@@ -111,6 +111,7 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
             notify();
           });
         }
+        // Connection receipts retire stale snapshot capture and restore the new scope.
         stopGateway = gateway.subscribe(() => {
           synchronize();
           notify();

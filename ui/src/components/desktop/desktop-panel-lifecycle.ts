@@ -1,4 +1,3 @@
-import { i18n } from "../../i18n/lib/translate.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { createDockLayout } from "../dock-layout.ts";
 import { DESKTOP_PANEL_TOGGLE_EVENT } from "../panel-toggle-contract.ts";
@@ -137,7 +136,6 @@ export function createDesktopPanelLifecycle(
         }
         mounted = true;
         stops = [
-          i18n.subscribe(notify),
           listen(window, DESKTOP_PANEL_TOGGLE_EVENT, (event) => {
             if (!host.embedded) {
               options.handleToggleRequest(event);
