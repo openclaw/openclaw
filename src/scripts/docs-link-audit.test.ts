@@ -1,18 +1,77 @@
-// Docs link audit tests cover documentation link validation behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { preparedScriptWrapperEnv } from "../../test/scripts/prepared-script-wrapper.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 
 const { auditDocsLinks, prepareExternalLinkAuditTree, prepareMirroredDocsDir } =
   await import("../../scripts/docs-link-audit.mts");
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const auditSource = new URL("../../scripts/docs-link-audit.mts", import.meta.url);
+const auditRuntime = resolveRuntimeWorkerUrl(scriptModuleEntrypoints.docsLinkAudit);
+const syncSource = new URL("../../scripts/docs-sync-publish.mjs", import.meta.url);
+const syncRuntime =
+  auditRuntime.href === auditSource.href
+    ? syncSource
+    : new URL("./docs-sync-publish.js", auditRuntime);
+
+function runAuditCli(
+  root: string,
+  {
+    anchors = false,
+    clawHubRoot,
+    fixtureSync,
+  }: {
+    anchors?: boolean;
+    clawHubRoot?: string;
+    fixtureSync?: string;
+  } = {},
+) {
+  const home = path.join(root, "home");
+  fs.mkdirSync(home, { recursive: true });
+  const modules: Array<[URL, URL]> = [[auditSource, auditRuntime]];
+  if (fixtureSync) {
+    modules.push([syncSource, syncRuntime]);
+  }
+  return spawnSync(
+    process.execPath,
+    [
+      fileURLToPath(new URL("../../scripts/docs-link-audit.mjs", import.meta.url)),
+      ...(anchors ? ["--anchors"] : []),
+    ],
+    {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 30_000,
+      env: preparedScriptWrapperEnv(
+        modules,
+        {
+          PATH: process.env.PATH,
+          HOME: home,
+          USERPROFILE: home,
+          TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+          ...(clawHubRoot ? { OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: clawHubRoot } : {}),
+        },
+        fixtureSync ? [[pathToFileURL(fixtureSync), syncRuntime]] : [],
+      ),
+    },
+  );
+}
+
+function writeFiles(root: string, files: Record<string, string>) {
+  for (const [name, contents] of Object.entries(files)) {
+    const file = path.join(root, name);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, contents);
+  }
+}
 
 type AuditCliCase = {
   name: string;
@@ -398,14 +457,11 @@ describe("docs-link-audit", () => {
   ])(
     "audits real CLI links after $name",
     ({ source, broken, anchors = false, diagnostics, files = {}, navigation = [], redirects }) => {
-      const tempDirs: string[] = [];
-      const fixtureRoot = makeTempDir(tempDirs, "docs-link-audit-cli-");
+      const fixtureRoot = tempDirs.make("docs-link-audit-cli-");
       const docsRoot = path.join(fixtureRoot, "docs");
       const clawHubRoot = path.join(fixtureRoot, "clawhub");
-      const home = path.join(fixtureRoot, "home");
       fs.mkdirSync(docsRoot);
       fs.mkdirSync(path.join(clawHubRoot, "docs"), { recursive: true });
-      fs.mkdirSync(home);
       fs.writeFileSync(
         path.join(docsRoot, "docs.json"),
         JSON.stringify({
@@ -421,9 +477,7 @@ describe("docs-link-audit", () => {
               : []),
         }),
       );
-      for (const [file, content] of Object.entries(files)) {
-        fs.writeFileSync(path.join(fixtureRoot, file), content);
-      }
+      writeFiles(fixtureRoot, files);
       if (anchors) {
         fs.writeFileSync(path.join(docsRoot, "index.md"), "## Root\n\n[next](next#target)\n");
         fs.writeFileSync(path.join(docsRoot, "next.md"), "## Target\n");
@@ -432,56 +486,26 @@ describe("docs-link-audit", () => {
         anchors && !diagnostics ? ["---", "permalink: /unpublished", "---", ...source] : source;
       fs.writeFileSync(path.join(docsRoot, "page.mdx"), `${pageSource.join("\n")}\n`);
 
-      try {
-        const result = spawnSync(
-          process.execPath,
-          [
-            fileURLToPath(new URL("../../scripts/docs-link-audit.mjs", import.meta.url)),
-            ...(anchors ? ["--anchors"] : []),
-          ],
-          {
-            cwd: fixtureRoot,
-            encoding: "utf8",
-            env: preparedScriptWrapperEnv(
-              [
-                [
-                  new URL("../../scripts/docs-link-audit.mts", import.meta.url),
-                  resolveRuntimeWorkerUrl(scriptModuleEntrypoints.docsLinkAudit),
-                ],
-              ],
-              {
-                PATH: process.env.PATH,
-                HOME: home,
-                USERPROFILE: home,
-                TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
-                OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: clawHubRoot,
-              },
-            ),
-            timeout: 30_000,
-          },
+      const result = runAuditCli(fixtureRoot, { anchors, clawHubRoot });
+      expect(result.error).toBeUndefined();
+      expect(result.stderr).toBe("");
+      expect(result.status, result.stdout).toBe(broken ? 1 : 0);
+      if (!anchors) {
+        expect(result.stdout).toContain(`checked_internal_links=${broken + 1}\n`);
+      }
+      expect(result.stdout).toContain(`broken_links=${broken}\n`);
+      expect(result.stdout).not.toContain("/hidden-");
+      if (anchors && !diagnostics) {
+        expect(result.stdout).toContain("#missing :: fragment not found");
+        expect(result.stdout).toContain("/unpublished#connection :: route/file not found");
+      }
+      for (const diagnostic of diagnostics ?? []) {
+        expect(result.stdout).toContain(diagnostic);
+      }
+      if (broken && !anchors && !diagnostics) {
+        expect(result.stdout).toContain(
+          `page.mdx:${source.findIndex((line) => line.includes("/missing-page")) + 1} :: /missing-page :: route/file not found`,
         );
-        expect(result.error).toBeUndefined();
-        expect(result.stderr).toBe("");
-        expect(result.status, result.stdout).toBe(broken ? 1 : 0);
-        if (!anchors) {
-          expect(result.stdout).toContain(`checked_internal_links=${broken + 1}\n`);
-        }
-        expect(result.stdout).toContain(`broken_links=${broken}\n`);
-        expect(result.stdout).not.toContain("/hidden-");
-        if (anchors && !diagnostics) {
-          expect(result.stdout).toContain("#missing :: fragment not found");
-          expect(result.stdout).toContain("/unpublished#connection :: route/file not found");
-        }
-        for (const diagnostic of diagnostics ?? []) {
-          expect(result.stdout).toContain(diagnostic);
-        }
-        if (broken && !anchors && !diagnostics) {
-          expect(result.stdout).toContain(
-            `page.mdx:${source.findIndex((line) => line.includes("/missing-page")) + 1} :: /missing-page :: route/file not found`,
-          );
-        }
-      } finally {
-        cleanupTempDirs(tempDirs);
       }
     },
   );
@@ -490,14 +514,10 @@ describe("docs-link-audit", () => {
     // /clawhub/** pages are authored upstream and injected by the publisher, so a
     // checkout without the ClawHub source has the navigation entries but no pages.
     const buildDocsTree = (
-      tempDirs: string[],
       link: string,
       options: { redirects?: Array<{ source: string; destination: string }>; root?: string } = {},
     ) => {
-      const docsRoot = path.join(
-        options.root ?? makeTempDir(tempDirs, "docs-clawhub-mirror-"),
-        "docs",
-      );
+      const docsRoot = path.join(options.root ?? tempDirs.make("docs-clawhub-mirror-"), "docs");
       fs.mkdirSync(docsRoot, { recursive: true });
       fs.writeFileSync(
         path.join(docsRoot, "docs.json"),
@@ -510,162 +530,78 @@ describe("docs-link-audit", () => {
       return docsRoot;
     };
 
+    const fragment = "/clawhub/publishing#package-publish-source";
+    const redirected = { redirects: [{ source: "/tools/clawhub", destination: fragment }] };
+    function auditMirror(
+      link: string,
+      options: { anchors?: boolean; allowExternalClawHubRoutes?: boolean; redirect?: boolean } = {},
+    ) {
+      const { redirect = false, ...auditOptions } = options;
+      return auditDocsLinks({
+        docsDir: buildDocsTree(link, redirect ? redirected : {}),
+        allowExternalClawHubRoutes: true,
+        anchors: true,
+        ...auditOptions,
+      });
+    }
+
+    function expectUnverified(result: ReturnType<typeof auditDocsLinks>) {
+      expect(result.unverifiedMirroredFragments).toBe(1);
+      expect(result.broken).toHaveLength(1);
+      expect(result.broken[0]?.reason).toContain("fragment unverified");
+      expect(result.broken[0]?.reason).toContain("OPENCLAW_DOCS_SYNC_CLAWHUB_REPO");
+    }
+
     it("reports fragments into mirrored routes as unverified rather than missing", () => {
-      const tempDirs: string[] = [];
-      try {
-        const result = auditDocsLinks({
-          docsDir: buildDocsTree(tempDirs, "/clawhub/publishing#package-publish-source"),
-          allowExternalClawHubRoutes: true,
-          anchors: true,
-        });
-        expect(result.unverifiedMirroredFragments).toBe(1);
-        expect(result.broken).toHaveLength(1);
-        expect(result.broken[0]?.reason).toContain("fragment unverified");
-        expect(result.broken[0]?.reason).toContain("OPENCLAW_DOCS_SYNC_CLAWHUB_REPO");
-      } finally {
-        cleanupTempDirs(tempDirs);
-      }
+      expectUnverified(auditMirror(fragment));
     });
 
     it("exits clean from the CLI in plain mode for a fragment into a mirrored route", () => {
-      const tempDirs: string[] = [];
-      try {
-        // Resolve source discovery from an owned module root, not the caller's checkout.
-        const fixtureRoot = path.join(makeTempDir(tempDirs, "docs-clawhub-mirror-cli-"), "repo");
-        const home = path.join(fixtureRoot, "home");
-        const auditSource = new URL("../../scripts/docs-link-audit.mts", import.meta.url);
-        const auditRuntime = resolveRuntimeWorkerUrl(scriptModuleEntrypoints.docsLinkAudit);
-        const syncSource = new URL("../../scripts/docs-sync-publish.mjs", import.meta.url);
-        const syncRuntime =
-          auditRuntime.href === auditSource.href
-            ? syncSource
-            : new URL("./docs-sync-publish.js", auditRuntime);
-        const fixtureSync = path.join(fixtureRoot, "scripts", "docs-sync-publish.mjs");
-        buildDocsTree(tempDirs, "/clawhub/publishing#package-publish-source", {
-          root: fixtureRoot,
-        });
-        fs.mkdirSync(home, { recursive: true });
-        fs.mkdirSync(path.dirname(fixtureSync), { recursive: true });
-        fs.copyFileSync(syncSource, fixtureSync);
-        fs.writeFileSync(
-          path.join(fixtureRoot, "package.json"),
-          '{"private":true,"type":"module"}\n',
-        );
-        fs.writeFileSync(path.join(fixtureRoot, "pnpm-workspace.yaml"), "packages: []\n");
-        const result = spawnSync(
-          process.execPath,
-          [fileURLToPath(new URL("../../scripts/docs-link-audit.mjs", import.meta.url))],
-          {
-            cwd: fixtureRoot,
-            encoding: "utf8",
-            env: preparedScriptWrapperEnv(
-              [
-                [auditSource, auditRuntime],
-                [syncSource, syncRuntime],
-              ],
-              {
-                PATH: process.env.PATH,
-                HOME: home,
-                USERPROFILE: home,
-                TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
-              },
-              [[pathToFileURL(fixtureSync), syncRuntime]],
-            ),
-            timeout: 30_000,
-          },
-        );
-        expect(result.error).toBeUndefined();
-        expect(result.stdout).toContain("broken_links=0\n");
-        expect(result.stdout).not.toContain("Synced ");
-        expect(result.stdout).not.toContain("fragment unverified");
-        expect(result.status).toBe(0);
-      } finally {
-        cleanupTempDirs(tempDirs);
-      }
+      // Resolve source discovery from an owned module root, not the caller's checkout.
+      const fixtureRoot = path.join(tempDirs.make("docs-clawhub-mirror-cli-"), "repo");
+      const fixtureSync = path.join(fixtureRoot, "scripts", "docs-sync-publish.mjs");
+      buildDocsTree(fragment, { root: fixtureRoot });
+      fs.mkdirSync(path.dirname(fixtureSync), { recursive: true });
+      fs.copyFileSync(syncSource, fixtureSync);
+      writeFiles(fixtureRoot, {
+        "package.json": '{"private":true,"type":"module"}\n',
+        "pnpm-workspace.yaml": "packages: []\n",
+      });
+      const result = runAuditCli(fixtureRoot, { fixtureSync });
+      expect(result.error).toBeUndefined();
+      expect(result.stdout).toContain("broken_links=0\n");
+      expect(result.stdout).not.toContain("Synced ");
+      expect(result.stdout).not.toContain("fragment unverified");
+      expect(result.status).toBe(0);
     });
 
     it("reports unverified fragments in redirect destinations into mirrored routes", () => {
-      const tempDirs: string[] = [];
-      try {
-        const result = auditDocsLinks({
-          docsDir: buildDocsTree(tempDirs, "/page", {
-            redirects: [
-              {
-                source: "/tools/clawhub",
-                destination: "/clawhub/publishing#package-publish-source",
-              },
-            ],
-          }),
-          allowExternalClawHubRoutes: true,
-          anchors: true,
-        });
-        expect(result.unverifiedMirroredFragments).toBe(1);
-        expect(result.broken).toHaveLength(1);
-        expect(result.broken[0]?.file).toBe("docs.json");
-        expect(result.broken[0]?.link).toBe("/tools/clawhub");
-        expect(result.broken[0]?.reason).toContain("fragment unverified");
-        expect(result.broken[0]?.reason).toContain("OPENCLAW_DOCS_SYNC_CLAWHUB_REPO");
-      } finally {
-        cleanupTempDirs(tempDirs);
-      }
+      const result = auditMirror("/page", { redirect: true });
+      expectUnverified(result);
+      expect(result.broken[0]?.file).toBe("docs.json");
+      expect(result.broken[0]?.link).toBe("/tools/clawhub");
     });
 
     it("keeps mirrored redirect destinations silent in plain mode", () => {
-      const tempDirs: string[] = [];
-      try {
-        const result = auditDocsLinks({
-          docsDir: buildDocsTree(tempDirs, "/page", {
-            redirects: [
-              {
-                source: "/tools/clawhub",
-                destination: "/clawhub/publishing#package-publish-source",
-              },
-            ],
-          }),
-          allowExternalClawHubRoutes: true,
-        });
-        expect(result.broken).toEqual([]);
-        expect(result.unverifiedMirroredFragments).toBe(0);
-      } finally {
-        cleanupTempDirs(tempDirs);
-      }
+      const result = auditMirror("/page", { redirect: true, anchors: false });
+      expect(result.broken).toEqual([]);
+      expect(result.unverifiedMirroredFragments).toBe(0);
     });
 
     it("still reports undeclared routes under /clawhub as missing", () => {
-      const tempDirs: string[] = [];
-      try {
-        const result = auditDocsLinks({
-          docsDir: buildDocsTree(tempDirs, "/clawhub/not-in-navigation"),
-          allowExternalClawHubRoutes: true,
-          anchors: true,
-        });
-        expect(result.broken).toHaveLength(1);
-        expect(result.broken[0]?.reason).toContain("route/file not found");
-      } finally {
-        cleanupTempDirs(tempDirs);
-      }
+      const result = auditMirror("/clawhub/not-in-navigation");
+      expect(result.broken).toHaveLength(1);
+      expect(result.broken[0]?.reason).toContain("route/file not found");
     });
 
     it("does not accept mirrored routes when the allowance is off", () => {
-      const tempDirs: string[] = [];
-      try {
-        const result = auditDocsLinks({
-          docsDir: buildDocsTree(tempDirs, "/clawhub/publishing"),
-          allowExternalClawHubRoutes: false,
-          anchors: true,
-        });
-        expect(result.broken.some((item) => item.reason.includes("route/file not found"))).toBe(
-          true,
-        );
-      } finally {
-        cleanupTempDirs(tempDirs);
-      }
+      const result = auditMirror("/clawhub/publishing", { allowExternalClawHubRoutes: false });
+      expect(result.broken.some((item) => item.reason.includes("route/file not found"))).toBe(true);
     });
   });
 
   it("prepares every external-link input without exposing code literals", () => {
-    const tempDirs: string[] = [];
-    const fixtureRoot = makeTempDir(tempDirs, "docs-external-link-audit-");
+    const fixtureRoot = tempDirs.make("docs-external-link-audit-");
     const docsRoot = path.join(fixtureRoot, "docs");
     const source = [
       "<AccordionGroup>",
@@ -719,63 +655,56 @@ describe("docs-link-audit", () => {
       );
     }
 
-    try {
-      const outputRoot = path.join(fixtureRoot, ".audit");
-      expect(prepareExternalLinkAuditTree(fixtureRoot, outputRoot)).toEqual({
-        files: 4,
-        projectedLinks: 14,
-      });
-      const prepared = fs.readFileSync(
-        path.join(outputRoot, "docs", "providers", "example.md"),
-        "utf8",
+    const outputRoot = path.join(fixtureRoot, ".audit");
+    expect(prepareExternalLinkAuditTree(fixtureRoot, outputRoot)).toEqual({
+      files: 4,
+      projectedLinks: 14,
+    });
+    const prepared = fs.readFileSync(
+      path.join(outputRoot, "docs", "providers", "example.md"),
+      "utf8",
+    );
+    const preparedLines = prepared.split("\n");
+    expect(preparedLines).toHaveLength(source.split("\n").length);
+    expect(preparedLines[2]).toContain('href="https://docs.example.test/reasoning"');
+    for (const url of [
+      "https://docs.example.test/after-list-fence",
+      "https://docs.example.test/after-literal-list-fence",
+      "https://docs.example.test/component",
+      "https://docs.example.test/pre-component",
+      "https://docs.example.test/after-code-block",
+      "https://docs.example.test/after-indented-code",
+      "https://docs.example.test/after-script",
+      "https://docs.example.test/after-void",
+    ]) {
+      expect(prepared).toContain(`href="${url}"`);
+    }
+    expect(prepared).toContain('href="https://docs.example.test/reference-first?one=1&amp;two=2"');
+    expect(prepared).toContain('href="https://docs.example.test/image.png?one=1&amp;two=2"');
+    for (const url of [
+      "https://api.example.test/v1",
+      "https://code.example.test",
+      "https://code.example.test/inline",
+      "https://code.example.test/list-fence",
+      "https://code.example.test/fenced-component",
+      "https://code.example.test/unclosed",
+      "https://code.example.test/still-hidden",
+      "https://code.example.test/pre",
+      "https://code.example.test/script",
+      "https://code.example.test/script-body",
+      "https://docs.example.test/reference-second",
+    ]) {
+      expect(prepared).not.toContain(url);
+    }
+    for (const filename of ["README.md", "CONTRIBUTING.md", "SECURITY.md"]) {
+      expect(fs.readFileSync(path.join(outputRoot, filename), "utf8")).toContain(
+        'href="https://root.test"',
       );
-      const preparedLines = prepared.split("\n");
-      expect(preparedLines).toHaveLength(source.split("\n").length);
-      expect(preparedLines[2]).toContain('href="https://docs.example.test/reasoning"');
-      for (const url of [
-        "https://docs.example.test/after-list-fence",
-        "https://docs.example.test/after-literal-list-fence",
-        "https://docs.example.test/component",
-        "https://docs.example.test/pre-component",
-        "https://docs.example.test/after-code-block",
-        "https://docs.example.test/after-indented-code",
-        "https://docs.example.test/after-script",
-        "https://docs.example.test/after-void",
-      ]) {
-        expect(prepared).toContain(`href="${url}"`);
-      }
-      expect(prepared).toContain(
-        'href="https://docs.example.test/reference-first?one=1&amp;two=2"',
-      );
-      expect(prepared).toContain('href="https://docs.example.test/image.png?one=1&amp;two=2"');
-      for (const url of [
-        "https://api.example.test/v1",
-        "https://code.example.test",
-        "https://code.example.test/inline",
-        "https://code.example.test/list-fence",
-        "https://code.example.test/fenced-component",
-        "https://code.example.test/unclosed",
-        "https://code.example.test/still-hidden",
-        "https://code.example.test/pre",
-        "https://code.example.test/script",
-        "https://code.example.test/script-body",
-        "https://docs.example.test/reference-second",
-      ]) {
-        expect(prepared).not.toContain(url);
-      }
-      for (const filename of ["README.md", "CONTRIBUTING.md", "SECURITY.md"]) {
-        expect(fs.readFileSync(path.join(outputRoot, filename), "utf8")).toContain(
-          'href="https://root.test"',
-        );
-      }
-    } finally {
-      cleanupTempDirs(tempDirs);
     }
   });
 
   it("falls back to tolerant parsing for legacy malformed MDX", () => {
-    const tempDirs: string[] = [];
-    const fixtureRoot = makeTempDir(tempDirs, "docs-external-link-fallback-");
+    const fixtureRoot = tempDirs.make("docs-external-link-fallback-");
     fs.mkdirSync(path.join(fixtureRoot, "docs"), { recursive: true });
     fs.writeFileSync(
       path.join(fixtureRoot, "docs", "legacy.md"),
@@ -785,48 +714,39 @@ describe("docs-link-audit", () => {
       fs.writeFileSync(path.join(fixtureRoot, filename), "");
     }
 
-    try {
-      const outputRoot = path.join(fixtureRoot, ".audit");
-      expect(prepareExternalLinkAuditTree(fixtureRoot, outputRoot)).toEqual({
-        files: 4,
-        projectedLinks: 6,
-      });
-      const prepared = fs
-        .readFileSync(path.join(outputRoot, "docs", "legacy.md"), "utf8")
-        .split("\n");
-      expect(prepared[6]).toContain('href="https://legacy.example.test"');
-      expect(prepared[5]?.match(/https:\/\/same\.example\.test/g)).toHaveLength(1);
-      expect(prepared[9]).toContain('href="https://component.example.test"');
-      expect(prepared[11]).toContain('href="https://reference.example.test"');
-      expect(prepared[14]?.match(/https:\/\/style\.example\.test/g)).toHaveLength(1);
-      expect(prepared[20]).toContain('href="https://after-fence.example.test"');
-      expect(prepared.join("\n")).not.toContain("https://hidden.example.test");
-      expect(prepared.join("\n")).not.toContain("https://fenced-hidden.example.test");
-    } finally {
-      cleanupTempDirs(tempDirs);
-    }
+    const outputRoot = path.join(fixtureRoot, ".audit");
+    expect(prepareExternalLinkAuditTree(fixtureRoot, outputRoot)).toEqual({
+      files: 4,
+      projectedLinks: 6,
+    });
+    const prepared = fs
+      .readFileSync(path.join(outputRoot, "docs", "legacy.md"), "utf8")
+      .split("\n");
+    expect(prepared[6]).toContain('href="https://legacy.example.test"');
+    expect(prepared[5]?.match(/https:\/\/same\.example\.test/g)).toHaveLength(1);
+    expect(prepared[9]).toContain('href="https://component.example.test"');
+    expect(prepared[11]).toContain('href="https://reference.example.test"');
+    expect(prepared[14]?.match(/https:\/\/style\.example\.test/g)).toHaveLength(1);
+    expect(prepared[20]).toContain('href="https://after-fence.example.test"');
+    expect(prepared.join("\n")).not.toContain("https://hidden.example.test");
+    expect(prepared.join("\n")).not.toContain("https://fenced-hidden.example.test");
   });
 
   it("does not create mirrored docs copies for non-root docs trees", () => {
-    const tempDirs: string[] = [];
-    const fixtureRoot = makeTempDir(tempDirs, "docs-link-audit-mirror-");
+    const fixtureRoot = tempDirs.make("docs-link-audit-mirror-");
     const docsRoot = path.join(fixtureRoot, "docs");
     fs.mkdirSync(docsRoot, { recursive: true });
 
     const before = tempEntries("openclaw-docs-link-audit-");
-    try {
-      const mirroredDocsDir = prepareMirroredDocsDir(docsRoot);
-      expect(mirroredDocsDir).toEqual({
-        cleanup: expect.any(Function),
-        dir: path.resolve(docsRoot),
-        mirroredClawHub: false,
-      });
-      mirroredDocsDir.cleanup();
-      const after = tempEntries("openclaw-docs-link-audit-");
-      expect([...after].filter((entry) => !before.has(entry))).toEqual([]);
-    } finally {
-      cleanupTempDirs(tempDirs);
-    }
+    const mirroredDocsDir = prepareMirroredDocsDir(docsRoot);
+    expect(mirroredDocsDir).toEqual({
+      cleanup: expect.any(Function),
+      dir: path.resolve(docsRoot),
+      mirroredClawHub: false,
+    });
+    mirroredDocsDir.cleanup();
+    const after = tempEntries("openclaw-docs-link-audit-");
+    expect([...after].filter((entry) => !before.has(entry))).toEqual([]);
   });
 
   it("cleans mirrored docs copies when ClawHub sync fails", () => {

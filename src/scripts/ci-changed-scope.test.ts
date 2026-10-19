@@ -1,4 +1,3 @@
-// CI changed scope tests cover script detection of changed files and lanes.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -34,9 +33,11 @@ it.each(["pull_request", "push", "schedule", "workflow_dispatch"])(
       workflowEventName,
     );
     const scope = parseGitHubOutput(fs.readFileSync(output, "utf8"));
-    expect(scope.run_android).toBe("true");
-    expect(scope.run_native_i18n).toBe("true");
-    expect(scope.run_android_screenshots).toBe(String(workflowEventName !== "pull_request"));
+    expect(scope).toMatchObject({
+      run_android: "true",
+      run_native_i18n: "true",
+      run_android_screenshots: String(workflowEventName !== "pull_request"),
+    });
   },
 );
 
@@ -62,26 +63,30 @@ function writeRepoFile(repoDir: string, filePath: string, contents: string): voi
   fs.writeFileSync(absolutePath, contents, "utf8");
 }
 
-function createSyntheticMergeRepo(prefix: string): { repoDir: string; staleBase: string } {
+function createRepo(prefix: string, file = "README.md", contents = "base\n") {
   const repoDir = tempDirs.make(prefix);
-
   git(repoDir, ["init", "-b", "main"]);
   git(repoDir, ["config", "user.email", "ci@example.invalid"]);
   git(repoDir, ["config", "user.name", "CI"]);
-  writeRepoFile(repoDir, "README.md", "base\n");
-  git(repoDir, ["add", "."]);
-  git(repoDir, ["commit", "-m", "base"]);
-  const staleBase = git(repoDir, ["rev-parse", "HEAD"]);
+  writeRepoFile(repoDir, file, contents);
+  commitRepo(repoDir, "base");
+  return repoDir;
+}
 
+function commitRepo(repoDir: string, message: string) {
+  git(repoDir, ["add", "."]);
+  git(repoDir, ["commit", "-m", message]);
+}
+
+function createSyntheticMergeRepo(prefix: string): { repoDir: string; staleBase: string } {
+  const repoDir = createRepo(prefix);
+  const staleBase = git(repoDir, ["rev-parse", "HEAD"]);
   git(repoDir, ["switch", "-c", "feature"]);
   writeRepoFile(repoDir, "src/pr.ts", "export const pr = true;\n");
-  git(repoDir, ["add", "."]);
-  git(repoDir, ["commit", "-m", "feature"]);
-
+  commitRepo(repoDir, "feature");
   git(repoDir, ["switch", "main"]);
   writeRepoFile(repoDir, "src/main-only.ts", "export const mainOnly = true;\n");
-  git(repoDir, ["add", "."]);
-  git(repoDir, ["commit", "-m", "main only"]);
+  commitRepo(repoDir, "main only");
   git(repoDir, ["merge", "--no-ff", "feature", "-m", "synthetic merge"]);
 
   return { repoDir, staleBase };
@@ -100,20 +105,13 @@ describe("parseArgs", () => {
   });
 });
 
-function expectedScope(overrides: Partial<ReturnType<typeof detectChangedScope>> = {}) {
-  return {
-    runNode: false,
-    runMacos: false,
-    runMacosNode: false,
-    runIosBuild: false,
-    runAndroid: false,
-    runWindows: false,
-    runSkillsPython: false,
-    runChangedSmoke: false,
-    runControlUiI18n: false,
-    runUiTests: false,
-    ...overrides,
-  };
+function expectedScope(enabled = "") {
+  const selected = new Set(enabled.split(" "));
+  return Object.fromEntries(
+    "Node Macos MacosNode IosBuild Android Windows SkillsPython ChangedSmoke ControlUiI18n UiTests"
+      .split(" ")
+      .map((lane) => [`run${lane}`, selected.has(lane)]),
+  );
 }
 
 describe("detectChangedScope", () => {
@@ -123,68 +121,40 @@ describe("detectChangedScope", () => {
     );
   });
 
-  it.each<[string[], Partial<ReturnType<typeof detectChangedScope>>]>([
-    [["docs/ci.md", "docs/docs.json", "README.md"], {}],
-    [["src/config/defaults.ts", "docs/docs.json"], { runNode: true }],
-    [[".crabbox.yaml"], { runNode: true }],
-    [["src/skills/runtime/refresh.ts"], { runNode: true, runMacosNode: true, runWindows: true }],
-    [[".github/actions/setup-android-toolchain/action.yml"], { runNode: true, runAndroid: true }],
-    [["apps/macos/Sources/Foo.swift"], { runMacos: true, runMacosNode: true }],
-    [["apps/ios/Sources/RootTabs.swift"], { runIosBuild: true }],
+  it.each<[string | string[], string]>([
+    [["docs/ci.md", "docs/docs.json", "README.md"], ""],
+    [["src/config/defaults.ts", "docs/docs.json"], "Node"],
+    [".crabbox.yaml", "Node"],
+    ["src/skills/runtime/refresh.ts", "Node MacosNode Windows"],
+    [".github/actions/setup-android-toolchain/action.yml", "Node Android"],
+    ["apps/macos/Sources/Foo.swift", "Macos MacosNode"],
+    ["apps/ios/Sources/RootTabs.swift", "IosBuild"],
+    ["apps/shared/OpenClawKit/Sources/Foo.swift", "Macos MacosNode IosBuild Android"],
+    ["apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift", "IosBuild"],
+    ["config/swiftformat", "Node Macos MacosNode IosBuild"],
+    ["scripts/run-swiftlint.mts", "Node Macos MacosNode IosBuild"],
+    ["scripts/prepare-apple-mermaid.mjs", "Node Macos MacosNode IosBuild"],
+    ["scripts/package-mac-app.sh", "Node Macos MacosNode"],
+    ["scripts/lib/openclaw-bun.json", "Node Macos MacosNode"],
+    ["scripts/stage-openclaw-bun.sh", "Node Macos MacosNode"],
+    ["skills/skill-creator/scripts/test_quick_validate.py", "Node SkillsPython"],
+    [".github/workflows/ci.yml", "Node Windows UiTests"],
+    ["scripts/lib/ci-test-runtime.mts", "Node UiTests"],
+    ["scripts/ci-xcodebuild.py", "Node IosBuild"],
+    ["scripts/ci-xcodebuild.py.bak", "Node"],
+    ["scripts/install.ps1", "Node Windows ChangedSmoke"],
+    ["scripts/install.sh", "Node ChangedSmoke"],
+    [".github/workflows/install-smoke.yml", "Node ChangedSmoke"],
+    ["src/plugins/loader.ts", "Node ChangedSmoke"],
     [
-      ["apps/shared/OpenClawKit/Sources/Foo.swift"],
-      {
-        runMacos: true,
-        runMacosNode: true,
-        runIosBuild: true,
-        runAndroid: true,
-      },
+      "packages/gateway-protocol/src/schema/messages.ts",
+      "Node ChangedSmoke Macos MacosNode IosBuild Android",
     ],
-    [
-      ["apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift"],
-      { runIosBuild: true },
-    ],
-    [
-      ["config/swiftformat"],
-      { runNode: true, runMacos: true, runMacosNode: true, runIosBuild: true },
-    ],
-    [
-      ["scripts/run-swiftlint.mts"],
-      { runNode: true, runMacos: true, runMacosNode: true, runIosBuild: true },
-    ],
-    [
-      ["scripts/prepare-apple-mermaid.mjs"],
-      { runNode: true, runMacos: true, runMacosNode: true, runIosBuild: true },
-    ],
-    [["scripts/package-mac-app.sh"], { runNode: true, runMacos: true, runMacosNode: true }],
-    [["scripts/lib/openclaw-bun.json"], { runNode: true, runMacos: true, runMacosNode: true }],
-    [["scripts/stage-openclaw-bun.sh"], { runNode: true, runMacos: true, runMacosNode: true }],
-    [
-      ["skills/skill-creator/scripts/test_quick_validate.py"],
-      { runNode: true, runSkillsPython: true },
-    ],
-    [[".github/workflows/ci.yml"], { runNode: true, runWindows: true, runUiTests: true }],
-    [["scripts/lib/ci-test-runtime.mts"], { runNode: true, runUiTests: true }],
-    [["scripts/ci-xcodebuild.py"], { runNode: true, runIosBuild: true }],
-    [["scripts/ci-xcodebuild.py.bak"], { runNode: true }],
-    [["scripts/install.ps1"], { runNode: true, runWindows: true, runChangedSmoke: true }],
-    [["scripts/install.sh"], { runNode: true, runChangedSmoke: true }],
-    [[".github/workflows/install-smoke.yml"], { runNode: true, runChangedSmoke: true }],
-    [["src/plugins/loader.ts"], { runNode: true, runChangedSmoke: true }],
-    [
-      ["packages/gateway-protocol/src/schema/messages.ts"],
-      {
-        runNode: true,
-        runChangedSmoke: true,
-        runMacos: true,
-        runMacosNode: true,
-        runIosBuild: true,
-        runAndroid: true,
-      },
-    ],
-    [["src/plugins/loader.test.ts"], { runNode: true }],
+    ["src/plugins/loader.test.ts", "Node"],
   ])("selects only the owning lanes for %j", (paths, lanes) => {
-    expect(detectChangedScope(paths)).toEqual(expectedScope(lanes));
+    expect(detectChangedScope(typeof paths === "string" ? [paths] : paths)).toEqual(
+      expectedScope(lanes),
+    );
   });
 
   it.each([
@@ -202,9 +172,7 @@ describe("detectChangedScope", () => {
     ["scripts/install-simslim.sh", true],
     ["scripts/install-simslim.sh.bak", false],
   ])("routes only exact iOS build helper paths: %s", (file, enabled) => {
-    expect(detectChangedScope([file])).toEqual(
-      expectedScope({ runNode: true, runIosBuild: enabled }),
-    );
+    expect(detectChangedScope([file])).toEqual(expectedScope(enabled ? "Node IosBuild" : "Node"));
     expect(shouldRunIosScreenshots([file])).toBe(enabled);
   });
 
@@ -257,27 +225,19 @@ describe("detectChangedScope", () => {
   it("uses the merge commit first parent instead of a stale PR payload base", () => {
     const { repoDir, staleBase } = createSyntheticMergeRepo("openclaw-ci-scope-merge-");
 
-    expect(
-      execFileSync("git", ["diff", "--name-only", staleBase, "HEAD"], {
-        cwd: repoDir,
-        encoding: "utf8",
-      })
-        .trim()
-        .split("\n")
-        .toSorted(),
-    ).toEqual(["src/main-only.ts", "src/pr.ts"]);
+    expect(git(repoDir, ["diff", "--name-only", staleBase, "HEAD"]).split("\n").toSorted()).toEqual(
+      ["src/main-only.ts", "src/pr.ts"],
+    );
 
     expect(listChangedPaths(staleBase, "HEAD", repoDir, true)).toEqual(["src/pr.ts"]);
   });
 
   it("reports both sides of a rename so deleted paths force safe planning", () => {
-    const repoDir = tempDirs.make("openclaw-ci-scope-rename-");
-    git(repoDir, ["init", "-b", "main"]);
-    git(repoDir, ["config", "user.email", "ci@example.invalid"]);
-    git(repoDir, ["config", "user.name", "CI"]);
-    writeRepoFile(repoDir, "src/old.ts", "export const value = 1;\n");
-    git(repoDir, ["add", "."]);
-    git(repoDir, ["commit", "-m", "base"]);
+    const repoDir = createRepo(
+      "openclaw-ci-scope-rename-",
+      "src/old.ts",
+      "export const value = 1;\n",
+    );
     const base = git(repoDir, ["rev-parse", "HEAD"]);
     fs.renameSync(path.join(repoDir, "src/old.ts"), path.join(repoDir, "src/new.ts"));
     git(repoDir, ["add", "-A"]);
@@ -290,13 +250,7 @@ describe("detectChangedScope", () => {
     if (process.platform === "win32") {
       return;
     }
-    const repoDir = tempDirs.make("openclaw-ci-scope-raw-paths-");
-    git(repoDir, ["init", "-b", "main"]);
-    git(repoDir, ["config", "user.email", "ci@example.invalid"]);
-    git(repoDir, ["config", "user.name", "CI"]);
-    writeRepoFile(repoDir, "README.md", "base\n");
-    git(repoDir, ["add", "."]);
-    git(repoDir, ["commit", "-m", "base"]);
+    const repoDir = createRepo("openclaw-ci-scope-raw-paths-");
     const base = git(repoDir, ["rev-parse", "HEAD"]);
     const changedPaths = [" scripts/changed-lanes.mts", "scripts/changed\nlanes.mts"];
     for (const changedPath of changedPaths) {
@@ -322,13 +276,12 @@ describe("detectChangedScope", () => {
   ])(
     "runs zero-install scope detection for %s",
     (_label, changedPath, manifest, failSafe, cliArgs) => {
-      const repoDir = fs.realpathSync(tempDirs.make("openclaw-ci-scope-empty-"));
+      const repoDir = fs.realpathSync(
+        createRepo("openclaw-ci-scope-empty-", "README.md", "test\n"),
+      );
       const outputPath = path.join(repoDir, "github-output.txt");
       const scriptPath = path.join(repoDir, "scripts/ci-changed-scope.mjs");
 
-      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir });
-      execFileSync("git", ["config", "user.email", "ci@example.invalid"], { cwd: repoDir });
-      execFileSync("git", ["config", "user.name", "CI"], { cwd: repoDir });
       for (const sourcePath of [
         "scripts/ci-changed-scope.mjs",
         "scripts/native-protocol-inputs.json",
@@ -340,9 +293,6 @@ describe("detectChangedScope", () => {
       ]) {
         writeRepoFile(repoDir, sourcePath, fs.readFileSync(path.resolve(sourcePath), "utf8"));
       }
-      fs.writeFileSync(path.join(repoDir, "README.md"), "test\n", "utf8");
-      execFileSync("git", ["add", "README.md"], { cwd: repoDir });
-      execFileSync("git", ["commit", "-m", "test"], { cwd: repoDir });
 
       if (manifest !== "missing") {
         const contents =
