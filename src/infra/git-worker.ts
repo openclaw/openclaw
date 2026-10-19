@@ -252,6 +252,12 @@ async function executeOperation(
     contentRoot !== undefined
       ? startGitOperationTiming("content-read", log, () => ({
           operation: command.type,
+          ...(command.type === "checkout.diff"
+            ? {
+                scope: command.input.scope ?? "all",
+                summaryOnly: command.input.summaryOnly === true,
+              }
+            : {}),
           checkoutId: createHash("sha256")
             .update(path.resolve(contentRoot))
             .digest("hex")

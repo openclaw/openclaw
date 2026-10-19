@@ -448,6 +448,38 @@ it("passes a replaced pinned engine to a new presentation", async () => {
   expect(first.context.signal.aborted).toBe(true);
 });
 
+it("publishes a completed catalog to the mounted Settings presentation", async () => {
+  const catalog = deferred<{ plugins: PluginCatalogItem[] }>();
+  const { settingsViews } = createPage({
+    configObject: { plugins: { slots: { memory: "synthetic-memory" } } },
+    routeData: memoryTabRoute("overview"),
+    listCatalog: () => catalog.promise,
+  });
+  try {
+    await waitForSolid(() =>
+      expect(settingsViews.at(-1)?.snapshot.engine.availability).toBe("loading"),
+    );
+    const view = settingsViews.at(-1)!;
+    catalog.resolve({ plugins: [] });
+    await waitForSolid(() => expect(view.snapshot.engine.availability).toBe("missing"));
+    expect(settingsViews.at(-1)).toBe(view);
+  } finally {
+    catalog.resolve({ plugins: [] });
+  }
+});
+
+it("retires the presentation when a committed same-agent Memory route changes", async () => {
+  const { element, settingsViews } = createPage({
+    routeData: memoryRoute("/settings/memory?agent=main&filter=first"),
+  });
+  await waitForSolid(() => expect(settingsViews.length).toBeGreaterThan(0));
+  const first = settingsViews.at(-1)!;
+  element.routeData = memoryRoute("/settings/memory?agent=main&filter=second");
+  await waitForSolid(() => expect(settingsViews.at(-1)?.context).not.toBe(first.context));
+  expect(first.context.signal.aborted).toBe(true);
+  expect(settingsViews.at(-1)?.snapshot.agentId).toBe("main");
+});
+
 it.each([["main"], ["research", "main"]])(
   "keeps newer sidebar intent when a pending Memory link mounts (%j)",
   async (...choices: string[]) => {
