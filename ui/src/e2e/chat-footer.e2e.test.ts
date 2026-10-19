@@ -136,6 +136,7 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
             branch: "fix/footer-layout",
             title: "Improve chat layout",
             url: "https://github.com/example/demo/pull/42",
+            checksUrl: "https://github.com/example/demo/pull/42/checks",
             state: "open",
             checks: { state: "passing", passed: 12, failed: 0, skipped: 0, running: 0 },
           },
