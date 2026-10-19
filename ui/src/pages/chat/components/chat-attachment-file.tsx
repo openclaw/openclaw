@@ -5,6 +5,7 @@ import "../../../components/tooltip.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { getChatAttachmentVideoPosterUrl } from "../attachment-payload-store.ts";
+import { attachmentContextCopyRef } from "./chat-attachment-context-copy.ts";
 import { resolveAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 
 export function AttachmentRemove(props: {
@@ -58,8 +59,10 @@ export function CompactAttachmentFile(props: {
     resolveAttachmentFileIcon(props.attachment.fileName ?? "attachment", props.attachment.mimeType),
   );
   const name = () => props.label ?? props.attachment.fileName ?? t("chat.attachments.attachedFile");
+  const copyRef = attachmentContextCopyRef(() => ({ name: name() }));
   const content = () => (
     <div
+      ref={copyRef}
       class={["chat-attachment-file", { "chat-attachment-file--video": icon().family === "video" }]}
       onClick={(event: MouseEvent) => {
         if (event.target instanceof Element && !event.target.closest("button")) {
