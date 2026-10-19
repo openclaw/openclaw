@@ -34,10 +34,7 @@ const createProxyConfig = () => ({ models: { providers: { pixverse: proxyProvide
 
 function createRuntimeContext(
   region: "international" | "cn",
-  config: ProviderAuthContext["config"] = {
-    ...createProxyConfig(),
-    agents: { entries: { main: {}, work: { workspace: "/tmp/pixverse-workspace" } } },
-  },
+  config: ProviderAuthContext["config"] = createProxyConfig(),
 ) {
   const { prompter, select, text } = createQueuedWizardPrompter();
   select.mockResolvedValue(region);
