@@ -3,7 +3,6 @@ import {
   readSessionMessageSequence,
   reduceSessionProjection,
 } from "@openclaw/gateway-client/browser";
-import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
@@ -12,6 +11,7 @@ import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./h
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 export { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
@@ -62,18 +62,6 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
   transcriptMetadata.set(row, metadata);
   return metadata;
 }
-
-export type ChatSessionSnapshot = {
-  widgetHeights?: Record<string, number>;
-  transcriptMetadata?: ChatTranscriptMetadata;
-  progressCard?: ProgressCard | null;
-  deltaCursor?: string;
-  historyState?: ChatHistoryState;
-  displayedLeafEntryId?: string | null;
-  messages: unknown[];
-  pagination: ChatHistoryPagination;
-  sessionId: string | null;
-};
 
 export type ChatWidgetLayout = {
   read: (key: string) => number | undefined;

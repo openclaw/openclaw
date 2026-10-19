@@ -15,7 +15,7 @@ import {
 import { acquirePreparedModelRuntimeLeaseFromOwners } from "./prepared-model-runtime-lease.js";
 import {
   configuredOwnersAreRequestVisible,
-  registerPreparedRuntimeAuthMaterializationPublisher,
+  bindPreparedRuntimeAuthMaterializationPublisher,
 } from "./prepared-model-runtime-materializations.js";
 import * as configuredRefresh from "./prepared-model-runtime.configured-refresh.js";
 import {
@@ -736,7 +736,7 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
 }
 
 registerRuntimeAuthProfileStoreMutationListener(invalidateForAuthMutation);
-registerPreparedRuntimeAuthMaterializationPublisher(owners, notifyPreparedModelRuntimePublication);
+bindPreparedRuntimeAuthMaterializationPublisher(owners, notifyPreparedModelRuntimePublication);
 
 async function resetPreparedModelRuntimeSnapshotsForTest(): Promise<void> {
   await closePreparedModelRuntimeSnapshots();
