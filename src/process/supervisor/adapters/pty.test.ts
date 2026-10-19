@@ -88,30 +88,25 @@ describe("createPtyAdapter", () => {
     vi.clearAllMocks();
   });
 
-  it("does not spawn when construction aborts during the module import", async () => {
+  it.each([false, true])("aborts construction (spawned=%s)", async (spawned) => {
     const abort = new AbortController();
-    spawnMock.mockReturnValue(createStubPty());
-
-    const starting = start({ args: ["-lc", "echo started"], abortSignal: abort.signal });
-    abort.abort();
-
-    await expect(starting).rejects.toThrow("PTY construction aborted");
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
-
-  it("kills a PTY created after construction is aborted", async () => {
-    const abort = new AbortController();
-    const spawned = createDeferredCore<ReturnType<typeof createStubPty>>();
+    const pending = createDeferredCore<ReturnType<typeof createStubPty>>();
     const stub = createStubPty();
-    spawnMock.mockReturnValue(spawned.promise);
-
+    spawnMock.mockReturnValue(spawned ? pending.promise : stub);
     const starting = start({ args: ["-lc", "echo started"], abortSignal: abort.signal });
-    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
+    if (spawned) {
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
+    }
     abort.abort();
-    spawned.resolve(stub);
-
+    if (spawned) {
+      pending.resolve(stub);
+    }
     await expect(starting).rejects.toThrow("PTY construction aborted");
-    expect(ptyKillMock).toHaveBeenCalledOnce();
+    if (spawned) {
+      expect(ptyKillMock).toHaveBeenCalledOnce();
+    } else {
+      expect(spawnMock).not.toHaveBeenCalled();
+    }
   });
 
   it("prefers the explicit child TERM without merging the Windows ambient env", async () => {
@@ -145,9 +140,7 @@ describe("createPtyAdapter", () => {
     const onSpawnCleanup = vi.fn<(cleanup: Promise<ProcessExtinctionResult>) => void>();
     const { adapter } = await setup({ onSpawnCleanup });
 
-    await expectWaitStaysPendingUntilSigkillFallback(adapter.wait(), () => {
-      adapter.kill();
-    });
+    await expectWaitStaysPendingUntilSigkillFallback(adapter.wait(), () => adapter.kill());
     expect(onSpawnCleanup).toHaveBeenCalledOnce();
     await expect(onSpawnCleanup.mock.calls[0]![0]).rejects.toThrow(
       "cleanup could not be confirmed",
@@ -176,8 +169,7 @@ describe("createPtyAdapter", () => {
       stub.emitExit({ exitCode: 3, signal: 0 });
       const result = await adapter.wait();
       expect(result).toStrictEqual({ code: 3, signal: null });
-      expect(adapter.stdin?.destroyed).toBe(true);
-      expect(adapter.stdin?.writable).toBe(false);
+      expect(adapter.stdin).toMatchObject({ destroyed: true, writable: false });
       stub.emitExit({ exitCode: 9, signal: 15 });
       adapter.dispose();
       for (const wait of [...pending, adapter.wait()]) {
@@ -189,13 +181,11 @@ describe("createPtyAdapter", () => {
   it("reports stdin as non-writable after EOF or dispose", async () => {
     const { stub, adapter } = await setup({ args: ["-lc", "cat"] });
 
-    expect(adapter.stdin?.writable).toBe(true);
-    expect(adapter.stdin?.writableEnded).toBe(false);
+    expect(adapter.stdin).toMatchObject({ writable: true, writableEnded: false });
 
     adapter.stdin?.end();
     expect(stub.write).toHaveBeenCalledWith(process.platform === "win32" ? "\x1a" : "\x04");
-    expect(adapter.stdin?.writable).toBe(false);
-    expect(adapter.stdin?.writableEnded).toBe(true);
+    expect(adapter.stdin).toMatchObject({ writable: false, writableEnded: true });
 
     adapter.dispose();
     expect(adapter.stdin?.destroyed).toBe(true);

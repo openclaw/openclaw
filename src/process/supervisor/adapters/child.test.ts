@@ -47,28 +47,55 @@ const decode = (chunk: Buffer | string) =>
 type Input = Partial<
   Omit<Parameters<typeof start>[0], "anchoredShellCommand" | "stdoutConsumption">
 >;
-function createSecretChild(secret: Writable) {
+function createSecretChild(secret: Writable, value = "selected-secret") {
   const child = createStubChild();
+  const transient = Buffer.from(value);
   Object.defineProperty(child.child, "stdio", {
     value: [child.child.stdin, child.child.stdout, child.child.stderr, secret],
     configurable: true,
   });
   spawnMock.mockResolvedValue(child.child);
-  return child;
+  return {
+    ...child,
+    transient,
+    startSecret: (input: Input = {}) =>
+      start({
+        argv: ["node", "worker"],
+        secretInput: { fd: 3, createData: () => transient },
+        ...input,
+      }),
+  };
 }
 async function setup(input: Input = {}) {
   const { argv = ["node", "worker"], ...options } = input;
   const stub = createStubChild();
   spawnMock.mockResolvedValue(stub.child);
-  const adapter = await start({
-    argv,
-    stdinMode: "pipe-open",
-    ...options,
-  });
+  const adapter = await start({ argv, stdinMode: "pipe-open", ...options });
   return { ...stub, adapter };
+}
+function setupTimed(platform = process.platform, input: Input = {}) {
+  vi.useFakeTimers();
+  setPlatform(platform);
+  return setup(input);
 }
 
 const spawnArgs = () => firstSpawnAndWaitParams(spawnMock);
+function watch(promise: Promise<unknown>) {
+  const settled = vi.fn();
+  void promise.then(settled, settled);
+  return settled;
+}
+async function advancePending(settled: ReturnType<typeof watch>, ms = 0) {
+  await vi.advanceTimersByTimeAsync(ms);
+  expect(settled).not.toHaveBeenCalled();
+}
+function observeOutput(adapter: Awaited<ReturnType<typeof start>>) {
+  const stdout = vi.fn(),
+    stderr = vi.fn();
+  adapter.onStdout(stdout);
+  adapter.onStderr(stderr);
+  return { stdout, stderr };
+}
 
 beforeEach(async () => {
   vi.resetModules();
@@ -106,24 +133,21 @@ it("creates owned worker groups and gates startup through IPC", async () => {
 });
 
 it("joins worker exit, closed pipes and the queued IPC disconnect", async () => {
-  vi.useFakeTimers();
-  setPlatform("darwin");
-  const { adapter, child, disconnectMock, emitExit } = await setup({ ownedWorker: true });
+  const { adapter, child, disconnectMock, emitExit } = await setupTimed("darwin", {
+    ownedWorker: true,
+  });
   disconnectMock.mockImplementation(() => {
     Object.defineProperty(child, "connected", { value: false });
   });
-  const settled = vi.fn();
-  void adapter.wait().then(settled);
+  const settled = watch(adapter.wait());
   adapter.closeStartGate?.();
   for (const stream of [child.stdout, child.stderr]) {
     stream?.emit("end");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(settled).not.toHaveBeenCalled();
+    await advancePending(settled);
     stream?.emit("close");
   }
   emitExit(7);
-  await vi.advanceTimersByTimeAsync(0);
-  expect(settled).not.toHaveBeenCalled();
+  await advancePending(settled);
   child.emit("disconnect");
   await expect(adapter.wait()).resolves.toEqual({ code: 7, signal: null });
   expect(signalMock).not.toHaveBeenCalled();
@@ -132,8 +156,7 @@ it("joins worker exit, closed pipes and the queued IPC disconnect", async () => 
 
 it("keeps ordinary children supervised through repeated operational errors", async () => {
   const { adapter, child, emitExit, emitClose } = await setup();
-  const settled = vi.fn();
-  void adapter.wait().then(settled, settled);
+  const settled = watch(adapter.wait());
   for (let attempt = 0; attempt < 2; attempt++) {
     child.emit("error", Object.assign(new Error("kill EPERM"), { code: "EPERM" }));
     await Promise.resolve();
@@ -177,7 +200,6 @@ it.each(["error", "close"])(
 
 it("captures close while secret delivery is still pending", async () => {
   setPlatform("win32");
-  const transient = Buffer.from("selected-secret");
   let delivered = "";
   const stream = new Writable({
     write(chunk, _encoding, callback) {
@@ -187,22 +209,17 @@ it("captures close while secret delivery is still pending", async () => {
     },
   });
   const child = createSecretChild(stream);
-  const adapter = await start({
-    argv: ["claude", "-p"],
-    secretInput: { fd: 3, createData: () => transient },
-  });
+  const adapter = await child.startSecret({ argv: ["claude", "-p"] });
   await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
   expect(delivered).toBe("selected-secret");
-  expect(transient.equals(Buffer.alloc(transient.length))).toBe(true);
+  expect(child.transient.equals(Buffer.alloc(child.transient.length))).toBe(true);
 });
 
 it("rejects writes after stdin ends and tracks destruction", async () => {
   const { adapter } = await setup();
-  expect(adapter.stdin?.writable).toBe(true);
-  expect(adapter.stdin?.writableEnded).toBe(false);
+  expect(adapter.stdin).toMatchObject({ writable: true, writableEnded: false });
   adapter.stdin?.end();
-  expect(adapter.stdin?.writable).toBe(false);
-  expect(adapter.stdin?.writableEnded).toBe(true);
+  expect(adapter.stdin).toMatchObject({ writable: false, writableEnded: true });
   const callback = vi.fn();
   adapter.stdin?.write("late", callback);
   expect(callback).toHaveBeenCalledWith(expect.any(Error));
@@ -211,18 +228,14 @@ it("rejects writes after stdin ends and tracks destruction", async () => {
 });
 
 it("detaches only decoder-owned listeners after the kill fallback", async () => {
-  vi.useFakeTimers();
   const flush = vi.fn(() => "flushed tail");
   decoderMock.mockImplementation(() => ({ decode: (chunk) => `decoded:${decode(chunk)}`, flush }));
-  const { adapter, child } = await setup();
-  const stdout = vi.fn(),
-    stderr = vi.fn(),
-    stdoutClose = vi.fn(),
+  const { adapter, child } = await setupTimed();
+  const stdoutClose = vi.fn(),
     stderrClose = vi.fn();
   child.stdout?.on("close", stdoutClose);
   child.stderr?.on("close", stderrClose);
-  adapter.onStdout(stdout);
-  adapter.onStderr(stderr);
+  const { stdout, stderr } = observeOutput(adapter);
   child.stdout?.emit("data", Buffer.from("drained stdout"));
   child.stderr?.emit("data", Buffer.from("drained stderr"));
   expect(stdout).toHaveBeenCalledExactlyOnceWith("decoded:drained stdout");
@@ -231,8 +244,8 @@ it("detaches only decoder-owned listeners after the kill fallback", async () => 
   const error = new Error("queued output error");
   child.stderr!.destroy(error);
   adapter.dispose();
-  expect(child.stdout!.destroyed).toBe(true);
-  expect(child.stderr!.destroyed).toBe(true);
+  expect(child.stdout).toMatchObject({ destroyed: true });
+  expect(child.stderr).toMatchObject({ destroyed: true });
   expect(child.stderr!.errored).toBe(error);
   child.stdout!.emit("data", Buffer.from("late stdout"));
   child.stderr!.emit("data", Buffer.from("late stderr"));
@@ -245,19 +258,15 @@ it("detaches only decoder-owned listeners after the kill fallback", async () => 
 });
 
 it("does not renew Windows cleanup deadlines or invent extinction on repeated KILL", async () => {
-  vi.useFakeTimers();
-  setPlatform("win32");
   signalMock.mockImplementationOnce(() => {}).mockImplementationOnce(() => {});
-  const { adapter } = await setup();
-  const settled = vi.fn();
-  void adapter.wait().then(settled);
+  const { adapter } = await setupTimed("win32");
+  const settled = watch(adapter.wait());
   const rejected = expect(closeOwnedStdioProcess(adapter, { force: true })).rejects.toThrow(
     "before the kill deadline",
   );
   await vi.advanceTimersByTimeAsync(3_000);
   adapter.kill("SIGKILL");
-  await vi.advanceTimersByTimeAsync(999);
-  expect(settled).not.toHaveBeenCalled();
+  await advancePending(settled, 999);
   await vi.advanceTimersByTimeAsync(1);
   expect(settled).toHaveBeenCalledExactlyOnceWith({ code: null, signal: "SIGKILL" });
   await rejected;
@@ -271,32 +280,27 @@ it("does not renew Windows cleanup deadlines or invent extinction on repeated KI
 it.each(["open", "closed"] as const)(
   "joins Windows tree kill before settling %s streams",
   async (streams) => {
-    vi.useFakeTimers();
-    setPlatform("win32");
     let complete: (() => void) | undefined;
     signalMock.mockImplementationOnce((_pid, _signal, options) => {
       complete = options?.onComplete;
     });
-    const { adapter, child, emitExit, emitClose } = await setup({
+    const { adapter, child, emitExit, emitClose } = await setupTimed("win32", {
       stdinMode: "pipe-closed",
     });
-    const settled = vi.fn();
-    void adapter.wait().then(settled);
+    const settled = watch(adapter.wait());
     adapter.kill("SIGKILL");
     adapter.closeStartGate?.();
     emitExit(null, "SIGKILL");
     if (streams === "closed") {
       emitClose(null, "SIGKILL");
     }
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(settled).not.toHaveBeenCalled();
+    await advancePending(settled, 1_000);
     expect(child.stdout?.destroyed).toBe(false);
     expect(child.stderr?.destroyed).toBe(false);
     complete?.();
     await vi.advanceTimersByTimeAsync(0);
     if (streams === "open") {
-      await vi.advanceTimersByTimeAsync(249);
-      expect(settled).not.toHaveBeenCalled();
+      await advancePending(settled, 249);
       await vi.advanceTimersByTimeAsync(1);
       expect(child.stdout?.destroyed).toBe(true);
       expect(child.stderr?.destroyed).toBe(true);
@@ -306,18 +310,11 @@ it.each(["open", "closed"] as const)(
 );
 
 it("preserves descendant output after ordinary Windows exit", async () => {
-  vi.useFakeTimers();
-  setPlatform("win32");
-  const { adapter, emitExit, child } = await setup({ stdinMode: "pipe-closed" });
-  const stdout = vi.fn(),
-    stderr = vi.fn(),
-    settled = vi.fn();
-  adapter.onStdout(stdout);
-  adapter.onStderr(stderr);
-  void adapter.wait().then(settled);
+  const { adapter, emitExit, child } = await setupTimed("win32", { stdinMode: "pipe-closed" });
+  const { stdout, stderr } = observeOutput(adapter);
+  const settled = watch(adapter.wait());
   emitExit(0);
-  await vi.advanceTimersByTimeAsync(1_000);
-  expect(settled).not.toHaveBeenCalled();
+  await advancePending(settled, 1_000);
   expect(child.stdout?.destroyed).toBe(false);
   expect(child.stderr?.destroyed).toBe(false);
   child.stdout?.emit("data", Buffer.from("late stdout"));
@@ -362,52 +359,43 @@ it("unwraps an npm script shim without reparsing prompt argv", async () => {
   expect(spawnArgs().options?.windowsVerbatimArguments).toBeUndefined();
 });
 
-it("strips shell-init env from Linux OOM wrapper spawns", async () => {
+it.each([false, true])("handles Linux spawn environment (exact=%s)", async (exact) => {
   setPlatform("linux");
   const restoreShell = mockLinuxOomWrapperShell();
-  vi.stubEnv("BASH_ENV", "/tmp/bashenv");
-  vi.stubEnv("ENV", "/tmp/env");
-  vi.stubEnv("CDPATH", "/tmp");
+  const shellEnv = { BASH_ENV: "/tmp/bashenv", ENV: "/tmp/env", CDPATH: "/tmp" };
+  for (const [key, value] of Object.entries(shellEnv)) {
+    vi.stubEnv(key, value);
+  }
   try {
-    await setup({ argv: ["/usr/bin/node", "-e", "process.exit(0)"] });
-    expect(spawnArgs().argv).toEqual([
-      "/bin/sh",
-      "-c",
-      'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
-      "/usr/bin/node",
-      "-e",
-      "process.exit(0)",
-    ]);
-    expect(spawnArgs().options?.env).toBeDefined();
-    for (const key of ["BASH_ENV", "ENV", "CDPATH"]) {
-      expect(spawnArgs().options?.env?.[key]).toBeUndefined();
+    const argv = ["/usr/bin/node", "worker"];
+    const env = { HOME: "/worker-home", PATH: "/usr/bin", DROP_ME: undefined };
+    await setup({ argv, exactEnv: exact ? true : undefined, env: exact ? env : undefined });
+    expect(spawnArgs().argv).toEqual(
+      exact
+        ? argv
+        : [
+            "/bin/sh",
+            "-c",
+            'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
+            ...argv,
+          ],
+    );
+    if (exact) {
+      expect(spawnArgs().options?.env).toEqual({ HOME: "/worker-home", PATH: "/usr/bin" });
+    } else {
+      expect(spawnArgs().options?.env).toBeDefined();
+      for (const key of Object.keys(shellEnv)) {
+        expect(spawnArgs().options?.env?.[key]).toBeUndefined();
+      }
     }
   } finally {
     restoreShell();
   }
 });
 
-it("preserves an exact Linux env without the OOM shell wrapper", async () => {
-  setPlatform("linux");
-  const restoreShell = mockLinuxOomWrapperShell();
-  try {
-    const env = { HOME: "/worker-home", PATH: "/usr/bin", DROP_ME: undefined };
-    await setup({ argv: ["/usr/bin/node", "worker"], exactEnv: true, env });
-    expect(spawnArgs().argv).toEqual(["/usr/bin/node", "worker"]);
-    expect(spawnArgs().options?.env).toEqual({ HOME: "/worker-home", PATH: "/usr/bin" });
-  } finally {
-    restoreShell();
-  }
-});
-
 it("retains the cleanup deadline after out-of-order close and disposal", async () => {
-  vi.useFakeTimers();
-  const { adapter, emitClose } = await setup({
-    onSpawnCleanup: (cleanup) => {
-      void cleanup.catch((error: unknown) => {
-        failure = error;
-      });
-    },
+  const { adapter, emitClose } = await setupTimed(process.platform, {
+    onSpawnCleanup: (cleanup) => void cleanup.catch((error: unknown) => (failure = error)),
   });
   let failure: unknown;
   signalMock.mockImplementationOnce(() => {});
@@ -429,9 +417,7 @@ it("records tree signaling rejection in cleanup without an unhandled rejection",
   });
   let cleanup: Promise<ProcessExtinctionResult> | undefined;
   const { adapter } = await setup({
-    onSpawnCleanup: (promise) => {
-      cleanup = promise;
-    },
+    onSpawnCleanup: (promise) => (cleanup = promise),
   });
   const unhandled = vi.fn();
   process.on("unhandledRejection", unhandled);
@@ -477,20 +463,15 @@ it("preserves startup failure when a worker error arrives during secret delivery
       setImmediate(() => callback(deliveryError));
     },
   });
-  const { child, killMock, emitClose } = createSecretChild(secretStream);
+  const { child, killMock, emitClose, transient, startSecret } = createSecretChild(
+    secretStream,
+    "synthetic-secret",
+  );
   killMock.mockImplementation(() => {
     setImmediate(() => emitClose(null, "SIGKILL"));
     return true;
   });
-  const transient = Buffer.from("synthetic-secret");
-
-  await expect(
-    start({
-      argv: ["node", "worker"],
-      ownedWorker: true,
-      secretInput: { fd: 3, createData: () => transient },
-    }),
-  ).rejects.toBe(deliveryError);
+  await expect(startSecret({ ownedWorker: true })).rejects.toBe(deliveryError);
   expect(killMock).toHaveBeenCalledWith("SIGKILL");
   expect(transient.equals(Buffer.alloc(transient.length))).toBe(true);
 });
@@ -544,21 +525,16 @@ it("joins child closure after tree-first cancellation of blocked secret delivery
       // Leave the secret pipe unread so construction stays blocked.
     },
   });
-  const { child, killMock, emitClose } = createSecretChild(secretStream);
+  const { child, killMock, emitClose, startSecret } = createSecretChild(secretStream);
   const abort = new AbortController();
-  const starting = start({
+  const starting = startSecret({
     argv: ["claude", "-p"],
     stdinMode: "pipe-open",
-    secretInput: {
-      fd: 3,
-      createData: () => Buffer.from("selected-secret"),
-    },
     abortSignal: abort.signal,
   });
   await nextTurn();
   const outcome = Promise.allSettled([starting]);
-  const settled = vi.fn();
-  void outcome.then(settled);
+  const settled = watch(outcome);
   abort.abort();
   await nextTurn();
   expect(signalMock).toHaveBeenCalledWith(
