@@ -5,13 +5,11 @@ const { inworldTTSMock, listInworldVoicesMock } = vi.hoisted(() => ({
   listInworldVoicesMock: vi.fn(),
 }));
 
-vi.mock("./tts.js", async (importOriginal) => {
-  return {
-    ...(await importOriginal<typeof import("./tts.js")>()),
-    inworldTTS: inworldTTSMock,
-    listInworldVoices: listInworldVoicesMock,
-  };
-});
+vi.mock("./tts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./tts.js")>()),
+  inworldTTS: inworldTTSMock,
+  listInworldVoices: listInworldVoicesMock,
+}));
 
 import { buildInworldSpeechProvider } from "./speech-provider.js";
 
@@ -49,28 +47,6 @@ afterAll(() => {
 
 describe("buildInworldSpeechProvider", () => {
   const provider = buildInworldSpeechProvider();
-  const directive = (key: string, value: string) =>
-    provider.parseDirectiveToken?.({ key, value, policy });
-  async function expectSynthesis(telephony: boolean) {
-    const audioBuffer = Buffer.from(telephony ? "pcm" : "opus");
-    inworldTTSMock.mockResolvedValueOnce(audioBuffer);
-    const req = { ...request, providerOverrides: overrides };
-    const result = telephony
-      ? await provider.synthesizeTelephony?.(req)
-      : await provider.synthesize({ ...req, target: "voice-note" });
-    expect(inworldTTSMock).toHaveBeenCalledWith({
-      ...synthesisParams,
-      audioEncoding: telephony ? "PCM" : "OGG_OPUS",
-      ...(telephony ? { sampleRateHertz: 22_050 } : {}),
-    });
-    expect(result).toEqual({
-      audioBuffer,
-      ...(telephony
-        ? { outputFormat: "pcm", sampleRate: 22_050 }
-        : { outputFormat: "ogg_opus", fileExtension: ".ogg", voiceCompatible: true }),
-    });
-  }
-
   afterEach(() => {
     inworldTTSMock.mockReset();
     listInworldVoicesMock.mockReset();
@@ -117,8 +93,7 @@ describe("buildInworldSpeechProvider", () => {
     };
     expect(
       provider.resolveConfig?.({
-        cfg: {},
-        timeoutMs: 30_000,
+        ...request,
         rawConfig: {
           providers: { inworld: { ...config, baseUrl: "https://custom.inworld.example.com/" } },
         },
@@ -150,25 +125,15 @@ describe("buildInworldSpeechProvider", () => {
     });
   });
 
-  it("parses Inworld TTS directive overrides", () => {
-    expect(directive("voice", "Ashley")).toEqual({
+  it.each([
+    ["voice", "Ashley", { overrides: { voiceId: "Ashley" } }],
+    ["model", "inworld-tts-1.5-mini", { overrides: { modelId: "inworld-tts-1.5-mini" } }],
+    ["temperature", "0.7", { overrides: { temperature: 0.7 } }],
+    ["temperature", "3", { warnings: ['invalid Inworld temperature "3"'] }],
+  ] as const)("parses directive %s=%s", (key, value, expected) => {
+    expect(provider.parseDirectiveToken?.({ key, value, policy })).toEqual({
       handled: true,
-      overrides: { voiceId: "Ashley" },
-    });
-    expect(directive("model", "inworld-tts-1.5-mini")).toEqual({
-      handled: true,
-      overrides: { modelId: "inworld-tts-1.5-mini" },
-    });
-    expect(directive("temperature", "0.7")).toEqual({
-      handled: true,
-      overrides: { temperature: 0.7 },
-    });
-  });
-
-  it("warns on invalid directive temperature", () => {
-    expect(directive("temperature", "3")).toEqual({
-      handled: true,
-      warnings: ['invalid Inworld temperature "3"'],
+      ...expected,
     });
   });
 
@@ -181,17 +146,30 @@ describe("buildInworldSpeechProvider", () => {
       providerOverrides: { temperature: 3 },
       target: "audio-file",
     });
-
     expect(inworldTTSMock).toHaveBeenCalledWith(
       expect.not.objectContaining({ temperature: expect.any(Number) }),
     );
   });
-
-  it("synthesizes voice-note targets with native OGG_OPUS output", async () => {
-    await expectSynthesis(false);
-  });
-
-  it("synthesizes telephony PCM at 22050 Hz", async () => {
-    await expectSynthesis(true);
+  it.each([
+    ["OGG_OPUS voice-note", false],
+    ["22050 Hz telephony PCM", true],
+  ] as const)("synthesizes %s", async (_label, telephony) => {
+    const audioBuffer = Buffer.from(telephony ? "pcm" : "opus");
+    inworldTTSMock.mockResolvedValueOnce(audioBuffer);
+    const req = { ...request, providerOverrides: overrides };
+    const result = telephony
+      ? await provider.synthesizeTelephony?.(req)
+      : await provider.synthesize({ ...req, target: "voice-note" });
+    expect(inworldTTSMock).toHaveBeenCalledWith({
+      ...synthesisParams,
+      audioEncoding: telephony ? "PCM" : "OGG_OPUS",
+      ...(telephony ? { sampleRateHertz: 22_050 } : {}),
+    });
+    expect(result).toEqual({
+      audioBuffer,
+      ...(telephony
+        ? { outputFormat: "pcm", sampleRate: 22_050 }
+        : { outputFormat: "ogg_opus", fileExtension: ".ogg", voiceCompatible: true }),
+    });
   });
 });
