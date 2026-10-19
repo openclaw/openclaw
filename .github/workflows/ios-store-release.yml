@@ -87,14 +87,6 @@ jobs:
           rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Ensure watchOS screenshot runtime
-        run: |
-          echo "Runner image: ${ImageOS:-unknown} / ${ImageVersion:-unknown}"
-          xcodebuild -version
-          xcrun simctl list runtimes
-          xcodebuild -downloadPlatform watchOS -buildVersion "$(xcrun --sdk watchsimulator --show-sdk-version)"
-          xcrun simctl list runtimes
-
       - name: Capture iPhone, iPad, and Watch screenshots
         env:
           OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1"
