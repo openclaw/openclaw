@@ -124,6 +124,7 @@ export async function sendGatewayHello(
       ? sha256Base64Url(JSON.stringify(recoveryScopeMaterial))
       : undefined;
   const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
+  const snapshotStartedAt = performance.now();
   const sessionRowProjection = getSessionRowProjection(buildRequestContext());
   const snapshot = buildGatewaySnapshot({
     client: context.handler.getClient(),
@@ -137,6 +138,8 @@ export async function sendGatewayHello(
     snapshot.health = cachedHealth;
     snapshot.stateVersion.health = getHealthVersion();
   }
+  context.recordAttachTiming?.("snapshotMs", snapshotStartedAt);
+  const descriptorsStartedAt = performance.now();
   const controlUiTabs = listControlUiPluginTabs(scopes, {
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
@@ -162,6 +165,7 @@ export async function sendGatewayHello(
     role === "operator"
       ? operatorSessionCap(context.handler.getClient(), context.configSnapshot)
       : undefined;
+  context.recordAttachTiming?.("helloDescriptorsMs", descriptorsStartedAt);
   const helloOk = {
     type: "hello-ok",
     // Admission already verified range overlap; this field reports the server's current protocol.
