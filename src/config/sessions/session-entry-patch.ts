@@ -437,6 +437,7 @@ export async function runSessionEntryWorkerOperation<
               ([key]) => !receipt.unavailableParticipantKeys?.includes(key),
             ),
           ),
+          receipt.conversationPublication,
         );
       }
     },

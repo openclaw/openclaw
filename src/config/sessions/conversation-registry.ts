@@ -18,7 +18,9 @@ import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-ad
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { retainConversationBindingFacts } from "./conversation-binding-facts.js";
 import type { ConversationIdentity } from "./conversation-identity.js";
+import { normalizeStoredConversationRef } from "./conversation-record-policy.js";
 import type { ConversationReadQuery, ConversationRecord } from "./conversation-registry.types.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { withConversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
@@ -30,6 +32,7 @@ import { captureSessionActorStorageOwner } from "./session-actor-storage-binding
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 const conversationAuthority = { assertCurrent() {}, authorize() {} };
@@ -152,6 +155,74 @@ function readConversationsAsync(
   return withConversationRead(scope, ({ reader, database }) =>
     reader.readConversations({ query, env: database.env }),
   );
+}
+
+/** Capture once; final effects consume the conversation writer's published current bindings. */
+export async function captureConversationBindingFacts(
+  scope: ConversationRegistryScope,
+  conversationRefs: readonly string[],
+) {
+  const refs = [...new Set(conversationRefs.map(normalizeStoredConversationRef))];
+  const memory = captureSessionActorStorageOwner(
+    { agentId: scope.databaseAgentId ?? scope.agentId, storePath: scope.storePath, env: scope.env },
+    conversationAuthority,
+  );
+  if (memory) {
+    let active = true;
+    return {
+      currentSessionKey(conversationRef: string): string | null {
+        if (!active) {
+          throw new Error("Conversation binding reader was released");
+        }
+        const input = { conversationRef, currentBindingOnly: true, limit: 1 };
+        const rows =
+          memory.binding &&
+          memory.agentId === memory.binding.agentId &&
+          memory.path === memory.binding.path
+            ? memory.binding.actor.storage!.readCurrent(
+                { type: "session.conversation.read", input },
+                memory.authority,
+              )
+            : (
+                memory.owner ??
+                memorySessionActorOwners.read({
+                  agentId: memory.agentId,
+                  path: memory.path,
+                })
+              )?.readConversations(input, memory.authority);
+        return rows?.[0]?.sessionKey ?? null;
+      },
+      release() {
+        active = false;
+      },
+    };
+  }
+  const facts = retainConversationBindingFacts(refs);
+  let retained: ReturnType<typeof retainSessionHistoryWorkerDatabase> | undefined;
+  const release = () => {
+    facts.release();
+    retained?.release();
+  };
+  try {
+    return await withConversationRead(scope, async ({ reader, database, assertCurrent }) => {
+      retained = retainSessionHistoryWorkerDatabase(database);
+      const snapshot = await reader.readConversationBindings({
+        conversationRefs: refs,
+        env: database.env,
+      });
+      facts.acknowledge(snapshot);
+      return {
+        currentSessionKey(conversationRef: string) {
+          assertCurrent();
+          return facts.currentSessionKey(conversationRef);
+        },
+        release,
+      };
+    });
+  } catch (error) {
+    release();
+    throw error;
+  }
 }
 
 export function pinConversationDatabaseScope(input: ConversationRegistryScope) {

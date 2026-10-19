@@ -3,16 +3,18 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import {
+  deleteLegacySessionEntryRows,
+  rehomeSessionWindows,
+} from "./session-accessor.sqlite-entry-aliases.js";
+import {
   sqliteSessionEntriesEqual,
   type SqliteLifecycleTargetSnapshot,
 } from "./session-accessor.sqlite-entry-equality.js";
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import {
-  deleteLegacySessionEntryRows,
   deleteSessionEntryRows,
   readExactSessionEntryRow,
   readSessionEntryCount,
-  rehomeSessionWindows,
   writeSessionEntry,
   type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-store.js";
@@ -182,9 +184,17 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
         projectionNeedsReconcile,
       });
     }
+    const relatedRemovalKeys = validatedRemovals.flatMap((removal) => {
+      const removedSessionId = removal.expectedEntry.sessionId;
+      return removal.sessionKey !== sessionKey &&
+        (removedSessionId === entry.sessionId || removedSessionId === entry.previousSessionId)
+        ? [removal.sessionKey]
+        : [];
+    });
     writeSessionEntry(database, sessionKey, entry, {
       // Inbound initialization observes activity even without authoritative route facts.
       observeConversation: true,
+      publishConversationBinding: relatedRemovalKeys.length > 0,
       allowStoredAliases: options.allowCanonicalRepair === true,
       preserveNodeSuggestions: options.allowCanonicalRepair === true,
       previousEntry: expectedCurrentEntry ?? null,
@@ -203,13 +213,6 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
     if (!currentEntry) {
       afterCount += 1;
     }
-    const relatedRemovalKeys = validatedRemovals.flatMap((removal) => {
-      const removedSessionId = removal.expectedEntry.sessionId;
-      return removal.sessionKey !== sessionKey &&
-        (removedSessionId === entry.sessionId || removedSessionId === entry.previousSessionId)
-        ? [removal.sessionKey]
-        : [];
-    });
     rehomeSessionWindows(database, sessionKey, relatedRemovalKeys, options.postimages);
     for (const legacyKey of relatedRemovalKeys) {
       const removedEntry = validatedRemovals.find(

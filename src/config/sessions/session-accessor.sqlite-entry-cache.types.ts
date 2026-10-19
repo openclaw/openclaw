@@ -89,6 +89,7 @@ export type SessionEntryPlaceholder = Readonly<{ sessionId: string }>;
 
 export type SessionTranscriptInitializationPublication = {
   kind: "session-transcript-initialized";
+  conversationPublication?: readonly import("./session-accessor.sqlite-conversation-publication.js").ConversationPublication[];
   transcriptPublication?: readonly import("./session-transcript-authority.types.js").SessionTranscriptAuthorityReceipt[];
   sessionKey: string;
   placeholder?: SessionEntryPlaceholder;
@@ -147,6 +148,7 @@ export type SessionEntryProjectionFacts = {
 };
 
 export type SessionEntryReplacementPublication = {
+  conversationPublication?: readonly import("./session-accessor.sqlite-conversation-publication.js").ConversationPublication[];
   /** Removed aliases preserved transcript contents, visibility, and logical-agent attribution. */
   transcriptInventoryUnchanged?: true;
   maintenancePlans?: readonly SessionMaintenancePreservationPlan[];

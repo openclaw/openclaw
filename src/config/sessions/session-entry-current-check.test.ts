@@ -6,9 +6,14 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
@@ -232,6 +237,45 @@ it("keeps prepared entry authority current through native and worker writes with
   }
 });
 
+it("revokes absent entry authority when a managed write creates its missing database", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("entry-current-missing-database-") };
+  const scope = {
+    agentId: "main",
+    sessionKey: "agent:main:entry-current",
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
+    env,
+  };
+  expect(fs.existsSync(scope.storePath)).toBe(false);
+  const check = await captureSessionEntryCurrentCheckAsyncInternal({
+    ...scope,
+    fields: ["execHost"],
+  });
+  try {
+    expect(check.entry).toBeUndefined();
+    expect(fs.existsSync(scope.storePath)).toBe(false);
+    expect(() => check.source()).not.toThrow();
+    await expect(check.isCurrent()).resolves.toBe(true);
+    const source = await check.source.prepareSessionSource();
+
+    await replaceSessionEntry(scope, { sessionId: "created", updatedAt: 1, execHost: "node" });
+
+    const sql = observeMainThreadSql();
+    const requests = vi.spyOn(Worker.prototype, "postMessage");
+    try {
+      expect(() => check.source()).toThrow("selected session changed");
+      expect(() => source.assertCurrent()).toThrow("selected session changed");
+      await expect(check.isCurrent()).resolves.toBe(false);
+      sql.expectIdle();
+      expect(requests).not.toHaveBeenCalled();
+    } finally {
+      requests.mockRestore();
+      sql.restore();
+    }
+  } finally {
+    check.release();
+  }
+});
+
 it("retains ID-selected policy and absence without revoking unrelated publications", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("entry-current-id-") };
   const scope = {
@@ -286,3 +330,203 @@ it("retains ID-selected policy and absence without revoking unrelated publicatio
     absent.release();
   }
 });
+
+const conversationAddress = {
+  channel: "slack",
+  accountId: "default",
+  kind: "channel" as const,
+  peerId: "channel:C_SYNTHETIC",
+};
+
+function conversationEntry(sessionId: string, updatedAt: number): InternalSessionEntry {
+  const legacy = {
+    sessionId,
+    updatedAt,
+    chatType: "channel" as const,
+    deliveryContext: {
+      channel: conversationAddress.channel,
+      accountId: conversationAddress.accountId,
+      to: conversationAddress.peerId,
+    },
+  };
+  return normalizeLegacySessionEntryDelivery(legacy);
+}
+
+type CurrentCheck = Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsyncInternal>>;
+
+function expectConversationCurrentWithoutSql(check: CurrentCheck, current: boolean) {
+  const sql = observeMainThreadSql();
+  const requests = vi.spyOn(Worker.prototype, "postMessage");
+  try {
+    if (current) {
+      expect(() => check.source()).not.toThrow();
+    } else {
+      expect(() => check.source()).toThrow("selected session changed");
+    }
+    sql.expectIdle();
+    expect(requests).not.toHaveBeenCalled();
+  } finally {
+    requests.mockRestore();
+    sql.restore();
+  }
+}
+
+it.each([true, false])(
+  "publishes current conversation ownership through worker writes (matchGeneration=%s)",
+  async (matchGeneration) => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("conversation-current-worker-") };
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:chosen",
+      storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
+      env,
+    };
+    const competitor = { ...scope, sessionKey: "agent:main:competitor" };
+    await replaceSessionEntry(scope, conversationEntry("chosen", 10));
+    const check = await captureSessionEntryCurrentCheckAsyncInternal({
+      ...scope,
+      matchGeneration,
+      alternatives: [{ conversations: [{ ...conversationAddress, sessionKey: scope.sessionKey }] }],
+    });
+    try {
+      expectConversationCurrentWithoutSql(check, true);
+      await replaceSessionEntry(
+        { ...scope, sessionKey: "agent:main:unrelated" },
+        { sessionId: "unrelated", updatedAt: 50 },
+      );
+      expectConversationCurrentWithoutSql(check, true);
+
+      // Another node can win the route while the selected entry stays byte-identical.
+      await replaceSessionEntry(competitor, conversationEntry("competitor", 20));
+      expectConversationCurrentWithoutSql(check, false);
+      await expect(check.isCurrent()).resolves.toBe(false);
+      await deleteSessionEntryLifecycle({
+        ...competitor,
+        target: { canonicalKey: competitor.sessionKey, storeKeys: [competitor.sessionKey] },
+        archiveTranscript: false,
+      });
+      // Deleting the winner exposes the older candidate; retaining only the winner loses it.
+      expectConversationCurrentWithoutSql(check, true);
+
+      await replaceSessionEntry(scope, conversationEntry("replacement", 30));
+      expectConversationCurrentWithoutSql(check, !matchGeneration);
+      await expect(check.isCurrent()).resolves.toBe(!matchGeneration);
+    } finally {
+      check.release();
+    }
+  },
+);
+
+it("keeps tentative conversation authority local to native commit and rollback", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("conversation-current-rollback-") };
+  const scope = {
+    agentId: "main",
+    sessionKey: "agent:main:chosen",
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
+    env,
+  };
+  const competitor = { ...scope, sessionKey: "agent:main:competitor" };
+  await replaceSessionEntry(scope, conversationEntry("chosen", 10));
+  const check = await captureSessionEntryCurrentCheckAsyncInternal({
+    ...scope,
+    matchGeneration: false,
+    alternatives: [{ conversations: [{ ...conversationAddress, sessionKey: scope.sessionKey }] }],
+  });
+  try {
+    expectConversationCurrentWithoutSql(check, true);
+    const rollback = new Error("Roll back the synthetic route");
+    expect(() =>
+      runOpenClawAgentWriteTransaction(
+        () => {
+          replaceSessionEntrySync(competitor, conversationEntry("competitor", 20));
+          expectConversationCurrentWithoutSql(check, false);
+          throw rollback;
+        },
+        { agentId: scope.agentId, path: scope.storePath, env },
+      ),
+    ).toThrow(rollback);
+    expectConversationCurrentWithoutSql(check, true);
+    replaceSessionEntrySync(competitor, conversationEntry("competitor", 20));
+    expectConversationCurrentWithoutSql(check, false);
+  } finally {
+    check.release();
+  }
+});
+
+it("revokes cold conversation authority when its database reader is retired", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("conversation-current-retirement-") };
+  const scope = {
+    agentId: "main",
+    sessionKey: "agent:main:chosen",
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
+    env,
+  };
+  await replaceSessionEntry(scope, conversationEntry("chosen", 10));
+  await closeOpenClawAgentDatabaseByPathAsync(scope.storePath, scope.agentId);
+  const check = await captureSessionEntryCurrentCheckAsyncInternal({
+    ...scope,
+    matchGeneration: false,
+    alternatives: [{ conversations: [{ ...conversationAddress, sessionKey: scope.sessionKey }] }],
+  });
+  try {
+    expectConversationCurrentWithoutSql(check, true);
+    await closeOpenClawAgentDatabaseByPathAsync(scope.storePath, scope.agentId);
+    expectConversationCurrentWithoutSql(check, false);
+  } finally {
+    check.release();
+  }
+});
+
+it.each([false, true])(
+  "isolates foreign conversation absence (existing store=%s)",
+  async (existing) => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("conversation-current-stores-") };
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:chosen",
+      storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
+      env,
+    };
+    const foreign = {
+      agentId: "other",
+      sessionKey: "agent:other:foreign",
+      storePath: resolveOpenClawAgentSqlitePath({ agentId: "other", env }),
+      env,
+    };
+    await replaceSessionEntry(scope, conversationEntry("chosen", 10));
+    if (existing) {
+      await replaceSessionEntry(foreign, { sessionId: "foreign", updatedAt: 10 });
+    } else {
+      expect(fs.existsSync(foreign.storePath)).toBe(false);
+    }
+    const check = await captureSessionEntryCurrentCheckAsyncInternal({
+      ...scope,
+      alternatives: [
+        {
+          conversations: [
+            { ...conversationAddress, sessionKey: scope.sessionKey },
+            {
+              ...conversationAddress,
+              agentId: foreign.agentId,
+              storePath: foreign.storePath,
+              sessionKey: null,
+            },
+          ],
+        },
+      ],
+    });
+    try {
+      expectConversationCurrentWithoutSql(check, true);
+      await replaceSessionEntry(scope, {
+        ...conversationEntry("chosen", 20),
+        displayName: "Updated",
+      });
+      expectConversationCurrentWithoutSql(check, true);
+      await replaceSessionEntry(foreign, conversationEntry("foreign", 30));
+      expectConversationCurrentWithoutSql(check, false);
+      await expect(check.isCurrent()).resolves.toBe(false);
+    } finally {
+      check.release();
+    }
+  },
+);

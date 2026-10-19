@@ -3,6 +3,7 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-ag
 import { assertConversationAuthority } from "./conversation-authority.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import {
+  captureConversationBindingFacts,
   listConversations,
   readConversation,
   registerConversationAddresses,
@@ -100,6 +101,24 @@ async function fixture() {
 }
 
 describe("memory conversation registry", () => {
+  it("observes a memory owner created after capturing absent conversation authority", async () => {
+    const identity = buildConversationIdentity({
+      channel: "discord",
+      accountId: "default",
+      kind: "channel",
+      peerId: "canonical-ops",
+      deliveryTarget: "channel:ops",
+    })!;
+    const captured = await captureConversationBindingFacts(scope, [identity.conversationRef]);
+    try {
+      expect(captured.currentSessionKey(identity.conversationRef)).toBeNull();
+      await fixture();
+      expect(captured.currentSessionKey(identity.conversationRef)).toBe(sessionKey);
+    } finally {
+      captured.release();
+    }
+  });
+
   it("registers an address catalogue without manufacturing a session", async () => {
     const identity = address("catalogue");
     await registerConversationAddresses(scope, [identity], 1);

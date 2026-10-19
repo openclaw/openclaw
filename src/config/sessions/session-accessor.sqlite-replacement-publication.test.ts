@@ -2,6 +2,7 @@ import "./session-accessor.sqlite-replacement-publication.test-support.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSessionMembershipProjection } from "../../gateway/session-membership-projection.js";
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import * as logging from "../../logging/logger.js";
 import {
   onSessionIdentityMutation,
@@ -13,6 +14,7 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
@@ -28,6 +30,7 @@ import {
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
+import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 import type { SessionEntry } from "./types.js";
 
@@ -135,6 +138,100 @@ it("settles publication before a successor writer and preserves metadata after w
     }
   });
 });
+
+it.each(["delivered", "lost", "overtaken"] as const)(
+  "settles conversation authority before observers when replacement delivery is %s",
+  async (boundary) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const { scope, write, replace } = setup("conversation-competitor");
+      const selected = { ...scope, sessionKey: "agent:main:conversation-selected" };
+      const address = {
+        channel: "slack",
+        accountId: "default",
+        kind: "channel" as const,
+        peerId: "channel:C_SYNTHETIC",
+      };
+      const routed = (sessionId: string, updatedAt: number) => {
+        const entry = {
+          sessionId,
+          updatedAt,
+          chatType: "channel" as const,
+          deliveryContext: {
+            channel: address.channel,
+            accountId: address.accountId,
+            to: address.peerId,
+          },
+        };
+        return normalizeLegacySessionEntryDelivery(entry);
+      };
+      replaceSessionEntrySync(selected, routed("selected", 10));
+      write(makeEntry("competitor", {}));
+      const check = await captureSessionEntryCurrentCheckAsyncInternal({
+        ...selected,
+        matchGeneration: false,
+        alternatives: [{ conversations: [{ ...address, sessionKey: selected.sessionKey }] }],
+      });
+      const assertRefusedWithoutSql = () => {
+        const sql = observeMainThreadSql();
+        try {
+          expect(() => check.source()).toThrow("selected session changed");
+          sql.expectIdle();
+        } finally {
+          sql.restore();
+        }
+      };
+      let observed = 0;
+      let delivered = 0;
+      const stop = sessionChanges.subscribe((change) => {
+        if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+          assertRefusedWithoutSql();
+          observed++;
+        }
+      });
+      const failure = new Error("Synthetic lost conversation result");
+      delivery.afterResult = () => {
+        delivered++;
+        assertRefusedWithoutSql();
+        if (boundary === "overtaken") {
+          replaceSessionEntrySync(selected, routed("selected", 30));
+        }
+        if (boundary === "lost") {
+          throw failure;
+        }
+      };
+      try {
+        const operation = replace(routed("competitor", 20));
+        if (boundary === "lost") {
+          await expect(operation).rejects.toBe(failure);
+        } else {
+          await operation;
+        }
+        expect(delivered).toBe(1);
+        expect(observed).toBe(1);
+        assertRefusedWithoutSql();
+        if (boundary === "overtaken") {
+          const fresh = await captureSessionEntryCurrentCheckAsyncInternal({
+            ...selected,
+            matchGeneration: false,
+            alternatives: [{ conversations: [{ ...address, sessionKey: selected.sessionKey }] }],
+          });
+          const sql = observeMainThreadSql();
+          try {
+            expect(() => fresh.source()).not.toThrow();
+            sql.expectIdle();
+          } finally {
+            sql.restore();
+            fresh.release();
+          }
+        }
+      } finally {
+        delivery.afterResult = undefined;
+        stop();
+        check.release();
+      }
+    });
+  },
+);
 
 it.each(["metadata only", "lost result", "callback failure", "release failure"] as const)(
   "preserves replacement publication through %s",

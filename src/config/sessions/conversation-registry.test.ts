@@ -159,9 +159,7 @@ describe("conversation registry", () => {
       receipts[0]?.facts.get(JSON.stringify(["catalogue", identity!.conversationRef])),
       {
         conversation_id: identity!.conversationRef,
-        label: identity!.label,
-        created_at: 100,
-        updated_at: 100,
+        kind: identity!.kind,
       },
       "catalogue",
     );
@@ -560,11 +558,11 @@ describe("conversation registry", () => {
     const oldRelated = associationKey(0, "related");
     const newPrimary = associationKey(1, "primary");
     expect(installed.get(oldPrimary)).toEqual({ kind: "absent" });
-    for (const [key, role, first_seen_at] of [
-      [oldRelated, "related", 10],
-      [newPrimary, "primary", 20],
+    for (const [key, role] of [
+      [oldRelated, "related"],
+      [newPrimary, "primary"],
     ] as const) {
-      expectPostimage(installed.get(key), { role, first_seen_at, last_seen_at: 20 });
+      expectPostimage(installed.get(key), { role, last_seen_at: 20 });
     }
     expect(snapshots).toHaveLength(2);
     for (const keys of snapshots) {
@@ -586,7 +584,7 @@ describe("conversation registry", () => {
     ).toEqual({ role: "primary" });
   });
 
-  it("commits catalogue metadata whose encoded receipt exceeds the transport limit", async () => {
+  it("publishes binding facts without transporting large catalogue metadata", async () => {
     const scope = registryScope();
     const identity = address("large-catalogue", undefined, { channel: "fixture" })!;
     // The request fits IPC; JSON's six-byte escape expands the stored postimage beyond it.
@@ -594,10 +592,12 @@ describe("conversation registry", () => {
       payload: "\0".repeat(Math.floor(SQLITE_WORKER_MAX_MESSAGE_BYTES / 6) + 1),
     };
     const events: string[] = [];
+    const receipts: ConversationPublication[] = [];
     observe(
       conversationPublication.subscribeFacts((change) => {
-        if ("kind" in change) {
-          events.push(change.kind);
+        if ("facts" in change) {
+          receipts.push(change);
+          events.push("facts");
         }
       }),
     );
@@ -614,7 +614,15 @@ describe("conversation registry", () => {
       bytes: JSON.stringify(identity.metadata).length,
       updated_at: 100,
     });
-    expect(events).toContain("unknown");
-    expect(events.indexOf("unknown")).toBeLessThan(events.indexOf("reply"));
+    expect(events).toEqual(["facts", "reply"]);
+    expect(receipts[0]?.facts.get(JSON.stringify(["catalogue", identity.conversationRef]))).toEqual(
+      {
+        kind: "postimage",
+        value: {
+          kind: "catalogue",
+          row: { conversation_id: identity.conversationRef, kind: identity.kind },
+        },
+      },
+    );
   });
 });
