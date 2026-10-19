@@ -26,6 +26,14 @@ export function projectScoreMultiplier(
   return stored.every((key) => activeProjectKeys.has(key)) ? 1.15 : 0.9;
 }
 
+/** Chunks with a malformed project annotation never reach retrieval results. */
+export function hasValidProjectAnnotation(entry: { projectKey?: string }): boolean {
+  return !entry.projectKey
+    ?.split(";")
+    .map((key) => key.trim())
+    .includes(INVALID_PROJECT_ANNOTATION_KEY);
+}
+
 export function applyRetrievalRanking<T extends ProjectRankable>(
   results: readonly T[],
   activeProjectKeys?: ReadonlySet<string>,
@@ -38,13 +46,7 @@ export function applyRetrievalRanking<T extends ProjectRankable>(
         : 0.75 + Math.max(1, Math.min(10, Math.floor(importance))) * 0.05;
     return { ...entry, score: entry.score * multiplier };
   });
-  const eligible = weighted.filter(
-    (entry) =>
-      !entry.projectKey
-        ?.split(";")
-        .map((key) => key.trim())
-        .includes(INVALID_PROJECT_ANNOTATION_KEY),
-  );
+  const eligible = weighted.filter(hasValidProjectAnnotation);
   if (!activeProjectKeys || activeProjectKeys.size === 0) {
     return eligible;
   }
