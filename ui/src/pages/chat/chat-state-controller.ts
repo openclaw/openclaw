@@ -134,6 +134,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   attach(state: TState) {
     if (this.stateValue && this.stateValue !== state) {
+      chatOutboxOwner(this.stateValue).admissions.cancelRequests(this.stateValue);
       this.privateDraftReview?.controller.abort();
       disposeSelectedSessionMessageSubscription(this.stateValue);
       releaseChatMediaResourceSubscriber(this.stateValue.requestUpdate);
@@ -567,6 +568,9 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   hostDisconnected() {
+    if (this.stateValue) {
+      chatOutboxOwner(this.stateValue).admissions.cancelRequests(this.stateValue);
+    }
     this.renderLifecycleConnected = false;
     this.cancelRenderLifecycleScope();
     this.attachmentReads.abortReads();

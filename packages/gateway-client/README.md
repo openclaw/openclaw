@@ -284,6 +284,11 @@ from `@openclaw/gateway-protocol`, not from bundled implementation paths.
   the socket; `stop()` closes it and rejects pending requests.
 - A request uses `request(method, params)` after `hello-ok`. Passing
   `timeoutMs: null` creates an intentionally unbounded request.
+- `signal` normally stops observing a request immediately on abort. A write
+  caller that must reconcile a sent request can opt into
+  `retainSentResultOnAbort: true`: abort still cancels unsent work and retries,
+  while a sent request retains its response and original deadline. A later
+  pre-dispatch refusal rejects as aborted instead of retrying.
 - Finite request deadlines reject with `GatewayProtocolRequestTimeoutError`,
   whose `CLIENT_TIMEOUT` code, method, deadline, and send-boundary flag remain
   distinct from authoritative Gateway response errors.

@@ -496,6 +496,7 @@ export function buildGatewayCronService(params: {
   };
 
   const cron = new CronService({
+    env,
     scheduler: params.scheduler,
     storePath,
     cronEnabled,
@@ -1206,9 +1207,7 @@ export function buildGatewayCronService(params: {
       logger: cronLogger,
     });
   };
-  cron.stopAndDrain = async () => {
-    await stopAndDrainCron();
-  };
+  cron.stopAndDrain = () => stopAndDrainCron();
   const systemJobs = createGatewayCronSystemJobReconciler({
     cron,
     scheduler: params.scheduler,

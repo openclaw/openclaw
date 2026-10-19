@@ -47,8 +47,13 @@ export type CronRunQueueOperations = {
       maxConcurrentRuns: number;
       requests: CronRunRequestContext[];
       schedulingPaused?: boolean;
+      preparingAgentIds?: string[];
     };
-    output: { launches: CronQueuedRun[]; skipped: CronSkippedRequest[] };
+    output: {
+      launches: CronQueuedRun[];
+      preparing: CronQueuedRun[];
+      skipped: CronSkippedRequest[];
+    };
   };
   "cron.cancelRequests": {
     input: {

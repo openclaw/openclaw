@@ -156,7 +156,15 @@ export async function startCronScheduler(
     state.schedulerStarted = true;
     await publish(state, result);
     await locked(state, () => launchCronRunQueueResult(state, result, context));
-    const completed = await Promise.allSettled(requests.map((request) => request.completion));
+    // Readiness observers retain queued custody without holding Gateway initialization.
+    const preparingReceiptIds = new Set(
+      result.preparing.map(({ runReceipt }) => runReceipt.receiptId),
+    );
+    const completed = await Promise.allSettled(
+      requests
+        .filter((request) => !preparingReceiptIds.has(request.runReceipt.receiptId))
+        .map((request) => request.completion),
+    );
     const failed = completed.find((completion) => completion.status === "rejected");
     if (failed?.status === "rejected") {
       throw failed.reason;

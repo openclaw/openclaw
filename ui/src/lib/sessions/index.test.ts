@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -265,7 +266,11 @@ it("creates a session while a list refresh is in flight", async () => {
   expect(sessions.state.loading).toBe(true);
   const created = sessions.create({ agentId: "main" });
   await waitForFast(() =>
-    expect(request).toHaveBeenCalledWith("sessions.create", { agentId: "main" }),
+    expect(request).toHaveBeenCalledWith(
+      "sessions.create",
+      { agentId: "main" },
+      expect.objectContaining({ timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS }),
+    ),
   );
   pending.resolve(sessionsResult([], 1));
   await expect(created).resolves.toBe(key);

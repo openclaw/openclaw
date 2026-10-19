@@ -31,6 +31,7 @@ export class McpAppCatalogController {
   private preparedSessionIdentity = "";
   private cleanup: (() => void)[] = [];
   private connected = false;
+  private targetRequest = new AbortController();
   constructor(
     private host: McpAppCatalogHost,
     private context: () => ApplicationContext | undefined,
@@ -73,6 +74,7 @@ export class McpAppCatalogController {
   }
   hostDisconnected() {
     this.connected = false;
+    this.targetRequest.abort();
     this.generation++;
     this.identity = "";
     this.preparedSessionIdentity = "";
@@ -97,6 +99,8 @@ export class McpAppCatalogController {
     if (identity === this.identity) {
       return;
     }
+    this.targetRequest.abort();
+    this.targetRequest = new AbortController();
     this.identity = identity;
     this.generation++;
     this.servers = [];
@@ -108,6 +112,7 @@ export class McpAppCatalogController {
     }
   }
   async refresh() {
+    const { signal } = this.targetRequest;
     const context = this.context();
     const client = context?.gateway.snapshot.client;
     const target = this.target();
@@ -134,6 +139,7 @@ export class McpAppCatalogController {
     this.host.requestUpdate();
     const current = () =>
       this.connected &&
+      !signal.aborted &&
       generation === this.generation &&
       client === context.gateway.snapshot.client &&
       scope === gatewayPresentationScope(context.gateway).key &&
@@ -148,6 +154,7 @@ export class McpAppCatalogController {
         if (!described.session) {
           const session = await context.sessions.createResult(sessionTarget, {
             reconciliation: "background",
+            signal,
           });
           if (!current()) {
             return;

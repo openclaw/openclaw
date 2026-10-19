@@ -169,7 +169,7 @@ describe("command palette paste-only images", () => {
           }),
         ],
       }),
-      { reconciliation: "background" },
+      { reconciliation: "background", signal: expect.any(AbortSignal) },
     );
     expect(context.navigateAndWait).not.toHaveBeenCalled();
     expect(context.gateway.setSessionKey).not.toHaveBeenCalled();
@@ -364,7 +364,7 @@ describe("command palette paste-only images", () => {
                   ],
                 }),
           }),
-          { reconciliation: "background" },
+          { reconciliation: "background", signal: expect.any(AbortSignal) },
         ),
       );
     } else {

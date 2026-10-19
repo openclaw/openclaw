@@ -436,7 +436,7 @@ export async function forkSession(
     return;
   }
   try {
-    const key = await scope.sessions.create(createParams);
+    const key = await scope.sessions.create(createParams, { signal: scope.signal });
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }

@@ -73,6 +73,7 @@ type PlacementStartupEntry = {
   readonly createdAt: number;
   readonly scope: GatewayConnectionScope;
   readonly retainsConnection: () => boolean;
+  readonly abort: AbortController;
 };
 
 export default function createApplicationPlacementStartupRuntime(
@@ -104,6 +105,7 @@ export default function createApplicationPlacementStartupRuntime(
     const snapshot = params.gateway.snapshot;
     return Boolean(
       entry.retainsConnection() &&
+      !entry.abort.signal.aborted &&
       connection.isCurrent(entry.scope) &&
       snapshot.client?.recoveryScopeReady,
     );
@@ -128,6 +130,7 @@ export default function createApplicationPlacementStartupRuntime(
       return;
     }
     entries.delete(found.key);
+    entry.abort.abort();
     if (notify) {
       publish();
     }
@@ -182,6 +185,7 @@ export default function createApplicationPlacementStartupRuntime(
       persistRecovery: entry.persistRecovery,
       cleanupOnCancellation: () => !entry.persistRecovery && entry.work.kind !== "paused",
       mode,
+      signal: entry.abort.signal,
       isLifecycleCurrent: () => lifecycleCurrent(entry),
       ownsRecovery: () => ownsRecovery(entry),
       clearRecovery: () =>
@@ -303,6 +307,7 @@ export default function createApplicationPlacementStartupRuntime(
         existing?.owner.messageId === owner.messageId ? existing.createdAt : input.createdAt,
       scope,
       retainsConnection: capturePlacementStartupConnection(params.gateway, owner),
+      abort: new AbortController(),
     };
     entries.set(owner.sessionKey, entry);
     publish();
@@ -322,6 +327,11 @@ export default function createApplicationPlacementStartupRuntime(
     snapshot: ApplicationPlacementStartupDependencies["gateway"]["snapshot"],
   ) => {
     connection.transition(snapshot);
+    for (const entry of entries.values()) {
+      if (!lifecycleCurrent(entry)) {
+        entry.abort.abort();
+      }
+    }
     if (snapshot.phase !== "connected") {
       return;
     }
@@ -473,6 +483,9 @@ export default function createApplicationPlacementStartupRuntime(
     subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       connection.dispose();
+      for (const entry of entries.values()) {
+        entry.abort.abort();
+      }
       entries.clear();
       listeners.clear();
     },

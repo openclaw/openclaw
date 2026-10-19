@@ -17,13 +17,16 @@ import {
 import { t } from "../../i18n/index.ts";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
 import { publishMcpAppContext } from "../../lib/mcp-app-context.ts";
-import { mcpAppMessageInput, sendMcpAppNewConversation } from "../../lib/mcp-app-message.ts";
+import { mcpAppMessageInput } from "../../lib/mcp-app-message.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import {
   releaseChatAttachmentPayloads,
   generateAttachmentId,
   registerChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   resolveChatAttachmentLimits,
@@ -31,6 +34,7 @@ import {
   chatAttachmentBatchBytes,
 } from "./components/chat-attachment-admission.ts";
 import { encodeTextAsDataUrl } from "./components/chat-attachment-text.ts";
+import type { ChatComposerScope } from "./composer-persistence.ts";
 
 registerMcpAppEnglish();
 
@@ -47,17 +51,18 @@ declare global {
   }
 }
 
-type ChatPaneMcpAppState = Pick<
-  ChatPageHost,
-  | "sessionKey"
-  | "assistantAgentId"
-  | "chatAttachments"
-  | "uploadConfig"
-  | "hello"
-  | "requestUpdate"
-  | "handleSendChat"
-  | "handleOpenSidebar"
->;
+type ChatPaneMcpAppState = ChatComposerScope &
+  Pick<
+    ChatPageHost,
+    | "sessionKey"
+    | "assistantAgentId"
+    | "chatAttachments"
+    | "uploadConfig"
+    | "hello"
+    | "requestUpdate"
+    | "handleSendChat"
+    | "handleOpenSidebar"
+  >;
 
 /** Read at delivery, not subscription time: retained panes can change presentation/connection. */
 export type ChatPaneMcpAppOwner = {
@@ -71,6 +76,7 @@ export type ChatPaneMcpAppOwner = {
 };
 
 export class ChatPaneMcpAppController {
+  private disposed = false;
   private openedLaunch?: McpAppOpenDetail;
 
   constructor(
@@ -81,6 +87,7 @@ export class ChatPaneMcpAppController {
   ) {}
 
   subscribe(): () => void {
+    this.disposed = false;
     // Listening on the containing pane keeps split-view prompts with their iframe.
     const element = this.options.element;
     const listen = <K extends keyof HTMLElementEventMap>(
@@ -98,7 +105,10 @@ export class ChatPaneMcpAppController {
       listen(MCP_APP_OPEN_EVENT, (event) => this.receiveOpen(event)),
       listen(WIDGET_PROMPT_EVENT, (event) => this.receiveWidgetPrompt(event)),
     ];
-    return () => cleanups.forEach((cleanup) => cleanup());
+    return () => {
+      this.disposed = true;
+      cleanups.forEach((cleanup) => cleanup());
+    };
   }
 
   syncLaunch(): void {
@@ -191,11 +201,38 @@ export class ChatPaneMcpAppController {
     event.preventDefault();
     void (async () => {
       if (detail.target === "new") {
-        return sendMcpAppNewConversation(
-          context,
-          state.assistantAgentId || owner.agentId || "",
-          detail,
+        const client = context.gateway.snapshot.client;
+        const connectionGeneration = client?.connectionGeneration;
+        const agentId = state.assistantAgentId || owner.agentId || "";
+        const selectionIntent = context.agentSelection.intentRevision;
+        const request = chatOutboxOwner(state).admissions.beginRequest(
+          state,
+          resolveUiConversationIdentity(state, state.sessionKey),
+          generateUUID(),
         );
+        try {
+          const { sendMcpAppNewConversation } =
+            await import("../../lib/mcp-app-new-conversation.ts");
+          const current = this.options.current();
+          if (
+            this.disposed ||
+            request.signal.aborted ||
+            !current ||
+            current.state !== state ||
+            current.context !== context ||
+            state.client !== client ||
+            context.gateway.snapshot.client !== client ||
+            client?.connectionGeneration !== connectionGeneration ||
+            context.agentSelection.intentRevision !== selectionIntent ||
+            state.sessionKey !== detail.sessionKey ||
+            (state.assistantAgentId || current.agentId || "") !== agentId
+          ) {
+            return false;
+          }
+          return await sendMcpAppNewConversation(context, agentId, detail, request.signal);
+        } finally {
+          request.release();
+        }
       }
       const turn = mcpAppMessageInput(detail.content, context);
       let admitted = false;

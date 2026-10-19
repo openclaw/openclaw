@@ -23,12 +23,15 @@ import {
   areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
   resolveUiDefaultAgentId,
+  resolveUiConversationIdentity,
   resolveUiSelectedGlobalAgentId,
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import { executeSlashCommand } from "./chat-command-executor.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { setChatError } from "./chat-history-state.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import type { ChatExportResult } from "./export.ts";
 import { publishChatSessionProjectionMessages } from "./history-merge.ts";
@@ -368,7 +371,16 @@ export async function dispatchChatSlashCommand(
     return "failed";
   }
 
-  const targetIsCurrent = () => isChatCommandTargetCurrent(host, target);
+  const runId = name === "steer" || name === "redirect" ? generateUUID() : undefined;
+  const request = runId
+    ? chatOutboxOwner(host).admissions.beginRequest(
+        host,
+        resolveUiConversationIdentity(host, target.sessionKey, target.agentId),
+        runId,
+      )
+    : undefined;
+  const targetIsCurrent = () =>
+    !request?.signal.aborted && isChatCommandTargetCurrent(host, target);
   let result: Awaited<ReturnType<typeof executeSlashCommand>>;
   try {
     result = await executeSlashCommand(target.client, target.sessionKey, name, args, {
@@ -377,6 +389,7 @@ export async function dispatchChatSlashCommand(
       sessionAccessSnapshot: currentSessionAccessSnapshot(host),
       readSessionAccessSnapshot: () => currentSessionAccessSnapshot(host),
       isCurrent: targetIsCurrent,
+      runRequest: request && runId ? { runId, signal: request.signal } : undefined,
       chatModelCatalog: host.chatModelCatalog,
       defaultAgentId: resolveUiDefaultAgentId(host),
       agentId: target.agentId,
@@ -391,6 +404,8 @@ export async function dispatchChatSlashCommand(
       });
     }
     return "failed";
+  } finally {
+    request?.release();
   }
 
   if (result.content && targetIsCurrent()) {

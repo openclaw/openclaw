@@ -103,6 +103,8 @@ export type CronSystemEventEnqueueResult =
 export type DeferredCronNotifications = CronNotificationIntent[];
 
 export type CronServiceDeps = {
+  /** Shares the Gateway's state-directory selection across admission checks. */
+  env?: NodeJS.ProcessEnv;
   nowMs?: () => number;
   scheduler: GatewayScheduler;
   log: Logger;
@@ -299,7 +301,8 @@ export type CronExecutionIdentityAdmission = {
   onPostAdmission?: (context: AdmittedRunContext) => void | Promise<void>;
 };
 
-type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
+type CronServiceDepsInternal = Omit<CronServiceDeps, "env" | "nowMs"> & {
+  env: NodeJS.ProcessEnv;
   nowMs: () => number;
 };
 
@@ -365,7 +368,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     deps.defaultAgentId ?? (deps.resolveDefaultAgentId ? undefined : LEGACY_IMPLICIT_AGENT_ID);
   const nowMs = deps.nowMs ?? (() => deps.scheduler.now());
   return {
-    deps: { ...deps, defaultAgentId, nowMs },
+    deps: { ...deps, env: deps.env ?? process.env, defaultAgentId, nowMs },
     store: null,
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     schedulerScope: deps.scheduler.scope(),

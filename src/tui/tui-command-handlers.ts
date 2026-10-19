@@ -18,6 +18,7 @@ import {
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeTerminalChatSendAckStatus } from "../shared/chat-send-ack-status.js";
 import { formatFastModeValue } from "../shared/fast-mode.js";
@@ -422,11 +423,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     const finishSessionTransition = beginSessionTransition(command);
     try {
       if (command === "new") {
-        const result = await client.createSession({
-          key: `tui-${randomUUID()}`,
-          agentId: selection.agentId,
-          ...(sessionId ? { parentSessionKey: selection.sessionKey, succeedsParent: true } : {}),
-        });
+        const result = await client.createSession(
+          {
+            key: `tui-${randomUUID()}`,
+            agentId: selection.agentId,
+            ...(sessionId ? { parentSessionKey: selection.sessionKey, succeedsParent: true } : {}),
+          },
+          selection,
+        );
         if (!incarnation.isCurrent()) {
           return;
         }
@@ -465,7 +469,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     } catch (err) {
       if (incarnation.isCurrent()) {
         const failure = command === "new" ? "new session failed" : "reset failed";
-        chatLog.addSystem(`${failure}: ${formatTuiErrorMessage(err)}`);
+        chatLog.addSystem(
+          isAbortError(err) ? "new session canceled" : `${failure}: ${formatTuiErrorMessage(err)}`,
+        );
       }
     } finally {
       finishSessionTransition();
@@ -794,7 +800,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       return;
     }
     const descriptor = resolveTuiCommandDescriptor(name);
-    if (sessionTransition.active && descriptor?.name !== "exit") {
+    if (sessionTransition.active && !["exit", "stop", "abort"].includes(descriptor?.name ?? "")) {
       chatLog.addSystem(
         `session change in progress; wait for /${sessionTransition.active} to finish`,
       );
@@ -998,9 +1004,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         });
         chatLog.dropPendingUser(runId);
       }
-      chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${formatTuiErrorMessage(err)}`);
+      chatLog.addSystem(
+        isAbortError(err)
+          ? "send canceled"
+          : `${isBtw ? "btw failed" : "send failed"}: ${formatTuiErrorMessage(err)}`,
+      );
       if (!isBtw) {
-        setActivityStatus("error");
+        setActivityStatus(isAbortError(err) ? "aborted" : "error");
       }
       tui.requestRender();
     }

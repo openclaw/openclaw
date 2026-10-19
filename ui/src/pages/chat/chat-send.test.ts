@@ -44,6 +44,7 @@ import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
+  expectRpc,
   findRequestPayload,
   makeChatHost,
   makeRequestMock,
@@ -615,7 +616,9 @@ describe("refreshChat", () => {
     await sendRequested.promise;
     await resumeStoredChatOutboxes(host);
     expect(host.request).toHaveBeenCalledWith("chat.send", expect.objectContaining(expectedSend), {
-      timeoutMs: 30_000,
+      timeoutMs: 300_000,
+      signal: expect.any(AbortSignal),
+      retainSentResultOnAbort: true,
     });
     expect(host.chatQueue).toEqual([]);
 
@@ -750,7 +753,9 @@ describe("refreshChat", () => {
       expect.objectContaining({ text: message, sendState: "waiting-idle" }),
     ]);
     expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-      timeoutMs: 30_000,
+      timeoutMs: 300_000,
+      signal: expect.any(AbortSignal),
+      retainSentResultOnAbort: true,
     });
 
     startup.resolve(idleHistory);
@@ -759,7 +764,7 @@ describe("refreshChat", () => {
       expect(host.request).toHaveBeenCalledWith(
         "chat.send",
         expect.objectContaining({ sessionKey, sessionId: "dashboard-session", message }),
-        { timeoutMs: 30_000 },
+        { timeoutMs: 300_000, signal: expect.any(AbortSignal), retainSentResultOnAbort: true },
       );
       expect(host.chatQueue).toEqual([]);
     });
@@ -928,7 +933,7 @@ describe("handleSendChat", () => {
       expect(host.request).toHaveBeenCalledWith(
         "chat.send",
         expect.objectContaining({ message, sessionKey: "agent:main" }),
-        { timeoutMs: 30_000 },
+        { timeoutMs: 300_000, signal: expect.any(AbortSignal), retainSentResultOnAbort: true },
       );
       expect(host.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
       expect(host.chatMessage).toBe("");
@@ -965,12 +970,14 @@ describe("handleSendChat", () => {
         expect(host.request).toHaveBeenCalledWith(
           "chat.send",
           expect.objectContaining({ message: chatMessage }),
-          { timeoutMs: 30_000 },
+          { timeoutMs: 300_000, signal: expect.any(AbortSignal), retainSentResultOnAbort: true },
         );
       } else {
         expect(dispatchClientPresentation).toHaveBeenCalledWith({ kind: "device-pairing" });
         expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-          timeoutMs: 30_000,
+          timeoutMs: 300_000,
+          signal: expect.any(AbortSignal),
+          retainSentResultOnAbort: true,
         });
         expect(host.chatQueue).toStrictEqual([]);
         expect(host.chatMessages).toEqual(baselineMessages);
@@ -1057,7 +1064,7 @@ describe("handleSendChat", () => {
       settingsPatch.resolve(success);
       await send;
       if (success) {
-        expect(host.request).toHaveBeenCalledWith("chat.send", {
+        expectRpc(host.request, "chat.send", {
           sessionKey: "agent:main",
           message: "start over",
           queueMode: "interrupt",
@@ -1605,7 +1612,9 @@ describe("handleSendChat", () => {
     const send = handleSendChat(host);
     await waitForFast(() => expect(container.scrollTop).toBe(1600));
     expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-      timeoutMs: 30_000,
+      timeoutMs: 300_000,
+      signal: expect.any(AbortSignal),
+      retainSentResultOnAbort: true,
     });
     container.scrollTop = 1200;
     handleChatScrollTakeover(host);
@@ -1615,7 +1624,9 @@ describe("handleSendChat", () => {
     settings.resolve(true);
     await waitForFast(() =>
       expect(host.request).toHaveBeenCalledWith("chat.send", expect.anything(), {
-        timeoutMs: 30_000,
+        timeoutMs: 300_000,
+        signal: expect.any(AbortSignal),
+        retainSentResultOnAbort: true,
       }),
     );
     ack.resolve({ status: "started", runId: "accepted-run" });
@@ -1927,7 +1938,9 @@ describe("handleSendChat", () => {
       const sending = handleSendChat(host);
       await waitForFast(() =>
         expect(host.request).toHaveBeenCalledWith("chat.send", expect.anything(), {
-          timeoutMs: 30_000,
+          timeoutMs: 300_000,
+          signal: expect.any(AbortSignal),
+          retainSentResultOnAbort: true,
         }),
       );
       const payload = findRequestPayload(host.request, "chat.send", "pending send");
@@ -2233,10 +2246,14 @@ describe("handleSendChat", () => {
       await draining;
 
       expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-        timeoutMs: 30_000,
+        timeoutMs: 300_000,
+        signal: expect.any(AbortSignal),
+        retainSentResultOnAbort: true,
       });
       expect(replacementRequest).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-        timeoutMs: 30_000,
+        timeoutMs: 300_000,
+        signal: expect.any(AbortSignal),
+        retainSentResultOnAbort: true,
       });
       if (outcome === "cancelled") {
         expect(listStoredChatOutboxes(host)).toStrictEqual([]);
@@ -2377,7 +2394,9 @@ describe("handleSendChat", () => {
       expect(host.chatMessages).toEqual([final]);
     });
     expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-      timeoutMs: 30_000,
+      timeoutMs: 300_000,
+      signal: expect.any(AbortSignal),
+      retainSentResultOnAbort: true,
     });
   });
 
@@ -3799,7 +3818,9 @@ describe("handleSendChat", () => {
       { timeoutMs: 30_000 },
     );
     expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-      timeoutMs: 30_000,
+      timeoutMs: 300_000,
+      signal: expect.any(AbortSignal),
+      retainSentResultOnAbort: true,
     });
     if (visible) {
       expect(historyReads).toBe(1);
@@ -3814,7 +3835,9 @@ describe("handleSendChat", () => {
       await resumeStoredChatOutboxes(host);
       expect(listStoredChatOutboxes(host)).toEqual([]);
       expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-        timeoutMs: 30_000,
+        timeoutMs: 300_000,
+        signal: expect.any(AbortSignal),
+        retainSentResultOnAbort: true,
       });
     }
   });
@@ -3899,7 +3922,9 @@ describe("handleSendChat", () => {
           expect.objectContaining({ id: source.id }),
         ]);
         expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-          timeoutMs: 30_000,
+          timeoutMs: 300_000,
+          signal: expect.any(AbortSignal),
+          retainSentResultOnAbort: true,
         });
         return;
       }
@@ -4310,7 +4335,9 @@ describe("handleSendChat", () => {
     const sending = steerQueuedChatMessage(host, original.id);
     await waitForFast(() =>
       expect(host.request).toHaveBeenCalledWith("chat.send", expect.anything(), {
-        timeoutMs: 30_000,
+        timeoutMs: 300_000,
+        signal: expect.any(AbortSignal),
+        retainSentResultOnAbort: true,
       }),
     );
 

@@ -496,6 +496,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
 
   protected override presentedChanged(presented: boolean): void {
     if (!presented) {
+      this.retireHeaderSessionMutations();
       this.dashboardPresentationActivation = undefined;
       this.retainedProgressCard = undefined;
       this.syncSessionCompanionPresentation(false);

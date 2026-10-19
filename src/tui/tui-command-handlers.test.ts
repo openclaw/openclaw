@@ -787,12 +787,15 @@ describe("tui command handlers", () => {
     await h.sendMessage("must not reach parent");
     await h.handleCommand("/new");
     expect(h.sendChat).not.toHaveBeenCalled();
-    expect(h.createSession).toHaveBeenCalledExactlyOnceWith({
-      key: expect.stringMatching(/^tui-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/),
-      agentId: "work",
-      parentSessionKey: "global",
-      succeedsParent: true,
-    });
+    expect(h.createSession).toHaveBeenCalledExactlyOnceWith(
+      {
+        key: expect.stringMatching(/^tui-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/),
+        agentId: "work",
+        parentSessionKey: "global",
+        succeedsParent: true,
+      },
+      { sessionKey: "global", agentId: "work" },
+    );
     expect(h.addSystem).toHaveBeenCalledWith("session change in progress; wait for /new to finish");
     creation.resolve({ ok: true, key: "agent:work:tui-created" });
     await creating;

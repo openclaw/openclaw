@@ -1203,7 +1203,7 @@ export class SessionsPageController {
       return;
     }
     try {
-      const forkedKey = await scope.sessions.create(createParams);
+      const forkedKey = await scope.sessions.create(createParams, { signal: scope.signal });
       if (!this.isRequestScopeCurrent(scope)) {
         return;
       }

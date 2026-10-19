@@ -713,7 +713,7 @@ describe("placement startup reconnect", () => {
         createPlacementStartupHarness(request);
       startup.start(input);
       await vi.waitFor(() =>
-        expect(request).toHaveBeenCalledWith("sessions.send", expect.anything()),
+        expect(request).toHaveBeenCalledWith("sessions.send", expect.anything(), expect.anything()),
       );
       const storage = sessionStorage;
       const remove = storage.removeItem.bind(storage);

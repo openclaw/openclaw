@@ -100,6 +100,7 @@ export function createSessionActions(context: SessionActionContext) {
       return false;
     }
 
+    client.cancelPendingRequests?.(captureTuiSessionSelection(state));
     // Retire the previous session's runs before history can adopt a new
     // in-flight owner; otherwise its completion can promote an old run.
     invalidateRunOwnership?.();

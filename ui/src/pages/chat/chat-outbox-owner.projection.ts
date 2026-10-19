@@ -72,3 +72,9 @@ export function isActiveLocal(
     !state.durableSeen.has(item.id),
   );
 }
+
+export function hasActiveChatOutboxProjection(state: ChatOutboxHostProjection): boolean {
+  return [...state.byScope.values()].some(({ queue }) =>
+    queue.some((item) => isActiveLocal(state, item)),
+  );
+}

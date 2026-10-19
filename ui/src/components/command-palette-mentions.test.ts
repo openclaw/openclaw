@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createWebPushCapability } from "../app/web-push.ts";
 import { requestSessionCreate } from "../lib/sessions/create.ts";
@@ -203,6 +204,7 @@ describe("command palette people mentions", () => {
     expect(f.request).toHaveBeenCalledWith(
       "sessions.create",
       expect.objectContaining({ message: "🙂 @Alex @Jordan Rivera @Alex", mentions: expected }),
+      expect.objectContaining({ timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS }),
     );
     const retained = f.context.chatSubmissions.readInitial(
       "agent:main:dashboard:mentioned",
@@ -251,6 +253,7 @@ describe("command palette people mentions", () => {
               { profileId: "jordan", start: 13, end: 27 },
             ],
           }),
+          expect.objectContaining({ timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS }),
         );
       } else {
         const value = f.input.value;
@@ -313,6 +316,7 @@ describe("command palette people mentions", () => {
       expect(f.request).toHaveBeenCalledWith(
         "sessions.create",
         expect.objectContaining({ message }),
+        expect.objectContaining({ timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS }),
       );
       const create = f.request.mock.calls.find(([method]) => method === "sessions.create")?.[1];
       expect(create).not.toHaveProperty("mentions");
@@ -545,6 +549,7 @@ describe("command palette people mentions", () => {
           message: "@New Person",
           mentions: [{ profileId: "new-person", start: 0, end: 11 }],
         }),
+        expect.objectContaining({ timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS }),
       );
       expect(f.context.gateway.snapshot.sessionKey).toBe(foreground);
       expect(f.context.agentSelection.state.selectedId).toBe("main");
