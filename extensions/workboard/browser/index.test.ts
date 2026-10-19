@@ -43,7 +43,7 @@ async function change(payload: unknown = {}) {
   fixture.emit("plugin.workboard.changed", payload);
   await tick();
 }
-function query<T extends Element>(selector: string, root: ParentNode = document) {
+function query<T extends Element>(selector: string, root: ParentNode = document): T {
   return expectDefined(root.querySelector<T>(selector), selector);
 }
 const clickDialog = (confirm: boolean) =>

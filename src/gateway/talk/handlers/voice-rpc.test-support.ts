@@ -83,7 +83,12 @@ export function voiceRpc(
   }
   return {
     start,
-    async invoke(method: string, params: Record<string, unknown>, client = options().client) {
+    async invoke(
+      this: void,
+      method: string,
+      params: Record<string, unknown>,
+      client = options().client,
+    ) {
       const request = start(method, params, client);
       await request.completed;
       return request.respond;

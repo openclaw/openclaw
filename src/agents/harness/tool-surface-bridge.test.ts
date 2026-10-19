@@ -370,19 +370,14 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
   it.each([
     { name: "message-only delivery", sourceReplyDeliveryMode: "message_tool_only" as const },
   ])("keeps $name directly visible in Code Mode", (delivery) => {
-    const runtime = createAgentHarnessToolSurfaceRuntime({
+    const runtime = configuredRuntime({
       config: { tools: { codeMode: true } },
       executeTool: async () => ({ content: [], details: {} }),
       ...delivery,
-      modelToolsEnabled: true,
     });
 
-    try {
-      expect(
-        runtime.compactTools(tools(["web_search", "message"])).tools.map((tool) => tool.name),
-      ).toEqual(["exec", "wait", "message"]);
-    } finally {
-      runtime.cleanup();
-    }
+    expect(
+      runtime.compactTools(tools(["web_search", "message"])).tools.map((tool) => tool.name),
+    ).toEqual(["exec", "wait", "message"]);
   });
 });

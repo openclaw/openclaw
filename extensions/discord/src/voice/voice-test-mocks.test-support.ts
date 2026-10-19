@@ -225,6 +225,7 @@ vi.mock("./audio-worker-thread.js", async () => {
   };
 });
 
+// mock-isolation: voice lifecycle tests own synthetic Discord transports, not live clients.
 vi.mock("./sdk-runtime.js", () => ({
   loadDiscordVoiceSdk: () => ({
     AudioPlayerStatus: { Playing: "playing", Idle: "idle" },
@@ -280,6 +281,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   };
 });
 
+// mock-isolation: capture emitted events without writing to the process event queue.
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
   enqueueRoutedSystemEvent: (
     text: unknown,
@@ -397,6 +399,7 @@ vi.mock("./participant-context.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: the voice harness supplies its own plugin runtime and credentials.
 vi.mock("../runtime.js", () => ({
   getDiscordRuntime: () => ({
     agent: {

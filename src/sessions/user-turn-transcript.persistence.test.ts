@@ -174,7 +174,8 @@ describe("persistUserTurnTranscript", () => {
     );
     const stored = await readMessage();
     const displayed = stripEnvelopeFromMessages([stored])[0];
-    expect([stored?.content, displayed?.content]).toEqual(["[redacted]", "[redacted]"]);
+    expect(stored).toHaveProperty("content", "[redacted]");
+    expect(displayed).toHaveProperty("content", "[redacted]");
     expect(stored).not.toHaveProperty("__openclaw.workContext");
     expect(displayed).not.toHaveProperty("__openclaw.workContext.text");
   });
@@ -393,6 +394,24 @@ describe("persistUserTurnTranscript", () => {
     },
   );
 
+  it.each([undefined, true])(
+    "requires explicit runtime append freshness (%s), not an admission anchor",
+    async (appended) => {
+      const commits: UserTurnOriginalInputCommit[] = [];
+      const input = { text: "Hello @Ada", idempotencyKey: "runtime-mention:user" };
+      const result = await writeInput(input);
+      const recorder = makeRecorder({
+        input,
+        onOriginalInputCommitted: (commit) => commits.push(commit),
+      });
+      const persistence = appended === undefined ? undefined : { appended };
+      recorder.markRuntimePersisted(result?.message, result?.admission, persistence);
+      recorder.markRuntimePersisted(result?.message, result?.admission, persistence);
+      expect(recorder.getAdmissionReceipt()?.entryId).toBe(result?.messageId);
+      expect(commits).toHaveLength(appended === true ? 1 : 0);
+    },
+  );
+
   it.each(["internal", "blocked"] as const)(
     "does not report %s rows as original human input",
     async (kind) => {
@@ -579,6 +598,26 @@ describe("persistUserTurnTranscript", () => {
       });
     },
   );
+
+  it("returns the existing user turn when the idempotency key was already persisted", async () => {
+    const first = await writeInput(
+      { text: "hello once", timestamp: 123, idempotencyKey: "chat-run-1:user" },
+      { updateMode: "none" },
+    );
+    const second = await writeInput(
+      { text: "hello once replayed", timestamp: 456, idempotencyKey: "chat-run-1:user" },
+      { updateMode: "none" },
+    );
+    const expected = {
+      role: "user",
+      content: "hello once",
+      timestamp: 123,
+      idempotencyKey: "chat-run-1:user",
+    };
+    expect(second?.messageId).toBe(first?.messageId);
+    expect(second?.message).toMatchObject(expected);
+    await expect(readMessages()).resolves.toEqual([expect.objectContaining(expected)]);
+  });
 
   it("preserves transcript metadata when before_message_write replaces a user turn", async () => {
     let hookCalls = 0;

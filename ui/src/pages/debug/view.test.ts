@@ -56,7 +56,7 @@ async function mountDebugPage(
   context = createDebugApplicationContext(request),
 ) {
   const page = mountDebugHost(context);
-  await flush();
+  flush();
   await waitForSolid(() => expect(readSnapshot(page, "Status")).toEqual({ version: "initial" }));
   return page;
 }
@@ -87,9 +87,10 @@ const snapshotAlert = (page: HTMLElement) =>
   page.querySelector<HTMLElement>('.settings-section:first-child [role="alert"]');
 
 function diagnosticRequest(overrides: Record<string, () => unknown>) {
-  return vi.fn(async (method: string) =>
-    Object.hasOwn(overrides, method) ? overrides[method]() : diagnosticResponse(method),
-  );
+  return vi.fn(async (method: string) => {
+    const override = overrides[method];
+    return override ? override() : diagnosticResponse(method);
+  });
 }
 
 type PresentationResponses = {
@@ -125,17 +126,17 @@ async function mountDebugPresentation(initial: Partial<PresentationResponses> = 
   await waitForDiagnostics();
   return {
     page,
-    setEvents(next: readonly EventLogEntry[]) {
+    setEvents(this: void, next: readonly EventLogEntry[]) {
       events = next;
       eventListeners.forEach((listener) => listener(events));
       flush();
     },
-    async refresh(next: Partial<PresentationResponses>) {
+    async refresh(this: void, next: Partial<PresentationResponses>) {
       Object.assign(responses, next);
       refreshButton(page).click();
       await waitForDiagnostics();
     },
-    async call(result: unknown) {
+    async call(this: void, result: unknown) {
       responses["manual.latest"] = result;
       callMethod(page, "manual.latest");
       await waitForSolid(() =>
@@ -167,7 +168,7 @@ it("only highlights changed diagnostics and tolerates out-of-range event timesta
 
   const newest = { ...event("newest", 8_640_000_000_000_001), event: "gateway" };
   setEvents([newest, ...events.slice(0, -1)]);
-  await flush();
+  flush();
 
   expect(page.textContent).toContain("gateway");
   expect(page.textContent).not.toContain("Invalid Date");
@@ -178,7 +179,7 @@ it("only highlights changed diagnostics and tolerates out-of-range event timesta
   assert(input);
   input.value = '{"typed":true}';
   input.dispatchEvent(new Event("input", { bubbles: true }));
-  await flush();
+  flush();
   expect(highlight).not.toHaveBeenCalled();
 
   await refresh({
@@ -190,6 +191,9 @@ it("only highlights changed diagnostics and tolerates out-of-range event timesta
   await call({ result: "updated" });
   expect(highlight).toHaveBeenCalledTimes(5);
   expect(page.textContent).toContain("updated");
+  setEvents([]);
+  expect(eventSection.querySelector("pre")).toBeNull();
+  expect(eventSection.textContent).not.toContain("retained");
 });
 
 it("updates security audit labels with the locale and keeps the command monospace", async () => {
@@ -367,7 +371,7 @@ it("discards pending diagnostics when a replacement provider reuses its client",
   flush();
   pending.resolve({ models: [{ id: "stale" }], stale: true });
   await pending.promise;
-  await flush();
+  flush();
   expect(request).toHaveBeenCalledTimes(5);
   expect(readSnapshots(page)).toEqual([{}, {}, [], {}]);
   expect(page.querySelector(".command-lane-row")).toBeNull();
@@ -388,7 +392,7 @@ it("polls live lanes and heartbeat while full snapshots change only on Refresh",
   try {
     marker = "live";
     await vi.advanceTimersByTimeAsync(9_000);
-    await flush();
+    flush();
     for (const method of ["status", "health", "models.list"]) {
       expect(request.mock.calls.filter(([called]) => called === method)).toHaveLength(1);
     }
@@ -396,14 +400,14 @@ it("polls live lanes and heartbeat while full snapshots change only on Refresh",
     marker = "manual";
     const refresh = refreshButton(page);
     refresh.click();
-    await flush();
+    flush();
     expect(refresh.disabled).toBe(true);
     expect(normalizedText(refresh)).toBe("Refreshing…");
     expect(page.querySelector(".settings-section .settings-status")).toBeNull();
     expect(page.textContent).toContain("initial");
     pendingRefresh.resolve();
     await vi.advanceTimersByTimeAsync(0);
-    await flush();
+    flush();
     expectSnapshots(page, "manual");
     for (const method of ["status", "health", "models.list"]) {
       expect(request.mock.calls.filter(([called]) => called === method)).toHaveLength(2);
@@ -419,7 +423,7 @@ it.each(["reconnecting", "offline"] as const)(
   async (phase) => {
     const request = vi.fn(async (method: string) => diagnosticResponse(method));
     const page = mountDebugHost(createDebugApplicationContext(request, phase));
-    await flush();
+    flush();
     expect(page.querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
     const text = normalizedText(page.querySelector(".settings-section"));
     if (phase === "offline") {

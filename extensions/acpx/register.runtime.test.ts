@@ -57,6 +57,7 @@ vi.mock("openclaw/plugin-sdk/acp-runtime-backend", () => ({
   },
 }));
 
+// mock-isolation: exercise deferred publication without starting the ACPX process service.
 vi.mock("./src/service.js", () => ({
   createAcpxRuntimeService: createServiceMock,
 }));

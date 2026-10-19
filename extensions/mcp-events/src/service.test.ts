@@ -255,7 +255,11 @@ describe("MCP Events callback and subscription lifecycle", () => {
               return { events: [definition] };
             }
             subscribed.push(params);
-            subscription = params;
+            subscription = {
+              name: params.name,
+              arguments: params.arguments,
+              delivery: { mode: "webhook", url: record(params.delivery)?.url },
+            };
             const delivery = record(params.delivery);
             assert(typeof delivery?.secret === "string" && typeof delivery.url === "string");
             secret = delivery.secret;

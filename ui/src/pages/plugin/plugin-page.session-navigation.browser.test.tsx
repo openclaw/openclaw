@@ -1,3 +1,4 @@
+import type { CDPSession } from "@vitest/browser-playwright";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cdp } from "vitest/browser";
 import {
@@ -129,7 +130,7 @@ async function mountClickableFrame(signal: AbortSignal) {
   const container = document.body.appendChild(document.createElement("div"));
   dispose.push(() => container.remove());
   signal.throwIfAborted();
-  const session = cdp();
+  const session: CDPSession = cdp();
   // Vitest initializes its CDP handler lazily; finish that before listener and command RPCs race.
   await session.send("Page.enable");
   const ready = createDeferred();
@@ -240,6 +241,7 @@ it("rejects other windows, wrong origins, response channels, and malformed reque
     { ...message, agentId: " writer " },
     { ...message, agentId: "other-agent" },
     { ...message, url: "https://unrelated.example" },
+    { ...message, prompt: "Do not run" },
   ]) {
     dispatch(frame.contentWindow, invalid);
   }

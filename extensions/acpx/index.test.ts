@@ -65,12 +65,12 @@ function createHarnessApi(options: Parameters<typeof createTestPluginApi>[0]) {
         harnesses.set(harness.id, harness);
       },
     }),
-    getHarness(id: string) {
+    getHarness(this: void, id: string) {
       const harness = harnesses.get(`acp-${id}`);
       if (!harness?.loadModelCatalog) {
         throw new Error("Native catalog operation missing");
       }
-      return { ...harness, loadModelCatalog: harness.loadModelCatalog };
+      return { ...harness, loadModelCatalog: harness.loadModelCatalog.bind(harness) };
     },
   };
 }
