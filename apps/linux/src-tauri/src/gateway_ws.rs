@@ -2320,14 +2320,9 @@ pub(crate) mod tests {
                         complete,
                     } = command
                     {
-                        let result = perform_request(
-                            &driver_client,
-                            generation,
-                            &socket,
-                            request,
-                            budget,
-                        )
-                        .await;
+                        let result =
+                            perform_request(&driver_client, generation, &socket, request, budget)
+                                .await;
                         let _ = complete(result);
                     }
                 }
@@ -3339,18 +3334,11 @@ esac
         else {
             panic!("expected request command");
         };
-        let failure = match perform_request(
-            &GatewayClient::new(),
-            0,
-            &socket,
-            request,
-            budget,
-        )
-        .await
-        {
-            Ok(_) => panic!("hung request should time out"),
-            Err(failure) => failure,
-        };
+        let failure =
+            match perform_request(&GatewayClient::new(), 0, &socket, request, budget).await {
+                Ok(_) => panic!("hung request should time out"),
+                Err(failure) => failure,
+            };
         let elapsed = started.elapsed();
         assert!(failure.disconnect, "timeout must recycle the socket");
         let _ = complete(Err(failure));
@@ -3471,14 +3459,9 @@ esac
                 else {
                     panic!("expected sleep request");
                 };
-                let result = perform_request(
-                    &self.client,
-                    self.generation,
-                    &self.socket,
-                    request,
-                    budget,
-                )
-                .await;
+                let result =
+                    perform_request(&self.client, self.generation, &self.socket, request, budget)
+                        .await;
                 let _ = complete(result);
             }
 
