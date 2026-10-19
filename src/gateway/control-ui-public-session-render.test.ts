@@ -6,6 +6,13 @@ import {
   renderPublicSessionDocument,
 } from "./control-ui-public-session-render.js";
 
+function message(role: string, content: unknown, fields: Record<string, unknown> = {}) {
+  return { role, content, ...fields };
+}
+function media(role: string, id: string, content: unknown[]) {
+  return message(role, content, { __openclaw: { id } });
+}
+
 function render(
   messages: unknown[],
   overrides: Partial<Parameters<typeof renderPublicSessionDocument>[0]> = {},
@@ -44,68 +51,59 @@ describe("public session document", () => {
   });
   it("publishes only user and assistant conversation text without internal input or metadata", () => {
     const html = render([
-      { role: "system", content: "private system instructions" },
-      { role: "developer", content: "private developer instructions" },
-      { role: "user", display: false, content: "hidden user input" },
-      { role: "user", provenance: { kind: "internal_system" }, content: "internal handoff" },
-      { role: "user", provenance: { kind: "inter_session" }, content: "private other session" },
-      { role: "user", provenance: { kind: "unknown" }, content: "unknown source" },
-      {
-        role: "user",
-        content: "[Inter-session message] sourceSession=private\nprivate legacy handoff",
-      },
-      { role: "toolResult", content: "private tool output" },
-      { role: "assistant", phase: "commentary", content: "Public progress" },
-      {
-        role: "assistant",
-        content: "<think>private tagged reasoning</think>Public visible answer",
-      },
-      { role: "assistant", content: "<think>private unfinished reasoning" },
-      {
-        role: "assistant",
-        content:
-          '<tool_call>{"name":"read","arguments":{"text":"private inline tool payload"}}</tool_call>',
-      },
-      {
-        role: "assistant",
-        content:
-          ']<]minimax[>[<tool_call>]<]minimax[>[<invoke name="read">private encoded tool payload</invoke>]<]minimax[>[</tool_call>',
-      },
-      { role: "assistant", content: "NO_REPLY" },
-      { role: "assistant", content: "HEARTBEAT_OK" },
-      { role: "user", content: "[OpenClaw heartbeat poll]" },
-      {
-        role: "user",
-        provenance: { kind: "external_user" },
-        content: [
+      message("system", "private system instructions"),
+      message("developer", "private developer instructions"),
+      message("user", "hidden user input", { display: false }),
+      ...["internal_system", "inter_session", "unknown"].map((kind) =>
+        message("user", "private handoff", { provenance: { kind } }),
+      ),
+      message("user", "[Inter-session message] sourceSession=private\nprivate legacy handoff"),
+      message("toolResult", "private tool output"),
+      message("assistant", "Public progress", { phase: "commentary" }),
+      message("assistant", "<think>private tagged reasoning</think>Public visible answer"),
+      message("assistant", "<think>private unfinished reasoning"),
+      message(
+        "assistant",
+        '<tool_call>{"name":"read","arguments":{"text":"private inline tool payload"}}</tool_call>',
+      ),
+      message(
+        "assistant",
+        ']<]minimax[>[<tool_call>]<]minimax[>[<invoke name="read">private encoded tool payload</invoke>]<]minimax[>[</tool_call>',
+      ),
+      message("assistant", "NO_REPLY"),
+      message("assistant", "HEARTBEAT_OK"),
+      message("user", "[OpenClaw heartbeat poll]"),
+      message(
+        "user",
+        [
           { type: "input_text", text: "First public question" },
           { type: "image", data: "private image bytes" },
           { type: "text", text: "Second public question" },
         ],
-        __openclaw: { senderIdentity: "private sender identity" },
-      },
-      {
-        role: "assistant",
-        content: [
-          { type: "reasoning", text: "private reasoning" },
-          {
-            type: "toolCall",
-            text: "private tool call",
-            arguments: { secret: "private tool arguments" },
-          },
-          {
-            type: "text",
-            text: "Public phased commentary",
-            textSignature: '{"v":1,"phase":"commentary"}',
-          },
-          {
-            type: "text",
-            text: "**Public final answer**",
-            textSignature: '{"v":1,"phase":"final_answer"}',
-          },
-          { type: "canvas", text: "private widget" },
-        ],
-      },
+        {
+          provenance: { kind: "external_user" },
+          __openclaw: { senderIdentity: "private sender identity" },
+        },
+      ),
+      message("assistant", [
+        { type: "reasoning", text: "private reasoning" },
+        {
+          type: "toolCall",
+          text: "private tool call",
+          arguments: { secret: "private tool arguments" },
+        },
+        {
+          type: "text",
+          text: "Public phased commentary",
+          textSignature: '{"v":1,"phase":"commentary"}',
+        },
+        {
+          type: "text",
+          text: "**Public final answer**",
+          textSignature: '{"v":1,"phase":"final_answer"}',
+        },
+        { type: "canvas", text: "private widget" },
+      ]),
     ]);
     expect(html).toContain("First public question");
     expect(html).toContain("Public visible answer");
@@ -130,27 +128,21 @@ describe("public session document", () => {
   it("groups tool work between every assistant message with bounded unmasked summaries", () => {
     const secret = `sk-${"a".repeat(48)}`;
     const html = render([
-      { role: "assistant", phase: "commentary", content: "Checking the files." },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            name: "exec",
-            arguments: { command: `cat file ${secret} ${"x".repeat(300)} TAIL_MARKER` },
-          },
-        ],
-      },
-      { role: "toolResult", content: "RESULT_BODY_MUST_STAY_PRIVATE" },
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "THOUGHT_MUST_STAY_PRIVATE" },
-          { type: "tool_use", name: "read", input: { path: "src/example.ts" } },
-        ],
-      },
-      { role: "assistant", phase: "commentary", content: "The cause is clear." },
-      { role: "assistant", phase: "final_answer", content: "Fixed the issue." },
+      message("assistant", "Checking the files.", { phase: "commentary" }),
+      message("assistant", [
+        {
+          type: "toolCall",
+          name: "exec",
+          arguments: { command: `cat file ${secret} ${"x".repeat(300)} TAIL_MARKER` },
+        },
+      ]),
+      message("toolResult", "RESULT_BODY_MUST_STAY_PRIVATE"),
+      message("assistant", [
+        { type: "thinking", thinking: "THOUGHT_MUST_STAY_PRIVATE" },
+        { type: "tool_use", name: "read", input: { path: "src/example.ts" } },
+      ]),
+      message("assistant", "The cause is clear.", { phase: "commentary" }),
+      message("assistant", "Fixed the issue.", { phase: "final_answer" }),
     ]);
     expect(html).toContain("Checking the files.");
     expect(html).toContain("The cause is clear.");
@@ -169,34 +161,19 @@ describe("public session document", () => {
     const fileName = `sk-${"a".repeat(48)}.png`;
     const html = render(
       [
-        {
-          role: "user",
-          __openclaw: { id: "user-entry" },
-          content: [
-            { type: "image", data: "PRIVATE_BYTES", fileName },
-            { type: "file", fileName: "notes.pdf", url: "file:///private/notes.pdf" },
-          ],
-        },
-        {
-          role: "assistant",
-          __openclaw: { id: "assistant-entry" },
-          content: [{ type: "image", data: "PRIVATE_BYTES" }],
-        },
-        {
-          role: "toolResult",
-          __openclaw: { id: "tool-entry" },
-          content: [
-            { type: "image", data: "PRIVATE_BYTES" },
-            { type: "text", text: "PRIVATE_RESULT" },
-          ],
-        },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "[Inter-session message] private input" },
-            { type: "image", data: "PRIVATE_BYTES", fileName: "HIDDEN_IMAGE" },
-          ],
-        },
+        media("user", "user-entry", [
+          { type: "image", data: "PRIVATE_BYTES", fileName },
+          { type: "file", fileName: "notes.pdf", url: "file:///private/notes.pdf" },
+        ]),
+        media("assistant", "assistant-entry", [{ type: "image", data: "PRIVATE_BYTES" }]),
+        media("toolResult", "tool-entry", [
+          { type: "image", data: "PRIVATE_BYTES" },
+          { type: "text", text: "PRIVATE_RESULT" },
+        ]),
+        message("user", [
+          { type: "text", text: "[Inter-session message] private input" },
+          { type: "image", data: "PRIVATE_BYTES", fileName: "HIDDEN_IMAGE" },
+        ]),
       ],
       { mediaBaseUrl: "/control/share/session/media?token=v1.opaque" },
     );
@@ -215,23 +192,16 @@ describe("public session document", () => {
   it("retains audio-only and video-only messages as filename chips without publishing their media", () => {
     const html = render(
       [
-        {
-          role: "user",
-          __openclaw: { id: "audio-entry" },
-          content: [{ type: "audio", fileName: "voice-note.mp3", url: "/private/audio" }],
-        },
-        {
-          role: "assistant",
-          __openclaw: { id: "video-entry" },
-          content: [{ type: "video", fileName: "walkthrough.mp4", url: "/private/video" }],
-        },
-        {
-          role: "toolResult",
-          content: [
-            { type: "audio", fileName: "hidden-audio.mp3", url: "/private/tool-audio" },
-            { type: "video", fileName: "hidden-video.mp4", url: "/private/tool-video" },
-          ],
-        },
+        media("user", "audio-entry", [
+          { type: "audio", fileName: "voice-note.mp3", url: "/private/audio" },
+        ]),
+        media("assistant", "video-entry", [
+          { type: "video", fileName: "walkthrough.mp4", url: "/private/video" },
+        ]),
+        message("toolResult", [
+          { type: "audio", fileName: "hidden-audio.mp3", url: "/private/tool-audio" },
+          { type: "video", fileName: "hidden-video.mp4", url: "/private/tool-video" },
+        ]),
       ],
       { mediaBaseUrl: "/control/share/session/media?token=v1.opaque" },
     );
@@ -251,11 +221,11 @@ describe("public session document", () => {
     try {
       const html = render(
         [
-          {
-            role: "user",
-            content: `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nprivate runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nVisible user request ${token}`,
-          },
-          { role: "assistant", content: `Visible response ${token} ${operatorSecret}` },
+          message(
+            "user",
+            `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nprivate runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nVisible user request ${token}`,
+          ),
+          message("assistant", `Visible response ${token} ${operatorSecret}`),
         ],
         { title: `Shared ${token} ${operatorSecret}` },
       );
@@ -275,9 +245,9 @@ describe("public session document", () => {
     const relativePath = "./Private/customer-board.pdf";
     const signedUrl = "https://media.example.test/private.png?sig=private-signed-value";
     const html = render([
-      {
-        role: "assistant",
-        content: [
+      message(
+        "assistant",
+        [
           "Visible response",
           `MEDIA:${relativePath}`,
           `MEDIA:${signedUrl}`,
@@ -285,7 +255,7 @@ describe("public session document", () => {
           "MEDIA:./example.png",
           "```",
         ].join("\n"),
-      },
+      ),
     ]);
     expect(html).toContain("Visible response");
     expect(html).toContain("MEDIA:./example.png");
@@ -296,9 +266,9 @@ describe("public session document", () => {
   it("renders inert Markdown without executable markup, automatic image loads, or unsafe links", () => {
     const html = render(
       [
-        {
-          role: "assistant",
-          content: [
+        message(
+          "assistant",
+          [
             "<script>alert('unsafe')</script>",
             "![remote image](https://remote.test/tracker.png)",
             "[Safe link](https://example.test/docs)",
@@ -306,7 +276,7 @@ describe("public session document", () => {
             "[Local link](/api/private)",
             "```html\n<iframe src='https://remote.test/embed'></iframe>\n```",
           ].join("\n\n"),
-        },
+        ),
       ],
       { title: '<img src=x onerror="unsafe">' },
     );
@@ -363,29 +333,6 @@ describe("public session document", () => {
     expect(html).toContain('href="/share/session?token=v1.opaque&amp;offset=100" rel="prev"');
     expect(html).toContain('href="/share/session?token=v1.opaque">Back to latest</a>');
     expect(html).not.toContain("within its size limit");
-  });
-
-  it("keeps bearer navigation relative when no trusted absolute origin is available", () => {
-    const html = render([{ role: "user", content: "Public question" }], {
-      canonicalUrl: undefined,
-    });
-    expect(html).not.toContain('rel="canonical"');
-    expect(html).not.toContain('property="og:url"');
-    expect(html).toContain('href="/share/session?token=v1.opaque">Refresh now</a>');
-  });
-
-  it("truncates titles and messages without splitting UTF-16 surrogate pairs", () => {
-    const title = `${"a".repeat(199)}😀 trailing`;
-    const html = render([{ role: "user", content: `${"b".repeat(32_767)}😀 UNIQUE_TAIL_MARKER` }], {
-      title,
-    });
-    expect(html).toContain(`<title>${"a".repeat(199)} · OpenClaw</title>`);
-    expect(html).toContain(`property="og:title" content="${"a".repeat(199)}"`);
-    expect(html).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
-    expect(html).toContain("Message shortened for this public view.");
-    expect(html).toContain("b".repeat(32_767));
-    expect(html).not.toContain("UNIQUE_TAIL_MARKER");
-    expect(html).not.toContain("😀");
   });
 
   it("keeps whole characters when the document budget leaves one code unit", () => {

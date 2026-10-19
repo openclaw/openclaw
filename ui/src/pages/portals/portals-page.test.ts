@@ -288,6 +288,36 @@ describe("PortalsPage", () => {
     expect(page.requestedEnvironmentId).toBeNull();
   });
 
+  it("loads only the final environment when native target writes share one turn", async () => {
+    const environment: EnvironmentSummary = {
+      id: "final-machine",
+      type: "worker",
+      status: "available",
+    };
+    const source = createContext(["portal.list", "environments.status"], async (method) =>
+      method === "portal.list" ? { portals: [portal] } : environment,
+    );
+    const page = await mountPage(source.context, portal.id);
+    await waitForSolid(() => expect(page.querySelector("iframe")).not.toBeNull());
+    source.request.mockClear();
+
+    for (const environmentId of ["intermediate-machine", environment.id]) {
+      page.handleToggleRequest(
+        new CustomEvent("openclaw:portal-toggle", {
+          detail: { open: true, environmentId },
+        }),
+      );
+    }
+
+    await waitForSolid(() => {
+      expect(source.request.mock.calls).toEqual([
+        ["environments.status", { environmentId: environment.id }],
+      ]);
+      expect(page.textContent).toContain("Waiting for your application");
+      expect(page.querySelector("iframe")).toBeNull();
+    });
+  });
+
   it("ignores retired startup targets and stops reading while hidden or disposed", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const retired = createDeferred<EnvironmentSummary>();
