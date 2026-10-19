@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { renderGatewayServiceStartHints } from "../cli/daemon-cli/shared.js";
@@ -293,144 +293,127 @@ function expectRecovery(output: string, root: string, previous: string) {
   expect(output).not.toContain("pnpm install --");
 }
 
-describe("Doctor refusal recovery under the released Git update driver", () => {
-  it.each([
-    { platform: "darwin", running: true },
-    { platform: "darwin", running: false },
-  ] as const)(
-    "names the managed-service stop command when the Gateway is not offline on $platform (running=$running)",
-    async ({ platform, running }) => {
-      await withFixture(
-        "npm",
-        async ({ root }) => {
-          mockProcessPlatform(platform);
-          const error = await maintenanceRefusal(root);
-          expect(error.message).toContain("openclaw gateway stop");
-          expect(error.message).toContain("openclaw update repair");
-          expect(error.message).toContain("If the stop command already returned successfully");
-          expect(error.message).toContain("managed-service shutdown did not complete");
-          if (platform === "darwin") {
-            expect(error.message).toContain(
-              `launchctl bootout gui/${process.getuid?.() ?? 501}/ai.openclaw.gateway`,
-            );
-          }
-          expect(maybeStopManagedServiceBeforeMutableUpdate).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({ phase: "inspect" }),
-          );
-        },
-        running,
-      );
-    },
-  );
-
-  it.each(["main-rebase", "expired"] as const)(
-    "preserves the schema refusal and records recovery for %s switching",
-    async (history) => {
-      await withFixture(history, async ({ root, previous, state, schemas }) => {
-        const databasePath = resolveOpenClawStateSqlitePath(state.env);
-        const before = fs.readFileSync(databasePath);
-        const error = await schemaRefusal(schemas);
-        // The schema bootstrap uses root CLI formatting before the 9.2 parent's ten-line tail.
-        const message = formatCliFailureLines({
-          title: "CLI failed",
-          error,
-          argv: ["node", "openclaw", "doctor", "--non-interactive", "--fix"],
-          env: process.env,
-        })
-          .join("\n")
-          .trimEnd()
-          .split("\n")
-          .slice(-10)
-          .join("\n");
-        const reason =
-          "[openclaw] Reason: Doctor refused update-time schema repair driven by OpenClaw 2026.9.2:";
-        expect(message).toContain(reason);
-        expect(message.indexOf(reason)).toBeLessThan(
-          message.indexOf("The previous source is intact in Git."),
+it.each([true, false])(
+  "names macOS service recovery when the Gateway is not offline (running=%s)",
+  async (running) => {
+    await withFixture(
+      "npm",
+      async ({ root }) => {
+        mockProcessPlatform("darwin");
+        const error = await maintenanceRefusal(root);
+        expect(error.message).toContain("openclaw gateway stop");
+        expect(error.message).toContain("openclaw update repair");
+        expect(error.message).toContain("If the stop command already returned successfully");
+        expect(error.message).toContain("managed-service shutdown did not complete");
+        expect(error.message).toContain(
+          `launchctl bootout gui/${process.getuid?.() ?? 501}/ai.openclaw.gateway`,
         );
-        expectRecovery(message, root, previous);
-        const logged = await warnings();
-        expect(logged).toContain("Doctor refused update-time schema repair");
-        expectRecovery(logged, root, previous);
-        expect(fs.readFileSync(databasePath)).toEqual(before);
-      });
-    },
-  );
+        expect(maybeStopManagedServiceBeforeMutableUpdate).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ phase: "inspect" }),
+        );
+      },
+      running,
+    );
+  },
+);
 
-  it("preserves activation ownership and records recovery without touching the service", async () => {
-    await withFixture("detached", async ({ root, previous }) => {
-      // Exercise the released parent's display boundary, not only the full child error.
-      const message = (await maintenanceRefusal(root)).message
-        .trimEnd()
-        .split("\n")
-        .slice(-10)
-        .join("\n");
+it.each([
+  ["main-rebase", "schema"],
+  ["expired", "schema"],
+  ["detached", "maintenance"],
+] as const)("records %s recovery after %s refusal", async (history, kind) => {
+  await withFixture(history, async ({ root, previous, state, schemas }) => {
+    const databasePath = resolveOpenClawStateSqlitePath(state.env);
+    const before = fs.readFileSync(databasePath);
+    const error = await (kind === "schema" ? schemaRefusal(schemas) : maintenanceRefusal(root));
+    // Both released-driver paths retain only the last ten lines.
+    const output =
+      kind === "schema"
+        ? formatCliFailureLines({
+            title: "CLI failed",
+            error,
+            argv: ["node", "openclaw", "doctor", "--non-interactive", "--fix"],
+            env: process.env,
+          }).join("\n")
+        : error.message;
+    const message = output.trimEnd().split("\n").slice(-10).join("\n");
+    if (kind === "schema") {
+      const reason =
+        "[openclaw] Reason: Doctor refused update-time schema repair driven by OpenClaw 2026.9.2:";
+      expect(message).toContain(reason);
+      expect(message.indexOf(reason)).toBeLessThan(
+        message.indexOf("The previous source is intact in Git."),
+      );
+      expect(fs.readFileSync(databasePath)).toEqual(before);
+    } else {
       expect(
         message.startsWith(`Doctor could not enter maintenance. Error: ${activationReason}`),
       ).toBe(true);
-      expectRecovery(message, root, previous);
-      const logged = await warnings();
-      expect(logged).toContain(activationReason);
-      expectRecovery(logged, root, previous);
       expect(maybeStopManagedServiceBeforeMutableUpdate).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ phase: "inspect" }),
       );
-    });
+    }
+    expectRecovery(message, root, previous);
+    const logged = await warnings();
+    expect(logged).toContain(
+      kind === "schema" ? "Doctor refused update-time schema repair" : activationReason,
+    );
+    expectRecovery(logged, root, previous);
   });
-
-  it("retains npm schema recovery and omits direct Doctor recovery for an update child", async () => {
-    await withFixture("npm", async ({ root, schemas, state }) => {
-      const expectedSchema =
-        "Doctor refused update-time schema repair driven by OpenClaw 2026.9.2: this updater reopens the ledger with old code after migration, and version publication could not be deferred safely.\n" +
-        `agent database ${state.path("agent.sqlite")}: on-disk schema 1, this build's schema 2. ` +
-        "The blocked schema change was not applied.\nLet the updater restore the previous package and exit. Then use an independent shell with the original service account, package prefix, profile, and state/config overrides.\n" +
-        `Manual update: openclaw gateway stop && npm install -g openclaw@${VERSION} --allow-scripts=openclaw && openclaw doctor --fix && openclaw gateway start.\n` +
-        `Use the package manager that owns this install (pnpm: pnpm add -g --allow-build=openclaw openclaw@${VERSION}; Bun: bun add -g --trust openclaw@${VERSION}). On npm 11.15 and earlier, omit --allow-scripts=openclaw.`;
-      expect((await schemaRefusal(schemas)).message).toBe(expectedSchema);
-      const maintenanceError = await maintenanceRefusal(root);
-      expect(maintenanceError.message).toContain(
-        `Doctor could not enter maintenance. Error: ${activationReason}`,
-      );
-      expect(maintenanceError.message).not.toContain(maintenanceSuffix);
-      expect(await warnings()).toBe("");
-    });
-  });
-
-  it("keeps non-driver schema admission and maintenance refusal unchanged", async () => {
-    await withFixture("detached", async ({ root, schemas }) => {
-      deleteTestEnvValue("OPENCLAW_UPDATE_IN_PROGRESS");
-      await expect(guardUpdateDoctorSchemaUpgrade({ schemas, runtime })).resolves.toBeUndefined();
-      vi.mocked(maybeStopManagedServiceBeforeMutableUpdate).mockResolvedValue({
-        stopped: false,
-        inspected: false,
-        runtimeInspected: false,
-        running: false,
-        blockMessage: "Synthetic service inspection unavailable.",
-      });
-      expect((await maintenanceRefusal(root)).message).toBe(
-        `Doctor could not enter maintenance. Error: Synthetic service inspection unavailable.${maintenanceSuffix}`,
-      );
-      expect(await warnings()).toBe("");
-    });
-  });
-
-  it.each(["missing", "ambiguous", "same-tree", "earlier-rebase", "stale"] as const)(
-    "does not guess a previous commit with %s history",
-    async (history) => {
-      await withFixture(history, async ({ root, previous, candidate, schemas }) => {
-        const message = (await schemaRefusal(schemas)).message;
-        for (const output of [message, await warnings()]) {
-          expect(output).toContain("The previous commit could not be determined; inspect");
-          expect(output).toContain(`git -C ${quote(root)} reflog`);
-          expect(output).not.toContain(`checkout ${previous}`);
-          expect(output).not.toContain(`checkout ${candidate}`);
-          expect(output).not.toContain("Previous source commit:");
-          expect(output).not.toContain(" checkout ");
-        }
-      });
-    },
-  );
 });
+
+it("retains npm schema recovery and omits direct Doctor recovery for an update child", async () => {
+  await withFixture("npm", async ({ root, schemas, state }) => {
+    const expectedSchema =
+      "Doctor refused update-time schema repair driven by OpenClaw 2026.9.2: this updater reopens the ledger with old code after migration, and version publication could not be deferred safely.\n" +
+      `agent database ${state.path("agent.sqlite")}: on-disk schema 1, this build's schema 2. ` +
+      "The blocked schema change was not applied.\nLet the updater restore the previous package and exit. Then use an independent shell with the original service account, package prefix, profile, and state/config overrides.\n" +
+      `Manual update: openclaw gateway stop && npm install -g openclaw@${VERSION} --allow-scripts=openclaw && openclaw doctor --fix && openclaw gateway start.\n` +
+      `Use the package manager that owns this install (pnpm: pnpm add -g --allow-build=openclaw openclaw@${VERSION}; Bun: bun add -g --trust openclaw@${VERSION}). On npm 11.15 and earlier, omit --allow-scripts=openclaw.`;
+    expect((await schemaRefusal(schemas)).message).toBe(expectedSchema);
+    const maintenanceError = await maintenanceRefusal(root);
+    expect(maintenanceError.message).toContain(
+      `Doctor could not enter maintenance. Error: ${activationReason}`,
+    );
+    expect(maintenanceError.message).not.toContain(maintenanceSuffix);
+    expect(await warnings()).toBe("");
+  });
+});
+
+it("keeps non-driver schema admission and maintenance refusal unchanged", async () => {
+  await withFixture("detached", async ({ root, schemas }) => {
+    deleteTestEnvValue("OPENCLAW_UPDATE_IN_PROGRESS");
+    await expect(guardUpdateDoctorSchemaUpgrade({ schemas, runtime })).resolves.toBeUndefined();
+    vi.mocked(maybeStopManagedServiceBeforeMutableUpdate).mockResolvedValue({
+      stopped: false,
+      inspected: false,
+      runtimeInspected: false,
+      running: false,
+      blockMessage: "Synthetic service inspection unavailable.",
+    });
+    expect((await maintenanceRefusal(root)).message).toBe(
+      `Doctor could not enter maintenance. Error: Synthetic service inspection unavailable.${maintenanceSuffix}`,
+    );
+    expect(await warnings()).toBe("");
+  });
+});
+
+it.each(["missing", "ambiguous", "same-tree", "earlier-rebase", "stale"] as const)(
+  "does not guess a previous commit with %s history",
+  async (history) => {
+    await withFixture(history, async ({ root, previous, candidate, schemas }) => {
+      const message = (await schemaRefusal(schemas)).message;
+      for (const output of [message, await warnings()]) {
+        expect(output).toContain("The previous commit could not be determined; inspect");
+        expect(output).toContain(`git -C ${quote(root)} reflog`);
+        expect(output).not.toContain(`checkout ${previous}`);
+        expect(output).not.toContain(`checkout ${candidate}`);
+        expect(output).not.toContain("Previous source commit:");
+        expect(output).not.toContain(" checkout ");
+      }
+    });
+  },
+);
 
 it("preserves Git recovery instead of accepting its package-style early markers", async () => {
   await withFixture("detached", async ({ root, previous, schemas }) => {

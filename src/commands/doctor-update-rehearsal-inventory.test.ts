@@ -15,6 +15,7 @@ import * as commands from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -46,6 +47,10 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+function childResult(cleanup: "normal" | "uncertain" = "normal") {
+  return { ...createCommandResult(), cleanup };
+}
+
 function prepareFixture(source: OpenClawTestState) {
   const driver = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
   recordUpdateRunStep(driver.runId, { step: "openclaw doctor", status: "in_progress" });
@@ -64,26 +69,16 @@ function prepareFixture(source: OpenClawTestState) {
   const workspace = path.join(root, "workspace");
   fs.writeFileSync(
     configPath,
-    JSON.stringify({
-      agents: {
-        defaults: { workspace, cwd: workspace, heartbeat: { every: "0m" } },
-        entries: {},
-      },
-      logging: { file: path.join(root, "canary.log") },
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        port: 12345,
-        auth: { mode: "token", token: "00000000-0000-4000-8000-000000000000" },
-        tls: { enabled: false },
-        tailscale: { mode: "off" },
-        controlUi: { enabled: false },
-      },
-      cron: { enabled: false, triggers: { enabled: false } },
-      hooks: { enabled: false, internal: { enabled: false } },
-      transcripts: { enabled: false, autoStart: [] },
-      discovery: { mdns: { mode: "off" } },
-    }),
+    `{
+    "agents": {"defaults": {"workspace": ${JSON.stringify(workspace)}, "cwd": ${JSON.stringify(workspace)}, "heartbeat": {"every": "0m"}}, "entries": {}},
+    "logging": {"file": ${JSON.stringify(path.join(root, "canary.log"))}},
+    "gateway": {"mode": "local", "bind": "loopback", "port": 12345,
+      "auth": {"mode": "token", "token": "00000000-0000-4000-8000-000000000000"},
+      "tls": {"enabled": false}, "tailscale": {"mode": "off"}, "controlUi": {"enabled": false}},
+    "cron": {"enabled": false, "triggers": {"enabled": false}},
+    "hooks": {"enabled": false, "internal": {"enabled": false}},
+    "transcripts": {"enabled": false, "autoStart": []}, "discovery": {"mdns": {"mode": "off"}}
+  }`,
     { mode: 0o600 },
   );
   const bytes = fs.statSync(statePath).size;
@@ -124,15 +119,7 @@ function prepareFixture(source: OpenClawTestState) {
     cleanupDirectories: [root],
     cleanup,
   });
-  const launch = vi.spyOn(commands, "runUtf8CommandWithTimeout").mockResolvedValue({
-    code: 0,
-    stdout: "",
-    stderr: "",
-    signal: null,
-    killed: false,
-    termination: "exit",
-    cleanup: "normal",
-  });
+  const launch = vi.spyOn(commands, "runUtf8CommandWithTimeout").mockResolvedValue(childResult());
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
   const schemas: databasePreflight.DoctorDatabasePreflight = {
     updateSchemaRehearsal: { runId: driver.runId, updaterVersion: "2026.9.2" },
@@ -348,15 +335,7 @@ it.each([
 
 it("retains a copy when the admitted child cannot confirm settlement", async () => {
   await fixture(async (f) => {
-    f.launch.mockResolvedValue({
-      code: 0,
-      stdout: "",
-      stderr: "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-      cleanup: "uncertain",
-    });
+    f.launch.mockResolvedValue(childResult("uncertain"));
     await expect(f.invoke()).rejects.toThrow(/did not settle/);
     expect(f.cleanup).not.toHaveBeenCalled();
     expect(fs.existsSync(f.statePath)).toBe(true);

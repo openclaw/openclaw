@@ -70,18 +70,15 @@ async function inspectDoctor(scenario: Scenario) {
       fs.unlinkSync(snapshotPath);
       return true;
     };
-    // Native private-directory creation is platform-owned and separately proved.
-    // Supply its closed, task-owned image while simulating Windows policy here.
-    const snapshotRead = vi
-      .spyOn(sqliteSnapshot, "prepareSqliteReadOnlyLocation")
-      .mockImplementation(async () => {
-        fs.copyFileSync(databasePath, snapshotPath);
-        return {
-          location: snapshotPath,
-          cleanup,
-          cleanupAsync: async () => cleanup(),
-        };
-      });
+    // Use a closed private copy; native directory creation is proved separately.
+    vi.spyOn(sqliteSnapshot, "prepareSqliteReadOnlyLocation").mockImplementation(async () => {
+      fs.copyFileSync(databasePath, snapshotPath);
+      return {
+        location: snapshotPath,
+        cleanup,
+        cleanupAsync: async () => cleanup(),
+      };
+    });
     // These are prepared preflight facts, not a synthetic migration or a claim
     // that the current test database has the shipped schema's full layout.
     const schemas: DoctorDatabasePreflight = {
@@ -117,27 +114,18 @@ async function inspectDoctor(scenario: Scenario) {
       vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
     }
     let error: unknown;
-    let result: DoctorDatabasePreflight | undefined;
-    try {
-      if (scenario.invocation === "package") {
-        await preflightUpdatePackageLifecycle();
-      } else {
-        result =
-          scenario.invocation === "flow"
-            ? await guardUpdateDoctorSchemaUpgrade({
-                schemas,
-                statePublicationOnly: scenario.publicationOnly,
-              })
-            : await preflightUpdateDoctorCli({});
-      }
-    } catch (caught) {
+    const result = await (
+      scenario.invocation === "package"
+        ? preflightUpdatePackageLifecycle()
+        : scenario.invocation === "flow"
+          ? guardUpdateDoctorSchemaUpgrade({
+              schemas,
+              statePublicationOnly: scenario.publicationOnly,
+            })
+          : preflightUpdateDoctorCli({})
+    ).catch((caught: unknown) => {
       error = caught;
-    }
-    for (const call of snapshotRead.mock.results) {
-      if (call.type === "return") {
-        await expect(call.value).resolves.toMatchObject({ location: expect.any(String) });
-      }
-    }
+    });
     expect(fs.readFileSync(databasePath)).toEqual(before);
     return { error, result, schemas };
   });
@@ -161,8 +149,7 @@ it.each(refusalScenarios)(
       updaterVersion: "2026.9.4",
       message: expect.stringContaining("The blocked schema change was not applied"),
     });
-    // The unchanged 9.4 canary keeps only the last 512 characters of each of
-    // forty lines. The reason and usable recovery must survive that boundary.
+    // The shipped canary retains only 40 lines, each truncated to its last 512 characters.
     const parentOutput = formatCliFailureLines({
       title: "CLI failed",
       error,
@@ -175,13 +162,13 @@ it.each(refusalScenarios)(
       .map((line) => line.slice(-512))
       .slice(-40)
       .join("\n");
-    expect(parentOutput).toContain(
+    for (const text of [
       "Doctor refused update-time schema repair driven by OpenClaw 2026.9.4:",
-    );
-    expect(parentOutput).toContain("openclaw gateway stop && npm install -g openclaw@");
-    expect(parentOutput).toContain(
+      "openclaw gateway stop && npm install -g openclaw@",
       "original service account, package prefix, profile, and state/config overrides",
-    );
+    ]) {
+      expect(parentOutput).toContain(text);
+    }
   },
 );
 

@@ -3,13 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as usageCacheSqlite from "../infra/session-cost-usage-cache.sqlite.js";
-import {
-  decodeUsageCostRollup,
-  encodeUsageCostRollup,
-  USAGE_COST_ROLLUP_SCOPE,
-  USAGE_COST_ROLLUP_VERSION,
-} from "../infra/session-cost-usage-rollup-codec.js";
-import { createSessionUsageRollupData } from "../infra/session-cost-usage-rollup.js";
+import { USAGE_COST_ROLLUP_SCOPE } from "../infra/session-cost-usage-rollup-codec.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
@@ -34,11 +28,7 @@ afterEach(async () => {
 async function uploadFixture() {
   const root = tempDirs.make("openclaw-skill-upload-doctor-");
   const uploadRoot = path.join(root, "tmp", "skill-uploads");
-  const metadataPath = path.join(
-    uploadRoot,
-    "11111111-1111-4111-8111-111111111111",
-    "metadata.json",
-  );
+  const metadataPath = path.join(uploadRoot, "sample", "metadata.json");
   await fs.mkdir(path.dirname(metadataPath), { recursive: true });
   await fs.writeFile(metadataPath, "{}\n", "utf8");
   return { uploadRoot, metadataPath, env: { OPENCLAW_STATE_DIR: root } };
@@ -54,14 +44,12 @@ describe("legacy usage-cost cache cleanup", () => {
     await fs.writeFile(cachedAsset, "old build");
     await fs.writeFile(unrelatedCache, "keep");
     const env = { OPENCLAW_STATE_DIR: stateDir };
-
     await maybeRepairLegacyRuntimeFiles(false, env);
     await expect(fs.readFile(cachedAsset, "utf8")).resolves.toBe("old build");
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining(`Obsolete Control UI asset cache remains at ${cacheRoot}`),
       "Control UI assets",
     );
-
     const rm = vi.spyOn(fs, "rm").mockRejectedValueOnce(fsError("EACCES"));
     await expect(maybeRepairLegacyRuntimeFiles(true, env)).resolves.toEqual([
       expect.stringMatching(/Could not remove obsolete Control UI asset cache.*EACCES/u),
@@ -72,7 +60,6 @@ describe("legacy usage-cost cache cleanup", () => {
     );
     await expect(fs.readFile(cachedAsset, "utf8")).resolves.toBe("old build");
     rm.mockRestore();
-
     await expect(maybeRepairLegacyRuntimeFiles(true, env)).resolves.toEqual([]);
     await expect(fs.lstat(cacheRoot)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.readFile(unrelatedCache, "utf8")).resolves.toBe("keep");
@@ -82,7 +69,6 @@ describe("legacy usage-cost cache cleanup", () => {
     );
     await expect(maybeRepairLegacyRuntimeFiles(true, env)).resolves.toEqual([]);
   });
-
   it("removes only rebuildable usage-cost cache sidecars", async () => {
     const root = tempDirs.make("openclaw-usage-cost-doctor-");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -99,9 +85,8 @@ describe("legacy usage-cost cache cleanup", () => {
       path.join(sessionsDir, ".usage-cost-cache.json.lock.123.tmp"),
     ];
     const recentTemp = path.join(sessionsDir, ".usage-cost-cache.456.tmp");
-    const transcript = path.join(sessionsDir, "session.jsonl");
     const unrelatedFiles = [
-      transcript,
+      path.join(sessionsDir, "session.jsonl"),
       path.join(sessionsDir, ".usage-cost-cache.backup"),
       path.join(sessionsDir, ".usage-cost-cache.notes"),
     ];
@@ -113,9 +98,7 @@ describe("legacy usage-cost cache cleanup", () => {
     const staleTime = new Date(Date.now() - 60_000);
     await Promise.all(staleTempFiles.map((filePath) => fs.utimes(filePath, staleTime, staleTime)));
     const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
-
     await maybeRepairLegacyRuntimeFiles(true, env);
-
     for (const filePath of [...cacheFiles, ...staleTempFiles]) {
       await expect(fs.readFile(filePath, "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
     }
@@ -123,30 +106,23 @@ describe("legacy usage-cost cache cleanup", () => {
       await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("x");
     }
   });
-
   it("reports legacy skill-upload staging without deleting it unless repair is enabled", async () => {
     const { uploadRoot, metadataPath, env } = await uploadFixture();
-
     await maybeRepairLegacyRuntimeFiles(false, env);
     await expect(fs.readFile(metadataPath, "utf8")).resolves.toBe("{}\n");
-
     await maybeRepairLegacyRuntimeFiles(true, env);
     await expect(fs.stat(uploadRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
-
   it.each([false, true])("reports skill-upload inspection failures (repair=%s)", async (repair) => {
     const { metadataPath, env } = await uploadFixture();
     vi.spyOn(fs, "lstat").mockRejectedValueOnce(fsError("EACCES"));
-
     await maybeRepairLegacyRuntimeFiles(repair, env);
-
     expect(note).toHaveBeenCalledWith(
       expect.stringMatching(/Failed (?:removing|inspecting) legacy skill-upload staging:.*EACCES/u),
       "Skill uploads",
     );
     await expect(fs.readFile(metadataPath, "utf8")).resolves.toBe("{}\n");
   });
-
   const symlinkTest = process.platform === "win32" ? it.skip : it;
   symlinkTest("removes a legacy staging symlink without touching its target", async () => {
     const root = tempDirs.make("openclaw-skill-upload-link-");
@@ -156,15 +132,12 @@ describe("legacy usage-cost cache cleanup", () => {
     await fs.mkdir(external);
     await fs.writeFile(path.join(external, "keep.txt"), "keep", "utf8");
     await fs.symlink(external, uploadRoot, "dir");
-
     await maybeRepairLegacyRuntimeFiles(true, {
       OPENCLAW_STATE_DIR: root,
     } as NodeJS.ProcessEnv);
-
     await expect(fs.lstat(uploadRoot)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.readFile(path.join(external, "keep.txt"), "utf8")).resolves.toBe("keep");
   });
-
   it.each(["none", "write", "inspection"] as const)(
     "continues retired-row cleanup after an agent failure (failure=%s)",
     async (failure) => {
@@ -173,25 +146,8 @@ describe("legacy usage-cost cache cleanup", () => {
       const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
       const firstDatabase = openOpenClawAgentDatabase({ agentId: "main", env });
       const databases = [firstDatabase, openOpenClawAgentDatabase({ agentId: "worker", env })];
-      const rollup = createSessionUsageRollupData();
-      rollup.untimestamped.totals.totalTokens = 17;
-      const current = encodeUsageCostRollup({
-        version: USAGE_COST_ROLLUP_VERSION,
-        pricingFingerprint: "synthetic",
-        checkpoint: {
-          kind: "jsonl",
-          parsedOffset: 7,
-          observedSize: 7,
-          observedMtimeMs: 1,
-          device: 1,
-          inode: 2,
-          anchorHash: "anchor",
-        },
-        scannedAt: 1,
-        parsedRecords: 1,
-        countedRecords: 0,
-        rollup,
-      });
+      // Cleanup selects scopes, not codec contents; preserve both stored columns byte-for-byte.
+      const current = { valueJson: '{"fixture":"current"}', blob: Uint8Array.of(0, 17, 255) };
       for (const database of databases) {
         const insert = database.db.prepare(
           "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, 1)",
@@ -207,10 +163,8 @@ describe("legacy usage-cost cache cleanup", () => {
         insert.run("session-cost-usage", "refresh-lock", "{}");
         insert.run("other", "keep", "{}");
       }
-      const before = firstDatabase.db
-        .prepare("SELECT * FROM cache_entries ORDER BY scope, key")
-        .all();
-
+      const query = "SELECT * FROM cache_entries ORDER BY scope, key";
+      const before = firstDatabase.db.prepare(query).all();
       if (failure === "inspection") {
         vi.spyOn(fs, "stat").mockRejectedValueOnce(fsError("EACCES"));
       } else if (failure === "write") {
@@ -219,15 +173,12 @@ describe("legacy usage-cost cache cleanup", () => {
         );
       }
       await maybeRepairLegacyRuntimeFiles(true, env);
-
       if (rejectFirst) {
         expect(note).toHaveBeenCalledWith(
           expect.stringContaining(failure === "inspection" ? "EACCES" : "pruning rejected"),
           "Doctor warnings",
         );
-        expect(
-          firstDatabase.db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all(),
-        ).toEqual(before);
+        expect(firstDatabase.db.prepare(query).all()).toEqual(before);
       }
       for (const database of rejectFirst ? databases.slice(1) : databases) {
         expect(
@@ -241,17 +192,9 @@ describe("legacy usage-cost cache cleanup", () => {
           .prepare("SELECT value_json, blob FROM cache_entries WHERE scope = ? AND key = 'current'")
           .get(USAGE_COST_ROLLUP_SCOPE);
         expect(retained).toEqual({ value_json: current.valueJson, blob: current.blob });
-        if (typeof retained?.value_json !== "string" || !(retained.blob instanceof Uint8Array)) {
-          throw new Error("Expected a retained current usage report");
-        }
-        expect(
-          decodeUsageCostRollup(retained.value_json, "synthetic", retained.blob)?.rollup
-            .untimestamped.totals.totalTokens,
-        ).toBe(17);
       }
     },
   );
-
   it.each([
     ["unreadable agent root", "root", "readdir", "EACCES", false, true],
     ["unreadable temp entry", "entry", "stat", "EIO", true, true],
@@ -278,11 +221,9 @@ describe("legacy usage-cost cache cleanup", () => {
     } else {
       vi.spyOn(fs, "stat").mockRejectedValueOnce(error);
     }
-
     await maybeRepairLegacyRuntimeFiles(shouldRepair, {
       OPENCLAW_STATE_DIR: root,
     } as NodeJS.ProcessEnv);
-
     if (diagnostic) {
       const action = shouldRepair ? "scan and cleanup" : "scan";
       expect(note).toHaveBeenCalledOnce();
@@ -292,12 +233,11 @@ describe("legacy usage-cost cache cleanup", () => {
         ),
         "Usage cost cache",
       );
-      expect(note.mock.calls[0]?.[0]).toContain(scope === "root" ? agentsDir : tempFile);
-      expect(note.mock.calls[0]?.[0]).toContain(code);
-      expect(note.mock.calls[0]?.[0]).toContain(
-        shouldRepair ? "openclaw doctor --fix" : "openclaw doctor",
-      );
-      expect(note.mock.calls[0]?.[0]).not.toContain("Removed");
+      const message = note.mock.calls[0]?.[0];
+      expect(message).toContain(scope === "root" ? agentsDir : tempFile);
+      expect(message).toContain(code);
+      expect(message).toContain(shouldRepair ? "openclaw doctor --fix" : "openclaw doctor");
+      expect(message).not.toContain("Removed");
       await expect(fs.readFile(cacheFile, "utf8")).resolves.toBe("x");
       return;
     }

@@ -48,11 +48,32 @@ vi.mock("../infra/update-run-interruption-worker.js", () => ({
   readInterruptedUpdateCandidateAsync: vi.fn(),
 }));
 
+const listRuns = vi.mocked(listUpdateRunsAsync);
+const readCandidate = vi.mocked(readInterruptedUpdateCandidateAsync);
+const reconcile = vi.mocked(reconcileInterruptedUpdateRuns);
+const readSnapshot = vi.mocked(withOpenClawStateDatabaseReadSnapshot);
+const noteMock = vi.mocked(note);
+
 beforeEach(() => {
-  vi.mocked(reconcileInterruptedUpdateRuns).mockResolvedValue([]);
-  vi.mocked(readInterruptedUpdateCandidateAsync).mockResolvedValue(undefined);
+  reconcile.mockResolvedValue([]);
+  readCandidate.mockResolvedValue(undefined);
 });
 afterEach(() => vi.resetAllMocks());
+
+function runtimeFailure() {
+  return Object.assign(new Error("runtime binary not executable: /fixture/node (EACCES)"), {
+    code: "EACCES",
+  });
+}
+
+function recordWarning(runId: string, detail: string, endedAtMs = 1, suffix = "") {
+  recordUpdateRunStep(runId, {
+    step: `warning:openclaw doctor${suffix}`,
+    status: "completed",
+    detail,
+    endedAtMs,
+  });
+}
 
 function makeHistory(overrides: Partial<UpdateRunRecord>): UpdateRunRecord {
   return {
@@ -90,17 +111,10 @@ it("keeps history read failure advisory without refreshing a running update", as
     } finally {
       clock.mockRestore();
     }
-    const failure = Object.assign(
-      new Error("runtime binary not executable: /fixture/node (EACCES)"),
-      {
-        code: "EACCES",
-      },
-    );
-    vi.mocked(readInterruptedUpdateCandidateAsync).mockRejectedValue(failure);
-    vi.mocked(listUpdateRunsAsync).mockRejectedValue(failure);
-
+    const failure = runtimeFailure();
+    readCandidate.mockRejectedValue(failure);
+    listRuns.mockRejectedValue(failure);
     await expect(noteStaleUpdateRuns({ migrateState: true })).resolves.toBeUndefined();
-
     expectHistoryNote(failure.message);
     const saved = getUpdateRun(run.runId)!;
     expect(saved).toMatchObject({
@@ -128,18 +142,12 @@ it("repairs config after update history discovery cannot launch its runtime", as
           gateway: { mode: "local", bind: "localhost" },
           plugins: { enabled: false },
         });
-        vi.mocked(withOpenClawStateDatabaseReadSnapshot).mockRejectedValueOnce(
-          Object.assign(new Error("runtime binary not executable: /fixture/node (EACCES)"), {
-            code: "EACCES",
-          }),
-        );
-
+        readSnapshot.mockRejectedValueOnce(runtimeFailure());
         const result = await runDoctorConfigPreflight({
           migrateState: false,
           migrateLegacyConfig: false,
           repairPrefixedConfig: true,
         });
-
         expect(result.snapshot.valid).toBe(true);
         expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject({
           gateway: { bind: "loopback" },
@@ -160,7 +168,7 @@ it("repairs config after update history discovery cannot launch its runtime", as
 
 it("keeps a warning visible when the existing history database cannot record it", async () => {
   await withOpenClawTestState({ label: "history-warning-unavailable" }, async (state) => {
-    vi.mocked(listUpdateRunsAsync).mockRejectedValue(new Error("history unavailable"));
+    listRuns.mockRejectedValue(new Error("history unavailable"));
     await expect(noteStaleUpdateRuns()).resolves.toBeUndefined();
     expectHistoryNote("history unavailable");
     expectHistoryNote("warning could not be saved");
@@ -175,7 +183,7 @@ it("does not admit mutations while a history child still has unsettled process c
   const failure = new CommandProcessCleanupError({
     cause: new Error("child cleanup is unsettled"),
   });
-  vi.mocked(listUpdateRunsAsync).mockRejectedValue(failure);
+  listRuns.mockRejectedValue(failure);
   await expect(noteStaleUpdateRuns()).rejects.toBe(failure);
 });
 
@@ -183,18 +191,13 @@ it("keeps foreign-destination remediation visible until a later successful updat
   let latest = makeHistory({
     runId: "6631ecee-adbf-41e8-a0e3-1b88b28b0a59",
     reason: "global-install-foreign-destination",
-    origin: { nextAction: undefined },
     target: { kind: "package", version: "2026.9.4" },
     before: { version: "2026.7.1-2" },
-    steps: [{ step: "global-install-foreign-destination", status: "failed", detail: undefined }],
+    steps: [{ step: "global-install-foreign-destination", status: "failed" }],
   });
-  vi.mocked(listUpdateRunsAsync).mockImplementation(async (input) =>
-    input?.active ? [] : [latest],
-  );
-  vi.mocked(readInterruptedUpdateCandidateAsync).mockResolvedValue(latest);
-
+  listRuns.mockImplementation(async (input) => (input?.active ? [] : [latest]));
+  readCandidate.mockResolvedValue(latest);
   await noteStaleUpdateRuns({});
-
   expect(note).toHaveBeenCalledOnce();
   expectHistoryNote("OpenClaw update failed: global-install-foreign-destination.");
   expect(reconcileInterruptedUpdateRuns).toHaveBeenCalledWith({ candidate: latest });
@@ -215,10 +218,8 @@ it("keeps foreign-destination remediation visible until a later successful updat
     after: { version: "2026.9.4" },
     steps: [],
   };
-  vi.mocked(note).mockClear();
-
+  noteMock.mockClear();
   await noteStaleUpdateRuns({});
-
   expect(note).not.toHaveBeenCalled();
 });
 
@@ -230,19 +231,17 @@ it("refreshes history outside the discovery snapshot after settling an interrupt
     reason: null,
     after: { buildId: "candidate-build" },
   };
-  vi.mocked(readInterruptedUpdateCandidateAsync).mockResolvedValue(abandoned);
-  vi.mocked(reconcileInterruptedUpdateRuns).mockImplementation(async () => {
+  readCandidate.mockResolvedValue(abandoned);
+  reconcile.mockImplementation(async () => {
     expect(snapshot.active).toBe(false);
     return [settled];
   });
   const readScopes: boolean[] = [];
-  vi.mocked(listUpdateRunsAsync).mockImplementation(async (input) => {
+  listRuns.mockImplementation(async (input) => {
     readScopes.push(snapshot.active);
     return snapshot.active ? [abandoned] : input?.active ? [] : [settled];
   });
-
   await noteStaleUpdateRuns();
-
   expect(withOpenClawStateDatabaseReadSnapshot).toHaveBeenCalledOnce();
   expect(readInterruptedUpdateCandidateAsync).toHaveBeenCalledOnce();
   expect(reconcileInterruptedUpdateRuns).toHaveBeenCalledWith({ candidate: abandoned });
@@ -271,28 +270,19 @@ it("stops replaying resolved state migration warnings without erasing history", 
     ];
     const run = createUpdateRun({ trigger: "cli" });
     for (const [index, detail] of warnings.entries()) {
-      recordUpdateRunStep(run.runId, {
-        step: `warning:openclaw doctor:${index}`,
-        status: "completed",
-        detail,
-        endedAtMs: 1,
-      });
+      recordWarning(run.runId, detail, 1, `:${index}`);
     }
     const history = finishUpdateRun(run.runId, { status: "succeeded" });
     let latestRunId = run.runId;
-    vi.mocked(listUpdateRunsAsync).mockImplementation(async (input) =>
+    listRuns.mockImplementation(async (input) =>
       input?.active ? [] : [getUpdateRun(latestRunId)!],
     );
     const output = async () => {
-      vi.mocked(note).mockClear();
+      noteMock.mockClear();
       await noteStaleUpdateRuns({ migrateState: false });
-      return vi
-        .mocked(note)
-        .mock.calls.map(([message]) => message)
-        .join("\n");
+      return noteMock.mock.calls.map(([message]) => message).join("\n");
     };
     expect(await output()).toContain(warnings[3]);
-
     await recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: ["resolved"] });
     const repaired = await output();
     expect(repaired).not.toContain(warnings[3]);
@@ -301,19 +291,12 @@ it("stops replaying resolved state migration warnings without erasing history", 
       expect(repaired).toContain(warning);
     }
     expect(getUpdateRun(run.runId)).toEqual(history);
-
     await recordDeferredPluginMigrations({ pending: [pending("resolved")] });
     expect(await output()).toContain(warnings[3]);
     expect(getUpdateRun(run.runId)).toEqual(history);
-
     await recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: ["resolved"] });
     const later = createUpdateRun({ trigger: "cli" });
-    recordUpdateRunStep(later.runId, {
-      step: "warning:openclaw doctor",
-      status: "completed",
-      detail: warnings[3],
-      endedAtMs: Date.now() + 60_000,
-    });
+    recordWarning(later.runId, warnings[3], Date.now() + 60_000);
     const laterHistory = finishUpdateRun(later.runId, { status: "succeeded" });
     latestRunId = later.runId;
     expect(await output()).not.toContain(warnings[3]);
