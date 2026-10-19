@@ -55,6 +55,7 @@ type FixturePluginsConfig = {
   entries?: Record<string, { enabled?: boolean }>;
 };
 
+// mock-isolation: Use explicit fixture enablement without loading plugin runtime state.
 vi.mock("../plugins/config-state.js", () => ({
   normalizePluginId: (id: string) => id,
   resolveEffectiveEnableState: (params: {

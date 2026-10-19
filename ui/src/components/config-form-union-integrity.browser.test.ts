@@ -4,8 +4,15 @@ import {
   renderTextInputFixture,
   renderNodeFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
-import { query, edit, objectSchema } from "./config-form-integrity.test-support.ts";
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
+
+function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
+  expect(element instanceof Element, label).toBe(true);
+  if (!(element instanceof Element)) {
+    throw new Error(`missing ${label}`);
+  }
+  return element;
+}
 
 describe("config form primitive union integrity", () => {
   it.each(
@@ -31,9 +38,13 @@ describe("config form primitive union integrity", () => {
         maskSensitive,
         onPatch,
       });
-      const editor = query<HTMLTextAreaElement>(container, "textarea");
+      const editor = expectElement(
+        container.querySelector<HTMLTextAreaElement>("textarea"),
+        "typed inline-object editor",
+      );
       const template = { output: { default: [{ text: "usage" }] } };
-      edit(editor, JSON.stringify(template));
+      editor.value = JSON.stringify(template);
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
       editor.dispatchEvent(new Event("change", { bubbles: true }));
       expect(onPatch).toHaveBeenLastCalledWith(["messages", "usageTemplate"], template);
     },
@@ -48,9 +59,10 @@ describe("config form primitive union integrity", () => {
         type: syntax === "string-first" ? ["string", "object"] : ["object", "string"],
         minLength: 3,
       };
-      const analysis = analyzeConfigSchema(
-        objectSchema({ credentials: objectSchema({ token: credential }) }),
-      );
+      const analysis = analyzeConfigSchema({
+        type: "object",
+        properties: { credentials: { type: "object", properties: { token: credential } } },
+      });
       const renderValue = (token: unknown) =>
         renderNodeFixture(container, {
           schema: analysis.schema!,
@@ -63,26 +75,39 @@ describe("config form primitive union integrity", () => {
           maskSensitive: true,
           onPatch,
         });
+
       renderValue(undefined);
-      const input = query<HTMLInputElement>(container, "input");
+      const input = expectElement(
+        container.querySelector<HTMLInputElement>("input"),
+        "credential input",
+      );
       expect(input.type).toBe("password");
-      edit(input, "x");
+      input.value = "x";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
       expect(onPatch).not.toHaveBeenCalled();
-      edit(input, "synthetic-key");
+      input.value = "synthetic-key";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
       expect(onPatch).toHaveBeenLastCalledWith(["credentials", "token"], "synthetic-key");
       renderValue("synthetic-key");
       expect(input.readOnly).toBe(false);
       expect(input.type).toBe("password");
+
       for (const source of ["env", "file", "exec"]) {
         onPatch.mockClear();
         renderValue({ source, provider: "default", id: "synthetic-reference" });
-        const reference = query<HTMLInputElement>(container, "input");
-        expect(reference).toMatchObject({ value: "", readOnly: true });
+        const reference = expectElement(
+          container.querySelector<HTMLInputElement>("input"),
+          "reference input",
+        );
+        expect(reference.value).toBe("");
+        expect(reference.readOnly).toBe(true);
         expect(reference.placeholder).toContain("edit the config file directly");
-        edit(reference, "replacement");
+        reference.value = "replacement";
+        reference.dispatchEvent(new Event("input", { bubbles: true }));
         reference.dispatchEvent(new Event("change", { bubbles: true }));
         expect(onPatch).not.toHaveBeenCalled();
       }
+
       renderValue({ nested: "structured" });
       expect(container.querySelector("textarea")).not.toBeNull();
       expect(container.querySelector("input")).toBeNull();
@@ -94,47 +119,110 @@ describe("config form primitive union integrity", () => {
     (syntax) => {
       const container = document.createElement("div");
       const onPatch = vi.fn();
-      const path = ["providerOptions", "deepgram", "temperature"];
       const schema =
         syntax === "anyOf"
           ? { anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }] }
           : { type: ["string", "number", "boolean"] };
       const renderValue = (value: unknown, defaultValue?: unknown) => {
-        const temperature =
-          defaultValue === undefined ? schema : { ...schema, default: defaultValue };
-        const analysis = analyzeConfigSchema(
-          objectSchema({
-            providerOptions: objectSchema({ deepgram: objectSchema({ temperature }) }),
-          }),
-        );
+        const analysis = analyzeConfigSchema({
+          type: "object",
+          properties: {
+            providerOptions: {
+              type: "object",
+              properties: {
+                deepgram: {
+                  type: "object",
+                  properties: {
+                    temperature:
+                      defaultValue === undefined ? schema : { ...schema, default: defaultValue },
+                  },
+                },
+              },
+            },
+          },
+        });
         expect(analysis.unsupportedPaths).toEqual([]);
         renderAnalyzedFormFixture(container, analysis, {
           value: { providerOptions: { deepgram: { temperature: value } } },
           onPatch,
         });
-        return query<HTMLInputElement>(container, "input[type='text']");
+        return expectElement(
+          container.querySelector<HTMLInputElement>("input[type='text']"),
+          "mixed primitive union input",
+        );
       };
-      const expectPatch = (value: unknown, raw: string, expected: unknown, fallback?: unknown) => {
-        onPatch.mockClear();
-        edit(renderValue(value, fallback), raw);
-        expect(onPatch).toHaveBeenLastCalledWith(path, expected);
-      };
-      expectPatch(42, "43", 43);
+
+      let input = renderValue(42);
+      input.value = "43";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], 43);
+
       onPatch.mockClear();
-      const input = renderValue(1);
-      edit(input, "1.0000000000000001");
+      input = renderValue(1);
+      input.value = "1.0000000000000001";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
       input.dispatchEvent(new Event("change", { bubbles: true }));
       expect(onPatch).not.toHaveBeenCalled();
       expect(input.getAttribute("aria-invalid")).toBe("true");
       expect(input.value).toBe("1.0000000000000001");
-      expectPatch("42", "43", "43");
-      expectPatch(undefined, "43", 43);
-      expectPatch(undefined, "43", 43, 42);
-      expectPatch(undefined, "43", "43", "42");
-      expectPatch("false", "true", "true");
-      expectPatch(false, "true", true);
+
+      onPatch.mockClear();
+      input = renderValue("42");
+      input.value = "43";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(
+        ["providerOptions", "deepgram", "temperature"],
+        "43",
+      );
+
+      onPatch.mockClear();
+      input = renderValue(undefined);
+      input.value = "43";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], 43);
+
+      onPatch.mockClear();
+      input = renderValue(undefined, 42);
+      input.value = "43";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], 43);
+
+      onPatch.mockClear();
+      input = renderValue(undefined, "42");
+      input.value = "43";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(
+        ["providerOptions", "deepgram", "temperature"],
+        "43",
+      );
+
+      onPatch.mockClear();
+      input = renderValue("false");
+      input.value = "true";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(
+        ["providerOptions", "deepgram", "temperature"],
+        "true",
+      );
+
+      onPatch.mockClear();
+      input = renderValue(false);
+      input.value = "true";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(
+        ["providerOptions", "deepgram", "temperature"],
+        true,
+      );
+
+      onPatch.mockClear();
       const identifier = "1048113311314608148";
-      expectPatch(undefined, identifier, identifier);
+      input = renderValue(undefined);
+      input.value = identifier;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(onPatch).toHaveBeenLastCalledWith(
+        ["providerOptions", "deepgram", "temperature"],
+        identifier,
+      );
     },
   );
 
@@ -159,6 +247,7 @@ describe("config form primitive union integrity", () => {
       const patches: unknown[] = [];
       let persisted: unknown = initial;
       let value: unknown = initial;
+
       const renderValue = () => {
         renderTextInputFixture(container, {
           schema,
@@ -174,19 +263,27 @@ describe("config form primitive union integrity", () => {
           },
         });
       };
+
       try {
         renderValue();
-        let input = query<HTMLInputElement>(container, "input[type='text']");
+        let input = expectElement(
+          container.querySelector<HTMLInputElement>("input[type='text']"),
+          "incremental string-number input",
+        );
         input.focus();
         input.value = "";
-        for (const digit of identifier) {
+        for (const [index, digit] of Array.from(identifier).entries()) {
           input.value += digit;
           input.dispatchEvent(new Event("input", { bubbles: true }));
           // A background refresh can land even when the prefix is not yet a
           // valid string branch; the focused edit must survive that repaint.
           renderValue();
-          input = query<HTMLInputElement>(container, "input[type='text']");
+          input = expectElement(
+            container.querySelector<HTMLInputElement>("input[type='text']"),
+            `incremental string-number input ${index + 1}`,
+          );
         }
+
         expect(patches.length).toBeGreaterThan(1);
         expect(patches.slice(0, -1).every((candidate) => typeof candidate === "number")).toBe(true);
         expect(patches.at(-1)).toBe(identifier);

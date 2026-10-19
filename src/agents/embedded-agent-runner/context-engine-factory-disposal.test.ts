@@ -72,7 +72,13 @@ it.for([
             ingest: async () => ({ ingested: false }),
             async dispose() {
               disposals.push(id);
-              await Promise.all(signals.map((signal) => signal.aborted || once(signal, "abort")));
+              await Promise.all(
+                signals.map(async (signal) => {
+                  if (!signal.aborted) {
+                    await once(signal, "abort");
+                  }
+                }),
+              );
               stop.resolve();
               const signal = getAsyncWorkSignal();
               if (!signal) {

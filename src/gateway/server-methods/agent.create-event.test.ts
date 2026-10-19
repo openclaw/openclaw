@@ -40,6 +40,7 @@ const preparedRuntimeMocks = vi.hoisted(() => ({
   releaseSelected: vi.fn(async () => {}),
 }));
 
+// mock-isolation: Exercise ingress admission without executing agent commands.
 vi.mock("../../commands/agent.js", () => ({
   agentCommandFromGatewayIngress: agentCommandFromIngress,
   agentCommandFromIngress,
@@ -91,6 +92,7 @@ vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: The ingress fixture does not need the process runtime singleton.
 vi.mock("../../runtime.js", () => ({ defaultRuntime: {} }));
 
 import { agentHandlers } from "./agent.js";

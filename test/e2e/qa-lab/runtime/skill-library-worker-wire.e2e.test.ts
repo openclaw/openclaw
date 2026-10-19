@@ -226,7 +226,7 @@ it("pins skill bundles through worker authoring and lifecycle changes", async (c
           // Queue admission is observable before the turn has a terminal result.
           return observation.status === "pending" ? undefined : observation;
         });
-        expect(waitResult, await waitMessage(waitResult, key, marker)).toMatchObject({
+        expect(waitResult, waitMessage(waitResult, key, marker)).toMatchObject({
           status: "ok",
         });
         if (key === remoteKey) {
@@ -381,10 +381,9 @@ it("pins skill bundles through worker authoring and lifecycle changes", async (c
         }),
       ).resolves.toMatchObject({ runId: authorRunId, status: "started" });
       const authorWait = await waitRun(bob, authorRunId);
-      expect(
-        authorWait,
-        await waitMessage(authorWait, remoteKey, "bob-worker-author"),
-      ).toMatchObject({ status: "ok" });
+      expect(authorWait, waitMessage(authorWait, remoteKey, "bob-worker-author")).toMatchObject({
+        status: "ok",
+      });
       await settlement.wait(admin, remoteKey, signal);
       const authorOutput = provider.authorOutputs.get("bob-worker");
       expect(authorOutput?.describedId).toEqual(expect.stringContaining("skill_workshop"));
@@ -518,7 +517,7 @@ it("pins skill bundles through worker authoring and lifecycle changes", async (c
       const removedWait = await waitRun(alice, removedRunId);
       expect(
         removedWait,
-        await waitMessage(removedWait, removedDefaultKey, "removed-default"),
+        waitMessage(removedWait, removedDefaultKey, "removed-default"),
       ).toMatchObject({ status: "ok" });
       expect(
         provider.observations.get("removed-default")!.catalogs[0]!.map((skill) => skill.name),

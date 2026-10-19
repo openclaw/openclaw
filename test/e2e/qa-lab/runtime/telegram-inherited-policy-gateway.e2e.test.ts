@@ -50,11 +50,10 @@ test.each(["allowlist", "open"] as const)(
       };
       updates.enqueue(update);
     };
-    const handleRequest = api.handle;
 
     await withServer(
       (req, res) => {
-        void handleRequest(req, res).catch((error: unknown) => {
+        void api.handle(req, res).catch((error: unknown) => {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
         });
       },

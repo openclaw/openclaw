@@ -17,13 +17,9 @@ export function mockRequest(
   fallback: (params?: unknown) => unknown = () => ({}),
   methods?: string[],
 ) {
-  return vi.fn((method: string, params?: unknown) => {
+  return vi.fn(async (method: string, params?: unknown) => {
     methods?.push(method);
-    try {
-      return Promise.resolve((routes[method] ?? fallback)(params));
-    } catch (error) {
-      return Promise.reject(error);
-    }
+    return (routes[method] ?? fallback)(params);
   });
 }
 
