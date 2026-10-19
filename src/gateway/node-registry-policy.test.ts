@@ -37,6 +37,15 @@ const nodeSkill = {
   description: "Work on the paired node",
   content: "---\nname: node-work\ndescription: Work on the paired node\n---\nUse this node.\n",
 };
+const nodeTools = [
+  nodeTool,
+  {
+    ...nodeTool,
+    name: "node_screen",
+    description: "Unapproved screen command",
+    command: "screen.snapshot",
+  },
+];
 function policy(nodes: NonNullable<OpenClawConfig["gateway"]>["nodes"]): OpenClawConfig {
   return { gateway: { nodes } };
 }
@@ -90,6 +99,31 @@ function createFixture(
     node,
     client,
     socket,
+    registerSurface: (caps: string[], declared: string[], approved: string[], withheld = false) => {
+      Object.assign(client.connect, {
+        caps: withheld ? [] : caps,
+        commands: withheld ? [] : approved,
+        declaredCaps: caps,
+        declaredCommands: declared,
+        sessionCapsCeiling: caps,
+        sessionCommandsCeiling: declared,
+      });
+      return registry.register(client, {
+        ...registration,
+        approvedSurface: { caps, commands: approved },
+      });
+    },
+    invoke: (
+      opts: Omit<Parameters<NodeRegistry["invoke"]>[0], "nodeId" | "command" | "timeoutMs">,
+    ) => registry.invoke({ nodeId: node.nodeId, command: "system.run", timeoutMs: 0, ...opts }),
+    progress: (invokeId: string, chunk: string) =>
+      registry.handleInvokeProgress({
+        invokeId,
+        nodeId: node.nodeId,
+        connId: node.connId,
+        seq: 0,
+        chunk,
+      }),
     getConfig: () => config,
     publishConfig: (next: OpenClawConfig) => {
       config = next;
@@ -132,19 +166,8 @@ describe("connected node runtime policy", () => {
     "classifies an unapproved %s (caps=%j, allow=%j) as %s",
     (command, caps, allow, state) => {
       const config = policy({ commands: { allow } });
-      const { registry, client, socket } = createFixture(config);
-      Object.assign(client.connect, {
-        caps,
-        commands: [],
-        declaredCaps: caps,
-        declaredCommands: [command],
-        sessionCapsCeiling: caps,
-        sessionCommandsCeiling: [command],
-      });
-      const node = registry.register(client, {
-        ...registration,
-        approvedSurface: { caps, commands: [] },
-      });
+      const { registerSurface, socket } = createFixture(config);
+      const node = registerSurface(caps, [command], []);
 
       expect(readCommandState(node, config, command)).toBe(state);
       expect(node).toMatchObject({ commands: [], caps: [] });
@@ -159,19 +182,8 @@ describe("connected node runtime policy", () => {
   ])("restores approved Talk commands for a $name", ({ caps, initiallyDenied }) => {
     const denied = policy({ commands: { deny: TALK_PTT_COMMANDS } });
     const approvedCommands = ["talk.ptt.start", "talk.ptt.stop"];
-    const { registry, client, socket, reload } = createFixture(initiallyDenied ? denied : {});
-    Object.assign(client.connect, {
-      caps: initiallyDenied ? [] : caps,
-      commands: initiallyDenied ? [] : approvedCommands,
-      declaredCaps: caps,
-      declaredCommands: TALK_PTT_COMMANDS,
-      sessionCapsCeiling: caps,
-      sessionCommandsCeiling: TALK_PTT_COMMANDS,
-    });
-    const node = registry.register(client, {
-      ...registration,
-      approvedSurface: { caps, commands: approvedCommands },
-    });
+    const { registerSurface, socket, reload } = createFixture(initiallyDenied ? denied : {});
+    const node = registerSurface(caps, TALK_PTT_COMMANDS, approvedCommands, initiallyDenied);
     if (!initiallyDenied) {
       expect(node.commands).toEqual(approvedCommands);
       reload(denied);
@@ -188,111 +200,78 @@ describe("connected node runtime policy", () => {
     expect(socket.close).not.toHaveBeenCalled();
   });
 
-  it("keeps publications and pending frames on committed policy until reconciliation", async () => {
-    const { registry, node, publishConfig } = createFixture();
-    let invokeId = "";
-    const onProgress = vi.fn();
-    const result = registry.invoke({
-      nodeId: node.nodeId,
-      command: "system.run",
-      timeoutMs: 0,
-      onProgress,
-      onDispatchReady: (id) => {
-        invokeId = id;
-      },
-    });
-    expect(invokeId).not.toBe("");
-    const candidate = policy({
-      commands: { deny: ["system.run"] },
-      pluginTools: { enabled: false },
-      allowSkills: false,
-    });
-    publishConfig(candidate);
-    registry.refreshRuntimePolicy();
-    registry.updateNodePluginTools(node.nodeId, node.connId, [nodeTool]);
-    registry.updateNodeSkills(node.nodeId, node.connId, [nodeSkill]);
-
-    expect(node.nodePluginTools.map((tool) => tool.name)).toEqual(["node_exec"]);
-    expect(node.nodeSkills.map((skill) => skill.name)).toEqual(["node-work"]);
-    registry.sendInvokeInput(invokeId, { input: "before-commit" });
-    expect(
-      registry.handleInvokeProgress({
-        invokeId,
-        nodeId: node.nodeId,
-        connId: node.connId,
-        seq: 0,
-        chunk: "before-commit",
-      }),
-    ).toBe(true);
-    expect(onProgress).toHaveBeenCalledWith("before-commit");
-
-    registry.refreshRuntimePolicy(candidate);
-
-    expect(node.nodePluginTools).toEqual([]);
-    expect(node.nodeSkills).toEqual([]);
-    expect(await result).toMatchObject({ ok: false, error: { code: "POLICY_CHANGED" } });
-    expect(() => registry.sendInvokeInput(invokeId, { input: "after-commit" })).toThrow(
-      /not pending/,
-    );
-  });
-
-  it.each([false, true])(
-    "cancels a revoked active command and rejects retained input (streamed=%s)",
-    async (streamed) => {
-      const { registry, node, reload, socket } = createFixture();
+  it.each([
+    { mode: "committed unstreamed", streamed: false, speculative: false },
+    { mode: "committed streamed", streamed: true, speculative: false },
+    { mode: "speculative then committed", streamed: true, speculative: true },
+  ])(
+    "revokes pending work only under committed policy: $mode",
+    async ({ streamed, speculative }) => {
+      const { registry, node, reload, socket, invoke, progress, publishConfig } = createFixture();
       let invokeId = "";
       const onProgress = vi.fn();
-      const result = registry.invoke({
-        nodeId: node.nodeId,
-        command: "system.run",
-        timeoutMs: 0,
+      const result = invoke({
         ...(streamed ? { onProgress } : {}),
         onDispatchReady: (id) => {
           invokeId = id;
         },
       });
       expect(invokeId).not.toBe("");
-      registry.sendInvokeInput(invokeId, { input: "before-revocation" });
-
-      reload(denyRun);
-
-      expect(() => registry.sendInvokeInput(invokeId, { input: "after-revocation" })).toThrow(
-        /not pending|not authorized|unavailable/,
+      const candidate = speculative
+        ? policy({
+            commands: { deny: ["system.run"] },
+            pluginTools: { enabled: false },
+            allowSkills: false,
+          })
+        : denyRun;
+      if (speculative) {
+        publishConfig(candidate);
+        registry.refreshRuntimePolicy();
+        registry.updateNodePluginTools(node.nodeId, node.connId, [nodeTool]);
+        registry.updateNodeSkills(node.nodeId, node.connId, [nodeSkill]);
+        expect(node.nodePluginTools.map((tool) => tool.name)).toEqual(["node_exec"]);
+        expect(node.nodeSkills.map((skill) => skill.name)).toEqual(["node-work"]);
+      }
+      registry.sendInvokeInput(invokeId, { input: "before-commit" });
+      if (speculative) {
+        expect(progress(invokeId, "before-commit")).toBe(true);
+        expect(onProgress).toHaveBeenCalledWith("before-commit");
+      }
+      reload(candidate);
+      if (speculative) {
+        expect(node).toMatchObject({ nodePluginTools: [], nodeSkills: [] });
+      }
+      expect(() => registry.sendInvokeInput(invokeId, { input: "after-commit" })).toThrow(
+        speculative ? /not pending/ : /not pending|not authorized|unavailable/,
       );
       expect(await result).toMatchObject({ ok: false, error: { code: "POLICY_CHANGED" } });
-      expect(socket.send.mock.calls.map(([frame]) => String(frame))).toContainEqual(
-        expect.stringContaining('"event":"node.invoke.cancel"'),
-      );
-      expect(
-        registry.handleInvokeProgress({
-          invokeId,
-          nodeId: node.nodeId,
-          connId: node.connId,
-          seq: 0,
-          chunk: "after-revocation",
-        }),
-      ).toBe(false);
-      expect(onProgress).not.toHaveBeenCalled();
-      expect(
-        registry.handleInvokeResult({
-          id: invokeId,
-          nodeId: node.nodeId,
-          connId: node.connId,
-          ok: true,
-        }),
-      ).toBe(false);
-      reload({});
-      expect(() => registry.sendInvokeInput(invokeId, { input: "after-restoration" })).toThrow(
-        /not pending/,
-      );
-      expect(socket.close).not.toHaveBeenCalled();
+      if (!speculative) {
+        expect(socket.send.mock.calls.map(([frame]) => String(frame))).toContainEqual(
+          expect.stringContaining('"event":"node.invoke.cancel"'),
+        );
+        expect(progress(invokeId, "after-revocation")).toBe(false);
+        expect(onProgress).not.toHaveBeenCalled();
+        expect(
+          registry.handleInvokeResult({
+            id: invokeId,
+            nodeId: node.nodeId,
+            connId: node.connId,
+            ok: true,
+          }),
+        ).toBe(false);
+        reload({});
+        expect(() => registry.sendInvokeInput(invokeId, { input: "after-restoration" })).toThrow(
+          /not pending/,
+        );
+        expect(socket.close).not.toHaveBeenCalled();
+      }
     },
   );
 
   it("rechecks command policy after awaited pairing work before creating a pending invocation", async () => {
     const entered = createDeferred();
     const pairing = createDeferred<{ identity: string; generation: string }>();
-    const { registry, node, reload } = createFixture(
+    const { registry, node, reload, invoke } = createFixture(
       {},
       {
         resolveCurrentPairingState: async () => {
@@ -310,10 +289,7 @@ describe("connected node runtime policy", () => {
         error: { code: "UNEXPECTED_DISPATCH" },
       });
     });
-    const result = registry.invoke({
-      nodeId: node.nodeId,
-      command: "system.run",
-      timeoutMs: 0,
+    const result = invoke({
       onDispatchReady,
     });
     await entered.promise;
@@ -373,53 +349,44 @@ describe("connected node runtime policy", () => {
     expect(socket.close).not.toHaveBeenCalled();
   });
 
-  it("retains tool publication while disabled and restores only currently approved commands", () => {
-    const { registry, node, reload } = createFixture(policy({ pluginTools: { enabled: false } }));
-    registry.updateNodePluginTools(node.nodeId, node.connId, [
-      nodeTool,
-      {
-        ...nodeTool,
-        name: "node_screen",
-        description: "Unapproved screen command",
-        command: "screen.snapshot",
-      },
-    ]);
-    expect(listConnectedNodePluginTools()).toEqual([]);
+  it.each(["tools", "skills"] as const)(
+    "retains disabled %s publications and restores only approved commands",
+    (kind) => {
+      const tools = kind === "tools";
+      const disabled = policy(tools ? { pluginTools: { enabled: false } } : { allowSkills: false });
+      const { registry, node, reload } = createFixture(disabled);
+      const name = tools ? "node_exec" : "node-work";
+      const publish = (present: boolean) => {
+        if (tools) {
+          registry.updateNodePluginTools(node.nodeId, node.connId, present ? nodeTools : []);
+        } else {
+          registry.updateNodeSkills(node.nodeId, node.connId, present ? [nodeSkill] : []);
+        }
+      };
+      const visible = () =>
+        tools
+          ? listConnectedNodePluginTools().map((tool) => tool.descriptor.name)
+          : mergeRemoteNodeSkillEntries([], { canExec: true }).map((entry) => entry.skill.name);
+      const resident = () =>
+        tools
+          ? node.nodePluginTools.map((tool) => tool.name)
+          : node.nodeSkills.map((skill) => skill.name);
 
-    reload({});
-    expect(listConnectedNodePluginTools().map((tool) => tool.descriptor.name)).toEqual([
-      "node_exec",
-    ]);
-
-    reload(denyRun);
-    expect(listConnectedNodePluginTools()).toEqual([]);
-    reload({});
-    expect(node.nodePluginTools.map((tool) => tool.name)).toEqual(["node_exec"]);
-
-    registry.updateNodePluginTools(node.nodeId, node.connId, []);
-    reload({});
-    expect(listConnectedNodePluginTools()).toEqual([]);
-  });
-
-  it("restores the last bounded skill publication and withdraws it when execution is denied", () => {
-    const { registry, node, reload } = createFixture(policy({ allowSkills: false }));
-    registry.updateNodeSkills(node.nodeId, node.connId, [nodeSkill]);
-    expect(node.nodeSkills).toEqual([]);
-
-    reload({});
-    expect(
-      mergeRemoteNodeSkillEntries([], { canExec: true }).map((entry) => entry.skill.name),
-    ).toEqual(["node-work"]);
-
-    reload(denyRun);
-    expect(mergeRemoteNodeSkillEntries([], { canExec: true })).toEqual([]);
-    reload({});
-    expect(node.nodeSkills.map((skill) => skill.name)).toEqual(["node-work"]);
-
-    reload(policy({ allowSkills: false }));
-    expect(mergeRemoteNodeSkillEntries([], { canExec: true })).toEqual([]);
-    registry.updateNodeSkills(node.nodeId, node.connId, []);
-    reload({});
-    expect(node.nodeSkills).toEqual([]);
-  });
+      publish(true);
+      expect(tools ? visible() : resident()).toEqual([]);
+      reload({});
+      expect(visible()).toEqual([name]);
+      reload(denyRun);
+      expect(visible()).toEqual([]);
+      reload({});
+      expect(resident()).toEqual([name]);
+      if (!tools) {
+        reload(disabled);
+        expect(visible()).toEqual([]);
+      }
+      publish(false);
+      reload({});
+      expect(tools ? visible() : resident()).toEqual([]);
+    },
+  );
 });

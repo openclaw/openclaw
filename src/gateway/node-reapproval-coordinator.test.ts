@@ -1,4 +1,3 @@
-// Covers paired-node reapproval reuse and changed-surface write limits.
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import {
@@ -25,17 +24,17 @@ const nodeInput = (surface = "screen") => ({
   caps: ["camera", surface],
 });
 
-async function pairedRoot(name: string) {
+async function pairedFixture(
+  name: string,
+  config?: Parameters<typeof createNodeReapprovalCoordinator>[0],
+  scheduler = createTestGatewayScheduler(),
+) {
   const baseDir = await tempDirs.make(name);
   await setupPairedNode(baseDir);
-  return baseDir;
-}
-
-function requests(
-  coordinator: ReturnType<typeof createNodeReapprovalCoordinator>,
-  baseDir: string,
-) {
-  return (surface = "screen") => coordinator.request({ input: nodeInput(surface), baseDir });
+  const coordinator = createNodeReapprovalCoordinator(config, { scheduler });
+  const request = (surface = "screen") =>
+    coordinator.request({ input: nodeInput(surface), baseDir });
+  return { baseDir, coordinator, request };
 }
 
 async function setupPairedNode(baseDir: string): Promise<void> {
@@ -60,9 +59,7 @@ async function setupPairedNode(baseDir: string): Promise<void> {
 }
 
 describe("node reapproval coordinator", () => {
-  beforeAll(async () => {
-    await tempDirs.setup();
-  });
+  beforeAll(() => tempDirs.setup());
 
   afterAll(async () => {
     await closeStateDatabaseForTest();
@@ -70,15 +67,14 @@ describe("node reapproval coordinator", () => {
   });
 
   test("retains changed-surface quota and free pending reuse across policy updates", async () => {
-    const baseDir = await pairedRoot("reuse");
-    const pending = await requestNodePairing(nodeInput(), baseDir);
     const clock = createGatewaySchedulerClock(1_000);
     const scheduler = createTestGatewayScheduler(clock.clock);
-    const coordinator = createNodeReapprovalCoordinator(
+    const { baseDir, coordinator, request } = await pairedFixture(
+      "reuse",
       { ...limit, exemptLoopback: true },
-      { scheduler },
+      scheduler,
     );
-    const request = requests(coordinator, baseDir);
+    const pending = await requestNodePairing(nodeInput(), baseDir);
 
     const matchingConnect = await beginNodePairingConnect("node-1", baseDir);
     await expect(
@@ -131,23 +127,15 @@ describe("node reapproval coordinator", () => {
   });
 
   test("stops accepting work after disposal", async () => {
-    const baseDir = await pairedRoot("dispose");
-    const coordinator = createNodeReapprovalCoordinator(undefined, {
-      scheduler: createTestGatewayScheduler(),
-    });
+    const { baseDir, coordinator, request } = await pairedFixture("dispose");
     coordinator.dispose();
 
-    await expect(requests(coordinator, baseDir)()).resolves.toBeNull();
+    await expect(request()).resolves.toBeNull();
     expect((await listNodePairing(baseDir)).pending).toEqual([]);
   });
 
   test("keeps only the latest request waiting behind active work", async () => {
-    const baseDir = await pairedRoot("latest");
-    const coordinator = createNodeReapprovalCoordinator(limit, {
-      scheduler: createTestGatewayScheduler(),
-    });
-
-    const request = requests(coordinator, baseDir);
+    const { baseDir, coordinator, request } = await pairedFixture("latest", limit);
     const active = request();
     const superseded = request("microphone");
     const latest = request("location");
@@ -167,11 +155,7 @@ describe("node reapproval coordinator", () => {
   });
 
   test("cancels queued work when the latest declaration matches active work", async () => {
-    const baseDir = await pairedRoot("active-latest");
-    const coordinator = createNodeReapprovalCoordinator(limit, {
-      scheduler: createTestGatewayScheduler(),
-    });
-    const request = requests(coordinator, baseDir);
+    const { baseDir, coordinator, request } = await pairedFixture("active-latest", limit);
     const active = request();
     const stale = request("microphone");
     const latest = request();
@@ -192,7 +176,7 @@ describe("node reapproval coordinator", () => {
   });
 
   test("retains the newest cleanup claim across equivalent reconnects", async () => {
-    const baseDir = await pairedRoot("cleanup-generation");
+    const { baseDir, coordinator } = await pairedFixture("cleanup-generation");
     const pending = await requestNodePairing(nodeInput(), baseDir);
     const first = await beginNodePairingConnect("node-1", baseDir);
     const staleCleanup = await beginNodePairingConnect("node-1", baseDir);
@@ -200,9 +184,6 @@ describe("node reapproval coordinator", () => {
     expect(first.cleanupClaim).toBeDefined();
     expect(staleCleanup.cleanupClaim).toBeDefined();
     expect(latest.cleanupClaim).toBeDefined();
-    const coordinator = createNodeReapprovalCoordinator(undefined, {
-      scheduler: createTestGatewayScheduler(),
-    });
     const input = nodeInput();
 
     const firstReuse = coordinator.request({
