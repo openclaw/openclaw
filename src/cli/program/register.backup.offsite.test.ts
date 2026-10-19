@@ -192,7 +192,7 @@ describe("offsite backup CLI", () => {
     });
   });
 
-  it("stops retention when namespace takeover follows the first delete's ownership check", async () => {
+  it("checks retention ownership once per deletion and stops after namespace takeover", async () => {
     await withNamespaceRace(async (fixture) => {
       const expired = [
         "20260101T000000Z-11111111.tar.gz",
@@ -203,27 +203,34 @@ describe("offsite backup CLI", () => {
         await fs.writeFile(path.join(fixture.namespaceDir, key), Buffer.alloc(200));
       }
       const deleted: string[] = [];
-      let nextMarker = false;
+      const ownerReadsAtDelete: number[] = [];
+      let retaining = false;
+      let ownerReads = 0;
       let displaced = false;
       fixture.intercept((backend) => {
         const get = backend.getObject;
+        const list = backend.listObjects;
         const remove = backend.deleteObject;
+        backend.listObjects = (prefix, opts) => {
+          retaining = true;
+          return list(prefix, opts);
+        };
         backend.getObject = async (key, opts) => {
-          if (key === "openclaw-storage.json" && nextMarker) {
-            nextMarker = false;
+          if (key === "openclaw-storage.json" && deleted.length === 1 && !displaced) {
             displaced = true;
             await fixture.takeOver();
           }
           const body = await get(key, opts);
-          if (key.endsWith("/owner.json") && deleted.length === 1 && !displaced) {
-            // Let the early claim read finish, then take over during the delete's marker check.
-            nextMarker = true;
+          if (retaining && key.endsWith("/owner.json")) {
+            ownerReads += 1;
           }
           return body;
         };
         backend.deleteObject = async (key, opts) => {
           await remove(key, opts);
           if (key.endsWith(".tar.gz")) {
+            ownerReadsAtDelete.push(ownerReads);
+            ownerReads = 0;
             deleted.push(path.basename(key));
           }
         };
@@ -233,6 +240,8 @@ describe("offsite backup CLI", () => {
       ).rejects.toThrow("CLI exit 1");
       expect(displaced).toBe(true);
       expect(deleted).toHaveLength(1);
+      expect(ownerReadsAtDelete).toEqual([1]);
+      expect(ownerReads).toBe(1);
       expect(await fs.readdir(fixture.namespaceDir)).toEqual(
         expect.arrayContaining(expired.filter((key) => !deleted.includes(key))),
       );
