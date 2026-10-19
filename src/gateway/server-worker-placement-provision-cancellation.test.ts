@@ -14,7 +14,6 @@ vi.mock("./worker-environments/workspace-sync-preflight.js", () => ({
 
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
-  GatewayDrainingError,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
@@ -781,7 +780,7 @@ describe("dispatch Stop before provider allocation", () => {
       const recovery = environments.reconcileEnvironment(environment.environmentId).then(
         () => {
           settled = true;
-          return "recovered";
+          return "settled";
         },
         (error: unknown) => {
           settled = true;
@@ -831,7 +830,8 @@ describe("dispatch Stop before provider allocation", () => {
             reason === "started-failure" ? "failed" : "destroyed",
           );
         } else {
-          expect(first).toBeInstanceOf(reason === "shutdown" ? GatewayDrainingError : Error);
+          // Shutdown skips reconciliation before admission and preserves recovery state.
+          expect(first).toEqual(reason === "shutdown" ? "settled" : expect.any(Error));
           expect(destroy).not.toHaveBeenCalled();
           expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
           expect(support.testState.store.get(environment.environmentId)).toMatchObject({
