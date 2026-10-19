@@ -87,6 +87,7 @@ export function createApplicationUpdateOverlays(
   const receipts = createUpdateRunReceipts();
   let updateRequestRunning = false;
   let updateRunGeneration = 0;
+  let statusProjectionGeneration = 0;
   let updateHoldInFlight = false;
   let runId: string | null = null;
   let updateHistory: UpdateHistory = { kind: "unknown" };
@@ -308,10 +309,11 @@ export function createApplicationUpdateOverlays(
     response: UpdateRestartStatusResponse,
     isCurrent: () => boolean,
   ) => {
+    const generation = ++statusProjectionGeneration;
     const run = response.activeRun ?? response.lastRun;
     const runFailure = run ? await projectUpdateRunFailure(run) : null;
-    // Failure formatting is cold code; a reconnect or revoked grant can win its load.
-    if (!isCurrent()) {
+    // Newer status or a changed connection/grant can win the cold formatter load.
+    if (generation !== statusProjectionGeneration || !isCurrent()) {
       return;
     }
     const { failure, updateStatusBanner, recordedUpdateAttempt, ...status } =
