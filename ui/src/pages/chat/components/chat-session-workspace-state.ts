@@ -332,25 +332,6 @@ export function captureSessionWorkspaceNavigation(
   };
 }
 
-/** The tabs owner calls this without changing preview identity or reader contents. */
-function restoreSessionWorkspaceNavigation(
-  state: SessionWorkspaceHost,
-  navigation: SessionWorkspaceNavigation,
-) {
-  const workspace = getSessionWorkspace(state);
-  clearWorkspaceTimer(workspace);
-  const { browserPath, browserSearch, filter, ...tree } = navigation;
-  workspace.browserPath = browserPath;
-  workspace.browserSearch = browserSearch;
-  workspace.filter = filter;
-  workspace.tree = { ...tree, expandedPaths: [...tree.expandedPaths] };
-  loadSessionWorkspace(state, workspace);
-  for (const path of tree.expandedPaths) {
-    void loadSessionWorkspaceDirectory(state, path);
-  }
-  sessionWorkspaceForHost(state).publish();
-}
-
 export function loadSessionWorkspace(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,

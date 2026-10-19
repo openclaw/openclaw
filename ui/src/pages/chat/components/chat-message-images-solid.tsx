@@ -488,10 +488,8 @@ function createMessageImagePresentation(props: MessageImageProps) {
     active = false;
     previewEvents?.stop();
     previewEvents = undefined;
-    if (previewElement) {
-      // Do not retain the removed row through the image's parent or listeners.
-      previewElement.remove();
-    }
+    // Do not retain the removed row through the image's parent or listeners.
+    previewElement?.remove();
     if (loadedElement && currentImage?.url) {
       retainAssistantImage(
         currentImage.url,
@@ -725,32 +723,23 @@ export function MessageImageAction(props: MessageImageActionProps): JSX.Element 
     ]);
   return (
     <Show when={scope()} keyed>
-      {(_scope) => (
-        <MessageImageActionContent
-          image={props.image}
-          options={props.options}
-          render={props.render}
-        />
-      )}
+      {(_scope) => {
+        const presentation = createMessageImagePresentation(props);
+        const action = createMemo<MessageMediaAction>(() => {
+          const { actions, state, reason, previewUrl } = presentation.model();
+          return {
+            ...actions,
+            pending: state === "loading",
+            reason,
+            observeElement: presentation.observeFrame,
+            onFocus: state === "unavailable" ? undefined : presentation.admit,
+            onOpen: previewUrl
+              ? () => openMessageImage(props.image, previewUrl, props.options)
+              : undefined,
+          };
+        });
+        return props.render(action);
+      }}
     </Show>
   );
-}
-
-function MessageImageActionContent(props: MessageImageActionProps): JSX.Element {
-  const presentation = createMessageImagePresentation(props);
-  const action = createMemo<MessageMediaAction>(() => {
-    const model = presentation.model();
-    const previewUrl = model.previewUrl;
-    return {
-      ...model.actions,
-      pending: model.state === "loading",
-      reason: model.reason,
-      observeElement: presentation.observeFrame,
-      onFocus: model.state === "unavailable" ? undefined : presentation.admit,
-      onOpen: previewUrl
-        ? () => openMessageImage(props.image, previewUrl, props.options)
-        : undefined,
-    };
-  });
-  return props.render(action);
 }
