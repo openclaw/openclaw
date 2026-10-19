@@ -1,6 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createSignal, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import { bindOverlayAnchor } from "../../../components/overlay-anchor.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import {
   createMenuControls,
@@ -23,8 +24,6 @@ import {
 } from "./session-diff-icons.tsx";
 import type { SessionDiffMode } from "./session-diff-preferences.ts";
 export { SessionDiffActionIcon } from "./session-diff-icons.tsx";
-
-type MenuAnchor = { x: number; y: number };
 
 export type SessionDiffMenuDraft =
   | {
@@ -71,7 +70,6 @@ export type SessionDiffMenuDraft =
   | { kind: "jump"; paths: string[]; selected: string | null };
 
 export type SessionDiffMenuData = SessionDiffMenuDraft & {
-  anchor: MenuAnchor;
   trigger: HTMLElement;
 };
 
@@ -93,7 +91,6 @@ export type SessionDiffDesktopMenuAction =
   | {
       kind: "sync";
       data: { command: string; root: string; branch: string };
-      anchor: MenuAnchor;
       trigger: HTMLElement;
     }
   | { kind: "open-file-view"; path: string; view: SessionDiffFileView };
@@ -177,7 +174,6 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
         props.onAction({
           kind: "sync",
           data: menu.sync,
-          anchor: menu.anchor,
           trigger: menu.trigger,
         });
         return;
@@ -601,6 +597,8 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
       <Show when={props.menu} keyed>
         {(menu) => {
           let handle: MenuHandle | undefined;
+          let releaseAnchor: (() => void) | undefined;
+          onCleanup(() => releaseAnchor?.());
           const placement = menu.kind === "scope" ? (menu.placement ?? "top-start") : "bottom-end";
           const label = () =>
             menu.kind === "file"
@@ -638,18 +636,13 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
                 triggerAttributes={{
                   tabindex: -1,
                   "aria-hidden": "true",
-                  style: {
-                    position: "fixed",
-                    left: `${Math.max(8, Math.min(menu.anchor.x, window.innerWidth - 8))}px`,
-                    top: `${Math.max(8, Math.min(menu.anchor.y, window.innerHeight - 8))}px`,
-                    width: "1px",
-                    height: "1px",
-                    opacity: 0,
-                    "pointer-events": "none",
-                  },
+                  style: { display: "none" },
                 }}
                 ref={(value) => {
                   handle = value;
+                  releaseAnchor?.();
+                  // Follow the real button through translated sheets; CSS owns placement and flipping.
+                  releaseAnchor = bindOverlayAnchor(value.overlay.surface, menu.trigger, placement);
                   value.overlay.setReturnTarget(menu.trigger);
                   value.open();
                 }}

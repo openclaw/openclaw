@@ -321,14 +321,9 @@ export function SessionDiffPanel(props: SessionDiffProps) {
     if (!(trigger instanceof HTMLElement)) {
       return;
     }
-    const bounds = trigger.getBoundingClientRect();
     setMenu({
       ...draft,
       ...(draft.kind === "scope" ? { placement } : {}),
-      anchor: {
-        x: placement.endsWith("start") ? bounds.left : bounds.right,
-        y: placement.startsWith("top") ? bounds.top : bounds.bottom,
-      },
       trigger,
     });
   }
@@ -396,7 +391,7 @@ export function SessionDiffPanel(props: SessionDiffProps) {
           }
           return;
         }
-        setMenu({ kind: "sync", ...action.data, anchor: action.anchor, trigger: action.trigger });
+        setMenu({ kind: "sync", ...action.data, trigger: action.trigger });
         return;
       }
       case "scope":
