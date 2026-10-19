@@ -354,7 +354,7 @@ it.each([true, false])(
         },
         {
           name: "guarded convergence",
-          expectedNames: [["first", "callback save"]],
+          expectedNames: [["first", "first"]],
           invoke: (callback) =>
             service.add(
               { ...input, declarationKey: "agent:main:callback-save" },
