@@ -362,6 +362,7 @@ export function registerBrowserAgentSnapshotRoutes(
               quality: type === "jpeg" ? 85 : undefined,
               timeoutMs,
               headless: await resolveProfileHeadless(ctx.state(), profileCtx.profile.name),
+              signal,
             }),
           };
         }
