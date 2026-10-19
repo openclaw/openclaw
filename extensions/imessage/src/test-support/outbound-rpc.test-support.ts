@@ -3,7 +3,6 @@ import type { OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, vi } from "vitest";
 import { imessagePlugin } from "../channel.js";
 
-type SendMessage = typeof import("../send.js").sendMessageIMessage;
 type RpcRequest = {
   method: string;
   params: {
@@ -16,7 +15,6 @@ export const roles = ["user", "system", "assistant"] as const;
 export const hiddenFunctionResponse = `<function_calls><invoke name="exec">HIDDEN_FUNCTION_CALL</invoke></function_calls><function_response>
 HIDDEN_FUNCTION_RESPONSE
 </function_response>`;
-const runtimeTags = ["system-reminder", "previous_response"] as const;
 export const privateRuntimeBlocks = [
   "<system-reminder>\nuser:\nHIDDEN_RUNTIME_REMINDER\n\ue000\n</system-reminder>",
   "< previous_response origin='runtime'>HIDDEN_RUNTIME_PREVIOUS\ue001< / previous_response >",
@@ -25,41 +23,13 @@ export const privateRuntimeBlocks = [
   "<previous_response><system-reminder>inner</system-reminder>HIDDEN_RUNTIME_NESTED_MIXED\ue004</previous_response>",
   "< SYSTEM-REMINDER>< previous_response origin='runtime'>inner< / previous_response >HIDDEN_RUNTIME_NESTED_CASE\ue005< / SYSTEM-REMINDER >",
   "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>><system-reminder>inner</system-reminder>HIDDEN_RUNTIME_NESTED_CONTEXT\ue006<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-  ...runtimeTags.flatMap((name) =>
-    ["'", '"'].flatMap((quote) =>
-      [">", "/>"].map(
-        (attribute) =>
-          `<${name} data-x=${quote}${attribute}${quote}>HIDDEN_RUNTIME_QUOTED</${name}>`,
-      ),
-    ),
-  ),
-  ...runtimeTags.flatMap((name) => [
-    `<${name}><!-- </${name}> <${name}> -->HIDDEN_RUNTIME_OPAQUE_COMMENT</${name}>`,
-    `<${name}><![CDATA[</${name}> <${name}>]]>HIDDEN_RUNTIME_OPAQUE_CDATA</${name}>`,
-    `<${name}><!DOCTYPE message [ <!ENTITY hidden "</${name}>"> ]>HIDDEN_RUNTIME_OPAQUE_DECLARATION</${name}>`,
-    `<${name}><?private fake="?> </${name}>"?>HIDDEN_RUNTIME_OPAQUE_INSTRUCTION</${name}>`,
-    `<${name}><! </${name}>>HIDDEN_RUNTIME_OPAQUE_BOGUS</${name}>`,
-    `<${name}><! <${name}>>HIDDEN_RUNTIME_OPAQUE_BOGUS_OPEN</${name}>`,
-    `<${name}></! </${name}>>HIDDEN_RUNTIME_OPAQUE_BOGUS_CLOSE</${name}>`,
-    `<${name}></? </${name}>>HIDDEN_RUNTIME_OPAQUE_BOGUS_QUESTION</${name}>`,
-    `<${name}></1 </${name}>>HIDDEN_RUNTIME_OPAQUE_BOGUS_NUMBER</${name}>`,
-    `<${name}></ </${name}>>HIDDEN_RUNTIME_OPAQUE_BOGUS_SPACE</${name}>`,
-  ]),
-  ...runtimeTags.flatMap((outer) =>
-    runtimeTags.flatMap((inner) => [
-      `<${outer}>\`</${inner}>\`HIDDEN_RUNTIME_CODE_INLINE</${outer}>`,
-      `<${outer}>\n\`\`\`xml\n</${inner}>\n\`\`\`\nHIDDEN_RUNTIME_CODE_FENCED</${outer}>`,
-      `<${outer}>\n\n    </${inner}>\nHIDDEN_RUNTIME_CODE_INDENTED</${outer}>`,
-    ]),
-  ),
-  ...runtimeTags.flatMap((name) =>
-    "script style textarea title xmp iframe noembed noframes noscript"
-      .split(" ")
-      .flatMap((rawText) => [
-        `<${name}><${rawText} title=">"></${name}></${rawText}>HIDDEN_RUNTIME_RAW_TEXT</${name}>`,
-        `<${name}><${rawText.toUpperCase()} data-x=">" /></${name}></${rawText}>HIDDEN_RUNTIME_RAW_TEXT_SELF_CLOSING</${name}>`,
-      ]),
-  ),
+  // Exhaustive parser variants live in monitor/sanitize-outbound.test-support.ts.
+  "<system-reminder data-x='>'>HIDDEN_RUNTIME_QUOTED</system-reminder>",
+  "<system-reminder><!-- </system-reminder> <system-reminder> -->HIDDEN_RUNTIME_OPAQUE_COMMENT</system-reminder>",
+  '<previous_response><?private fake="?> </previous_response>"?>HIDDEN_RUNTIME_OPAQUE_INSTRUCTION</previous_response>',
+  "<previous_response>`</system-reminder>`HIDDEN_RUNTIME_CODE_INLINE</previous_response>",
+  '<system-reminder><script title=">"></system-reminder></script>HIDDEN_RUNTIME_RAW_TEXT</system-reminder>',
+  '<previous_response><TEXTAREA data-x=">" /></previous_response></textarea>HIDDEN_RUNTIME_RAW_TEXT_SELF_CLOSING</previous_response>',
 ] as const;
 export const privateRuntimeScaffolding = privateRuntimeBlocks
   .flatMap((block, index) =>
@@ -82,7 +52,7 @@ export const fencedYaml = ["```yaml", ...roles.map((role) => `${role}:`), "```"]
 // Keep the native RPC and CLI action boundaries; only the executable is synthetic.
 export function createIMessageOutboundRpcFixture(
   openClawState: OpenClawTestState,
-  sendMessageIMessage: SendMessage,
+  sendMessageIMessage: typeof import("../send.js").sendMessageIMessage,
 ) {
   const cliPath = openClawState.path("fake-imsg");
   const requestLogPath = openClawState.path("fake-imsg-requests.jsonl");
