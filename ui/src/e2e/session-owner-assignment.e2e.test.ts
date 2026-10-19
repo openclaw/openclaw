@@ -1,3 +1,4 @@
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Locator, Page, Request, Response } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
@@ -398,8 +399,8 @@ suite.define(() => {
             .toBeGreaterThan(0);
         } catch (error) {
           recordControlUiE2eFailureFacts(page, avatarRequests);
-          await page
-            .evaluate(() => {
+          await withTimeout(
+            page.evaluate(() => {
               const menu = document.querySelector("openclaw-session-menu");
               const trigger = menu?.querySelector('[role="menuitem"][aria-label="Assign to…"]');
               const panel = trigger?.parentElement?.querySelector(':scope > [role="menu"]');
@@ -423,7 +424,9 @@ suite.define(() => {
                 avatarImageComplete: image?.complete ?? false,
                 avatarImageDecoded: (image?.naturalWidth ?? 0) > 0,
               };
-            })
+            }),
+            1_000,
+          )
             .then((facts) => recordControlUiE2eFailureFacts(page, facts))
             .catch(() => undefined);
           throw error;
