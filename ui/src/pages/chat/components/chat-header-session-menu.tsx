@@ -1,13 +1,13 @@
 import type { JSX } from "@solidjs/web";
 import {
   createMemo,
-  createEffect,
   createProjection,
   createSignal,
   flush,
   merge,
   onCleanup,
   onSettled,
+  Show,
 } from "solid-js";
 import type { UiSettings } from "../../../app/settings.ts";
 import { BoardGrantedCapabilities } from "../../../components/board/board-widget-capabilities.solid.tsx";
@@ -244,11 +244,6 @@ function ChatHeaderSessionMenuContent(
     source: () => menu?.overlay.trigger,
     closeMenu: close,
     select: (item) => select(item, new CustomEvent("select", { cancelable: true, detail: item })),
-  });
-  createEffect(presented, (isPresented) => {
-    if (!isPresented) {
-      actions.advanced.close();
-    }
   });
   const browserOnlyInfo = content(
     "browser-only",
@@ -536,53 +531,62 @@ function ChatHeaderSessionMenuContent(
   const label = () =>
     t("chat.sidebar.sessionMenu", { session: liveProps.paneTitle ?? liveProps.session.label });
   return (
-    <Menu
-      controls={controls}
-      id={menuId}
-      lazy
-      prewarm={liveProps.prewarm && !liveProps.compact}
-      class={[
-        "session-menu chat-header-session-menu",
-        {
-          "session-menu--compact chat-header-session-menu--compact": props.compact || mobile(),
-          "chat-header-session-menu--mobile": mobile(),
-          "chat-header-session-menu--compact-sharing": props.compact && compactView() === "sharing",
-        },
-      ]}
-      panelClass="chat-header-session-menu__panel"
-      placement="bottom-end"
-      label={label()}
-      triggerClass="btn btn--ghost btn--icon chat-icon-btn chat-header-session-menu__trigger"
-      trigger={<Icon name="moreHorizontal" />}
-      items={items()}
-      onSelect={select}
-      ref={(handle) => {
-        menu = handle;
-        stopShortcut = listen(handle.overlay.surface, "keydown", shortcut, true);
-      }}
-      onEscape={(event) =>
-        props.paneTitle === undefined && actions.handleKeydown(event, view.appearance)
-      }
-      onBeforeShow={() => {
-        setOpen(true);
-        // Native opening reads the prepared items for validation and initial focus synchronously.
-        flush();
-      }}
-      onOpenChange={(isOpen) => {
-        setOpen(isOpen);
-        if (isOpen) {
-          if (props.paneTitle === undefined) {
-            actions.loadOwners();
-          }
-          props.onOpen();
-        } else {
-          setCompactView("root");
-          if (!mobile()) {
-            actions.advanced.close();
-          }
+    <>
+      <Show when={!presented()}>
+        {(_parked) => {
+          onSettled(() => actions.advanced.close());
+          return undefined;
+        }}
+      </Show>
+      <Menu
+        controls={controls}
+        id={menuId}
+        lazy
+        prewarm={liveProps.prewarm && !liveProps.compact}
+        class={[
+          "session-menu chat-header-session-menu",
+          {
+            "session-menu--compact chat-header-session-menu--compact": props.compact || mobile(),
+            "chat-header-session-menu--mobile": mobile(),
+            "chat-header-session-menu--compact-sharing":
+              props.compact && compactView() === "sharing",
+          },
+        ]}
+        panelClass="chat-header-session-menu__panel"
+        placement="bottom-end"
+        label={label()}
+        triggerClass="btn btn--ghost btn--icon chat-icon-btn chat-header-session-menu__trigger"
+        trigger={<Icon name="moreHorizontal" />}
+        items={items()}
+        onSelect={select}
+        ref={(handle) => {
+          menu = handle;
+          stopShortcut = listen(handle.overlay.surface, "keydown", shortcut, true);
+        }}
+        onEscape={(event) =>
+          props.paneTitle === undefined && actions.handleKeydown(event, view.appearance)
         }
-      }}
-    />
+        onBeforeShow={() => {
+          setOpen(true);
+          // Native opening reads the prepared items for validation and initial focus synchronously.
+          flush();
+        }}
+        onOpenChange={(isOpen) => {
+          setOpen(isOpen);
+          if (isOpen) {
+            if (props.paneTitle === undefined) {
+              actions.loadOwners();
+            }
+            props.onOpen();
+          } else {
+            setCompactView("root");
+            if (!mobile()) {
+              actions.advanced.close();
+            }
+          }
+        }}
+      />
+    </>
   );
 }
 
