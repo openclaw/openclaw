@@ -101,8 +101,8 @@ it("refreshes visible message avatars from identity and stops hydrating while hi
 
   const replacement = createAgentIdentityCapability(element.gateway!);
   element.agentIdentity = replacement;
+  await vi.waitFor(() => expect(replacement.get("main")?.avatar).toBe(avatar));
   await avatarLoaded();
-  expect(replacement.get("main")?.avatar).toBe(avatar);
 
   element.presented = false;
   await element.updateComplete;

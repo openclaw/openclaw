@@ -181,6 +181,7 @@ it.each([
     const initial: BoardGetParams = hydrateOwner ? { sessionKey } : session;
     const element = await mountDashboard(initial, client, {}, provider);
 
+    await customElements.whenDefined("openclaw-board-view");
     await vi.waitFor(() => expect(nativeOwner(element)).not.toBeNull());
     expect(request).toHaveBeenCalledWith("board.get", initial);
     expect(nativeOwner(element)?.textContent).toBe(`${initial.agentId}/${sessionKey}`);
