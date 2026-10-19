@@ -85,7 +85,9 @@ function currentMigrationIssues(
     const read = withOpenClawAgentDatabaseReadOnly(
       () => {
         const sessionsDir = resolveRealpathOrAbsolute(path.dirname(target.storePath));
-        return target.issues.filter((issue) => !isResolvedActiveTranscriptWarning(issue, sessionsDir));
+        return target.issues.filter(
+          (issue) => !isResolvedActiveTranscriptWarning(issue, sessionsDir),
+        );
       },
       { agentId: target.agentId, path: target.sqlitePath, env },
     );

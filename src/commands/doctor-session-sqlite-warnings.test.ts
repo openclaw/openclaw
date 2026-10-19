@@ -78,7 +78,8 @@ it("keeps active-file warnings when the live database cannot establish resolutio
 
     expect(readSessionSqliteMigrationWarnings(state.env)).toEqual(
       run.manifest.targets.map(
-        (target) => `${target.storePath}: [active_sqlite_transcript_jsonl] ${target.issues[0]?.message}`,
+        (target) =>
+          `${target.storePath}: [active_sqlite_transcript_jsonl] ${target.issues[0]?.message}`,
       ),
     );
     expect(fs.existsSync(expectDefined(targets[0], "missing target").sqlitePath)).toBe(false);
