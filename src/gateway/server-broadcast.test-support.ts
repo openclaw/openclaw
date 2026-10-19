@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { vi } from "vitest";
 import { WebSocket } from "ws";
+import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -12,6 +13,12 @@ export type BroadcastFrame<Payload = unknown> = {
   payload: Payload;
   recipientProfileId?: string;
 };
+export const eventFrame = (
+  event: string,
+  payload: unknown,
+  seq = 1,
+  extra: { recipientProfileId?: string; stateVersion?: GatewayBroadcastOpts["stateVersion"] } = {},
+) => ({ type: "event", event, payload, seq, ...extra });
 type Send = (
   wire: string | Buffer,
   options?: { binary: false } | ((error?: Error) => void),
