@@ -234,6 +234,7 @@ describe("renderMemoryImport", () => {
     const container = renderView({ onToggleCollection });
     const checkbox = expectDefined(
       container.querySelector<HTMLInputElement>(".memory-import__collection-choice input"),
+      "collection checkbox",
     );
 
     checkbox.checked = false;
@@ -257,6 +258,7 @@ describe("renderMemoryImport", () => {
     expect(container.textContent).toContain("backed up in the migration report");
     const confirm = expectDefined(
       container.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']"),
+      "import confirmation button",
     );
     confirm.click();
     expect(onConfirmImport).toHaveBeenCalledOnce();
