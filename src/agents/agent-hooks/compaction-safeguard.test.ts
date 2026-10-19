@@ -825,7 +825,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
           "Quality check feedback",
         );
         expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
-        const warnings = compactionLogger.warn.mock.calls.flat().join("\n");
+        const warnings = compactionLogger.warn.mock.calls.map(([message]) => message).join("\n");
         expect(warnings).toContain("reasonCode=quality_guard_degraded_fallback");
         expect(warnings).toContain("attempt=2");
         expect(warnings).not.toContain(correctiveFailureMarker);
@@ -1083,7 +1083,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summary).toContain("BODY-END");
     expect(summary).toContain(CONTEXT_TRUNCATED_MARKER.trim());
     expect(compactionLogger.warn).toHaveBeenCalledOnce();
-    const warning = compactionLogger.warn.mock.calls[0]?.join(" ") ?? "";
+    const warning = compactionLogger.warn.mock.calls[0]?.[0] ?? "";
     expect(warning).toBe(
       "Compaction safeguard: finalized artifact truncated; " +
         "loss=split-turn-head,preserved-turn-head,suffix-head",

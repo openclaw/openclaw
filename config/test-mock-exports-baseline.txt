@@ -7933,7 +7933,6 @@
 ["src/shared/pid-alive.test.ts","./freebsd-process-identity.ts","9f84b303fc5f147000308f7919ecd3cdc461ec427149094bc94980680a70b135",1]
 ["src/skills/discovery/chat-commands.test.ts","../../auto-reply/commands-registry.data.js","0f6c996d114111ece73c02a88d7577ea0842fdeb820675063e6343a9e8dd4199",1]
 ["src/skills/discovery/chat-commands.test.ts","../runtime/remote.js","77ac38a054f432e435f9508e1eb81892ec0008d2d10438bce827fa9f91e59c07",1]
-["src/skills/discovery/chat-commands.test.ts","./agent-filter.js","e896cff43b97fd8056baf113674bc8a238f6845ae254b8b0a0dd5497fd76e357",1]
 ["src/skills/discovery/chat-commands.test.ts","./command-specs.js","74b2a08860d5a712833139882a8bfff29ccce7eef2b637796471186aa9694c44",1]
 ["src/skills/discovery/command-specs.test.ts","../../logging/subsystem.js","7f542fc42dee2c939cbdee116f2b2cb1ccd5415e0fe62807eeca877dca432a3d",1]
 ["src/skills/discovery/command-specs.test.ts","../../plugins/bundle-commands.js","d6cd7b34f6c6e70deb5077b8076a3fc0f683df7d2034670818b3488cb517e1b0",1]
