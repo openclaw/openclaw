@@ -210,6 +210,32 @@ describe("typed Git read ownership", () => {
     expect(gitRead).toHaveBeenCalledTimes(9);
   });
 
+  it("shares only in-flight revision checks with identical inputs and environment", async () => {
+    const held = createDeferredCore<string>();
+    onTestFinished(() => held.resolve("unchanged"));
+    readRevision.mockReturnValue(held.promise);
+    gitRead.mockResolvedValue(emptyDiff);
+    const input = { cwd: "/revision-sharing" };
+    const read = (params: GitReadOperations["checkout.diff"]["input"]) =>
+      runGitReadOperation({ type: "checkout.diff", input: params });
+    const first = read(input);
+    const otherCheckout = read({ cwd: "/other-revision-sharing" });
+    const otherBase = read({ ...input, baseCommit: "a".repeat(40) });
+    const second = read(input);
+    vi.stubEnv("GIT_CONFIG_GLOBAL", "/revision-sharing-config");
+    const otherEnvironment = read(input);
+    vi.unstubAllEnvs();
+    const revisionCount = readRevision.mock.calls.length;
+    held.resolve("unchanged");
+    await Promise.all([first, otherCheckout, otherBase, second, otherEnvironment]);
+    expect(revisionCount).toBe(4);
+    expect(gitRead).toHaveBeenCalledTimes(3);
+    readRevision.mockResolvedValue("edited");
+    await read(input);
+    expect(readRevision).toHaveBeenCalledTimes(5);
+    expect(gitRead).toHaveBeenCalledTimes(4);
+  });
+
   it("gives each coalesced response independent files and commit metadata", async () => {
     const held = holdRead("checkout.diff", emptyDiff);
     const first = loadCheckoutDiff({ cwd: "/independent-diffs", sessionKey: "a" });
@@ -261,9 +287,7 @@ describe("typed Git read ownership", () => {
     readRevision.mockResolvedValue(null);
     const pending = runGitReadOperation(operation);
     const refresh = runGitReadOperation(operation, { refresh: true });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(gitRead).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(gitRead).toHaveBeenCalledTimes(2));
     const refreshed = {
       owner: "example",
       repo: "repo",
@@ -305,32 +329,50 @@ describe("typed Git read ownership", () => {
     await expect(runGitReadOperation(operation)).resolves.toEqual(fresh);
   });
 
-  it("one cancelled subscriber cannot terminate a peer's Git operation", async () => {
-    const held = holdRead("checkout.diff", emptyDiff);
-    const operation = { type: "checkout.diff" as const, input: { cwd: "/shared-cancellation" } };
-    const first = new AbortController();
-    const second = new AbortController();
-    const cancelled = runGitReadOperation(operation, { signal: first.signal });
-    const retained = runGitReadOperation(operation, { signal: second.signal });
-    await vi.waitFor(() => expect(gitRead).toHaveBeenCalledOnce());
-    const owner = gitRead.mock.calls[0]?.[1]?.signal;
-    const rejected = expect(cancelled).rejects.toThrow("first retired");
-    first.abort(new Error("first retired"));
-    await rejected;
-    expect(owner?.aborted).toBe(false);
-    held.resolve(emptyDiff);
-    await expect(retained).resolves.toEqual(emptyDiff);
-    expect(getEventListeners(first.signal, "abort")).toHaveLength(0);
-    expect(getEventListeners(second.signal, "abort")).toHaveLength(0);
-  });
+  it.each(["checkout.diff", "checkout.revision"] as const)(
+    "one cancelled subscriber cannot terminate a peer's %s operation",
+    async (phase) => {
+      const held = createDeferredCore<null>();
+      onTestFinished(() => held.resolve(null));
+      if (phase === "checkout.revision") {
+        readRevision.mockReturnValueOnce(held.promise);
+        gitRead.mockResolvedValue(emptyDiff);
+      } else {
+        gitRead.mockReturnValueOnce(held.promise.then(() => emptyDiff));
+      }
+      const operation = {
+        type: "checkout.diff" as const,
+        input: { cwd: `/shared-cancellation-${phase}` },
+      };
+      const first = new AbortController();
+      const second = new AbortController();
+      const cancelled = runGitReadOperation(operation, { signal: first.signal });
+      const retained = runGitReadOperation(operation, { signal: second.signal });
+      await vi.waitFor(() =>
+        expect(
+          vi.mocked(runGitWorkerOperation).mock.calls.filter(([command]) => command.type === phase),
+        ).toHaveLength(1),
+      );
+      const owner = vi
+        .mocked(runGitWorkerOperation)
+        .mock.calls.find(([command]) => command.type === phase)?.[1]?.signal;
+      const rejected = expect(cancelled).rejects.toThrow("first retired");
+      first.abort(new Error("first retired"));
+      await rejected;
+      expect(owner?.aborted).toBe(false);
+      held.resolve(null);
+      await expect(retained).resolves.toEqual(emptyDiff);
+      expect(getEventListeners(first.signal, "abort")).toHaveLength(0);
+      expect(getEventListeners(second.signal, "abort")).toHaveLength(0);
+    },
+  );
 
   it("keeps a shared read cached after its last viewer stops waiting", async () => {
     const held = holdRead("checkout.context", null);
     const operation = contextRead("/last-viewer");
     const viewer = new AbortController();
     const cancelled = runGitReadOperation(operation, { signal: viewer.signal });
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(gitRead).toHaveBeenCalledOnce());
     const owner = gitRead.mock.calls[0]?.[1]?.signal;
     const rejected = expect(cancelled).rejects.toThrow("retired");
     viewer.abort(new Error("retired"));
@@ -355,8 +397,11 @@ describe("typed Git read ownership", () => {
       const operation = contextRead(`/restart-lifecycle-${phase}`);
       const pending = runGitReadOperation(operation);
       const rejected = expect(pending).rejects.toThrow();
-      await Promise.resolve();
-      await Promise.resolve();
+      await vi.waitFor(() =>
+        expect(
+          vi.mocked(runGitWorkerOperation).mock.calls.some(([command]) => command.type === phase),
+        ).toBe(true),
+      );
       const owner = vi
         .mocked(runGitWorkerOperation)
         .mock.calls.find(([command]) => command.type === phase)?.[1]?.signal;
@@ -374,11 +419,16 @@ describe("typed Git read ownership", () => {
     },
   );
 
-  it("a failed read cannot poison the next normal request", async () => {
-    gitRead.mockRejectedValueOnce(new Error("temporary failure")).mockResolvedValueOnce(null);
-    const operation = contextRead("/recovery");
-    await expect(runGitReadOperation(operation)).rejects.toThrow("temporary failure");
-    await expect(runGitReadOperation(operation)).resolves.toBeNull();
-    expect(gitRead).toHaveBeenCalledTimes(2);
-  });
+  it.each(["checkout.context", "checkout.revision"] as const)(
+    "a failed %s cannot poison the next normal request",
+    async (phase) => {
+      gitRead.mockResolvedValue(null);
+      const failing = phase === "checkout.revision" ? readRevision : gitRead;
+      failing.mockRejectedValueOnce(new Error("temporary failure"));
+      const operation = contextRead(`/recovery-${phase}`);
+      await expect(runGitReadOperation(operation)).rejects.toThrow("temporary failure");
+      await expect(runGitReadOperation(operation)).resolves.toBeNull();
+      expect(failing).toHaveBeenCalledTimes(2);
+    },
+  );
 });

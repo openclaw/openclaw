@@ -368,27 +368,66 @@ node --import ./scripts/tsx.mjs scripts/perf/history-diff-measure.ts \
 
 `--seed` requires exclusive offline custody and refuses a second seed. It adds
 one session with 64 completed tool turns (8 KiB, 64 KiB, and 256 KiB tool results),
-captures a clean checkout baseline, then changes 32 tracked files and creates 32
-untracked files. All repositories, worktrees and data remain inside the fixture.
+captures a clean checkout baseline, then changes `--tracked-files` (default 32)
+tracked files and creates `--untracked-files` (default 32) untracked files.
+`--unchanged-files` (default 0) adds small committed files to increase checkout
+size without increasing the diff. Counts are nonnegative; setting both changed
+counts to zero measures a clean checkout. For example, seed with
+`--tracked-files 32 --untracked-files 100 --unchanged-files 6000` to exercise a
+larger index and untracked set. Measurement reads the saved counts, so these
+options only configure `--seed`. All repositories, worktrees and data remain inside the fixture.
+Add `--managed-worktree` when seeding to register the checkout as owned by the
+measured session and create its accepted local workspace projection with the
+actual committed base. This exercises managed-workspace review and registry
+resolution before the Git read. The default remains an unregistered Git
+worktree. The seed summary records this choice; measurement needs no matching flag.
 Measurement never writes the database directly. The driver owns and stops its
 loopback Gateway; `--entry` defaults to `dist/entry.js` and also accepts a prepared
 source entry. It issues small, default, and large `chat.history` requests, plus
 full `sessions.diff` requests for both `all` and `uncommitted` scopes. Summary
-requests are excluded because their 10-second result cache would make repeated
-requests measure cached throughput instead of checkout and baseline work.
+requests are excluded. Repeated full requests exercise the existing diff cache
+and its checkout-revision validation.
 Each operation is one concurrent cohort with one request per client. Empty
-history, missing tracked/untracked changes, missing full patches, or RPC failures
-reject the run.
+history, counts that differ from the seed, missing full patches for a nonempty
+diff, or RPC failures reject the run. Keep changed-file counts within the
+product's diff limits; the driver does not treat truncated inventories as complete.
 
-The first request for each variant is recorded separately as warmup. Later
-cohorts can still include burst-worker startup: warming one client does not warm
-all concurrent readers, and an idle start barrier can retire burst workers.
-Keep those first-cohort tails separate when attributing steady service costs.
+The default client retains the existing local administrator recipe.
+`--scoped-reader` instead uses a synthetic profile with exactly
+`operator.sessions.read`, exercising per-person session visibility and retained
+read authority. The driver writes a separate configuration under the output
+directory with loopback-only trusted-proxy authentication, one allowlisted
+`example.invalid` identity, and a read-only role. It supplies those synthetic
+proxy headers through a WebSocket client using the Control UI protocol identity;
+no browser, real account, external proxy, or credential is involved. The
+connection must return the exact narrow scope, and `users.self` must identify an
+individual profile before measurement begins. Profile creation occurs through
+the Gateway's normal authentication path.
+
+The first request for each variant is recorded separately as warmup. Then
+`--warmup-cohorts` (default 5) warms every concurrent reader before measurement.
+With `--start-at <epoch-ms>`, those cohorts run within the final 10 seconds before
+the shared start, keeping burst readers warm. A missed readiness deadline rejects
+the run. The report records the requested start, actual per-round start and first
+dispatch skew. CPU profiling starts before the barrier, so the first profile and
+CPU totals include its short idle wait; RPC latency samples exclude that wait.
 Measured rounds include raw latency samples, p50/p95/p99, payload bytes, returned row
 counts, main-thread/process CPU, CPU profiles and existing worker queue, run,
-and transfer diagnostics. Payload bytes measure re-encoded JSON in the driver,
+and transfer diagnostics. Each sample includes `payloadSha256`, computed after
+omitting the top-level absolute `root` and `sessionKey`; each round lists its
+distinct hashes. Compare matching diff hashes across A/B reports to establish
+identical response content despite different fixture roots. Within one run,
+every diff response must match its warmup hash because the workload does not
+modify the checkout. Payload bytes measure re-encoded JSON in the driver,
 not WebSocket frame overhead. Profiles sample the main isolate; worker task
 diagnostics provide worker timings. They do not count Git subprocesses.
+Diagnostic captures also include RPC admission/handler/response durations,
+session diff stages (scoped retention, resolution, repository access, managed
+review base, Git, and synchronous response encoding/socket enqueue), and separate
+`checkout.revision` and `checkout.diff` worker round trips. These are nested
+measurements: do not add a parent duration to its child stages. The stage channel
+observes sub-second requests without enabling slow-request logs or recording
+session keys, paths, or diff contents.
 `--output` names a new artifact directory (by default below the fixture).
 `--scenario` defaults to `all`; individual choices are `history-small`,
 `history-default`, `history-large`, `diff-all-full`, and

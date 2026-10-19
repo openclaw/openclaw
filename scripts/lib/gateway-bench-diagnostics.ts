@@ -7,15 +7,26 @@ import {
   type RecordableHistogram,
 } from "node:perf_hooks";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
+import {
+  areDiagnosticsEnabledForProcess,
+  onInternalDiagnosticEvent,
+  setDiagnosticsEnabledForProcess,
+} from "../../src/infra/diagnostic-events.ts";
 
 const CHANNELS = [
   "openclaw.redaction",
   "openclaw.session.write",
   "openclaw.session.list",
   "openclaw.worker.task",
+  "openclaw.gateway.request.stages",
+  "openclaw.git.operation",
+  "openclaw.gateway.rpc",
 ] as const;
 const METRICS = [
   "elapsedMs",
+  "durationMs",
+  "admissionMs",
+  "responseBytes",
   "threadCpuMs",
   "inputChars",
   "patternCount",
@@ -57,6 +68,13 @@ const PHASES = [
   "visibilityRepair",
   "response",
   "handlerExit",
+  "resolve",
+  "repository",
+  "managedBase",
+  "git",
+  "scopedRead",
+  "load",
+  "send",
 ] as const;
 
 const MAX_HISTOGRAMS = 256;
@@ -154,11 +172,15 @@ export function startGatewayBenchDiagnostics() {
           return;
         }
         const outcome =
-          message.outcome === "ok" || message.outcome === "error" || message.outcome === "failed"
-            ? message.outcome
-            : message.responseOutcome === "ok"
-              ? "ok"
-              : "error";
+          name === "openclaw.gateway.request.stages" || name === "openclaw.gateway.rpc"
+            ? "observed"
+            : message.outcome === "ok" ||
+                message.outcome === "error" ||
+                message.outcome === "failed"
+              ? message.outcome
+              : message.responseOutcome === "ok"
+                ? "ok"
+                : "error";
         const cacheRole = [
           "unreached",
           "completed-hit",
@@ -197,6 +219,19 @@ export function startGatewayBenchDiagnostics() {
     source.subscribe(listener);
     return () => source.unsubscribe(listener);
   });
+  const previousDiagnostics = areDiagnosticsEnabledForProcess();
+  setDiagnosticsEnabledForProcess(true);
+  const stopRpc = onInternalDiagnosticEvent(
+    (event) => {
+      if (event.type === "gateway.rpc") {
+        channel("openclaw.gateway.rpc").publish({
+          ...event,
+          operation: `${event.method}.${event.phase}`,
+        });
+      }
+    },
+    { includeTrusted: ["gateway.rpc"] },
+  );
   const gc: Record<string, Metric> = {};
   const collectGc = (entries: readonly { startTime: number; duration: number }[]) => {
     for (const entry of entries) {
@@ -210,6 +245,8 @@ export function startGatewayBenchDiagnostics() {
   return () => {
     const endedAt = performance.now();
     eventLoopDelay.disable();
+    stopRpc();
+    setDiagnosticsEnabledForProcess(previousDiagnostics);
     for (const unsubscribe of subscriptions) {
       unsubscribe();
     }

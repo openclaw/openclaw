@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -38,6 +39,7 @@ type GitWorkerRuntime = Partial<Record<(typeof POOL_OWNERS)[number], GitPool>> &
 const MAX_PENDING_OPERATIONS = 128;
 const WORKER_PHASE_TIMEOUT_MS = 30 * 60_000;
 const log = createSubsystemLogger("git/worker");
+const operationDiagnostics = channel("openclaw.git.operation");
 const SPAWN_OPERATIONS = {
   "repository.identities": "repository.identities",
   "repository.branches": "repository.branches",
@@ -222,6 +224,7 @@ async function executeOperation(
   baseEnv: NodeJS.ProcessEnv,
   options: GitWorkerOperationOptions,
 ): Promise<GitWorkerResult> {
+  const observedAt = operationDiagnostics.hasSubscribers ? performance.now() : undefined;
   const contentRoot =
     command.type === "checkout.diff" || command.type === "checkout.baseline"
       ? command.input.cwd
@@ -462,6 +465,13 @@ async function executeOperation(
       cleanupSucceeded = true;
     } finally {
       timing?.finish(cleanupSucceeded ? outcome : "threw");
+      if (observedAt !== undefined) {
+        operationDiagnostics.publish({
+          operation: command.type,
+          outcome: cleanupSucceeded && outcome === "returned" ? "ok" : "error",
+          elapsedMs: performance.now() - observedAt,
+        });
+      }
     }
   }
 }

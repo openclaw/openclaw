@@ -7,6 +7,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs, promisify } from "node:util";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.ts";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import type { TranscriptEvent } from "../../src/config/sessions/session-accessor.sqlite-contract.ts";
@@ -25,11 +26,17 @@ const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
     seed: { type: "boolean" },
+    "tracked-files": { type: "string", default: "32" },
+    "untracked-files": { type: "string", default: "32" },
+    "unchanged-files": { type: "string", default: "0" },
+    "managed-worktree": { type: "boolean", default: false },
+    "scoped-reader": { type: "boolean", default: false },
     port: { type: "string", default: "41072" },
     entry: { type: "string", default: "dist/entry.js" },
     clients: { type: "string", default: "4" },
     operations: { type: "string", default: "25" },
     rounds: { type: "string", default: "5" },
+    "warmup-cohorts": { type: "string", default: "5" },
     scenario: { type: "string", default: "all" },
     "start-at": { type: "string" },
     output: { type: "string" },
@@ -56,6 +63,11 @@ if (port > 65535) {
 const clientCount = integer(values.clients, "--clients");
 const operations = integer(values.operations, "--operations");
 const rounds = integer(values.rounds, "--rounds");
+const warmupCohorts = integer(values["warmup-cohorts"], "--warmup-cohorts", 0);
+const startAt = values["start-at"] ? integer(values["start-at"], "--start-at") : undefined;
+const trackedFiles = integer(values["tracked-files"], "--tracked-files", 0);
+const untrackedFiles = integer(values["untracked-files"], "--untracked-files", 0);
+const unchangedFiles = integer(values["unchanged-files"], "--unchanged-files", 0);
 const sessionId = "history-diff-measure";
 const sessionKey = `agent:main:${sessionId}`;
 const seedDir = path.join(root, "history-diff-fixture");
@@ -82,6 +94,8 @@ async function seed() {
   try {
     const repo = path.join(seedDir, "repository");
     const worktree = path.join(seedDir, "worktree");
+    const branch = "fixture/history-diff";
+    const lifecycleRevision = "history-diff-fixture-v1";
     mkdirSync(repo);
     const git = (...args: string[]) =>
       promisify(execFile)("git", ["-C", repo, ...args], {
@@ -98,16 +112,30 @@ async function seed() {
         },
       });
     await git("init", "--initial-branch=main");
-    for (let index = 0; index < 32; index++) {
+    for (let index = 0; index < trackedFiles; index++) {
       writeFileSync(path.join(repo, `tracked-${index}.txt`), `Synthetic tracked file ${index}\n`);
     }
+    for (let index = 0; index < unchangedFiles; index++) {
+      writeFileSync(
+        path.join(repo, `unchanged-${index}.txt`),
+        `Synthetic unchanged file ${index}\n`,
+      );
+    }
     await git("add", ".");
-    await git("-c", "commit.gpgSign=false", "commit", "-m", "test: seed synthetic diff");
-    await git("worktree", "add", "-b", "fixture/history-diff", worktree);
-    const [{ captureSessionDiffBaseline }, agentDb, entries, transcripts, lifecycle] =
+    await git(
+      "-c",
+      "commit.gpgSign=false",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "test: seed synthetic diff",
+    );
+    await git("worktree", "add", "-b", branch, worktree);
+    const [{ captureSessionDiffBaseline }, agentDb, stateDb, entries, transcripts, lifecycle] =
       await Promise.all([
         import("../../src/sessions/session-diff.js"),
         import("../../src/state/openclaw-agent-db.js"),
+        import("../../src/state/openclaw-state-db.js"),
         import("../../src/config/sessions/session-accessor.sqlite-entry-store.js"),
         import("../../src/config/sessions/session-accessor.sqlite-transcript-store.js"),
         import("../../src/shared/global-singleton.js"),
@@ -116,6 +144,59 @@ async function seed() {
       const baseline = await captureSessionDiffBaseline({ cwd: worktree, sessionId });
       if (!baseline || baseline.files.length !== 0) {
         throw new Error("Synthetic session must start with a captured clean checkout baseline");
+      }
+      const managedBinding = values["managed-worktree"]
+        ? { id: "history-diff-managed-worktree", branch, repoRoot: repo }
+        : undefined;
+      if (managedBinding) {
+        const [registry, repositories, projections] = await Promise.all([
+          import("../../src/agents/worktrees/registry-run-end.worker.js"),
+          import("../../src/agents/worktrees/repository-paths.js"),
+          import("../../src/gateway/worker-environments/local-workspace-store.kernel.js"),
+        ]);
+        const repository = await repositories.resolveRepositoryIdentity(repo);
+        managedBinding.repoRoot = repository.repoRoot;
+        const baseCommit = (await git("rev-parse", "HEAD")).stdout.trim();
+        stateDb.runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            registry.insertRegistryWorktreeInDatabase(db, {
+              record: {
+                ...managedBinding,
+                name: managedBinding.id,
+                repoFingerprint: repository.fingerprint,
+                path: worktree,
+                baseRef: "main",
+                ownerKind: "session",
+                ownerId: sessionKey,
+                createdAt: fixtureNow,
+                lastActiveAt: fixtureNow,
+              },
+              provisionedPaths: [],
+            });
+            projections.mutateLocalWorkspaceProjection(db, managedBinding.id, {
+              kind: "create",
+              row: {
+                worktree_id: managedBinding.id,
+                agent_id: "main",
+                session_key: sessionKey,
+                session_id: sessionId,
+                lifecycle_revision: lifecycleRevision,
+                projection_path: worktree,
+                base_commit: baseCommit,
+                source_paths_json: "[]",
+                baseline_json: null,
+                baseline_ref: null,
+                pending_ref: null,
+                pending_target: null,
+                journal_json: null,
+                journal_pack: null,
+                paused_runtimes_json: null,
+                created_at_ms: fixtureNow,
+              },
+            });
+          },
+          { env },
+        );
       }
       const databaseOptions = { agentId: "main", env };
       agentDb.runOpenClawAgentWriteTransaction((database) => {
@@ -127,10 +208,11 @@ async function seed() {
           createdAt: fixtureNow,
           updatedAt: fixtureNow,
           createdVia: "operator",
-          lifecycleRevision: "history-diff-fixture-v1",
+          lifecycleRevision,
           visibility: "shared",
           spawnedWorkspaceDir: repo,
           spawnedCwd: worktree,
+          ...(managedBinding ? { worktree: managedBinding } : {}),
           sessionDiffBaseline: baseline,
         });
       }, databaseOptions);
@@ -200,11 +282,13 @@ async function seed() {
           );
         }, databaseOptions);
       }
-      for (let index = 0; index < 32; index++) {
+      for (let index = 0; index < trackedFiles; index++) {
         writeFileSync(
           path.join(worktree, `tracked-${index}.txt`),
           `Synthetic tracked file ${index}\n${"Synthetic added line\n".repeat(64)}`,
         );
+      }
+      for (let index = 0; index < untrackedFiles; index++) {
         writeFileSync(
           path.join(worktree, `untracked-${index}.txt`),
           `Synthetic untracked file ${index}\n${"Synthetic new line\n".repeat(64)}`,
@@ -217,15 +301,20 @@ async function seed() {
         sessionId,
         logicalBytes,
         messages: 256,
-        trackedFiles: 32,
-        untrackedFiles: 32,
+        trackedFiles,
+        untrackedFiles,
+        unchangedFiles,
+        managedWorktree: Boolean(managedBinding),
         baselineFiles: 0,
         agentDatabaseBytes: statSync(database.path).size,
       };
       writeFileSync(seedPath, `${JSON.stringify(summary, null, 2)}\n`);
       console.log(JSON.stringify(summary));
     } finally {
-      await agentDb.closeOpenClawAgentDatabasesAsync();
+      await Promise.all([
+        agentDb.closeOpenClawAgentDatabasesAsync(),
+        stateDb.closeOpenClawStateDatabaseAsync(),
+      ]);
       await lifecycle.drainGlobalSingletonLifecycleState();
     }
   } finally {
@@ -251,11 +340,54 @@ async function measure() {
   if (!isRecord(seeded) || seeded.format !== "openclaw-history-diff-v1") {
     throw new Error("Run --seed once while the fixture is offline");
   }
+  const seededCount = (field: "trackedFiles" | "untrackedFiles") => {
+    const count = seeded[field];
+    if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) {
+      throw new Error(`Invalid seeded ${field}`);
+    }
+    return count;
+  };
+  const expectedTrackedFiles = seededCount("trackedFiles");
+  const expectedUntrackedFiles = seededCount("untrackedFiles");
   const output = path.resolve(
     values.output ?? path.join(root, `history-diff-measure-${Date.now()}`),
   );
   mkdirSync(output);
+  const scopedReader = values["scoped-reader"];
+  const readerIdentity = "history-diff-reader@example.invalid";
+  const readerOrigin = "https://history-diff.example.invalid";
+  let gatewayEnv = env;
+  if (scopedReader) {
+    const config: unknown = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
+    if (!isRecord(config) || !isRecord(config.gateway)) {
+      throw new Error("Expected generated Gateway configuration");
+    }
+    const scopes = ["operator.sessions.read"];
+    config.gateway = {
+      ...config.gateway,
+      auth: {
+        mode: "trusted-proxy",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          requiredHeaders: ["x-forwarded-proto"],
+          allowUsers: [readerIdentity],
+          allowLoopback: true,
+        },
+        identityScopes: { [readerIdentity]: scopes },
+      },
+      trustedProxies: ["127.0.0.1", "::1"],
+      controlUi: { enabled: false, allowedOrigins: [readerOrigin] },
+      roles: {
+        default: "reader",
+        definitions: { reader: { sessions: { others: "view" }, agents: "*", scopes } },
+      },
+    };
+    const configPath = path.join(output, "gateway-config.json");
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    gatewayEnv = { ...env, OPENCLAW_CONFIG_PATH: configPath };
+  }
   const clients: ReturnType<typeof createGatewayWsClient>[] = [];
+  const readerProfileIds = new Set<string>();
   let gateway: ChildProcess | undefined;
   let closing = false;
   let clientFailure: Error | undefined;
@@ -298,20 +430,20 @@ async function measure() {
       probe.close((error) => (error ? reject(error) : resolve()));
     });
     const log = createWriteStream(path.join(output, "gateway.log"));
-    gateway = spawn(
-      process.execPath,
-      buildGatewayBenchChildArgs(values.entry, port, [
-        "--import",
-        "./scripts/tsx.mjs",
-        "--import",
-        "./scripts/lib/gateway-bench-profile-preload.ts",
-      ]),
-      {
-        env,
-        detached: true,
-        stdio: ["ignore", "pipe", "pipe", "ipc"],
-      },
-    );
+    const childArgs = buildGatewayBenchChildArgs(values.entry, port, [
+      "--import",
+      "./scripts/tsx.mjs",
+      "--import",
+      "./scripts/lib/gateway-bench-profile-preload.ts",
+    ]);
+    if (scopedReader) {
+      childArgs[childArgs.indexOf("--auth") + 1] = "trusted-proxy";
+    }
+    gateway = spawn(process.execPath, childArgs, {
+      env: gatewayEnv,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+    });
     gateway.stdout?.pipe(log);
     gateway.stderr?.pipe(log);
     let startup = "";
@@ -341,7 +473,20 @@ async function measure() {
     await readGatewayCpuUsage(gateway);
     await delay(10_000);
     for (let index = 0; index < clientCount; index++) {
-      const client = createGatewayWsClient({ url: `ws://127.0.0.1:${port}` });
+      const client = createGatewayWsClient({
+        url: `ws://127.0.0.1:${port}`,
+        ...(scopedReader
+          ? {
+              origin: readerOrigin,
+              headers: {
+                "x-forwarded-for": "203.0.113.50",
+                "x-forwarded-proto": "https",
+                "x-forwarded-host": "history-diff.example.invalid",
+                "x-forwarded-user": readerIdentity,
+              },
+            }
+          : {}),
+      });
       clients.push(client);
       client.ws.on("error", (error) => {
         clientFailure ??= error;
@@ -352,20 +497,43 @@ async function measure() {
         }
       });
       await client.waitOpen();
-      await rpc(client, "connect", {
+      const hello = await rpc(client, "connect", {
         minProtocol: PROTOCOL_VERSION,
         maxProtocol: PROTOCOL_VERSION,
         client: {
-          id: "gateway-client",
+          id: scopedReader ? "openclaw-control-ui" : "gateway-client",
           displayName: "synthetic-history-diff-measurement",
           version: "1.0.0",
           platform: process.platform,
-          mode: "backend",
+          mode: scopedReader ? "ui" : "backend",
         },
         role: "operator",
-        scopes: ["operator.read", "operator.admin"],
+        scopes: scopedReader ? ["operator.sessions.read"] : ["operator.read", "operator.admin"],
         caps: [],
       });
+      if (scopedReader) {
+        if (
+          !isRecord(hello) ||
+          !isRecord(hello.auth) ||
+          hello.auth.method !== "trusted-proxy" ||
+          !Array.isArray(hello.auth.scopes) ||
+          hello.auth.scopes.length !== 1 ||
+          hello.auth.scopes[0] !== "operator.sessions.read"
+        ) {
+          throw new Error("Synthetic reader did not acquire exactly operator.sessions.read");
+        }
+        const self = await rpc(client, "users.self", {});
+        if (
+          !isRecord(self) ||
+          !isRecord(self.profile) ||
+          typeof self.profile.id !== "string" ||
+          !self.profile.id ||
+          self.profile.id === GATEWAY_OWNER_PROFILE_ID
+        ) {
+          throw new Error("Synthetic reader did not acquire an individual user profile");
+        }
+        readerProfileIds.add(self.profile.id);
+      }
     }
     const allVariants = [
       {
@@ -394,6 +562,7 @@ async function measure() {
         `--scenario must be all or one of: ${allVariants.map((variant) => variant.name).join(", ")}`,
       );
     }
+    const diffHashes = new Map<string, string>();
     const request = async (
       client: (typeof clients)[number],
       variant: (typeof variants)[number],
@@ -405,23 +574,26 @@ async function measure() {
         throw new Error(`${variant.name}: missing response`);
       }
       const rows = variant.method === "chat.history" ? response.messages : response.files;
-      if (!Array.isArray(rows) || rows.length === 0 || response.unavailableReason) {
+      if (!Array.isArray(rows) || response.unavailableReason) {
         throw new Error(`${variant.name}: empty or unavailable result`);
       }
       if (variant.method === "chat.history") {
-        if (response.sessionId !== sessionId) {
+        if (rows.length === 0 || response.sessionId !== sessionId) {
           throw new Error(`${variant.name}: wrong session`);
         }
       } else {
         if (
-          rows.length !== 64 ||
-          !rows.some((file) => isRecord(file) && file.untracked === true) ||
-          !rows.some((file) => isRecord(file) && file.status === "modified")
+          rows.length !== expectedTrackedFiles + expectedUntrackedFiles ||
+          rows.filter((file) => isRecord(file) && file.untracked === true).length !==
+            expectedUntrackedFiles ||
+          rows.filter((file) => isRecord(file) && file.status === "modified").length !==
+            expectedTrackedFiles
         ) {
           throw new Error(`${variant.name}: missing tracked/untracked changes`);
         }
         if (
           variant.name.endsWith("-full") &&
+          rows.length > 0 &&
           !rows.some(
             (file) => isRecord(file) && typeof file.patch === "string" && file.patch.length > 0,
           )
@@ -429,24 +601,41 @@ async function measure() {
           throw new Error(`${variant.name}: missing patches`);
         }
       }
+      const comparable = Object.fromEntries(
+        Object.entries(response).filter(([key]) => key !== "root" && key !== "sessionKey"),
+      );
+      const payloadSha256 = createHash("sha256").update(JSON.stringify(comparable)).digest("hex");
+      if (variant.method === "sessions.diff") {
+        const previous = diffHashes.get(variant.name);
+        if (previous && previous !== payloadSha256) {
+          throw new Error(`${variant.name}: unchanged checkout returned different payload bytes`);
+        }
+        diffHashes.set(variant.name, payloadSha256);
+      }
       return {
         elapsedMs,
         payloadBytes: Buffer.byteLength(JSON.stringify(response)),
+        payloadSha256,
         rows: rows.length,
       };
     };
-    // Record first use separately; concurrent cohorts can still start burst workers.
+    // Separate cold first use from the concurrent warmup that starts burst readers.
     const warmup = [];
     for (const variant of variants) {
       warmup.push({ variant: variant.name, sample: await request(clients[0]!, variant) });
     }
     console.log(JSON.stringify({ ready: true, output }));
-    if (values["start-at"]) {
-      const startAt = integer(values["start-at"], "--start-at");
+    if (startAt !== undefined) {
       if (Date.now() >= startAt) {
         throw new Error("--start-at passed before fixture readiness");
       }
-      await delay(startAt - Date.now());
+      // Run the final cohorts near the barrier, before idle retirement of burst readers.
+      await delay(Math.max(0, startAt - Date.now() - 10_000));
+    }
+    for (let cohort = 0; cohort < warmupCohorts; cohort++) {
+      for (const variant of variants) {
+        await Promise.all(clients.map((client) => request(client, variant)));
+      }
     }
     const results = [];
     for (let round = 0; round < rounds; round++) {
@@ -454,6 +643,13 @@ async function measure() {
         const profilePath = path.join(output, `${variant.name}-${round}.cpuprofile`);
         await controlGatewayProfile(gateway, "cpu", "start", profilePath);
         const before = await readGatewayCpuUsage(gateway);
+        if (results.length === 0 && startAt !== undefined) {
+          if (Date.now() >= startAt) {
+            throw new Error("--start-at passed before concurrent warmup and profiler readiness");
+          }
+          await delay(startAt - Date.now());
+        }
+        const startedAt = Date.now();
         const samples = [];
         for (let operation = 0; operation < operations; operation++) {
           samples.push(...(await Promise.all(clients.map((client) => request(client, variant)))));
@@ -472,9 +668,11 @@ async function measure() {
         const result = {
           round,
           variant: variant.name,
+          startedAt,
           request: variant.params,
           latencyMs: summarize(samples.map((sample) => sample.elapsedMs)),
           payloadBytes: summarize(samples.map((sample) => sample.payloadBytes)),
+          payloadSha256: [...new Set(samples.map((sample) => sample.payloadSha256))],
           samples,
           cpu,
           profile: profileResult,
@@ -495,11 +693,16 @@ async function measure() {
       revision: values.revision ?? null,
       entry: values.entry,
       scenario: values.scenario,
+      reader: scopedReader ? "scoped-profile" : "admin",
+      readerProfileIds: [...readerProfileIds],
       fixture,
       seeded,
       clientCount,
       operationsPerClientPerRound: operations,
       rounds,
+      warmupCohorts,
+      requestedStartAt: startAt ?? null,
+      startSkewMs: startAt === undefined ? null : results[0]!.startedAt - startAt,
       warmup,
       results,
     };
