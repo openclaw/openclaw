@@ -1,12 +1,4 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  flush,
-  onCleanup,
-  onSettled,
-  Show,
-} from "solid-js";
+import { createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { nativeGatewaysCapability } from "../../../app/native-gateways.runtime.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -57,7 +49,36 @@ export function SessionDiffPanel(props: SessionDiffProps) {
   const desktop = () => props.mobile === false;
   const mobile = () => props.mobile === true;
   const preferences = loadSessionDiffPreferences();
-  const [collapsedPaths, setCollapsedPaths] = createSignal(new Set<string>());
+  const [value, setValue] = createSignal<DiffValue | null>(null);
+  const collapseEntry = createMemo(
+    () => ({
+      desktop: desktop(),
+      active: props.active !== false,
+      paths: value()?.views.map((view) => view.file.path) ?? [],
+    }),
+    {
+      equals: (before, after) => before.desktop === after.desktop && before.active === after.active,
+    },
+  );
+  type CollapseState = { presentation: ReturnType<typeof collapseEntry>; paths: Set<string> };
+  // Entry resets the view; data refreshes and local disclosure choices retain their state.
+  const [collapseState, setCollapseState] = createSignal<CollapseState>((previous) => {
+    const next = collapseEntry();
+    const entering = next !== previous?.presentation;
+    const paths =
+      entering && next.desktop && next.active
+        ? new Set(next.paths)
+        : entering && !next.desktop && previous?.presentation.desktop
+          ? new Set<string>()
+          : (previous?.paths ?? new Set<string>());
+    return { presentation: next, paths };
+  });
+  const collapsedPaths = () => collapseState().paths;
+  const setCollapsedPaths = (next: Set<string> | ((paths: Set<string>) => Set<string>)) =>
+    setCollapseState((previous) => ({
+      ...previous,
+      paths: typeof next === "function" ? next(previous.paths) : next,
+    }));
   const [menu, setMenu] = createSignal<SessionDiffMenuData | null>(null);
   // Local scope choices survive until a new request from this owner arrives.
   const [scope, setScope] = createSignal<SessionDiffScope>((previous) => {
@@ -104,7 +125,6 @@ export function SessionDiffPanel(props: SessionDiffProps) {
     result?: SessionsDiffResult;
   } | null>(null);
   const request = createMemo(() => ({ target: requestTarget(), reload: reload() }));
-  const [value, setValue] = createSignal<DiffValue | null>(null);
   const syncData = createMemo(() => {
     const current = value();
     if (current?.owner !== props.owner) {
@@ -226,42 +246,36 @@ export function SessionDiffPanel(props: SessionDiffProps) {
     setReload({ target: requestTarget() });
   }
   const loading = () => props.loader !== null && pending();
-  let wasDesktop = false;
-  createEffect(
-    () => ({ desktop: desktop(), active: props.active !== false }),
-    (state) => {
-      if (state.desktop && state.active) {
-        setCollapsedPaths(new Set(value()?.views.map((view) => view.file.path) ?? []));
-      } else if (!state.desktop && wasDesktop) {
-        let changed = false;
-        for (const { source } of value()?.views ?? []) {
-          const { parsed, expandedGaps } = source;
-          if (!parsed || !expandedGaps?.size) {
-            continue;
-          }
-          // Native fully expanded gaps keep their context without a disclosure
-          // marker. Retaining the desktop marker would insert that context twice.
-          parsed.lines = parsed.lines.filter((line) => !expandedGaps.has(line));
-          expandedGaps.clear();
-          changed = true;
+  function NativeGapLifetime() {
+    onSettled(() => {
+      let changed = false;
+      for (const { source } of value()?.views ?? []) {
+        const { parsed, expandedGaps } = source;
+        if (!parsed || !expandedGaps?.size) {
+          continue;
         }
-        if (changed) {
-          setGapRevision((revision) => revision + 1);
-        }
-        setCollapsedPaths(new Set<string>());
+        // Native fully expanded gaps keep their context without a disclosure
+        // marker. Retaining the desktop marker would insert that context twice.
+        parsed.lines = parsed.lines.filter((line) => !expandedGaps.has(line));
+        expandedGaps.clear();
+        changed = true;
       }
-      wasDesktop = state.desktop;
-    },
-  );
+      if (changed) {
+        setGapRevision((revision) => revision + 1);
+      }
+    });
+    return null;
+  }
   function jumpToFile(path: string) {
     setMotionInstant(true);
     setSelectedPath(path);
     setCollapsedPaths((paths) => new Set([...paths].filter((entry) => entry !== path)));
     // Scrolling needs the expanded file's committed height, and menu return-focus
     // must settle before focus moves to the selected file.
-    flush();
-    fileElements.get(path)?.scrollIntoView({ block: "start" });
-    fileToggles.get(path)?.()?.focus({ preventScroll: true });
+    onSettled(() => {
+      fileElements.get(path)?.scrollIntoView({ block: "start" });
+      fileToggles.get(path)?.()?.focus({ preventScroll: true });
+    });
   }
   function toggleFile(path: string) {
     const collapsing = !collapsedPaths().has(path);
@@ -281,8 +295,9 @@ export function SessionDiffPanel(props: SessionDiffProps) {
       return next;
     });
     if (readingAbove) {
-      flush();
-      element.scrollIntoView({ block: "start" });
+      onSettled(() => {
+        element.scrollIntoView({ block: "start" });
+      });
     }
   }
   function toggleTree() {
@@ -296,8 +311,9 @@ export function SessionDiffPanel(props: SessionDiffProps) {
   function searchTree() {
     setTreeOpen(true);
     setTreeSearchOpen(true);
-    flush();
-    treeSearch?.focus();
+    onSettled(() => {
+      treeSearch?.focus();
+    });
   }
   function openAnchoredMenu(
     event: Event,
@@ -560,8 +576,9 @@ export function SessionDiffPanel(props: SessionDiffProps) {
     closeTreeSearch: () => {
       setTreeQuery("");
       setTreeSearchOpen(false);
-      flush();
-      treeSearchTrigger?.focus({ preventScroll: true });
+      onSettled(() => {
+        treeSearchTrigger?.focus({ preventScroll: true });
+      });
     },
     refreshCollapsed: () => {
       setCollapsedPaths(new Set(value()?.views.map((view) => view.file.path) ?? []));
@@ -602,6 +619,9 @@ export function SessionDiffPanel(props: SessionDiffProps) {
           }
         }}
       >
+        <Show when={!desktop()}>
+          <NativeGapLifetime />
+        </Show>
         <Show when={request()} keyed>
           {(current) => <RequestLifetime request={current} />}
         </Show>

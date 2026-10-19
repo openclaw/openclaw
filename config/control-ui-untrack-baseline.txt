@@ -31,7 +31,6 @@ ui/src/pages/chat/components/chat-sidebar-region.runtime.tsx	1
 ui/src/pages/chat/components/chat-summary-automations.tsx	1
 ui/src/pages/chat/components/chat-transcript-layout-solid.tsx	1
 ui/src/pages/chat/components/file-draft-recovery-dialog-view.tsx	1
-ui/src/pages/chat/components/session-diff-panel.tsx	2
 ui/src/pages/chat/components/widget-card-view.tsx	1
 ui/src/pages/config/curated-settings.tsx	1
 ui/src/pages/config/view.tsx	1

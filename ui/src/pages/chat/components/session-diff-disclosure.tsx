@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createSignal, onSettled, Show, untrack } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
+import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 
 /** Keeps the real reader present through exit; disclosure state belongs to the caller. */
@@ -9,13 +10,15 @@ export function ReviewDisclosure(props: {
   instant: boolean;
   children: JSX.Element;
 }) {
-  // Parent scroll restoration needs the initial content height before child effects run.
-  const initialOpen = untrack(() => props.open);
-  const [present, setPresent] = createSignal(initialOpen);
+  // Render an initially open reader synchronously and retain it through exit.
+  const [present, setPresent] = createSignal<boolean>(
+    (previous) => props.open || previous || false,
+  );
   let shell!: HTMLDivElement;
   let content!: HTMLDivElement;
   let animation: Animation | undefined;
-  let current = { open: initialOpen, active: false, instant: true };
+  let current = { open: false, active: false, instant: true };
+  let applied: typeof current | undefined;
   let height = 0;
   let ready = false;
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -43,17 +46,34 @@ export function ReviewDisclosure(props: {
     });
     animation.onfinish = finish;
   }
-  createEffect(
+  createLayoutMeasurement(
     () => ({ open: props.open, active: props.active, instant: props.instant }),
     (next) => {
-      const from = shell.hidden ? 0 : shell.getBoundingClientRect().height;
-      current = next;
-      shell.hidden = false;
-      if (next.open) {
-        setPresent(true);
+      if (!next) {
+        return;
       }
-      move(from, next.open ? content.getBoundingClientRect().height : 0);
+      if (next === applied) {
+        if (!current.open || !current.active) {
+          return;
+        }
+        const to = content.getBoundingClientRect().height;
+        if (to === height) {
+          return;
+        }
+        const from = animation ? shell.getBoundingClientRect().height : height;
+        return () => move(from, to);
+      }
+      const closed = !current.open && !animation;
+      const from = closed || shell.hidden ? 0 : shell.getBoundingClientRect().height;
+      return () => {
+        applied = next;
+        current = next;
+        shell.hidden = false;
+        // A hidden reader has no measurable destination until it is revealed.
+        move(from, next.open ? content.getBoundingClientRect().height : 0);
+      };
     },
+    { targets: () => [content], changeTiming: "sync" },
   );
   onSettled(() => {
     ready = true;
@@ -63,20 +83,7 @@ export function ReviewDisclosure(props: {
       }
     };
     const stopMotion = listen(reducedMotion, "change", motionChanged);
-    const observer = new ResizeObserver(() => {
-      if (!current.open || !current.active) {
-        return;
-      }
-      const next = content.getBoundingClientRect().height;
-      if (next === height) {
-        return;
-      }
-      // Context expansion and late syntax/layout changes retain the same reader.
-      move(animation ? shell.getBoundingClientRect().height : height, next);
-    });
-    observer.observe(content);
     return () => {
-      observer.disconnect();
       animation?.cancel();
       stopMotion();
     };
@@ -85,9 +92,9 @@ export function ReviewDisclosure(props: {
     <div
       ref={(element) => {
         shell = element;
-        shell.hidden = !initialOpen;
       }}
       class="session-diff__disclosure"
+      hidden={!present()}
       inert={!props.open || !props.active}
       aria-hidden={props.open ? "false" : "true"}
     >
