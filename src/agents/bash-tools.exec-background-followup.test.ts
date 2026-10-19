@@ -1,4 +1,5 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
@@ -18,15 +19,23 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { removeCronRunContinuationSessionIfIdle } from "../cron/run-continuation-cleanup.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
+import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
+import type { OpenClawPluginDefinition } from "../plugins/plugin-definition.types.js";
+import type { OpenClawPluginToolFactory } from "../plugins/tool-types.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  readAdmittedRunOperatorAuthority,
+} from "./admitted-run-context.js";
 import { waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
@@ -42,6 +51,11 @@ import {
 import { createProcessTool } from "./bash-tools.process.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "./embedded-agent.js";
+import {
+  preparePluginToolExecutionCapabilities,
+  type PluginToolExecutionCapabilities,
+} from "./plugin-tool-execution.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 // mock-isolation: Keep model inference outside the real process and session-event ownership fixture.
 vi.mock("./embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
@@ -53,17 +67,32 @@ await Promise.all([
   ),
 ]);
 
+let reviewFactory: OpenClawPluginToolFactory<2>;
 let state: OpenClawTestState;
 let config: OpenClawConfig;
 const receipts: sessionEvents.SessionEventReceipt[] = [];
 const enqueue = sessionEvents.enqueueSessionEventForHost;
 
 beforeAll(async () => {
+  const { default: autoreview } = await loadBundledPluginFacade<{
+    default: OpenClawPluginDefinition;
+  }>({ pluginId: "autoreview", artifactBasename: "index.js" });
+  autoreview.register!(
+    createTestPluginApi({
+      registerTool(tool) {
+        if (typeof tool === "object" && "contextVersion" in tool) {
+          reviewFactory = tool;
+        }
+      },
+    }),
+  );
   state = await createOpenClawTestState({
     label: "exec-followup",
     env: { OPENCLAW_TEST_FAST: "0" },
   });
   config = completionConfig(state.workspaceDir);
+  const models = expectDefined(config.agents?.defaults?.models, "completion fixture models");
+  models["mock-openai/admin-only"] = { agentRuntime: { id: "openclaw" } };
   await state.writeConfig(config);
   openOpenClawStateDatabase();
 });
@@ -384,3 +413,149 @@ test("reports manual collection after destination capture fails, then recovers o
     }
   }
 });
+
+test.for(["completed", "revoked", "missing"] as const)(
+  "keeps the original guest review authority through exec completion: %s",
+  async (scenario, { signal }) => {
+    const sessionKey = `agent:main:guest-review-${scenario}`;
+    await seedOrigin(sessionKey);
+    const revoked = new AbortController();
+    let references = 1;
+    const authority = createAdmittedRunOperatorAuthority({
+      profileId: "original-guest",
+      scopes: ["operator.write"],
+      signal: revoked.signal,
+      assertCurrent() {
+        if (!references) {
+          throw new Error("original source released");
+        }
+      },
+      retain() {
+        references++;
+        return () => {
+          references--;
+        };
+      },
+      modelPolicy: {
+        models: [{ provider: "mock-openai", model: "gpt-5.6-luna" }],
+        allows: (ref) => ref.provider === "mock-openai" && ref.model === "gpt-5.6-luna",
+      },
+    });
+    const admin = createAdmittedRunOperatorAuthority({
+      profileId: "another-admin",
+      scopes: ["operator.admin"],
+      assertCurrent() {},
+    });
+    const adminExecution = expectDefined(
+      preparePluginToolExecutionCapabilities({ authority: admin, config, agentId: "main" })(
+        () => {},
+      ).modelExecution,
+      "admin reviewer capability",
+    );
+    await expect(
+      adminExecution.run(
+        { model: "mock-openai/admin-only", explicit: true },
+        async ({ model: selectedModel }) => selectedModel,
+      ),
+    ).resolves.toBe("mock-openai/admin-only");
+    const enqueueFromAdmin = await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey, operatorAuthority: admin },
+      () =>
+        AsyncLocalStorage.bind((...args: Parameters<typeof enqueue>) => {
+          const receipt = enqueue(...args);
+          receipts.push(receipt);
+          return receipt;
+        }),
+    );
+    vi.mocked(sessionEvents.enqueueSessionEventForHost).mockImplementation(enqueueFromAdmin);
+    const constructReview = (capabilities: PluginToolExecutionCapabilities) =>
+      reviewFactory.create({
+        ...capabilities,
+        // External sandbox and installed-skill facts stay fixed while the admitted source changes.
+        sandbox: {
+          workspaceDir: "/workspace",
+          installedSkillRoots: { autoreview: "/protected/autoreview" },
+          run: vi.fn(),
+        },
+        assertInvocationCurrent() {},
+      });
+    const original = scenario === "missing" ? undefined : authority;
+    const initial = preparePluginToolExecutionCapabilities({
+      authority: original,
+      config,
+      agentId: "main",
+    })(() => {});
+    expect(Boolean(constructReview(initial))).toBe(scenario !== "missing");
+    const reached = createDeferredCore<PluginToolExecutionCapabilities>();
+    const proceed = createDeferredCore();
+    model.mockImplementation(async (params) => {
+      const admitted = await expectDefined(params.preparedRunAdmission, "event admission").admit(
+        "gateway",
+        params.runId,
+      );
+      await params.userTurnTranscriptRecorder?.persistApproved();
+      params.onExecutionPhase?.({ phase: "model_call_started" });
+      await params.onExecutionStarted?.();
+      await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+      const current = readAdmittedRunOperatorAuthority(admitted);
+      reached.resolve(
+        preparePluginToolExecutionCapabilities({
+          authority: current,
+          config: params.config,
+          agentId: "main",
+        })(() => {}),
+      );
+      await proceed.promise;
+      expect(current?.profileId).toBe(original?.profileId);
+      expect(params.senderIsOwner).not.toBe(true);
+      return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+    });
+    try {
+      const started = await withGatewayToolCallerIdentity(
+        { agentId: "main", sessionKey, operatorAuthority: original },
+        () =>
+          backgroundExec(sessionKey, { agentId: "main" }).execute("guest-command", {
+            command: nodeCommand('process.stdout.write("GUEST_COMMAND_DONE")'),
+            background: true,
+          }),
+      );
+      runningSession(started.details);
+      references--;
+      await withinTest(waitForExecScope(sessionKey), signal);
+      const continued = await withinTest(reached.promise, signal);
+      expect(Boolean(constructReview(continued)), "background completion keeps AutoReview").toBe(
+        scenario !== "missing",
+      );
+      if (scenario !== "missing") {
+        const execute = expectDefined(continued.modelExecution, "guest reviewer capability");
+        const action = vi.fn(async ({ model: selectedModel }: { model: string }) => selectedModel);
+        await expect(execute.run({ model: null, explicit: false }, action)).resolves.toBe(
+          "mock-openai/gpt-5.6-luna",
+        );
+        await expect(
+          execute.run({ model: "mock-openai/admin-only", explicit: true }, action),
+        ).rejects.toThrow();
+        expect(action).toHaveBeenCalledOnce();
+        if (scenario === "revoked") {
+          revoked.abort(new Error("original guest revoked"));
+          await expect(execute.run({ model: null, explicit: false }, action)).rejects.toThrow(
+            "original guest revoked",
+          );
+          expect(action).toHaveBeenCalledOnce();
+        }
+      }
+      proceed.resolve();
+      if (scenario === "revoked") {
+        expect(
+          await withinTest(expectDefined(receipts.at(-1), "revoked event").settled, signal),
+        ).toMatchObject({ status: "cancelled" });
+      } else {
+        await completion(signal);
+      }
+      expect(references).toBe(0);
+    } finally {
+      proceed.resolve();
+      await withinTest(waitForExecScope(sessionKey), signal);
+    }
+  },
+);

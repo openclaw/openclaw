@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
@@ -206,7 +207,7 @@ it.each([
   },
 );
 
-it("keeps a progress presentation failure open until the execution terminal", async () => {
+it("settles failed progress without retiring its transferred recovery delivery", async () => {
   const { context, enqueue, terminals } = fixture();
   const { adoption } = enqueue("progress-failure-B");
   const getRuntimeConfig = context.getRuntimeConfig;
@@ -223,6 +224,10 @@ it("keeps a progress presentation failure open until the execution terminal", as
   expect(context.dedupe.get("chat:progress-failure-B")?.payload).toMatchObject({
     status: "accepted",
   });
+  const retry = expectDefined(
+    adoption.onQueuedFollowupReplyBatch.createSourceRetry,
+    "transferred recovery delivery",
+  )();
   context.getRuntimeConfig = failPreparation;
   await expect(
     adoption.onQueuedFollowupReplyBatch({
@@ -232,13 +237,22 @@ it("keeps a progress presentation failure open until the execution terminal", as
     }),
   ).rejects.toThrow("progress preparation failed");
   expect(terminals()).toMatchObject([{ runId: "progress-failure-B", state: "error" }]);
+  await retry(replyBatch("recovery-C", { kind: "completed" }));
+  expect(terminals()).toMatchObject([
+    { runId: "progress-failure-B", state: "error" },
+    { runId: "recovery-C", state: "final" },
+  ]);
 });
 
 it("withdraws only the selected input before consumption", async () => {
-  const { enqueue, terminals, execution } = fixture();
+  const { context, enqueue, terminals, execution } = fixture();
   const active = await execution();
   const first = enqueue("cancel-B1");
   const second = enqueue("cancel-B2");
+  const releaseFirst = vi.fn();
+  const releaseSecond = vi.fn();
+  context.chatRunState.getOrCreate("cancel-B1").releaseBufferAuthority = releaseFirst;
+  context.chatRunState.getOrCreate("cancel-B2").releaseBufferAuthority = releaseSecond;
   expect(requestRpcSourceCancellation(first.sourceRef, createAgentRunDirectAbortError())).toBe(
     true,
   );
@@ -247,6 +261,9 @@ it("withdraws only the selected input before consumption", async () => {
   expect(active.abortSignal.aborted).toBe(false);
   expect(isRpcSourceQueued(second.sourceRef)).toBe(true);
   expect(terminals()).toMatchObject([{ runId: "cancel-B1", state: "aborted" }]);
+  expect(releaseFirst).toHaveBeenCalledOnce();
+  expect(releaseSecond).not.toHaveBeenCalled();
+  expect(context.chatRunState.runs.get("cancel-B1")?.releaseBufferAuthority).toBeUndefined();
 });
 
 it.each([1, 2])("waits for %i consumed inputs to settle after cancellation", async (count) => {
@@ -292,8 +309,15 @@ it.each(["old", "new"] as const)(
   "terminalizes the dropped input with overflow policy %s",
   async (dropPolicy) => {
     const { context, enqueue, terminals } = fixture();
-    enqueue(`overflow-first-${dropPolicy}`, dropPolicy, 1);
+    const first = `overflow-first-${dropPolicy}`;
+    enqueue(first, dropPolicy, 1);
+    const releaseFirst = vi.fn();
+    context.chatRunState.getOrCreate(first).releaseBufferAuthority = releaseFirst;
     enqueue(`overflow-second-${dropPolicy}`, dropPolicy, 1);
+    expect(releaseFirst).toHaveBeenCalledTimes(dropPolicy === "old" ? 1 : 0);
+    if (dropPolicy === "old") {
+      expect(context.chatRunState.runs.get(first)?.releaseBufferAuthority).toBeUndefined();
+    }
     const dropped = `overflow-${dropPolicy === "old" ? "first" : "second"}-${dropPolicy}`;
     expect(terminals()).toMatchObject([
       {

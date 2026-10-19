@@ -13,6 +13,7 @@ import {
 import { registerListener } from "../../../../../src/shared/listeners.js";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../../lib/presentation.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { AfterCommitEffect } from "../render-lifecycle.ts";
@@ -35,6 +36,7 @@ import { TranscriptWorkPreviews } from "./chat-transcript-content.tsx";
 import type { TranscriptContent, TranscriptLayoutProps } from "./chat-transcript-layout.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
+import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
 import {
   GuardedTranscriptItem,
   type NativeTranscriptView,
@@ -89,13 +91,9 @@ function NativeRow(props: { value: NativeTranscriptView }): JSX.Element {
 }
 
 function GuardedRow(props: { value: GuardedTranscriptItem }): JSX.Element {
-  const dependencies = createMemo(() => props.value.dependencies, {
-    equals: transcriptArraysEqual,
-  });
-  const current = createMemo(() => {
-    dependencies();
-    // The explicit row dependency vector keeps unrelated streaming snapshots out of this row.
-    return untrack(() => props.value);
+  // Equal dependency vectors preserve the accepted row across unrelated stream updates.
+  const current = createMemo(() => props.value, {
+    equals: (before, next) => transcriptArraysEqual(before.dependencies, next.dependencies),
   });
   return <Show when={current().native}>{(view) => <NativeRow value={view()} />}</Show>;
 }
@@ -111,14 +109,18 @@ function RowContent(props: { value: TranscriptContent }): JSX.Element {
   );
 }
 
-function TranscriptRows(props: { snapshot: TranscriptLayoutProps }) {
+function TranscriptRows(props: {
+  snapshot: TranscriptLayoutProps;
+  measureRowRefFor: TranscriptLayoutProps["measureRowRefFor"];
+  columnRef: (element: HTMLDivElement) => void;
+}) {
   const virtualRows = createMemo(() => {
     return props.snapshot.virtualizer.getVirtualItems();
   });
   return (
     <>
       <Show when={props.snapshot.header}>{(header) => <ChatHistoryBoundary {...header()} />}</Show>
-      <div class="chat-virtual-sizer">
+      <div class="chat-virtual-sizer" ref={(element) => props.columnRef(element)}>
         {props.snapshot.overlay}
         <div
           class="chat-virtual-block"
@@ -138,9 +140,8 @@ function TranscriptRows(props: { snapshot: TranscriptLayoutProps }) {
                   : 0;
               });
               // The keyed row owns one measurement binding for its entire mounted lifetime.
-              const measureRef = untrack(() =>
-                props.snapshot.measureRowRefFor(String(virtualRow().key)),
-              );
+              const initialKey = untrack(() => String(virtualRow().key));
+              const measureRef = props.measureRowRefFor(initialKey);
               onCleanup(() => measureRef(undefined));
               return (
                 <>
@@ -148,7 +149,7 @@ function TranscriptRows(props: { snapshot: TranscriptLayoutProps }) {
                     <div aria-hidden="true" style={{ height: `${gap()}px` }} />
                   </Show>
                   <div
-                    ref={(node) => measureRef(node)}
+                    ref={measureRef}
                     class={[
                       "chat-virtual-row",
                       { "chat-virtual-row--first": virtualRow().index === 0 },
@@ -172,17 +173,23 @@ function TranscriptRows(props: { snapshot: TranscriptLayoutProps }) {
 /** One Solid root per session, independent of the caller's render computation. */
 export class ChatTranscriptRenderer {
   private element?: HTMLDivElement;
+  private column?: HTMLDivElement;
   private accepted?: TranscriptLayoutProps;
   private committed?: TranscriptLayoutProps;
   private lifecycle?: SolidRenderLifecycle<TranscriptLayoutProps>;
   private publishPresentation?: () => void;
   private disposeRoot?: () => void;
   private binding?: PresentationBinding;
+  private stopPresentation?: () => void;
   private commitQueued = false;
   private readonly layoutEffects = new Set<() => void>();
   private readonly mediaDisconnect = new Set<() => void>();
   private readonly listeners = new Set<() => void>();
   private readonly presentationChanged = () => this.publishPresentation?.();
+
+  get columnElement(): HTMLDivElement | undefined {
+    return this.column;
+  }
 
   subscribe(listener: () => void): () => void {
     return registerListener(this.listeners, listener);
@@ -253,8 +260,7 @@ export class ChatTranscriptRenderer {
     this.lifecycle.afterCommit(
       () => {
         this.commitQueued = false;
-        // Commit observes the accepted DOM snapshot without subscribing its imperative caller.
-        const current = untrack(() => this.lifecycle?.snapshot());
+        const current = this.lifecycle?.snapshot();
         if (!current || !this.element) {
           return;
         }
@@ -279,8 +285,10 @@ export class ChatTranscriptRenderer {
     this.accepted = next;
     const binding = typeof next.presented === "boolean" ? undefined : next.presented;
     if (binding?.owner !== this.binding?.owner) {
-      this.binding?.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, this.presentationChanged);
-      binding?.owner.addEventListener(PRESENTATION_CHANGED_EVENT, this.presentationChanged);
+      this.stopPresentation?.();
+      this.stopPresentation = binding
+        ? listen(binding.owner, PRESENTATION_CHANGED_EVENT, this.presentationChanged)
+        : undefined;
     }
     this.binding = binding;
     if (!this.element) {
@@ -309,14 +317,21 @@ export class ChatTranscriptRenderer {
           this.lifecycle = lifecycle;
           const snapshot = createMemo(lifecycle.snapshot);
           const capture = (event: Event) => snapshot().captureInteractionResize(event);
-          element.addEventListener("click", capture, true);
-          onCleanup(() => element.removeEventListener("click", capture, true));
+          onCleanup(listen(element, "click", capture, true));
           const content = () => (
-            <TranscriptMediaDisconnect value={this.mediaDisconnect}>
-              <ContentPresentation value={active}>
-                <TranscriptRows snapshot={snapshot()} />
-              </ContentPresentation>
-            </TranscriptMediaDisconnect>
+            <TranscriptMessageElementsContext value={next.messageElements}>
+              <TranscriptMediaDisconnect value={this.mediaDisconnect}>
+                <ContentPresentation value={active}>
+                  <TranscriptRows
+                    snapshot={snapshot()}
+                    measureRowRefFor={next.measureRowRefFor}
+                    columnRef={(column) => {
+                      this.column = column;
+                    }}
+                  />
+                </ContentPresentation>
+              </TranscriptMediaDisconnect>
+            </TranscriptMessageElementsContext>
           );
           // Keep the session root independent while retaining its application capabilities.
           return (
@@ -340,7 +355,8 @@ export class ChatTranscriptRenderer {
   }
 
   dispose(): void {
-    this.binding?.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, this.presentationChanged);
+    this.stopPresentation?.();
+    this.stopPresentation = undefined;
     this.binding = undefined;
     this.disposeRoot?.();
     this.disposeRoot = undefined;
@@ -351,5 +367,6 @@ export class ChatTranscriptRenderer {
     this.commitQueued = false;
     this.layoutEffects.clear();
     this.element = undefined;
+    this.column = undefined;
   }
 }

@@ -4964,8 +4964,11 @@ discard the cache. A concurrent write may finish while a snapshot is being
 delivered; its receipt makes the next lookup refresh. Workers also adopt the host's
 live database validation receipt before session admission, preserving pending-row
 checks without repeating whole-store validation. Branch reads share the existing
-maintenance reader's prewarming, five-minute idle window, database custody, and
-memory-pressure retirement. They no longer start a dedicated worker after short
+maintenance reader's retained connection, prewarming, five-minute idle window,
+database custody, and memory-pressure retirement. Each branch read refreshes the
+connection's idle deadline and finishes its snapshot before returning; an expired
+reader reopens in that same scope without rotating the worker for queued viewers.
+They no longer start a dedicated worker after short
 idle gaps, and foreground history retains its separate reader. Branch identity and lifecycle
 reads use metadata without loading saved prompts or diff snapshots. After a complete scan
 verifies unique indexed identities and backward ancestry, linear stored
@@ -6918,6 +6921,12 @@ Namespace lists share that cache owner with a 64-namespace, 8 MiB bound. A
 committed write invalidates its namespace, unknown settlement invalidates the
 database's lists, and each read filters expired entries without another worker
 request. Returned lists and values are detached from the retained snapshot.
+
+Runtime-health cleanup retains acknowledged empty selections in that same bounded
+namespace cache, scoped by store identity, process, and engine or tool selection.
+Repeated clears skip the worker request until a namespace write receipt or unknown
+settlement invalidates them. Initial observations and positive clears retain the
+existing ordered worker operation and deletion authority.
 
 Agent dispatch reads ACP metadata only after finding a completed subagent run
 eligible for reactivation. Ordinary turns without such a run skip that worker

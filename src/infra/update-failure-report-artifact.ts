@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { z } from "zod";
 import {
   sanitizeTriageUpdateFailure,
@@ -14,7 +15,6 @@ import { classifyUpdateOutcome } from "../shared/update-outcome.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { formatErrorMessage } from "./errors.js";
 import { withFileLock } from "./file-lock.js";
-import { writeTextAtomic } from "./json-files.js";
 import { formatUpdateDoctorLintFinding } from "./update-doctor-lint.js";
 import type { PreparedUpdateFailureReport } from "./update-failure-report-prepare.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
@@ -52,8 +52,33 @@ async function readSavedUpdateReport(filePath: string): Promise<string | undefin
   });
 }
 
-async function withUpdateReportWrite<T>(outputPath: string, write: () => Promise<T>): Promise<T> {
+async function writeReportText(
+  filePath: string,
+  content: string,
+  assertCurrent?: () => void,
+): Promise<void> {
+  // Unlike beforeRename, this synchronous dependency guard covers each new
+  // mutation after an await, including rename retries and copy fallback.
+  await replaceFileAtomic({
+    filePath,
+    content,
+    mode: 0o600,
+    dirMode: 0o700,
+    copyFallbackOnPermissionError: true,
+    syncTempFile: true,
+    syncParentDir: true,
+    assertBeforeMutation: assertCurrent,
+  });
+}
+
+async function withUpdateReportWrite<T>(
+  outputPath: string,
+  write: () => Promise<T>,
+  assertCurrent?: () => void,
+): Promise<T> {
+  assertCurrent?.();
   await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
+  assertCurrent?.();
   return withFileLock(
     outputPath,
     {
@@ -61,14 +86,19 @@ async function withUpdateReportWrite<T>(outputPath: string, write: () => Promise
       stale: 30_000,
       staleRecovery: "remove-if-definitely-stale",
     },
-    write,
+    async () => {
+      // Waiting for the report lock does not preserve executor authority.
+      // Lock release remains unconditional even when the owner was revoked.
+      assertCurrent?.();
+      return write();
+    },
   );
 }
 
 /** The recovery writer can finish a run after its CLI exits without publishing a report. */
 export async function refreshUpdateRunReportArtifact(
   run: UpdateRunRecord,
-  options: { env?: NodeJS.ProcessEnv } = {},
+  options: { env?: NodeJS.ProcessEnv; assertCurrent?: () => void } = {},
 ): Promise<void> {
   if (run.status === "running") {
     return;
@@ -77,34 +107,39 @@ export async function refreshUpdateRunReportArtifact(
   const stateDir = resolveStateDir(env);
   const id = z.uuid().parse(run.runId);
   const outputPath = path.join(stateDir, "update-reports", `${id}.md`);
-  await withUpdateReportWrite(outputPath, async () => {
-    const previous = (await readSavedUpdateReport(outputPath)) ?? "";
-    // A child can commit the terminal ledger before its report is published.
-    // Repair missing/pending projections, but retain terminal or user-authored bytes.
-    if (previous && !isUpdateRunReportInProgress(previous)) {
-      return;
-    }
-    // Complete inventories and diagnostic links are not bounded ledger fields.
-    // Preserve the artifact writer's appendix while refreshing only its summary.
-    const appendixStart = previous.indexOf(DOCTOR_LINT_REPORT_SECTION);
-    const appendix = appendixStart < 0 ? "" : `\n${previous.slice(appendixStart)}`;
-    const native = appendix.includes(NATIVE_FAILURE_REPORT_SECTION)
-      ? ""
-      : nativeFailureDiagnostics(run.steps);
-    const report = renderUpdateRunReport(run, {
-      mode: run.target.kind,
-      markdownLimit: Infinity,
-    });
-    await writeTextAtomic(
-      outputPath,
-      redactSupportString(
-        `${report.markdown}${appendix}${native}`,
-        { env, stateDir },
-        { maxLength: Number.MAX_SAFE_INTEGER },
-      ),
-      { mode: 0o600, dirMode: 0o700 },
-    );
-  });
+  await withUpdateReportWrite(
+    outputPath,
+    async () => {
+      const previous = (await readSavedUpdateReport(outputPath)) ?? "";
+      options.assertCurrent?.();
+      // A child can commit the terminal ledger before its report is published.
+      // Repair missing/pending projections, but retain terminal or user-authored bytes.
+      if (previous && !isUpdateRunReportInProgress(previous)) {
+        return;
+      }
+      // Complete inventories and diagnostic links are not bounded ledger fields.
+      // Preserve the artifact writer's appendix while refreshing only its summary.
+      const appendixStart = previous.indexOf(DOCTOR_LINT_REPORT_SECTION);
+      const appendix = appendixStart < 0 ? "" : `\n${previous.slice(appendixStart)}`;
+      const native = appendix.includes(NATIVE_FAILURE_REPORT_SECTION)
+        ? ""
+        : nativeFailureDiagnostics(run.steps);
+      const report = renderUpdateRunReport(run, {
+        mode: run.target.kind,
+        markdownLimit: Infinity,
+      });
+      await writeReportText(
+        outputPath,
+        redactSupportString(
+          `${report.markdown}${appendix}${native}`,
+          { env, stateDir },
+          { maxLength: Number.MAX_SAFE_INTEGER },
+        ),
+        options.assertCurrent,
+      );
+    },
+    options.assertCurrent,
+  );
 }
 
 function updateDiagnosticArtifactName(kind: "lint" | "failure", id: string = randomUUID()): string {
@@ -116,19 +151,18 @@ function updateDiagnosticArtifactName(kind: "lint" | "failure", id: string = ran
 async function writeUpdateFailureLintArtifact(
   inventory: TriageUpdateFailure,
   directory: string,
+  assertCurrent?: () => void,
 ): Promise<string> {
   const outputPath = path.join(directory, updateDiagnosticArtifactName("lint"));
-  await writeTextAtomic(outputPath, `${JSON.stringify(inventory)}\n`, {
-    mode: 0o600,
-    dirMode: 0o700,
-  });
+  await writeReportText(outputPath, `${JSON.stringify(inventory)}\n`, assertCurrent);
   return outputPath;
 }
 
 export async function writeTriageUpdateFailure(
   failure: TriageUpdateFailure,
-  options: { env?: NodeJS.ProcessEnv; outputPath?: string } = {},
+  options: { env?: NodeJS.ProcessEnv; outputPath?: string; assertCurrent?: () => void } = {},
 ): Promise<string> {
+  options.assertCurrent?.();
   const env = options.env ?? process.env;
   const stateDir = resolveStateDir(env);
   const outputPath =
@@ -137,16 +171,21 @@ export async function writeTriageUpdateFailure(
   const inventory = sanitizeTriageUpdateFailure(failure, { env, stateDir }, "inventory");
   let detail: string | undefined;
   if ("result" in inventory && inventory.result.steps.some((step) => step.doctorLintFindings)) {
-    detail = await writeUpdateFailureLintArtifact(inventory, path.dirname(outputPath)).then(
+    detail = await writeUpdateFailureLintArtifact(
+      inventory,
+      path.dirname(outputPath),
+      options.assertCurrent,
+    ).then(
       (inventoryPath) => `Complete Doctor lint inventory: ${inventoryPath}`,
       (error: unknown) =>
         `Complete Doctor lint inventory unavailable: ${formatErrorMessage(error)}`,
     );
   }
+  options.assertCurrent?.();
   const sanitized = sanitizeTriageUpdateFailure(inventory, { env, stateDir }, "artifact", detail);
   const body = `${JSON.stringify(sanitized)}\n`;
   // The managed helper's private handoff keeps the latest complete outcome after cleanup.
-  await writeTextAtomic(outputPath, body, { mode: 0o600, dirMode: 0o700 });
+  await writeReportText(outputPath, body, options.assertCurrent);
   return outputPath;
 }
 
@@ -159,7 +198,9 @@ export async function writeUpdateRunReportArtifact(params: {
   readRun?: () => UpdateRunRecord | undefined;
   env?: NodeJS.ProcessEnv;
   detached?: boolean;
+  assertCurrent?: () => void;
 }): Promise<string> {
+  params.assertCurrent?.();
   const env = params.env ?? process.env;
   const stateDir = resolveStateDir(env);
   const id = (!params.detached && z.uuid().safeParse(params.result.runId).data) || randomUUID();
@@ -170,10 +211,12 @@ export async function writeUpdateRunReportArtifact(params: {
     : path.join(stateDir, "update-reports");
   const outputPath = path.join(directory, `${id}.md`);
   const write = async () => {
+    params.assertCurrent?.();
     const run = params.readRun?.();
     const report = typeof params.report === "function" ? params.report(run) : params.report;
     if (params.readRun && !run) {
       const previous = await readSavedUpdateReport(outputPath);
+      params.assertCurrent?.();
       // An old reader can lose schema admission after the helper settles.
       // Its fallback result cannot replace already-published terminal details.
       if (previous && !isUpdateRunReportInProgress(previous)) {
@@ -186,12 +229,14 @@ export async function writeUpdateRunReportArtifact(params: {
             { result: params.result },
             {
               env,
+              assertCurrent: params.assertCurrent,
               outputPath: params.detached
                 ? path.join(directory, updateDiagnosticArtifactName("failure", id))
                 : undefined,
             },
           )
         : undefined;
+    params.assertCurrent?.();
     const findings = params.result.steps.flatMap((step) => step.doctorLintFindings ?? []);
     const native = nativeFailureDiagnostics(
       run?.steps ?? params.result.steps.flatMap(updateRunStepsFromResultStep),
@@ -203,23 +248,24 @@ export async function writeUpdateRunReportArtifact(params: {
       ...(native ? [native] : []),
       failurePath ? `\nBounded diagnostic JSON: ${path.relative(directory, failurePath)}` : "",
     ].join("\n");
-    await writeTextAtomic(
+    await writeReportText(
       outputPath,
       redactSupportString(body, { env, stateDir }, { maxLength: Number.MAX_SAFE_INTEGER }),
-      { mode: 0o600, dirMode: 0o700 },
+      params.assertCurrent,
     );
     return outputPath;
   };
   if (params.detached) {
     return write();
   }
-  await withUpdateReportWrite(outputPath, write);
+  await withUpdateReportWrite(outputPath, write, params.assertCurrent);
   // Reconcile after release, including async rename and unlock. A helper that
   // exhausted its lock wait has already settled the ledger; one settling after
   // this read can acquire the released lock and finish the projection itself.
+  params.assertCurrent?.();
   const settled = params.readRun?.();
   if (settled) {
-    await refreshUpdateRunReportArtifact(settled, { env });
+    await refreshUpdateRunReportArtifact(settled, { env, assertCurrent: params.assertCurrent });
   }
   return outputPath;
 }

@@ -302,6 +302,10 @@ agents so you can inspect them before creating the missing members.
 
 ## Download files
 
+If the **Files** panel shows a listing error, select **Retry** to load the current
+folder or search again. This keeps the session and query in place; access checks
+still apply, and a failed retry displays its error.
+
 In the **Files** panel, hover over a file or focus its row to reveal **Download file**
 next to Preview and Copy path. The same action is available in the file preview
 toolbar. It saves the original file through your browser without opening another

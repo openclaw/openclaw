@@ -30,6 +30,7 @@ import {
 import { hasLiveAgentRunContext, listAgentRunsForSession } from "../../infra/agent-run-registry.js";
 import {
   captureGatewaySessionControllerWork,
+  captureSessionControllerSettlement,
   isSessionControllerWorkActive,
 } from "../../sessions/session-controller.lifecycle.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../../state/openclaw-agent-db.paths.js";
@@ -372,6 +373,10 @@ type OrphanMarkParams = {
   cfg?: OpenClawConfig;
   updatedBeforeMs?: number;
   lifecycleGeneration: string;
+  onOwnerPending?: (
+    target: RestartRecoveryStoreTarget & { sessionKey: string; sessionId: string },
+    settled: Promise<void>,
+  ) => void;
 };
 
 async function markOrphanedMainSessionStore(
@@ -451,6 +456,16 @@ async function markOrphanedMainSessionStore(
         ) ||
         isSessionControllerWorkActive(params.target.storePath, [sessionKey, entry.sessionId]);
       if (hasLiveOwner()) {
+        const settled = captureSessionControllerSettlement({
+          scope: params.target.storePath,
+          identities: [sessionKey, entry.sessionId],
+        });
+        if (settled) {
+          params.onOwnerPending?.(
+            { ...params.target, sessionKey, sessionId: entry.sessionId },
+            settled,
+          );
+        }
         return undefined;
       }
       const continuation = captureYieldedMainSessionContinuation({
@@ -530,6 +545,7 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   stateDir?: string;
   startupCheckedStorePaths?: Set<string>;
   updatedBeforeMs?: number;
+  onOwnerPending?: OrphanMarkParams["onOwnerPending"];
 }): Promise<{ marked: number; skipped: number; failedTargets?: RestartRecoveryStoreTarget[] }> {
   const result = { marked: 0, skipped: 0 };
   const failedTargets: RestartRecoveryStoreTarget[] = [];

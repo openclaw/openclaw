@@ -65,7 +65,11 @@ describe("conversation position rail", () => {
             vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
             return (
               <div class="chat-thread" tabindex="0">
-                <div class="chat-bubble" data-entry-id="message-79">
+                <div
+                  ref={session.messageElements.forKey("message-79")}
+                  class="chat-bubble"
+                  data-entry-id="message-79"
+                >
                   Latest message
                 </div>
                 <ChatPositionRail
@@ -175,7 +179,11 @@ describe("conversation position rail", () => {
       () =>
         transcript.renderSession("agent:main:rail-overflow", (session) => (
           <div class="chat-thread" tabindex="0">
-            <div class="chat-bubble" data-entry-id="short">
+            <div
+              ref={session.messageElements.forKey("short")}
+              class="chat-bubble"
+              data-entry-id="short"
+            >
               A short question
             </div>
             <ChatPositionRail positions={positions} transcript={session} />
@@ -268,7 +276,11 @@ describe("conversation position rail", () => {
             vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
             return (
               <div class="chat-thread" tabindex="0">
-                <div class="chat-bubble" data-entry-id="message-79">
+                <div
+                  ref={session.messageElements.forKey("message-79")}
+                  class="chat-bubble"
+                  data-entry-id="message-79"
+                >
                   Latest message
                 </div>
                 <ChatPositionRail positions={currentPositions()} transcript={session} />
@@ -398,7 +410,7 @@ describe("conversation position rail", () => {
             root.scrollTop = 0;
             activeMessage.mockReturnValue("message-0");
           }
-          adjustTextareaHeight(textarea);
+          adjustTextareaHeight(textarea, { getTranscriptElement: () => root });
           expect(root.scrollTop).toBe(navigatesBeforeResize ? 0 : 8315);
           // The goal header regrows the composer before any observer or frame runs.
           height = 576;
@@ -486,7 +498,7 @@ describe("conversation position rail", () => {
     },
   );
 
-  it("keeps stream edits off target scans while reconciling bubble mounts and identities", async () => {
+  it("keeps stream edits off target scans while reconciling registered bubble mounts", async () => {
     const observed = new Set<Element>();
     vi.stubGlobal(
       "IntersectionObserver",
@@ -544,49 +556,43 @@ describe("conversation position rail", () => {
       }
       expect(targetScans()).toBe(0);
 
+      const elements = transcript.renderSession(
+        props.sessionKey,
+        (session) => session.messageElements,
+      );
+      const entry = [...elements.elements].find(([, element]) => element === original);
+      assert(entry);
+      const bubbleRef = elements.forKey(entry[0]);
+      bubbleRef(original);
+      bubbleRef();
       original.remove();
       await settleFrames();
-      expect(targetScans()).toBeGreaterThan(0);
+      expect(targetScans()).toBe(0);
       expect(observed.has(original)).toBe(false);
-      query.mockClear();
 
       const replacement = original.cloneNode(true) as HTMLElement;
       root.append(replacement);
+      bubbleRef(replacement);
       await settleFrames();
-      expect(targetScans()).toBeGreaterThan(0);
+      expect(targetScans()).toBe(0);
       expect(observed.has(replacement)).toBe(true);
-      query.mockClear();
+      bubbleRef();
       replacement.remove();
       await settleFrames();
-      expect(targetScans()).toBeGreaterThan(0);
+      expect(targetScans()).toBe(0);
       expect(observed.has(replacement)).toBe(false);
-      query.mockClear();
 
       const wrapper = document.createElement("section");
       wrapper.append(replacement);
       root.append(wrapper);
-      await settleFrames();
-      expect(targetScans()).toBeGreaterThan(0);
-      expect(observed.has(replacement)).toBe(true);
-      query.mockClear();
-      wrapper.remove();
-      await settleFrames();
-      expect(targetScans()).toBeGreaterThan(0);
-      expect(observed.has(replacement)).toBe(false);
-      query.mockClear();
-
-      replacement.removeAttribute("data-entry-id");
-      root.append(replacement);
+      bubbleRef(replacement);
       await settleFrames();
       expect(targetScans()).toBe(0);
-      replacement.dataset.entryId = "question";
-      await settleFrames();
-      expect(targetScans()).toBeGreaterThan(0);
       expect(observed.has(replacement)).toBe(true);
-      query.mockClear();
-      replacement.removeAttribute("data-entry-id");
+      bubbleRef();
+      wrapper.remove();
       await settleFrames();
-      expect(targetScans()).toBeGreaterThan(0);
+      expect(targetScans()).toBe(0);
       expect(observed.has(replacement)).toBe(false);
     } finally {
       view.unmount();
@@ -945,26 +951,6 @@ describe("conversation position rail", () => {
       expect(query.mock.calls.filter(([selector]) => selector.includes(".chat-bubble"))).toEqual(
         [],
       );
-      const streamParent = streamBubble.parentNode!;
-      const streamNext = streamBubble.nextSibling;
-      streamBubble.remove();
-      await settleFrames();
-      expect(observed.has(streamBubble)).toBe(false);
-      const wrapper = document.createElement("section");
-      wrapper.append(streamBubble);
-      root.append(wrapper);
-      await settleFrames();
-      expect(observed.has(streamBubble)).toBe(true);
-      const streamId = streamBubble.dataset.messageId!;
-      delete streamBubble.dataset.messageId;
-      await settleFrames();
-      expect(observed.has(streamBubble)).toBe(false);
-      streamBubble.dataset.messageId = streamId;
-      await settleFrames();
-      expect(observed.has(streamBubble)).toBe(true);
-      streamParent.insertBefore(streamBubble, streamNext);
-      wrapper.remove();
-      await settleFrames();
       provisional.click();
       // Reveal settles the committed target's geometry on the render lifecycle's layout phase.
       await settleFrames();
@@ -983,6 +969,9 @@ describe("conversation position rail", () => {
       const persistedBubble = container.querySelector<HTMLElement>(
         '[data-entry-id="persisted-answer"]',
       )!;
+      await settleFrames();
+      expect(observed.has(streamBubble)).toBe(false);
+      expect(observed.has(persistedBubble)).toBe(true);
       marker().click();
       await settleFrames();
       expect(persistedBubble.classList.contains("chat-bubble--reply-target")).toBe(true);

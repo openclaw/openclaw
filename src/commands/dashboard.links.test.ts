@@ -293,7 +293,9 @@ describe("dashboardCommand", () => {
       JSON.stringify({ ok: false, error: { type: "cli_error", message: reason }, reason }),
     );
     expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+      "Gateway is not running.\nRun `openclaw gateway status --deep` for details, then retry `openclaw dashboard --json`.",
+    );
     expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
   });
 

@@ -488,6 +488,7 @@ export async function recoverStore(params: {
           gatewayRuntime: params.gatewayRuntime,
           observation: recoveryView.observation,
           reason: "delegated recovery sender authority is unavailable",
+          cronOwned: source === "cron",
           assertCurrent: () => {
             if (stopped()) {
               throw new Error("Delegated restart recovery stopped before settlement");
@@ -498,8 +499,8 @@ export async function recoverStore(params: {
           params.handledSessionKeys.add(resumeDedupeKey);
           decision = {
             decision: "settled",
-            reason: "delegated_authority_unavailable",
-            nextOwner: "none",
+            reason: source === "cron" ? "cron_interrupted" : "delegated_authority_unavailable",
+            nextOwner: source === "cron" ? "cron" : "none",
           };
           result.settled++;
         } else if (outcome === "notice_failed") {

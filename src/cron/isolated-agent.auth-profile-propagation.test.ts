@@ -357,9 +357,13 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     },
   );
 
-  it.each(["cron", "event"] as const)(
-    "fails closed for a bound account on a %s CLI route (#144047)",
-    async (trigger) => {
+  it.each([
+    { trigger: "cron", cli: true },
+    { trigger: "event", cli: true },
+    { trigger: "cron", cli: false },
+  ] as const)(
+    "explains a bound account refusal for $trigger with cli=$cli (#144047)",
+    async ({ trigger, cli }) => {
       await saveProfiles({ "openai:work": apiKey(), "claude-cli:personal": oauth("claude-cli") });
       const cfg = config();
       const binding = await captureCronInferenceBinding({
@@ -368,20 +372,36 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         model: "openai/gpt-4.1@openai:work",
       });
       expect(binding).toMatchObject({ profileId: "openai:work", source: "user" });
+      const storePath = state.statePath("cron", "jobs.json");
+      await saveCronJobsStore(storePath, {
+        version: 1,
+        jobs: [makeAuthJob({ inferenceBinding: binding })],
+      });
       setupClaudeCliBackend();
-      h.resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4o" });
-      cfg.agents!.defaults!.model = "openai/gpt-4o";
-      cfg.agents!.defaults!.models = { "openai/gpt-4o": { agentRuntime: { id: "claude-cli" } } };
+      const provider = cli ? "openai" : "anthropic";
+      const model = cli ? "gpt-4o" : "claude-sonnet-4-5";
+      h.resolveConfiguredModelRefMock.mockReturnValue({ provider, model });
+      cfg.agents!.defaults!.model = `${provider}/${model}`;
+      if (cli) {
+        cfg.agents!.defaults!.models = { "openai/gpt-4o": { agentRuntime: { id: "claude-cli" } } };
+      }
       cfg.auth!.order = { "claude-cli": ["claude-cli:personal"] };
-
-      const result = await runWithConfig(
-        cfg,
-        makeIsolatedAgentJobFixture({ agentId: "main", inferenceBinding: binding }),
-        trigger,
-      );
+      clearRuntimeAuthProfileStoreSnapshots();
+      await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
+      const reloaded = (await loadCronJobsStore(storePath)).jobs[0];
+      if (!reloaded) {
+        throw new Error("Expected the persisted automation");
+      }
+      const result = await runWithConfig(cfg, reloaded, trigger);
 
       expect(result.status).toBe("error");
       expect(result.error).toContain("incompatible with its recorded inference account and route");
+      expect(result.error).toContain(cli ? "CLI login" : "different provider");
+      expect(result.error).toContain(
+        "openclaw automations edit <jobId> --model <provider/model>@<profileId>",
+      );
+      expect(reloaded.inferenceBinding).toEqual(binding);
+      expect((await loadCronJobsStore(storePath)).jobs[0]?.inferenceBinding).toEqual(binding);
       expect(h.resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
       expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
       expect(h.runCliAgentMock).not.toHaveBeenCalled();

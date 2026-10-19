@@ -326,10 +326,9 @@ export function registerMatrixMonitorEvents(params: {
     const eventId = event?.event_id ?? "unknown";
     const sender = event?.sender ?? "unknown";
     const invitee = normalizeOptionalString(event?.state_key) ?? "";
-    const senderIsInvitee =
-      Boolean(invitee) && (normalizeOptionalString(event?.sender) ?? "") === invitee;
-    const isDirect = (event?.content as { is_direct?: boolean } | undefined)?.is_direct === true;
     const rememberedSender = normalizeOptionalString(event?.sender);
+    const senderIsInvitee = Boolean(invitee) && rememberedSender === invitee;
+    const isDirect = (event?.content as { is_direct?: boolean } | undefined)?.is_direct === true;
     if (rememberedSender && !senderIsInvitee) {
       directTracker?.rememberInvite?.(roomId, rememberedSender);
     }

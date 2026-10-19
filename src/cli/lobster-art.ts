@@ -6,9 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isLobsterDay, lobsterDayHash } from "../shared/lobster-day.js";
 
 const LOBSTER_ARTS: readonly string[] = [
-  // Claws up, saying hi.
   ["  (\\/)  (\\/)", "   \\_\\  /_/", "    ( o.o )", "    /|__|\\"].join("\n"),
-  // Just the eyestalks, watching from below the waterline.
   ["     o   o", "     )   (", "  ~~~~~~~~~~~"].join("\n"),
 ] as const;
 

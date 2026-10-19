@@ -7,7 +7,7 @@ import {
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { registryFor } from "../../components/overlay-registry.ts";
+import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
@@ -271,7 +271,7 @@ export function createPluginsPage(options: {
       !(event instanceof KeyboardEvent) ||
       event.key !== "Escape" ||
       isComposingKeyboardEvent(event) ||
-      document.querySelector(".shell-nav[aria-modal='true']") ||
+      hasModalSurface(document) ||
       registryFor(document).stack.at(-1)?.open
     ) {
       return;
@@ -296,7 +296,7 @@ export function createPluginsPage(options: {
       return;
     }
     // The file viewer owns Escape inside its shadow-root modal.
-    if (skillPreview.state || document.openClawModalLayers?.size) {
+    if (skillPreview.state) {
       return;
     }
     // Firefox does not emit blur when a focused input is removed from the document.

@@ -16,6 +16,7 @@ import {
   projectSessions,
 } from "../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { registerModalSurface } from "./overlay-registry.ts";
 import "../styles/sidebar-menus.css";
 import "../styles/sidebar-issues.css";
 import type { SidebarAttentionDismissal } from "./sidebar-attention-dismissals.ts";
@@ -261,8 +262,12 @@ export function SidebarAttentionPanel(
   let panel!: HTMLElement;
   const focus = createSidebarAttentionFocus(() => panel);
   onSettled(() => {
+    const releaseModal = registerModalSurface(panel);
     props.focusRef?.(focus);
-    return () => props.focusRef?.(null);
+    return () => {
+      props.focusRef?.(null);
+      releaseModal();
+    };
   });
   const mentions = projectMentions(mentionSource);
   const gateway = projectGateway(context.gateway);

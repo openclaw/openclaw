@@ -1,3 +1,6 @@
+import { onSettled } from "solid-js";
+import { listen } from "../../../lib/reactive/listener.ts";
+import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { findMessageDisclosureLine, type MessageTextRect } from "./chat-message-disclosure.ts";
 
 // Character length owns normal disclosure; this high line cap only bounds newline-heavy prompts.
@@ -45,40 +48,51 @@ function scheduleOverflowMeasurement(measurement: MessageOverflowMeasurement): v
   });
 }
 
-export function messageOverflowRef(expanded: boolean, forwarded: boolean) {
-  let resizeObserver: ResizeObserver | null = null;
-  let onFontsLoaded: (() => void) | undefined;
+export function messageOverflowRef(
+  readOptions: () => { expanded: boolean; forwarded: boolean; connected: boolean },
+  getNodes: () => { toggle?: HTMLButtonElement; text?: HTMLElement },
+) {
+  let current: HTMLElement | undefined;
   let measurement: MessageOverflowMeasurement | undefined;
-  let generation = 0;
-  return (element: Element | undefined) => {
-    const currentGeneration = ++generation;
-    if (measurement) {
-      pendingOverflowMeasurements.delete(measurement);
-      measurement = undefined;
+  const update = () => {
+    if (measurement && readOptions().connected) {
+      scheduleOverflowMeasurement(measurement);
     }
-    resizeObserver?.disconnect();
-    resizeObserver = null;
-    if (onFontsLoaded) {
-      document.fonts?.removeEventListener("loadingdone", onFontsLoaded);
-      onFontsLoaded = undefined;
-    }
+  };
+  createResizeObserver(() => {
+    const { connected } = readOptions();
+    const { text } = getNodes();
+    return connected && current ? [current, ...(text ? [text] : [])] : [];
+  }, update);
+  onSettled(() => {
+    // Sibling toggle refs are attached before the initial batched measurement.
+    update();
+    // Font metrics can change without resizing tightly spaced retained text.
+    const stopFontsLoaded = document.fonts && listen(document.fonts, "loadingdone", update);
+    return () => {
+      stopFontsLoaded?.();
+      if (measurement) {
+        pendingOverflowMeasurements.delete(measurement);
+        measurement = undefined;
+      }
+    };
+  });
+  return (element: Element) => {
     if (!(element instanceof HTMLElement)) {
       return;
     }
+    current = element;
     const read = () => {
-      if (generation !== currentGeneration) {
+      const { expanded, forwarded, connected } = readOptions();
+      if (!connected) {
         return undefined;
       }
-      const disclosure = element.parentElement;
-      const toggle = disclosure?.querySelector<HTMLButtonElement>(
-        ":scope > .chat-message-disclosure__toggle",
-      );
-      if (!disclosure || !toggle) {
+      const { toggle, text } = getNodes();
+      if (!toggle) {
         return undefined;
       }
       let clamp: string | undefined;
       let fadeSize: string | undefined;
-      const text = element.querySelector<HTMLElement>(":scope > .chat-text");
       // Test the full preview before a partial-line cut can create its own overflow.
       const scrollHeight = element.scrollHeight;
       const overflows = scrollHeight > element.clientHeight + 1;
@@ -148,9 +162,6 @@ export function messageOverflowRef(expanded: boolean, forwarded: boolean) {
               1
           : !overflows);
       return () => {
-        if (generation !== currentGeneration) {
-          return;
-        }
         for (const [property, value] of [
           ["--chat-disclosure-clamp", clamp],
           ["--chat-disclosure-fade-size", fadeSize],
@@ -164,32 +175,6 @@ export function messageOverflowRef(expanded: boolean, forwarded: boolean) {
         toggle.hidden = hidden;
       };
     };
-    const currentMeasurement = (measurement = { element, read });
-    const update = () => {
-      if (generation === currentGeneration) {
-        scheduleOverflowMeasurement(currentMeasurement);
-      }
-    };
-    // Lit resolves refs while siblings are still committing. Measure after the
-    // toggle exists; it renders visible so collapsing never shifts row height,
-    // and only content that fits the clamp hides it.
-    queueMicrotask(() => {
-      if (generation !== currentGeneration) {
-        return;
-      }
-      const text = element.querySelector(":scope > .chat-text");
-      if (text) {
-        resizeObserver?.observe(text);
-      }
-    });
-    update();
-    // Font metrics can change without resizing tightly spaced text, including
-    // fonts loaded after this retained message's original render.
-    onFontsLoaded = update;
-    document.fonts?.addEventListener("loadingdone", onFontsLoaded);
-    if (typeof ResizeObserver === "function") {
-      resizeObserver = new ResizeObserver(update);
-      resizeObserver.observe(element);
-    }
+    measurement = { element, read };
   };
 }

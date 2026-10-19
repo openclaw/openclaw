@@ -12,7 +12,8 @@ import { toNumber } from "../format.ts";
 import { parseCronDurationMs } from "./decimal.ts";
 import { hasUnchangedCronSchedule, buildCronSchedule } from "./form-schedule.ts";
 import { isReadOnlyCronPayload, jobToForm, normalizeCronFormState } from "./form.ts";
-import { loadCronJobsPage, retireCronJobsRequest } from "./jobs.ts";
+import { loadCronJobsPage } from "./jobs-full.ts";
+import { retireCronJobsRequest } from "./jobs.ts";
 import { buildCronPayload, getCronJobPayload } from "./payload.ts";
 import { cronRunNotStartedMessage } from "./run-feedback.ts";
 import { clearCronRunsPage, loadCronRuns, retireCronRunsRequest } from "./runs.ts";
@@ -29,7 +30,7 @@ import { resolveCronWebhookDeliveryError } from "./webhook-url.ts";
 export { normalizeCronFormState } from "./form.ts";
 export { createInitialCronState, loadCronStatus } from "./state.ts";
 export { loadCronScopeStats } from "./scope.ts";
-export { loadCronJobsPage } from "./jobs.ts";
+export { loadCronJobsPage } from "./jobs-full.ts";
 export { getCronJobPayload } from "./payload.ts";
 export { resolveConfiguredCronModelSuggestions } from "./model-suggestions.ts";
 

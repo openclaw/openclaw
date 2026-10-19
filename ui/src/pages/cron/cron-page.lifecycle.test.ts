@@ -321,6 +321,81 @@ it("refreshes model suggestions when team selection changes without changing sco
   }
 });
 
+it("applies run events to the complete job table without fetching the inventory again", async () => {
+  const job = createCronViewJob("running-job", { state: { nextRunAtMs: 100 } });
+  const other = createCronViewJob("other-job", { state: { nextRunAtMs: 200 } });
+  let inventory = [job, other];
+  const request = cronRpc({ "cron.list": () => cronListResponse(structuredClone(inventory)) });
+  const { page, gateway } = mountCronPage(request);
+  await waitForCronPage(() => expect(page.cron.cronJobs).toHaveLength(2));
+  await page.settle();
+  request.mockClear();
+  inventory = [{ ...job, updatedAtMs: 1, state: { nextRunAtMs: 100, runningAtMs: 100 } }, other];
+  emitEvent(gateway, "cron", {
+    action: "started",
+    jobId: job.id,
+    job: {
+      id: job.id,
+      name: job.name,
+      enabled: true,
+      updatedAtMs: 1,
+      state: { nextRunAtMs: 100, runningAtMs: 100 },
+    },
+  });
+  await page.settle();
+  expect(page.cron.cronJobs[0]?.state.runningAtMs).toBe(100);
+  expect(callsFor(request, "cron.list"), "started event").toHaveLength(0);
+  inventory = [
+    other,
+    {
+      ...job,
+      updatedAtMs: 2,
+      state: {
+        nextRunAtMs: 300,
+        lastRunAtMs: 100,
+        lastRunStatus: "ok",
+        lastDurationMs: 10,
+      },
+    },
+  ];
+  emitEvent(gateway, "cron", {
+    action: "finished",
+    jobId: job.id,
+    status: "ok",
+    durationMs: 10,
+    job: {
+      id: job.id,
+      name: job.name,
+      enabled: true,
+      updatedAtMs: 2,
+      state: { nextRunAtMs: 300, lastRunAtMs: 100, lastRunStatus: "ok" },
+    },
+  });
+  await page.settle();
+  expect(page.cron.cronJobs.map((entry) => entry.id)).toEqual([other.id, job.id]);
+  expect(page.cron.cronJobs[1]?.state).toMatchObject({ lastRunStatus: "ok", lastDurationMs: 10 });
+  expect(page.cron.cronJobs[1]?.state.runningAtMs).toBeUndefined();
+  expect(callsFor(request, "cron.list")).toHaveLength(0);
+});
+
+it("keeps the periodic inventory recovery visible-only", async () => {
+  vi.useFakeTimers();
+  const visibility = controlVisibility();
+  const request = createRequest();
+  const { page } = mountCronPage(request, { render: false });
+  await vi.advanceTimersByTimeAsync(0);
+  request.mockClear();
+  visibility("hidden");
+  await vi.advanceTimersByTimeAsync(600_000);
+  expect(request).not.toHaveBeenCalled();
+  visibility("visible");
+  await vi.advanceTimersByTimeAsync(0);
+  request.mockClear();
+  await vi.advanceTimersByTimeAsync(600_000);
+  expect(callsFor(request, "cron.list")).toHaveLength(1);
+  page.remove();
+});
+
 it("coalesces a cron event burst into one trailing refresh of the current page", async () => {
   const held = createDeferred();
   let released = false;

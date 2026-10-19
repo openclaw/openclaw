@@ -10,11 +10,10 @@ import type { BrowserTabTarget } from "../../../components/browser/browser-targe
 import { BROWSER_PANEL_TOGGLE_EVENT } from "../../../components/panel-toggle-contract.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
+import { BrowserTabCardHost } from "./browser-tab-card.tsx";
 import { createActivityGroupHarness } from "./chat-message-native.test-support.tsx";
-import { ToolPreview } from "./widget-card-view.tsx";
 
 const hosts: HTMLElement[] = [];
 const activityGroups = new Map<HTMLElement, ReturnType<typeof createActivityGroupHarness>>();
@@ -151,20 +150,12 @@ async function card(
   latest = true,
   tab: BrowserTabTarget = { target: "host", profile: "managed", targetId: "tab-1" },
 ) {
-  const host = container();
-  mountSolid(
-    () => (
-      <ToolPreview
-        preview={{ kind: "browser-tab", ...tab, url: "https://example.com/page" }}
-        surface="chat_tool"
-        options={{ browserTabRevision: "one", browserTabLatest: latest }}
-      />
-    ),
-    { container: host },
-  );
-  flush();
-  const element = host.querySelector("openclaw-browser-tab-card")!;
+  const element = new BrowserTabCardHost.Element();
+  element.preview = { kind: "browser-tab", ...tab, url: "https://example.com/page" };
+  element.revision = "one";
+  element.latest = latest;
   element.context = context;
+  container().append(element);
   await element.updateComplete;
   return element;
 }

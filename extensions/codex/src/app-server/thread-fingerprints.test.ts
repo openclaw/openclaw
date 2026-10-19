@@ -3,6 +3,7 @@ import type { CodexDynamicToolFunctionSpec, JsonObject } from "./protocol.js";
 import {
   codexDynamicToolsFingerprint,
   fingerprintCodexThreadConfig,
+  fingerprintRestrictedThreadConfig,
   fingerprintUserMcpServersConfigPatch,
   readActiveCodexTurnIdsFromResume,
 } from "./thread-fingerprints.js";
@@ -90,6 +91,47 @@ describe("fingerprintCodexThreadConfig", () => {
     expect(fingerprintCodexThreadConfig({ ...request, config: config("user") })).not.toBe(
       fingerprintCodexThreadConfig({ ...request, config: config("auto_review") }),
     );
+  });
+});
+
+describe.each(["ordinary", "restricted"] as const)("%s proxied thread fingerprint", (kind) => {
+  function fingerprint(
+    port: number,
+    upstream = "https://api.example.com/v1",
+    auth = "personal",
+    hooks = true,
+  ) {
+    const route = {
+      baseUrl: `http://127.0.0.1:${port}/private-route`,
+      configurationIdentity: upstream,
+    };
+    const request = {
+      config: {
+        openai_base_url: route.baseUrl,
+        model_providers: { custom: { base_url: route.baseUrl } },
+        "model_providers.custom": { base_url: route.baseUrl },
+        "model_providers.custom.base_url": route.baseUrl,
+        features: { hooks },
+      },
+    };
+    const inference = {
+      inferenceRoute: route,
+      inferenceProviderRoutes: new Map([["custom", route]]),
+    };
+    return kind === "ordinary"
+      ? fingerprintCodexThreadConfig(request, auth, "tools", undefined, inference)
+      : fingerprintRestrictedThreadConfig(request, auth, "tools", {}, false, undefined, inference);
+  }
+
+  it("keeps identity across proxy restarts", () => {
+    expect(fingerprint(41001)).toBe(fingerprint(41002));
+  });
+
+  it("retains upstream, auth profile, and other configuration identity", () => {
+    const original = fingerprint(41001);
+    expect(fingerprint(41002, "https://other.example.com/v1")).not.toBe(original);
+    expect(fingerprint(41002, undefined, "work")).not.toBe(original);
+    expect(fingerprint(41002, undefined, undefined, false)).not.toBe(original);
   });
 });
 

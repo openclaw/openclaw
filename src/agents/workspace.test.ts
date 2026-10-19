@@ -303,7 +303,7 @@ it("records stale bootstrap completion when BOOTSTRAP.md cleanup fails", async (
   expect((await readWorkspaceState(tempDir)).setupCompletedAt).toMatch(TIMESTAMP);
 });
 
-it("observes setup completed concurrently before writing optional bootstrap files", async () => {
+it("preserves concurrent setup while refusing ambiguous bootstrap remnants", async () => {
   const agentsPath = workspacePath(AGENTS);
   await fs.writeFile(agentsPath, "custom agents instructions\n", "utf8");
   await mergeWorkspaceSetupState(tempDir, SEEDED);
@@ -316,8 +316,9 @@ it("observes setup completed concurrently before writing optional bootstrap file
     }
     return await realAccess(filePath, mode);
   });
-  await ensureWorkspace();
+  await expectWorkspaceVanished(ensureWorkspace());
   expect(completed).toBe(true);
+  expect((await readWorkspaceState(tempDir)).setupCompletedAt).toBe(COMPLETED.setupCompletedAt);
   for (const filename of [SOUL, IDENTITY, USER, HEARTBEAT]) {
     await expectPathMissing(workspacePath(filename));
   }

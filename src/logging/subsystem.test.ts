@@ -18,7 +18,7 @@ import { applyLoggingConfig, getLogger, resetLogger, setLoggerOverride } from ".
 import { testApi } from "./logger.test-support.js";
 import { getDefaultRedactPatterns } from "./redact.js";
 import { loggingState } from "./state.js";
-import { createSubsystemLogger } from "./subsystem.js";
+import { createSubsystemLogger, runtimeForLogger } from "./subsystem.js";
 
 const logPathTracker = createSuiteLogPathTracker("openclaw-subsystem-log-");
 
@@ -53,6 +53,17 @@ afterEach(async () => {
 
 afterAll(async () => {
   await logPathTracker.cleanup();
+});
+
+it("formats host runtime arguments before routing them to the subsystem logger", () => {
+  const logger = createSubsystemLogger("runtime-arguments");
+  const info = vi.spyOn(logger, "info").mockImplementation(() => {});
+  const error = vi.spyOn(logger, "error").mockImplementation(() => {});
+  const runtime = runtimeForLogger(logger);
+  runtime.log("ready", { active: true }, 17);
+  runtime.error("failed", { retryable: false });
+  expect(info).toHaveBeenCalledExactlyOnceWith("ready { active: true } 17");
+  expect(error).toHaveBeenCalledExactlyOnceWith("failed { retryable: false }");
 });
 
 describe("createSubsystemLogger().isEnabled", () => {

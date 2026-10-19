@@ -647,23 +647,31 @@ describe("createOllamaStreamFn streaming events", () => {
     });
   });
 
-  it("emits text_end as soon as Ollama switches from text to tool calls", async () => {
+  it.each([
+    { name: "ordinary text", chunks: ["Let me check."] },
+    { name: "split Unicode text", chunks: ["Let me check. \ud83e", "\udd8a e", "\u0301"] },
+  ])("ends $name as soon as Ollama switches to tool calls", async ({ chunks }) => {
     const source = createControlledNdjsonFetch();
     fetchWithSsrFGuardMock.mockImplementation(source.fetchImpl);
     const stream = await createOllamaTestStream({});
     const iterator = stream[Symbol.asyncIterator]();
-    source.pushLine(ndjson({ content: "Let me check." }));
+    const text = chunks.join("");
+    source.pushLine(ndjson({ content: chunks[0] }));
     await expectNext(iterator, { type: "start", partial: { content: [] } });
-    await expectNext(iterator, { type: "text_start", partial: { content: [] } });
-    await expectNext(iterator, { type: "text_delta", delta: "Let me check." });
+    await expectNext(iterator, { type: "text_start", contentIndex: 0, partial: { content: [] } });
+    await expectNext(iterator, { type: "text_delta", contentIndex: 0, delta: chunks[0] });
+    for (const content of chunks.slice(1)) {
+      source.pushLine(ndjson({ content }));
+      await expectNext(iterator, { type: "text_delta", contentIndex: 0, delta: content });
+    }
     source.pushLine(
       ndjson({ tool_calls: [{ function: { name: "bash", arguments: { command: "ls" } } }] }),
     );
     await expectNext(iterator, {
       type: "text_end",
       contentIndex: 0,
-      content: "Let me check.",
-      partial: { content: [{ type: "text", text: "Let me check." }] },
+      content: text,
+      partial: { content: [{ type: "text", text }] },
     });
     source.pushLine(ndjson({}, { done: true }));
     source.close();
@@ -674,9 +682,25 @@ describe("createOllamaStreamFn streaming events", () => {
       "toolcall_end",
       "done",
     ]);
-    expect(remaining[1]).toMatchObject({ type: "toolcall_delta", delta: '{"command":"ls"}' });
-    expect(remaining.at(-1)).toMatchObject({ type: "done", reason: "toolUse" });
+    expect(remaining[0]).toMatchObject({ type: "toolcall_start", contentIndex: 1 });
+    expect(remaining[1]).toMatchObject({
+      type: "toolcall_delta",
+      contentIndex: 1,
+      delta: '{"command":"ls"}',
+    });
+    expect(remaining[2]).toMatchObject({ type: "toolcall_end", contentIndex: 1 });
+    expect(remaining.at(-1)).toMatchObject({
+      type: "done",
+      reason: "toolUse",
+      message: {
+        content: [
+          { type: "text", text },
+          { type: "toolCall", name: "bash", arguments: { command: "ls" } },
+        ],
+      },
+    });
     await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+    expect(source.release).toHaveBeenCalledOnce();
   });
   it("emits an error instead of accepting garbled Kimi visible text", async () => {
     const garbled =

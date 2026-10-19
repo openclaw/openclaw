@@ -181,7 +181,9 @@ it("reads off thread and fences a placement created before mutation", async () =
   expect(await store.getManyAsync([" first ", "first", "missing"])).toEqual(
     new Map([[first.sessionId, first]]),
   );
-  expect(await store.getAsync(second.sessionId)).toEqual(second);
+  expect(await store.getAsync(` ${second.sessionId} `)).toEqual(second);
+  expect(await store.getAsync("late-placement")).toBeUndefined();
+  await expect(store.getAsync(" ")).rejects.toThrow("session id");
   expect(await store.getPlacementMoveAsync(second.sessionId)).toBeUndefined();
   expect(await store.listAsync()).toEqual([first, second]);
   expect(await store.listForReconcileAsync(second.sessionKey)).toEqual([second]);
@@ -191,8 +193,9 @@ it("reads off thread and fences a placement created before mutation", async () =
   });
   sql.expectIdle();
   assertCurrent();
-  await store.startDispatch(sessionIdentity("late-placement"));
+  const late = await store.startDispatch(sessionIdentity("late-placement"));
   expect(assertCurrent).toThrow("placement late-placement changed before mutation");
+  expect(await store.getAsync(" late-placement ")).toEqual(late);
 });
 
 it("publishes retention without host SQL and fences drained dispatch", async () => {
@@ -446,6 +449,11 @@ it("reads all projection facts off the host SQLite thread", async () => {
     nodeDeviceId: null,
     attachedSessionIds: ["pending"],
   });
+  const cancelled = new AbortController();
+  cancelled.abort(new Error("Worker environment reconciliation stopped"));
+  await expect(
+    store.readEnvironmentOwner(placement.environmentId, cancelled.signal),
+  ).rejects.toThrow("Worker environment reconciliation stopped");
   expect(await store.readEnvironmentOwner(placement.environmentId)).toMatchObject({
     sessionId: "pending",
     state: "draining",

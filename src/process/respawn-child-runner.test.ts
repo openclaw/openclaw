@@ -41,8 +41,8 @@ function start(
     detachForProcessTree: options.detached,
     runtime: {
       spawn: childProcess.spawn,
-      attachChildProcessBridge: (_child, bridgeOptions) => {
-        onSignal = bridgeOptions?.onSignal;
+      attachChildProcessBridge: (_child, signalHandler) => {
+        onSignal = signalHandler;
         return { detach };
       },
     },

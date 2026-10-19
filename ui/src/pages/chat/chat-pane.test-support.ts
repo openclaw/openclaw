@@ -220,6 +220,7 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   handleTranscriptHistoryIntent: (event: Event) => void;
   historyAutoLoadBlocked: boolean;
   historyObserverArmed: boolean;
+  historySentinel: HTMLElement | null;
   transcriptScrollTop: number | null;
   syncHistoryObserver: () => void;
   loadCatalogSession: (key: CatalogSessionKey, older: boolean) => Promise<boolean>;
@@ -540,7 +541,6 @@ export function createTestChatPane(params: {
       {
         sessionKey: "agent:main:current",
         dispatchEvent: (event) => pane.element.dispatchEvent(event),
-        querySelector: (selector) => pane.element.querySelector(selector),
       },
       chatMessagesBySession,
     ),
@@ -668,7 +668,6 @@ class RenderTestChatPane extends ChatPaneRuntime {
       {
         sessionKey: this.sessionKey,
         dispatchEvent: (event) => this.element.dispatchEvent(event),
-        querySelector: (selector) => this.element.querySelector(selector),
       },
     );
     return this.state;

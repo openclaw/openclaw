@@ -14,7 +14,6 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
-import { startAwaitedReadMock } from "../state/openclaw-state-read-mock.test-support.js";
 import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -40,6 +39,10 @@ import {
   prepareControlUiSessionPrServiceTarget,
 } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
+import {
+  createTestSessionPrReadSource,
+  spyOnSessionPrLoader,
+} from "./control-ui-session-pr-subscriptions.test-support.js";
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -349,13 +352,11 @@ it.each(["unchanged", "revoked"] as const)(
               held = true;
               return {
                 ...owned,
-                startRead(...args) {
-                  return startAwaitedReadMock(async () => {
-                    const result = await owned.startRead(...args).result;
-                    entered.resolve();
-                    await release.promise;
-                    return result;
-                  });
+                async startRead(...args) {
+                  const result = await owned.startRead(...args);
+                  entered.resolve();
+                  await release.promise;
+                  return result;
                 },
               };
             },
@@ -399,11 +400,12 @@ it.each(["replace", "unsubscribe"] as const)(
     const release = createDeferredCore();
     let ready = false;
     const load = vi.fn<Load>(async () => snapshot);
+    spyOnSessionPrLoader(load);
+    const readSource = createTestSessionPrReadSource();
     const broadcast = vi.fn();
     const subscriptions = createControlUiSessionPullRequestSubscriptions({
       scheduler: createTestGatewayScheduler(),
       broadcastToConnIds: broadcast,
-      load,
       prepareRead: async (_connId, session) => async () => {
         if (session.sessionKey === first && !ready) {
           entered.resolve();
@@ -413,7 +415,7 @@ it.each(["replace", "unsubscribe"] as const)(
         return {
           params: { sessionKey: session.sessionKey, agentId: "main" },
           identity: session.sessionKey,
-          readSource: { agentId: "main", path: "/synthetic/unused.sqlite" },
+          readSource,
           source: null,
         };
       },

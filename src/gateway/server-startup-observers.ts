@@ -105,53 +105,62 @@ export async function runGatewayStartupObservers(params: {
         await resumeAgentDeletions(context, params.signal);
       }
       await measureStartup(params.startupTrace, "sidecars.subagent-recovery", async () => {
-        // Restored wakes start their admission budget at dispatch. Join reader startup
-        // first, including maintenance that shares compute with foreground admission.
-        await measureStartup(params.startupTrace, "sidecars.recovery-readers", async () => {
-          const { prewarmGatewaySessionHistory } = await import("./server-history-prewarm.js");
-          await prewarmGatewaySessionHistory(params.config, {
-            includeMaintenance: true,
-            isCancelled: () => params.signal.aborted || params.isClosing?.() === true,
-          });
-        });
-        // A crash can leave agent databases under background integrity admission.
-        // Discover saved deliveries only after the existing reader startup joins it.
-        if (context && !params.signal.aborted && !params.isClosing?.()) {
-          try {
-            await measureStartup(params.startupTrace, "sidecars.delivery-recovery", async () => {
-              const { recoverSessionSendDeliveries } = await import("./session-send-recovery.js");
-              await recoverSessionSendDeliveries(context, params.signal, params.startupTrace);
-            });
-          } catch (error) {
-            if (!params.signal.aborted) {
-              params.log.warn(
-                `Session delivery restart recovery could not complete; saved inputs remain available: ${formatErrorMessageForDisplay(error, formatErrorMessageWithCode(error))}`,
-              );
-            }
-          }
-        }
-        if (!params.signal.aborted && !params.isClosing?.()) {
-          await measureStartup(params.startupTrace, "sidecars.exec-recovery", async () => {
-            try {
-              const { recoverExecExitNotifications } =
-                await import("../agents/bash-tools.exec-notify.js");
-              await recoverExecExitNotifications(params.config, params.signal);
-            } catch (error) {
-              if (!params.signal.aborted) {
-                params.log.warn(`Exec restart notifications remain pending: ${String(error)}`);
+        // Each recovery owner retains its pending agents. Their waits must not
+        // serialize unrelated recovery, and shutdown still joins every tail.
+        const outcomes = await Promise.allSettled([
+          (async () => {
+            if (context && !params.signal.aborted && !params.isClosing?.()) {
+              try {
+                await measureStartup(
+                  params.startupTrace,
+                  "sidecars.delivery-recovery",
+                  async () => {
+                    const { recoverSessionSendDeliveries } =
+                      await import("./session-send-recovery.js");
+                    await recoverSessionSendDeliveries(context, params.signal, params.startupTrace);
+                  },
+                );
+              } catch (error) {
+                if (!params.signal.aborted) {
+                  params.log.warn(
+                    `Session delivery restart recovery could not complete; saved inputs remain available: ${formatErrorMessageForDisplay(error, formatErrorMessageWithCode(error))}`,
+                  );
+                }
               }
             }
-          });
-        }
-        const activateSubagentRegistry = await measureStartup(
-          params.startupTrace,
-          "sidecars.subagent-load",
-          params.loadSubagentRegistryActivation,
-        );
-        if (!params.signal.aborted && params.isClosing?.() !== true) {
-          await measureStartup(params.startupTrace, "sidecars.subagent-activation", () =>
-            activateSubagentRegistry(params.resolveGatewayContext, params.startupTrace),
-          );
+          })(),
+          (async () => {
+            if (!params.signal.aborted && !params.isClosing?.()) {
+              await measureStartup(params.startupTrace, "sidecars.exec-recovery", async () => {
+                try {
+                  const { recoverExecExitNotifications } =
+                    await import("../agents/bash-tools.exec-notify.js");
+                  await recoverExecExitNotifications(params.config, params.signal);
+                } catch (error) {
+                  if (!params.signal.aborted) {
+                    params.log.warn(`Exec restart notifications remain pending: ${String(error)}`);
+                  }
+                }
+              });
+            }
+          })(),
+          (async () => {
+            const activateSubagentRegistry = await measureStartup(
+              params.startupTrace,
+              "sidecars.subagent-load",
+              params.loadSubagentRegistryActivation,
+            );
+            if (!params.signal.aborted && params.isClosing?.() !== true) {
+              await measureStartup(params.startupTrace, "sidecars.subagent-activation", () =>
+                activateSubagentRegistry(params.resolveGatewayContext, params.startupTrace),
+              );
+            }
+          })(),
+        ]);
+        for (const outcome of outcomes) {
+          if (outcome.status === "rejected") {
+            throw outcome.reason;
+          }
         }
       });
     },

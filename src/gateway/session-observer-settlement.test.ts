@@ -19,6 +19,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   resetSessionObserverEventSequence();
 });
@@ -67,7 +68,6 @@ describe("session observer physical settlement", () => {
       const completion = createDeferred<ReturnType<typeof modelMessage>>();
       const timers = createObserverTimerTracker();
       const harness = createHarness({
-        ...timers,
         prepareModel: vi.fn(() =>
           stage === "preparation" ? preparation.promise : Promise.resolve(preparedModel()),
         ),
@@ -147,7 +147,7 @@ describe("session observer physical settlement", () => {
         }),
       );
       const timers = createObserverTimerTracker();
-      const harness = createHarness({ subscribe: false, completeModel, ...timers });
+      const harness = createHarness({ subscribe: false, completeModel });
       const observe = (index: number) => {
         const sessionKey = `agent:main:session-${index}`;
         const connId = `conn-${index}`;

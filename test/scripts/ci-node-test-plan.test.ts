@@ -3084,6 +3084,39 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
+  it("keeps full locale finalizer proof in manual plans and fast locale contracts in PR plans", () => {
+    const proof = "test/scripts/control-ui-locale-finalizer.test.ts";
+    const fast = "test/scripts/control-ui-locale-refresh.test.ts";
+    const direct = buildVitestRunPlans([proof]);
+    expect(direct).toHaveLength(1);
+    expect([...(direct[0]?.forwardedArgs ?? []), ...(direct[0]?.includePatterns ?? [])]).toContain(
+      proof,
+    );
+    const owners = (plan: ReturnType<typeof createNodeTestShards>, file: string) => {
+      const rawConfig = expectDefined(buildVitestRunPlans([file])[0]?.config, file);
+      const config = resolveCanonicalNodeTestConfig(file, rawConfig) ?? rawConfig;
+      return plan.filter(
+        (shard) =>
+          shard.configs.includes(config) &&
+          (!shard.includePatterns ||
+            shard.includePatterns.some((pattern) => matchesGlob(file, pattern))),
+      );
+    };
+    expect(owners(defaultShards, proof)).toHaveLength(1);
+    const pr = createNodeTestShards({ compactMode: "pull-request", changedPaths: [proof, fast] });
+    expect(owners(pr, proof)).toHaveLength(0);
+    expect(owners(pr, fast)).toHaveLength(1);
+    const selected = expectDefined(
+      createSelectedNodeTestShardBundles([proof, fast], {
+        runnerBackend: "github",
+      }),
+      "precise locale PR plan",
+    );
+    expect(
+      selected.flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? [])),
+    ).toEqual([fast]);
+  });
+
   it("retains recovery contracts in their main, PR, and manual Node tiers", () => {
     const proofFiles = ["src/gateway/server.codex-failure-recovery.test.ts"];
     const files = (mode: "push" | "pull-request") =>

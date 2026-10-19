@@ -4,6 +4,7 @@ import type { SessionsDiffResult } from "../../../../../packages/gateway-protoco
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import {
+  createMenuControls,
   Menu,
   type MenuEntry,
   type MenuHandle,
@@ -95,12 +96,14 @@ function CopyRow(props: {
   label: string;
   command?: boolean;
   initialFocus?: boolean;
+  ref?: (element: HTMLButtonElement) => void;
 }) {
   return (
     <div class={["session-diff-menu__copy-row", { "is-command": props.command }]}>
       <span class="session-diff-menu__copy-label">{props.label}</span>
       <code title={props.value}>{props.value}</code>
       <CopyButton
+        ref={props.ref}
         text={props.value}
         idleLabel={props.label}
         buttonAttributes={{
@@ -114,6 +117,7 @@ function CopyRow(props: {
 let nextMenuId = 0;
 function SessionDiffMenuContent(props: SessionDiffMenuProps) {
   const id = `session-diff-menu-${++nextMenuId}`;
+  const controls = createMenuControls();
   function select(value: string, menu: SessionDiffMenuData) {
     const simple: Record<string, SessionDiffMenuAction | undefined> = {
       "collapse-all": { kind: "collapse-all" },
@@ -159,7 +163,12 @@ function SessionDiffMenuContent(props: SessionDiffMenuProps) {
           kind: "content",
           id: "path",
           content: (
-            <CopyRow value={menu.path} label={t("chat.sessionDiff.copyPath")} initialFocus />
+            <CopyRow
+              ref={controls.ref()}
+              value={menu.path}
+              label={t("chat.sessionDiff.copyPath")}
+              initialFocus
+            />
           ),
         },
         {
@@ -256,13 +265,22 @@ function SessionDiffMenuContent(props: SessionDiffMenuProps) {
               <strong>{t("chat.sessionDiff.syncLocally")}</strong>
               <p>{t("chat.sessionDiff.syncDescription")}</p>
               <CopyRow
+                ref={controls.ref()}
                 value={menu.command}
                 label={t("chat.sessionDiff.copyCommand")}
                 command
                 initialFocus
               />
-              <CopyRow value={menu.root} label={t("chat.sessionDiff.checkoutPath")} />
-              <CopyRow value={menu.branch} label={t("chat.sessionDiff.branchName")} />
+              <CopyRow
+                ref={controls.ref()}
+                value={menu.root}
+                label={t("chat.sessionDiff.checkoutPath")}
+              />
+              <CopyRow
+                ref={controls.ref()}
+                value={menu.branch}
+                label={t("chat.sessionDiff.branchName")}
+              />
               <p class="session-diff-menu__note">{t("chat.sessionDiff.uncommittedStay")}</p>
             </div>
           ),
@@ -306,6 +324,7 @@ function SessionDiffMenuContent(props: SessionDiffMenuProps) {
             }}
           >
             <Menu
+              controls={controls}
               id={id}
               class={["session-menu session-diff-menu", `session-diff-menu--${menu.kind}`]}
               panelClass="session-diff-menu__surface"

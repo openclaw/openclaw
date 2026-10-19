@@ -413,7 +413,6 @@ function applySessionControllerStop(
   }
   for (const captured of capture.effects) {
     effect(captured, () => {
-      assertCurrent();
       const wasInterrupted = Boolean(captured.effect.interrupted);
       let matchedRun: SessionWorkRun | undefined;
       const cancel = once(

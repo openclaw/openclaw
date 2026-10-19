@@ -107,10 +107,10 @@ function observerFixture(
   const broadcast = vi.fn();
   const persisted = vi.fn<NonNullable<SessionObserverDeps["persistDigest"]>>(async () => true);
   let now = 1_000;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
   const cfg = { session: { store: useDefaultStore ? undefined : database.path } };
   const observer = createSessionObserver({
     getConfig: () => cfg,
-    now: () => now,
     subscribers,
     broadcastToConnIds: broadcast,
     ...(persistDigests ? {} : { persistDigest: persisted }),

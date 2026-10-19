@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { ComposerDictationStatus } from "../chat/components/chat-composer-controls.tsx";
+import { ComposerDictationStatus } from "../chat/components/chat-voice-activity.tsx";
 import type * as ComposerDictationModule from "../chat/composer-dictation.ts";
 import { NewSessionDictationView } from "./composer-dictation-view.tsx";
 import { createNewSessionComposerTextarea } from "./composer-textarea.ts";

@@ -24,6 +24,7 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { measureGatewayCloseStep } from "../restart-trace.js";
 import {
   measureNodeWorkerLaunchBytes,
   nodeWorkerSpawnResultFromReceipt,
@@ -414,6 +415,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
             ? {}
             : { credentialExpiresAtMs: request.credentialExpiresAtMs }),
           onDispatchReady: request.onDispatchReady,
+          cancellationSignal: shutdown.signal,
           signal: request.signal
             ? AbortSignal.any([entry.abortController.signal, request.signal])
             : entry.abortController.signal,
@@ -483,7 +485,9 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         );
       } finally {
         stopping = false;
-        await options.workspaceTransfer.close(entry.environmentId);
+        await measureGatewayCloseStep("shutdown.worker-environment.node-transfers", () =>
+          options.workspaceTransfer.close(entry.environmentId),
+        );
       }
       if (reason !== "provider-destroying") {
         retiredEntries.delete(entry);
@@ -628,9 +632,15 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         readiness,
       };
       entry.drainLocalWork = async () => {
-        await entry.initialization?.catch(() => undefined);
-        await Promise.allSettled(entry.launchTasks);
-        await Promise.allSettled(entry.workspaceTasks);
+        await measureGatewayCloseStep("shutdown.worker-environment.node-initialization", () =>
+          entry.initialization?.catch(() => undefined),
+        );
+        await measureGatewayCloseStep("shutdown.worker-environment.node-launches", () =>
+          Promise.allSettled(entry.launchTasks),
+        );
+        await measureGatewayCloseStep("shutdown.worker-environment.node-workspace-operations", () =>
+          Promise.allSettled(entry.workspaceTasks),
+        );
       };
       // Publish the new epoch before any teardown or initialization await so stop and replacement
       // can fence it, while exact same-owner callers share this readiness barrier.

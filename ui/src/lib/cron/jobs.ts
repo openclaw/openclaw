@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { CronCompactJob, CronJob, CronJobsListResult } from "../../api/types.ts";
+import type { CronCompactJob, CronJobsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
-import { getCronJobPayload } from "./payload.ts";
 import type { CronJobsState } from "./types.ts";
 
 export function readCanonicalCronJobsPage<Row>(
@@ -73,8 +72,8 @@ async function drainPendingCronJobsReload<Row>(
   await loadCronJobsProjectionPage(state, projection, { tableFilters });
 }
 
-type CronJobsPageOptions = { append?: boolean; tableFilters?: boolean };
-type CronJobsProjection<Row> = {
+export type CronJobsPageOptions = { append?: boolean; tableFilters?: boolean };
+export type CronJobsProjection<Row> = {
   compact?: true;
   readRows: (rows: Row[]) => Row[];
 };
@@ -85,15 +84,15 @@ const cronInventoryScopes = new WeakMap<
 >();
 const cronInventoryRequests = new WeakMap<CronJobsState<unknown>, object>();
 
+export function isCronJobsScopeCurrent(state: CronJobsState<unknown>): boolean {
+  return cronInventoryScopes.get(state) === (state.cronSessionFilter ?? state.cronAgentId);
+}
+
 export function retireCronJobsRequest(state: CronJobsState<unknown>) {
   cronInventoryRequests.delete(state);
   state.cronLoading = false;
   state.cronJobsLoadingMore = false;
 }
-
-const fullCronJobsProjection: CronJobsProjection<CronJob> = {
-  readRows: (rows) => rows.filter((job) => getCronJobPayload(job) !== null),
-};
 
 function isCronInventoryTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -140,10 +139,6 @@ const compactCronJobsProjection: CronJobsProjection<CronCompactJob> = {
   },
 };
 
-export function loadCronJobsPage(state: CronJobsState, opts?: CronJobsPageOptions) {
-  return loadCronJobsProjectionPage(state, fullCronJobsProjection, opts);
-}
-
 export function loadCompactCronJobsPage(
   state: CronJobsState<CronCompactJob>,
   opts?: CronJobsPageOptions,
@@ -151,7 +146,7 @@ export function loadCompactCronJobsPage(
   return loadCronJobsProjectionPage(state, compactCronJobsProjection, opts);
 }
 
-async function loadCronJobsProjectionPage<Row>(
+export async function loadCronJobsProjectionPage<Row>(
   state: CronJobsState<Row>,
   projection: CronJobsProjection<Row>,
   opts?: CronJobsPageOptions,

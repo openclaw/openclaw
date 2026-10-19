@@ -21,7 +21,7 @@ import {
   testModel,
   thinkingLevels,
 } from "./model-control-view-queries.test-support.ts";
-import { contextWith, renderControl } from "./model-control.test-support.ts";
+import { contextWith, renderControl, waitForModelControl } from "./model-control.test-support.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 import { loadNewSessionPreference } from "./preferences.ts";
 
@@ -109,7 +109,8 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
   const select = (value: string) => find("account-option", value)!.click();
   const chooseAccount = async () => {
     await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
-    const picker = draw().querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]");
+    const container = await waitForModelControl(control, context, "main", agent);
+    const picker = container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]");
     expect(picker).not.toBeNull();
     picker!.click();
     await vi.waitFor(() => expect(draw().textContent).toContain(account.label));

@@ -1,6 +1,10 @@
 import { createEffect, createMemo, onSettled } from "solid-js";
 import { focusWithoutTooltip } from "../../../components/tooltip.ts";
-import type { ChatAttachment, ChatSelectionAnnotation } from "../../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatSelectionAnnotation,
+  ChatSelectionSource,
+} from "../../../lib/chat/chat-types.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
@@ -8,10 +12,9 @@ import { releaseDisplacedChatAttachmentPayloads } from "../attachment-payload-st
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { currentAttachments } from "./chat-attachment-draft.ts";
 import { stagedAttachmentBytes } from "./chat-attachments.ts";
-import { resolveChatCommentAnchor } from "./chat-comment-anchor.ts";
 import type { ChatCommentAction } from "./chat-selection-annotations.tsx";
 import { createChatSelectionAttachment } from "./chat-selection-attachment.ts";
-import { showChatAnnotationEditor } from "./chat-selection-popup.ts";
+import { showChatAnnotationEditor } from "./chat-selection-popup.tsx";
 
 type CommentAttachment = ChatAttachment & { selectionAnnotation: ChatSelectionAnnotation };
 
@@ -32,6 +35,7 @@ type ChatCommentControllerProps = {
   presented: boolean;
   onFocusComposer?: () => void;
   visiblePin?: (id: string) => HTMLElement | undefined;
+  resolveSourceRange?: (source: ChatSelectionSource) => Range | undefined;
 };
 
 /** Owns comment mutations even when plugins or history errors replace the transcript. */
@@ -175,9 +179,7 @@ export const ChatCommentController = defineSolidBridge<ChatCommentControllerProp
         paneId: view.paneId,
         anchorRect: anchor.getBoundingClientRect(),
         anchorElement: anchor,
-        sourceRange: root
-          ? resolveChatCommentAnchor(root, attachment.selectionAnnotation)?.range
-          : undefined,
+        sourceRange: view.resolveSourceRange?.(attachment.selectionAnnotation),
         comment: attachment.selectionAnnotation.comment,
         expanded: true,
         readSignal: editorOwner.signal,
@@ -293,6 +295,7 @@ export const ChatCommentController = defineSolidBridge<ChatCommentControllerProp
       presented: { default: true, type: Boolean },
       onFocusComposer: { default: undefined, attribute: false },
       visiblePin: { default: undefined, attribute: false },
+      resolveSourceRange: { default: undefined, attribute: false },
     },
   },
 );

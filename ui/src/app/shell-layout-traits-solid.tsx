@@ -7,6 +7,16 @@ export const ShellLayoutProvider = createContext<{ owner: ShellLayoutOwner; host
   null,
 );
 
+export function createFooterControlRef() {
+  const scope = useContext(ShellLayoutProvider);
+  let release: (() => void) | undefined;
+  onCleanup(() => release?.());
+  return (element: HTMLElement) => {
+    release?.();
+    release = scope?.owner.registerFooterControlSurface(element);
+  };
+}
+
 export function ShellLayoutBoundary(props: { traits: ShellLayoutTraits; children: JSX.Element }) {
   const scope = useContext(ShellLayoutProvider);
   if (scope) {

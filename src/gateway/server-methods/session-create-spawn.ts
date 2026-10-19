@@ -217,13 +217,13 @@ export function resolveSessionCreateSpawnContext(params: {
   const runtimeIdentity = params.client?.internal?.agentRuntimeIdentity;
   const requester = toolCaller?.assertCurrent
     ? {
-        agentId: toolCaller.agentId,
+        agentId: normalizeAgentId(toolCaller.agentId),
         sessionKey: toolCaller.sessionKey,
         assertCurrent: toolCaller.assertCurrent,
       }
     : runtimeIdentity && params.assertRuntimeCurrent
       ? {
-          agentId: runtimeIdentity.agentId,
+          agentId: normalizeAgentId(runtimeIdentity.agentId),
           sessionKey: runtimeIdentity.sessionKey,
           assertCurrent: params.assertRuntimeCurrent,
         }
@@ -233,7 +233,7 @@ export function resolveSessionCreateSpawnContext(params: {
     !requester ||
     requester.sessionKey !== requesterSessionKey ||
     requesterSessionKey !== params.parentSessionKey ||
-    normalizeAgentId(params.creation.actor.id) !== normalizeAgentId(requester.agentId)
+    normalizeAgentId(params.creation.actor.id) !== requester.agentId
   ) {
     if (params.creation.inheritedPermissionMode) {
       throw new Error("Permission inheritance requires a current matching spawn requester.");
@@ -248,7 +248,7 @@ export function resolveSessionCreateSpawnContext(params: {
   const preparedPermissionSelection = params.creation.inheritedPermissionMode
     ? { mode: params.creation.inheritedPermissionMode, assertCurrent: requester.assertCurrent }
     : undefined;
-  if (normalizeAgentId(requester.agentId) !== params.agentId) {
+  if (requester.agentId !== params.agentId) {
     if (params.creation.resolvedModel) {
       throw new Error("Resolved model inheritance requires a current same-agent requester.");
     }

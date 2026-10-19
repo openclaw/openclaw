@@ -182,9 +182,16 @@ function buildNodeMcpToolDescriptors(
   return descriptors;
 }
 
-async function disposeNodeHostMcpSession(session: NodeHostMcpSession): Promise<void> {
+async function disposeNodeHostMcpSession(
+  serverName: string,
+  session: NodeHostMcpSession,
+): Promise<void> {
   session.abortController.abort(new Error("node host MCP session retired"));
-  await disposeMcpClient(session);
+  if ((await disposeMcpClient(session)) === "uncertain") {
+    console.warn(
+      `node host MCP server "${serverName}" cleanup could not be confirmed; check the server process`,
+    );
+  }
 }
 
 /** Starts process-lifetime MCP server state for the node host. */
@@ -370,7 +377,7 @@ export async function startNodeHostMcpManager(
         client.onclose = () => {
           if (createdSession.connected && invalidateCurrent(state, createdSession)) {
             enqueueWork(state, async () => {
-              await disposeNodeHostMcpSession(createdSession);
+              await disposeNodeHostMcpSession(state.serverName, createdSession);
               scheduleRetry(state);
             });
           }
@@ -396,7 +403,7 @@ export async function startNodeHostMcpManager(
         const lostOwnership = session !== undefined && state.current !== session;
         if (session && state.current === session) {
           invalidateCurrent(state, session);
-          await disposeNodeHostMcpSession(session);
+          await disposeNodeHostMcpSession(state.serverName, session);
         } else if (!session) {
           resolved?.detachStderr?.();
         }
@@ -441,7 +448,7 @@ export async function startNodeHostMcpManager(
         `node host MCP server "${state.serverName}" tool refresh failed: ${formatMcpError(error)}`,
       );
       invalidateCurrent(state, session);
-      await disposeNodeHostMcpSession(session);
+      await disposeNodeHostMcpSession(state.serverName, session);
       scheduleRetry(state);
     }
   };
@@ -536,7 +543,7 @@ export async function startNodeHostMcpManager(
         const sessionExpired = isMcpHttpSessionExpired(session, error);
         if (sessionExpired && invalidateCurrent(state, session)) {
           enqueueWork(state, async () => {
-            await disposeNodeHostMcpSession(session);
+            await disposeNodeHostMcpSession(state.serverName, session);
             scheduleRetry(state);
           });
         }
@@ -579,7 +586,7 @@ export async function startNodeHostMcpManager(
         state.current = undefined;
         state.listedTools = [];
         if (session) {
-          await disposeNodeHostMcpSession(session);
+          await disposeNodeHostMcpSession(state.serverName, session);
         }
         // Lifecycle work accepted before close may append catalog work. Drain it
         // first, then await the latest catalog tail before releasing ownership.

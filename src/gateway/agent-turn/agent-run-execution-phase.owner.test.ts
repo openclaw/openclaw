@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
-import { resolveAgentRunContext } from "../../agents/command/run-context.js";
+import { prepareEmbeddedSessionState } from "../../agents/command/session-preparation.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
@@ -26,6 +26,10 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import {
+  clearAgentRunContext,
+  getAgentRunLifecycleGeneration,
+} from "../../infra/agent-run-registry.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
 import { retireInspectionInstances } from "../../plugins/registry-inspection.test-support.js";
@@ -42,6 +46,7 @@ import {
   resetSessionControllerStateForTest,
   rpcSourceTesting,
 } from "../../sessions/session-lifecycle-admission.test-support.js";
+import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
@@ -74,6 +79,21 @@ vi.mock("../../commands/agent.js", () => ({
 
 vi.mock("./agent-run-dispatch.js", () => ({
   dispatchAgentRunFromGateway,
+}));
+
+// mock-isolation: Routing cases prepare command context without skills or exec-policy discovery.
+vi.mock("../../agents/command/runtime-loaders.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/command/runtime-loaders.js")>()),
+  loadSkillsRuntime: async () => ({
+    getRemoteSkillEligibility: () => ({}),
+    resolveReusableWorkspaceSkillSnapshot: () => ({
+      snapshot: undefined,
+      shouldRefresh: false,
+    }),
+  }),
+  loadExecDefaultsRuntime: async () => ({
+    resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
+  }),
 }));
 
 function createGate() {
@@ -129,6 +149,8 @@ describe("startAgentRunExecution Gateway ownership", () => {
   it.each([
     "success",
     "startup failure",
+    "publication failure",
+    "publication and cleanup failure",
     "cleanup failure",
     "completed cleanup failure",
     "prewriter abort",
@@ -161,13 +183,23 @@ describe("startAgentRunExecution Gateway ownership", () => {
     const actualDispatch =
       await vi.importActual<typeof import("./agent-run-dispatch.js")>("./agent-run-dispatch.js");
     dispatchAgentRunFromGateway.mockImplementationOnce(actualDispatch.dispatchAgentRunFromGateway);
+    const publicationFault = new Error("Synthetic final response refusal");
+    const publicationFails =
+      outcome === "publication failure" || outcome === "publication and cleanup failure";
+    const cleanupFails =
+      outcome === "cleanup failure" || outcome === "publication and cleanup failure";
+    if (publicationFails) {
+      vi.mocked(execution.params.io.emitFinal).mockImplementationOnce(() => {
+        throw publicationFault;
+      });
+    }
     const cleanupFault = new Error("Synthetic unfinished runtime cleanup");
     execution.runtimeRelease.mockImplementation(
       prewriter
         ? disposal.wait
         : async () => {
             await disposal.wait();
-            if (outcome === "cleanup failure") {
+            if (cleanupFails) {
               throw cleanupFault;
             }
           },
@@ -287,13 +319,19 @@ describe("startAgentRunExecution Gateway ownership", () => {
         expect(collectNestedErrorCandidates(await observed)).toContain(callbackFault);
         expect(database?.isOpen).toBe(false);
         expect(nativeDisposals).toBe(1);
-      } else if (outcome === "cleanup failure") {
+      } else if (outcome === "publication and cleanup failure") {
+        expect(collectNestedErrorCandidates(await observed)).toEqual(
+          expect.arrayContaining([publicationFault, cleanupFault]),
+        );
+      } else if (outcome === "publication failure") {
+        expect(await observed).toBe(publicationFault);
+      } else if (cleanupFails) {
         expect(await observed).toBe(cleanupFault);
       } else {
         await completion;
       }
-      expect(rpcSourceTesting.has(execution.params.runId)).toBe(outcome === "cleanup failure");
-      if (outcome === "cleanup failure") {
+      expect(rpcSourceTesting.has(execution.params.runId)).toBe(cleanupFails);
+      if (cleanupFails) {
         expect(sourceSettled).not.toHaveBeenCalled();
       } else {
         expect(sourceSettled).toHaveBeenCalledOnce();
@@ -517,9 +555,29 @@ describe("startAgentRunExecution Gateway ownership", () => {
 
     expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce();
     const dispatch = dispatchAgentRunFromGateway.mock.calls[0]?.[0];
-    const runContext = resolveAgentRunContext(dispatch.ingressOpts);
-    expect(runContext.messageChannel).toBe(testCase.expectedChannel);
-    expect(runContext.currentChannelId).toBeUndefined();
+    const runId = execution.params.runId;
+    try {
+      const { runContext } = await prepareEmbeddedSessionState({
+        cfg: execution.params.cfg,
+        opts: dispatch.ingressOpts,
+        sessionKey: dispatch.ingressOpts.sessionKey,
+        sessionId: dispatch.ingressOpts.sessionId ?? "source-session",
+        storePath: "/unused/command.sqlite",
+        sessionAgentId: "main",
+        lifecycleGeneration: getAgentRunLifecycleGeneration(),
+        runId,
+        executionWorkspaceDir: "/workspace/A",
+        watchSkills: false,
+        isNewSession: false,
+        isSubagentLaneTurn: false,
+        suppressVisibleSessionEffects: execution.params.suppressVisibleSessionEffects,
+        sessionStateActor: classifySessionStateActor(dispatch.ingressOpts),
+      });
+      expect(runContext.messageChannel).toBe(testCase.expectedChannel);
+      expect(runContext.currentChannelId).toBeUndefined();
+    } finally {
+      clearAgentRunContext(runId);
+    }
   });
 
   it.each([

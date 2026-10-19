@@ -8,6 +8,7 @@ import {
   openAttachmentCardFromClick,
   type AttachmentCardHeaderOptions,
 } from "./chat-attachment-card.ts";
+import { attachmentContextCopyRef } from "./chat-attachment-context-copy.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 import { createChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
@@ -131,6 +132,7 @@ function ChatVideoPlayerContent(
         : {},
   );
   const Player = () => {
+    const copyRef = attachmentContextCopyRef(() => ({ name: props.label, href: downloadHref() }));
     const viewport = createChatAttachmentViewportRef(() => {
       mediaVisible = true;
       syncSource();
@@ -152,7 +154,7 @@ function ChatVideoPlayerContent(
           { "chat-assistant-attachment-card--loading": loading() },
         ]}
         aria-busy={loading() ? "true" : undefined}
-        ref={viewport}
+        ref={[viewport, copyRef]}
         data-openable={onExpand() ? "" : undefined}
         onClick={(event) => openAttachmentCardFromClick(event, onExpand())}
       >

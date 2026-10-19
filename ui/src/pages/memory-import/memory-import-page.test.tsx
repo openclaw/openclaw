@@ -180,6 +180,58 @@ describe("MemoryImportPage", () => {
     expect(page.textContent).toContain("/tmp/openclaw-research");
   });
 
+  it("replans once per owner target and ignores late replies and repeated receipts", async () => {
+    const firstPlan = createDeferredCore<ReturnType<typeof createPlan>>();
+    const request = vi.fn((_method: string, params: { agentId: string; overwrite: boolean }) =>
+      params.agentId === "research" ? firstPlan.promise : Promise.resolve(createPlan("writer")),
+    );
+    const context = createContext(request);
+    const page = await mountPage(context);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    context.agents.state.agentsList = {
+      defaultId: "writer",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "writer", name: "Writer" }],
+    };
+    context.agentSelection.state.selectedId = "writer";
+    context.notify();
+    context.notify();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]?.[1]).toEqual({ agentId: "writer", overwrite: false });
+    await waitForMemoryImport(() => expect(page.textContent).toContain("/tmp/openclaw-writer"));
+
+    firstPlan.resolve(createPlan());
+    await firstPlan.promise;
+    await Promise.resolve();
+    flush();
+    expect(page.textContent).toContain("/tmp/openclaw-writer");
+    expect(page.textContent).not.toContain("/tmp/openclaw-research");
+
+    page.querySelector<HTMLInputElement>('input[role="switch"]')!.click();
+    context.notify();
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls[2]?.[1]).toEqual({ agentId: "writer", overwrite: true });
+    await waitForMemoryImport(() =>
+      expect(
+        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
+          ?.disabled,
+      ).toBe(false),
+    );
+
+    cleanupSolid();
+    context.agentSelection.state.selectedId = "research";
+    context.agents.state.agentsList = {
+      defaultId: "research",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "research", name: "Research" }],
+    };
+    context.notify();
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
   it("retains a loaded plan after roster refresh failure and retries the roster on Refresh", async () => {
     const roster = createDeferredCore<unknown>();
     const request = vi.fn((method: string) =>
@@ -275,11 +327,13 @@ describe("MemoryImportPage", () => {
     const request = vi.fn(async () => {
       throw new Error("planning unavailable: OPENAI_API_KEY=sk-1234567890abcdef");
     });
-    const page = await mountPage(createContext(request));
+    const context = createContext(request);
+    const page = await mountPage(context);
 
     await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(1));
     flush();
     await Promise.resolve();
+    context.notify();
     flush();
     expect(request).toHaveBeenCalledTimes(1);
     expect(page.textContent).toContain("planning unavailable: OPENAI_API_KEY=sk-123...cdef");
@@ -673,7 +727,7 @@ describe("MemoryImportPage", () => {
 
         selection.set("writer");
         confirm?.click();
-        expect(request).toHaveBeenCalledTimes(1);
+        expect(request).toHaveBeenCalledTimes(2);
 
         await waitForMemoryImport(() => expect(request).toHaveBeenCalledTimes(2));
         expect(request.mock.calls[1]?.[1]).toMatchObject({ agentId: "writer" });

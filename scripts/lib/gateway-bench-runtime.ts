@@ -332,9 +332,7 @@ export function writePluginFixtures(
       `${JSON.stringify(
         {
           id,
-          ...(options.activationOnStartup === undefined
-            ? {}
-            : { activation: { onStartup: options.activationOnStartup } }),
+          activation: { onStartup: options.activationOnStartup ?? true },
           ...(stallsProviderCatalog || stallsProviderStaticCatalog
             ? {
                 providers: [STALLED_CATALOG_PROVIDER_ID],

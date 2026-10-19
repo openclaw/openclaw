@@ -90,7 +90,7 @@ type ChatPageElement = {
   sessionKey?: string;
   dispatchEvent: (event: Event) => boolean;
   getBoundingClientRect?: () => DOMRect;
-  querySelector: (selectors: string) => Element | null;
+  transcriptLoadingChanged?: () => void;
 };
 
 export function invalidateImageLightbox(state: ChatPageHost) {
@@ -266,16 +266,17 @@ export function createPageState(
     renderLifecycle,
     // Background warming gates on these edges. Session-event reloads never
     // re-render the page, so no update can carry the fact to it.
-    transcriptLoadingChanged: () =>
+    transcriptLoadingChanged: () => {
+      page.transcriptLoadingChanged?.();
       page.dispatchEvent(
         new CustomEvent(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, { bubbles: true, composed: true }),
-      ),
+      );
+    },
     historyRecoveryChanged: () =>
       page.dispatchEvent(
         new Event(CHAT_HISTORY_RECOVERY_CHANGED_EVENT, { bubbles: true, composed: true }),
       ),
     sessionWorkspaceState: undefined,
-    querySelector: page.querySelector.bind(page),
   }) as unknown as ChatPageHost;
 
   state.resetToolStream = () => resetToolStream(state);

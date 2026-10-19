@@ -348,7 +348,7 @@ describe("anonymous public session HTTP boundary", () => {
     expect(response.res.statusCode).toBe(200);
     expect(response.getBody()).not.toContain('rel="canonical"');
     expect(response.getBody()).not.toContain('property="og:url"');
-    expect(response.getBody()).toContain(`href="${requestPath()}">Refresh now</a>`);
+    expect(response.getBody()).toContain(`data-public-refresh-now href="${requestPath()}"`);
   });
 
   it("rejects public bearer traffic over remote plaintext HTTP", async () => {
