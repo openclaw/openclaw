@@ -312,6 +312,7 @@ describe("Gateway config selection before migration admission", () => {
         ...process.env,
         ...env,
         OPENCLAW_TEST_FAST: "1",
+        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
       };
       const result = await runIsolatedModuleScript(
         inheritedEnv,
@@ -320,11 +321,21 @@ describe("Gateway config selection before migration admission", () => {
       const runtime = { log() {}, error() {}, exit(code) { throw new Error("unexpected exit " + code); } };
       if (!await selectGatewayRunEnvironment({ opts: {}, runtime })) throw new Error("selection refused");
       if (!await prepareGatewayRunBootstrap({ opts: {}, runtime })) throw new Error("preparation refused");
-      console.log("prepared");
+      const { consumeGatewayBootstrapSteps } = await import("./src/cli/startup-trace.ts");
+      console.log("__RESULT__" + JSON.stringify(consumeGatewayBootstrapSteps().map(({ name, calls }) => ({ name, calls }))));
     `,
         options,
       );
-      expect(result.stdout).toContain("prepared");
+      expect(readResult(result)).toEqual(
+        expect.arrayContaining([
+          { name: "cli.environment.imports", calls: 2 },
+          { name: "cli.environment.dotenv", calls: 2 },
+          { name: "cli.environment.config-import", calls: 2 },
+          { name: "cli.environment.config.snapshot.read.file", calls: 2 },
+          { name: "cli.environment.config.snapshot.read.validate", calls: 2 },
+          { name: "cli.environment.config-recovery", calls: 2 },
+        ]),
+      );
       expect(stateManifest(stateDir)).toEqual(before);
     },
     90_000,

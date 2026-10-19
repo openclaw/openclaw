@@ -397,6 +397,7 @@ async function persistOutboundSessionEntry(
         creation: buildInboundSessionCreationStamp({ SessionCreation: creation }),
       },
       {
+        result: "none",
         fallbackEntry,
         preserveActivity: true,
         workerGuard: params.workerGuard ?? {},

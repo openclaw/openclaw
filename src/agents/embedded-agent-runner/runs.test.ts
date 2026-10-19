@@ -10,8 +10,11 @@ import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.j
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
-import { createReplyOperation, isSessionRunActive } from "../../sessions/session-controller.js";
-import { isSessionRunCompactionBlocked } from "../../sessions/session-controller.queries.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import {
+  isSessionRunActive,
+  isSessionRunCompactionBlocked,
+} from "../../sessions/session-controller.queries.js";
 import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
 import { supersedeReplyRunByRunId } from "../../sessions/session-controller.stop-runtime.js";
 import {

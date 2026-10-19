@@ -34,20 +34,42 @@ function fixture(implementation: Sender = async () => ({})) {
     });
     return stringField(events.at(-1)?.params, "requestId");
   }
-  return { fetch, send, owner, emit, events, command, pause };
+  async function stream(nativeId = "stream") {
+    const requestId = pause(nativeId, { responseStatusCode: 200 });
+    return {
+      requestId,
+      handle: stringField(await command("Fetch.takeResponseBodyAsStream", { requestId }), "stream"),
+    };
+  }
+  function expectLatePauseIgnored() {
+    const count = events.length;
+    fetch.event("Fetch.requestPaused", { requestId: "late" });
+    expect(events).toHaveLength(count);
+  }
+  return { fetch, send, owner, emit, events, command, pause, stream, expectLatePauseIgnored };
+}
+
+const streamSender =
+  (stream: string): Sender =>
+  async (method) =>
+    method === "Fetch.takeResponseBodyAsStream" ? { stream } : {};
+
+function blockedFixture(blocked: string, fallback: Sender = async () => ({})) {
+  const started = createDeferred<void>();
+  const pending = createDeferred<unknown>();
+  const f = fixture(async (method, params) => {
+    if (method === blocked) {
+      started.resolve();
+      return pending.promise;
+    }
+    return fallback(method, params);
+  });
+  return { f, started, pending };
 }
 
 describe("RelayFetch request and stream ownership", () => {
   it("keeps response-body reads nonterminal and does not serialize another request", async () => {
-    const started = createDeferred<void>();
-    const body = createDeferred<unknown>();
-    const f = fixture(async (method) => {
-      if (method === "Fetch.getResponseBody") {
-        started.resolve();
-        return body.promise;
-      }
-      return {};
-    });
+    const { f, started, pending: body } = blockedFixture("Fetch.getResponseBody");
     await f.command("Fetch.enable");
     const response = f.pause("response", { responseStatusCode: 200 });
     const reading = f.command("Fetch.getResponseBody", { requestId: response });
@@ -65,15 +87,7 @@ describe("RelayFetch request and stream ownership", () => {
   it.each(["auth", "response"])(
     "does not let an old continuation erase a replacement %s pause",
     async (stage) => {
-      const started = createDeferred<void>();
-      const continued = createDeferred<unknown>();
-      const f = fixture(async (method) => {
-        if (method === "Fetch.continueRequest") {
-          started.resolve();
-          return continued.promise;
-        }
-        return {};
-      });
+      const { f, started, pending: continued } = blockedFixture("Fetch.continueRequest");
       await f.command("Fetch.enable");
       const requestId = f.pause("same");
       const first = f.command("Fetch.continueRequest", { requestId });
@@ -115,15 +129,9 @@ describe("RelayFetch request and stream ownership", () => {
   });
 
   it("blocks explicit disable while a taken stream pause is unresolved", async () => {
-    const f = fixture(async (method) =>
-      method === "Fetch.takeResponseBodyAsStream" ? { stream: "native" } : {},
-    );
+    const f = fixture(streamSender("native"));
     await f.command("Fetch.enable");
-    const requestId = f.pause("stream", { responseStatusCode: 200 });
-    const handle = stringField(
-      await f.command("Fetch.takeResponseBodyAsStream", { requestId }),
-      "stream",
-    );
+    const { requestId, handle } = await f.stream();
     await expect(f.command("Fetch.disable")).rejects.toThrow(/failed or fulfilled/);
     await expect(f.command("Fetch.enable", undefined, {})).rejects.toThrow(/owned/);
     await f.command("Fetch.failRequest", { requestId, errorReason: "Aborted" });
@@ -135,25 +143,14 @@ describe("RelayFetch request and stream ownership", () => {
   });
 
   it("serializes stream reads and retires readability after an ambiguous failure", async () => {
-    const readStarted = createDeferred<void>();
-    const read = createDeferred<unknown>();
     const failure = new Error("read completion unknown");
-    const f = fixture(async (method) => {
-      if (method === "Fetch.takeResponseBodyAsStream") {
-        return { stream: "native" };
-      }
-      if (method === "IO.read") {
-        readStarted.resolve();
-        return read.promise;
-      }
-      return {};
-    });
+    const {
+      f,
+      started: readStarted,
+      pending: read,
+    } = blockedFixture("IO.read", streamSender("native"));
     await f.command("Fetch.enable");
-    const requestId = f.pause("stream", { responseStatusCode: 200 });
-    const handle = stringField(
-      await f.command("Fetch.takeResponseBodyAsStream", { requestId }),
-      "stream",
-    );
+    const { handle } = await f.stream();
     const reading = f.command("IO.read", { handle });
     await readStarted.promise;
     await expect(f.command("IO.read", { handle })).rejects.toThrow(/read in flight/);
@@ -208,9 +205,7 @@ describe("RelayFetch uncertain state and retirement", () => {
     f.pause("first");
     const closing = f.fetch.close(f.owner);
     await cleanupStarted.promise;
-    const eventCount = f.events.length;
-    f.fetch.event("Fetch.requestPaused", { requestId: "late" });
-    expect(f.events).toHaveLength(eventCount);
+    f.expectLatePauseIgnored();
     cleanup.resolve({});
     await closing;
     expect(f.send.mock.calls.slice(1)).toEqual([
@@ -220,21 +215,13 @@ describe("RelayFetch uncertain state and retirement", () => {
   });
 
   it("closes residual streams when owner close overtakes explicit disable", async () => {
-    const disableStarted = createDeferred<void>();
-    const disable = createDeferred<unknown>();
-    const f = fixture(async (method) => {
-      if (method === "Fetch.takeResponseBodyAsStream") {
-        return { stream: "native-stream" };
-      }
-      if (method === "Fetch.disable") {
-        disableStarted.resolve();
-        return disable.promise;
-      }
-      return {};
-    });
+    const {
+      f,
+      started: disableStarted,
+      pending: disable,
+    } = blockedFixture("Fetch.disable", streamSender("native-stream"));
     await f.command("Fetch.enable");
-    const requestId = f.pause("stream", { responseStatusCode: 200 });
-    await f.command("Fetch.takeResponseBodyAsStream", { requestId });
+    const { requestId } = await f.stream();
     await f.command("Fetch.failRequest", { requestId, errorReason: "Aborted" });
     const disabling = f.command("Fetch.disable");
     await disableStarted.promise;
@@ -245,24 +232,13 @@ describe("RelayFetch uncertain state and retirement", () => {
   });
 
   it("prepares physical retirement without awaiting a hanging operation", async () => {
-    const bodyStarted = createDeferred<void>();
-    const body = createDeferred<unknown>();
-    const f = fixture(async (method) => {
-      if (method === "Fetch.getResponseBody") {
-        bodyStarted.resolve();
-        return body.promise;
-      }
-      if (method === "Fetch.takeResponseBodyAsStream") {
-        return { stream: "native-stream" };
-      }
-      return {};
-    });
+    const {
+      f,
+      started: bodyStarted,
+      pending: body,
+    } = blockedFixture("Fetch.getResponseBody", streamSender("native-stream"));
     await f.command("Fetch.enable");
-    const streamPause = f.pause("stream", { responseStatusCode: 200 });
-    const handle = stringField(
-      await f.command("Fetch.takeResponseBodyAsStream", { requestId: streamPause }),
-      "stream",
-    );
+    const { handle } = await f.stream();
     f.pause("request");
     f.pause("auth", {}, true);
     const pendingBody = f.pause("body", { responseStatusCode: 200 });
@@ -282,9 +258,7 @@ describe("RelayFetch uncertain state and retirement", () => {
       ["IO.close", { handle: "native-stream" }],
     ]);
     expect(f.send.mock.calls.some(([method]) => method === "Fetch.disable")).toBe(false);
-    const eventCount = f.events.length;
-    f.fetch.event("Fetch.requestPaused", { requestId: "late" });
-    expect(f.events).toHaveLength(eventCount);
+    f.expectLatePauseIgnored();
     await expect(f.command("IO.read", { handle })).rejects.toThrow(/detached/);
 
     body.resolve({ body: "late", base64Encoded: false });
@@ -371,11 +345,7 @@ describe("RelayFetch native completion boundaries", () => {
           : {},
     );
     await f.command("Fetch.enable");
-    const requestId = f.pause("response", { responseStatusCode: 200 });
-    const handle = stringField(
-      await f.command("Fetch.takeResponseBodyAsStream", { requestId }),
-      "stream",
-    );
+    const { handle } = await f.stream("response");
     const closing = f.command("IO.close", { handle });
     const rejected = expect(closing).rejects.toThrow("close completion unknown");
     gate.reject(new Error("close completion unknown"));

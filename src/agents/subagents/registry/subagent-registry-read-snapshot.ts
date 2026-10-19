@@ -4,6 +4,7 @@ import {
   getActiveOpenClawStateDatabaseReadSnapshot,
 } from "../../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import {
   getSubagentSessionReadLookup,
   immutableSubagentRunSessionList,
@@ -255,9 +256,10 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
   inMemoryRuns: Map<string, SubagentRunRecord>;
   fullCache: SubagentRunsCache<SubagentRunRecord>;
   sessionKeys: readonly string[];
+  context?: OpenClawStateWorkerContext;
 }): Promise<PreparedSubagentSessionsRead> {
   const { inMemoryRuns, fullCache } = params;
-  const context = captureOpenClawStateWorkerContext();
+  const context = params.context ?? captureOpenClawStateWorkerContext();
   const signal = getAsyncWorkSignal();
   const roots = Object.freeze(
     [...new Set(params.sessionKeys.map((key) => key.trim()).filter(Boolean))].toSorted(),

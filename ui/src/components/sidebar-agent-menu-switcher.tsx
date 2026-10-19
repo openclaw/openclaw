@@ -88,6 +88,7 @@ function renderAgentRow(
   params: SidebarAgentMenuSwitcherParams,
   readAutofocus: () => boolean,
   readDuplicateName: () => boolean,
+  pinButtons: Map<string, HTMLButtonElement>,
 ) {
   const agentId = createMemo(() => normalizeAgentId(readAgent().id));
   const identity = createMemo(() => params.identities.get(agentId()) ?? null);
@@ -138,6 +139,7 @@ function renderAgentRow(
         <span class="sidebar-agent-menu__agent-status">
           {params.agents.length > 3 ? (
             <button
+              ref={(button) => pinButtons.set(agentId(), button)}
               type="button"
               class="sidebar-agent-menu__pin"
               aria-label={`${pinLabel()}: ${label()}`}
@@ -152,15 +154,13 @@ function renderAgentRow(
                 const button = event.currentTarget;
                 // Moving a keyed row into pinned-first order can drop native focus.
                 const focused = button === document.activeElement;
-                const menu = button.closest('[role="menu"]');
-                const value = `${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId())}`;
-                void params.onTogglePinnedAgent(agentId()).then(() => {
+                const id = agentId();
+                void params.onTogglePinnedAgent(id).then(() => {
                   if (focused) {
-                    menu
-                      ?.querySelector<HTMLElement>(
-                        `[data-value="${CSS.escape(value)}"] .sidebar-agent-menu__pin`,
-                      )
-                      ?.focus({ preventScroll: true });
+                    const currentButton = pinButtons.get(id);
+                    if (currentButton?.isConnected) {
+                      currentButton.focus({ preventScroll: true });
+                    }
                   }
                 });
               }}
@@ -176,7 +176,10 @@ function renderAgentRow(
     ),
   } satisfies MenuItem;
 }
-export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherParams) {
+export function renderSidebarAgentMenuSwitcher(
+  params: SidebarAgentMenuSwitcherParams,
+  pinButtons = new Map<string, HTMLButtonElement>(),
+) {
   const agents = createMemo(() => {
     const pinnedIds = new Set(params.pinnedAgentIds.map(normalizeAgentId));
     return params.agents.toSorted(
@@ -237,6 +240,7 @@ export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherP
           (nameCounts().get(
             normalizeAgentLabel(agent, params.identities.get(normalizeAgentId(agent.id))),
           ) ?? 0) > 1,
+        pinButtons,
       ),
     );
   }

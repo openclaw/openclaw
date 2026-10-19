@@ -143,6 +143,7 @@ export function getFollowupQueue(
   return mailbox;
 }
 
+/** @internal Exposed for unit tests only. */
 export function clearFollowupQueue(key: string, captured?: SessionControllerMailbox): number {
   const queue = captured ?? getExistingSessionControllerMailbox(key.trim());
   return queue ? clearSessionControllerMailbox(queue, completeFollowupRunLifecycle) : 0;

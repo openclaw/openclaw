@@ -1,6 +1,10 @@
 import "./session-entry-patch-delivery.test-support.js";
+import { serialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import * as transfer from "../../infra/sqlite-worker-transfer.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import { readConversation, registerConversationAddresses } from "./conversation-registry.js";
@@ -136,6 +140,86 @@ it("reduces a fixed patch against the current row in one worker request without 
       expect(f.read()).toEqual(current);
     }
     expect(published).toEqual([result]);
+  });
+});
+
+it("acknowledges no-result patches without transferring the entry and keeps final authority", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const prompt = "synthetic instructions ".repeat(4096);
+    replaceSessionEntrySync(f.scope, {
+      ...f.read()!,
+      skillsSnapshot: { prompt, skills: [] },
+    });
+    const deliveredBytes: number[] = [];
+    const collect = transfer.createSqliteWorkerTransferCollector;
+    vi.spyOn(transfer, "createSqliteWorkerTransferCollector").mockImplementation((kind, consume) =>
+      collect(kind, (value) => {
+        deliveredBytes.push(serialize(value).byteLength);
+        consume(value);
+      }),
+    );
+    const operation = {
+      kind: "fields" as const,
+      expected: { sessionId: "retired" },
+      patch: { label: "must not apply" },
+    };
+    const result = await applySessionEntryOperation(f.scope, operation, { skipMaintenance: true });
+    expect(result).toMatchObject({ label: "initial", skillsSnapshot: { prompt } });
+    expect(deliveredBytes.at(-1)).toBeGreaterThan(prompt.length);
+    result!.skillsSnapshot!.prompt = "caller-owned change";
+    expect(f.read()?.skillsSnapshot?.prompt).toBe(prompt);
+
+    await expect(
+      applySessionEntryOperation(f.scope, operation, { result: "none", skipMaintenance: true }),
+    ).resolves.toBeUndefined();
+    expect(deliveredBytes.at(-1)).toBeLessThan(1024);
+    expect(f.read()).toMatchObject({ label: "initial", skillsSnapshot: { prompt } });
+
+    const onCommitted = vi.fn();
+    await expect(
+      applySessionEntryOperation(
+        f.scope,
+        { kind: "fields", patch: { label: "observed" } },
+        { result: "none", skipMaintenance: true, onCommitted },
+      ),
+    ).resolves.toBeUndefined();
+    expect(onCommitted).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ label: "observed", skillsSnapshot: { prompt, skills: [] } }),
+    );
+
+    let current = true;
+    const refused = new Error("patch authority revoked before commit");
+    const createAdmission = admission.createSqliteWorkerOperationAdmission;
+    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (callback, attachment) =>
+        createAdmission((request, grant) => {
+          if (
+            request.stage === "commit" &&
+            isRecord(request.facts) &&
+            isRecord(request.facts.publication) &&
+            request.facts.publication.kind === "session-entry-patch-committed"
+          ) {
+            current = false;
+          }
+          callback(request, grant);
+        }, attachment),
+    );
+    await expect(
+      applySessionEntryOperation(f.scope, operation, {
+        result: "none",
+        skipMaintenance: true,
+        workerGuard: {
+          assertMutationAllowed() {
+            if (!current) {
+              throw refused;
+            }
+          },
+        },
+      }),
+    ).rejects.toBe(refused);
+    expect(current).toBe(false);
+    expect(f.read()).toMatchObject({ label: "observed", skillsSnapshot: { prompt } });
   });
 });
 

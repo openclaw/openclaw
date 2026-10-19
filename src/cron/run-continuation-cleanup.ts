@@ -41,6 +41,7 @@ export async function removeCronRunContinuationSessionIfIdle(
   sessionKey: string,
   settledDeliveryId?: string,
   queueContext?: OpenClawStateWorkerContext,
+  capturedStorePath?: string,
 ): Promise<void> {
   if (
     !parseCronRunScopeSuffix(sessionKey).runId ||
@@ -51,10 +52,12 @@ export async function removeCronRunContinuationSessionIfIdle(
   const context = queueContext ?? captureOpenClawStateWorkerContext();
   const assertCurrent = () => assertSubagentReadContext(context);
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
-  const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
-    agentId,
-    env: context.environment,
-  });
+  const storePath =
+    capturedStorePath ??
+    resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+      agentId,
+      env: context.environment,
+    });
   const readEntry = () =>
     withSessionEntryReadOnlyInWorker(
       {
@@ -100,13 +103,14 @@ export async function removeCronRunContinuationSessionIfIdle(
       ) {
         return;
       }
-      const descendants = await prepareCronDescendantDeletion([sessionKey]);
+      const descendants = await prepareCronDescendantDeletion([sessionKey], context);
       assertCurrent();
       if (descendants.hasUnsettled(sessionKey)) {
         return;
       }
       await deleteSessionEntryLifecycle({
         agentId,
+        env: context.environment,
         commitGuard: () => {
           assertCurrent();
           if (

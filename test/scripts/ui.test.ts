@@ -115,6 +115,7 @@ function writeUiPackageBin(modules: string, name: string, source: string): strin
 
 const buildEnvironment = {
   OPENCLAW_BUILD_ALL_NO_PNPM: "1",
+  OPENCLAW_BUILD_CACHE: "0",
   OPENCLAW_BUILD_TIMESTAMP: "2026-08-27T00:00:00.000Z",
   GIT_COMMIT: "a".repeat(40),
 };
@@ -417,7 +418,7 @@ process.exitCode = 0;\n`,
     `control-ui.build-${process.pid}-live`,
     `control-ui.build-${process.pid}-live.retired`,
   ];
-  it("checks source prerequisites before reusing a warm UI build", () => {
+  it.each(["default", "explicit"])("checks source prerequisites with %s cache", (cacheRoot) => {
     // Preload module URLs must preserve spaces and URL fragment characters.
     const root = fs.realpathSync(tempDirs.make("openclaw-ui-required-cache #"));
     const build = prepareBuildFixture(root, [
@@ -451,7 +452,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     }
     const run = (expectedExit = 0) => {
       const result = build.run({
-        BUILD_ALL_CACHE_ROOT: path.join(root, "cache"),
+        BUILD_ALL_CACHE_ROOT: cacheRoot === "explicit" ? path.join(root, "cache") : undefined,
         OPENCLAW_BUILD_CACHE: "1",
         OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS: "1",
         OPENCLAW_CONTROL_UI_BUILD_ID: "cache-test",

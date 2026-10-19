@@ -194,7 +194,6 @@ async function startDiscovery(fixture: RecoveryFixture, minimal = false) {
   const discovery = await startGatewayDiscovery({
     ...(minimal ? { discovery: { mdns: { mode: "minimal" as const } } } : {}),
     gatewayDiscoveryServices: fixture.previousRegistry.gatewayDiscoveryServices,
-    pluginRuntimeClaim: fixture.owner.currentClaim(),
     machineDisplayName: "fixture-gateway",
     port: 0,
     tailscaleMode: "off",

@@ -49,6 +49,7 @@ export type SessionEntryPatchCommit = {
   next: SessionEntry | undefined;
   operationLabel: "session-entry.patch" | "session-entry-target.patch";
   validateCanonicalKeys: boolean;
+  returnEntry?: false;
   consumePendingReset?: boolean;
   providerReviewMutation?: boolean;
   shouldCommitIf?: SessionEntryPatchGuard["shouldCommitIf"];
@@ -60,7 +61,8 @@ export type SessionEntryPatchCommit = {
 
 export type SessionEntryPatchCommitted = {
   kind: "session-entry-patch";
-  entry: SessionEntry | null;
+  /** Null is absent/refused; undefined omits only the caller's entry result. */
+  entry?: SessionEntry | null;
   applied: boolean;
   lifecycleEffects?: SessionLifecyclePatchEffects;
   publication?: SessionEntryReplacementPublication;

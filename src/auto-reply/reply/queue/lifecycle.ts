@@ -166,19 +166,3 @@ export function completeFollowupRunLifecycle(run: FollowupRun, disposition?: "co
   }
   completeSessionControllerSourceLifecycle(run, state, disposition);
 }
-
-export function completeFollowupRuns(
-  items: Iterable<FollowupRun>,
-  onError?: (error: unknown) => void,
-): void {
-  for (const item of items) {
-    try {
-      completeFollowupRunLifecycle(item);
-    } catch (error) {
-      if (!onError) {
-        throw error;
-      }
-      onError(error);
-    }
-  }
-}
