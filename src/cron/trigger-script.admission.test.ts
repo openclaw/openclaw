@@ -10,7 +10,6 @@ import { ToolSearchRuntime } from "../agents/tool-search-runtime.js";
 import { resolveToolSearchConfig } from "../agents/tool-search.js";
 import { jsonResult, type AnyAgentTool } from "../agents/tools/common.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
@@ -29,13 +28,6 @@ function toolRuntime(ctx: HeadlessParams["ctx"]) {
   });
 }
 
-function prepareRuntime(config: OpenClawConfig, tool: AnyAgentTool) {
-  return vi.fn(async () => ({
-    createTools: async () => [tool],
-    context: { config, agentId: "main", sessionKey: "agent:main:cron:probe" },
-  }));
-}
-
 function probe(execute: AnyAgentTool["execute"]): AnyAgentTool {
   return {
     name: "probe",
@@ -46,13 +38,45 @@ function probe(execute: AnyAgentTool["execute"]): AnyAgentTool {
   };
 }
 
+function fixture(
+  jobId: string,
+  tool: AnyAgentTool,
+  deps: Partial<Parameters<typeof createCronScriptRuntime>[0]> = {},
+) {
+  const config = {};
+  const admitted: AdmittedRunContext[] = [];
+  const retained: HeadlessParams["ctx"][] = [];
+  const prepare = vi.fn(async () => ({
+    createTools: async () => [tool],
+    context: { config, agentId: "main", sessionKey: "agent:main:cron:probe" },
+  }));
+  const runtime = createCronScriptRuntime({
+    config,
+    prepareRuntime: prepare,
+    runHeadless: async ({ ctx }) => {
+      retained.push(ctx);
+      return completed({ fire: false, state: await toolRuntime(ctx).callValue("probe", {}) });
+    },
+    ...deps,
+  });
+  const input = {
+    jobId,
+    script: "return result",
+    state: null,
+    executionIdentity: {
+      ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" } as const,
+      onPostAdmission: (context: AdmittedRunContext) => {
+        admitted.push(context);
+      },
+    },
+  };
+  return { runtime, prepare, admitted, retained, input };
+}
+
 describe("cron script admission", () => {
   it("gives each warm payload invocation fresh authority and releases it after completion", async () => {
-    const config: OpenClawConfig = {};
-    const admitted: AdmittedRunContext[] = [];
-    const retained: HeadlessParams["ctx"][] = [];
-    const prepare = prepareRuntime(
-      config,
+    const { runtime, prepare, admitted, retained, input } = fixture(
+      "same-job",
       probe(async () => {
         const caller = getGatewayToolCallerIdentity();
         return jsonResult({
@@ -61,32 +85,8 @@ describe("cron script admission", () => {
         });
       }),
     );
-    const runtime = createCronScriptRuntime({
-      config,
-      prepareRuntime: prepare,
-      runHeadless: async ({ ctx }) => {
-        retained.push(ctx);
-        const value = await toolRuntime(ctx).callValue("probe", {});
-        return completed({ fire: false, state: value });
-      },
-    });
     for (let index = 0; index < 2; index += 1) {
-      const params = {
-        jobId: "same-job",
-        script: "return result",
-        state: null,
-        executionIdentity: {
-          ingress: {
-            kind: "schedule" as const,
-            boundary: "cron.isolated-agent",
-            state: "present" as const,
-          },
-          onPostAdmission: (context: AdmittedRunContext) => {
-            admitted.push(context);
-          },
-        },
-      };
-      await expect(runtime.executePayload(params)).resolves.toMatchObject({
+      await expect(runtime.executePayload(input)).resolves.toMatchObject({
         kind: "completed",
         state: { owned: true },
       });
@@ -106,8 +106,6 @@ describe("cron script admission", () => {
     async (revocation) => {
       const entered = createDeferred();
       const release = createDeferred();
-      const config: OpenClawConfig = {};
-      let admitted: AdmittedRunContext | undefined;
       const controller = new AbortController();
       let gateway = {} as GatewayRequestContext;
       const execute = vi.fn(async () => jsonResult({ changed: true }));
@@ -119,29 +117,16 @@ describe("cron script admission", () => {
           return args;
         },
       };
-      const runtime = createCronScriptRuntime({
-        config,
-        prepareRuntime: prepareRuntime(config, tool),
+      const { runtime, admitted, input } = fixture("closed-during-preparation", tool, {
         resolveGatewayContext: () => gateway,
         runHeadless: async ({ ctx }) => completed(await toolRuntime(ctx).callValue("probe", {})),
       });
-      const result = runtime.executePayload({
-        jobId: "closed-during-preparation",
-        script: "return result",
-        state: null,
-        abortSignal: controller.signal,
-        executionIdentity: {
-          ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
-          onPostAdmission: (context) => {
-            admitted = context;
-          },
-        },
-      });
+      const result = runtime.executePayload({ ...input, abortSignal: controller.signal });
       try {
         await entered.promise;
-        expect(admitted).toBeDefined();
+        expect(admitted[0]).toBeDefined();
         if (revocation === "admission") {
-          closeAdmittedRunDelegatedAuthority(admitted!);
+          closeAdmittedRunDelegatedAuthority(admitted[0]!);
         } else if (revocation === "gateway") {
           gateway = {} as GatewayRequestContext;
         } else {
@@ -158,13 +143,11 @@ describe("cron script admission", () => {
   );
 
   it("keeps concurrent invocations independent while sharing prepared tools", async () => {
-    const config: OpenClawConfig = {};
     const entered = [createDeferred(), createDeferred()];
     const release = [createDeferred(), createDeferred()];
-    const admitted: AdmittedRunContext[] = [];
     let calls = 0;
-    const prepare = prepareRuntime(
-      config,
+    const { runtime, prepare, admitted, input } = fixture(
+      "concurrent",
       probe(async () => {
         const index = calls++;
         const before = getGatewayToolCallerIdentity()?.operationalRunInstance;
@@ -177,26 +160,8 @@ describe("cron script admission", () => {
         });
       }),
     );
-    const runtime = createCronScriptRuntime({
-      config,
-      prepareRuntime: prepare,
-      runHeadless: async ({ ctx }) =>
-        completed({ fire: false, state: await toolRuntime(ctx).callValue("probe", {}) }),
-    });
-    const run = () =>
-      runtime.evaluateTrigger({
-        jobId: "concurrent",
-        script: "return result",
-        state: null,
-        executionIdentity: {
-          ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
-          onPostAdmission: (context) => {
-            admitted.push(context);
-          },
-        },
-      });
-    const first = run();
-    const second = run();
+    const first = runtime.evaluateTrigger(input);
+    const second = runtime.evaluateTrigger(input);
     try {
       await Promise.all(entered.map((entry) => entry.promise));
       release[0]!.resolve();

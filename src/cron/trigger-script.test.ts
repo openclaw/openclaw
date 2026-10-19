@@ -17,13 +17,8 @@ type PrepareParams = Parameters<NonNullable<EvaluatorDeps["prepareRuntime"]>>[0]
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function completed(params: { value: unknown; output?: unknown[] }): CodeModeHeadlessResult {
-  return {
-    status: "completed",
-    value: params.value,
-    output: params.output ?? [],
-    toolCallCount: 0,
-  };
+function completed(value: unknown, output: unknown[] = []): CodeModeHeadlessResult {
+  return { status: "completed", value, output, toolCallCount: 0 };
 }
 
 function createPreparedRuntime(config: OpenClawConfig) {
@@ -44,22 +39,51 @@ function createPreparedRuntime(config: OpenClawConfig) {
 }
 
 function createEvaluator(
-  runHeadless: (
-    params: Parameters<
-      NonNullable<Parameters<typeof createCronScriptRuntime>[0]["runHeadless"]>
-    >[0],
-  ) => Promise<CodeModeHeadlessResult>,
+  result: CodeModeHeadlessResult | NonNullable<EvaluatorDeps["runHeadless"]>,
 ) {
-  const config = {} as OpenClawConfig;
+  const config: OpenClawConfig = {};
+  const runHeadless = vi.fn(async (params: HeadlessParams) =>
+    typeof result === "function" ? result(params) : result,
+  );
   const prepareRuntime = vi.fn(async () => createPreparedRuntime(config));
+  const runtime = createCronScriptRuntime({ config, runHeadless, prepareRuntime });
   return {
-    evaluate: createCronScriptRuntime({ config, runHeadless, prepareRuntime }).evaluateTrigger,
+    ...runtime,
+    evaluate: runtime.evaluateTrigger,
     prepareRuntime,
+    runHeadless,
   };
 }
 
 function createCronTriggerEvaluator(deps: EvaluatorDeps) {
   return createCronScriptRuntime(deps).evaluateTrigger;
+}
+
+const INPUT = { jobId: "probe", script: "return result", state: null };
+
+function triggerNamespace(entries: Array<[string, unknown]>) {
+  return [
+    {
+      id: "cron:trigger",
+      globalName: "trigger",
+      scope: {
+        kind: "object",
+        entries: entries.map(([name, value]) => [name, { kind: "value", value }]),
+      },
+    },
+  ];
+}
+
+function shiftedWallClock() {
+  const now = Date.now();
+  let jump = 0;
+  const spy = vi.spyOn(Date, "now").mockImplementation(() => now + jump);
+  return {
+    shift: () => {
+      jump = 60_000;
+    },
+    restore: () => spy.mockRestore(),
+  };
 }
 
 describe("cron trigger script evaluator", () => {
@@ -98,9 +122,9 @@ describe("cron trigger script evaluator", () => {
       },
     });
     const evaluation = runtime.evaluateTrigger({
+      ...INPUT,
       jobId: "catalog-close",
       script: 'await gate({}); text("STALE AFTER CLOSE"); return { fire: true };',
-      state: null,
     });
     try {
       await entered.promise;
@@ -115,9 +139,9 @@ describe("cron trigger script evaluator", () => {
       release.resolve();
       await expect(
         runtime.evaluateTrigger({
+          ...INPUT,
           jobId: "catalog-close",
           script: "return { fire: false };",
-          state: null,
         }),
       ).resolves.toMatchObject({ kind: "evaluated", fire: false });
       expect(context.catalogRef?.onDispose?.size ?? 0).toBe(0);
@@ -140,13 +164,13 @@ describe("cron trigger script evaluator", () => {
     };
     const runtime = createCronScriptRuntime({
       config,
-      runHeadless: vi.fn(async () => completed({ value: { fire: false } })),
+      runHeadless: async () => completed({ fire: false }),
     });
     await runtime.evaluateTrigger({
+      ...INPUT,
       jobId: "acp-workspace-trigger",
       agentId: "codex",
       script: "return { fire: false }",
-      state: null,
       toolsAllow: [],
     });
     expect(fs.existsSync(path.join(workspaceDir, "AGENTS.md"))).toBe(false);
@@ -187,10 +211,10 @@ describe("cron trigger script evaluator", () => {
 
       await expect(
         evaluate({
+          ...INPUT,
           jobId: "job-canonical-pinned-exec",
           script:
             'await exec({ command: "printf openclaw-canonical-ok", host: "node", node: "remote" }); return { fire: false };',
-          state: null,
           toolsAllow: ["exec", "process"],
           scheduledToolPolicy: { version: 1, mode: "trusted" },
           execTarget: { version: 1, host: "gateway" },
@@ -209,9 +233,9 @@ describe("cron trigger script evaluator", () => {
     }).evaluateTrigger;
 
     const result = await evaluate({
+      ...INPUT,
       jobId: "job-colliding-gateway-exec",
       script: 'await exec({ command: "printf must-not-run" }); return { fire: false };',
-      state: null,
       toolsAllow: ["gateway_exec"],
       scheduledToolPolicy: { version: 1, mode: "trusted" },
     });
@@ -221,20 +245,14 @@ describe("cron trigger script evaluator", () => {
   });
 
   it("prefers a valid returned value and injects trigger state", async () => {
-    const runHeadless = vi.fn(async (_params: HeadlessParams) =>
-      completed({
-        value: { fire: true, message: "changed", state: { revision: 2 } },
-        output: [{ type: "json", value: { fire: false, state: { revision: 1 } } }],
-      }),
+    const { evaluate, runHeadless } = createEvaluator(
+      completed({ fire: true, message: "changed", state: { revision: 2 } }, [
+        { type: "json", value: { fire: false, state: { revision: 1 } } },
+      ]),
     );
-    const { evaluate } = createEvaluator(runHeadless);
 
     await expect(
-      evaluate({
-        jobId: "job-value",
-        script: "return result",
-        state: { revision: 1 },
-      }),
+      evaluate({ ...INPUT, jobId: "job-value", state: { revision: 1 } }),
     ).resolves.toEqual({
       kind: "evaluated",
       fire: true,
@@ -244,36 +262,22 @@ describe("cron trigger script evaluator", () => {
     expect(runHeadless).toHaveBeenCalledOnce();
     expect(runHeadless).toHaveBeenCalledWith(
       expect.objectContaining({
-        extraNamespaces: [
-          {
-            id: "cron:trigger",
-            globalName: "trigger",
-            scope: {
-              kind: "object",
-              entries: [["state", { kind: "value", value: { revision: 1 } }]],
-            },
-          },
-        ],
+        extraNamespaces: triggerNamespace([["state", { revision: 1 }]]),
       }),
     );
   });
 
   it("falls back to the last json output entry when the returned object is not a trigger result", async () => {
     const { evaluate } = createEvaluator(
-      vi.fn(async () =>
-        completed({
-          value: { ignored: true },
-          output: [
-            { type: "json", value: { fire: false, state: { old: true } } },
-            { type: "text", text: "ignored" },
-            { type: "json", value: { fire: true, state: { current: true } } },
-          ],
-        }),
-      ),
+      completed({ ignored: true }, [
+        { type: "json", value: { fire: false, state: { old: true } } },
+        { type: "text", text: "ignored" },
+        { type: "json", value: { fire: true, state: { current: true } } },
+      ]),
     );
 
     await expect(
-      evaluate({ jobId: "job-json", script: "json(result)", state: null }),
+      evaluate({ ...INPUT, jobId: "job-json", script: "json(result)" }),
     ).resolves.toEqual({
       kind: "evaluated",
       fire: true,
@@ -298,16 +302,16 @@ describe("cron trigger script evaluator", () => {
         }
         return createPreparedRuntime(config);
       },
-      runHeadless: async () => completed({ value: { fire: false } }),
+      runHeadless: async () => completed({ fire: false }),
     });
-    const request = { jobId: "cancelled-preparation", script: "return {}", state: null };
-    const cancelled = evaluate({ ...request, abortSignal: controller.signal });
+    const input = { ...INPUT, jobId: "cancelled-preparation", script: "return {}" };
+    const cancelled = evaluate({ ...input, abortSignal: controller.signal });
     let next: ReturnType<typeof evaluate> | undefined;
     try {
       await entered.promise;
       controller.abort();
       await expect(cancelled).resolves.toMatchObject({ kind: "error", code: "aborted" });
-      next = evaluate(request);
+      next = evaluate(input);
       release.resolve();
       await expect(next).resolves.toMatchObject({ kind: "evaluated", fire: false });
     } finally {
@@ -318,43 +322,34 @@ describe("cron trigger script evaluator", () => {
   });
 
   it("forwards scheduled provenance and invalidates cached authority when it changes", async () => {
-    const config = {} as OpenClawConfig;
+    const config: OpenClawConfig = {};
     const prepareRuntime = vi.fn(async (_params: PrepareParams) => createPreparedRuntime(config));
-    const runHeadless = vi.fn(async () => completed({ value: { fire: false } }));
+    const runHeadless = vi.fn(async () => completed({ fire: false }));
     const evaluate = createCronTriggerEvaluator({ config, prepareRuntime, runHeadless });
 
-    for (const [ownerSessionKey, ownerAccountId] of [
-      ["agent:main:discord:group:a", "alpha"],
-      ["agent:main:discord:group:b", "beta"],
-    ] as const) {
+    const policies = (
+      [
+        ["agent:main:discord:group:a", "alpha"],
+        ["agent:main:discord:group:b", "beta"],
+      ] as const
+    ).map(([ownerSessionKey, ownerAccountId]) => ({
+      version: 1 as const,
+      mode: "account" as const,
+      ownerSessionKey,
+      ownerAccountId,
+    }));
+    for (const scheduledToolPolicy of policies) {
       await evaluate({
+        ...INPUT,
         jobId: "job-owner-session",
-        script: "return result",
-        state: null,
         toolsAllow: ["write"],
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey,
-          ownerAccountId,
-        },
+        scheduledToolPolicy,
       });
     }
 
-    expect(prepareRuntime.mock.calls.map(([params]) => params.scheduledToolPolicy)).toEqual([
-      {
-        version: 1,
-        mode: "account",
-        ownerSessionKey: "agent:main:discord:group:a",
-        ownerAccountId: "alpha",
-      },
-      {
-        version: 1,
-        mode: "account",
-        ownerSessionKey: "agent:main:discord:group:b",
-        ownerAccountId: "beta",
-      },
-    ]);
+    expect(prepareRuntime.mock.calls.map(([params]) => params.scheduledToolPolicy)).toEqual(
+      policies,
+    );
   });
 
   it.each(["policy change", "capacity eviction"] as const)(
@@ -383,20 +378,20 @@ describe("cron trigger script evaluator", () => {
             entered.resolve();
             await release.promise;
           }
-          return completed({ value: { fire: false } });
+          return completed({ fire: false });
         },
       });
-      const request = { jobId: "active-cache", script: "return {}", state: null };
-      const active = evaluate(request);
+      const input = { ...INPUT, jobId: "active-cache", script: "return {}" };
+      const active = evaluate(input);
       try {
         await entered.promise;
         if (retirement === "policy change") {
-          await evaluate({ ...request, toolsAllow: [] });
-          await evaluate({ ...request, toolsAllow: [] });
+          await evaluate({ ...input, toolsAllow: [] });
+          await evaluate({ ...input, toolsAllow: [] });
           expect(prepareRuntime).toHaveBeenCalledTimes(2);
         } else {
           for (let index = 0; index < 128; index++) {
-            await evaluate({ ...request, jobId: `cache-${index}` });
+            await evaluate({ ...input, jobId: `cache-${index}` });
           }
         }
         expect(disposed).toEqual([]);
@@ -410,27 +405,23 @@ describe("cron trigger script evaluator", () => {
     },
   );
 
-  it.each([
-    completed({ value: { fire: "yes" } }),
-    completed({ value: { fire: true, message: 42 } }),
-  ])("rejects invalid result shapes", async (headlessResult) => {
-    const { evaluate } = createEvaluator(vi.fn(async () => headlessResult));
+  it.each([completed({ fire: "yes" }), completed({ fire: true, message: 42 })])(
+    "rejects invalid result shapes",
+    async (headlessResult) => {
+      const { evaluate } = createEvaluator(headlessResult);
 
-    const result = await evaluate({ jobId: "job-invalid", script: "return bad", state: null });
+      const result = await evaluate({ ...INPUT, jobId: "job-invalid", script: "return bad" });
 
-    expect(result).toMatchObject({ kind: "error", code: "internal_error" });
-  });
+      expect(result).toMatchObject({ kind: "error", code: "internal_error" });
+    },
+  );
 
   it("rejects returned state larger than 16KB", async () => {
     const { evaluate } = createEvaluator(
-      vi.fn(async () =>
-        completed({ value: { fire: false, state: { value: "x".repeat(16 * 1024) } } }),
-      ),
+      completed({ fire: false, state: { value: "x".repeat(16 * 1024) } }),
     );
 
-    await expect(
-      evaluate({ jobId: "job-large-state", script: "return result", state: null }),
-    ).resolves.toEqual({
+    await expect(evaluate({ ...INPUT, jobId: "job-large-state" })).resolves.toEqual({
       kind: "error",
       code: "output_limit_exceeded",
       error: "cron trigger state exceeds the 16KB limit",
@@ -438,23 +429,14 @@ describe("cron trigger script evaluator", () => {
   });
 
   it("returns busy instead of queueing a fourth concurrent evaluation", async () => {
-    let release: ((result: CodeModeHeadlessResult) => void) | undefined;
-    const pending = new Promise<CodeModeHeadlessResult>((resolve) => {
-      release = resolve;
-    });
-    const runHeadless = vi.fn(async () => await pending);
+    const pending = createDeferred<CodeModeHeadlessResult>();
+    const runHeadless = vi.fn(async () => await pending.promise);
     const { evaluate } = createEvaluator(runHeadless);
-    const running = ["one", "two", "three"].map((jobId) =>
-      evaluate({ jobId, script: "return result", state: null }),
-    );
+    const running = ["one", "two", "three"].map((jobId) => evaluate({ ...INPUT, jobId }));
     await vi.waitFor(() => expect(runHeadless).toHaveBeenCalledTimes(3));
 
-    const saturated = await evaluate({
-      jobId: "four",
-      script: "return result",
-      state: null,
-    });
-    release?.(completed({ value: { fire: false } }));
+    const saturated = await evaluate({ ...INPUT, jobId: "four" });
+    pending.resolve(completed({ fire: false }));
     await Promise.all(running);
 
     expect(saturated).toEqual({ kind: "busy" });
@@ -465,26 +447,20 @@ describe("cron trigger script evaluator", () => {
 describe("cron script runtime elapsed-time budgets", () => {
   it("preserves an integer elapsed-time budget when the wall clock jumps during preparation", async () => {
     const config: OpenClawConfig = {};
-    const initialWallClockMs = Date.now();
-    let wallClockJumpMs = 0;
-    const wallClock = vi
-      .spyOn(Date, "now")
-      .mockImplementation(() => initialWallClockMs + wallClockJumpMs);
+    const wallClock = shiftedWallClock();
     try {
       const prepareRuntime = vi.fn(async () => {
-        wallClockJumpMs = 60_000;
+        wallClock.shift();
         await Promise.resolve();
         return createPreparedRuntime(config);
       });
-      const runHeadless = vi.fn(async (_params: HeadlessParams) =>
-        completed({ value: { fire: false } }),
-      );
+      const runHeadless = vi.fn(async (_params: HeadlessParams) => completed({ fire: false }));
       const runtime = createCronScriptRuntime({ config, prepareRuntime, runHeadless });
       await expect(
         runtime.evaluateTrigger({
+          ...INPUT,
           jobId: "wall-clock-trigger",
           script: "return { fire: false }",
-          state: null,
         }),
       ).resolves.toMatchObject({ kind: "evaluated", fire: false });
       expect(runHeadless).toHaveBeenCalledOnce();
@@ -493,17 +469,13 @@ describe("cron script runtime elapsed-time budgets", () => {
       expect(delegatedBudgetMs).toBeGreaterThan(15_000);
       expect(delegatedBudgetMs).toBeLessThanOrEqual(30_000);
     } finally {
-      wallClock.mockRestore();
+      wallClock.restore();
     }
   });
 
   it("survives a wall-clock jump after the real headless handoff", async () => {
     const config: OpenClawConfig = {};
-    const initialWallClockMs = Date.now();
-    let wallClockJumpMs = 0;
-    const wallClock = vi
-      .spyOn(Date, "now")
-      .mockImplementation(() => initialWallClockMs + wallClockJumpMs);
+    const wallClock = shiftedWallClock();
     try {
       const shiftClock = {
         name: "shift_clock",
@@ -511,7 +483,7 @@ describe("cron script runtime elapsed-time budgets", () => {
         description: "Adjust the test wall clock",
         parameters: { type: "object", properties: {} },
         execute: vi.fn(async () => {
-          wallClockJumpMs = 60_000;
+          wallClock.shift();
           return jsonResult({ shifted: true });
         }),
       } satisfies AnyAgentTool;
@@ -529,43 +501,36 @@ describe("cron script runtime elapsed-time budgets", () => {
       });
       await expect(
         runtime.evaluateTrigger({
+          ...INPUT,
           jobId: "real-headless-trigger",
           script:
             "await Promise.all([shift_clock({}), observe_clock({})]); await observe_clock({}); return { fire: true };",
-          state: null,
         }),
       ).resolves.toMatchObject({ kind: "evaluated", fire: true });
       expect(shiftClock.execute).toHaveBeenCalledOnce();
       expect(observeClock.execute).toHaveBeenCalledTimes(2);
     } finally {
-      wallClock.mockRestore();
+      wallClock.restore();
     }
   });
 });
 
 describe("cron script payload evaluator", () => {
   it("uses payload-grade capped budgets and exposes frozen trigger state", async () => {
-    const config = {} as OpenClawConfig;
-    const runHeadless = vi.fn(async (_params: HeadlessParams) =>
+    const runtime = createEvaluator(
       completed({
-        value: {
-          notify: "queue changed",
-          wake: "now",
-          state: { revision: 2, dropped: undefined, nonFinite: Number.NaN },
-          nextCheck: "5m",
-        },
+        notify: "queue changed",
+        wake: "now",
+        state: { revision: 2, dropped: undefined, nonFinite: Number.NaN },
+        nextCheck: "5m",
       }),
     );
-    const runtime = createCronScriptRuntime({
-      config,
-      runHeadless,
-      prepareRuntime: vi.fn(async () => createPreparedRuntime(config)),
-    });
+    const { runHeadless } = runtime;
 
     await expect(
       runtime.executePayload({
+        ...INPUT,
         jobId: "payload-job",
-        script: "return result",
         state: { revision: 1 },
         streamBatch: "line one\nline two",
         timeoutSeconds: 10_000,
@@ -582,19 +547,10 @@ describe("cron script payload evaluator", () => {
     expect(runHeadless).toHaveBeenCalledWith(
       expect.objectContaining({
         maxToolCalls: 200,
-        extraNamespaces: [
-          {
-            id: "cron:trigger",
-            globalName: "trigger",
-            scope: {
-              kind: "object",
-              entries: [
-                ["state", { kind: "value", value: { revision: 1 } }],
-                ["streamBatch", { kind: "value", value: "line one\nline two" }],
-              ],
-            },
-          },
-        ],
+        extraNamespaces: triggerNamespace([
+          ["state", { revision: 1 }],
+          ["streamBatch", "line one\nline two"],
+        ]),
       }),
     );
     const headlessParams = runHeadless.mock.calls[0]?.[0];
@@ -608,15 +564,10 @@ describe("cron script payload evaluator", () => {
     [{ nextCheck: "tomorrowish" }, "nextCheck must be a positive duration"],
     [{ state: "x".repeat(17 * 1024) }, "state exceeds the 16KB limit"],
   ] as const)("rejects an invalid result %#", async (value, error) => {
-    const config = {} as OpenClawConfig;
-    const runtime = createCronScriptRuntime({
-      config,
-      runHeadless: vi.fn(async () => completed({ value })),
-      prepareRuntime: vi.fn(async () => createPreparedRuntime(config)),
-    });
+    const runtime = createEvaluator(completed(value));
 
     await expect(
-      runtime.executePayload({ jobId: "payload-invalid", script: "return result", state: null }),
+      runtime.executePayload({ ...INPUT, jobId: "payload-invalid" }),
     ).resolves.toMatchObject({ kind: "error", error: expect.stringContaining(error) });
   });
 });
