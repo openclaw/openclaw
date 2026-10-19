@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
+import { resolveActiveMemoryRecallSources } from "./active-memory-session-sources.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -206,6 +207,18 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     const hasTargetSessionRequest = hasTargetedSessionSyncParams(params);
     let needsFullReindex = Boolean(params?.force && !hasTargetSessionRequest);
     try {
+      if (!needsFullReindex && this.sources.has("sessions")) {
+        const excluded = await resolveActiveMemoryRecallSources({
+          rows: await this.database.readSourceState({ source: "sessions" }),
+          cfg: this.cfg,
+          agentId: this.agentId,
+        });
+        // Invalid helper rows do not need an embedding provider or a forced rebuild.
+        // Reconcile them before an unrelated source can fail to embed.
+        for (const row of excluded) {
+          await this.deleteIndexedFile(row.path, "sessions", row.hash);
+        }
+      }
       // An unavailable configured provider must not replace semantic vectors
       // with FTS-only rows; fresh and already-FTS-only indexes remain safe.
       this.assertFtsOnlySyncAllowed();

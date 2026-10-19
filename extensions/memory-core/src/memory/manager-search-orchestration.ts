@@ -16,6 +16,7 @@ import {
 import { WorkerTaskError } from "openclaw/plugin-sdk/process-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveActiveMemoryRecallSources } from "./active-memory-session-sources.js";
 import { mergeHybridResults, selectHybridSearchResults } from "./hybrid.js";
 import { tokenizeFtsQuery } from "./keyword-query.js";
 import { runMemoryVectorFallback } from "./manager-cpu-worker-runtime.js";
@@ -35,6 +36,7 @@ import { admitMemoryVectorIndex, searchMemoryVectorIndex } from "./manager-searc
 import { searchVector } from "./manager-search-vector.js";
 import { prepareExactPathMatcher } from "./manager-search.js";
 import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
+import type { MemorySourceFileStateRow } from "./manager-source-state.js";
 import { applyRetrievalRanking, prepareActiveProjectKeys } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
@@ -140,7 +142,13 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       (opts?.lexicalOnly === true || this.providerRequirement.mode === "fts-only") &&
       sourceFilterList.length === 1 &&
       sourceFilterList[0] === "sessions";
-    const keywordOptions = { boostFallbackRanking: true, signal: opts?.signal, fuseRecallMetadata };
+    const keywordOptions = {
+      boostFallbackRanking: true,
+      signal: opts?.signal,
+      fuseRecallMetadata,
+      excludedSessionPaths: new Array<string>(),
+    };
+    const excludedSources = new Map<string, MemorySourceFileStateRow>();
     const database = this.publishedDatabase;
     const assertReadOwner = () => {
       opts?.signal?.throwIfAborted();
@@ -163,6 +171,19 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       );
       assertReadOwner();
       preparedKeyword = undefined;
+      const excluded =
+        sourceFilterAllowed && sourceFilterList.includes("sessions")
+          ? await resolveActiveMemoryRecallSources({
+              rows: await database.readSourceState({ source: "sessions" }),
+              cfg: this.cfg,
+              agentId: this.agentId,
+            })
+          : [];
+      assertReadOwner();
+      keywordOptions.excludedSessionPaths = excluded.map((row) => row.path);
+      for (const row of excluded) {
+        excludedSources.set(row.path, row);
+      }
       if (
         sourceFilterAllowed &&
         this.fts.enabled &&
@@ -546,6 +567,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             vectorProviderIdentity,
             indexState,
             keywordResults.map((entry) => entry.id),
+            keywordOptions.excludedSessionPaths,
             opts?.signal,
           ).catch((error: unknown) => ({
             results: this.handleRetrievalError("vector", error, opts?.signal),
@@ -616,6 +638,20 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         return results;
       } finally {
         await releaseReadGeneration();
+        if (excludedSources.size > 0 && !database.readOnly) {
+          // Serving excludes immediately. Cleanup uses the source owner's conditional
+          // deletion after releasing the read generation, independently of embeddings.
+          const cleanup = this.withManagerOperation(async () => {
+            for (const row of excludedSources.values()) {
+              await this.deleteIndexedFile(row.path, "sessions", row.hash);
+            }
+          })
+            .catch((error: unknown) => {
+              log.warn(`memory recall source cleanup failed: ${formatErrorMessage(error)}`);
+            })
+            .finally(() => this.activeBackgroundSearchSyncs.delete(cleanup));
+          this.activeBackgroundSearchSyncs.add(cleanup);
+        }
       }
     });
   }
@@ -656,6 +692,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     providerIdentity: { model: string; aliases: string[] },
     indexState: MemoryRetrievalIndexState,
     keywordCandidateIds: string[],
+    excludedSessionPaths: readonly string[],
     signal?: AbortSignal,
   ): Promise<{ results: VectorSearchHit[]; candidates: VectorSearchHit[] }> {
     const query = {
@@ -672,7 +709,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           ...query,
           candidateIds,
           limit: candidateIds?.length ?? limit,
-          sourceFilter: this.buildSourceFilter(undefined, sourceFilterList),
+          sourceFilter: this.buildSourceFilter(undefined, sourceFilterList, excludedSessionPaths),
         },
         signal,
       );
@@ -691,6 +728,11 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         ...query,
         signal,
         ensureVectorReady: async () => {
+          // Recovery can carry a large exclusion set. Use the existing worker scan
+          // until cleanup removes it rather than exceed the native subprocess limit.
+          if (excludedSessionPaths.length > 0) {
+            return false;
+          }
           if (!this.vector.enabled) {
             return false;
           }
@@ -722,7 +764,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           }
           return response;
         },
-        sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
+        sourceFilterVec: this.buildSourceFilter("c", sourceFilterList, excludedSessionPaths),
       });
     }
     // Keyword candidates outside the vector window still need their stored

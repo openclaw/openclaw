@@ -292,6 +292,44 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
     expect((await regular.vector(vectorQuery({ candidateIds: [] }))).rows).toEqual([]);
   });
 
+  it("excludes session paths before keyword, path, and vector limits without excluding ordinary memory", async () => {
+    const fixture = admitted(() => createFixture(root, "session-exclusions", connection!));
+    try {
+      admitted(() => {
+        expect(fixture.ensureVector()).toMatchObject({ ok: true });
+        fixture.publish("recall", "recall", [1, 0, 0], { source: "sessions" });
+        fixture.publish("recall", "recall lunch", [0.8, 0.6, 0]);
+        fixture.publish("recall-ordinary", "recall lunch tomorrow", [0.9, 0.4, 0], {
+          source: "sessions",
+        });
+      });
+      const excludedSessionPaths = [
+        "memory/recall.md",
+        ...Array.from({ length: 33_000 }, (_, index) => `unused/${index}`),
+      ];
+      const sourceFilter = { sql: "", params: [], excludedSessionPaths };
+      for (const text of ["recall", "recall absentword"]) {
+        const query = keywordQuery(text, { limit: 2 });
+        query.body.sourceFilter = sourceFilter;
+        query.path.sourceFilter = sourceFilter;
+        const result = await fixture.keyword(query);
+        expect(result.body.error).toBeUndefined();
+        expect(result.path.error).toBeUndefined();
+        expect(result.body.rows.map((row) => row.source).sort()).toEqual(["memory", "sessions"]);
+        if (text === "recall") {
+          expect(result.path.rows.map((row) => row.source).sort()).toEqual(["memory", "sessions"]);
+        }
+      }
+      const result = await fixture.vector(vectorQuery({ sourceFilter, limit: 2 }));
+      expect(result.rows.map((row) => row.source).sort()).toEqual(["memory", "sessions"]);
+      expect(
+        result.rows.some((row) => row.source === "sessions" && row.path === "memory/recall.md"),
+      ).toBe(false);
+    } finally {
+      admitted(() => fixture.close());
+    }
+  });
+
   it("uses unaccented full text with source filtering and the unchanged 0.7/0.3 hybrid merge", async () => {
     const keyword = await regular.keyword(keywordQuery("cafe", { limit: 1 }));
     expect(keyword.body.error).toBeUndefined();

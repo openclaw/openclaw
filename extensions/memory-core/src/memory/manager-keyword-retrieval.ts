@@ -45,6 +45,7 @@ type KeywordSearchOptions = {
   boostFallbackRanking?: boolean;
   signal?: AbortSignal;
   fuseRecallMetadata?: boolean;
+  excludedSessionPaths?: readonly string[];
 };
 
 function projectRecallMetadata(
@@ -278,7 +279,11 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         ftsTokenizer: this.settings.store.fts.tokenizer,
         limit,
         snippetMaxChars: SNIPPET_MAX_CHARS,
-        sourceFilter: this.buildSourceFilter(undefined, sourceFilterList),
+        sourceFilter: this.buildSourceFilter(
+          undefined,
+          sourceFilterList,
+          options?.excludedSessionPaths,
+        ),
         boostFallbackRanking: options?.boostFallbackRanking,
       },
       path: {
@@ -288,7 +293,11 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         ftsTokenizer: this.settings.store.fts.tokenizer,
         limit,
         snippetMaxChars: SNIPPET_MAX_CHARS,
-        sourceFilter: this.buildSourceFilter(PATH_FTS_TABLE, sourceFilterList),
+        sourceFilter: this.buildSourceFilter(
+          PATH_FTS_TABLE,
+          sourceFilterList,
+          options?.excludedSessionPaths,
+        ),
       },
     };
   }

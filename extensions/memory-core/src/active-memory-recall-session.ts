@@ -13,10 +13,12 @@ export function isActiveMemoryRecallSessionKey(sessionKey: string | undefined): 
 export function isActiveMemoryRecallSession(params: {
   sessionId?: string;
   sessionKey?: string;
+  pluginOwnerId?: string;
 }): boolean {
   // Transcript artifacts that are not in the session store reach the indexer without a key, so
   // the id is checked too.
   return (
+    params.pluginOwnerId === "active-memory" ||
     isActiveMemoryRecallSessionKey(params.sessionKey) ||
     Boolean(params.sessionId && RECALL_SESSION_ID.test(params.sessionId))
   );

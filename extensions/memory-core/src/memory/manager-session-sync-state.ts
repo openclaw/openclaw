@@ -17,7 +17,7 @@ export function isMemorySessionIndexable(
     SessionTranscriptCorpusEntry,
     "generatedByDreamingNarrative" | "generatedByCronRun" | "sessionKind"
   > &
-    Partial<Pick<SessionTranscriptCorpusEntry, "sessionId" | "sessionKey">> &
+    Partial<Pick<SessionTranscriptCorpusEntry, "sessionId" | "sessionKey" | "pluginOwnerId">> &
     Partial<Pick<SessionFileEntry, "lineProvenance">>,
   archivedSessionKey?: string,
 ): boolean {
@@ -27,6 +27,7 @@ export function isMemorySessionIndexable(
     // Like cron and heartbeat runs: the recall sub-agent's prompt, not a conversation.
     isActiveMemoryRecallSession({
       sessionId: entry.sessionId,
+      pluginOwnerId: entry.pluginOwnerId,
       sessionKey: entry.sessionKey ?? archivedSessionKey,
     }) ||
     entry.sessionKind === "cron" ||
