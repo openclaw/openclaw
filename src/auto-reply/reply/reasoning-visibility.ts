@@ -7,13 +7,8 @@ import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReasoningLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
+import type { ReplyReasoningVisibility } from "./reasoning-visibility.types.js";
 import { isDispatchFinalReplySessionWriterAuthorized } from "./session-writer-delivery-authority.js";
-
-export type ReplyReasoningVisibility = {
-  retainForQueue: (isAborted: () => boolean) => void;
-  releaseDispatch: () => void;
-  close: () => void;
-};
 
 // Metadata carries an opaque owner, not a caller-supplied visibility callback.
 const visibilityByOwner = new WeakMap<object, { isVisible: () => boolean; storePath?: string }>();
