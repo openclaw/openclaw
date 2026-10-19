@@ -3,38 +3,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../../src/talk/describe-view-tool.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
-import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
 } from "./shared.ts";
 import {
+  dispatchCompletedToolCall,
   dispatchRealtimeEvent,
   FakePeerConnection,
   sentRealtimeEvents,
+  stubMicrophone,
+  startWebRtcTransport,
 } from "./webrtc.test-support.ts";
-import { WebRtcSdpRealtimeTalkTransport } from "./webrtc.ts";
+import type { WebRtcSdpRealtimeTalkTransport } from "./webrtc.ts";
 
 let stopInputTrack: ReturnType<typeof vi.fn>;
-
-async function createOpenAiTransport(
-  client: Record<string, unknown>,
-  callbacks: Record<string, unknown> = {},
-): Promise<WebRtcSdpRealtimeTalkTransport> {
-  return new WebRtcSdpRealtimeTalkTransport(
-    {
-      provider: "openai",
-      transport: "webrtc",
-      clientSecret: "client-secret-123",
-    },
-    {
-      input: await prepareRealtimeTalkTestInput(),
-      client: client as never,
-      sessionKey: "main",
-      callbacks: callbacks as never,
-    },
-  );
-}
 
 function dispatchControlToolCall(
   peer: FakePeerConnection | undefined,
@@ -46,56 +29,10 @@ function dispatchControlToolCall(
   });
 }
 
-function dispatchCompletedToolCall(
-  peer: FakePeerConnection | undefined,
-  overrides: {
-    responseId?: string | null;
-    responseStatus?: string | null;
-    itemId?: string | null;
-    itemStatus?: string | null;
-    callId?: string | null;
-    name?: string | null;
-    arguments?: string | null;
-  } = {},
-): void {
-  const field = (value: string | null | undefined, fallback: string): string | undefined =>
-    value === undefined ? fallback : (value ?? undefined);
-  dispatchRealtimeEvent(peer, {
-    type: "response.done",
-    response: {
-      id: field(overrides.responseId, "response-1"),
-      status: field(overrides.responseStatus, "completed"),
-      output: [
-        {
-          type: "function_call",
-          id: field(overrides.itemId, "item-control"),
-          status: field(overrides.itemStatus, "completed"),
-          call_id: field(overrides.callId, "call-control"),
-          name: field(overrides.name, REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME),
-          arguments: field(overrides.arguments, JSON.stringify({ text: "status" })),
-        },
-      ],
-    },
-  });
-}
-
 describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
   beforeEach(() => {
     FakePeerConnection.instances = [];
-    stopInputTrack = vi.fn();
-    const track = Object.assign(new EventTarget(), {
-      stop: stopInputTrack,
-    }) as unknown as MediaStreamTrack;
-    const stream = {
-      getAudioTracks: () => [track],
-      getTracks: () => [track],
-    } as unknown as MediaStream;
-    Object.defineProperty(globalThis.navigator, "mediaDevices", {
-      configurable: true,
-      value: {
-        getUserMedia: vi.fn(async () => stream),
-      },
-    });
+    ({ stopInputTrack } = stubMicrophone());
     vi.stubGlobal("RTCPeerConnection", FakePeerConnection as unknown as typeof RTCPeerConnection);
     vi.stubGlobal(
       "fetch",
@@ -161,17 +98,19 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
     async (outcome) => {
       const pending = createDeferred<unknown>();
       const request = vi.fn(() => pending.promise);
-      const onTalkEvent = vi.fn();
-      const transport = await createOpenAiTransport({ request }, { onTalkEvent });
-      await transport.start();
-      const previousPeer = FakePeerConnection.instances[0];
+      const {
+        transport,
+        peer: previousPeer,
+        onTalkEvent,
+      } = await startWebRtcTransport({ request });
       dispatchControlToolCall(previousPeer, { text: "status", mode: "status" });
       await waitForFast(() => expect(request).toHaveBeenCalledOnce());
 
       transport.stop();
-      const replacement = await createOpenAiTransport({ request }, { onTalkEvent });
-      await replacement.start();
-      const replacementPeer = FakePeerConnection.instances[1];
+      const { transport: replacement, peer: replacementPeer } = await startWebRtcTransport(
+        { request },
+        { onTalkEvent },
+      );
       onTalkEvent.mockClear();
       if (outcome === "resolved") {
         pending.resolve({ ok: true, mode: "status", message: "Old call finished." });
@@ -198,13 +137,11 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
       }
       throw new Error(`unexpected request: ${method}`);
     });
-    const transport = await createOpenAiTransport({
+    const { transport, peer } = await startWebRtcTransport({
       addEventListener: vi.fn(() => () => undefined),
       request,
     });
 
-    await transport.start();
-    const peer = FakePeerConnection.instances[0];
     for (const type of [
       "response.function_call_arguments.delta",
       "response.function_call_arguments.done",
@@ -255,10 +192,9 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
     { label: "incomplete item", responseStatus: "completed", itemStatus: "incomplete" },
   ])("ignores function calls from a $label", async ({ responseStatus, itemStatus }) => {
     const request = vi.fn();
-    const transport = await createOpenAiTransport({ request });
+    const { transport, peer } = await startWebRtcTransport({ request });
 
-    await transport.start();
-    dispatchCompletedToolCall(FakePeerConnection.instances[0], {
+    dispatchCompletedToolCall(peer, {
       responseStatus,
       itemStatus,
     });
@@ -272,10 +208,8 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
 
   it("requires call, name, and arguments before executing tools", async () => {
     const request = vi.fn();
-    const transport = await createOpenAiTransport({ request });
+    const { transport, peer } = await startWebRtcTransport({ request });
 
-    await transport.start();
-    const peer = FakePeerConnection.instances[0];
     for (const overrides of [
       { callId: null, itemId: "missing-call" },
       { name: null, callId: "missing-name", itemId: "missing-name" },
@@ -298,14 +232,11 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
       }
       throw new Error(`unexpected request: ${method}`);
     });
-    const onTalkEvent = vi.fn();
-    const transport = await createOpenAiTransport({ request }, { onTalkEvent });
+    const { transport, peer, onTalkEvent } = await startWebRtcTransport({ request });
     const baseArgs = JSON.stringify({ text: "status" });
     const argumentsAtLimit = baseArgs + " ".repeat(256_000 - baseArgs.length);
     const oversizedArguments = JSON.stringify({ text: "é".repeat(128_000) });
 
-    await transport.start();
-    const peer = FakePeerConnection.instances[0];
     dispatchCompletedToolCall(peer, { arguments: argumentsAtLimit });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     dispatchCompletedToolCall(peer, {
@@ -346,43 +277,28 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
   });
 
   it("ends the session instead of evicting completed call identities", async () => {
-    const onStatus = vi.fn();
-    const transport = await createOpenAiTransport({}, { onStatus });
+    const { peer, onStatus } = await startWebRtcTransport();
 
-    await transport.start();
-    const peer = FakePeerConnection.instances[0];
-    for (let index = 0; index < 1_024; index += 1) {
+    const dispatchView = (suffix: string | number) =>
       dispatchCompletedToolCall(peer, {
-        responseId: `response-${index}`,
-        itemId: `item-${index}`,
-        callId: `call-${index}`,
+        responseId: `response-${suffix}`,
+        itemId: `item-${suffix}`,
+        callId: `call-${suffix}`,
         name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
         arguments: "{}",
       });
+    for (let index = 0; index < 1_024; index += 1) {
+      dispatchView(index);
     }
-    dispatchCompletedToolCall(peer, {
-      responseId: "response-overflow",
-      itemId: "item-overflow",
-      callId: "call-overflow",
-      name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
-      arguments: "{}",
-    });
+    dispatchView("overflow");
 
     expect(onStatus).toHaveBeenCalledWith("error", "Realtime tool-call session limit exceeded");
     expect(peer?.channel.close).toHaveBeenCalledOnce();
-    dispatchCompletedToolCall(peer, {
-      responseId: "response-late",
-      itemId: "item-late",
-      callId: "call-late",
-      name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
-      arguments: "{}",
-    });
+    dispatchView("late");
     expect(peer?.channel.close).toHaveBeenCalledOnce();
   });
 
   it("surfaces OpenAI tool-result send failures without an unhandled rejection", async () => {
-    const onStatus = vi.fn();
-    const onTalkEvent = vi.fn();
     const request = vi.fn(async (method: string) => {
       if (method === "talk.client.steer") {
         return {
@@ -395,10 +311,8 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
       }
       throw new Error(`unexpected request: ${method}`);
     });
-    const transport = await createOpenAiTransport({ request }, { onStatus, onTalkEvent });
+    const { transport, peer, onStatus, onTalkEvent } = await startWebRtcTransport({ request });
 
-    await transport.start();
-    const peer = FakePeerConnection.instances[0];
     peer?.channel.send.mockImplementation(() => {
       throw new Error("OpenAI data channel rejected the tool result");
     });
@@ -438,14 +352,8 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
   ])(
     "displays GPT-Live transcript fragments and releases media on %s finalization",
     async (reason, outcome) => {
-      const onTranscript = vi.fn();
-      const onTalkEvent = vi.fn();
-      const onStatus = vi.fn();
-      const transport = await createOpenAiTransport({}, { onTranscript, onTalkEvent, onStatus });
-      await transport.start();
-      const peer = FakePeerConnection.instances[0]!;
-      const dispatch = (event: unknown) =>
-        peer.channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(event) }));
+      const { peer, onTranscript, onTalkEvent, onStatus } = await startWebRtcTransport();
+      const dispatch = (event: unknown) => dispatchRealtimeEvent(peer, event);
 
       dispatch({
         type: "session.input_transcript.delta",
@@ -468,7 +376,7 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
         "transcript.delta",
         "output.text.delta",
       ]);
-      expect(peer.connectionState).not.toBe("closed");
+      expect(peer?.connectionState).not.toBe("closed");
 
       dispatch({
         type: "session.delegation.created",
@@ -483,8 +391,8 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
       });
       dispatch({ type: "session.input_transcript.delta", delta: "stale" });
 
-      expect(peer.connectionState).toBe("closed");
-      expect(peer.channel.close).toHaveBeenCalledOnce();
+      expect(peer?.connectionState).toBe("closed");
+      expect(peer?.channel.close).toHaveBeenCalledOnce();
       expect(stopInputTrack).toHaveBeenCalledOnce();
       if (outcome === "error") {
         expect(onStatus).toHaveBeenLastCalledWith("error", "Realtime connection closed");
@@ -502,17 +410,17 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
   );
 
   it("stops an assistant turn event when its transcript callback closes the transport", async () => {
-    const onStatus = vi.fn();
-    const onTalkEvent = vi.fn();
     const transportRef: { current?: WebRtcSdpRealtimeTalkTransport } = {};
     const onTranscript = vi.fn(() => transportRef.current?.stop());
-    const transport = await createOpenAiTransport({}, { onStatus, onTalkEvent, onTranscript });
+    const { transport, peer, onStatus, onTalkEvent } = await startWebRtcTransport(
+      {},
+      { onTranscript },
+    );
     transportRef.current = transport;
-    await transport.start();
     onStatus.mockClear();
     onTalkEvent.mockClear();
 
-    dispatchRealtimeEvent(FakePeerConnection.instances[0], {
+    dispatchRealtimeEvent(peer, {
       type: "turn.done",
       turn: { id: "assistant-final", role: "assistant", transcript: "finished" },
     });
