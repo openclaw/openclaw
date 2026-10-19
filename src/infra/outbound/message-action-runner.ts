@@ -306,18 +306,19 @@ async function handleInternalSourceReplySendAction(
     ) {
       throw new Error("ClawHub recommendation cards require the current Control UI conversation.");
     }
-    const { resolveClawHubRecommendations } = await loadClawHubRecommendations();
+    const { resolveClawHubRecommendations, validateClawHubRecommendationSend } =
+      await loadClawHubRecommendations();
+    const request = validateClawHubRecommendationSend(params);
     recommendations = await resolveClawHubRecommendations({
-      request: params.clawhub,
+      request,
       config: input.cfg,
       agentId,
       workspaceDir:
         input.workspaceDir ?? (agentId ? resolveAgentWorkspaceDir(input.cfg, agentId) : undefined),
     });
     throwIfAborted(input.abortSignal);
-    if (!normalizeOptionalString(params.message)) {
-      params.message = recommendations.text;
-    }
+    params.message =
+      recommendations.cards.length > 0 && request.intro ? request.intro : recommendations.text;
   }
   const mediaSources = collectActionMediaSourceHints(params, [], { structuredAttachments: "all" });
   await waitForLocalMessageMedia({

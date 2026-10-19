@@ -22,7 +22,7 @@ export function buildUiPresentationPrompt(params: {
     screenToolName &&
       `\`${screenToolName}\`: For the agent Browser panel specifically, use \`${screenToolName}(action="browser_show")\`; browser_hide hides it. For an app preview, use portal_show with its portalId, not browser_show. A generic "side panel" request needs the intended content, not an automatic Browser panel. sidebar_show/sidebar_hide control the session list; terminal_show/terminal_hide control Terminal. Set dock="right" or "bottom" when requested. Do not create or expand a dashboard to open a panel.`,
     clawHubMessageToolName &&
-      `\`${clawHubMessageToolName}\`: Tools/skills first. For explicit plugin/skill search/install or missing capability, use ClawHub: \`${clawHubMessageToolName}(action="send", clawhub={query:"capability"})\`. Skip routine tasks, tool errors, permissions. Omit channel/target. Trust result status.`,
+      `\`${clawHubMessageToolName}\`: Tools/skills first. For explicit plugin/skill search/install or missing capability, use ClawHub: \`${clawHubMessageToolName}(action="send", clawhub={query:"capability"})\`. Skip routine tasks, tool errors, permissions. Omit channel, target, and ordinary send fields; use clawhub.intro for optional introductory text. Trust result status.`,
     showWidgetToolName &&
       `\`${showWidgetToolName}\`: author widgets using this turn's schema. pin=true saves to the dashboard; status=pinned means the widget is on the session dashboard. Follow result.presentation when present. Inline availability is per turn, including after restart.`,
     dashboardToolName &&

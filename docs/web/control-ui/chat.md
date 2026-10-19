@@ -682,21 +682,34 @@ configured, or connected to an account before the agent can use it. The card
 checks the current installation status; select **Status unavailable · Retry** if
 that check fails.
 
-The agent requests cards through `message` with a capability query:
+The agent requests cards through `message` with a specific capability query:
 
 ```json
 {
   "action": "send",
-  "clawhub": { "query": "whatsapp", "kind": "plugin" }
+  "clawhub": {
+    "query": "whatsapp",
+    "kind": "plugin",
+    "intro": "Here is the official WhatsApp capability."
+  }
 }
 ```
 
-`query` is required; `kind` can be `plugin` or `skill`. Omit `kind` to check plugins
-first, then skills if no official plugin matches. Omit `channel` and `target` to
-reply to the current Control UI conversation. ClawHub supplies the official
-designation, and the Gateway checks installation status; the agent cannot assign
-those badges. A search with no official match or an unavailable catalog returns
-an explanation in chat.
+`query` is required and must contain at least one non-whitespace character.
+Short and punctuation-bearing capability names remain valid. Existing query-only
+requests remain valid. `kind` can be `plugin` or `skill`. Omit `kind` to check
+plugins first, then skills if no official plugin matches. `intro` is optional
+user-facing text shown with matching cards.
+
+Do not combine `clawhub` with ordinary send fields such as `message`, media,
+attachments, presentation, or delivery targets. Put optional introductory text in
+`clawhub.intro`, and omit `channel` and `target` so the cards reply to the current
+Control UI conversation. Invalid or mixed payloads fail before capability discovery
+or conversation persistence.
+
+ClawHub supplies the official designation, and the Gateway checks installation
+status; the agent cannot assign those badges. A search with no official match or
+an unavailable catalog returns an explanation in chat.
 
 ### Source previews and copying code
 

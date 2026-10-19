@@ -187,13 +187,24 @@ function buildSendSchema(options: MessageToolSchemaOptions) {
     props.clawhub = Type.Optional(
       Type.Object(
         {
-          query: Type.String({ minLength: 1, maxLength: 160 }),
+          query: Type.String({
+            minLength: 1,
+            maxLength: 160,
+            description: "Non-empty capability query.",
+          }),
           kind: Type.Optional(stringEnum(["plugin", "skill"])),
+          intro: Type.Optional(
+            Type.String({
+              minLength: 1,
+              description:
+                "Optional user-facing introduction for the recommendation cards. Use this instead of the top-level message field.",
+            }),
+          ),
         },
         {
           additionalProperties: false,
           description:
-            "Official plugin/skill cards in current chat; user chooses install. Omit kind: plugins, then skills.",
+            "Official plugin/skill cards in current chat; user chooses install. Do not combine with ordinary send, media, presentation, or delivery fields. Omit kind: plugins, then skills.",
         },
       ),
     );
