@@ -476,6 +476,7 @@ describe("projects vitest config", () => {
   );
 
   it.each([
+    "extensions/deep-research/src/jobs.test.ts",
     "extensions/google/research-gateway.test.ts",
   ])("routes %s through the host database owner exactly once", (file) => {
     const project = "test/vitest/vitest.extension-database-workers.config.ts";
