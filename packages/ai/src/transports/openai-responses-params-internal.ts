@@ -174,7 +174,6 @@ export function buildOpenAIResponsesParams(
     (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
   const messages = convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, {
     includeSystemPrompt: !payloadPolicy.usesInstructionsField,
-    replayReasoningItems: true,
     replayResponsesItemIds,
     authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,

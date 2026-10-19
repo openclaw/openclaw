@@ -134,7 +134,6 @@ export class RelayService {
   }
 
   async pair(assertCommandCurrent?: () => void, authority?: RelayGrantAuthority) {
-    assertCommandCurrent?.();
     this.#requireReady();
     const selected = authority ?? {
       principal: { kind: "owner" as const },

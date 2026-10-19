@@ -3,6 +3,8 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
+import { captureRequesterOrigin } from "../../agents/requester-origin.js";
+import { createRestartRecoveryRequesterSource } from "../../agents/requester-run-recovery-source.js";
 import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import { normalizeMessageClientSources } from "../../chat/message-client-source.js";
 import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
@@ -22,7 +24,10 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import type { UserTurnOriginalInputCommit } from "../../sessions/user-turn-transcript.types.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
-import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isBrowserOperatorUiClient,
+} from "../../utils/message-channel.js";
 import type { MentionInbox } from "../mention-inbox.types.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { captureWorkerTurnInputSource } from "../worker-environments/worker-turn-transcript-target.js";
@@ -82,6 +87,18 @@ export function createGatewayChatUserTurnController(params: {
       ? undefined
       : gatewayClientSenderFields(params.client).sender;
   const senderProfileId = params.client?.authenticatedUserProfile?.profileId;
+  const toolCaller = params.client?.internal?.agentToolCaller;
+  const requesterOrigin = captureRequesterOrigin({
+    requesterOrigin: toolCaller?.requesterOrigin,
+    sessionKey: session.sessionKey,
+    operatorProfileId: toolCaller ? undefined : admission.operatorAuthority?.profileId,
+    messageProvider: INTERNAL_MESSAGE_CHANNEL,
+    agentAccountId: admission.originatingRoute.accountId,
+    chatType: "direct",
+    messageThreadId: admission.originatingRoute.messageThreadId,
+    senderId: toolCaller ? undefined : sender?.id,
+    senderName: toolCaller ? undefined : sender?.name,
+  });
   const selectedMentions = request.mentions;
   const mentionInbox = params.mentionInbox;
   const sourceId = buildRunUserTurnIdempotencyKey(session.clientRunId);
@@ -96,6 +113,7 @@ export function createGatewayChatUserTurnController(params: {
       ? { display: false }
       : {}),
     text: request.rawMessage,
+    requesterOrigin,
     ...(request.workContext ? { workContext: request.workContext } : {}),
     ...(request.mentions ? { mentions: request.mentions } : {}),
     timestamp: session.now,
@@ -215,6 +233,15 @@ export function createGatewayChatUserTurnController(params: {
           startedAt: params.startedAt,
           ...(!progressRefresh ? { lastInteractionAt: params.startedAt } : {}),
           sourceIngress: isBrowserOperatorUiClient(request.clientInfo) ? "control-ui" : "internal",
+          requesterSource: admission.restartSafeAdmission.retryExpectedState
+            ? undefined
+            : createRestartRecoveryRequesterSource({
+                requesterOrigin,
+                entry: admission.admittedSessionEntry ?? admission.initialSessionEntry!,
+                agentId: session.agentId,
+                sessionKey: session.sessionKey,
+                sourceRunId: session.clientRunId,
+              }),
           operatorSource: admission.restartSafeAdmission.retryExpectedState
             ? undefined
             : createRestartRecoveryOperatorSource({
@@ -358,6 +385,7 @@ export function createGatewayChatUserTurnController(params: {
       inputPromise = Promise.all([previousInputPromise, input]).then(([previous, next]) => ({
         ...previous,
         ...next,
+        requesterOrigin: previous.requesterOrigin,
       }));
     },
   };

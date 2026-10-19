@@ -233,7 +233,7 @@ describe("overflow recovery deadline ownership through the public runner", () =>
     const result = await observed;
     expect(result).toMatchObject({
       kind: "resolved",
-      result: { meta: { error: { kind: "context_overflow" } } },
+      result: { meta: { error: { kind: "compaction_failure" } } },
     });
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
   });

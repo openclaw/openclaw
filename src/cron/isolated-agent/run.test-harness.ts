@@ -341,7 +341,8 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: callGatewayMock,
 }));
 
-vi.mock("../../gateway/session-transcript-readers.js", () => ({
+vi.mock("../../gateway/session-transcript-readers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/session-transcript-readers.js")>()),
   readSessionMessagesAsync: readSessionMessagesAsyncMock,
 }));
 

@@ -1297,6 +1297,11 @@ openclaw doctor
 
 Migrates config, audits DM policies, and checks gateway health. Doctor also compares active official plugins with the OpenClaw package the managed service will load after restart. Resolve any plugin restart-readiness warning before continuing. Details: [Doctor](/gateway/doctor)
 
+On Windows, `openclaw doctor --fix` can also retry abandoned backup scratch
+cleanup after an older release reported `EPERM` while renaming to an
+`openclaw-backup-retired-*` directory. Active backup scratch and published
+archives remain protected. See [Backup scratch cleanup](/cli/backup).
+
 If you use the unpacked Chrome extension, also run `openclaw browser doctor --browser-profile chrome`.
 For a version-mismatch warning, reload the extension from `chrome://extensions`;
 fully restart Chrome if the warning remains.

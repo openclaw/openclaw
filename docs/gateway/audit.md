@@ -122,7 +122,15 @@ state for these fields:
 - parent or child lineage when available.
 
 For a child started through `sessions_spawn`, the child owns a new context; it
-never reuses or mutates the parent context. The lineage projection links the
+never reuses or mutates the parent context. The spawning agent remains the
+invoker. When admission has a verified human requester, `representedSubject`
+records that person's installation-local pseudonym separately. A supported
+explicit user selection can therefore create a child representing Bob while
+the parent execution continues as Alice. This does not mean Bob personally
+requested or approved the tool call. Agent-initiated `sessions_create` and
+`sessions_send` executions also record the trusted agent invoker and prepared
+human subject when available; they do not invent spawn lineage. The lineage
+projection for `sessions_spawn` links the
 parent context, execution, run, and agent when the exact private parent token
 was available. Its delegation reference covers the spawn relation plus the
 requester/controller and evaluated local/target policy inputs. Applicable
@@ -239,7 +247,23 @@ await and authority recheck. Create, fork, send, patch, reset, archive, restore,
 and delete facts distinguish committed or scheduled work from typed lifecycle
 conflicts and definitive no-ops. These mechanics are `attribution-only`; the
 public generic display remains unverified rather than presenting their private
-reason or target as trusted evidence.
+reason or target as trusted evidence. When the operation has a resolved human
+authority, its receipt includes a pseudonymous **Recorded authority subject**
+from that prepared selection. The operation's subject can differ from the
+immutable parent context; it is not inferred from message authorship, session
+ownership, or a later participant lookup. This field does not verify the generic
+receipt or prove human intent, approval, or authorization. No new successful
+read, list, or history receipts are collected, and missing historical subjects
+mean they were not recorded.
+
+On otherwise compatible databases, older released readers reject generic receipt
+payloads containing this new optional field and show those receipts as corrupt or
+unknown. Previously written receipts remain readable; upgrading again restores
+access to the retained new receipts. This receipt-format limitation is separate
+from database schema compatibility: an older installation can refuse a newer
+database before reading any receipt. Context subjects use an existing optional
+field and do not have this receipt-reader limitation. Collection switches,
+retention, row bounds, and approval records remain unchanged.
 
 Direct session-sharing methods do not admit model runs,
 so they do not synthesize run selectors. Sharing events preserve a verified

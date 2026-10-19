@@ -51,7 +51,12 @@ export type AdmittedRunContext = Readonly<{
 export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
   /** Host-captured original input; claim/occurrence owners revalidate it for continuations. */
-  recoverySnapshot?: import("../gateway/operator-run-recovery-source.js").OperatorRunRecoverySnapshot;
+  recoverySnapshot?: import("../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot;
+  /** Existing immutable policy and link; accepted-input owners may retain them for recovery. */
+  channelRecoverySource?: Readonly<{
+    reference: import("../state/user-profiles.types.js").UserChannelAuthorizationReference;
+    modelPolicy?: PreparedOperatorModelPolicy;
+  }>;
   scopes: readonly string[];
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
@@ -116,6 +121,12 @@ export function createAdmittedRunOperatorAuthority(
     profileId: source.profileId,
     recoverySnapshot: source.recoverySnapshot
       ? freezeJsonSnapshot(structuredClone(source.recoverySnapshot))
+      : undefined,
+    channelRecoverySource: source.channelRecoverySource
+      ? Object.freeze({
+          reference: Object.freeze({ ...source.channelRecoverySource.reference }),
+          modelPolicy: source.channelRecoverySource.modelPolicy,
+        })
       : undefined,
     scopes: Object.freeze([...source.scopes]),
     gatewayAccessGrant: source.gatewayAccessGrant

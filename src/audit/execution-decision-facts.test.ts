@@ -600,6 +600,14 @@ describe("execution decision facts", () => {
     recordExecutionDecisionFactInDatabase(
       {
         ...receipt(receiptIdSecret),
+        representedSubject: {
+          state: "present",
+          principal: {
+            kind: "person",
+            domainRef: "recorded-domain",
+            principalRef: "recorded-person",
+          },
+        },
         action: {
           family: "tool",
           operation: "policy",
@@ -656,6 +664,14 @@ describe("execution decision facts", () => {
       }),
       expect.objectContaining({
         selectorId: "decision-fact:1",
+        representedSubject: {
+          state: "present",
+          principal: {
+            kind: "person",
+            domainRef: "recorded-domain",
+            principalRef: "recorded-person",
+          },
+        },
         action: { family: "decision", operation: "record" },
         decision: { outcome: "unknown", reasonCode: "decision_fact_display_unverified" },
         enforcement: {

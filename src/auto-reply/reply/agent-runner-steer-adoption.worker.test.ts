@@ -4,6 +4,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createNativeSessionBindingAuthority } from "../../agents/harness/native-session/binding-authority.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { beginRestartRecoveryTerminalDelivery } from "../../config/sessions/restart-recovery-receipt.js";
@@ -20,13 +21,13 @@ import {
   attachSteerBackend,
   createSteerParams,
 } from "./agent-runner-steer-adoption.test-support.js";
-import { createQueueTestRun } from "./queue.test-helpers.js";
 import { clearSessionQueues } from "./queue/cleanup.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
 import type { FollowupRun } from "./queue/types.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { createQueueTestRun } from "./reply-tool-authority.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import * as steeringDelivery from "./steering-delivery-preparation.js";
 
@@ -60,6 +61,12 @@ it("adopts active steering through prepared policy without caller-thread SQL", a
       prompt: "use the new requirements",
       messageId: "incoming-steer",
       originatingChannel: "webchat",
+    });
+    run.operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "steering-requester",
+      scopes: ["operator.read", "operator.write"],
+      source: {},
+      assertCurrent() {},
     });
     Object.assign(run.run, {
       agentId: "main",
@@ -135,6 +142,12 @@ it.for(
         prompt: "keep this incoming request visible",
         messageId,
         originatingChannel: "webchat",
+      });
+      run.operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "steering-requester",
+        scopes: ["operator.read", "operator.write"],
+        source: {},
+        assertCurrent() {},
       });
       Object.assign(run.run, {
         agentId: "main",
@@ -263,6 +276,7 @@ it.for(
         expect(resultState.admission).toEqual({
           status: "accepted",
           mode: steered ? "steer" : "followup",
+          ...(!steered ? { reason: "steering-unavailable" } : {}),
         });
         expect([...retained]).toEqual(steered ? [] : [run]);
         if (!steered) {
@@ -347,6 +361,7 @@ it.for([
         expect(resultState.admission).toEqual({
           status: "accepted",
           mode: steered ? "steer" : "followup",
+          ...(!steered ? { reason: "steering-unavailable" } : {}),
         });
         expect(original.run.gitContributorProfileId).toBe("requester-c");
         if (!steered) {

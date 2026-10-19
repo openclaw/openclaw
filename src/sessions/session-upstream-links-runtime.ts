@@ -19,10 +19,9 @@ export type SessionUpstreamLinkReadSource = ReturnType<typeof captureSessionUpst
 export function captureSessionUpstreamLinkReadSource(
   context: OpenClawStateWorkerContext = captureOpenClawStateWorkerContext(),
 ) {
-  const identity = { ...context.admission.identity };
   return {
     context,
-    present: identity.key.startsWith("file:"),
+    present: context.admission.identity.key.startsWith("file:"),
     assertCurrent() {
       context.admission.assertCurrent();
     },
@@ -45,7 +44,7 @@ export async function prepareSessionUpstreamLink(
     { context, current: true },
   );
   source.assertCurrent();
-  if (!result?.ok || result.type !== "sessionUpstream.read") {
+  if (!result) {
     throw new Error("Session upstream source is unavailable");
   }
   return result.link;
@@ -82,11 +81,11 @@ export function settleSessionUpstreamLink(
 ): Promise<boolean> {
   const context = captureOpenClawStateWorkerContext(options);
   const { assertCurrent, sessionEntryCurrent } = options;
-  const input = structuredClone({
+  const input = {
     expected,
     settlement,
     sessionEntryCurrentSource: sessionEntryCurrent?.source,
-  });
+  };
   return runOpenClawStateWorkerOperation(
     context,
     (scope) => scope.execute({ type: "sessionUpstream.settle", input }),

@@ -204,6 +204,25 @@ function renderReceiptDetail(receipt: DecisionReceiptDisplayV1) {
             ])
           : undefined}
         <p class="run-inspector__reason">{t("activity.runInspector.decisions.ownerNote")}</p>
+        {receipt.representedSubject ? (
+          <>
+            <h6>{t("activity.runInspector.decisions.representedSubjectHeading")}</h6>
+            {renderRunInspectorValues("values", [
+              ["kind", renderRunInspectorSafeRef(receipt.representedSubject.principal.kind)],
+              [
+                "principalReference",
+                renderRunInspectorSafeRef(receipt.representedSubject.principal.principalRef, true),
+              ],
+              [
+                "domainReference",
+                renderRunInspectorSafeRef(receipt.representedSubject.principal.domainRef, true),
+              ],
+            ])}
+            <p class="run-inspector__reason">
+              {t("activity.runInspector.decisions.representedSubjectNote")}
+            </p>
+          </>
+        ) : undefined}
       </section>
       <section aria-labelledby="run-inspector-receipt-evidence">
         <h5 id="run-inspector-receipt-evidence">

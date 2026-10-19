@@ -3,6 +3,9 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export function projectEmbeddedMessageContext(run: Partial<EmbeddedForegroundPromptContext>) {
   return {
+    requesterOrigin: run.requesterOrigin,
+    operatorProfileId: run.operatorProfileId,
+    conversationId: run.conversationId,
     senderId: run.senderId,
     senderName: run.senderName,
     senderUsername: run.senderUsername,

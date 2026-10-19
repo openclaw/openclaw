@@ -42,13 +42,11 @@ import {
   loadSessionEntryByKey,
   withSubagentRequesterDelivery,
 } from "./subagent-announce-delivery.runtime.js";
-import {
-  sendSubagentAnnounceDirectly,
-  type SubagentAnnounceDirectParams,
-} from "./subagent-announce-direct-delivery.js";
+import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import {
   sourceOwnerChangedResult,
   type SubagentAnnounceDeliveryResult,
+  type SubagentAnnounceDirectParams,
 } from "./subagent-announce-dispatch.js";
 import {
   resolveCompletionDeliveryOrigins,

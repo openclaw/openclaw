@@ -76,7 +76,6 @@ export function hasRegisteredOpenClawAgentDatabasePath(
 ): boolean {
   const { identity } = readOpenClawAgentDatabaseIdentity(database);
   return (
-    typeof identity === "string" &&
     getOrLoadSqliteDatabaseAdmissionForPath(
       resolveDatabasePath(options),
       registeredPathKey({ ...database, identity: `file:${identity}` }),

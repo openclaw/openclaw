@@ -5,7 +5,7 @@ import {
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
@@ -83,7 +83,7 @@ export function readCronRunReceiptCurrentFactsInDatabase(
   database: EngineConnection,
   command: CronRunReceiptCurrentReadCommand,
 ): CronRunReceiptCurrentFacts {
-  return runSqliteDeferredTransactionSync(database, () => {
+  return runSqliteReadSnapshotSync(database, () => {
     const { handle } = command;
     const deletionBlocked =
       command.includeAvailability &&

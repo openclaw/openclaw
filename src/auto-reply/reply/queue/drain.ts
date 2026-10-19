@@ -145,6 +145,7 @@ async function executeClaim(
             text: prompt,
             idempotencyKey: buildOverflowTranscriptIdempotencyKey(source, prompt),
             senderIsOwner: source.run.senderIsOwner,
+            requesterOrigin: source.run.requesterOrigin,
             provenance: source.run.inputProvenance,
           },
           pendingInputSources: sources.flatMap((item) => item.userTurnTranscriptRecorder ?? []),

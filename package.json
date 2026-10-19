@@ -482,7 +482,8 @@
     "!dist/plugin-sdk/http-response-runtime.d.ts",
     "!dist/plugin-sdk/node-crypto-runtime.d.ts",
     "!dist/plugin-sdk/path-existence-runtime.d.ts",
-    "!dist/plugin-sdk/provider-auth-markers.d.ts"
+    "!dist/plugin-sdk/provider-auth-markers.d.ts",
+    "!dist/plugin-sdk/terminal-safe-text.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -844,6 +845,9 @@
     "./plugin-sdk/text-chunking": {
       "types": "./dist/plugin-sdk/text-chunking.d.ts",
       "default": "./dist/plugin-sdk/text-chunking.js"
+    },
+    "./plugin-sdk/terminal-safe-text": {
+      "default": "./dist/plugin-sdk/terminal-safe-text.js"
     },
     "./plugin-sdk/agent-scope-runtime": {
       "types": "./dist/plugin-sdk/agent-scope-runtime.d.ts",

@@ -1,6 +1,6 @@
 import fs, { promises as fsPromises } from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeAll, expect, it, vi } from "vitest";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -148,6 +148,8 @@ it("redacts structured audit records before persistence", async () => {
   const record = finalizeConfigWriteAuditRecord({
     base: {
       ...createAuditRecordBase(path.join(home, ".openclaw", "openclaw.json")),
+      argv: ["openclaw", "--password", "audit-password"],
+      execArgv: ["--api-key", "audit-api-key"],
       suspicious: [
         "provider returned ya29.fake-access-token-with-enough-length",
         "plugin returned AIzaSyD-very-real-looking-google-api-key-123",
@@ -157,12 +159,28 @@ it("redacts structured audit records before persistence", async () => {
     err: Object.assign(new Error("payload contained abcd-efgh-ijkl-mnop"), { code: "EFAIL" }),
   });
 
+  const sanitized = sanitizeConfigAuditRecord(record);
+  assert(sanitized.event === "config.write");
+  expect(sanitized.argv).toEqual(["openclaw", "--password", "***"]);
+  expect(sanitized.execArgv).toEqual(["--api-key", "***"]);
+  sanitized.argv.push("changed");
+  sanitized.execArgv.push("changed");
+  sanitized.suspicious.push("changed");
+  expect(record.argv).toEqual(["openclaw", "--password", "audit-password"]);
+  expect(record.execArgv).toEqual(["--api-key", "audit-api-key"]);
+  expect(record.suspicious).toEqual([
+    "provider returned ya29.fake-access-token-with-enough-length",
+    "plugin returned AIzaSyD-very-real-looking-google-api-key-123",
+  ]);
+
   const deps = { env: {}, homedir: () => home };
   await appendConfigAuditRecord({ ...deps, record });
   const raw = JSON.stringify(listConfigAuditRecordsForTests(deps));
   expect(raw).not.toContain("AIzaSyD-very-real-looking");
   expect(raw).not.toContain("ya29.fake-access-token");
   expect(raw).not.toContain("abcd-efgh-ijkl-mnop");
+  expect(raw).not.toContain("audit-password");
+  expect(raw).not.toContain("audit-api-key");
 });
 
 it("caps caller-supplied processInfo argv at 8 entries before redaction", () => {

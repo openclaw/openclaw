@@ -21,7 +21,7 @@ import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-con
 import { withSqliteDatabaseWriteScope } from "../infra/sqlite-database-admission.js";
 import { assertSqliteJsonlReadBudget } from "../infra/sqlite-jsonl-budget.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -281,7 +281,7 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
         );
       // Budget checks and payload reads must share one snapshot so a concurrent
       // writer cannot cross the budget between admission and materialization.
-      return runSqliteDeferredTransactionSync(
+      return runSqliteReadSnapshotSync(
         database.db,
         () => {
           if (
