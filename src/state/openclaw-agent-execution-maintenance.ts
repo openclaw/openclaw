@@ -6,6 +6,8 @@ import type {
   SessionMaintenanceLiveProtection,
 } from "../config/sessions/session-accessor.sqlite-lifecycle-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { captureSqliteNativeRuntimeAdmission } from "../infra/node-sqlite.js";
 import { repairDoctorSqliteIndexCorruption } from "../infra/sqlite-index-recovery.js";
 import { SqliteIntegrityError, type SqliteIntegrityCheck } from "../infra/sqlite-integrity.js";
 import {
@@ -174,6 +176,19 @@ export function createAgentDatabaseMaintenanceOwner(context: {
           ftsSchemas: OPENCLAW_AGENT_FTS_SCHEMAS,
           ftsOnly: true,
           assertCurrent,
+          describeRepair(indexes) {
+            const db = getNodeSqliteKysely<Record<string, Record<string, never>>>(
+              check.database,
+            ).withSchema("main");
+            const counts = indexes.map((name) => {
+              const row = executeSqliteQueryTakeFirstSync(
+                check.database,
+                db.selectFrom(name).select((eb) => eb.fn.countAll<number | bigint>().as("n")),
+              );
+              return `${name}=${String(row?.n)}`;
+            });
+            return `Rebuilt stale SQLite FTS indexes (agent ${context.databaseOptions.agentId}): ${counts.join(", ")}; SQLite ${captureSqliteNativeRuntimeAdmission()?.version}. No table rows were removed.`;
+          },
         });
       }, state);
       requestSqliteWorkerOperationAdmission({

@@ -3,8 +3,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
 import { hashFileDescriptorSync } from "./file-descriptor.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { captureSqliteNativeRuntimeAdmission, openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { repairSqliteIndexCorruption } from "./sqlite-index-schema.js";
 import { createPrivateSqliteTempDirectorySync } from "./sqlite-private-directory.js";
 import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
@@ -67,6 +66,7 @@ export function repairDoctorSqliteIndexCorruption(
     assertCurrent: () => void;
     ftsSchemas?: readonly string[];
     ftsOnly?: boolean;
+    describeRepair?: (indexes: readonly string[]) => string;
   },
 ): string[] {
   let backupPath: string | undefined;
@@ -89,26 +89,11 @@ export function repairDoctorSqliteIndexCorruption(
       { cause },
     );
   }
-  const db =
-    getNodeSqliteKysely<Record<string, Record<string, never>>>(database).withSchema("main");
   return indexes.length > 0
     ? [
         `Saved pre-repair SQLite backup: ${backupPath}`,
-        options.ftsOnly
-          ? `Rebuilt stale SQLite FTS indexes (${options.label}): ${indexes
-              .map(
-                (name) =>
-                  `${name}=${String(
-                    executeSqliteQueryTakeFirstSync(
-                      database,
-                      db.selectFrom(name).select((eb) => eb.fn.countAll<number | bigint>().as("n")),
-                    )?.n,
-                  )}`,
-              )
-              .join(
-                ", ",
-              )}; SQLite ${captureSqliteNativeRuntimeAdmission()?.version}. No table rows were removed.`
-          : `Warning: Rebuilt corrupt ${options.label} SQLite indexes: ${indexes.join(", ")}. No table rows were removed.`,
+        options.describeRepair?.(indexes) ??
+          `Warning: Rebuilt corrupt ${options.label} SQLite indexes: ${indexes.join(", ")}. No table rows were removed.`,
       ]
     : [];
 }
