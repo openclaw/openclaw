@@ -374,34 +374,66 @@ describe("recoverEmbeddedRunOverflow", () => {
   });
 
   it.each([
-    { reason: "Compaction timed out after 180000ms", summary: "Auto-compaction timed out" },
-    { reason: "The summary provider is unavailable", summary: "Auto-compaction failed" },
-  ])("preserves a precheck compaction failure: $reason", async ({ reason, summary }) => {
-    mocks.compact.mockResolvedValueOnce({ ok: false, compacted: false, reason });
-    const promptError = overflowError();
-    const input = makeInput({
-      promptError,
-      attempt: {
-        terminal: { kind: "failed", source: "precheck", error: promptError },
-        preflightRecovery: { route: "compact_only" },
-      },
+    {
+      source: "precheck",
+      reason: "Compaction timed out after 180000ms",
+      summary: "Auto-compaction timed out before the next model request.",
+    },
+    {
+      source: "precheck",
+      reason: "The summary provider is unavailable",
+      summary: "Auto-compaction failed before the next model request.",
+    },
+    {
+      source: "prompt",
+      reason: "Synthetic summary rejected",
+      summary: "Auto-compaction failed after the provider rejected the prompt.",
+    },
+  ] as const)(
+    "preserves a $source compaction failure: $reason",
+    async ({ source, reason, summary }) => {
+      mocks.compact.mockResolvedValueOnce({ ok: false, compacted: false, reason });
+      const promptError = overflowError();
+      const input = makeInput({
+        promptError,
+        attempt: {
+          terminal: { kind: "failed", source, error: promptError },
+          ...(source === "precheck" ? { preflightRecovery: { route: "compact_only" } } : {}),
+        },
+      });
+
+      const result = await recoverEmbeddedRunOverflow(input);
+
+      expect(result).toMatchObject({
+        action: "surface",
+        kind: "compaction_failure",
+        errorText: expect.stringContaining(reason),
+        userText: expect.stringContaining(summary),
+      });
+      if (result.action !== "surface") {
+        throw new Error("expected compaction failure");
+      }
+      expect(result.userText).toContain("Try again or run /compact");
+      expect(result.userText).not.toContain("Context overflow");
+      expect(mocks.markProviderPromptRejected).toHaveBeenCalledTimes(source === "prompt" ? 1 : 0);
+      expect(input.prepareCurrentTranscriptRetry).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps provider overflow guidance when compaction only skipped", async () => {
+    mocks.compact.mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+      reason: "nothing to compact",
     });
 
-    const result = await recoverEmbeddedRunOverflow(input);
+    const result = await recoverEmbeddedRunOverflow(makeInput({ promptError: overflowError() }));
 
     expect(result).toMatchObject({
       action: "surface",
-      kind: "compaction_failure",
-      errorText: expect.stringContaining(reason),
-      userText: expect.stringContaining(`${summary} before the next model request.`),
+      kind: "context_overflow",
+      userText: expect.stringContaining("Context overflow"),
     });
-    if (result.action !== "surface") {
-      throw new Error("expected precheck compaction failure");
-    }
-    expect(result.userText).toContain("Try again or run /compact");
-    expect(result.userText).not.toContain("Context overflow");
-    expect(mocks.markProviderPromptRejected).not.toHaveBeenCalled();
-    expect(input.prepareCurrentTranscriptRetry).not.toHaveBeenCalled();
   });
 
   it.each([true])(

@@ -12,7 +12,7 @@ import {
 } from "../state/openclaw-state-worker-error.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
-import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
+import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
 import {
   acquireStateDatabaseSchemaLease,
   type StateDatabaseSchemaLease,

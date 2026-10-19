@@ -3243,31 +3243,79 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it("uses 16-class capacity for the qualified compact selection without changing its scope", () => {
+  it("uses 16-class capacity for the qualified compact selection without changing its scope", async () => {
     const targets = [
       "src/agents/embedded-agent-runner/effective-tool-policy.test.ts",
       "src/gateway/client-callsites.guard.test.ts",
       "src/gateway/mcp-app-extension-runtime.test.ts",
       "src/agents/cli-runner.helpers.test.ts",
     ];
-    const plan = expectDefined(
-      createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" }),
-      "qualified compact selection",
-    );
-    expect(
-      plan.flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? [])).toSorted(),
-    ).toEqual(targets.toSorted());
-    for (const job of plan) {
-      expect(job).toMatchObject({
-        runner: "blacksmith-16vcpu-ubuntu-2404",
-        planConcurrency: 1,
-        requiresDist: false,
-      });
-      for (const group of job.groups) {
-        expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS ?? String(group.fallbackMaxWorkers)).toBe(
-          "2",
-        );
+    const configs = new Set([
+      ...embeddedAgentVitestProjectOwners.map((owner) => owner.config),
+      "test/vitest/vitest.gateway-client.config.ts",
+      "test/vitest/vitest.gateway-core.config.ts",
+      "test/vitest/vitest.agents-core.config.ts",
+    ]);
+    // Pin the inventory and costs: unrelated test removals can otherwise move
+    // these owners between serial and parallel canonical jobs.
+    const inventory = [
+      ...targets,
+      "src/agents/embedded-agent-runner/capacity-a.test.ts",
+      "src/agents/embedded-agent-runner/capacity-b.test.ts",
+      "src/agents/embedded-agent-runner/run.incomplete-turn.classification.test.ts",
+      "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
+      "src/agents/embedded-agent-runner/run/capacity.test.ts",
+    ];
+    vi.resetModules();
+    vi.doMock("../vitest/vitest.test-shards.mjs", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../vitest/vitest.test-shards.mjs")>()),
+      fullSuiteVitestShards: fullSuiteVitestShards
+        .map((shard) =>
+          Object.assign({}, shard, {
+            projects: shard.projects.filter((config) => configs.has(config)),
+          }),
+        )
+        .filter((shard) => shard.projects.length > 0),
+    }));
+    vi.doMock("../../scripts/lib/list-test-files.mts", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../scripts/lib/list-test-files.mts")>()),
+      listTrackedTestFiles: (root: string) =>
+        inventory.filter((file) => root === "." || file.startsWith(`${root}/`)),
+    }));
+    vi.doMock("../../scripts/lib/ci-test-timings.mts", () => ({
+      ...testTimings,
+      readCompactGroupTimings: () => ({}),
+      readRuntimePlacementTimings: () => [],
+    }));
+    try {
+      const { createSelectedNodeTestShardBundles: createSelected } =
+        await import("../../scripts/lib/ci-node-test-plan.mts");
+      const plan = expectDefined(
+        createSelected(targets, { runnerBackend: "hybrid" }),
+        "qualified compact selection",
+      );
+      expect(
+        plan
+          .flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []))
+          .toSorted(),
+      ).toEqual(targets.toSorted());
+      for (const job of plan) {
+        expect(job).toMatchObject({
+          runner: "blacksmith-16vcpu-ubuntu-2404",
+          planConcurrency: 1,
+          requiresDist: false,
+        });
+        for (const group of job.groups) {
+          expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS ?? String(group.fallbackMaxWorkers)).toBe(
+            "2",
+          );
+        }
       }
+    } finally {
+      vi.doUnmock("../../scripts/lib/ci-test-timings.mts");
+      vi.doUnmock("../../scripts/lib/list-test-files.mts");
+      vi.doUnmock("../vitest/vitest.test-shards.mjs");
+      vi.resetModules();
     }
   });
 

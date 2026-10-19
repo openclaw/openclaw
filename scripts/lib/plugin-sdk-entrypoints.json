@@ -101,6 +101,7 @@
   "thread-bindings-runtime",
   "thread-bindings-session-runtime",
   "text-chunking",
+  "terminal-safe-text",
   "agent-scope-runtime",
   "agent-runtime",
   "simple-completion-runtime",
