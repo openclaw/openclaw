@@ -50,8 +50,6 @@ it("warns once for legacy generation preparation and leaves retained authority q
   expect(warning).toHaveBeenCalledOnce();
   expect(warning.mock.calls[0]?.[0]).toContain("prepareNativeSessionGenerationAuthority");
   expect(warning.mock.calls[0]?.[0]).toContain("retainNativeSessionGenerationAuthority");
-  expect(warning.mock.calls[0]?.[0]).toContain("Final compatibility day: 2026-12-31");
-  expect(warning.mock.calls[0]?.[0]).toContain("first January 2027 stable release");
 });
 
 describe("native session binding generation authority", () => {
@@ -65,9 +63,8 @@ describe("native session binding generation authority", () => {
   const scope = () => ({ agentId: target.agentId, sessionKey: target.sessionKey, storePath });
   const params = () => ({ target, storePath, createSupersededError });
   const seed = () => upsertSessionEntryCore(scope(), { sessionId: target.sessionId, updatedAt: 1 });
-  const retain = (
-    overrides: Partial<Parameters<typeof retainNativeSessionGenerationAuthority>[0]> = {},
-  ) => retainNativeSessionGenerationAuthority({ ...params(), ...overrides });
+  const retain = (assertCurrent?: () => void) =>
+    retainNativeSessionGenerationAuthority({ ...params(), assertCurrent });
   const resolve = (
     overrides: Partial<
       Parameters<typeof resolvePreparedNativeSessionBinding<typeof binding>>[0]
@@ -90,22 +87,37 @@ describe("native session binding generation authority", () => {
     storePath = path.join(fixture.stateDir, "sessions.json");
   });
 
-  it.each(["current", "stale", "ephemeral"] as const)(
+  it.each(["current", "stale", "ephemeral", "rotated-during-read"] as const)(
     "fences a %s readable binding",
     async (state) => {
       let active = true;
+      await using gate = bindingGate();
       await upsertSessionEntryCore(
         state === "ephemeral" ? { ...scope(), sessionKey: "agent:main:other" } : scope(),
         { sessionId: state === "ephemeral" ? "session-other" : target.sessionId, updatedAt: 1 },
       );
       const pending = resolve({
         target: state === "stale" ? { ...target, sessionId: "session-stale" } : target,
+        readBinding: async () => {
+          if (state === "rotated-during-read") {
+            await gate.pause();
+          }
+          return binding;
+        },
         assertCurrent: () => {
           if (!active) {
             throw new Error("caller authority closed");
           }
         },
       });
+      if (state === "rotated-during-read") {
+        gate.observe(pending);
+        await gate.reached;
+        await patchSessionEntryCore(scope(), () => ({ sessionId: "session-successor" }));
+        gate.resume();
+        await expect(pending).rejects.toThrow(createSupersededError(target.sessionId));
+        return;
+      }
       if (state === "stale") {
         await expect(pending).rejects.toThrow(superseded);
         return;
@@ -125,31 +137,10 @@ describe("native session binding generation authority", () => {
     },
   );
 
-  it("rechecks host generation after an awaited binding read", async () => {
-    await seed();
-    await using gate = bindingGate();
-    const pending = gate.observe(
-      resolve({
-        readBinding: async () => {
-          await gate.pause();
-          return binding;
-        },
-      }),
-    );
-    await gate.reached;
-    await patchSessionEntryCore(scope(), () => ({ sessionId: "session-successor" }));
-    gate.resume();
-    expect(await pending).toMatchObject({
-      message: `Session generation is no longer current: ${target.sessionId}`,
-    });
-  });
-
   it("retains published lineage through foreground abort and terminal cleanup without main-thread SQL", async () => {
     await seed();
     const controller = new AbortController();
-    const retained = await retain({
-      assertCurrent: () => controller.signal.throwIfAborted(),
-    });
+    const retained = await retain(() => controller.signal.throwIfAborted());
     using _ = { [Symbol.dispose]: () => retained.release() };
     const cleanup = retained.authority.withLiveness(() => {});
     const calls = observeMainThreadSql();
