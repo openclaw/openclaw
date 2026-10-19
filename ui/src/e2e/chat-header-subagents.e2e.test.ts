@@ -70,6 +70,14 @@ suite.define(() => {
         const activityModule = controlUiE2eBuiltModuleRequest(
           "ui/src/pages/chat/components/chat-subagent-activity-live.tsx",
         );
+        const detailsChunk = Promise.withResolvers<void>();
+        await page.route(
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-details-session.tsx"),
+          async (route) => {
+            await detailsChunk.promise;
+            await route.continue();
+          },
+        );
         const activityChunk = Promise.withResolvers<void>();
         const activityRequested = Promise.withResolvers<void>();
         await page.route(activityModule, async (route) => {
@@ -96,6 +104,12 @@ suite.define(() => {
         const detailsDialog = activePane.getByRole("dialog", { name: "Details", exact: true });
         await details.getByRole("button", { name: "Details", exact: true }).click();
         await detailsDialog.waitFor();
+        await detailsDialog.getByRole("status").filter({ hasText: "Loading…" }).waitFor();
+        detailsChunk.resolve();
+        await detailsDialog.locator(".chat-details-session").waitFor();
+        expect(
+          await detailsDialog.getByRole("status").filter({ hasText: "Loading…" }).count(),
+        ).toBe(0);
         expect(
           await activePane
             .locator(".chat-main__conversation-frame > openclaw-chat-details")

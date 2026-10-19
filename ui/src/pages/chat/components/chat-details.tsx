@@ -318,7 +318,13 @@ export const ChatDetails = defineSolidBridge<Props, Methods>(
               {(_scope) => (
                 <>
                   <Show when={sessionOpened()}>
-                    <Loading>
+                    <Loading
+                      fallback={
+                        <div class="chat-details__muted" role="status">
+                          {t("common.loading")}
+                        </div>
+                      }
+                    >
                       <ChatDetailsSession
                         props={props.props}
                         presented={props.presented && opened()}
