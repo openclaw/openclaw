@@ -22,6 +22,7 @@ import {
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const fallbackMocks = createFallbackE2eMocks((params) => runEmbeddedAttemptMock(params));
+// mock-isolation: keep model config writes out of the isolated fallback workspace.
 vi.mock("./models-config.js", () => ({
   ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
 }));
