@@ -2,11 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
-const mocks = vi.hoisted(() => ({
-  metadata: vi.fn(),
-  channel: vi.fn(),
-  channelRecord: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ metadata: vi.fn(), channel: vi.fn(), channelRecord: vi.fn() }));
 
 // mock-isolation: Keep filesystem discovery and process-wide metadata outside this owner test.
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
@@ -49,6 +45,17 @@ function plugin(id: string, channels: string[] = []): PluginManifestRecord {
 }
 
 let query: typeof import("./target-registry-query.js");
+
+function expectUndiscovered(...sources: unknown[]) {
+  for (const source of sources) {
+    expect(source).not.toHaveBeenCalled();
+  }
+}
+
+function expectPath(segments: string[], id: string) {
+  expect(query.resolveConfigSecretTargetByPath(segments)?.entry.id).toBe(id);
+}
+
 beforeEach(async () => {
   vi.resetModules();
   mocks.metadata.mockReset().mockReturnValue({
@@ -106,23 +113,18 @@ describe("secret target path ownership", () => {
       query.resolvePlanTargetAgainstRegistry({ type: "unknown", pathSegments: segments }),
     ).toBeNull();
     query.listSecretTargetRegistryEntries({ configPath: segments });
-    expect(mocks.metadata).toHaveBeenCalledTimes(0);
-    expect(mocks.channel).toHaveBeenCalledTimes(0);
-    expect(mocks.channelRecord).toHaveBeenCalledTimes(0);
+    expectUndiscovered(mocks.metadata, mocks.channel, mocks.channelRecord);
   });
 
   it("resolves core and auth-profile paths without plugin metadata", () => {
-    expect(query.resolveConfigSecretTargetByPath(["gateway", "auth", "token"])?.entry.id).toBe(
-      "gateway.auth.token",
-    );
+    expectPath(["gateway", "auth", "token"], "gateway.auth.token");
     expect(
       query.resolveSecretPlanTargetByPathCore({
         configFile: "auth-profile-store",
         pathSegments: ["profiles", "example", "key"],
       })?.entry.id,
     ).toBe("auth-profiles.api_key.key");
-    expect(mocks.metadata).toHaveBeenCalledTimes(0);
-    expect(mocks.channel).toHaveBeenCalledTimes(0);
+    expectUndiscovered(mocks.metadata, mocks.channel);
   });
 
   it("loads only the selected plugin's manifest targets, preserving literal IDs", () => {
@@ -137,21 +139,14 @@ describe("secret target path ownership", () => {
     expect(mocks.metadata).toHaveBeenCalledWith(
       expect.objectContaining({ pluginIds: ["example.plugin"] }),
     );
-    expect(mocks.channel).toHaveBeenCalledTimes(0);
-    expect(mocks.channelRecord).toHaveBeenCalledTimes(0);
+    expectUndiscovered(mocks.channel, mocks.channelRecord);
   });
 
   it("resolves manifest web-provider targets without unrelated channel contracts", () => {
-    expect(
-      query.resolveConfigSecretTargetByPath([
-        "plugins",
-        "entries",
-        "web-plugin",
-        "config",
-        "webSearch",
-        "apiKey",
-      ])?.entry.id,
-    ).toBe("plugins.entries.web-plugin.config.webSearch.apiKey");
+    expectPath(
+      ["plugins", "entries", "web-plugin", "config", "webSearch", "apiKey"],
+      "plugins.entries.web-plugin.config.webSearch.apiKey",
+    );
     expect(mocks.channelRecord).toHaveBeenCalledTimes(0);
   });
 
@@ -221,32 +216,21 @@ describe("secret target path ownership", () => {
   );
 
   it("resolves bundled channel hits without metadata discovery", () => {
-    expect(query.resolveConfigSecretTargetByPath(["channels", "bundled", "token"])?.entry.id).toBe(
-      "channels.bundled.token",
-    );
-    expect(mocks.metadata).toHaveBeenCalledTimes(0);
-    expect(mocks.channelRecord).toHaveBeenCalledTimes(0);
+    expectPath(["channels", "bundled", "token"], "channels.bundled.token");
+    expectUndiscovered(mocks.metadata, mocks.channelRecord);
   });
 
   it("retains external targets extending bundled and empty channel contracts", () => {
-    expect(
-      query.resolveConfigSecretTargetByPath(["channels", "bundled", "extraToken"])?.entry.id,
-    ).toBe("channels.bundled.extraToken");
-    expect(
-      query.resolveConfigSecretTargetByPath(["channels", "empty", "extraToken"])?.entry.id,
-    ).toBe("channels.empty.extraToken");
+    expectPath(["channels", "bundled", "extraToken"], "channels.bundled.extraToken");
+    expectPath(["channels", "empty", "extraToken"], "channels.empty.extraToken");
     expect(query.resolveConfigSecretTargetByPath(["channels", "bundled", "unknown"])).toBeNull();
     expect(mocks.metadata).toHaveBeenCalledTimes(1);
   });
 
   it("retains all external channel owners and unknown-channel misses", () => {
-    expect(
-      query.resolveConfigSecretTargetByPath(["channels", "external", "primary"])?.entry.id,
-    ).toBe("channels.external.primary");
+    expectPath(["channels", "external", "primary"], "channels.external.primary");
     expect(mocks.metadata).toHaveBeenCalledTimes(0);
-    expect(
-      query.resolveConfigSecretTargetByPath(["channels", "external", "secondary"])?.entry.id,
-    ).toBe("channels.external.secondary");
+    expectPath(["channels", "external", "secondary"], "channels.external.secondary");
     expect(query.resolveConfigSecretTargetByPath(["channels", "unknown", "token"])).toBeNull();
     expect(mocks.metadata).toHaveBeenCalledTimes(1);
   });
@@ -267,11 +251,7 @@ describe("secret target path ownership", () => {
     expect(
       query
         .discoverConfigSecretTargetsByIds(
-          {
-            cron: { webhookToken: "synthetic-token" },
-            channels: {},
-            plugins: { entries: {} },
-          },
+          { cron: { webhookToken: "synthetic-token" }, channels: {}, plugins: { entries: {} } },
           [
             "cron.webhookToken",
             "channels.external.primary",
@@ -280,9 +260,7 @@ describe("secret target path ownership", () => {
         )
         .map(({ entry }) => entry.id),
     ).toEqual(["cron.webhookToken"]);
-    expect(mocks.metadata).toHaveBeenCalledTimes(0);
-    expect(mocks.channel).toHaveBeenCalledTimes(0);
-    expect(mocks.channelRecord).toHaveBeenCalledTimes(0);
+    expectUndiscovered(mocks.metadata, mocks.channel, mocks.channelRecord);
   });
 
   it("discovers every configured external channel owner", () => {
@@ -307,8 +285,7 @@ describe("secret target path ownership", () => {
     expect(
       query.discoverConfigSecretTargets(config).map(({ pathSegments }) => pathSegments),
     ).toEqual([["plugins", "entries", "example.plugin", "config", "token"]]);
-    expect(mocks.channel).toHaveBeenCalledTimes(0);
-    expect(mocks.channelRecord).toHaveBeenCalledTimes(0);
+    expectUndiscovered(mocks.channel, mocks.channelRecord);
   });
 
   it("uses prepared manifests without loading contracts for absent channel subtrees", () => {
@@ -320,8 +297,6 @@ describe("secret target path ownership", () => {
         )
         .map(({ entry }) => entry.id),
     ).toEqual(["cron.webhookToken"]);
-    expect(mocks.metadata).toHaveBeenCalledTimes(0);
-    expect(mocks.channel).toHaveBeenCalledTimes(0);
-    expect(mocks.channelRecord).toHaveBeenCalledTimes(0);
+    expectUndiscovered(mocks.metadata, mocks.channel, mocks.channelRecord);
   });
 });

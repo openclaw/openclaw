@@ -64,28 +64,17 @@ function securityFor(file: string): WindowsSecurity {
 beforeEach(() => {
   facts.clear();
   inspections.batch.mockReset().mockImplementation(async (paths) => paths.map(securityFor));
-  // The former owner parsed this native summary as if it contained icacls tokens.
-  inspections.legacy.mockReset().mockImplementation(async (file) => {
-    const stat = await fs.lstat(file);
-    return {
-      ok: true,
-      isSymlink: stat.isSymbolicLink(),
-      isDir: stat.isDirectory(),
-      mode: stat.mode,
-      bits: stat.mode & 0o777,
-      source: "windows-acl",
-      ownerSid: CURRENT_USER,
-      ownerTrusted: true,
-      worldReadable: true,
-      worldWritable: true,
-      groupReadable: false,
-      groupWritable: false,
-      aclSummary: "native owner=current-user world=rw group=--",
-    };
-  });
+  inspections.legacy.mockReset();
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  try {
+    // The old reader's string summary must never substitute for native descriptors.
+    expect(inspections.legacy).not.toHaveBeenCalled();
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
 
 async function fixture() {
   const root = tempDirs.make("trusted-plan-path-");

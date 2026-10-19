@@ -26,20 +26,20 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   resolvePluginMetadataSnapshot: metadataMocks.resolvePluginMetadataSnapshot,
 }));
 
-function writeChannelContract(params: {
-  channelId: string;
-  pluginId: string;
-  targetId: string;
-  ownership: "channelConfigs" | "channels";
-}) {
+function writeChannelContract(
+  pluginId: string,
+  channelId = pluginId,
+  ownership: "channelConfigs" | "channels" = "channels",
+  targetId = `channels.${channelId}.token`,
+) {
   const rootDir = makeTrackedTempDir("openclaw-target-registry-channel", tempDirs);
   fs.writeFileSync(
     path.join(rootDir, "secret-contract-api.cjs"),
     `module.exports = { secretTargetRegistryEntries: [${JSON.stringify({
-      id: params.targetId,
-      targetType: params.targetId,
+      id: targetId,
+      targetType: targetId,
       configFile: "openclaw.json",
-      pathPattern: params.targetId,
+      pathPattern: targetId,
       secretShape: "secret_input",
       expectedResolvedValue: "string",
       includeInPlan: true,
@@ -49,12 +49,29 @@ function writeChannelContract(params: {
     "utf8",
   );
   return {
-    id: params.pluginId,
+    id: pluginId,
     origin: "config",
-    channels: params.ownership === "channels" ? [params.channelId] : [],
-    channelConfigs: params.ownership === "channelConfigs" ? { [params.channelId]: {} } : {},
+    channels: ownership === "channels" ? [channelId] : [],
+    channelConfigs: ownership === "channelConfigs" ? { [channelId]: {} } : {},
     rootDir,
   };
+}
+
+function expectedTarget(suffix: string, pluginId: string, ...segments: string[]) {
+  return {
+    path: `plugins.entries${suffix}`,
+    pathSegments: ["plugins", "entries", pluginId, "config", ...segments],
+  };
+}
+
+function envRef(id: string) {
+  return { source: "env", provider: "default", id };
+}
+
+function expectTargets(actual: unknown, targets: Array<{ path: string; pathSegments: string[] }>) {
+  expect(actual).toEqual(
+    expect.arrayContaining(targets.map((entry) => expect.objectContaining(entry))),
+  );
 }
 
 describe("getSecretTargetRegistry metadata reuse", () => {
@@ -77,18 +94,8 @@ describe("getSecretTargetRegistry metadata reuse", () => {
   it.each(["bundled", "config"])(
     "rejects a broken %s contract during source docs generation without changing runtime tolerance",
     async (origin) => {
-      const healthy = writeChannelContract({
-        channelId: "healthy",
-        pluginId: "healthy",
-        targetId: "channels.healthy.token",
-        ownership: "channels",
-      });
-      const broken = writeChannelContract({
-        channelId: "broken",
-        pluginId: "broken",
-        targetId: "channels.broken.token",
-        ownership: "channels",
-      });
+      const healthy = writeChannelContract("healthy");
+      const broken = writeChannelContract("broken");
       const missing = {
         ...broken,
         id: "missing",
@@ -131,12 +138,7 @@ describe("getSecretTargetRegistry metadata reuse", () => {
   it.runIf(process.platform !== "win32")(
     "reports a rejected contract boundary during source generation after runtime cached the rejection",
     async () => {
-      const record = writeChannelContract({
-        channelId: "blocked",
-        pluginId: "blocked",
-        targetId: "channels.blocked.token",
-        ownership: "channels",
-      });
+      const record = writeChannelContract("blocked");
       const outsideDir = makeTrackedTempDir("openclaw-contract-outside", tempDirs);
       fs.linkSync(
         path.join(record.rootDir, "secret-contract-api.cjs"),
@@ -236,46 +238,36 @@ describe("getSecretTargetRegistry metadata reuse", () => {
       },
     };
     const expectedTargets = [
-      {
-        path: 'plugins.entries["foo.config.bar"].config.token',
-        pathSegments: ["plugins", "entries", "foo.config.bar", "config", "token"],
-      },
-      {
-        path: "plugins.entries.foo.config.bar.config.token",
-        pathSegments: ["plugins", "entries", "foo", "config", "bar", "config", "token"],
-      },
-      {
-        path: "plugins.entries.array-plugin.config.accounts[0].token",
-        pathSegments: ["plugins", "entries", "array-plugin", "config", "accounts", "0", "token"],
-      },
-      {
-        path: 'plugins.entries.record-plugin.config.accounts["0"].token',
-        pathSegments: ["plugins", "entries", "record-plugin", "config", "accounts", "0", "token"],
-      },
-      {
-        path: 'plugins.entries.record-plugin.config.accounts["foo.bar"].token',
-        pathSegments: [
-          "plugins",
-          "entries",
-          "record-plugin",
-          "config",
-          "accounts",
-          "foo.bar",
-          "token",
-        ],
-      },
-      {
-        path: "plugins.entries.wildcard-array-plugin.config.accounts[0].token",
-        pathSegments: [
-          "plugins",
-          "entries",
-          "wildcard-array-plugin",
-          "config",
-          "accounts",
-          "0",
-          "token",
-        ],
-      },
+      expectedTarget('["foo.config.bar"].config.token', "foo.config.bar", "token"),
+      expectedTarget(".foo.config.bar.config.token", "foo", "bar", "config", "token"),
+      expectedTarget(
+        ".array-plugin.config.accounts[0].token",
+        "array-plugin",
+        "accounts",
+        "0",
+        "token",
+      ),
+      expectedTarget(
+        '.record-plugin.config.accounts["0"].token',
+        "record-plugin",
+        "accounts",
+        "0",
+        "token",
+      ),
+      expectedTarget(
+        '.record-plugin.config.accounts["foo.bar"].token',
+        "record-plugin",
+        "accounts",
+        "foo.bar",
+        "token",
+      ),
+      expectedTarget(
+        ".wildcard-array-plugin.config.accounts[0].token",
+        "wildcard-array-plugin",
+        "accounts",
+        "0",
+        "token",
+      ),
     ];
     const { getSecretTargetRegistry } = await import("./target-registry-data.js");
     const { discoverConfigSecretTargets } = await import("./target-registry-query.js");
@@ -296,16 +288,12 @@ describe("getSecretTargetRegistry metadata reuse", () => {
         }),
       ),
     );
-    expect(discoverConfigSecretTargets(config)).toEqual(
-      expect.arrayContaining(expectedTargets.map((target) => expect.objectContaining(target))),
-    );
+    expectTargets(discoverConfigSecretTargets(config), expectedTargets);
 
     const candidates = buildConfigureCandidatesForScope({ config }).filter((candidate) =>
       candidate.path.startsWith("plugins.entries"),
     );
-    expect(candidates).toEqual(
-      expect.arrayContaining(expectedTargets.map((target) => expect.objectContaining(target))),
-    );
+    expectTargets(candidates, expectedTargets);
     const plan = buildSecretsConfigurePlan({
       selectedTargets: new Map(
         candidates.map((candidate) => {
@@ -333,27 +321,20 @@ describe("getSecretTargetRegistry metadata reuse", () => {
       (target) => target.pathSegments?.[2] === "foo.config.bar",
     )!;
     const quotedArrayPath = 'plugins.entries.array-plugin.config.accounts["0"].token';
-    const legacyArrayTarget = {
-      ...arrayTarget,
-      path: arrayTarget.pathSegments!.join("."),
-    };
-    const legacyRecordTarget = {
-      ...recordTarget,
-      path: recordTarget.pathSegments!.join("."),
-    };
-    expect(resolveValidatedPlanTarget(arrayTarget)?.pathTokens[5]).toBe(0);
-    expect(resolveValidatedPlanTarget(recordTarget)?.pathTokens[5]).toBe("0");
+    for (const [target, token] of [
+      [arrayTarget, 0],
+      [recordTarget, "0"],
+    ] as const) {
+      const legacy = { ...target, path: target.pathSegments!.join(".") };
+      expect(resolveValidatedPlanTarget(target)?.pathTokens[5]).toBe(token);
+      expect(resolveValidatedPlanTarget(legacy)?.pathTokens[5]).toBe(token);
+      expect(
+        resolveValidatedPlanTarget({ ...legacy, pathSegments: undefined })?.pathTokens[5],
+      ).toBe(token);
+    }
     expect(resolveValidatedPlanTarget(wildcardArrayTarget)?.pathTokens[5]).toBe(0);
     expect(Object.hasOwn(arrayTarget, "pathTokens")).toBe(false);
     expect(resolveValidatedPlanTarget({ ...arrayTarget, path: quotedArrayPath })).toBeNull();
-    expect(resolveValidatedPlanTarget(legacyArrayTarget)?.pathTokens[5]).toBe(0);
-    expect(resolveValidatedPlanTarget(legacyRecordTarget)?.pathTokens[5]).toBe("0");
-    expect(
-      resolveValidatedPlanTarget({ ...legacyArrayTarget, pathSegments: undefined })?.pathTokens[5],
-    ).toBe(0);
-    expect(
-      resolveValidatedPlanTarget({ ...legacyRecordTarget, pathSegments: undefined })?.pathTokens[5],
-    ).toBe("0");
     expect(
       resolveValidatedPlanTarget({
         ...dottedPluginTarget,
@@ -380,9 +361,7 @@ describe("getSecretTargetRegistry metadata reuse", () => {
         secretId: `credentials/${index}`,
       })),
     });
-    expect(setupPlan.targets).toEqual(
-      expect.arrayContaining(expectedTargets.map((target) => expect.objectContaining(target))),
-    );
+    expectTargets(setupPlan.targets, expectedTargets);
     expect(isSecretsApplyPlan(plan)).toBe(true);
 
     const configPath = path.join(rootDir, "openclaw.json");
@@ -406,26 +385,24 @@ describe("getSecretTargetRegistry metadata reuse", () => {
     });
 
     expect(projected.plugins?.entries?.["foo.config.bar"]?.config).toEqual({
-      token: { source: "env", provider: "default", id: "DOTTED_PLUGIN_TOKEN" },
+      token: envRef("DOTTED_PLUGIN_TOKEN"),
     });
     expect(projected.plugins?.entries?.foo?.config).toEqual({
       bar: {
-        config: { token: { source: "env", provider: "default", id: "NESTED_PLUGIN_TOKEN" } },
+        config: { token: envRef("NESTED_PLUGIN_TOKEN") },
       },
     });
     expect(projected.plugins?.entries?.["array-plugin"]?.config).toEqual({
-      accounts: [{ token: { source: "env", provider: "default", id: "ARRAY_PLUGIN_TOKEN" } }],
+      accounts: [{ token: envRef("ARRAY_PLUGIN_TOKEN") }],
     });
     expect(projected.plugins?.entries?.["record-plugin"]?.config).toEqual({
       accounts: {
-        "0": { token: { source: "env", provider: "default", id: "RECORD_PLUGIN_TOKEN" } },
-        "foo.bar": { token: { source: "env", provider: "default", id: "RECORD_PLUGIN_TOKEN" } },
+        "0": { token: envRef("RECORD_PLUGIN_TOKEN") },
+        "foo.bar": { token: envRef("RECORD_PLUGIN_TOKEN") },
       },
     });
     expect(projected.plugins?.entries?.["wildcard-array-plugin"]?.config).toEqual({
-      accounts: [
-        { token: { source: "env", provider: "default", id: "WILDCARD_ARRAY_PLUGIN_TOKEN" } },
-      ],
+      accounts: [{ token: envRef("WILDCARD_ARRAY_PLUGIN_TOKEN") }],
     });
   });
 
@@ -466,18 +443,13 @@ describe("getSecretTargetRegistry metadata reuse", () => {
 
   it("loads channel contracts from every supported ownership field", async () => {
     const records = [
-      writeChannelContract({
-        channelId: "custom",
-        pluginId: "custom-primary",
-        targetId: "channels.custom.primaryToken",
-        ownership: "channels",
-      }),
-      writeChannelContract({
-        channelId: "custom",
-        pluginId: "custom-secondary",
-        targetId: "channels.custom.secondaryToken",
-        ownership: "channelConfigs",
-      }),
+      writeChannelContract("custom-primary", "custom", "channels", "channels.custom.primaryToken"),
+      writeChannelContract(
+        "custom-secondary",
+        "custom",
+        "channelConfigs",
+        "channels.custom.secondaryToken",
+      ),
     ];
     metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({ plugins: records } as never);
     const { getSecretTargetRegistry } = await import("./target-registry-data.js");
