@@ -263,7 +263,7 @@ suite.define(() => {
       const error = page.locator('.chat-history-error[role="alert"]');
       await error.waitFor();
       expect(await error.textContent()).toContain("Couldn’t load this conversation");
-      expect(await error.locator("p").innerText()).toContain("History temporarily unavailable");
+      expect(await error.locator("p").textContent()).toContain("History temporarily unavailable");
       await page
         .locator(".agent-chat__composer-combobox textarea")
         .fill("Preserve this recovery draft");

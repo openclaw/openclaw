@@ -156,7 +156,7 @@ suite.define(() => {
 
       const notice = page.locator(".chat-history-error");
       await notice.waitFor();
-      expect(await notice.locator("p").innerText()).toContain(
+      expect(await notice.locator("p").textContent()).toContain(
         "This agent is still starting. Retry in a moment.",
       );
       expect(await notice.textContent()).not.toContain(diagnostic);
