@@ -22,6 +22,7 @@ import {
 import { type Hunk, parsePatchText } from "./apply-patch-parse.js";
 import { resolveApplyPatchInputPath, toDisplayPath } from "./apply-patch-paths.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
+import { normalizeNewFileLineEndings } from "./line-endings.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import {
   preserveAtPrefixedRelativePath,
@@ -263,7 +264,13 @@ async function resolvePatchHunks(
         ? hardlinkInode(await fs.stat(target.target.resolved).catch(() => undefined))
         : undefined;
     resolved.push({
-      hunk,
+      hunk:
+        hunk.kind === "add"
+          ? {
+              ...hunk,
+              contents: normalizeNewFileLineEndings(target.target.resolved, hunk.contents),
+            }
+          : hunk,
       target: target.target,
       stage: target.stage,
       keys: moveTarget ? [...target.keys, ...moveTarget.keys] : target.keys,

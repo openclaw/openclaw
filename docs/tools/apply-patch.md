@@ -55,6 +55,7 @@ runs to the end of the file.
 - Memory-flush runs expose only `read` and append-only `write`, so `apply_patch` is unavailable even in `full` mode.
 - Runs whose entire agent executes on a worker (`worker-turn`) ignore both configuration settings. With no permission mode, they contain `apply_patch` whenever it is available; an explicit `full` mode disables that tool containment. Workers used only for remote commands (`remote-exec`) follow the locally running agent's file-tool policy.
 - `*** Add File:` and a non-self `*** Move to:` require the destination path to be absent. To intentionally replace a path, delete it earlier in the same patch before adding or moving the replacement.
+- New `.cmd` and `.bat` files use CRLF line endings so Windows CMD can parse them reliably. This also applies to new files created by `write`, regardless of the host OS. Updates and moves preserve existing line endings; overwriting an existing file with `write` preserves the supplied content.
 - For workspace-contained host paths, updates can follow directory aliases that stay inside the workspace. Adds and moves to new files reject aliased parents; deleting a final symlink removes the link itself. A move through an alias to the same file applies the update in place.
 - Use `*** Move to:` within an `*** Update File:` hunk to rename files.
 - `*** End of File` marks an EOF-only insert when needed.
