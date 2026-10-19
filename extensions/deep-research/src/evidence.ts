@@ -78,31 +78,34 @@ export function evidenceProblem(
   return undefined;
 }
 
-export function renderResearchReport(
+/** The producer records citation ranges while composing, never by scanning user text. */
+export function renderResearchDocument(
   question: string,
   findings: ResearchFinding[],
   sources: ResearchSource[],
   gaps: string[],
-): string {
-  const lines = [
-    `# ${question}`,
-    "",
-    "## Findings",
-    ...findings.map(
-      (finding) =>
-        `- ${finding.statement} ${finding.evidence.map((e) => `[${e.sourceId}]`).join(" ")}`,
-    ),
-  ];
-  if (gaps.length) {
-    lines.push("", "## Unresolved", ...gaps.map((gap) => `- ${gap}`));
+) {
+  let report = `# ${question}\n\n## Findings`;
+  const citations: Array<{ sourceId: string; startByte: number; endByte: number }> = [];
+  for (const finding of findings) {
+    report += `\n- ${finding.statement}`;
+    for (const evidence of finding.evidence) {
+      report += " ";
+      const startByte = Buffer.byteLength(report);
+      report += `[${evidence.sourceId}]`;
+      citations.push({
+        sourceId: evidence.sourceId,
+        startByte,
+        endByte: Buffer.byteLength(report),
+      });
+    }
   }
-  lines.push(
-    "",
-    "## Sources",
-    ...sources.map(
-      (source) =>
-        `[${source.id}] ${source.title}${source.url ? ` — ${source.url}` : " (supplied document)"}`,
-    ),
-  );
-  return lines.join("\n");
+  if (gaps.length) {
+    report += `\n\n## Unresolved\n${gaps.map((gap) => `- ${gap}`).join("\n")}`;
+  }
+  report += "\n\n## Sources";
+  for (const source of sources) {
+    report += `\n[${source.id}] ${source.title}${source.url ? ` — ${source.url}` : " (supplied document)"}`;
+  }
+  return { report, citations };
 }

@@ -82,6 +82,8 @@ export type ResearchResult = {
     reportedTokens: number;
     tokensComplete: boolean;
   };
+  /** Half-open UTF-8 byte ranges emitted with the portable report. */
+  reportCitations?: Array<{ sourceId: string; startByte: number; endByte: number }>;
   providerCitations?: Array<{ url: string; title?: string; startByte?: number; endByte?: number }>;
   route: {
     model: string;

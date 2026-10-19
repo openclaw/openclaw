@@ -46,6 +46,20 @@ describe("portable research", () => {
         extraction: "web-fetch-text-v1",
       },
     ]);
+    const observations = vi.mocked(io.progress).mock.calls.map(([, observation]) => observation);
+    expect(observations.map((observation) => observation?.phase)).toEqual([
+      "planning",
+      "gathering",
+      "assessing",
+      "auditing",
+    ]);
+    expect(observations[0]?.sources).toEqual([]);
+    expect(observations[2]?.sources[0]).toMatchObject({
+      id: "S1",
+      text: "The measured river length is 12 km.",
+    });
+    expect(observations[2]?.counts).toEqual({ modelCalls: 1, searches: 1, fetches: 1, sources: 1 });
+    expect(result.reportCitations).toHaveLength(1);
     expect(result.usage).toEqual({
       modelCalls: 3,
       searches: 1,

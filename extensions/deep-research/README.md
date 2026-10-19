@@ -27,3 +27,29 @@ All branches share bounded model/search/fetch call admission and a deadline.
 Token totals are observational, not a hard token or dollar budget. The feature never chooses a fallback provider or account. The host may rotate
 its configured eligible auth profiles; use an authorized `model@profile` override
 to pin one credential owner. Retrieved source text is untrusted.
+
+## Retained job views
+
+The plugin owns `deep-research.view.v1.{list,read,start,cancel,resume}`. All methods
+use authenticated Gateway session access with the `deep_research` tool policy;
+all methods require operator.write because the current native session gate admits
+only write-scoped handlers. List/read remain pure local reads. Selectors
+are not grants: the admitted target supplies agent, session and incarnation. An
+opaque incarnation fence includes lifecycleRevision, including replacements that
+retain sessionId. Browser acceptance keys are scoped to that incarnation.
+Mutations require the opaque incarnation returned by an authenticated list; the
+server compares this selector with its admitted target before accepting any effect.
+An old mounted pane cannot start work in a replacement conversation.
+List/read inspect only bounded local keyed state and never run recovery or poll a
+provider. Start promptly returns a durable, idempotent acceptance for the existing
+service-owned wake, not a detached model call. The original authenticated source
+must support recoverable work. A repeated key with different input is rejected.
+The read model is version 1, with a content revision, timestamps and explicit
+allowed actions. Unknown counts are absent, not invented zeros.
+
+Portable citations are emitted by the report composer as `reportCitations`;
+`startByte` is inclusive and `endByte` exclusive in the exact report's UTF-8 bytes,
+not UTF-16 character indices. The view maps each to a stable source ID. Managed
+citations without valid ranges appear as provider-cited source entries, not
+invented inline citations. Provider attribution remains distinct from fetched or
+supplied text. Quote matching is mechanical; model-supported evidence is fallible.

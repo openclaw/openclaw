@@ -77,116 +77,140 @@ export function createPluginServiceSessionWork(params: {
       throw new Error("Session work requires a bounded logical operation ID");
     }
   };
+  async function withInvocation<T>(
+    input: Omit<Parameters<PluginServiceSessionWorkV1["admit"]>[0], "id">,
+    work: (current: PluginServiceSessionWorkContextV1, record: AcceptedWork) => Promise<T>,
+  ): Promise<T> {
+    const owner = context();
+    const scope = getPluginRuntimeGatewayRequestScope();
+    if (
+      scope?.pluginId !== params.pluginId ||
+      !params.registry.tools.some(
+        (entry) =>
+          entry.pluginId === params.pluginId &&
+          (entry.declaredNames?.has(input.toolName) ?? entry.names.includes(input.toolName)),
+      )
+    ) {
+      throw new Error("Session work requires its registered tool owner");
+    }
+    const caller = getGatewayToolCallerIdentity();
+    const assertCaller = captureGatewayToolCallerAssertion();
+    const captured = await captureAmbientGatewayOperatorAuthority({
+      missingBindingError: () => new Error("Session work requires its original operator source"),
+      retainInherited: true,
+    });
+    const active = new AbortController();
+    const signal = AbortSignal.any([
+      params.signal,
+      active.signal,
+      ...(scope?.signal ? [scope.signal] : []),
+      ...(captured.authority?.signal ? [captured.authority.signal] : []),
+    ]);
+    let releaseSession: (() => void) | undefined;
+    let assertSession: (() => void) | undefined;
+    try {
+      const assertCurrent = () => {
+        signal.throwIfAborted();
+        assertService();
+        if (context() !== owner) {
+          throw new Error("Session work Gateway changed");
+        }
+        assertCaller?.();
+        captured.assertInvocationCurrent?.();
+        captured.authority?.assertCurrent();
+        assertSession?.();
+      };
+      assertCurrent();
+      const resolved = resolveInProcessGatewayDispatch("tools.invoke", input, {
+        // Preserve a real operator request; an admitted agent still resolves to
+        // its synthetic client with the original executable-tool ceiling.
+        pluginRuntimeOwnerId: params.pluginId,
+        resolveGatewayContext: params.resolveGatewayContext,
+      });
+      const tools = [...new Set([input.toolName, ...(input.delegatedTools ?? [])])];
+      if (tools.length > 32 || tools.some((name) => !name || name.length > 256)) {
+        throw new Error("Session work tool request exceeds its bound");
+      }
+      let target: AcceptedWork["target"] | undefined;
+      // Capture only requested effects that the *original live source* allows.
+      // Reauthorization intersects this restriction with current policy on every wake.
+      for (const name of tools) {
+        if (caller?.operationalRunInstance && !caller.assertToolAllowed) {
+          throw new Error("Session work requires the original executable tool policy");
+        }
+        // A standalone operator tool has routing context, not an admitted agent
+        // run. Its authenticated request still passes the session gate below.
+        caller?.assertToolAllowed?.(name);
+        const prepared = await prepareGatewaySessionAccessAuthority({
+          policy: { mode: "write", requiredTool: name },
+          methodOwner: { kind: "plugin", pluginId: params.pluginId },
+          pluginRegistry: params.registry,
+          requestParams: input,
+          client: resolved.operatorSourceClient,
+          context: owner,
+          ownSessionOnly: false,
+          assertInvocationCurrent: assertCurrent,
+        });
+        try {
+          assertCurrent();
+          prepared.authority.assertCurrent();
+          if (name === input.toolName) {
+            target = prepared.authority.target;
+            const retained = prepared.authority.retain();
+            releaseSession = retained.release;
+            assertSession = retained.assertCurrent;
+          }
+        } finally {
+          prepared.authority.release();
+        }
+      }
+      if (!target) {
+        throw new Error("Session work target was not admitted");
+      }
+      assertCurrent();
+      const record: AcceptedWork = {
+        target: Object.freeze({ ...target }),
+        toolName: input.toolName,
+        tools,
+        ...(captured.authority?.recoverySnapshot
+          ? { snapshot: captured.authority.recoverySnapshot }
+          : {}),
+      };
+      const value = await work(
+        Object.freeze({ target: record.target, signal, assertCurrent }),
+        record,
+      );
+      assertCurrent();
+      return value;
+    } finally {
+      active.abort(new Error("Current session work borrow closed"));
+      releaseSession?.();
+      captured.release?.();
+    }
+  }
   return {
     version: 1,
+    withCurrent: (input, work) => withInvocation(input, (current) => work(current)),
     async admit(input) {
       validateId(input.id);
-      const owner = context();
-      if (
-        getPluginRuntimeGatewayRequestScope()?.pluginId !== params.pluginId ||
-        !params.registry.tools.some(
-          (entry) =>
-            entry.pluginId === params.pluginId &&
-            (entry.declaredNames?.has(input.toolName) ?? entry.names.includes(input.toolName)),
-        )
-      ) {
-        throw new Error("Session work must be admitted by its registered tool owner");
-      }
-      const caller = getGatewayToolCallerIdentity();
-      const assertCaller = captureGatewayToolCallerAssertion();
-      const captured = await captureAmbientGatewayOperatorAuthority({
-        missingBindingError: () => new Error("Session work requires its original operator source"),
-        retainInherited: true,
-      });
-      let releaseSession: (() => void) | undefined;
-      let assertSession: (() => void) | undefined;
-      try {
-        const assertCurrent = () => {
-          assertService();
-          if (context() !== owner) {
-            throw new Error("Session work Gateway changed");
-          }
-          assertCaller?.();
-          captured.assertInvocationCurrent?.();
-          captured.authority?.assertCurrent();
-          assertSession?.();
-        };
-        assertCurrent();
-        const resolved = resolveInProcessGatewayDispatch("tools.invoke", input, {
-          forceSyntheticClient: true,
-          pluginRuntimeOwnerId: params.pluginId,
-          resolveGatewayContext: params.resolveGatewayContext,
-        });
-        const tools = [...new Set([input.toolName, ...(input.delegatedTools ?? [])])];
-        if (tools.length > 32 || tools.some((name) => !name || name.length > 256)) {
-          throw new Error("Session work tool request exceeds its bound");
-        }
-        let target: AcceptedWork["target"] | undefined;
-        // Capture only requested effects that the *original live source* allows.
-        // Reauthorization intersects this restriction with current policy on every wake.
-        for (const name of tools) {
-          if (caller) {
-            if (!caller.assertToolAllowed) {
-              throw new Error("Session work requires the original executable tool policy");
-            }
-            caller.assertToolAllowed(name);
-          }
-          const prepared = await prepareGatewaySessionAccessAuthority({
-            policy: { mode: "write", requiredTool: name },
-            methodOwner: { kind: "plugin", pluginId: params.pluginId },
-            pluginRegistry: params.registry,
-            requestParams: input,
-            client: resolved.operatorSourceClient,
-            context: owner,
-            ownSessionOnly: false,
-            assertInvocationCurrent: assertCurrent,
-          });
-          try {
-            assertCurrent();
-            prepared.authority.assertCurrent();
-            if (name === input.toolName) {
-              target = prepared.authority.target;
-              const retained = prepared.authority.retain();
-              releaseSession = retained.release;
-              assertSession = retained.assertCurrent;
-            }
-          } finally {
-            prepared.authority.release();
-          }
-        }
-        if (!target) {
-          throw new Error("Session work target was not admitted");
-        }
-        assertCurrent();
-        const record: AcceptedWork = {
-          target,
-          toolName: input.toolName,
-          tools,
-          ...(captured.authority?.recoverySnapshot
-            ? { snapshot: captured.authority.recoverySnapshot }
-            : {}),
-        };
+      return withInvocation(input, async ({ assertCurrent }, record) => {
         const durable = store(assertCurrent);
         if (!(await durable.registerIfAbsent(input.id, record, { ttlMs: retentionMs }))) {
           const existing = await durable.lookup(input.id);
           assertCurrent();
           if (
             !existing ||
-            !isDeepStrictEqual(existing.target, target) ||
+            !isDeepStrictEqual(existing.target, record.target) ||
             existing.toolName !== record.toolName ||
-            !isDeepStrictEqual(existing.tools, tools) ||
+            !isDeepStrictEqual(existing.tools, record.tools) ||
             !isDeepStrictEqual(existing.snapshot, record.snapshot)
           ) {
             throw new Error("Session work ID belongs to a different accepted operation");
           }
-          return { target, recoverable: existing.snapshot !== undefined };
+          return { target: record.target, recoverable: existing.snapshot !== undefined };
         }
-        assertCurrent();
-        return { target, recoverable: record.snapshot !== undefined };
-      } finally {
-        releaseSession?.();
-        captured.release?.();
-      }
+        return { target: record.target, recoverable: record.snapshot !== undefined };
+      });
     },
     async run(id, work) {
       validateId(id);

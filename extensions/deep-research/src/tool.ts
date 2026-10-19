@@ -19,7 +19,7 @@ export function createResearchTool(
       _id: string,
       args: unknown,
       signal?: AbortSignal,
-      progress: (message: string) => void = () => {},
+      progress: (message: string, jobId?: string) => void = () => {},
     ) {
       context.assertInvocationCurrent();
       signal?.throwIfAborted();
@@ -45,27 +45,29 @@ export function createResearchTool(
           managed,
         });
       }
-      let job =
-        input.action === "start"
-          ? await jobs.start(input.request, input.idempotencyKey, context, signal, progress)
-          : await jobs.get(input.jobId, context);
-      if (input.action === "resume") {
-        job = await jobs.run(job, context, signal, progress);
-      }
-      if (input.action === "cancel") {
-        job = await jobs.cancel(job, context, signal);
-      }
-      context.assertInvocationCurrent();
-      signal?.throwIfAborted();
-      // The same immutable stored result is returned on retries. No channel send is replayed.
-      return jsonResult({
-        version: 1,
-        jobId: job.id,
-        state: job.state,
-        progress: job.progress,
-        ...(input.action === "result" || input.action === "start" || input.action === "resume"
-          ? { result: job.result }
-          : {}),
+      return jobs.withCurrent(context, async (current) => {
+        let job =
+          input.action === "start"
+            ? await jobs.start(input.request, input.idempotencyKey, current, signal, progress)
+            : await jobs.get(input.jobId, current);
+        if (input.action === "resume") {
+          job = await jobs.run(job, current, signal, progress);
+        }
+        if (input.action === "cancel") {
+          job = await jobs.cancel(job, current, signal);
+        }
+        current.assertInvocationCurrent();
+        signal?.throwIfAborted();
+        // The same immutable stored result is returned on retries. No channel send is replayed.
+        return jsonResult({
+          version: 1,
+          jobId: job.id,
+          state: job.state,
+          progress: job.progress,
+          ...(input.action === "result" || input.action === "start" || input.action === "resume"
+            ? { result: job.result }
+            : {}),
+        });
       });
     },
   };

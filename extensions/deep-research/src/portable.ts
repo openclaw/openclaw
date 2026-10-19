@@ -6,8 +6,9 @@ import type {
   ResearchResult,
   ResearchSource,
 } from "./contract.js";
-import { evidenceProblem, renderResearchReport } from "./evidence.js";
+import { evidenceProblem, renderResearchDocument } from "./evidence.js";
 import { parseValue } from "./validation.js";
+import type { ResearchObservation } from "./view-contract.js";
 
 export type ResearchIO = {
   complete: (
@@ -20,7 +21,7 @@ export type ResearchIO = {
     signal: AbortSignal,
   ) => Promise<{ url: string; title: string; text: string }>;
   assertCurrent: () => void;
-  progress: (message: string) => void;
+  progress: (message: string, observation?: ResearchObservation) => void | Promise<void>;
 };
 const planSchema = Type.Object(
   {
@@ -165,6 +166,27 @@ export async function runPortableResearch(
   let route: ResearchResult["route"] = {
     model: request.model ?? "host-default",
     runtime: "unobserved",
+  };
+  const progress = async (phase: ResearchObservation["phase"], message: string) => {
+    current();
+    await io.progress(message, {
+      phase,
+      counts: {
+        searches: usage.searches,
+        fetches: usage.fetches,
+        modelCalls: usage.modelCalls,
+        sources: sources.length,
+      },
+      sources: sources.map(({ id, title, url, text, retrievedAt, extraction }) => ({
+        id,
+        title,
+        ...(url ? { url } : {}),
+        text,
+        retrievedAt,
+        extraction,
+      })),
+    });
+    current();
   };
   let status: ResearchResult["status"] = "completed";
   const current = () => {
@@ -336,7 +358,7 @@ export async function runPortableResearch(
     for (const document of request.sources?.documents ?? []) {
       addSource({ title: document.title, text: document.text, extraction: "supplied-text-v1" });
     }
-    io.progress("Planning research");
+    await progress("planning", "Planning research");
     const plan = parseValue(
       planSchema,
       await model(
@@ -350,16 +372,18 @@ export async function runPortableResearch(
       const page = await fetchUrl(url);
       if (page) {
         addSource(page);
+        await progress("gathering", "Retaining retrieved evidence");
       }
     }
     let queries = plan.questions;
     for (let round = 0; round < 3; round++) {
-      io.progress(`Gathering evidence (round ${round + 1})`);
+      await progress("gathering", `Gathering evidence (round ${round + 1})`);
       await explore(queries.slice(0, budget.searches - usage.searches));
       if (!sources.length) {
         gaps.push("No readable sources were retrieved.");
         break;
       }
+      await progress("assessing", "Assessing retained evidence");
       const extracted = parseValue(
         extractionSchema,
         await model(
@@ -377,6 +401,7 @@ export async function runPortableResearch(
         }
       }
       if (candidates.length) {
+        await progress("auditing", "Auditing quote support (fallible model)");
         const verification = parseValue(
           verificationSchema,
           await model(
@@ -435,12 +460,13 @@ export async function runPortableResearch(
   if (status === "completed" && gaps.length) {
     status = "partial";
   }
-  const report = renderResearchReport(request.question, findings, sources, gaps);
+  const { report, citations } = renderResearchDocument(request.question, findings, sources, gaps);
   return {
     version: 1,
     engine: "portable",
     status,
     report,
+    reportCitations: citations,
     findings,
     sources,
     gaps,

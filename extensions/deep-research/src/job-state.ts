@@ -3,6 +3,10 @@ import type { OpenClawPluginApi, PluginServiceSchedulerV1 } from "openclaw/plugi
 import type { ResearchRequest, ResearchResult } from "./contract.js";
 import type { ResearchExecution } from "./execution.js";
 import type { ResearchAdapterSnapshot } from "./managed-contract.js";
+import type { ResearchObservation } from "./view-contract.js";
+
+/** A proven pre-acceptance rejection, never an unknown persistence/transport outcome. */
+export class ResearchStartRejectedError extends Error {}
 
 export type ResearchJob = {
   version: 1;
@@ -12,6 +16,8 @@ export type ResearchJob = {
   sessionId: string;
   agentId: string;
   createdAt: number;
+  updatedAt?: number;
+  observation?: ResearchObservation;
   deadlineAt: number;
   state:
     | "queued"
@@ -137,6 +143,7 @@ export class ResearchState {
     if (handle) {
       latest.handle = handle;
     }
+    latest.updatedAt = this.scheduler.now();
     latest.state = "paused";
     latest.progress = handle
       ? "Provider receipt recorded for reconciliation."
@@ -175,6 +182,7 @@ export class ResearchState {
     } else {
       recordWakeFailure(latest, this.scheduler.now(), reason, retryAfterMs);
     }
+    latest.updatedAt = this.scheduler.now();
     const result = await store.compareAndApply(id, observed.comparison, {
       operation: "update",
       action: "set",

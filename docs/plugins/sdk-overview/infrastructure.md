@@ -741,6 +741,14 @@ A changed operator, grant, or captured policy cannot adopt an orphaned admission
 use a new operation ID instead. Existing admitted work is still reauthorized
 against current policy on every wake.
 
+For access from an already-live tool invocation, use
+`sessionWork.withCurrent({ agentId, sessionKey, toolName }, async (current) => { ... })`.
+This reuses admission's source, owner and current-session checks without writing
+an accepted-work record or restoring a saved source. Compare all fields of the
+host-issued `current.target`, including `lifecycleRevision`, when accessing retained
+feature state. Recheck `current.assertCurrent()` after awaits; the borrow closes
+when the callback settles. Selectors and saved revisions cannot supply authority.
+
 A scheduled callback can call `sessionWork.run(id, async (current) => { ... })`.
 An unavailable result carries `retryAfterMs` only for temporary preparation failure;
 the feature must bound retries. A borrow interrupted by refresh remains closed,

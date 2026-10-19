@@ -5,10 +5,12 @@ import type {
   PluginServiceSessionWorkV1,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { ResearchRequest } from "./contract.js";
-import { renderResearchReport } from "./evidence.js";
-import type { ResearchExecution } from "./execution.js";
+import { renderResearchDocument } from "./evidence.js";
+import { withResearchExecution, type ResearchExecution } from "./execution.js";
+import { assertResearchStart } from "./job-request.js";
 import {
   ResearchState,
+  ResearchStartRejectedError,
   recordWakeFailure,
   hash,
   retentionMs,
@@ -17,14 +19,14 @@ import {
   type ResearchJob,
   type Step,
 } from "./job-state.js";
-import type { ResearchAdapterSnapshot } from "./managed-contract.js";
 import {
-  assertManagedRequest,
   managedClient,
-  managedResult,
+  finishManaged,
   reconcileManaged,
   recordManagedPollFailure,
 } from "./managed.js";
+import type { ResearchObservation } from "./view-contract.js";
+import { assertResearchJobCurrent, listResearchJobs, readResearchJob } from "./view-state.js";
 
 export type { ResearchJob } from "./job-state.js";
 export type ResearchMemo = <T>(key: string, work: () => Promise<T>) => Promise<T>;
@@ -40,6 +42,7 @@ export class ResearchJobs {
     private readonly api: OpenClawPluginApi,
     private readonly scheduler: PluginServiceSchedulerV1,
     private readonly sessionWork?: PluginServiceSessionWorkV1,
+    private readonly changed: () => void = () => {},
   ) {
     this.state = new ResearchState(api, scheduler);
   }
@@ -140,21 +143,30 @@ export class ResearchJobs {
     const latest = await this.state.settleUnavailable(id, retained.context, reason, retryAfterMs);
     if (latest) {
       this.schedule(latest);
+      this.changed();
     }
   }
 
+  withCurrent<T>(context: ResearchExecution, work: (current: ResearchExecution) => Promise<T>) {
+    return withResearchExecution(this.sessionWork, context, work);
+  }
+  list(context: ResearchExecution) {
+    return listResearchJobs(this.state, context);
+  }
+  read(id: string, context: ResearchExecution) {
+    return readResearchJob(this.state, id, context);
+  }
+  requestResume(job: ResearchJob, context: ResearchExecution) {
+    assertResearchJobCurrent(job, context);
+    if (job.state !== "paused" || job.recovery !== "ready" || job.cancelRequested) {
+      throw new Error("This job cannot be resumed safely; inspect its retained state.");
+    }
+    this.schedule(job);
+    return job;
+  }
   async get(id: string, context: ResearchExecution) {
     const store = this.state.open<ResearchJob>("jobs", context);
-    const job = await store.lookup(id);
-    context.assertInvocationCurrent();
-    if (
-      !job ||
-      job.sessionKey !== context.sessionKey ||
-      job.sessionId !== context.sessionId ||
-      job.agentId !== context.agentId
-    ) {
-      throw new Error("Research job not found in this conversation generation.");
-    }
+    const job = await this.read(id, context);
     if (!this.active.has(id) && ["running", "submitting"].includes(job.state)) {
       job.state = job.state === "submitting" && !job.handle ? "indeterminate" : "paused";
       job.progress =
@@ -166,6 +178,7 @@ export class ResearchJobs {
       }
       await store.register(id, job, { ttlMs: retentionMs });
       await this.state.retireWake(job, context.assertInvocationCurrent);
+      this.changed();
     }
     return job;
   }
@@ -174,18 +187,11 @@ export class ResearchJobs {
     key: string,
     context: ResearchExecution,
     signal?: AbortSignal,
-    progress?: (message: string) => void,
+    progress?: (message: string, jobId?: string) => void,
+    acceptOnly = false,
   ) {
     context.assertInvocationCurrent();
-    if (!context.sessionKey || !context.sessionId || !context.agentId) {
-      throw new Error("Research requires a current conversation generation.");
-    }
-    if (request.engine === "google") {
-      assertManagedRequest(request);
-    }
-    if (Buffer.byteLength(JSON.stringify(request)) > 262_144) {
-      throw new Error("Research request exceeds the retained input limit.");
-    }
+    assertResearchStart(request, context);
     const id = hash(`${context.agentId}\n${context.sessionKey}\n${context.sessionId}\n${key}`);
     const store = this.state.open<ResearchJob>("jobs", context);
     const prior = await store.lookup(id);
@@ -193,14 +199,16 @@ export class ResearchJobs {
     if (prior) {
       const existing = await this.get(id, context);
       if (!isDeepStrictEqual(existing.request, retainedJson(request))) {
-        throw new Error("Idempotency key belongs to a different research request.");
+        throw new ResearchStartRejectedError(
+          "Idempotency key belongs to a different research request.",
+        );
       }
       await this.state.prepareWake(existing, context.assertInvocationCurrent);
       this.schedule(existing);
       return existing;
     }
     if ((await store.count()) >= 32) {
-      throw new Error("Research job capacity reached for this conversation.");
+      throw new ResearchStartRejectedError("Research job capacity reached for this conversation.");
     }
     context.assertInvocationCurrent();
     const webEnabled = request.sources?.web ?? !request.sources?.documents?.length;
@@ -212,17 +220,32 @@ export class ResearchJobs {
             ...(webEnabled || request.sources?.urls?.length ? ["web_fetch"] : []),
           ];
     const admission = this.sessionWork
-      ? await this.sessionWork.admit({
-          id,
-          agentId: context.agentId,
-          sessionKey: context.sessionKey,
-          toolName: "deep_research",
-          ...(delegatedTools.length ? { delegatedTools } : {}),
-        })
+      ? await this.sessionWork
+          .admit({
+            id,
+            agentId: context.agentId,
+            sessionKey: context.sessionKey,
+            toolName: "deep_research",
+            ...(delegatedTools.length ? { delegatedTools } : {}),
+          })
+          .catch((error: unknown) => {
+            throw new ResearchStartRejectedError(
+              error instanceof Error ? error.message : "Research admission rejected",
+            );
+          })
       : undefined;
     context.assertInvocationCurrent();
-    if (admission && admission.target.sessionId !== context.sessionId) {
-      throw new Error("Research conversation changed during admission");
+    if (
+      admission &&
+      (admission.target.sessionId !== context.sessionId ||
+        admission.target.lifecycleRevision !== context.lifecycleRevision)
+    ) {
+      throw new ResearchStartRejectedError("Research conversation changed during admission");
+    }
+    if (acceptOnly && !admission?.recoverable) {
+      throw new ResearchStartRejectedError(
+        "Research start needs a recoverable authenticated source; no work was started.",
+      );
     }
     const job: ResearchJob = {
       version: 1,
@@ -248,14 +271,24 @@ export class ResearchJobs {
     if (!(await store.registerIfAbsent(id, retainedJson(job), { ttlMs: retentionMs }))) {
       const existing = await this.get(id, context);
       if (!isDeepStrictEqual(existing.request, retainedJson(request))) {
-        throw new Error("Idempotency key belongs to a different research request.");
+        throw new ResearchStartRejectedError(
+          "Idempotency key belongs to a different research request.",
+        );
       }
       return existing;
     }
     this.schedule(job);
-    return this.run(job, context, signal, progress);
+    this.changed();
+    progress?.("Research accepted", job.id);
+    return acceptOnly ? job : this.run(job, context, signal, progress);
   }
-  async cancel(job: ResearchJob, context: ResearchExecution, signal?: AbortSignal) {
+  async cancel(
+    requestedJob: ResearchJob,
+    context: ResearchExecution,
+    signal?: AbortSignal,
+    requestOnly = false,
+  ) {
+    const job = await this.read(requestedJob.id, context);
     if (terminal(job)) {
       return job;
     }
@@ -264,12 +297,15 @@ export class ResearchJobs {
     });
     context.assertInvocationCurrent();
     this.schedule(job);
+    this.changed();
     const active = this.active.get(job.id);
     if (active) {
       active.abort(new Error("Research cancellation requested"));
       return { ...job, cancelRequested: true };
     }
-    return this.run({ ...job, cancelRequested: true }, context, signal);
+    return requestOnly
+      ? { ...job, cancelRequested: true }
+      : this.run({ ...job, cancelRequested: true }, context, signal);
   }
   async run(
     initialJob: ResearchJob,
@@ -277,6 +313,7 @@ export class ResearchJobs {
     parentSignal?: AbortSignal,
     progress: (message: string) => void = () => {},
   ) {
+    assertResearchJobCurrent(initialJob, context);
     let job = initialJob;
     if (terminal(job) || this.active.has(job.id)) {
       return job;
@@ -317,11 +354,13 @@ export class ResearchJobs {
     const save = async () => {
       assertCurrent();
       prepareSave();
+      job.updatedAt = this.scheduler.now();
       await this.state.prepareWake(job, assertCurrent);
       await store.register(job.id, retainedJson(job), { ttlMs: retentionMs });
       assertCurrent();
       await this.state.retireWake(job, assertCurrent);
       this.schedule(job);
+      this.changed();
     };
     // Record parent-only interruption progress while source/service authority is
     // still live. Receipt-only custody is separate and cannot publish content.
@@ -332,6 +371,7 @@ export class ResearchJobs {
       };
       assertReceiptCurrent();
       prepareSave();
+      job.updatedAt = this.scheduler.now();
       await this.state.prepareWake(job, assertReceiptCurrent);
       await this.state
         .open<ResearchJob>("jobs", context, assertReceiptCurrent)
@@ -501,7 +541,7 @@ export class ResearchJobs {
           job.handle = response.value.handle;
           assertCurrent(); // The receipt is already retained; honor parent abort before more work.
           if (response.value.state !== "running") {
-            return await this.finishManaged(job, response.value, save);
+            return await finishManaged(job, response.value, save);
           }
         }
         if (!job.handle) {
@@ -531,7 +571,7 @@ export class ResearchJobs {
             throw new Error("Expected a research snapshot.");
           }
           if (response.value.state !== "running") {
-            return await this.finishManaged(job, response.value, save);
+            return await finishManaged(job, response.value, save);
           }
           signal.throwIfAborted();
           job.state = "paused";
@@ -573,7 +613,15 @@ export class ResearchJobs {
           },
         },
         signal,
-        progress,
+        async (message: string, observation?: ResearchObservation) => {
+          assertCurrent();
+          job.progress = message;
+          if (observation) {
+            job.observation = observation;
+          }
+          await save();
+          progress(message);
+        },
         memo,
       );
       assertCurrent();
@@ -586,12 +634,14 @@ export class ResearchJobs {
         result.gaps.push(
           "Global research deadline exhausted; only recorded evidence was replayed, with no new calls.",
         );
-        result.report = renderResearchReport(
+        const document = renderResearchDocument(
           job.request.question,
           result.findings,
           result.sources,
           result.gaps,
         );
+        result.report = document.report;
+        result.reportCitations = document.citations;
       }
       job.result = job.cancelRequested ? { ...result, status: "cancelled" } : result;
       job.state = uncertain ? "indeterminate" : job.result.status;
@@ -627,7 +677,7 @@ export class ResearchJobs {
           invocationSignal,
         );
         if (response.ok && "state" in response.value && response.value.state !== "running") {
-          return await this.finishManaged(job, response.value, save);
+          return await finishManaged(job, response.value, save);
         }
         job.state = "paused";
         job.progress =
@@ -655,6 +705,7 @@ export class ResearchJobs {
     } finally {
       this.active.delete(job.id);
       this.schedule(job);
+      this.changed();
       // Drain all IDs: a selected wake may be obsolete or deferred and never
       // claim a slot. The normal wake path rechecks its durable retry deadline.
       const waiting = [...this.capacityWaiters];
@@ -663,24 +714,5 @@ export class ResearchJobs {
         this.enqueue(id, this.scheduler.now());
       }
     }
-  }
-  private async finishManaged(
-    job: ResearchJob,
-    snapshot: ResearchAdapterSnapshot,
-    save: () => Promise<void>,
-  ) {
-    job.handle = snapshot.handle;
-    job.result = managedResult(snapshot);
-    job.state =
-      snapshot.state === "completed" ||
-      snapshot.state === "cancelled" ||
-      snapshot.state === "partial"
-        ? snapshot.state
-        : snapshot.state === "indeterminate"
-          ? "indeterminate"
-          : "failed";
-    job.progress = snapshot.reason ?? "Provider report ready";
-    await save();
-    return job;
   }
 }
