@@ -24,14 +24,7 @@ function startOptions(command: string): CodexAppServerStartOptions {
   return { transport: "stdio", command, args: ["app-server", "--listen", "stdio://"], headers: {} };
 }
 
-function spawnEnv(
-  env: Record<string, string>,
-  baseEnv: NodeJS.ProcessEnv,
-  clearEnv: string[] = [],
-  platform?: NodeJS.Platform,
-) {
-  return { ...resolveCodexAppServerSpawnEnv({ env, clearEnv }, baseEnv, platform) };
-}
+type Env = Record<string, string>;
 
 describe("createStdioTransport", () => {
   it("does not let a missing working directory poison another launch of the same executable", async () => {
@@ -101,38 +94,24 @@ describe("createStdioTransport", () => {
     ).rejects.toThrow("owner closed");
     expect(spawnMock).not.toHaveBeenCalled();
   });
-  it.each<{
-    lifeline?: string;
-    detached: boolean;
-    childOptions?: Pick<CodexAppServerStartOptions, "env" | "clearEnv">;
-  }>([
-    {
-      lifeline: " stdin ",
-      childOptions: { clearEnv: ["OPENCLAW_GATEWAY_HOST_LIFELINE"] },
-      detached: false,
-    },
-    {
-      childOptions: { env: { OPENCLAW_GATEWAY_HOST_LIFELINE: "stdin" } },
-      detached: true,
-    },
-  ])(
-    "spawns an endpoint with host lifeline $lifeline and child overrides $childOptions",
-    async ({ lifeline, detached, childOptions }) => {
-      await createStdioTransport(
-        { ...startOptions("codex"), cwd: "/srv/codex-project", ...childOptions },
-        { OPENCLAW_GATEWAY_HOST_LIFELINE: lifeline },
-      );
+  it.each<[string | undefined, Pick<CodexAppServerStartOptions, "env" | "clearEnv">, boolean]>([
+    [" stdin ", { clearEnv: ["OPENCLAW_GATEWAY_HOST_LIFELINE"] }, false],
+    [undefined, { env: { OPENCLAW_GATEWAY_HOST_LIFELINE: "stdin" } }, true],
+  ])("honors host lifeline %s", async (lifeline, childOptions, detached) => {
+    await createStdioTransport(
+      { ...startOptions("codex"), cwd: "/srv/codex-project", ...childOptions },
+      { OPENCLAW_GATEWAY_HOST_LIFELINE: lifeline },
+    );
 
-      expect(spawnMock).toHaveBeenCalledWith(
-        "codex",
-        ["app-server", "--listen", "stdio://"],
-        expect.objectContaining({
-          cwd: "/srv/codex-project",
-          detached: process.platform !== "win32" && detached,
-        }),
-      );
-    },
-  );
+    expect(spawnMock).toHaveBeenCalledWith(
+      "codex",
+      ["app-server", "--listen", "stdio://"],
+      expect.objectContaining({
+        cwd: "/srv/codex-project",
+        detached: process.platform !== "win32" && detached,
+      }),
+    );
+  });
 
   it("preserves wrapper prefixes, root option values, and raw override ordering", async () => {
     const overrides = ["-c", 'developer_instructions="app-server = literal"'];
@@ -184,68 +163,60 @@ describe("createStdioTransport", () => {
 });
 
 describe("resolveCodexAppServerSpawnEnv", () => {
-  it.each([
-    { label: "configured", parameters: "'user.name=Process'", clear: false, preserve: true },
-    { label: "empty", parameters: "", clear: false, preserve: false },
-    { label: "cleared", parameters: "'user.name=Process'", clear: true, preserve: false },
-    {
-      label: "already prepared",
-      parameters: "'user.name=Process' 'maintenance.auto=false' 'gc.auto=0'",
-      clear: false,
-      preserve: true,
-    },
-  ])("preserves $label Git settings when preparing the private process", (fixture) => {
+  const parameters = "'maintenance.auto=false' 'gc.auto=0'";
+  it.each<[string, boolean, boolean]>([
+    ["'user.name=Process'", false, true],
+    ["", false, false],
+    ["'user.name=Process'", true, false],
+    [`'user.name=Process' ${parameters}`, false, true],
+  ])("prepares Git parameters %s (cleared: %s)", (inherited, clear, preserve) => {
     vi.stubEnv("GIT_CONFIG_PARAMETERS", "'user.name=Ambient'");
-    const parameters = "'maintenance.auto=false' 'gc.auto=0'";
     const original = {
       ...startOptions("codex"),
       env: {
-        GIT_CONFIG_PARAMETERS: fixture.parameters,
+        GIT_CONFIG_PARAMETERS: inherited,
         OPENCLAW_GIT_ENV_DROP: "fixture",
       },
-      clearEnv: ["OPENCLAW_GIT_ENV_DROP", ...(fixture.clear ? ["GIT_CONFIG_PARAMETERS"] : [])],
+      clearEnv: ["OPENCLAW_GIT_ENV_DROP", ...(clear ? ["GIT_CONFIG_PARAMETERS"] : [])],
     };
     const prepared = withCodexAppServerGitConfig(original, parameters);
     const refreshed = withCodexAppServerGitConfig(prepared, parameters);
     const env = resolveCodexAppServerSpawnEnv(refreshed);
     expect(env.GIT_CONFIG_PARAMETERS).toBe(
-      fixture.preserve ? `'user.name=Process' ${parameters}` : parameters,
+      preserve ? `'user.name=Process' ${parameters}` : parameters,
     );
     expect(env.OPENCLAW_GIT_ENV_DROP).toBeUndefined();
-    expect(original.env.GIT_CONFIG_PARAMETERS).toBe(fixture.parameters);
+    expect(original.env.GIT_CONFIG_PARAMETERS).toBe(inherited);
   });
 
-  it("applies configured env overrides before clearing denied env vars", () => {
-    expect(
-      spawnEnv(
-        { OPENAI_API_KEY: "configured-openai-key", KEEP: "override" },
-        { OPENAI_API_KEY: "parent-openai-key", CODEX_API_KEY: "parent-codex-key", KEEP: "parent" },
-        ["OPENAI_API_KEY", "CODEX_API_KEY", "MISSING"],
-      ),
-    ).toEqual({ KEEP: "override" });
-  });
-
-  it("clears denied env vars case-insensitively on Windows", () => {
-    expect(
-      spawnEnv(
-        { OpenAI_Api_Key: "configured-openai-key", Other: "configured" },
-        { Codex_Api_Key: "parent-codex-key", KEEP: "parent" },
-        ["OPENAI_API_KEY", " CODEX_API_KEY ", ""],
-        "win32",
-      ),
-    ).toEqual({ KEEP: "parent", Other: "configured" });
-  });
-
-  it("strips inherited runtime loader injection before spawn", () => {
-    expect(
-      spawnEnv(
-        {
-          NODE_PATH: "/configured/node_modules",
-          DYLD_INSERT_LIBRARIES: "/configured/inject.dylib",
-        },
-        { NODE_PATH: "/ambient/node_modules", LD_PRELOAD: "/ambient/inject.so", KEEP: "safe" },
-      ),
-    ).toEqual({ KEEP: "safe" });
+  it.each<[string, Env, Env, string[], NodeJS.Platform | undefined, Env]>([
+    [
+      "overrides then denials",
+      { OPENAI_API_KEY: "configured", KEEP: "override" },
+      { OPENAI_API_KEY: "parent", CODEX_API_KEY: "parent", KEEP: "parent" },
+      ["OPENAI_API_KEY", "CODEX_API_KEY", "MISSING"],
+      undefined,
+      { KEEP: "override" },
+    ],
+    [
+      "case-insensitive Windows denials",
+      { OpenAI_Api_Key: "configured", Other: "configured" },
+      { Codex_Api_Key: "parent", KEEP: "parent" },
+      ["OPENAI_API_KEY", " CODEX_API_KEY ", ""],
+      "win32",
+      { KEEP: "parent", Other: "configured" },
+    ],
+    [
+      "runtime loader injection",
+      { NODE_PATH: "/configured", DYLD_INSERT_LIBRARIES: "/inject.dylib" },
+      { NODE_PATH: "/ambient", LD_PRELOAD: "/inject.so", KEEP: "safe" },
+      [],
+      undefined,
+      { KEEP: "safe" },
+    ],
+  ])("filters %s", (_name, env, base, clear, platform, expected) => {
+    const result = resolveCodexAppServerSpawnEnv({ env, clearEnv: clear }, base, platform);
+    expect({ ...result }).toEqual(expected);
   });
 
   it("uses a null-prototype env map and ignores prototype-polluting keys", () => {

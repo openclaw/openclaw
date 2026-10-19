@@ -1,9 +1,10 @@
+import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { type RawData, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
+import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 import * as processRegistration from "./transport-process-registration.js";
@@ -17,6 +18,17 @@ describe("Codex app-server websocket transport", () => {
   const httpServers: http.Server[] = [];
   const tempDirs: string[] = [];
 
+  async function startClient(options: Parameters<typeof CodexAppServerClient.start>[0]) {
+    const client = await CodexAppServerClient.start(options);
+    clients.push(client);
+    return client;
+  }
+
+  const rejectLocalInspection = () =>
+    vi
+      .spyOn(processRegistration, "prepareCodexAppServerProcessRegistration")
+      .mockRejectedValue(new Error("local inspection unavailable"));
+
   function tcpServer(autoPong = true) {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0, autoPong });
     servers.push(server);
@@ -28,7 +40,7 @@ describe("Codex app-server websocket transport", () => {
     server.on("connection", (socket, request) => {
       headers.push(request.headers[header]);
       socket.on("message", (data) => {
-        const message = JSON.parse(rawDataToText(data)) as { id?: number; method?: string };
+        const message = JSON.parse(data.toString()) as { id?: number; method?: string };
         const result =
           message.method === "initialize"
             ? { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION}` }
@@ -44,6 +56,7 @@ describe("Codex app-server websocket transport", () => {
   }
 
   async function heartbeatFixture(autoPong = true) {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const server = tcpServer(autoPong);
     const connected = createDeferred<void>();
     const ping = createDeferred<void>();
@@ -69,10 +82,10 @@ describe("Codex app-server websocket transport", () => {
     return transport;
   }
 
-  async function websocketUrl(server: WebSocketServer) {
-    await new Promise<void>((resolve) => {
-      server.once("listening", resolve);
-    });
+  async function websocketUrl(server: WebSocketServer | http.Server) {
+    if (!server.address()) {
+      await once(server, "listening");
+    }
     const address = server.address();
     if (!address || typeof address === "string") {
       throw new Error("expected websocket test server port");
@@ -80,13 +93,24 @@ describe("Codex app-server websocket transport", () => {
     return `ws://127.0.0.1:${address.port}`;
   }
 
+  async function frameFixture() {
+    const server = tcpServer();
+    const message = createDeferred<string>();
+    server.once("connection", (socket) => {
+      socket.once("message", (data) => message.resolve(data.toString()));
+      socket.send("{}");
+    });
+    const transport = createTransport(await websocketUrl(server));
+    await once(transport.stdout, "data");
+    return { transport, message: message.promise };
+  }
+
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
-    for (const client of clients) {
+    for (const client of clients.splice(0)) {
       client.close();
     }
-    clients.length = 0;
     for (const transport of transports.splice(0)) {
       transport.kill?.();
       transport.stdin.destroy?.();
@@ -97,18 +121,10 @@ describe("Codex app-server websocket transport", () => {
       }
     }
     await Promise.all(
-      servers.splice(0).map(
+      [...servers.splice(0), ...httpServers.splice(0)].map(
         (server) =>
           new Promise<void>((resolve, reject) => {
             server.close((error) => (error ? reject(error) : resolve()));
-          }),
-      ),
-    );
-    await Promise.all(
-      httpServers.splice(0).map(
-        (server) =>
-          new Promise<void>((resolve) => {
-            server.close(() => resolve());
           }),
       ),
     );
@@ -116,19 +132,14 @@ describe("Codex app-server websocket transport", () => {
   });
 
   it("can speak JSON-RPC over websocket transport", async () => {
-    const localRegistration = vi
-      .spyOn(processRegistration, "prepareCodexAppServerProcessRegistration")
-      .mockRejectedValue(new Error("local inspection unavailable"));
+    const localRegistration = rejectLocalInspection();
     const server = tcpServer();
     const authHeaders = serveRpc(server, "model/list", "authorization");
-    const url = await websocketUrl(server);
-    const client = await CodexAppServerClient.start({
+    const client = await startClient({
       transport: "websocket",
-      url,
+      url: await websocketUrl(server),
       authToken: "secret",
     });
-    clients.push(client);
-
     await expect(client.initialize()).resolves.toBeUndefined();
     await expect(client.request("model/list", {})).resolves.toEqual({ data: [] });
     expect(authHeaders).toEqual(["Bearer secret"]);
@@ -160,11 +171,10 @@ describe("Codex app-server websocket transport", () => {
         socket.send(JSON.stringify({ method: "probe/ready" }));
       });
     });
-    const client = await CodexAppServerClient.start({
+    const client = await startClient({
       transport: "websocket",
       url: await websocketUrl(server),
     });
-    clients.push(client);
     const received = new Promise<void>((resolve) => {
       client.addNotificationHandler(() => resolve());
     });
@@ -176,7 +186,6 @@ describe("Codex app-server websocket transport", () => {
   });
 
   it("keeps an idle remote websocket healthy with protocol-level ping frames", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const { transport, receivedPing } = await heartbeatFixture();
 
     await vi.advanceTimersByTimeAsync(20_000);
@@ -187,11 +196,9 @@ describe("Codex app-server websocket transport", () => {
   });
 
   it("closes a remote websocket only after five consecutive unanswered pings", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const { transport, receivedPing } = await heartbeatFixture(false);
-    const exited = new Promise<unknown>((resolve) => {
-      transport.once("exit", (code) => resolve(code));
-    });
+    const exited = createDeferred<unknown>();
+    transport.once("exit", exited.resolve);
     await vi.advanceTimersByTimeAsync(20_000);
     await expect(receivedPing).resolves.toBeUndefined();
 
@@ -201,76 +208,43 @@ describe("Codex app-server websocket transport", () => {
     }
     await vi.advanceTimersByTimeAsync(20_000);
 
-    await expect(exited).resolves.toBe(1006);
+    await expect(exited.promise).resolves.toBe(1006);
     expect(transport.killed).toBe(true);
   });
 
   it("surfaces a rejected HTTP websocket upgrade", async () => {
-    const statusCode = 401;
     const httpServer = http.createServer((_request, response) => {
-      response.writeHead(statusCode);
-      response.end();
+      response.writeHead(401).end();
     });
     httpServers.push(httpServer);
-    await new Promise<void>((resolve) => {
-      httpServer.listen(0, "127.0.0.1", resolve);
-    });
-    const address = httpServer.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected websocket test server port");
-    }
-    const url = `ws://127.0.0.1:${address.port}`;
-    const transport = createTransport(url);
-    const connectionError = new Promise<unknown>((resolve) => {
-      transport.once("error", (error) => resolve(error));
-    });
-
-    await expect(connectionError).resolves.toHaveProperty(
+    httpServer.listen(0, "127.0.0.1");
+    const transport = createTransport(await websocketUrl(httpServer));
+    const error = createDeferred<unknown>();
+    transport.once("error", error.resolve);
+    await expect(error.promise).resolves.toHaveProperty(
       "message",
-      `Unexpected server response: ${statusCode}`,
+      "Unexpected server response: 401",
     );
   });
 
   it("preserves UTF-8 JSON-RPC bytes split across writable chunks", async () => {
-    const server = tcpServer();
-    const connected = createDeferred<void>();
-    const message = createDeferred<string>();
-    server.once("connection", (socket) => {
-      socket.once("message", (data) => message.resolve(rawDataToText(data)));
-      connected.resolve();
-    });
-    const url = await websocketUrl(server);
-    const transport = createTransport(url);
-    await connected.promise;
+    const { transport, message } = await frameFixture();
     const frame = Buffer.from('{"jsonrpc":"2.0","method":"😀"}\n');
     const emojiStart = frame.indexOf(Buffer.from("😀"));
     transport.stdin.write(frame.subarray(0, emojiStart + 2));
     transport.stdin.write(frame.subarray(emojiStart + 2));
-    await expect(message.promise).resolves.toBe('{"jsonrpc":"2.0","method":"😀"}');
+    await expect(message).resolves.toBe('{"jsonrpc":"2.0","method":"😀"}');
   });
 
   it("flushes an unterminated JSON-RPC frame when stdin finishes", async () => {
-    const server = tcpServer();
-    const message = createDeferred<string>();
-    server.once("connection", (socket) => {
-      socket.once("message", (data) => message.resolve(rawDataToText(data)));
-      socket.send("{}");
-    });
-    const url = await websocketUrl(server);
-    const transport = createTransport(url);
-    const clientReady = new Promise<void>((resolve) => {
-      transport.stdout.once("data", () => resolve());
-    });
-    await clientReady;
+    const { transport, message } = await frameFixture();
     transport.stdin.write('{"jsonrpc":"2.0","method":"final"}');
     transport.stdin.end?.();
-    await expect(message.promise).resolves.toBe('{"jsonrpc":"2.0","method":"final"}');
+    await expect(message).resolves.toBe('{"jsonrpc":"2.0","method":"final"}');
   }, 5_000);
 
   it("can speak JSON-RPC over the canonical unix control socket", async () => {
-    const localRegistration = vi
-      .spyOn(processRegistration, "prepareCodexAppServerProcessRegistration")
-      .mockRejectedValue(new Error("local inspection unavailable"));
+    const localRegistration = rejectLocalInspection();
     // macOS socket paths must fit sockaddr_un even when the runner nests TMPDIR.
     const tempRoot = process.platform === "darwin" ? "/tmp" : os.tmpdir();
     const tempDir = await mkdtemp(path.join(tempRoot, "openclaw-codex-unix-"));
@@ -286,27 +260,14 @@ describe("Codex app-server websocket transport", () => {
     const server = new WebSocketServer({ server: httpServer });
     servers.push(server);
     const upgradeExtensions = serveRpc(server, "thread/list", "sec-websocket-extensions");
-
-    const client = await CodexAppServerClient.start({
+    const client = await startClient({
       transport: "unix",
       homeScope: "user",
       url: `unix://${socketPath}`,
     });
-    clients.push(client);
-
     await expect(client.initialize()).resolves.toBeUndefined();
     await expect(client.request("thread/list", {})).resolves.toEqual({ data: [] });
     expect(upgradeExtensions).toEqual([undefined]);
     expect(localRegistration).not.toHaveBeenCalled();
   });
 });
-
-function rawDataToText(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(new Uint8Array(data)).toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
-}

@@ -16,6 +16,7 @@ import { forkCodexUpstreamSession } from "./upstream-session-fork.js";
 import {
   codexForkTurn,
   createForkTestRuntime,
+  forkControl,
   forkParams,
   forkResponse,
 } from "./upstream-session-fork.test-support.js";
@@ -117,35 +118,30 @@ describe("fork boundaries from imported Codex history", () => {
       const sourceEntries = await readVisibleSessionTranscriptMessageEntries(history.target);
       const bindingStore = createCodexTestBindingStore();
       const identity = sessionBindingIdentity(history.target);
-      const pending = {
-        sourceThreadId: history.thread.id,
-        connectionFingerprint: "fingerprint",
-        lastTurnId: "turn-2",
-      };
       await bindingStore.mutate(identity, {
         kind: "set",
         binding: {
-          threadId: history.thread.id,
+          threadId: materialized ? "thread-canonical" : history.thread.id,
           cwd: "/tmp",
           connectionScope: "supervision",
           supervisionSourceThreadId: history.thread.id,
           preserveNativeModel: true,
           conversationSourceTransferComplete: true,
-          pendingSupervisionBranch: pending,
+          ...(materialized
+            ? {
+                appServerRuntimeFingerprint: "fingerprint",
+                model: "gpt-5.6-luna",
+                modelProvider: "openai",
+              }
+            : {
+                pendingSupervisionBranch: {
+                  sourceThreadId: history.thread.id,
+                  connectionFingerprint: "fingerprint",
+                  lastTurnId: "turn-2",
+                },
+              }),
         },
       });
-      if (materialized) {
-        await bindingStore.mutate(identity, {
-          kind: "commit-pending-supervision-branch",
-          expected: pending,
-          threadId: "thread-canonical",
-          patch: {
-            appServerRuntimeFingerprint: "fingerprint",
-            model: "gpt-5.6-luna",
-            modelProvider: "openai",
-          },
-        });
-      }
       const sourceBinding = bindingStore.read(identity);
       const response = forkResponse();
       const namedResponse = { ...response, thread: { ...response.thread, name } };
@@ -156,19 +152,15 @@ describe("fork boundaries from imported Codex history", () => {
         [response.thread.id, { ...namedResponse.thread, turns: turns.slice(0, 1) }],
       ]);
       const sourceBefore = structuredClone(nativeThreads);
-      const forkThread = vi.fn<CodexSessionCatalogControl["forkThread"]>(async () => namedResponse);
-      const archiveThread = vi.fn<CodexSessionCatalogControl["archiveThread"]>(
-        async () => undefined,
+      const { control, controlFactory, forkThread, archiveThread } = forkControl(
+        vi.fn(async () => namedResponse),
       );
-      const control: CodexSessionCatalogControl = {
-        ...history.control,
-        connectionFingerprint: "fingerprint",
-        withPinnedConnection: async (run) => await run(control),
-        forkThread,
-        archiveThread,
+      Object.assign(control, history.control, {
         readThread: async (threadId) => nativeThreads.get(threadId)!,
-        listTurnPage: async ({ threadId }) => ({ data: nativeThreads.get(threadId)!.turns ?? [] }),
-      };
+        listTurnPage: async ({ threadId }: { threadId: string }) => ({
+          data: nativeThreads.get(threadId)!.turns ?? [],
+        }),
+      } satisfies Partial<CodexSessionCatalogControl>);
       const runtime = createForkTestRuntime(history.target.storePath);
       const createSession = vi.mocked(runtime.agent.session.createSessionEntry);
       const targetKey = "agent:main:dashboard:forked";
@@ -178,24 +170,10 @@ describe("fork boundaries from imported Codex history", () => {
           ...forkParams(),
           targetKey,
           source: { ...history.target, entryId: history.users.at(-1)!.entryId },
-          upstream: {
-            ...forkParams().upstream,
-            threadId: history.thread.id,
-            ref: { connectionFingerprint: "fingerprint" },
-          },
         },
         {
           bindingStore,
-          controlFactory: {
-            hasActiveWork: () => false,
-            disconnect: async () => {},
-            forRequest: () => control,
-            forNode: async () => {
-              throw new Error("Node source is outside this local fork fixture");
-            },
-            forUpstream: async () => control,
-            homesForAgent: async () => [],
-          },
+          controlFactory,
           harnessRuntimeId: "codex",
           resolveConfig: () => ({ session: { store: history.target.storePath } }),
           runtime,
@@ -251,17 +229,12 @@ describe("fork boundaries from imported Codex history", () => {
   });
 
   it.each([
-    { label: "message count", count: 105, text: "same question", omittedImage: false },
-    {
-      label: "message count with an earlier image",
-      count: 105,
-      text: "same question",
-      omittedImage: true,
-    },
-    { label: "total UTF-8 bytes", count: 12, text: "🦞".repeat(16_000) },
-  ])(
-    "selects the original turn after the $label cap drops an identical-text prefix",
-    async ({ count, text, omittedImage }) => {
+    ["message count", 105, "same question", false],
+    ["message count with an earlier image", 105, "same question", true],
+    ["total UTF-8 bytes", 12, "🦞".repeat(16_000), false],
+  ] as const)(
+    "selects the original turn after the %s cap drops an identical-text prefix",
+    async (_label, count, text, omittedImage) => {
       // Repeated text makes ordinal misalignment select the wrong valid turn rather than reject.
       const turns = Array.from({ length: count }, (_, index) => turn(`turn-${index}`, [text]));
       if (omittedImage) {

@@ -8,9 +8,7 @@ import {
 import { resolveCodexUpstreamForkBoundary } from "./upstream-fork-boundary.js";
 import { attachCodexMirrorIdentity, attachUpstreamUserText } from "./upstream-prompt-provenance.js";
 
-const transcriptMocks = vi.hoisted(() => ({
-  readVisibleEntries: vi.fn(),
-}));
+const transcriptMocks = vi.hoisted(() => ({ readVisibleEntries: vi.fn() }));
 
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
   readVisibleSessionTranscriptMessageEntries: transcriptMocks.readVisibleEntries,
@@ -20,10 +18,10 @@ function item(type: string, overrides: Record<string, unknown> = {}): CodexThrea
   return { id: `${type}-item`, type, ...overrides } as CodexThreadItem;
 }
 
-function user(text: string): CodexThreadItem {
+function user(text: string, extraContent: Record<string, unknown>[] = []): CodexThreadItem {
   return item("userMessage", {
     id: `${text}-user`,
-    content: [{ type: "text", text, text_elements: [] }],
+    content: [{ type: "text", text, text_elements: [] }, ...extraContent],
   });
 }
 
@@ -32,13 +30,7 @@ function turn(id: string, items: CodexThreadItem[], overrides: Partial<CodexTurn
 }
 
 function attestedHarnessPrompt(upstreamText: string) {
-  const prompt = attachUpstreamUserText(
-    attachCodexMirrorIdentity(
-      { role: "user", content: "visible question", timestamp: 0 },
-      "turn-1:prompt",
-    ),
-    upstreamText,
-  );
+  const prompt = attachUpstreamUserText(mirror("visible question", "turn-1:prompt"), upstreamText);
   return attachCodexMirrorAttestation(prompt, fingerprintCodexMirrorSourceMessage(prompt));
 }
 
@@ -55,31 +47,26 @@ function entry(
   };
 }
 
-async function resolveFromTurns(params: {
-  turns: readonly CodexTurn[];
-  userMessageOrdinal: number;
-  localPrefixTexts: readonly string[];
-  localIdentities?: readonly string[];
-}) {
+function mirror(text: string, identity: string, timestamp = 0) {
+  return attachCodexMirrorIdentity({ role: "user", content: text, timestamp }, identity);
+}
+
+async function resolveFromTurns(
+  turns: readonly CodexTurn[],
+  texts: readonly string[],
+  localIdentities?: readonly string[],
+) {
   const identities =
-    params.localIdentities ??
-    params.turns
+    localIdentities ??
+    turns
       .flatMap((nativeTurn) =>
         nativeTurn.items
           .filter((nativeItem) => nativeItem.type === "userMessage")
           .map((nativeItem) => `${nativeTurn.id}:${nativeItem.id}`),
       )
-      .slice(-params.localPrefixTexts.length);
-  const entries = params.localPrefixTexts.map((text, index) =>
-    entry(
-      index,
-      attachCodexMirrorIdentity(
-        { role: "user", content: text, timestamp: index },
-        identities[index]!,
-      ),
-    ),
-  );
-  return await resolveEntries(params.turns, entries, `entry-${params.userMessageOrdinal}`);
+      .slice(-texts.length);
+  const entries = texts.map((text, index) => entry(index, mirror(text, identities[index]!, index)));
+  return await resolveEntries(turns, entries, `entry-${texts.length - 1}`);
 }
 
 async function resolveEntries(
@@ -113,18 +100,16 @@ async function resolveEntries(
 
 describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
   it("rejects a selected steer message", async () => {
-    const result = await resolveFromTurns({
-      turns: [turn("turn-1", [user("one"), user("steer")])],
-      userMessageOrdinal: 1,
-      localPrefixTexts: ["one", "steer"],
-    });
-
+    const result = await resolveFromTurns(
+      [turn("turn-1", [user("one"), user("steer")])],
+      ["one", "steer"],
+    );
     expect(result).toMatchObject({ ok: false, code: "steer-message" });
   });
 
   it("locates the retained user after review history", async () => {
-    const result = await resolveFromTurns({
-      turns: [
+    const result = await resolveFromTurns(
+      [
         turn("turn-review", [
           item("enteredReviewMode"),
           user("hidden review prompt"),
@@ -132,10 +117,8 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
         ]),
         turn("turn-2", [user("visible")]),
       ],
-      userMessageOrdinal: 0,
-      localPrefixTexts: ["visible"],
-    });
-
+      ["visible"],
+    );
     expect(result).toEqual({
       ok: true,
       boundary: { beforeTurnId: "turn-2", lastRetainedTurnId: "turn-review" },
@@ -143,24 +126,20 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
   });
 
   it("rejects an in-progress target turn", async () => {
-    const result = await resolveFromTurns({
-      turns: [turn("turn-1", [user("one")], { status: "inProgress" })],
-      userMessageOrdinal: 0,
-      localPrefixTexts: ["one"],
-    });
-
+    const result = await resolveFromTurns(
+      [turn("turn-1", [user("one")], { status: "inProgress" })],
+      ["one"],
+    );
     expect(result).toMatchObject({ ok: false, code: "in-progress-turn" });
   });
 
   it("rejects inherited history absent from native projection even when a canonical target matches", async () => {
-    const result = await resolveFromTurns({
+    const result = await resolveFromTurns(
       // Ordinary injected ResponseItems do not project into native turns.
-      turns: [turn("canonical-turn", [user("target")])],
-      userMessageOrdinal: 1,
-      localPrefixTexts: ["one", "target"],
-      localIdentities: ["source-turn:source-user", "canonical-turn:prompt"],
-    });
-
+      [turn("canonical-turn", [user("target")])],
+      ["one", "target"],
+      ["source-turn:source-user", "canonical-turn:prompt"],
+    );
     expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });
   });
 
@@ -179,34 +158,18 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
   });
 
   it.each([
-    { name: "matching long text", prefix: "x".repeat(70 * 1024), suffix: "Q1", matches: true },
-    {
-      name: "changed long-text suffix",
-      prefix: "x".repeat(70 * 1024),
-      suffix: "Q2",
-      matches: false,
-    },
-    { name: "changed whitespace", prefix: "harness context\n", suffix: "Q1 \n", matches: false },
-  ])(
-    "compares complete attested harness prompts with $name",
-    async ({ prefix, suffix, matches }) => {
-      const entries: SessionTranscriptMessageEntry[] = [
+    ["matching long text", "x".repeat(70 * 1024), "Q1", true],
+    ["changed long-text suffix", "x".repeat(70 * 1024), "Q2", false],
+    ["changed whitespace", "harness context\n", "Q1 \n", false],
+  ] as const)(
+    "compares complete attested harness prompts with %s",
+    async (_, prefix, suffix, matches) => {
+      const entries = [
         entry(0, attestedHarnessPrompt(`${prefix}Q1`)),
-        entry(
-          1,
-          attachCodexMirrorIdentity(
-            { role: "user", content: "target", timestamp: 1 },
-            "turn-2:target-user",
-          ),
-        ),
+        entry(1, mirror("target", "turn-2:target-user", 1)),
       ];
       const turns = [
-        turn("turn-1", [
-          item("userMessage", {
-            id: "native-prompt",
-            content: [{ type: "text", text: `${prefix}${suffix}`, text_elements: [] }],
-          }),
-        ]),
+        turn("turn-1", [user(`${prefix}${suffix}`)]),
         turn("turn-2", [user("target")]),
       ];
 
@@ -236,22 +199,15 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
   );
 
   it("rejects upstream messages carrying semantic non-text inputs", async () => {
-    const result = await resolveFromTurns({
-      turns: [
+    const result = await resolveFromTurns(
+      [
         turn("turn-1", [
-          item("userMessage", {
-            content: [
-              { type: "text", text: "one", text_elements: [] },
-              { type: "skill", name: "reviewer", path: "/skills/reviewer" },
-            ],
-          }),
+          user("one", [{ type: "skill", name: "reviewer", path: "/skills/reviewer" }]),
         ]),
         turn("turn-2", [user("target")]),
       ],
-      userMessageOrdinal: 1,
-      localPrefixTexts: ["one", "target"],
-    });
-
+      ["one", "target"],
+    );
     expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });
   });
 });

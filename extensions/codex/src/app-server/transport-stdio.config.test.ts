@@ -8,7 +8,7 @@ import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveManagedCodexAppServerStartOptions } from "./managed-binary.js";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
-import type { CodexConfigReadResponse, CodexInitializeResponse } from "./protocol.js";
+import type { CodexInitializeResponse } from "./protocol.js";
 import { createStdioTransport } from "./transport-stdio.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
@@ -49,82 +49,47 @@ const expectedMixedConfig = {
   features: { fast_mode: false },
 };
 
-type NativeConfigCase = {
-  name: string;
-  invocation: (
-    command: string,
-    launcher: string,
-  ) => Pick<CodexAppServerStartOptions, "command" | "args">;
-  expected: CodexConfigReadResponse["config"];
-  authProfileId?: null;
-  posixOnly?: boolean;
-  managed?: boolean;
-};
+const cases = [
+  "managed package",
+  "root overrides",
+  "mixed overrides",
+  "node wrapper",
+  "shell wrapper",
+  "shell marker values",
+  "native auth",
+] as const;
+type NativeConfigCase = (typeof cases)[number];
 
-const cases: NativeConfigCase[] = [
-  {
-    name: "loader-owned managed package entrypoint",
-    invocation: () => ({ command: "codex", args: [...mixedArgs] }),
-    expected: expectedMixedConfig,
-    managed: true,
-  },
-  {
-    name: "root overrides with injected auth",
-    invocation: (command) => ({
-      command,
-      args: [...rootOverrides, "app-server", "--listen", "stdio://"],
-    }),
-    expected: expectedConfig,
-  },
-  {
-    name: "mixed override spellings and last-value precedence",
-    invocation: (command) => ({ command, args: [...mixedArgs] }),
-    expected: expectedMixedConfig,
-  },
-  {
-    name: "wrapper prefix and option terminator",
-    invocation: (_command, launcher) => ({
-      command: process.execPath,
-      args: [launcher, ...mixedArgs, "--"],
-    }),
-    expected: expectedMixedConfig,
-  },
-  {
-    name: "shell-owned -c and -- prefix",
-    invocation: (command) => ({
-      command: "/bin/sh",
-      args: ["-c", 'exec "$@"', "--", command, ...mixedArgs, "--"],
-    }),
-    expected: expectedMixedConfig,
-    posixOnly: true,
-  },
-  {
-    name: "wrapper-supplied subcommand with marker-shaped root values",
-    invocation: (command) => ({
-      command: "/bin/sh",
-      args: [
-        "-c",
-        'exec "$@" app-server --listen stdio://',
-        "--",
-        command,
-        "--model",
-        "app-server",
-        "--image",
-        "photo.png",
-        "app-server",
-        ...rootOverrides,
-      ],
-    }),
-    expected: expectedConfig,
-    posixOnly: true,
-  },
-  {
-    name: "native-owned auth without injection",
-    invocation: (command) => ({ command, args: [...mixedArgs] }),
-    expected: { ...expectedMixedConfig, cli_auth_credentials_store: "file" },
-    authProfileId: null,
-  },
-];
+function invocation(mode: NativeConfigCase, command: string, launcher: string) {
+  switch (mode) {
+    case "managed package":
+      return { command: "codex", args: [...mixedArgs] };
+    case "root overrides":
+      return { command, args: [...rootOverrides, "app-server", "--listen", "stdio://"] };
+    case "node wrapper":
+      return { command: process.execPath, args: [launcher, ...mixedArgs, "--"] };
+    case "shell wrapper":
+      return { command: "/bin/sh", args: ["-c", 'exec "$@"', "--", command, ...mixedArgs, "--"] };
+    case "shell marker values":
+      return {
+        command: "/bin/sh",
+        args: [
+          "-c",
+          'exec "$@" app-server --listen stdio://',
+          "--",
+          command,
+          "--model",
+          "app-server",
+          "--image",
+          "photo.png",
+          "app-server",
+          ...rootOverrides,
+        ],
+      };
+    default:
+      return { command, args: [...mixedArgs] };
+  }
+}
 
 async function readNativeConfig(startOptions: CodexAppServerStartOptions, env: NodeJS.ProcessEnv) {
   const child = await createStdioTransport(startOptions, env);
@@ -156,14 +121,14 @@ async function readNativeConfig(startOptions: CodexAppServerStartOptions, env: N
 }
 
 describe("Codex stdio effective configuration", () => {
-  it.for(cases)("preserves $name", { timeout: 75_000 }, async (testCase, context) => {
-    if (testCase.posixOnly && process.platform === "win32") {
+  it.for(cases)("preserves %s", { timeout: 75_000 }, async (mode, context) => {
+    if (mode.startsWith("shell") && process.platform === "win32") {
       context.skip();
     }
     await withTempDir("openclaw-codex-config-", async (dir) => {
       const root = await fs.realpath(dir);
       const { command, launcher, cwd, codexHome, env } = await createCodexNativeTestState(root);
-      if (testCase.managed) {
+      if (mode === "managed package") {
         // Exercise the real package launcher without any alternate Node on PATH.
         env.PATH = path.join(root, "no-path-executables");
       }
@@ -173,9 +138,9 @@ describe("Codex stdio effective configuration", () => {
         'cli_auth_credentials_store="file"\n[features]\nrespect_system_proxy=false\n[analytics]\nenabled=false\n[feedback]\nenabled=false\n',
       );
       const options: CodexAppServerStartOptions = {
-        ...testCase.invocation(command, launcher),
+        ...invocation(mode, command, launcher),
         transport: "stdio",
-        commandSource: testCase.managed ? "managed" : "config",
+        commandSource: mode === "managed package" ? "managed" : "config",
         cwd,
         headers: {},
       };
@@ -183,10 +148,16 @@ describe("Codex stdio effective configuration", () => {
         startOptions: await resolveManagedCodexAppServerStartOptions(options, {
           pluginRoot: fileURLToPath(new URL("../../", import.meta.url)),
         }),
-        authProfileId: testCase.authProfileId,
+        authProfileId: mode === "native auth" ? null : undefined,
       });
       const { config } = await readNativeConfig(start, env);
-      expect(config).toMatchObject(testCase.expected);
+      const expected =
+        mode === "root overrides" || mode === "shell marker values"
+          ? expectedConfig
+          : expectedMixedConfig;
+      expect(config).toMatchObject(
+        mode === "native auth" ? { ...expected, cli_auth_credentials_store: "file" } : expected,
+      );
       await expect(fs.access(path.join(codexHome, "auth.json"))).rejects.toMatchObject({
         code: "ENOENT",
       });
