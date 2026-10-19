@@ -158,11 +158,9 @@ describe("chat pane header", () => {
     await container.querySelector("openclaw-chat-header-session-menu")!.updateComplete;
     const actions = container.querySelector(".chat-pane__actions")!;
     expect(actions.querySelector(".chat-header-session-menu__trigger")).not.toBeNull();
-    expect(
-      [...actions.querySelectorAll("button:not([role^=menuitem])")].map((button) =>
-        button.textContent?.trim(),
-      ),
-    ).toEqual(["Share", "Layout", ""]);
+    const buttons = [...actions.querySelectorAll("button:not([role^=menuitem])")];
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual(["", "Layout", ""]);
+    expect(buttons[0]?.getAttribute("aria-label")).toBe("Session sharing");
     const menu = actions.querySelector(".chat-pane__layout-menu")!;
     expect(menu.querySelector("[role^=menuitem]")).toBeNull();
     await openNativeMenu(menu);
