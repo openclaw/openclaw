@@ -76,6 +76,29 @@ reference time. Generate a fresh fixture for each startup comparison. Cron jobs,
 heartbeats, channels, plugins, browser automation and network discovery are
 disabled so this workload does not call models or external integrations.
 
+## Shared writer contention from audit retention
+
+`scripts/bench-channel-ingress-writer.ts` measures the real audit FIFO, ingress
+queue, and interactive machine-state writer against synthetic retained audit rows:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-channel-ingress-writer.ts \
+  --state-dir /tmp/writer-bench --seed-only
+node --import ./scripts/tsx.mjs scripts/bench-channel-ingress-writer.ts \
+  --state-dir /tmp/writer-bench --seconds 60 --output /tmp/writer-bench.json
+```
+
+Seed requires a new database. Defaults populate 100,000 execution contexts and
+250,000 decision facts, then offer three audit items, one inbound message, one
+idle-drain poll, and one interactive write per second. Audit work alternates
+identity and decision inserts; this models enabled identity collection at its
+retention caps, not the ordinary run/tool-only audit mix. Reports include worker
+queue/service timing, ingress and interactive latency, and persisted-work checks.
+This exercises storage owners, not Gateway transport, external channels, or a model.
+Use `--help` for smaller fixtures and synchronized concurrent A/B start times.
+Prepare fixtures separately from measurement and compare paired differences on
+the authorized benchmark host, swapping CPU allocations between pairs.
+
 ## Measure the real list endpoint
 
 With the fixture Gateway running, use a second terminal:
