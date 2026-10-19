@@ -293,14 +293,9 @@ describe("browser.request profile selection", () => {
     const connection = new AbortController();
     const client = makeClient(connection.signal);
     dispatchLocally({});
-    await runRequest("/screencast", { method: "POST", target: "host" }, undefined, [], {
-      client,
-    });
+    await runRequest("/screencast", { method: "POST", target: "host" }, undefined, [], { client });
     const { requester } = expectDefined(m.dispatch.mock.calls[0], "local dispatch")[0];
-    expect(requester).toMatchObject({
-      connId: "requester-1",
-      signal: connection.signal,
-    });
+    expect(requester).toMatchObject({ connId: "requester-1", signal: connection.signal });
     expect([requester.signal.aborted, requester.isCurrent()]).toEqual([false, true]);
     client.invalidated = true;
     expect([requester.isCurrent(), requester.signal.aborted]).toEqual([false, false]);
@@ -416,14 +411,6 @@ describe("browser.request profile selection", () => {
     });
   });
 
-  it("falls back to host dispatch when an auto-selected node has no browser host", async () => {
-    const { respond, nodeRegistry } = await runRequest("/", {}, hostUnavailable);
-
-    expect(nodeRegistry.invoke).toHaveBeenCalledOnce();
-    expect(m.start).toHaveBeenCalledOnce();
-    expect(reply(respond)[2]?.message).toContain("browser control disabled:");
-  });
-
   it("uses the original Gateway paths when an auto-selected old node lacks upload support", async () => {
     dispatchLocally({ ok: true });
 
@@ -452,56 +439,53 @@ describe("browser.request profile selection", () => {
     expect(reply(respond)[2]?.message).toContain("remote upload transfer is pending approval");
   });
 
-  it("preserves a configured node failure instead of falling back to the host", async () => {
-    m.hostAvailable.mockReturnValue(true);
-    policy("auto", "node-1");
-    const { respond } = await runRequest("/", {}, hostUnavailable);
+  it.each([
+    ["automatic", 1, "browser control disabled:"],
+    ["configured", 0, "Browser control host is not reachable"],
+    ["ambiguous", 0, "UNAVAILABLE: node invoke timed out"],
+  ] as const)(
+    "handles %s node failure without replaying actions",
+    async (mode, starts, message) => {
+      if (mode === "configured") {
+        m.hostAvailable.mockReturnValue(true);
+        policy("auto", "node-1");
+      }
+      const failure =
+        mode === "ambiguous"
+          ? { ok: false, error: { code: "UNAVAILABLE", message: "node invoke timed out" } }
+          : hostUnavailable;
+      const { respond, nodeRegistry } = await runRequest("/", {}, failure);
+      expect(m.start).toHaveBeenCalledTimes(starts);
+      if (starts) {
+        expect(nodeRegistry.invoke).toHaveBeenCalledOnce();
+      }
+      if (mode === "ambiguous") {
+        expect(reply(respond)[2]?.message).toBe(message);
+      } else {
+        expect(reply(respond)[2]?.message).toContain(message);
+      }
+    },
+  );
 
-    expect(m.start).not.toHaveBeenCalled();
-    expect(reply(respond)[2]?.message).toContain("Browser control host is not reachable");
-  });
-
-  it("preserves ambiguous auto-selected node failures", async () => {
-    const { respond } = await runRequest(
-      "/",
-      {},
-      { ok: false, error: { code: "UNAVAILABLE", message: "node invoke timed out" } },
-    );
-
-    expect(m.start).not.toHaveBeenCalled();
-    expect(reply(respond)[2]?.message).toBe("UNAVAILABLE: node invoke timed out");
-  });
-
-  it("maps validated node-proxy route failures like local route failures", async () => {
-    const errorBody = {
-      error: "headed mode needs a display",
-      reason: "no_display_for_headed_profile",
-      details: { profile: "openclaw" },
-    };
-    const { respond } = await runRequest(
-      "/start",
-      { method: "POST" },
-      { ok: true, payload: { error: { status: 409, body: errorBody } } },
-    );
-
-    expectFailure(respond, {
-      code: "INVALID_REQUEST",
-      message: "headed mode needs a display",
-      details: errorBody,
-    });
-  });
-
-  it("returns UNAVAILABLE for an incomplete node file envelope", async () => {
-    const { respond } = await runRequest(
-      "/screenshot",
-      { method: "POST" },
-      { ok: true, payload: { result: { path: "/node/browser/screenshot.png" } } },
-    );
-
-    expectFailure(respond, {
-      code: "UNAVAILABLE",
-      message: "browser proxy file transfer failed",
-    });
+  const errorBody = {
+    error: "headed mode needs a display",
+    reason: "no_display_for_headed_profile",
+    details: { profile: "openclaw" },
+  };
+  it.each([
+    {
+      path: "/start",
+      payload: { error: { status: 409, body: errorBody } },
+      error: { code: "INVALID_REQUEST", message: errorBody.error, details: errorBody },
+    },
+    {
+      path: "/screenshot",
+      payload: { result: { path: "/node/browser/screenshot.png" } },
+      error: { code: "UNAVAILABLE", message: "browser proxy file transfer failed" },
+    },
+  ])("maps node proxy failures for $path", async ({ path, payload, error }) => {
+    const { respond } = await runRequest(path, { method: "POST" }, { ok: true, payload });
+    expectFailure(respond, error);
   });
 });
 
@@ -628,15 +612,15 @@ describe("session tab scope", () => {
   });
 
   it.each([
-    { path: "/tabs/open", method: "POST", outcome: "success" },
-    { path: "/tabs/open", method: "POST", outcome: "failure" },
-    { path: "/tabs/open", method: "POST", outcome: "stale" },
-    { path: "/tabs/owned", method: "DELETE", outcome: "success" },
-    { path: "/tabs/focus", method: "POST", outcome: "success" },
-    { path: "/screenshot", method: "POST", outcome: "success" },
-  ])(
-    "updates ownership and activity only for current successful $path ($outcome)",
-    async ({ path, method, outcome }) => {
+    ["POST", "/tabs/open", "success", ["owned", "opened"], 1],
+    ["POST", "/tabs/open", "failure", ["owned"], 1],
+    ["POST", "/tabs/open", "stale", ["owned"], 1],
+    ["DELETE", "/tabs/owned", "success", [], 0],
+    ["POST", "/tabs/focus", "success", ["owned"], 0],
+    ["POST", "/screenshot", "success", ["owned"], 1],
+  ] as const)(
+    "updates ownership for %s %s (%s)",
+    async (method, path, outcome, targetIds, expired) => {
       vi.spyOn(Date, "now").mockReturnValue(9_000);
       await trackSessionBrowserTab({
         sessionKey,
@@ -660,16 +644,12 @@ describe("session tab scope", () => {
         { hasCurrentClientAuthority: () => current },
       );
       expect(reply(respond)[0]).toBe(outcome === "success");
-      const succeeds = outcome === "success";
       const tracked = await filterTrackedSessionBrowserTabs({
         sessionKey,
         profile: "openclaw",
         tabs: [{ targetId: "owned" }, { targetId: "opened" }],
       });
-      expect(tracked).toEqual([
-        ...(path !== "/tabs/owned" || !succeeds ? [{ targetId: "owned" }] : []),
-        ...(path === "/tabs/open" && succeeds ? [{ targetId: "opened" }] : []),
-      ]);
+      expect(tracked).toEqual(targetIds.map((targetId) => ({ targetId })));
       const closeTab = vi.fn(async () => {});
       await sweepTrackedBrowserTabs({
         now: 10_000,
@@ -677,10 +657,7 @@ describe("session tab scope", () => {
         closeTab,
         sessionFilter: (key) => key === sessionKey,
       });
-      const touched = succeeds && (path === "/navigate" || path === "/tabs/focus");
-      expect(closeTab).toHaveBeenCalledTimes(
-        touched || (path === "/tabs/owned" && succeeds) ? 0 : 1,
-      );
+      expect(closeTab).toHaveBeenCalledTimes(expired);
     },
   );
 

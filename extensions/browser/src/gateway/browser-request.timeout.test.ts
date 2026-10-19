@@ -13,9 +13,7 @@ const m = vi.hoisted(() => ({
 }));
 
 vi.mock("../browser-control-state.js", () => ({ createBrowserControlContext: m.context }));
-vi.mock("../browser/routes/dispatcher.js", () => ({
-  createBrowserRouteDispatcher: m.dispatcher,
-}));
+vi.mock("../browser/routes/dispatcher.js", () => ({ createBrowserRouteDispatcher: m.dispatcher }));
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
   readRuntimeConfig: m.config,
@@ -73,13 +71,7 @@ it.each([
   let current = true;
   const respond = vi.fn();
   const pending = request(
-    {
-      target: "host",
-      method: "POST",
-      path: "/tabs/open",
-      body: { url: "about:blank" },
-      timeoutMs,
-    },
+    { target: "host", method: "POST", path: "/tabs/open", body: { url: "about:blank" }, timeoutMs },
     { respond, context: {} as never, client, hasCurrentClientAuthority: () => current },
   );
   await admission.entered;
@@ -95,9 +87,7 @@ it.each([
   expect(respond).toHaveBeenCalledWith(
     false,
     undefined,
-    expect.objectContaining({
-      message: expect.stringContaining("requester is no longer active"),
-    }),
+    expect.objectContaining({ message: expect.stringContaining("requester is no longer active") }),
   );
 });
 

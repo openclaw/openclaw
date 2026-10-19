@@ -59,10 +59,7 @@ const { getBridgeAuthForPort } = await import("../browser/bridge-auth-registry.j
 const { browserHandlers } = await import("./browser-request.js");
 
 const controlPort = 18_791;
-const activePlugins = {
-  allow: ["telegram", "browser"],
-  entries: { browser: { enabled: true } },
-};
+const activePlugins = { allow: ["telegram", "browser"], entries: { browser: { enabled: true } } };
 const browserStatus = { enabled: true, profile: "openclaw" };
 function browserConfig(browser: OpenClawConfig["browser"] = {}): OpenClawConfig {
   return {
