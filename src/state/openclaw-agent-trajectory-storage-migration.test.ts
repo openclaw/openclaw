@@ -141,6 +141,12 @@ describe("agent trajectory payload migration", () => {
           ).toThrow(/changed or lost/u);
           database.exec("ROLLBACK TO changed_payload; RELEASE changed_payload");
         }
+        // Historical ACP diagnostics still belong to their session window.
+        const acpRows = () =>
+          database.prepare("SELECT event_json FROM acp_parent_stream_events").all();
+        expect(acpRows()).toEqual([{ event_json: '{"type":"retained"}' }]);
+        database.prepare("DELETE FROM session_windows WHERE session_id = ?").run("session");
+        expect(acpRows()).toEqual([]);
       });
     },
   );
