@@ -23,6 +23,7 @@ import {
 } from "../../components/terminal/terminal-pending-actions.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import { lazySidebarElements } from "./chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { closeSlot, openSlot, setSidebarDock } from "./sidebar-layout.ts";
@@ -192,8 +193,15 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
       customElements.whenDefined(tagName),
     ])
       .then(async () => {
-        // Read the live pane fence after lazy registration publishes its readiness.
-        await options.current()?.awaitDomCommit();
+        // Definition precedes the lazy owner's publication that mounts its outlet.
+        await Promise.all([
+          lazySidebarElements.snapshot.get("region")?.pending,
+          lazySidebarElements.snapshot.get(slot)?.pending,
+        ]);
+        if (!isCurrent()) {
+          return;
+        }
+        await owner.awaitDomCommit();
         if (!isCurrent()) {
           return;
         }
