@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, test, vi } from "vitest";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
@@ -70,27 +69,30 @@ async function seedRecoverableSession(params: {
   storePath: string;
   ownerProfileId: string;
 }) {
-  const { sourceKey, sourceSessionId, storePath, ownerProfileId } = params;
   await writeSessionStore({
     entries: {
-      [sourceKey]: sessionStoreEntry(sourceSessionId, {
+      [params.sourceKey]: sessionStoreEntry(params.sourceSessionId, {
         status: "failed",
         abortedLastRun: true,
         mainRestartRecovery: {
-          cycleId: `cycle-${sourceSessionId}`,
+          cycleId: `cycle-${params.sourceSessionId}`,
           revision: 1,
           chargedAttempts: 3,
           tombstone: { reason: "automatic recovery exhausted" },
         },
-        createdActor: { type: "human", source: "profile", id: ownerProfileId },
+        createdActor: {
+          type: "human",
+          source: "profile",
+          id: params.ownerProfileId,
+        },
       }),
     },
   });
   await seedSessionTranscript({
     agentId: "main",
-    sessionId: sourceSessionId,
-    sessionKey: sourceKey,
-    storePath,
+    sessionId: params.sourceSessionId,
+    sessionKey: params.sourceKey,
+    storePath: params.storePath,
     messages: [{ role: "user", content: "finish the interrupted work" }],
   });
 }
@@ -125,9 +127,14 @@ async function registeredSessionRecover(params: {
       response = { ok, payload, error };
     },
     isWebchatConnect: () => false,
-    hasCurrentClientAuthority: params.hasCurrentClientAuthority,
+    ...(params.hasCurrentClientAuthority
+      ? { hasCurrentClientAuthority: params.hasCurrentClientAuthority }
+      : {}),
   });
-  return expectDefined(response, "registered sessions.recover response");
+  if (!response) {
+    throw new Error("registered sessions.recover did not respond");
+  }
+  return response;
 }
 
 function recoveryConfig(storePath: string) {
@@ -152,7 +159,10 @@ test("sessions.recover denies a narrow continuation into a linked foreign succes
   prepareGatewayRecipientProfile(broadWriter);
   const cfg = recoveryConfig(storePath);
   const revokedRole = rolePolicyConfig().gateway!.roles!;
-  const writeRole = expectDefined(revokedRole.definitions.write, "write role fixture");
+  const writeRole = revokedRole.definitions.write;
+  if (!writeRole) {
+    throw new Error("role policy fixture has no write role");
+  }
   writeRole.sessions = { others: "view" };
   const revokedCfg = { ...cfg, gateway: { ...cfg.gateway, roles: revokedRole } };
   await seedRecoverableSession({
@@ -168,10 +178,13 @@ test("sessions.recover denies a narrow continuation into a linked foreign succes
         ? revokedCfg
         : cfg,
   });
-  const recover = (client: typeof sourceOwner, id: string, ctx = context) =>
-    registeredSessionRecover({ client, context: ctx, id, key: sourceKey });
 
-  const initial = await recover(broadWriter, "linked-recovery-create");
+  const initial = await registeredSessionRecover({
+    client: broadWriter,
+    context,
+    id: "linked-recovery-create",
+    key: sourceKey,
+  });
   expect(initial.ok, JSON.stringify(initial)).toBe(true);
   expect(initial).toMatchObject({
     ok: true,
@@ -191,7 +204,12 @@ test("sessions.recover denies a narrow continuation into a linked foreign succes
   });
   const runCountBefore = vi.mocked(context.addChatRun).mock.calls.length;
 
-  const retried = await recover(sourceOwner, "linked-recovery-narrow-retry");
+  const retried = await registeredSessionRecover({
+    client: sourceOwner,
+    context,
+    id: "linked-recovery-narrow-retry",
+    key: sourceKey,
+  });
 
   expect(retried).toMatchObject({
     ok: true,
@@ -217,7 +235,12 @@ test("sessions.recover denies a narrow continuation into a linked foreign succes
   });
   sourceOwner.connect.scopes = ["operator.write"];
   const allowedContext = createDirectChatContext({ getRuntimeConfig: () => cfg });
-  const granted = await recover(sourceOwner, "linked-recovery-explicit-member", allowedContext);
+  const granted = await registeredSessionRecover({
+    client: sourceOwner,
+    context: allowedContext,
+    id: "linked-recovery-explicit-member",
+    key: sourceKey,
+  });
   expect(granted, JSON.stringify(granted)).toMatchObject({
     ok: true,
     payload: {
@@ -267,16 +290,28 @@ test("sessions.recover retains source revocation for its accepted own successor"
   if (typeof runId !== "string") {
     throw new Error("recovery did not return its admitted run");
   }
-  const acceptedRun = expectDefined(rpcSourceTesting.get(runId), "registered active run");
-  const retainedRun = expectDefined(operatorRunCaptures.get(runId), "retained operator authority");
+  const acceptedRun = rpcSourceTesting.get(runId);
+  if (!acceptedRun) {
+    throw new Error("recovery did not register its active run");
+  }
+  const retainedRun = operatorRunCaptures.get(runId);
+  if (!retainedRun) {
+    throw new Error("recovery did not retain its operator run authority");
+  }
   const cancellationWork: Promise<unknown>[] = [];
   context.trackExecution = async (run) => {
     const operation = Promise.resolve().then(run);
     cancellationWork.push(operation);
     return await operation;
   };
-  const providerCancellation = vi.fn();
-  acceptedRun.input.abortSignal.addEventListener("abort", providerCancellation, { once: true });
+  let providerCancellationObserved = false;
+  acceptedRun.input.abortSignal.addEventListener(
+    "abort",
+    () => {
+      providerCancellationObserved = true;
+    },
+    { once: true },
+  );
   retainedRun.armCancellation();
   requestAuthority.release();
   expect(requestAuthority.isCurrent()).toBe(true);
@@ -285,10 +320,14 @@ test("sessions.recover retains source revocation for its accepted own successor"
   await Promise.allSettled(cancellationWork);
   expect(requestAuthority.isCurrent()).toBe(false);
   expect(acceptedRun.input.abortSignal.aborted).toBe(true);
-  expect(providerCancellation).toHaveBeenCalledOnce();
+  expect(providerCancellationObserved).toBe(true);
   retainedRun.release();
   const recoveredKey = recovered.payload?.key ?? "";
   expect(
-    loadSessionEntry({ agentId: "main", sessionKey: recoveredKey, storePath })?.createdActor,
+    loadSessionEntry({
+      agentId: "main",
+      sessionKey: recoveredKey,
+      storePath,
+    })?.createdActor,
   ).toEqual({ type: "human", source: "profile", id: owner.authenticatedUserProfile!.profileId });
 });

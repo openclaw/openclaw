@@ -15,7 +15,6 @@ import {
   expectUnauthorizedVariants,
   sendRequest,
   withGatewayServer,
-  withGatewayTempConfig,
 } from "./server-http.test-harness.js";
 import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
 import {
@@ -26,13 +25,27 @@ import {
 import { withTempConfig } from "./test-temp-config.js";
 
 type ServerOptions = Parameters<typeof withGatewayServer>[0];
+type RequestOptions = Parameters<typeof sendRequest>[1];
+type Request = (
+  path: string,
+  options?: Omit<RequestOptions, "path">,
+) => ReturnType<typeof sendRequest>;
 const log = createSubsystemLogger("test/plugin-http-auth");
+const requestFor =
+  (server: Parameters<typeof sendRequest>[0]): Request =>
+  (path, options) =>
+    sendRequest(server, { path, ...options });
 function withServer(
-  run: ServerOptions["run"],
+  run: (request: Request, server: Parameters<typeof sendRequest>[0]) => Promise<void>,
   overrides: ServerOptions["overrides"] = {},
-  resolvedAuth = AUTH_NONE,
+  resolvedAuth = AUTH_TOKEN,
 ) {
-  return withGatewayServer({ prefix: "plugin-http-auth-", resolvedAuth, overrides, run });
+  return withGatewayServer({
+    prefix: "plugin-http-auth-",
+    resolvedAuth,
+    overrides,
+    run: (server) => run(requestFor(server), server),
+  });
 }
 function pluginRoutes(httpRoutes: PluginHttpRouteRegistration[]) {
   const registry = createGatewayTestRegistry({ httpRoutes });
@@ -62,7 +75,7 @@ const profilePath = "/api/channels/nostr/default/profile";
 function withMattermost(
   path: string,
   plugin: ReturnType<typeof claimingPlugin>,
-  run: ServerOptions["run"],
+  run: (request: Request) => Promise<void>,
 ) {
   return withTempConfig({
     cfg: {
@@ -71,69 +84,54 @@ function withMattermost(
     },
     run: async () =>
       run(
-        createTestGatewayServer({
-          resolvedAuth: AUTH_TOKEN,
-          overrides: { handlePluginRequest: plugin },
-        }),
+        requestFor(
+          createTestGatewayServer({
+            resolvedAuth: AUTH_TOKEN,
+            overrides: { handlePluginRequest: plugin },
+          }),
+        ),
       ),
   });
 }
 
 describe("gateway plugin HTTP auth boundary", () => {
   beforeAll(async () => {
-    // Compile the real Control UI owner before request deadlines begin.
     await import("./control-ui.js");
   });
 
-  test.each([true, false])(
-    "reserves public preview routes ahead of plugins (UI enabled: %s)",
-    async (controlUiEnabled) => {
-      const plugin = claimingPlugin();
-      await withServer(
-        async (server) => {
-          const response = await sendRequest(server, {
-            path: "/control/share/dashboard/example/session",
-            host: "gateway.example.test",
-          });
-          expect(response.res.statusCode).toBe(controlUiEnabled ? 200 : 404);
-          expect(response.getBody()).toContain(
-            controlUiEnabled ? 'content="OpenClaw dashboard"' : "Not Found",
-          );
-          for (const path of ["/control/share", "/control/share/api/private"]) {
-            expect((await sendRequest(server, { path })).res.statusCode).toBe(404);
-          }
-          expect(plugin).not.toHaveBeenCalled();
-        },
-        { controlUiEnabled, controlUiBasePath: "/control", handlePluginRequest: plugin },
-        AUTH_TOKEN,
-      );
-    },
-  );
-
   test.each([
-    { controlUiEnabled: true, method: "GET", status: 503, body: "Control UI assets not found" },
-    { controlUiEnabled: true, method: "POST", status: 404, body: "Not Found" },
-    { controlUiEnabled: false, method: "GET", status: 404, body: "Not Found" },
-  ])(
-    "reserves approval documents ahead of plugins ($method, UI enabled: $controlUiEnabled)",
-    async ({ controlUiEnabled, method, status, body }) => {
+    ["preview", true, "GET", 200, 'content="OpenClaw dashboard"'],
+    ["preview", false, "GET", 404, "Not Found"],
+    ["approval", true, "GET", 503, "Control UI assets not found"],
+    ["approval", true, "POST", 404, "Not Found"],
+    ["approval", false, "GET", 404, "Not Found"],
+  ] as const)(
+    "reserves %s routes ahead of plugins (UI: %s, method: %s)",
+    async (surface, controlUiEnabled, method, status, body) => {
       const plugin = claimingPlugin();
+      const preview = surface === "preview";
       await withServer(
-        async (server) => {
-          const response = await sendRequest(server, {
-            path: "/approve/plugin%3Arequest.json",
-            method,
-          });
+        async (request) => {
+          const response = await request(
+            preview ? "/control/share/dashboard/example/session" : "/approve/plugin%3Arequest.json",
+            preview ? { host: "gateway.example.test" } : { method },
+          );
           expect(response.res.statusCode).toBe(status);
           expect(response.getBody()).toContain(body);
+          if (preview) {
+            for (const path of ["/control/share", "/control/share/api/private"]) {
+              expect((await request(path)).res.statusCode).toBe(404);
+            }
+          }
           expect(plugin).not.toHaveBeenCalled();
         },
         {
           controlUiEnabled,
-          controlUiBasePath: "",
-          controlUiRoot: { kind: "missing" },
+          controlUiBasePath: preview ? "/control" : "",
+          ...(preview ? {} : { controlUiRoot: { kind: "missing" as const } }),
           handlePluginRequest: plugin,
         },
+        preview ? AUTH_TOKEN : AUTH_NONE,
       );
     },
   );
@@ -172,16 +170,14 @@ describe("gateway plugin HTTP auth boundary", () => {
         },
       ]);
       await withServer(
-        async (server) => {
-          const response = await sendRequest(server, {
-            path: "/secure-hook",
+        async (request) => {
+          const response = await request("/secure-hook", {
             authorization: "Bearer test-token",
             headers: header === undefined ? {} : { "x-openclaw-scopes": header },
           });
           expectResponse(response, 200, "ok");
         },
         { handlePluginRequest, shouldEnforcePluginGatewayAuth: () => true },
-        AUTH_TOKEN,
       );
       expect(scopes).toEqual([
         surface === "trusted-operator" ? expect.arrayContaining([...expected]) : [...expected],
@@ -190,28 +186,23 @@ describe("gateway plugin HTTP auth boundary", () => {
     },
   );
 
-  test("allows unauthenticated Mattermost callbacks while protecting other channel routes", async () => {
-    await withMattermost(
-      callbackPath,
-      claimingPlugin([callbackPath, profilePath]),
-      async (server) => {
-        expectResponse(
-          await sendRequest(server, { path: callbackPath, method: "POST" }),
-          200,
-          "plugin-owned",
-        );
-        expectUnauthorizedResponse(await sendRequest(server, { path: profilePath }));
-      },
-    );
-  });
-
-  test("does not bypass auth when mattermost callbackPath names another channel", async () => {
-    const plugin = claimingPlugin([profilePath]);
-    await withMattermost(profilePath, plugin, async (server) => {
-      expectUnauthorizedResponse(await sendRequest(server, { path: profilePath, method: "POST" }));
-      expect(plugin).not.toHaveBeenCalled();
-    });
-  });
+  test.each([callbackPath, profilePath])(
+    "limits Mattermost auth bypass to its own channel (%s)",
+    async (path) => {
+      const plugin = claimingPlugin(
+        path === callbackPath ? [callbackPath, profilePath] : [profilePath],
+      );
+      await withMattermost(path, plugin, async (request) => {
+        if (path === callbackPath) {
+          expectResponse(await request(callbackPath, { method: "POST" }), 200, "plugin-owned");
+          expectUnauthorizedResponse(await request(profilePath));
+        } else {
+          expectUnauthorizedResponse(await request(profilePath, { method: "POST" }));
+          expect(plugin).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
 
   test("routes unattributable proxy traffic only to plugin-authenticated webhooks", async () => {
     const ips: Array<string | undefined> = [];
@@ -238,10 +229,9 @@ describe("gateway plugin HTTP auth boundary", () => {
       req.url?.startsWith("/plugins/diffs") ? respond(res, "hooks") : false,
     );
     await withServer(
-      async (server) => {
+      async (request) => {
         const proxy = (path: string, method = "GET") =>
-          sendRequest(server, {
-            path,
+          request(path, {
             method,
             remoteAddress: "127.0.0.1",
             headers: { "x-forwarded-for": "198.51.100.20" },
@@ -261,7 +251,6 @@ describe("gateway plugin HTTP auth boundary", () => {
           shouldEnforceGatewayAuthForPluginPath(registry, path),
         isPluginAuthenticatedRoute: (path) => isPluginAuthenticatedRoutePath(registry, path),
       },
-      AUTH_TOKEN,
     );
   });
 
@@ -274,35 +263,31 @@ describe("gateway plugin HTTP auth boundary", () => {
       return path === "/googlechat" ? respond(res, "wildcard") : false;
     });
     await withServer(
-      async (server) => {
+      async (request) => {
         for (const path of [
           "/googlechat",
           profilePath,
           "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile",
         ]) {
           const isPublic = path === "/googlechat";
-          const unauthenticated = await sendRequest(server, { path });
+          const unauthenticated = await request(path);
           if (isPublic) {
             expectResponse(unauthenticated, 200, "wildcard");
           } else {
             expectUnauthorizedResponse(unauthenticated);
           }
-          const authenticated = await sendRequest(server, {
-            path,
-            authorization: "Bearer test-token",
-          });
+          const authenticated = await request(path, { authorization: "Bearer test-token" });
           expectResponse(authenticated, 200, isPublic ? "wildcard" : "channel");
         }
       },
       { handlePluginRequest: plugin },
-      AUTH_TOKEN,
     );
   });
 
   test("enforces auth before plugin handlers on encoded protected-path variants", async () => {
     const plugin = claimingPlugin();
     await withServer(
-      async (server) => {
+      async (_request, server) => {
         await expectUnauthorizedVariants({
           server,
           variants: buildChannelPathFuzzCorpus().filter((variant) => variant.path.includes("%")),
@@ -310,19 +295,18 @@ describe("gateway plugin HTTP auth boundary", () => {
         expect(plugin).not.toHaveBeenCalled();
       },
       { handlePluginRequest: plugin },
-      AUTH_TOKEN,
     );
   });
 
   test("rejects query-token hooks requests with bindHost=::", async () => {
-    await withGatewayTempConfig("openclaw-plugin-http-hooks-query-token-", async () => {
-      const server = createTestGatewayServer({
-        resolvedAuth: AUTH_NONE,
-        overrides: { handleHooksRequest: createHooksHandler("::") },
-      });
-      const response = await sendRequest(server, { path: "/hooks/wake?token=bad" });
-      expect(response.res.statusCode).toBe(400);
-      expect(response.getBody()).toContain("Hook token must be provided");
-    });
+    await withServer(
+      async (request) => {
+        const response = await request("/hooks/wake?token=bad");
+        expect(response.res.statusCode).toBe(400);
+        expect(response.getBody()).toContain("Hook token must be provided");
+      },
+      { handleHooksRequest: createHooksHandler("::") },
+      AUTH_NONE,
+    );
   });
 });

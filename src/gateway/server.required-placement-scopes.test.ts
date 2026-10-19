@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -70,7 +71,7 @@ async function connectWriter(port: number, email: string, scopes: string[]) {
       deviceIdentityPath: path.join(temps.make("policy-writer-"), "device.sqlite"),
     });
     expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
-    return { ws, connected };
+    return { ws, connected, [Symbol.dispose]: () => ws.close() };
   } catch (error) {
     ws.close();
     throw error;
@@ -83,39 +84,38 @@ test.each([false, true])(
     const email = "writer@example.invalid";
     await configureWriters({ [email]: ["operator.sessions.write"] }, required);
     await withGatewayServer(async ({ port }) => {
-      const { ws, connected } = await connectWriter(port, email, ["operator.sessions.write"]);
-      try {
-        expect((connected.payload as HelloOk).auth.scopes).not.toContain("operator.write");
-        const self = await rpcReq<{ profile: { id: string } }>(ws, "users.self", {});
-        expect(self.ok, JSON.stringify(self.error)).toBe(true);
-        expect(self.payload?.profile.id).toBeTruthy();
-        for (const params of [{}, { runtimeId: "openclaw" }]) {
-          const inventory = await rpcReq(ws, "environments.list", params);
-          expect(inventory.ok).toBe(false);
-          expect(inventory.error?.message).toMatch(/missing scope/);
-        }
-        const listed = await rpcReq<{ sessionPlacement: unknown }>(ws, "agents.list", {
-          includeSessionPlacement: true,
+      using connection = await connectWriter(port, email, ["operator.sessions.write"]);
+      const { ws, connected } = connection;
+      expect((connected.payload as HelloOk).auth.scopes).not.toContain("operator.write");
+      const self = await rpcReq<{ profile: { id: string } }>(ws, "users.self", {});
+      expect(self.ok, JSON.stringify(self.error)).toBe(true);
+      expect(self.payload?.profile.id).toBeTruthy();
+      for (const params of [{}, { runtimeId: "openclaw" }]) {
+        const inventory = await rpcReq(ws, "environments.list", params);
+        expect(inventory).toMatchObject({
+          ok: false,
+          error: { message: expect.stringMatching(/missing scope/) },
         });
-        expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
-        expect(listed.payload?.sessionPlacement).toEqual(
-          required
-            ? {
-                requiredProfile: {
-                  id: "dedicated",
-                  providerId: "device",
-                  executionModes: ["worker-turn"],
-                  inference: "worker",
-                },
-              }
-            : {},
-        );
-        const ordinary = await rpcReq(ws, "agents.list", {});
-        expect(ordinary.ok).toBe(true);
-        expect(ordinary.payload).not.toHaveProperty("sessionPlacement");
-      } finally {
-        ws.close();
       }
+      const listed = await rpcReq<{ sessionPlacement: unknown }>(ws, "agents.list", {
+        includeSessionPlacement: true,
+      });
+      expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
+      expect(listed.payload?.sessionPlacement).toEqual(
+        required
+          ? {
+              requiredProfile: {
+                id: "dedicated",
+                providerId: "device",
+                executionModes: ["worker-turn"],
+                inference: "worker",
+              },
+            }
+          : {},
+      );
+      const ordinary = await rpcReq(ws, "agents.list", {});
+      expect(ordinary.ok).toBe(true);
+      expect(ordinary.payload).not.toHaveProperty("sessionPlacement");
     });
   },
 );
@@ -134,25 +134,32 @@ test("required placement survives disconnect but stops setup when committed call
     ),
   });
 
-  // Observe the production service's provider-side setup entry points without replacing them.
+  // Observe real provider setup, never replace it.
   const setupCalls: string[] = [];
   const dispatchErrors: string[] = [];
   let dispatchSettled: Promise<unknown> | undefined;
+  let hold:
+    | { committed: Deferred; resume: Promise<void>; afterAcknowledgment: boolean }
+    | undefined;
+  async function pauseRequested<T extends { state: string }>(
+    placement: T,
+    afterAcknowledgment: boolean,
+  ) {
+    const current = hold;
+    if (current?.afterAcknowledgment === afterAcknowledgment && placement.state === "requested") {
+      hold = undefined;
+      current.committed.resolve();
+      await current.resume;
+    }
+    return placement;
+  }
   const createDispatch = placementDispatch.createWorkerPlacementDispatchService;
   vi.spyOn(placementDispatch, "createWorkerPlacementDispatchService").mockImplementation(
     (options) => {
       const service = createDispatch({
         ...options,
-        runLocalBarrier: async (params) => {
-          const placement = await options.runLocalBarrier(params);
-          const current = hold;
-          if (current?.afterAcknowledgment && placement.state === "requested") {
-            hold = undefined;
-            current.committed.resolve();
-            await current.resume;
-          }
-          return placement;
-        },
+        runLocalBarrier: async (params) =>
+          pauseRequested(await options.runLocalBarrier(params), true),
       });
       const dispatch = service.dispatch;
       service.dispatch = (...args) => {
@@ -181,26 +188,14 @@ test("required placement survives disconnect but stops setup when committed call
       return service;
     },
   );
-  // Hold dispatch after its durable requested commit. The requested acknowledgment is reported
-  // on resume, leaving the post-acknowledgment recheck as the only fence before setup I/O.
-  let hold:
-    | { committed: Deferred; resume: Promise<void>; afterAcknowledgment: boolean }
-    | undefined;
+  // Gate the durable requested commit on either side of acknowledgment, before setup I/O.
   const createLifecycle = placementLifecycleStore.createPlacementLifecycleWorkerOps;
   vi.spyOn(placementLifecycleStore, "createPlacementLifecycleWorkerOps").mockImplementation(
     (options) => {
       const lifecycle = createLifecycle(options);
       const startDispatch = lifecycle.startDispatch.bind(lifecycle);
-      lifecycle.startDispatch = async (...args) => {
-        const placement = await startDispatch(...args);
-        const current = hold;
-        if (current && !current.afterAcknowledgment && placement.state === "requested") {
-          hold = undefined;
-          current.committed.resolve();
-          await current.resume;
-        }
-        return placement;
-      };
+      lifecycle.startDispatch = async (...args) =>
+        pauseRequested(await startDispatch(...args), false);
       return lifecycle;
     },
   );
@@ -217,7 +212,8 @@ test("required placement survives disconnect but stops setup when committed call
   await withGatewayServer(async ({ port }) => {
     const connect = async (email: string, scopes: string[]) =>
       (await connectWriter(port, email, scopes)).ws;
-    const adminWs = await connect(admin, ["operator.admin"]);
+    using adminConnection = await connectWriter(port, admin, ["operator.admin"]);
+    const adminWs = adminConnection.ws;
     const commitConfigPatch = async (patch: Record<string, unknown>) => {
       const current = await rpcReq<{ hash: string }>(adminWs, "config.get", {});
       expect(current.ok, JSON.stringify(current.error)).toBe(true);
@@ -263,42 +259,34 @@ test("required placement survives disconnect but stops setup when committed call
       expect(setupCalls, dispatchErrors.join("; ")).toEqual(expectedSetupCalls);
       return { ws, created };
     };
-    try {
-      // Let the RPC acknowledge and release its own custody before disconnecting.
-      // Detached setup still owns the accepted source until its operation settles.
-      const disconnected = await createThenEndAuthority(
-        writers.disconnect,
-        async (ws) => {
-          const closed = createDeferredCore();
-          ws.once("close", () => closed.resolve());
-          ws.close();
-          await closed.promise;
-        },
-        ["prepareProjectIntent", "createWithRequest"],
-        true,
-      );
-      expect((await disconnected.created).ok).toBe(true);
+    // Detached setup keeps accepted custody after RPC acknowledgment and disconnect.
+    const disconnected = await createThenEndAuthority(
+      writers.disconnect,
+      async (ws) => {
+        const closed = once(ws, "close");
+        ws.close();
+        await closed;
+      },
+      ["prepareProjectIntent", "createWithRequest"],
+      true,
+    );
+    expect((await disconnected.created).ok).toBe(true);
 
-      // A committed config patch removes the caller's operator scope.
-      const revoked = await createThenEndAuthority(writers.scope, async () => {
-        await commitConfigPatch({
-          raw: JSON.stringify({ gateway: { auth: { identityScopes: { [writers.scope]: null } } } }),
-          replacePaths: [`gateway.auth.identityScopes.${writers.scope}`],
-        });
+    const revoked = await createThenEndAuthority(writers.scope, async () => {
+      await commitConfigPatch({
+        raw: JSON.stringify({ gateway: { auth: { identityScopes: { [writers.scope]: null } } } }),
+        replacePaths: [`gateway.auth.identityScopes.${writers.scope}`],
       });
-      await expect(revoked.created).rejects.toThrow(/gateway policy changed/);
+    });
+    await expect(revoked.created).rejects.toThrow(/gateway policy changed/);
 
-      // A committed config patch removes the required profile while the caller stays connected.
-      const unprofiled = await createThenEndAuthority(writers.profile, async () => {
-        await commitConfigPatch({
-          raw: JSON.stringify({ cloudWorkers: { requiredProfile: null } }),
-        });
+    const unprofiled = await createThenEndAuthority(writers.profile, async () => {
+      await commitConfigPatch({
+        raw: JSON.stringify({ cloudWorkers: { requiredProfile: null } }),
       });
-      await unprofiled.created;
-      expect(unprofiled.ws.readyState).toBe(WebSocket.OPEN);
-      unprofiled.ws.close();
-    } finally {
-      adminWs.close();
-    }
+    });
+    await unprofiled.created;
+    expect(unprofiled.ws.readyState).toBe(WebSocket.OPEN);
+    unprofiled.ws.close();
   });
 });
