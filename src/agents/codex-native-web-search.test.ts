@@ -155,24 +155,23 @@ describe("Codex native web-search payload helpers", () => {
   });
 
   it("uses schema-normalized optional config values", () => {
-    const result = resolveCodexNativeWebSearchConfig({
-      tools: ToolsSchema.parse({
-        web: {
-          search: {
-            openaiCodex: {
-              enabled: true,
-              allowedDomains: [" example.com ", "example.com", ""],
-              contextSize: "high",
-              userLocation: {
-                country: " US ",
-                city: " New York ",
-                timezone: "America/New_York",
-              },
+    const tools = ToolsSchema.parse({
+      web: {
+        search: {
+          openaiCodex: {
+            enabled: true,
+            allowedDomains: [" example.com ", "example.com", ""],
+            contextSize: "high",
+            userLocation: {
+              country: " US ",
+              city: " New York ",
+              timezone: "America/New_York",
             },
           },
         },
-      }),
+      },
     });
+    const result = resolveCodexNativeWebSearchConfig({ tools: { web: tools?.web } });
     expect(result).toMatchObject({
       enabled: true,
       mode: "cached",
