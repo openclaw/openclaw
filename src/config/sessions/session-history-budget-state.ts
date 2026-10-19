@@ -15,10 +15,12 @@ export type SessionHistoryDiskBudgetParams = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   mode: ResolvedSessionMaintenanceConfig["mode"];
+  /** Test seam for the age cutoff; defaults to Date.now(). */
+  now?: number;
   reclamationMode?: "worker" | "in-process";
   storePath: string;
   maintenance: Pick<ResolvedSessionMaintenanceConfig, "highWaterBytes" | "maxDiskBytes"> &
-    Partial<Pick<ResolvedSessionMaintenanceConfig, "preserveRecentMs">>;
+    Partial<Pick<ResolvedSessionMaintenanceConfig, "archiveAfterMs" | "preserveRecentMs">>;
 };
 
 export function createPhysicalBudgetResult(params: {

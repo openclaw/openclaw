@@ -169,6 +169,8 @@ export function readHistoricalSessionIdsInDatabase(params: {
   database: Pick<OpenClawAgentDatabase, "db">;
   admissionIdentities: readonly string[];
   preserveRecentMs?: number | null;
+  /** Wall-clock cutoff (epoch ms); only generations last updated before it qualify. */
+  cutoffMs?: number | null;
 }): string[] {
   const { database } = params;
   const protectedSessionIds = readReferencedSessionIds(database, undefined, undefined, params);
@@ -179,12 +181,15 @@ export function readHistoricalSessionIdsInDatabase(params: {
     protectedSessionIds.add(sessionId);
   }
   const db = getSessionKysely(database.db);
-  return executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_windows")
-      .select("session_id")
-      .orderBy("updated_at", "asc")
-      .orderBy("session_id", "asc"),
-  ).rows.flatMap((row) => (protectedSessionIds.has(row.session_id) ? [] : [row.session_id]));
+  let query = db
+    .selectFrom("session_windows")
+    .select("session_id")
+    .orderBy("updated_at", "asc")
+    .orderBy("session_id", "asc");
+  if (params.cutoffMs != null) {
+    query = query.where("updated_at", "<", params.cutoffMs);
+  }
+  return executeSqliteQuerySync(database.db, query).rows.flatMap((row) =>
+    protectedSessionIds.has(row.session_id) ? [] : [row.session_id],
+  );
 }

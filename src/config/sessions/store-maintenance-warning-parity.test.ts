@@ -27,6 +27,7 @@ it("leaves warn-mode rows unchanged and protects admitted work during enforcemen
     resetArchiveRetentionMs: null,
     maxDiskBytes: null,
     highWaterBytes: null,
+    archiveAfterMs: null,
   };
   const shared = {
     storePath: "/tmp/openclaw-sessions/warn-enforce-parity.json",

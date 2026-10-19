@@ -803,4 +803,124 @@ describe("SQLite historical session disk budget", () => {
     expect(sessionExists("warn-old")).toBe(true);
     expect(readArchiveNames("warn-old")).toHaveLength(0);
   });
+
+  it("archives history older than archiveAfter without a disk budget, keeping younger generations", async () => {
+    const sessionKey = "agent:main:age-retention";
+    await createHistoricalTranscript({
+      content: "old " + "x".repeat(64 * 1024),
+      nextSessionId: "mid-history",
+      sessionId: "old-history",
+      sessionKey,
+      updatedAt: 1_000,
+    });
+    await appendTranscriptMessage(
+      { sessionId: "mid-history", sessionKey, storePath },
+      { message: { role: "user", content: "mid " + "y".repeat(64 * 1024) } },
+    );
+    await resetSessionEntryLifecycle({
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      buildNextEntry: () => ({ sessionId: "live-history", updatedAt: 90_000 }),
+    });
+    setSessionUpdatedAt("mid-history", 50_000);
+    settlePhysicalUsage();
+
+    const result = await enforceSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "enforce",
+      now: 100_000,
+      maintenance: {
+        // No disk budget at all: the wall-clock archiveAfter cutoff alone must
+        // bound historical rows (cutoff = 100_000 - 60_000 = 40_000).
+        maxDiskBytes: null,
+        highWaterBytes: null,
+        archiveAfterMs: 60_000,
+      },
+    });
+
+    expect(result?.removedEntries).toBe(1);
+    expect(sessionExists("old-history")).toBe(false);
+    expect(sessionExists("mid-history")).toBe(true);
+    expect(sessionExists("live-history")).toBe(true);
+    expect(readArchiveNames("old-history")).toHaveLength(1);
+    expect(readArchiveNames("mid-history")).toHaveLength(0);
+  });
+
+  it("inspects age candidates as mutation without pressure and never mutates in warn mode", async () => {
+    const sessionKey = "agent:main:age-inspect";
+    await createHistoricalTranscript({
+      content: "old inspection history",
+      nextSessionId: "live-history",
+      sessionId: "old-history",
+      sessionKey,
+      updatedAt: 1_000,
+    });
+    setSessionUpdatedAt("live-history", 90_000);
+
+    const enforced = await inspectSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "enforce",
+      now: 100_000,
+      maintenance: { maxDiskBytes: null, highWaterBytes: null, archiveAfterMs: 60_000 },
+    });
+    const warned = await inspectSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "warn",
+      now: 100_000,
+      maintenance: { maxDiskBytes: null, highWaterBytes: null, archiveAfterMs: 60_000 },
+    });
+    const applied = await enforceSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "warn",
+      now: 100_000,
+      maintenance: { maxDiskBytes: null, highWaterBytes: null, archiveAfterMs: 60_000 },
+    });
+
+    expect(enforced.diskBudget).toBeNull();
+    expect(enforced.wouldMutate).toBe(true);
+    expect(warned.diskBudget).toBeNull();
+    expect(warned.wouldMutate).toBe(false);
+    expect(applied?.removedEntries).toBe(0);
+    expect(sessionExists("old-history")).toBe(true);
+    expect(readArchiveNames("old-history")).toHaveLength(0);
+  });
+
+  it("reclaims pages after archiving, retrofitting legacy databases to incremental auto-vacuum", async () => {
+    const sessionKey = "agent:main:age-vacuum";
+    await createHistoricalTranscript({
+      content: "old vacuum " + "z".repeat(64 * 1024),
+      nextSessionId: "live-history",
+      sessionId: "old-history",
+      sessionKey,
+      updatedAt: 1_000,
+    });
+    setSessionUpdatedAt("live-history", 90_000);
+    settlePhysicalUsage();
+
+    const owner = database();
+    const dbPath = owner.path;
+    // Simulate the legacy pre-flip databases that never received doctor's
+    // auto_vacuum=INCREMENTAL retrofit: mode NONE keeps deleted pages forever.
+    owner.walMaintenance.checkpoint();
+    owner.db.exec("PRAGMA auto_vacuum = NONE;");
+    owner.db.exec("VACUUM;");
+    const beforeSize = fs.statSync(dbPath).size;
+
+    const result = await enforceSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "enforce",
+      now: 100_000,
+      maintenance: { maxDiskBytes: null, highWaterBytes: null, archiveAfterMs: 60_000 },
+    });
+
+    expect(result?.removedEntries).toBe(1);
+    expect(sessionExists("old-history")).toBe(false);
+    const vacuumRow = owner.db.prepare("PRAGMA auto_vacuum").get() as
+      | { auto_vacuum?: unknown }
+      | undefined;
+    // The post-archive pass must retrofit INCREMENTAL so future removals are
+    // reclaimable incrementally.
+    expect(Number(vacuumRow?.auto_vacuum ?? 0)).toBe(2);
+    expect(fs.statSync(dbPath).size).toBeLessThan(beforeSize);
+  });
 });

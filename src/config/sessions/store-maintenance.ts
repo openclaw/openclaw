@@ -47,6 +47,8 @@ export type ResolvedSessionMaintenanceConfig = {
   resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
+  /** Age cutoff for the historical transcript archive pass; null disables age-driven archival. */
+  archiveAfterMs: number | null;
 };
 
 export type ResolvedSessionMaintenanceConfigInput = Omit<
@@ -78,6 +80,18 @@ function resolveArchiveDashboardAfterMs(maintenance?: SessionMaintenanceConfig):
   }
   const parsed = resolveMaintenanceDuration(raw, DEFAULT_DASHBOARD_ARCHIVE_AFTER_MS);
   return parsed > 0 ? parsed : null;
+}
+
+function resolveArchiveAfterMs(maintenance: SessionMaintenanceConfig | undefined): number | null {
+  // null = age-driven transcript archival disabled; history is only archived
+  // under disk-budget pressure. An explicit duration opts into wall-clock
+  // archival; parse failures stay disabled because archiving history early is
+  // data loss and must never be opted into by a typo.
+  const raw = maintenance?.archiveAfter;
+  if (raw === false) {
+    return null;
+  }
+  return resolveMaintenanceDuration(raw, null);
 }
 
 function resolveMaxDiskBytes(maintenance?: SessionMaintenanceConfig): number | null {
@@ -148,6 +162,7 @@ export function resolveMaintenanceConfigFromInput(
     resetArchiveRetentionMs: resolveMaintenanceDuration(maintenance?.resetArchiveRetention, null),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
+    archiveAfterMs: resolveArchiveAfterMs(maintenance),
   };
 }
 

@@ -23,6 +23,7 @@ export type SqliteSessionWriteOperation =
   | "session.history.archive-prune"
   | "session.history.eviction-prepare"
   | "session.history.free-pages"
+  | "session.history.age-retention-reclaim"
   | "session.history.reclamation-plan"
   | "session.import.batch"
   | "session.lifecycle.archive-plan"

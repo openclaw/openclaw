@@ -103,6 +103,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     'Per-agent physical disk budget covering SQLite main/WAL and counted session-directory artifacts (for example `500mb`). Defaults to `10gb`; protected data can keep usage above the target. When exceeded, warn mode reports pressure and enforce mode removes old reset/delete artifacts, unreferenced history, then cap-created archives. Manual, age-retention, dashboard, recovery, and legacy archives remain protected. Set `false`, `0`, or `"0"` to disable.',
   "session.maintenance.highWaterBytes":
     "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks. A value that resolves to zero falls back to the default; negative values are invalid. Disable the budget with maxDiskBytes instead.",
+  "session.maintenance.archiveAfter":
+    "Age cutoff for the historical transcript archive pass (for example `90d` or `12h`). When set, maintenance archives and removes historical transcript rows older than this age on its normal cadence, keeping per-agent history bounded on long-lived installs instead of waiting for disk pressure. Set `false` or leave unset to archive only under disk-budget pressure.",
   cron: "Global scheduler settings for stored automations, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling automation volume or integrating external webhook receivers.",
   "cron.enabled":
     "Enables automation execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all automation execution without deleting jobs.",

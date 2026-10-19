@@ -87,6 +87,7 @@ export const SessionSchema = z
         resetArchiveRetention: z.union([PositiveDurationSchema, z.literal(false)]).optional(),
         maxDiskBytes: z.union([z.string(), z.number(), z.literal(false)]).optional(),
         highWaterBytes: z.union([z.string(), z.number()]).optional(),
+        archiveAfter: z.union([PositiveDurationSchema, z.literal(false)]).optional(),
       })
       .superRefine((val, ctx) => {
         for (const key of ["maxDiskBytes", "highWaterBytes"] as const) {

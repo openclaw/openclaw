@@ -10,18 +10,19 @@ title: "Store maintenance and retention"
 
 `session.maintenance` controls automatic maintenance for SQLite session rows, SQLite transcript rows, archive artifacts, and trajectory sidecars:
 
-| Key                     | Default               | Notes                                                                                             |
-| ----------------------- | --------------------- | ------------------------------------------------------------------------------------------------- |
-| `mode`                  | `"enforce"`           | or `"warn"` (report age, count, and disk-budget policies without applying them)                   |
-| `pruneAfter`            | `"30d"`               | stale-entry age cutoff                                                                            |
-| `archiveDashboardAfter` | `"7d"`                | dashboard archiving cutoff; `false` or `0` disables only this trigger                             |
-| `maxEntries`            | `5000`                | cap on unarchived session rows when protection permits                                            |
-| `preserveRecent`        | disabled              | inactivity window protecting interactive sessions and their history generations; `false` disables |
-| `resetArchiveRetention` | keep (no age cutoff)  | age cutoff for `*.reset.*`/`*.deleted.*` transcript archives; a duration opts into deletion       |
-| `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false`, `0`, or `"0"` disables                                   |
-| `highWaterBytes`        | 80% of `maxDiskBytes` | target after cleanup; zero-resolving values use the default, and negatives are invalid            |
-| `coldStorage.enabled`   | `false`               | move eligible inactive transcript payloads to compressed JSONL files in a background worker       |
-| `coldStorage.afterDays` | `30`                  | positive integer inactivity cutoff in days for cold storage                                       |
+| Key                     | Default               | Notes                                                                                              |
+| ----------------------- | --------------------- | -------------------------------------------------------------------------------------------------- |
+| `mode`                  | `"enforce"`           | or `"warn"` (report age, count, and disk-budget policies without applying them)                    |
+| `pruneAfter`            | `"30d"`               | stale-entry age cutoff                                                                             |
+| `archiveDashboardAfter` | `"7d"`                | dashboard archiving cutoff; `false` or `0` disables only this trigger                              |
+| `maxEntries`            | `5000`                | cap on unarchived session rows when protection permits                                             |
+| `preserveRecent`        | disabled              | inactivity window protecting interactive sessions and their history generations; `false` disables  |
+| `resetArchiveRetention` | keep (no age cutoff)  | age cutoff for `*.reset.*`/`*.deleted.*` transcript archives; a duration opts into deletion        |
+| `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false`, `0`, or `"0"` disables                                    |
+| `highWaterBytes`        | 80% of `maxDiskBytes` | target after cleanup; zero-resolving values use the default, and negatives are invalid             |
+| `archiveAfter`          | disabled              | age cutoff (e.g. `"90d"`) for the historical transcript archive pass; independent of disk pressure |
+| `coldStorage.enabled`   | `false`               | move eligible inactive transcript payloads to compressed JSONL files in a background worker        |
+| `coldStorage.afterDays` | `30`                  | positive integer inactivity cutoff in days for cold storage                                        |
 
 Reset boundaries start a fresh history window without deleting earlier transcript rows. When session rollover advances the live `sessionKey -> sessionId` mapping, the previous SQLite session, transcript, trajectory, and search rows also remain; ordinary entry and session lists show only the live mapping. Retained reset history is bounded by the disk budget, not by `resetArchiveRetention`, which only ages archive artifacts. Explicit deletion is different: it stores and verifies the compressed transcript archive in SQLite in the same transaction that removes the deleted session's rows. It then publishes, syncs, and reads back the derived `*.jsonl.deleted.<timestamp>.zst` file before reporting success when zstd is available.
 
@@ -49,6 +50,8 @@ Gateway model-run check sessions (keys matching `agent:*:explicit:model-run-<uui
 When combined physical usage exceeds `maxDiskBytes`, `mode: "enforce"` first reclaims checkpointable database space, then removes the oldest retained reset/delete archives. If usage is still above `highWaterBytes`, it walks historical SQLite sessions by `sessions.updated_at`, oldest first. Historical means the session id is not referenced by a live session entry, a route target, or an admitted/in-flight run. For each victim, cleanup stores the compressed archive in the same write transaction that removes the session row and its transcript, trajectory, active, index, and FTS projections. It publishes, syncs, and reads back the derived file after commit. This includes sessions that contain trajectory events but no transcript events. If those tiers are insufficient, cleanup permanently deletes the oldest sessions whose recorded archive reason is `active-session-cap`. Manual, legacy, age-retention, stale-dashboard, and recovery archives protect every history generation. Cleanup rechecks entry identity and admission references at deletion time, remeasures physical usage after each victim, and stops at `highWaterBytes`.
 
 Committed writes and deletion first land in the WAL. Cleanup tries to truncate it without waiting for readers. If truncation is blocked, cleanup can proceed after a PASSIVE checkpoint copies every observed WAL frame to the main database; a partial checkpoint still defers cleanup. Incremental vacuum returns eligible free tail pages from the main file. Retained WAL bytes and pages that are not yet reclaimable remain counted on the next physical measurement. `mode: "warn"` reports the current physical overage without checkpointing, writing an archive, or deleting rows.
+
+`archiveAfter` ages the same historical rows independently of pressure: with a cutoff set (for example `"90d"`), maintenance archives and removes historical transcript rows older than the cutoff on its normal cadence, so per-agent history stays bounded on long-lived installs instead of accumulating until the disk budget triggers one large first pass. The pass still honors protected generations (live entries, route targets, and admitted runs), stores and verifies the compressed archive before removing rows, and rechecks references at delete time. After a pass that archived rows, cleanup also reclaims freed pages: databases already running `auto_vacuum=INCREMENTAL` shrink via incremental vacuum, while legacy databases (created before the SQLite flip or never compacted by doctor) get a one-time INCREMENTAL retrofit and full `VACUUM` so the archived rows' pages actually leave the file and future passes revert to cheap incremental reclamation.
 
 For a full file rewrite after substantial cleanup, use Doctor's offline
 [`--session-sqlite compact` mode](/cli/doctor/sqlite-maintenance#session-sqlite-migration).

@@ -352,6 +352,7 @@ describe("session-store-runtime", () => {
           resetArchiveRetentionMs: 7 * DAY_MS,
           maxDiskBytes: null,
           highWaterBytes: null,
+          archiveAfterMs: null,
         },
         update: () => ({ model: "gpt-5.5" }),
       });
@@ -560,6 +561,7 @@ describe("plugin session store maintenance", () => {
           resetArchiveRetentionMs: 7 * DAY_MS,
           maxDiskBytes: null,
           highWaterBytes: null,
+          archiveAfterMs: null,
         },
         update: () => ({ model: "gpt-5.6-luna" }),
       });
