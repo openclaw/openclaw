@@ -51,7 +51,7 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .session-diff-sync-mobile :where(.chat-copy-btn, .session-diff-sync-mobile__wrap):where(:hover) {

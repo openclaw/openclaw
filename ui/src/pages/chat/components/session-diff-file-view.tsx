@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, onCleanup, Show, untrack } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -142,9 +142,10 @@ export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
     );
   }
   function File(fileProps: { view: FileView; result: SessionsDiffResult }) {
+    let fileElement!: HTMLElement;
     let fileToggle: HTMLButtonElement | undefined;
     // The keyed list retains this owner by source, not refreshed metadata.
-    const source = untrack(() => fileProps.view.source);
+    const source = () => fileProps.view.source;
     const file = () => fileProps.view.file;
     const collapsed = () => collapsedPaths().has(file().path);
     // The pairing budget skips collapsed files. Keep its last real result while
@@ -162,7 +163,7 @@ export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
       },
       get lines() {
         gapRevision();
-        return source.parsed?.lines ?? [];
+        return source().parsed?.lines ?? [];
       },
       get file() {
         return fileProps.view.file;
@@ -172,19 +173,22 @@ export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
       },
     });
     // A retained source has one immutable file path across metadata refreshes.
-    const pathKey = untrack(() => fileProps.view.file.path);
-    onCleanup(registerPresentation(pathKey, presentation));
+    onSettled(() => {
+      const path = file().path;
+      registerFileElement(path, fileElement, () => fileToggle);
+      return registerPresentation(path, presentation);
+    });
     const path = () => splitPath(file().path);
     const intrinsicSize = () => {
       gapRevision();
-      return `auto ${Math.max(80, Math.min(12_000, (source.parsed?.lines.length ?? 2) * 19))}px`;
+      return `auto ${Math.max(80, Math.min(12_000, (source().parsed?.lines.length ?? 2) * 19))}px`;
     };
     const statusLabel = () => FILE_STATUS_LABELS[file().status] ?? FILE_STATUS_LABELS.modified;
     const body = () => (
       <div class="session-diff__file-body" style={{ "contain-intrinsic-size": intrinsicSize() }}>
         <SessionDiffFileBody
           file={file()}
-          parsed={source.parsed}
+          parsed={source().parsed}
           unavailableReason={fileProps.result.unavailableReason}
           split={effectiveSplit()}
           presentation={presentation}
@@ -200,7 +204,9 @@ export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
         ]}
         data-status={file().status}
         data-collapsed={collapsed() ? "true" : "false"}
-        ref={(element) => registerFileElement(pathKey, element)}
+        ref={(element) => {
+          fileElement = element;
+        }}
       >
         <presentation.SyntaxLifetime />
         <div

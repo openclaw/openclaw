@@ -134,6 +134,62 @@ describe.runIf(browserMode)("Review header layout", () => {
       expect(document.activeElement).toBe(copyPath);
     }
   });
+  it("keeps a disabled path copy mounted through clipboard fallback focus changes", async () => {
+    const { page, userEvent } = await import("vitest/browser");
+    await page.viewport(1200, 800);
+    let rejectWrite: ((error: Error) => void) | undefined;
+    const write = vi.spyOn(navigator.clipboard, "writeText").mockImplementation(
+      () =>
+        new Promise<void>((_, reject) => {
+          rejectWrite = reject;
+        }),
+    );
+    const fallback = vi.spyOn(document, "execCommand").mockReturnValue(true);
+    onTestFinished(() => {
+      rejectWrite?.(new Error("test finished"));
+      write.mockRestore();
+      fallback.mockRestore();
+    });
+    let panel!: HTMLElementTagNameMap["openclaw-session-diff"];
+    mountSolid(() =>
+      createComponent(SessionDiffPanel, {
+        mobile: false,
+        ref: (element) => {
+          panel = element;
+        },
+      }),
+    );
+    panel.style.cssText = "display:block;position:fixed;left:0;top:0;width:1100px;height:600px";
+    panel.loader = async () => ({
+      sessionKey: "main",
+      root,
+      branch,
+      baseRef: "main",
+      additions: 1,
+      deletions: 0,
+      files: [{ path: "added.ts", status: "added", additions: 1, deletions: 0 }],
+    });
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff__file-menu")).not.toBeNull(),
+    );
+    const trigger = panel.querySelector<HTMLButtonElement>(".session-diff__file-menu")!;
+    await userEvent.click(trigger);
+    const surface = panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
+    await waitForSolid(() => expect(surface.matches(":popover-open")).toBe(true));
+    const copy = surface.querySelector<HTMLButtonElement>('[data-value="copy-path"]')!;
+    await userEvent.click(copy);
+    expect(write).toHaveBeenCalledExactlyOnceWith("added.ts");
+    expect(copy.disabled).toBe(true);
+    rejectWrite?.(new DOMException("Clipboard denied", "NotAllowedError"));
+    await waitForSolid(() => expect(copy.getAttribute("aria-label")).toBe("Copied!"));
+    expect(fallback).toHaveBeenCalledExactlyOnceWith("copy");
+    expect(copy.isConnected).toBe(true);
+    expect(surface.matches(":popover-open")).toBe(true);
+    await userEvent.keyboard("{Escape}");
+    await waitForSolid(() => expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull());
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it("keeps mobile Review menus reachable inside a translated dock and restores the real trigger", async () => {
     const { page, userEvent } = await import("vitest/browser");
     await page.viewport(390, 800);

@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createEffect, createSignal, onSettled, Show, untrack } from "solid-js";
+import { listen } from "../../../lib/reactive/listener.ts";
 
 /** Keeps the real reader present through exit; disclosure state belongs to the caller. */
 export function ReviewDisclosure(props: {
@@ -8,11 +9,13 @@ export function ReviewDisclosure(props: {
   instant: boolean;
   children: JSX.Element;
 }) {
-  const [present, setPresent] = createSignal(untrack(() => props.open));
+  // Parent scroll restoration needs the initial content height before child effects run.
+  const initialOpen = untrack(() => props.open);
+  const [present, setPresent] = createSignal(initialOpen);
   let shell!: HTMLDivElement;
   let content!: HTMLDivElement;
   let animation: Animation | undefined;
-  let current = { open: untrack(() => props.open), active: false, instant: true };
+  let current = { open: initialOpen, active: false, instant: true };
   let height = 0;
   let ready = false;
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -59,7 +62,7 @@ export function ReviewDisclosure(props: {
         finish();
       }
     };
-    reducedMotion.addEventListener("change", motionChanged);
+    const stopMotion = listen(reducedMotion, "change", motionChanged);
     const observer = new ResizeObserver(() => {
       if (!current.open || !current.active) {
         return;
@@ -75,14 +78,14 @@ export function ReviewDisclosure(props: {
     return () => {
       observer.disconnect();
       animation?.cancel();
-      reducedMotion.removeEventListener("change", motionChanged);
+      stopMotion();
     };
   });
   return (
     <div
       ref={(element) => {
         shell = element;
-        shell.hidden = !untrack(() => props.open);
+        shell.hidden = !initialOpen;
       }}
       class="session-diff__disclosure"
       inert={!props.open || !props.active}
