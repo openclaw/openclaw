@@ -7,7 +7,7 @@ import {
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -208,7 +208,7 @@ export function listSqliteSessionEntriesFromDatabase(
     const expired = scope.expiredCronRuns;
     const requestedOwner = expired ? normalizeAgentId(expired.agentId) : undefined;
     const captured = withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-      runSqliteDeferredTransactionSync(database.db, () => {
+      runSqliteReadSnapshotSync(database.db, () => {
         let entries: SessionEntrySummary[];
         if (scope.cronRetention) {
           const page = scope.cronRetention;

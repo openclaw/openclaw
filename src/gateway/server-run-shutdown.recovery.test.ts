@@ -3,6 +3,7 @@ import { afterAll, beforeAll, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { commitMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-store.js";
 import {
+  markOrphanedMainSessionForRecovery,
   markRestartAbortedMainSessions,
   markStartupOrphanedMainSessionsForRecovery,
 } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
@@ -265,10 +266,12 @@ it.each([
   }
 });
 
-it.each(["admission", "queue", "delegated"] as const)(
+it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
   "retains %s work through shutdown and gives it one explicit recovery outcome",
   async (kind) => {
-    const sessionKey = `agent:main:dashboard:restart-${kind}`;
+    const delegated = kind === "delegated" || kind === "delegated source-only";
+    const sourceOnly = kind === "delegated source-only";
+    const sessionKey = delegated ? "agent:main:main" : `agent:main:dashboard:restart-${kind}`;
     const sessionId = `restart-${kind}-session`;
     const runId = `restart-${kind}-run`;
     const target = { storePath, sessionKey };
@@ -276,9 +279,12 @@ it.each(["admission", "queue", "delegated"] as const)(
     await replaceSessionEntry(target, {
       sessionId,
       updatedAt: 1_000,
-      restartRecoveryDeliveryRunId: runId,
+      restartRecoveryDeliveryRunId: sourceOnly ? undefined : runId,
       restartRecoveryDeliverySourceRunId: runId,
-      restartRecoverySourceIngress: kind === "delegated" ? "internal" : "control-ui",
+      restartRecoverySourceIngress: sourceOnly ? undefined : delegated ? "internal" : "control-ui",
+      ...(sourceOnly
+        ? { restartRecoveryRuns: [{ runId, lifecycleGeneration: "before-restart" }] }
+        : {}),
     });
     await appendTranscriptMessage(
       { ...target, sessionId },
@@ -287,7 +293,7 @@ it.each(["admission", "queue", "delegated"] as const)(
           role: "user",
           content: "Finish the synthetic task after restart.",
           idempotencyKey: runId,
-          ...(kind === "delegated" ? { provenance: { kind: "inter_session" } } : {}),
+          ...(delegated ? { provenance: { kind: "inter_session" } } : {}),
         },
       },
     );
@@ -372,21 +378,34 @@ it.each(["admission", "queue", "delegated"] as const)(
         });
       await recover();
       await recover();
-      if (kind === "delegated") {
+      if (delegated) {
         expect(gatewayRuntime.dispatchAgent).not.toHaveBeenCalled();
-        expect(loadSessionEntry(target)).toMatchObject({
-          status: "failed",
+        const settled = loadSessionEntry(target);
+        expect(settled).toMatchObject({
+          sessionId,
+          status: "interrupted",
           abortedLastRun: false,
-          mainRestartRecovery: {
-            tombstone: { reason: "delegated recovery sender authority is unavailable" },
-          },
+          restartRecoveryTerminalRunIds: [runId],
         });
+        expect(settled?.mainRestartRecovery).toBeUndefined();
+        expect(settled?.restartRecoveryDeliveryRunId).toBeUndefined();
+        expect(settled?.restartRecoveryRuns).toBeUndefined();
+        expect(settled?.restartRecoveryTerminalDeliveryEvidence).toBeUndefined();
         const transcript = JSON.stringify(await loadTranscriptEvents({ ...target, sessionId }));
         expect(transcript).toContain("delegated recovery sender authority is unavailable");
-        expect(transcript.match(/use Resume to continue in this session/g)).toHaveLength(1);
+        expect(transcript.match(/Send a new authenticated message to continue/g)).toHaveLength(1);
         expect(recoveryLog).toHaveBeenCalledWith(
           expect.stringContaining('"reason":"delegated_authority_unavailable"'),
         );
+        rotateAgentEventLifecycleGeneration();
+        expect(
+          await markOrphanedMainSessionForRecovery({ target, expectedSessionId: sessionId, cfg }),
+        ).toEqual({ marked: 0, skipped: 0 });
+        await recover();
+        expect(JSON.stringify(await loadTranscriptEvents({ ...target, sessionId }))).toBe(
+          transcript,
+        );
+        expect(gatewayRuntime.dispatchAgent).not.toHaveBeenCalled();
       } else {
         expect(gatewayRuntime.dispatchAgent).toHaveBeenCalledTimes(1);
         expect(loadSessionEntry(target)).toMatchObject({ status: "done", abortedLastRun: false });

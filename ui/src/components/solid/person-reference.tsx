@@ -27,7 +27,7 @@ import { updatePersonActivityCard } from "../person-activity-card.tsx";
 import { observePersonActivityData } from "../person-activity-data.ts";
 import { personActivityRouting } from "../person-activity-link.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "../portaled-hovercard.ts";
-import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-image.tsx";
+import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
 import { useIdentityAvatarView } from "./identity-avatar-view.ts";
 import "../../styles/chat/person-reference.css";
 
@@ -265,6 +265,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
     identity: { type: "profile", id: profileId() },
     name: label().replace(/^@/u, ""),
   }));
+  const presentation = createIdentityAvatarPresentation(avatar);
   return (
     <button
       ref={(element) => {
@@ -317,15 +318,15 @@ function PersonReferenceContent(props: PersonReferenceProps) {
       }}
     >
       <span
-        ref={identityAvatarState(avatar)}
-        class="markdown-person-reference__avatar"
+        data-avatar-state={presentation.state()}
+        class={["markdown-person-reference__avatar", presentation.classes()]}
         aria-hidden="true"
         data-initials={avatar().fallback.initials}
       >
         <Show when={Boolean(avatar().imageUrl)}>
           <IdentityAvatarImage
             view={avatar()}
-            fallbackSelector=".markdown-person-reference__avatar"
+            onStateChange={presentation.onStateChange}
             ariaHidden={true}
           />
         </Show>

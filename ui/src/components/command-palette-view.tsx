@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, For, onCleanup, Show, untrack } from "solid-js";
+import { createMemo, For, onCleanup, Show, untrack } from "solid-js";
 import type { GatewayAgentRow } from "../api/types.ts";
 import {
   pathForAgentPanel,
@@ -446,11 +446,6 @@ function PaletteSearch(props: {
 
 export function CommandPaletteView(props: { readProps: () => CommandPaletteProps }) {
   const current = () => props.readProps();
-  createEffect(
-    createMemo(() => current().mentionMenu.open),
-    () => current().onMentionChange(),
-    { defer: true },
-  );
   const results = createMemo(() => resolvePaletteResults(current()));
   const hideSearch = () => results().hideSearch;
   // The collapsing search remains mounted with its last presented projection.
@@ -478,7 +473,6 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             event.preventDefault();
             if (!current().composing) {
               current().mentionMenu.close();
-              current().onMentionChange();
             }
             return;
           }

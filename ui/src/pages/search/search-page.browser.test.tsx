@@ -4,6 +4,7 @@ import type { WebSearchStatusResult } from "../../../../packages/gateway-protoco
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
 import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
@@ -162,7 +163,7 @@ async function mount(
     await settleModelCatalogRequests(client, { agentId: selection.state.selectedId });
     await Promise.allSettled(requested);
     await waitForSolid(() => {
-      expect(button(element, "Refresh search status").disabled).toBe(false);
+      expect(button(element, i18n.t("searchPage.refresh")).disabled).toBe(false);
     });
   };
   if (options.waitReady === false) {
@@ -213,6 +214,35 @@ function select(element: Element, label: string, value: string) {
 }
 
 describe("Search settings", () => {
+  it("keeps the initial localized query and edited draft when the locale changes", async () => {
+    const locale = i18n.getLocale();
+    try {
+      await i18n.setLocale("pt-BR");
+      const fixture = await mount();
+      const query = fixture.element.querySelector<HTMLInputElement>(
+        `input[aria-label="${i18n.t("searchPage.query")}"]`,
+      )!;
+      const initialQuery = i18n.t("searchPage.queryDefault");
+      expect(query.value).toBe(initialQuery);
+
+      await i18n.setLocale("en");
+      flush();
+      expect(i18n.t("searchPage.queryDefault")).not.toBe(initialQuery);
+      expect(query.getAttribute("aria-label")).toBe(i18n.t("searchPage.query"));
+      expect(query.value).toBe(initialQuery);
+
+      query.value = "My search draft";
+      query.dispatchEvent(new Event("input", { bubbles: true }));
+      flush();
+      await i18n.setLocale("pt-BR");
+      flush();
+      expect(query.getAttribute("aria-label")).toBe(i18n.t("searchPage.query"));
+      expect(query.value).toBe("My search draft");
+    } finally {
+      await i18n.setLocale(locale);
+    }
+  });
+
   it.each(["success", "failure"] as const)(
     "resolves current search status after catalog %s without manual refresh",
     async (outcome) => {

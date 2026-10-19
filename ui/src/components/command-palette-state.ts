@@ -101,7 +101,9 @@ export class CommandPaletteState {
   private takeInitialInput: CommandPaletteInputHandoff | undefined;
   private inputElement: HTMLTextAreaElement | undefined;
   private stopInputFocus: (() => void) | undefined;
-  private readonly mentionMenu = createHumanMentionMenu();
+  private readonly mentionMenu = createHumanMentionMenu((nextOpen) =>
+    this.notifyMentionChange(nextOpen),
+  );
   private hasOpened = false;
   private mentionInput: HumanMentionInput | undefined;
   private composing = false;
@@ -112,12 +114,13 @@ export class CommandPaletteState {
     getTextarea: () => this.inputElement ?? null,
     commitDraft: (value, mentions) => this.draft.setMessage(value, mentions),
   };
-  private readonly notifyMentionChange = () => {
-    if (this.mentionMenu.open || this.draft.mentions.length > 0) {
+  // Menu transitions arrive before Solid publishes the new store value.
+  private readonly notifyMentionChange = (nextOpen = this.mentionMenu.open) => {
+    if (nextOpen || this.draft.mentions.length > 0) {
       this.clearSessionSearch();
       this.clearCatalogSearch();
     } else {
-      this.scheduleSessionSearch(this.draft.message);
+      this.scheduleSessionSearch(this.draft.message, false, nextOpen);
     }
     this.changed();
   };
@@ -262,7 +265,7 @@ export class CommandPaletteState {
     }
     this.activeId = null;
     this.filter = "all";
-    this.scheduleSessionSearch(this.draft.message);
+    this.scheduleSessionSearch(this.draft.message, false, false);
     this.changed();
   }
 
@@ -454,11 +457,15 @@ export class CommandPaletteState {
     return promise;
   }
 
-  private scheduleSessionSearch(query: string, immediate = false) {
+  private scheduleSessionSearch(
+    query: string,
+    immediate = false,
+    mentionOpen = this.mentionMenu.open,
+  ) {
     // Retire in-flight results immediately, but keep the settled search visible
     // until the typing burst ends. The view disables selection during this pause.
     this.invalidateSessionSearch();
-    if (this.promptMode || this.mentionMenu.open || this.draft.mentions.length > 0) {
+    if (this.promptMode || mentionOpen || this.draft.mentions.length > 0) {
       // Retire catalog generations too: late results and refresh events must not
       // revive search while the same field is being used as a session draft.
       this.clearSessionSearch();
@@ -597,7 +604,6 @@ export class CommandPaletteState {
       event?.inputType === "insertFromDrop"
     ) {
       this.mentionMenu.close();
-      this.notifyMentionChange();
       return;
     }
     this.mentionMenu.update(
@@ -644,8 +650,12 @@ export class CommandPaletteState {
       },
       onCompositionEnd: () => {
         this.composing = false;
+        const wasOpen = this.mentionMenu.open;
         this.updateMentionMenu();
-        this.scheduleSessionSearch(this.draft.message);
+        // The menu callback handles closes; closed menus still need the IME refresh.
+        if (!wasOpen) {
+          this.scheduleSessionSearch(this.draft.message);
+        }
       },
       activeId: this.activeId,
       filter: this.filter,

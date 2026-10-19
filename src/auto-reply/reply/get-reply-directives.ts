@@ -40,6 +40,7 @@ import {
 } from "../thinking.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
+import { matchSlashCommandToken } from "./commands-slash-parse.js";
 import { resolveReplyDirectiveCommand } from "./directive-handling.parse.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
@@ -149,7 +150,10 @@ export async function resolveReplyDirectives(params: {
     commandSource: ctx.CommandSource,
   });
   const canInterpretTextDirectives =
-    allowTextCommands && command.isAuthorizedSender && ctx.CommandInterpretationSuppressed !== true;
+    allowTextCommands &&
+    command.isAuthorizedSender &&
+    ctx.CommandInterpretationSuppressed !== true &&
+    matchSlashCommandToken(command.commandBodyNormalized, "/followup") === null;
   const commandTextHasSlash = commandText.includes("/");
   const configuredModelAliases = commandTextHasSlash
     ? listModelAliasCandidates(cfg, agentId)

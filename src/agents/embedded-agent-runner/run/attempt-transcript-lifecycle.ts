@@ -19,7 +19,8 @@ const lifecycleOwners = new AsyncLocalStorage<LifecycleOwner>();
 
 export type EmbeddedAttemptTranscriptLifecycle = {
   withTranscriptWrite<T>(run: () => Promise<T> | T): Promise<T>;
-  beginCleanup(): Promise<void>;
+  /** Retire callbacks after the actual drain, including when owner release fails. */
+  beginCleanup(onDrained?: () => void): Promise<void>;
   dispose(): Promise<void>;
 };
 
@@ -140,16 +141,20 @@ export function createEmbeddedAttemptTranscriptLifecycle(params: {
       );
     }
   };
-  const beginCleanup = async (): Promise<void> => {
+  const beginCleanup = async (onDrained?: () => void): Promise<void> => {
     if (currentOwner()?.active) {
       throw new Error("cannot start attempt cleanup inside a transcript write callback");
     }
     // Accepted descendants retain their owner until the drain settles, even when
     // the bounded teardown budget expires. Cleanup never disables the shared carrier.
     cleanupDrain ??= settleWithinTeardownBudget(
-      serializeLifecycle(() => {
+      serializeLifecycle(async () => {
         currentOwner()!.active = false;
-        return params.onDrained?.();
+        try {
+          await params.onDrained?.();
+        } finally {
+          onDrained?.();
+        }
       }),
     );
     await cleanupDrain;

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -139,6 +140,10 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../internal-runtime-context.js";
 import {
+  createRestartRecoveryRequesterSource,
+  readRestartRecoveryRequesterSource,
+} from "../requester-run-recovery-source.js";
+import {
   AGENT_RUN_RESTART_ABORT_ERROR_CODE,
   resolveAgentRunErrorLifecycleFields,
 } from "../run-termination.js";
@@ -160,7 +165,10 @@ import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js"
 import { registerHarnessCompletionRecoveryCases } from "./main-session-harness-completion.test-harness.js";
 import { registerParentRestartRecoveryCases } from "./main-session-parent-recovery.test-harness.js";
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
-import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
+import {
+  createRecoveryRuntimeFixture,
+  runRecoveryCommandDuringStop,
+} from "./main-session-recovery-runtime.test-support.js";
 import * as recoveryStore from "./main-session-recovery-store.js";
 import {
   claimMainSessionRecoveryOwner,
@@ -526,120 +534,6 @@ function getHarnessRecoveryFixture() {
     runningSessionEntry,
     gatewayParams,
   };
-}
-
-async function runRecoveryCommandDuringStop(params: {
-  entry: SessionEntry;
-  runId: string;
-  sessionKey: string;
-  storePath: string;
-  stateDir: string;
-  signal: AbortSignal;
-}): Promise<void> {
-  const [
-    { getAcpSessionManager },
-    { prepareAgentCommandExecutionIdentity },
-    { runEmbeddedAgentAttempt },
-  ] = await Promise.all([
-    import("../../acp/control-plane/manager.js"),
-    import("../agent-command-execution-identity.js"),
-    import("../command/run-embedded-attempt.js"),
-  ]);
-  const opts = {
-    message: "Resume the interrupted task.",
-    abortSignal: params.signal,
-    mainRestartRecoveryAdmitted: true,
-    mainRestartRecoveryAttempt: params.entry.mainRestartRecovery!.chargedAttempts,
-    onActiveModelSelected: () => markGatewayRestartDraining("stop (SIGTERM)"),
-  };
-  const provider = "anthropic";
-  const model = "claude-sonnet-4-6";
-  const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  const prepared: Parameters<typeof runEmbeddedAgentAttempt>[0]["prepared"] = {
-    opts,
-    cfg: {},
-    body: opts.message,
-    transcriptBody: opts.message,
-    configuredThinkingCatalog: [],
-    normalizedSpawned: {},
-    agentCfg: undefined,
-    thinkOverride: undefined,
-    thinkOnce: undefined,
-    verboseOverride: undefined,
-    timeoutMs: 10_000,
-    runTimeoutOverrideMs: undefined,
-    sessionId: params.entry.sessionId,
-    sessionEntry: params.entry,
-    sessionStore: { [params.sessionKey]: params.entry },
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    runId: params.runId,
-    isNewSession: false,
-    previousSessionId: undefined,
-    persistedThinking: undefined,
-    persistedVerbose: undefined,
-    sessionAgentId: "main",
-    outboundSession: undefined,
-    workspaceDir: params.stateDir,
-    cwd: undefined,
-    agentDir: path.join(params.stateDir, "agents", "main", "agent"),
-    pluginsEnabled: false,
-    manifestMetadataSnapshot: undefined,
-    modelManifestContext: { manifestPlugins: [] },
-    isSubagentLane: false,
-    acpManager: getAcpSessionManager(),
-    acpResolution: null,
-    runLease: undefined,
-  };
-  const admission = prepareAgentCommandExecutionIdentity({
-    opts,
-    prepared,
-    ingress: { kind: "system", boundary: "restart-recovery-test", state: "present" },
-    lifecycleGeneration,
-  });
-  try {
-    await runEmbeddedAgentAttempt({
-      prepared,
-      preparedRunAdmission: admission,
-      opts,
-      sessionEntry: params.entry,
-      lifecycleGeneration,
-      onLifecycleGenerationChanged: () => {},
-      suppressVisibleSessionEffects: false,
-      preserveUserFacingSessionModelState: false,
-      trackInternalModelRunTarget: () => {},
-      embeddedSessionState: {
-        sessionEntry: params.entry,
-        requestedThinkLevel: "off",
-        resolvedVerboseLevel: undefined,
-        skillsSnapshot: { prompt: "", skills: [] },
-        runContext: {},
-      },
-      modelSelection: {
-        sessionEntry: params.entry,
-        provider,
-        model,
-        requestedRouteResolution: "resolved",
-        defaultProvider: provider,
-        defaultModel: model,
-        configuredDefaultAuthProfileId: undefined,
-        providerForAuthProfileValidation: provider,
-        hasExplicitRunOverride: false,
-        storedProviderOverride: undefined,
-        storedModelOverride: undefined,
-        storedModelOverrideSource: undefined,
-        hasStoredAutoFallbackProvenance: false,
-        autoFallbackPrimaryProbe: undefined,
-        sessionEntryForAttempt: params.entry,
-        thinkingCatalog: [],
-        immutableThinkLevel: "off",
-        effectiveTurnThinkLevel: "off",
-        sessionFile: path.join(path.dirname(params.storePath), `${params.entry.sessionId}.jsonl`),
-      },
-    });
-  } finally {
-    await admission.finish();
-  }
 }
 
 describe("main-session-restart-recovery", () => {
@@ -4220,6 +4114,26 @@ describe("main-session-restart-recovery", () => {
         restartRecoveryDeliverySourceRunId: "source-main",
         restartRecoveryDeliveryContext: discordDeliveryContext,
       });
+      const entry = expectDefined(readEntry(), "interrupted source session");
+      const requesterSource = expectDefined(
+        createRestartRecoveryRequesterSource({
+          agentId: "main",
+          sessionKey,
+          sourceRunId: "source-main",
+          entry,
+          requesterOrigin: {
+            sessionKey: "agent:research:telegram:group:requesters",
+            messageProvider: "telegram",
+            accountId: "work",
+            senderId: "bob",
+          },
+        }),
+        "original channel requester source",
+      );
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        { ...entry, restartRecoveryRequesterSource: requesterSource },
+      );
       await writeTranscript(sessionsDir, "main-session", [
         { role: "user", content: "recover without losing the owner" },
       ]);
@@ -4256,6 +4170,23 @@ describe("main-session-restart-recovery", () => {
         });
         options?.onAccepted?.({ runId, status: "accepted" });
         const admittedEntry = readEntry()!;
+        const requesterTarget = expectDefined(
+          options?.restartRecoveryRequesterTarget,
+          "successor dispatch requester custody",
+        );
+        expect(requesterTarget).toEqual({
+          agentId: "main",
+          sessionKey,
+          sessionId: "main-session",
+          storePath,
+          sourceRunId: "source-main",
+          recoveryRunId: runId,
+        });
+        const requesterOrigin = expectDefined(
+          readRestartRecoveryRequesterSource({ ...requesterTarget, entry: admittedEntry }),
+          "requester restored from the successor's current claim",
+        );
+        expect(requesterOrigin).toEqual(requesterSource.requesterOrigin);
         const terminalEvents: Parameters<typeof persistGatewaySessionLifecycleEvent>[0]["event"][] =
           [];
         const terminalObserved =
@@ -4273,6 +4204,7 @@ describe("main-session-restart-recovery", () => {
         // Observe the expected rejection immediately, then join its real lifecycle settlement.
         const commandSettlement = runRecoveryCommandDuringStop({
           entry: admittedEntry,
+          requesterOrigin,
           runId,
           sessionKey,
           storePath,
@@ -4354,12 +4286,14 @@ describe("main-session-restart-recovery", () => {
           }),
         ]);
         expect(persistedEntries[0]?.status).toBeUndefined();
+        expect(persistedEntries[0]?.restartRecoveryRequesterSource).toEqual(requesterSource);
         expect(persistedEntries[0]).toMatchObject({
           mainRestartRecovery: { cycleId: "interrupted-cycle", chargedAttempts: 1 },
           restartRecoveryRuns: [
             { runId: "recovery-main", lifecycleGeneration: getAgentEventLifecycleGeneration() },
           ],
         });
+        expect(readEntry()?.restartRecoveryRequesterSource).toEqual(requesterSource);
         expect(readEntry()).toMatchObject({
           status: "interrupted",
           abortedLastRun: true,
@@ -4381,8 +4315,10 @@ describe("main-session-restart-recovery", () => {
           await expect(
             recoverRestartAbortedMainSessions({ cfg: {}, gatewayRuntime }),
           ).resolves.toEqual({ started: 0, settled: 0, failed: 1, skipped: 0 });
+          expect(readEntry()?.restartRecoveryRequesterSource).toEqual(requesterSource);
           expect(readEntry()).toMatchObject({
             status: "interrupted",
+            restartRecoveryDeliverySourceRunId: "source-main",
             mainRestartRecovery: { chargedAttempts: attempt },
           });
           expect(dispatchAgent).toHaveBeenCalledTimes(attempt);
@@ -5629,7 +5565,7 @@ describe("main-session startup recovery", () => {
         await resetSubagentRegistryForTests({ persist: false });
         await markStartupOrphanedMainSessionsForRecovery({ cfg, agentIds: new Set(["main"]) });
         expect(
-          await readSessionEntrySummariesInWorker({ ...target, mainSessionRecovery: true }),
+          await readSessionEntrySummariesInWorker({ ...target, mainSessionRecovery: "claims" }),
         ).toEqual([]);
         expect(
           await recoverRestartAbortedMainSessions({ cfg, agentIds: new Set(["main"]) }),

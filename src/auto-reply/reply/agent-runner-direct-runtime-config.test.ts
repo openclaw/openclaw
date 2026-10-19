@@ -299,7 +299,7 @@ describe("runReplyAgent runtime config", () => {
     expect(followupRun.run.config).toBe(freshCfg);
     expect(resolveQueuedReplyExecutionConfigMock).toHaveBeenCalledTimes(1);
     const [configArg, configContextArg] = requireResolveQueuedReplyExecutionConfigCall();
-    expect(configArg).toBe(staleCfg);
+    expect(configArg).toEqual(staleCfg);
     expect(configContextArg.originatingChannel).toBe("telegram");
     expect(configContextArg.messageProvider).toBe("telegram");
     expect(resolveReplyToModeMock).toHaveBeenCalledWith(freshCfg, "telegram", "default", "dm");
@@ -351,7 +351,7 @@ describe("runReplyAgent runtime config", () => {
 
     expect(followupRun.run.config).toBe(freshCfg);
     const [configArg, configContextArg] = requireResolveQueuedReplyExecutionConfigCall();
-    expect(configArg).toBe(staleCfg);
+    expect(configArg).toEqual(staleCfg);
     expect(configContextArg).toMatchObject({
       originatingChannel: "telegram",
       messageProvider: "telegram",

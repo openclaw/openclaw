@@ -51,6 +51,7 @@ describe("theme avatar hats", () => {
         });
         const image = container.querySelector("img")!;
         image.dispatchEvent(new Event("load"));
+        flush();
         const hat = image.parentElement?.querySelector(":scope > .identity-avatar__hat");
         expect(Boolean(hat)).toBe(agentId === "agent-5");
         if (hat) {

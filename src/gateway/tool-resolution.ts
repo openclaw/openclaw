@@ -338,6 +338,10 @@ export async function resolveGatewayScopedTools(
   };
   const swarmCollectorContext = resolveSwarmCollectorToolContext(swarmCollectorAdmission);
   const commonToolOptions = () => ({
+    requesterOrigin: params.requesterOrigin,
+    operatorProfileId: params.operatorProfileId,
+    conversationId: params.conversationId,
+    chatType: params.chatType,
     runId: params.runId,
     inboundEventKind: params.inboundEventKind,
     sourceReplyDeliveryMode,
@@ -348,6 +352,7 @@ export async function resolveGatewayScopedTools(
     sessionId: params.sessionId,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     senderIsOwner: params.senderIsOwner,
+    gitContributorProfileId: params.gitContributorProfileId,
     config: params.cfg,
     sessionConfigSource: "runtime" as const,
     modelProvider: params.modelProvider,

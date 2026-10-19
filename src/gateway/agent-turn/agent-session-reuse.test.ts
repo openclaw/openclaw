@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+import { syncBuiltinESMExports } from "node:module";
 import { describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -86,7 +88,19 @@ describe("agent session reuse at mutation", () => {
         if (!prepared?.entry) {
           throw new Error("Session preparation did not return the stored row");
         }
-        expect(prepared.isNewSession).toBe(status === "failed");
+        const patchParams = {
+          ...prepared,
+          freshEntry: prepared.entry,
+          initialEntry: prepared.entry,
+          sessionAgentId: "main",
+          canonicalSessionKey: prepared.canonicalKey,
+          normalizedSpawned: {},
+          requestDeliveryHint: undefined,
+          hasRestoredCronContinuation: false,
+          fallbackSessionId: "after-append",
+        };
+        const initialPatch = await buildAgentSessionPatch(patchParams);
+        expect(initialPatch.isNewSession).toBe(status === "failed");
         expect(
           await appendTranscriptEvent(
             {
@@ -99,17 +113,7 @@ describe("agent session reuse at mutation", () => {
           ),
         ).toBe(true);
 
-        const result = await buildAgentSessionPatch({
-          ...prepared,
-          freshEntry: prepared.entry,
-          initialEntry: prepared.entry,
-          sessionAgentId: "main",
-          canonicalSessionKey: prepared.canonicalKey,
-          normalizedSpawned: {},
-          requestDeliveryHint: undefined,
-          hasRestoredCronContinuation: false,
-          fallbackSessionId: "after-append",
-        });
+        const result = await buildAgentSessionPatch(patchParams);
         expect(result.isNewSession).toBe(status === "killed");
         expect(result.patch.sessionId).toBe(status === "killed" ? "after-append" : sessionId);
       });
@@ -246,6 +250,52 @@ describe("agent session reuse at mutation", () => {
     }
   });
 
+  it.each([
+    { name: "existing identity", input: { freshEntry }, sessionId: "original", allocations: 0 },
+    {
+      name: "requested missing identity",
+      input: { freshEntry: undefined, initialEntry: undefined, requestedSessionId: "requested" },
+      sessionId: "requested",
+      allocations: 0,
+    },
+    {
+      name: "requested fresh identity",
+      input: { freshEntry, requestedSessionId: "requested" },
+      sessionId: "requested",
+      allocations: 0,
+    },
+    {
+      name: "new identity",
+      input: {},
+      sessionId: "00000000-0000-4000-8000-000000000001",
+      allocations: 1,
+    },
+    {
+      name: "stable writer fallback",
+      input: { fallbackSessionId: "selected" },
+      sessionId: "selected",
+      allocations: 0,
+    },
+  ] satisfies Array<{
+    name: string;
+    input: Partial<PatchParams>;
+    sessionId: string;
+    allocations: number;
+  }>)("allocates a UUID only when needed for $name", async (scenario) => {
+    const randomUUID = vi
+      .spyOn(crypto, "randomUUID")
+      .mockReturnValue("00000000-0000-4000-8000-000000000001");
+    try {
+      syncBuiltinESMExports();
+      const result = await buildReusePatch({ fallbackSessionId: undefined, ...scenario.input });
+      expect(result.patch.sessionId).toBe(scenario.sessionId);
+      expect(randomUUID).toHaveBeenCalledTimes(scenario.allocations);
+    } finally {
+      randomUUID.mockRestore();
+      syncBuiltinESMExports();
+    }
+  });
+
   it("keeps a concurrent replacement after preparing a rotation from the stored row", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = { session: { reset: { mode: "idle" as const, idleMinutes: 1 } } };
@@ -271,8 +321,18 @@ describe("agent session reuse at mutation", () => {
       if (!prepared) {
         throw new Error("Session preparation did not return a candidate");
       }
-      expect(prepared.isNewSession).toBe(true);
-      expect(prepared.sessionId).not.toBe("original");
+      const initialPatch = await buildReusePatch({
+        freshEntry: prepared.entry,
+        initialEntry: prepared.entry,
+        cfg: prepared.cfg,
+        canonicalSessionKey: prepared.canonicalKey,
+        storePath: prepared.storePath,
+        resetPolicy: prepared.resetPolicy,
+        now: prepared.now,
+        fallbackSessionId: undefined,
+      });
+      expect(initialPatch.isNewSession).toBe(true);
+      expect(initialPatch.patch.sessionId).not.toBe("original");
       const concurrent: SessionEntry = {
         ...freshEntry,
         sessionId: "concurrent",
@@ -293,7 +353,7 @@ describe("agent session reuse at mutation", () => {
         resetPolicy: prepared.resetPolicy,
         now: prepared.now,
         requestedSessionId: "original",
-        fallbackSessionId: prepared.sessionId,
+        fallbackSessionId: initialPatch.patch.sessionId,
       });
       expect(mergeSessionEntry(latest, updated.patch)).toMatchObject({
         sessionId: "concurrent",
