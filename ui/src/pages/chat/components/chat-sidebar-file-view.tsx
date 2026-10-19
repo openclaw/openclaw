@@ -1,4 +1,4 @@
-import { createEffect, createMemo, onSettled, Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { createMarkdownRef } from "../../../components/markdown-dom-ref.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
@@ -9,12 +9,13 @@ import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.
 import "../../../components/tooltip.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import "../../../styles/session-panel-rail.css";
 
 import type { FileViewControls } from "./chat-file-reader-controls.ts";
-import { observeFileScroll } from "./chat-file-scroll.ts";
+import { measureFileScroll } from "./chat-file-scroll.ts";
 import { HtmlPreview, HtmlPreviewSourceFallback } from "./chat-html-preview-view.tsx";
 import type { FileSidebarContent, AttachmentSidebarRuntime } from "./chat-sidebar-content-types.ts";
 import { ChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.tsx";
@@ -63,7 +64,6 @@ export function computeFileMatches(content: string, query: string): number[] {
 function FileMarkdown(props: { controls: FileViewControls; onSelect: (event: Event) => void }) {
   let scroll!: HTMLDivElement;
   let article!: HTMLElement;
-  let fades: ReturnType<typeof observeFileScroll> | undefined;
   const markdownRef = createMarkdownRef(() => ({
     incremental: true,
     content: toSanitizedMarkdownHtml(
@@ -71,19 +71,15 @@ function FileMarkdown(props: { controls: FileViewControls; onSelect: (event: Eve
       props.controls.markdown?.options,
     ),
   }));
-  onSettled(() => {
-    fades = observeFileScroll(scroll, article, props.controls.presentation === "mobile");
-    return () => fades?.destroy();
-  });
-  createEffect(
-    () => props.controls.presentation,
-    (presentation) => {
-      fades?.setEnabled(presentation === "mobile");
-    },
+  const schedule = createLayoutMeasurement(
+    () => [props.controls.presentation, props.controls.markdown],
+    () => measureFileScroll(scroll, props.controls.presentation === "mobile"),
+    { targets: () => [scroll, article] },
   );
   return (
     <div
       class="sidebar-file-view__markdown-scroll"
+      onScroll={schedule}
       ref={(element) => {
         scroll = element;
       }}

@@ -51,7 +51,7 @@
   background: transparent;
   color: var(--muted);
   font: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   touch-action: manipulation;
 }
 
