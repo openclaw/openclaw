@@ -11,7 +11,7 @@ import {
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
@@ -455,7 +455,7 @@ export function readUserProfileGitHubCommand(
   | { type: "userProfiles.githubIdentity.cached"; identity: CachedGitHubIdentity | undefined }
   | ({ type: "userProfiles.githubAttribution.resolve" } & UserProfileGitHubAttributionRead) {
   if (command.type === "userProfiles.githubIdentity.cached") {
-    return runSqliteDeferredTransactionSync(db, () => ({
+    return runSqliteReadSnapshotSync(db, () => ({
       type: command.type,
       identity: resolveCachedGitHubIdentityInDatabase(db, command),
     }));
@@ -467,7 +467,7 @@ export function readUserProfileGitHubCommand(
   // Public attribution is one snapshot statement; Enterprise also reads verified bindings.
   return !command.host || command.host === "github.com"
     ? read()
-    : runSqliteDeferredTransactionSync(db, read);
+    : runSqliteReadSnapshotSync(db, read);
 }
 
 /** Retain every account; the merge target owns primary choice and its coauthor consent. */

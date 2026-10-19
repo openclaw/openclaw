@@ -5,6 +5,10 @@ export function buildCommandAttemptToolContext(
   params: Pick<AgentAttemptParams, "messageChannel" | "opts" | "runContext" | "spawnedBy">,
 ) {
   return {
+    requesterOrigin: params.opts.requesterOrigin,
+    operatorProfileId: params.opts.operatorAuthority?.profileId,
+    conversationId: params.opts.requesterOrigin?.conversationId ?? params.runContext.chatId,
+    chatType: params.opts.requesterOrigin?.chatType,
     messageChannel: params.messageChannel,
     messageProvider: params.opts.messageProvider ?? params.messageChannel,
     agentAccountId: params.runContext.accountId,

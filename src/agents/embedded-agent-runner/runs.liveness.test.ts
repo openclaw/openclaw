@@ -88,19 +88,24 @@ beforeEach(async () => {
     {
       ...caller,
       watchdogAttempt,
-      embeddedRunToolAuthorityBinding: (registration) => ({
-        source: "reply",
-        operation,
-        watchdogAttempt,
-        project: () => undefined,
-        projectAsync: async () => undefined,
-        assertActive: () => {
+      embeddedRunToolAuthorityBinding: (registration) => {
+        const assertActive = () => {
           assertSessionControllerOperation(operation);
           if (registration.handle !== handle) {
             throw new Error("liveness fixture handle changed");
           }
-        },
-      }),
+        };
+        return {
+          source: "reply",
+          acceptsRequesterOrigin: () => false,
+          operation,
+          watchdogAttempt,
+          project: () => undefined,
+          projectAsync: async () => undefined,
+          assertRegistrationActive: assertActive,
+          assertActive,
+        };
+      },
     },
     () => setActiveEmbeddedRun(sessionId, handle, sessionKey),
   );

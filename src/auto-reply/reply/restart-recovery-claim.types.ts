@@ -1,7 +1,9 @@
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import type { RequesterOrigin } from "../../agents/requester-origin.js";
 import type { RestartRecoveryBeforeAgentReplyState } from "../../config/sessions/restart-recovery-types.js";
 import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
 import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
+import type { SessionTranscriptTurnLifecyclePatch } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { ReplyOperationAdmission } from "../../sessions/session-controller.state.js";
@@ -43,6 +45,7 @@ export type ReplyRestartRecoveryClaimControllerParams = {
     | undefined
   >;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  requesterOrigin?: RequesterOrigin;
   inputProvenance?: InputProvenance;
   admissionRunId?: unknown;
   executionRunId?: string;
@@ -66,4 +69,22 @@ export type ReplyRestartRecoveryClaimControllerParams = {
   strandedReplyRetry?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   storePath?: string;
+};
+
+export type ReplyRecoveryAdoption = {
+  entry: SessionEntry;
+  patch: SessionTranscriptTurnLifecyclePatch;
+  writer?: { runId: string; assertCurrent?: () => void };
+  validate?: (entry: SessionEntry | undefined) => boolean;
+  committed: (entry: SessionEntry) => void;
+  rolledBack?: () => void;
+};
+
+export type ReplyAdmissionPatch = {
+  entry: SessionEntry;
+  patch: SessionTranscriptTurnLifecyclePatch;
+  recorder?: UserTurnTranscriptRecorder;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
 };

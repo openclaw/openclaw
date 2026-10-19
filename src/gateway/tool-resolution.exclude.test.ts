@@ -393,27 +393,68 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
 
   const wildcardExecDeny = { tools: { toolsBySender: { "*": { deny: ["exec"] } } } };
 
-  it("applies wildcard sender policy to owners on external channels", async () => {
-    const result = await resolveNodeExecTools({
-      cfg: wildcardExecDeny,
-      sessionKey: "agent:main:discord:channel:dev",
-      senderIsOwner: true,
-      messageProvider: "discord",
-    });
-
-    expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
-    expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
-  });
-
-  it("preserves owner WebChat access from wildcard sender policy", async () => {
+  it.each<{
+    name: string;
+    params: Partial<Parameters<typeof resolveGatewayScopedTools>[0]>;
+    available: boolean;
+  }>([
+    {
+      name: "external-channel owner",
+      params: { sessionKey: "agent:main:discord:channel:dev", messageProvider: "discord" },
+      available: false,
+    },
+    {
+      name: "WebChat owner",
+      params: { messageProvider: "webchat" },
+      available: true,
+    },
+    {
+      name: "preserved provider-less internal owner",
+      params: { requesterOrigin: { sessionKey: "agent:main:main", operatorProfileId: "owner" } },
+      available: true,
+    },
+    {
+      name: "preserved internal owner with an external destination route",
+      params: {
+        requesterOrigin: { sessionKey: "agent:main:main", operatorProfileId: "owner" },
+        messageProvider: "discord",
+      },
+      available: true,
+    },
+    {
+      name: "preserved external owner with an internal destination route",
+      params: {
+        requesterOrigin: {
+          sessionKey: "agent:main:discord:channel:dev",
+          operatorProfileId: "owner",
+          messageProvider: "discord",
+        },
+        messageProvider: "webchat",
+      },
+      available: false,
+    },
+    ...[false, undefined].map((senderIsOwner) => ({
+      name: `preserved provider-less requester with current owner=${senderIsOwner}`,
+      params: {
+        requesterOrigin: { sessionKey: "agent:main:main", operatorProfileId: "requester" },
+        messageProvider: "webchat",
+        senderIsOwner,
+      },
+      available: false,
+    })),
+  ])("applies wildcard sender policy for $name", async ({ params, available }) => {
     const result = await resolveNodeExecTools({
       cfg: wildcardExecDeny,
       sessionKey: "agent:main:main",
-      messageProvider: "webchat",
+      ...params,
     });
 
-    expect(result.tools.map((tool) => tool.name)).toContain("exec");
-    expect(readCreateToolsArgs().pluginToolDenylist).not.toContain("exec");
+    expect(result.tools.some((tool) => tool.name === "exec")).toBe(available);
+    if (available) {
+      expect(readCreateToolsArgs().pluginToolDenylist).not.toContain("exec");
+    } else {
+      expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
+    }
   });
 
   it("does not inherit node-only exec as a generic child or cron capability", async () => {

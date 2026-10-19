@@ -75,8 +75,7 @@ instructions can be inherited by child agents. Managed relay connections retain
 parent-only personal-profile delivery. See [Codex workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files#skills-persona-and-memory-without-a-managed-relay).
 
 Files are refreshed on later turns. Reassigning the session changes personal
-context on the next new turn, not the running turn. Another participant can steer
-under the normal permission and queue rules without switching personal context.
+context on the next new turn, not the running turn. Another participant's message waits for a separate turn under their own permissions without switching the session's personal-context selection.
 Queued and collected messages from multiple people keep the session's selection;
 the current sender does not select a different file. Profile merges select the
 surviving primary ID; move the preferences to that directory yourself. OpenClaw

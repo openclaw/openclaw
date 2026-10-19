@@ -502,20 +502,19 @@ async function resumeMainSessionWithinAdmission(
     dispatchStarted = true;
     let dispatchSettled = false;
     let stopTyping: (() => void) | undefined;
+    const recoverySourceTarget = sourceRunId
+      ? { ...target, sessionId: params.entry.sessionId, sourceRunId, recoveryRunId }
+      : undefined;
     const dispatchOutcome = await dispatchRestartRecoveryUntilStarted({
       agentParams,
       controllerInput,
       gatewayRuntime: params.gatewayRuntime,
-      ...(sourceRunId && params.entry.restartRecoveryOperatorSource
-        ? {
-            restartRecoveryOperatorTarget: {
-              ...target,
-              sessionId: params.entry.sessionId,
-              sourceRunId,
-              recoveryRunId,
-            },
-          }
-        : {}),
+      restartRecoveryRequesterTarget: params.entry.restartRecoveryRequesterSource
+        ? recoverySourceTarget
+        : undefined,
+      restartRecoveryOperatorTarget: params.entry.restartRecoveryOperatorSource
+        ? recoverySourceTarget
+        : undefined,
       assertAdmissionCurrent: () => {
         if (params.shouldContinue?.() === false || !taskRemainsOwed()) {
           throw new Error("Restart recovery admission is no longer current.");

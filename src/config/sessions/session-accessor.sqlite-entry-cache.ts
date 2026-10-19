@@ -354,7 +354,7 @@ export function publishSessionEntryCacheInvalidation(
     sharingUnchanged?: boolean;
   },
   writeGeneration?: SqliteSessionEntryCacheWriteGeneration,
-): void {
+): SessionEntry | undefined {
   let facts = update.facts;
   const cached = writeGeneration
     ? publishSqliteSessionEntryCacheUpsert(database, update, writeGeneration)
@@ -414,6 +414,7 @@ export function publishSessionEntryCacheInvalidation(
         }
       : { kind: "marker", sharingChange },
   );
+  return fullEntry;
 }
 
 /** Refresh participant projections without reloading unchanged session-entry JSON. */

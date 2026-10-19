@@ -267,7 +267,7 @@ describe("guest session followup admission", () => {
         );
         revoke();
         release.resolve();
-        await expect(sending).rejects.toThrow("Followup owner's access changed; ask them again");
+        await expect(sending).rejects.toThrow("followup source revoked");
         expect(stage).not.toHaveBeenCalled();
         expect(agentCommandMock).not.toHaveBeenCalled();
         expect(await readInput()).toEqual(before);

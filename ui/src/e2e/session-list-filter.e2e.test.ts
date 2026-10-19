@@ -68,7 +68,6 @@ const allAgentsQuery = {
 };
 suite.define(() => {
   it("refetches instead of showing a row excluded by configured-agent filtering", async () => {
-    const pageQueryParams = { ...allAgentsQuery, ifRowsRevision: "" };
     const visibleLabel = "Visible configured session";
     const hiddenLabel = "Hidden unconfigured session";
     const page = await newPage();
@@ -100,8 +99,8 @@ suite.define(() => {
       .poll(async () =>
         (await gateway.getRequests("sessions.list")).map((request) => request.params),
       )
-      .toContainEqual(pageQueryParams);
-    await gateway.deferNext("sessions.list", pageQueryParams);
+      .toContainEqual({ ...allAgentsQuery, ifRowsRevision: "" });
+    await gateway.deferNext("sessions.list", { ...allAgentsQuery, ifRowsRevision: "" });
     const requestsBeforeEvent = await gateway.getRequests("sessions.list");
 
     await page.clock.install();
@@ -119,7 +118,10 @@ suite.define(() => {
     // Cross the full event window while keeping the response explicitly deferred.
     await page.clock.runFor(5_000);
     await waitForList(gateway, requestsBeforeEvent.length);
-    expect((await gateway.getRequests("sessions.list")).at(-1)?.params).toEqual(pageQueryParams);
+    expect((await gateway.getRequests("sessions.list")).at(-1)?.params).toEqual({
+      ...allAgentsQuery,
+      ifRowsRevision: "",
+    });
     expect(await page.getByText(hiddenLabel, { exact: true }).count()).toBe(0);
     await page.clock.resume();
     await gateway.resolveDeferred(

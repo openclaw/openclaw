@@ -1,4 +1,3 @@
-// Voice Call plugin entrypoint registers its OpenClaw integration.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
