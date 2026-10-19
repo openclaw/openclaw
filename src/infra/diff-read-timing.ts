@@ -1,13 +1,15 @@
 import { performance } from "node:perf_hooks";
 import { createQueuedDiagnosticPhaseEmitter } from "./diagnostic-events.js";
 
-type DiffReadStage =
-  | "admission"
-  | "checkout-resolve"
-  | "cache-validate"
-  | "worker-queue"
-  | "git-wall"
-  | "encode";
+const DIFF_READ_STAGES = [
+  "admission",
+  "checkout-resolve",
+  "cache-validate",
+  "worker-queue",
+  "git-wall",
+  "encode",
+] as const;
+type DiffReadStage = (typeof DIFF_READ_STAGES)[number];
 
 export type DiffReadTiming = {
   durations: Partial<Record<DiffReadStage, number>>;
@@ -15,8 +17,11 @@ export type DiffReadTiming = {
 };
 
 export function addDiffReadDurations(target: DiffReadTiming, source: DiffReadTiming) {
-  for (const stage of Object.keys(source.durations) as DiffReadStage[]) {
-    target.durations[stage] = (target.durations[stage] ?? 0) + source.durations[stage]!;
+  for (const stage of DIFF_READ_STAGES) {
+    const duration = source.durations[stage];
+    if (duration !== undefined) {
+      target.durations[stage] = (target.durations[stage] ?? 0) + duration;
+    }
   }
 }
 
