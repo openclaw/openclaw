@@ -115,7 +115,7 @@ it("reports a best-effort generation verification failure for its actual sources
 
   assert(failure instanceof Error);
   expect(failure.message).toContain(
-    `State schema inspection failed (exit): SQLite snapshot size mismatch; after `,
+    `State schema inspection failed (exit): SQLite file generation changed while reading; after `,
   );
   expect(failure.message).toContain(
     `during database generation verification for source scope [${file}, ${missing}] (scope: 2 source paths)`,

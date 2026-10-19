@@ -1,14 +1,29 @@
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
   ProviderThinkingProfile,
+  AnyAgentTool,
+  ProviderNormalizeToolSchemasContext,
+  ProviderToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
+import {
+  buildProviderToolCompatFamilyHooks,
+  findUnsupportedSchemaKeywords,
+  SCHEMA_MAP_KEYS,
+  SCHEMA_NESTED_KEYS,
+} from "openclaw/plugin-sdk/provider-tools";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { registerClawRouterPoolMethod } from "./pool-gateway.js";
+import { parseClawRouterPool, type ClawRouterPoolResult } from "./pool.js";
 import {
   buildClawRouterProviderConfig,
   CLAWROUTER_REASONING_EFFORT_LEVELS,
@@ -18,8 +33,102 @@ import {
   normalizeClawRouterResolvedModel,
 } from "./provider-catalog.js";
 import { wrapClawRouterProviderStream } from "./stream.js";
-import { inspectPerplexityToolSchemas, normalizePerplexityToolSchemas } from "./tool-schemas.js";
 import { fetchClawRouterUsage } from "./usage.js";
+
+const PERPLEXITY_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
+  "patternProperties",
+  "additionalProperties",
+]);
+
+// JSON Schema allows `type` to be an array; a union containing "object" still
+// admits objects, so it needs `properties` for Perplexity too.
+function isObjectType(type: unknown): boolean {
+  return type === "object" || (Array.isArray(type) && type.includes("object"));
+}
+
+function normalizeSchemaMap(value: unknown): unknown {
+  const record = readRecord(value);
+  if (!record) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(record).map(([key, schema]) => [key, normalizePerplexitySchema(schema)]),
+  );
+}
+
+function normalizePerplexitySchema(value: object): object;
+function normalizePerplexitySchema(value: unknown): unknown;
+function normalizePerplexitySchema(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(normalizePerplexitySchema);
+  }
+  const record = readRecord(value);
+  if (!record) {
+    return value;
+  }
+  const normalized: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(record)) {
+    if (PERPLEXITY_UNSUPPORTED_SCHEMA_KEYWORDS.has(key)) {
+      continue;
+    }
+    normalized[key] = SCHEMA_MAP_KEYS.has(key)
+      ? normalizeSchemaMap(child)
+      : SCHEMA_NESTED_KEYS.has(key)
+        ? normalizePerplexitySchema(child)
+        : child;
+  }
+  if (isObjectType(normalized.type) && !("properties" in normalized)) {
+    normalized.properties = {};
+  }
+  return normalized;
+}
+
+function findObjectSchemasMissingProperties(schema: unknown, path: string): string[] {
+  if (Array.isArray(schema)) {
+    return schema.flatMap((child, index) =>
+      findObjectSchemasMissingProperties(child, `${path}[${index}]`),
+    );
+  }
+  const record = readRecord(schema);
+  if (!record) {
+    return [];
+  }
+  const violations =
+    isObjectType(record.type) && !("properties" in record) ? [`${path}.properties`] : [];
+  for (const [key, child] of Object.entries(record)) {
+    if (PERPLEXITY_UNSUPPORTED_SCHEMA_KEYWORDS.has(key)) {
+      continue;
+    }
+    if (SCHEMA_MAP_KEYS.has(key)) {
+      const schemas = readRecord(child);
+      if (schemas) {
+        for (const [name, nestedSchema] of Object.entries(schemas)) {
+          violations.push(
+            ...findObjectSchemasMissingProperties(nestedSchema, `${path}.${key}.${name}`),
+          );
+        }
+      }
+      continue;
+    }
+    if (SCHEMA_NESTED_KEYS.has(key)) {
+      violations.push(...findObjectSchemasMissingProperties(child, `${path}.${key}`));
+    }
+  }
+  return violations;
+}
+
+const TIMEOUT_MS = 10_000;
+const MAX_BYTES = 1024 * 1024;
+const unavailable = (): ClawRouterPoolResult => ({
+  status: "unavailable",
+  message:
+    "ClawRouter pool status is unavailable. Check the ClawRouter connection and try Refresh.",
+});
+
+async function readJson(response: Response): Promise<unknown> {
+  const bytes = await readResponseWithLimit(response, MAX_BYTES, { chunkTimeoutMs: TIMEOUT_MS });
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+}
 
 const PROVIDER_ID = "clawrouter";
 const ENV_VAR = "CLAWROUTER_API_KEY";
@@ -36,8 +145,31 @@ const openAiTools = buildProviderToolCompatFamilyHooks("openai");
 const deepSeekTools = buildProviderToolCompatFamilyHooks("deepseek");
 const geminiTools = buildProviderToolCompatFamilyHooks("gemini");
 const perplexityTools = {
-  normalizeToolSchemas: normalizePerplexityToolSchemas,
-  inspectToolSchemas: inspectPerplexityToolSchemas,
+  normalizeToolSchemas(ctx: ProviderNormalizeToolSchemasContext): AnyAgentTool[] {
+    return ctx.tools.map((tool) => {
+      if (!tool.parameters || typeof tool.parameters !== "object") {
+        return tool;
+      }
+      return {
+        ...tool,
+        parameters: normalizePerplexitySchema(tool.parameters),
+      };
+    });
+  },
+  inspectToolSchemas(ctx: ProviderNormalizeToolSchemasContext): ProviderToolSchemaDiagnostic[] {
+    return ctx.tools.flatMap((tool, toolIndex) => {
+      const path = `${tool.name}.parameters`;
+      const violations = [
+        ...findUnsupportedSchemaKeywords(
+          tool.parameters,
+          path,
+          PERPLEXITY_UNSUPPORTED_SCHEMA_KEYWORDS,
+        ),
+        ...findObjectSchemasMissingProperties(tool.parameters, path),
+      ];
+      return violations.length > 0 ? [{ toolName: tool.name, toolIndex, violations }] : [];
+    });
+  },
 };
 
 function resolveClawRouterThinkingProfile(
@@ -119,7 +251,105 @@ export default defineSingleProviderPluginEntry({
   name: "ClawRouter",
   description: "Managed multi-provider model routing and quotas",
   manifest,
-  register: registerClawRouterPoolMethod,
+  register(api) {
+    api.registerGatewayMethod(
+      "clawrouter.pool.get",
+      async (request) => {
+        const config = request.context.getRuntimeConfig();
+        const signal = request.signal;
+        const current = () => {
+          signal?.throwIfAborted();
+          request.client?.connectionSignal?.throwIfAborted();
+          if (request.hasCurrentClientAuthority?.() === false) {
+            throw new Error("Retired pool request");
+          }
+        };
+        let result: ClawRouterPoolResult;
+        try {
+          current();
+          const { resolveApiKeyForProvider } =
+            await import("openclaw/plugin-sdk/provider-auth-runtime");
+          let token: string | undefined;
+          try {
+            token = (
+              await resolveApiKeyForProvider({
+                provider: "clawrouter",
+                cfg: config,
+                signal,
+              })
+            )?.apiKey;
+          } catch {
+            // Auth diagnostics can include credential details; only return fixed next steps.
+          }
+          current();
+          if (!token) {
+            result = {
+              status: "not_configured",
+              message: "Configure a ClawRouter key in Model Providers, then try Refresh.",
+            };
+          } else {
+            const baseUrl = normalizeClawRouterRootUrl(
+              config.models?.providers?.clawrouter?.baseUrl,
+            );
+            const { response, release } = await fetchWithSsrFGuard(
+              withTrustedEnvProxyGuardedFetchMode({
+                url: `${baseUrl}/v1/pool`,
+                init: { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } },
+                timeoutMs: TIMEOUT_MS,
+                signal,
+                policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+                auditContext: "clawrouter.pool",
+              }),
+            );
+            try {
+              if (response.status === 401 || response.status === 403) {
+                result = {
+                  status: "unauthorized",
+                  message:
+                    "The ClawRouter key was rejected. Check or replace it in Model Providers.",
+                };
+              } else if (response.status === 404) {
+                const body = readRecord(await readJson(response).catch(() => undefined));
+                const error = readRecord(body?.error);
+                result =
+                  body?.code === "pool_status_hidden" ||
+                  error?.code === "pool_status_hidden" ||
+                  body?.error === "pool_status_hidden"
+                    ? {
+                        status: "hidden",
+                        message: "Ask your ClawRouter admin to enable pool status for this policy.",
+                      }
+                    : {
+                        status: "unsupported",
+                        message:
+                          "This ClawRouter deployment does not expose pool status. Ask your admin to update ClawRouter.",
+                      };
+              } else if (response.status === 405) {
+                result = {
+                  status: "unsupported",
+                  message:
+                    "This ClawRouter deployment does not expose pool status. Ask your admin to update ClawRouter.",
+                };
+              } else if (!response.ok) {
+                result = unavailable();
+              } else {
+                const pool = parseClawRouterPool(await readJson(response));
+                result = pool ? { status: "ok", pool } : unavailable();
+              }
+            } finally {
+              void response.body?.cancel().catch(() => undefined);
+              await release();
+            }
+          }
+          current();
+        } catch {
+          result = unavailable();
+        }
+        request.respond(true, result);
+      },
+      { scope: "operator.read" },
+    );
+  },
   provider() {
     const dynamicModels = new Map<string, Map<string, ProviderRuntimeModel>>();
 

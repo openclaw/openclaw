@@ -4,6 +4,7 @@ import { Match, onSettled, Switch } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { createTabFocus } from "../../lib/tabs.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
@@ -469,6 +470,7 @@ export function BrowserPanelChrome(
     };
   });
   const panelId = `browser-tab-panel-${generateUUID()}`;
+  const tabFocus = createTabFocus();
   const rendersTabStrip = createMemo(
     () =>
       !props.controller.host.fixedTab &&
@@ -490,6 +492,7 @@ export function BrowserPanelChrome(
       {rendersTabStrip() ? (
         <header class="rail-header bp-header">
           <BrowserPanelTabs
+            focusOwner={tabFocus}
             panelId={panelId}
             tabs={props.controller.tabs}
             activeTargetId={props.controller.activeTargetId}

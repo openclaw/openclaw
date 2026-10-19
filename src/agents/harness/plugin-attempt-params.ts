@@ -43,12 +43,12 @@ export async function preparePluginHarnessParams(
       ? harness.conversationToolPolicySafeDenyTools
       : undefined,
     harness.conversationToolPolicyNativeTools,
-    webSearchModel === null
-      ? undefined
-      : (webSearchModel ?? {
+    webSearchModel === undefined
+      ? {
           provider: preparedParams.model.provider,
           model: preparedParams.modelId,
-        }),
+        }
+      : webSearchModel,
   );
   if (policies.requiresLiveToolAuthority) {
     // Native-runtime consent does not waive a separate revocable delegation grant.

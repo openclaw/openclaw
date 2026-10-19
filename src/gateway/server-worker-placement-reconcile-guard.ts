@@ -57,7 +57,7 @@ export function installWorkerPlacementReconcileGuard(params: {
         return;
       }
       if (owner?.state === "provisioning") {
-        await params.dispatch.resumeProvisioning(owner, reconcileEnvironmentCore);
+        await params.dispatch.resumeProvisioning(owner, reconcileEnvironmentCore, signal);
         return;
       }
       const environment = params.environments.get(environmentId);

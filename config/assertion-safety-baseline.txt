@@ -87,7 +87,6 @@ extensions/canvas/src/tool.ts	1
 extensions/chutes/models.ts	1
 extensions/chutes/oauth.ts	1
 extensions/clawrouter/index.ts	1
-extensions/clawrouter/tool-schemas.ts	1
 extensions/clawrouter/usage.ts	1
 extensions/clickclack/src/access.ts	2
 extensions/clickclack/src/channel-config.ts	5
@@ -554,10 +553,8 @@ extensions/msteams/src/sqlite-state.ts	1
 extensions/msteams/src/user-agent.ts	1
 extensions/nextcloud-talk/src/approval-auth.ts	1
 extensions/nextcloud-talk/src/channel.ts	2
-extensions/nextcloud-talk/src/gateway.ts	2
 extensions/nextcloud-talk/src/inbound.ts	9
 extensions/nextcloud-talk/src/message-actions.ts	3
-extensions/nextcloud-talk/src/message-adapter.ts	1
 extensions/nextcloud-talk/src/policy.ts	2
 extensions/nextcloud-talk/src/send.ts	1
 extensions/nextcloud-talk/src/setup-core.ts	8
@@ -1566,7 +1563,6 @@ src/cli/native-hook-relay-cli.ts	1
 src/cli/nodes-cli/register.pairing.ts	2
 src/cli/nodes-cli/register.status.ts	3
 src/cli/nodes-cli/rpc.ts	2
-src/cli/output-file.runtime.ts	1
 src/cli/pairing-cli.ts	1
 src/cli/plugins-authoring-command.ts	2
 src/cli/plugins-update-command.ts	5
@@ -1638,7 +1634,7 @@ src/commands/doctor-sqlite-compact.ts	1
 src/commands/doctor-sqlite-maintenance-lock.ts	1
 src/commands/doctor-telegram-general-topic-conversations.ts	2
 src/commands/doctor-tools-md-migration.ts	5
-src/commands/doctor-workspace.ts	2
+src/commands/doctor-workspace.ts	1
 src/commands/doctor/cron/legacy-quarantine-migration.ts	1
 src/commands/doctor/cron/legacy-repair.ts	4
 src/commands/doctor/cron/store-migration.ts	2
@@ -2265,7 +2261,7 @@ src/plugins/loader-module-runtime.ts	5
 src/plugins/loader-records.ts	1
 src/plugins/loader-runtime-candidate.ts	1
 src/plugins/loader-shared.ts	2
-src/plugins/managed-npm-retention.ts	4
+src/plugins/managed-npm-retention.ts	3
 src/plugins/manifest-install-owner.ts	1
 src/plugins/manifest-setup-normalizers.ts	4
 src/plugins/manifest.ts	2

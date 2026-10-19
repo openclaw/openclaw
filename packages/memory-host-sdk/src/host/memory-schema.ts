@@ -10,8 +10,8 @@ import * as provenanceSchema from "./memory-schema-provenance.js";
 import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
 import { migrateMemoryIndexStorage } from "./memory-schema-storage-migration.js";
 import { memoryTextSearchSchema } from "./memory-search-schema.js";
-import { admitStoreSearch } from "./openclaw-runtime-kysely.js";
 import {
+  admitSqliteMemoryTextSearch,
   backfillMemoryPathFtsRows,
   dropDisabledMemoryFts,
   dropMemoryChunkFtsTriggers,
@@ -360,6 +360,11 @@ export function migrateMemoryIndexSourcesIdentity(db: DatabaseSync): void {
 /** Ensure canonical memory index tables and the optional FTS table exist. */
 export function ensureMemoryIndexSchema(params: {
   db: DatabaseSync;
+  /**
+   * Caller asserts it just created this empty private shadow database.
+   * Passing this for an existing database skips required repair writes.
+   */
+  fresh?: true;
   /** @deprecated Omit to use the canonical memory cache table. */
   embeddingCacheTable?: string;
   cacheEnabled: boolean;
@@ -450,7 +455,9 @@ export function ensureMemoryIndexSchema(params: {
     CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
       ON ${MEMORY_INDEX_CHUNKS_TABLE}(source);
   `);
-  provenanceSchema.ensureMemoryChunkProvenance(params.db);
+  if (!params.fresh) {
+    provenanceSchema.ensureMemoryChunkProvenance(params.db);
+  }
   dropDisabledMemoryFts(params.db, ftsTable, params.ftsEnabled);
   if (params.cacheEnabled) {
     const updatedAtIndex =
@@ -495,7 +502,7 @@ export function ensureMemoryIndexSchema(params: {
       if (ftsTable !== MEMORY_INDEX_FTS_TABLE) {
         search.text = { body: { ...search.text!.body!, table: ftsTable } };
       }
-      admitStoreSearch(params.db, search, { extension: "memory.text" });
+      admitSqliteMemoryTextSearch(params.db, search, { fresh: params.fresh });
       ftsAvailable = true;
     } catch (err) {
       if (ftsTable === MEMORY_INDEX_FTS_TABLE) {

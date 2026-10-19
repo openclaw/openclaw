@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError, type Root } from "../../infra/fs-safe.js";
-import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import { lstatIfExists } from "../../infra/path-existence.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
 import type { WorkspaceNode } from "./workspace-manifest-comparison.js";
@@ -52,12 +52,7 @@ export async function removeEmptyWorkspaceDirectory(root: Root, entryPath: strin
 
 export async function localWorkspaceNode(root: string, entryPath: string): Promise<WorkspaceNode> {
   const absolute = localPath(root, entryPath);
-  const stats = await fs.lstat(absolute).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const stats = await lstatIfExists(absolute);
   if (!stats) {
     return undefined;
   }

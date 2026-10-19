@@ -1,4 +1,4 @@
-import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
+import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
@@ -260,7 +260,7 @@ export async function createLmstudioEmbeddingProvider(
     }
   };
 
-  const withPreloadLock = createAsyncLock();
+  const preloadPermits = createPermitPool(1);
   const preloadModel = async (
     signal?: AbortSignal,
     initializeIdentity = false,
@@ -269,9 +269,11 @@ export async function createLmstudioEmbeddingProvider(
       return undefined;
     }
     // Serialize discovery/load, keeping embedding requests themselves concurrent.
-    let entered = false;
-    const preparation = withPreloadLock(async () => {
-      entered = true;
+    const release = await preloadPermits.acquire({ signal });
+    if (!release) {
+      throw toErrorObject(signal?.reason, "LM Studio preload aborted");
+    }
+    try {
       signal?.throwIfAborted();
       try {
         const prepared = await prepareLmstudioModelForInference({
@@ -305,34 +307,12 @@ export async function createLmstudioEmbeddingProvider(
         }
         return undefined;
       }
-    });
-    if (!signal) {
-      return await preparation;
+    } catch (error) {
+      throw signal ? toErrorObject(error, "LM Studio model preload failed") : error;
+    } finally {
+      // Once admitted, transport cleanup must finish before the service lease is released.
+      release();
     }
-    // A queued cancellation owns no load. Once entered, wait for transport cleanup
-    // before the caller releases its service lease.
-    return await new Promise<LmstudioPreparedModel | undefined>((resolve, reject) => {
-      const onAbort = () => {
-        if (!entered) {
-          signal.removeEventListener("abort", onAbort);
-          reject(toErrorObject(signal.reason, "LM Studio preload aborted"));
-        }
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-      void preparation.then(
-        (prepared) => {
-          signal.removeEventListener("abort", onAbort);
-          resolve(prepared);
-        },
-        (error: unknown) => {
-          signal.removeEventListener("abort", onAbort);
-          reject(toErrorObject(error, "LM Studio model preload failed"));
-        },
-      );
-      if (signal.aborted) {
-        onAbort();
-      }
-    });
   };
 
   // Resolve the canonical embedding/cache identity before returning the provider.
