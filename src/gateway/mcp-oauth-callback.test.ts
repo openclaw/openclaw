@@ -52,13 +52,9 @@ function pendingStore() {
 }
 
 async function dispatch(
-  path: string,
+  path = "/oauth/mcp/callback?code=authorization-code&state=state-1234567890",
   options?: { config?: OpenClawConfig; method?: string },
-): Promise<{
-  handled: boolean;
-  response: ReturnType<typeof createResponse>;
-  warn: ReturnType<typeof vi.fn>;
-}> {
+) {
   const response = createResponse();
   const warn = vi.fn();
   const handled = await handleMcpOAuthCallback(
@@ -69,6 +65,15 @@ async function dispatch(
   return { handled, response, warn };
 }
 
+function expectPage(
+  { response }: Awaited<ReturnType<typeof dispatch>>,
+  code = 404,
+  text = "expired or was already used",
+) {
+  expect(response.res.statusCode).toBe(code);
+  expect(response.getBody()).toContain(text);
+}
+
 beforeEach(() => {
   mocks.complete.mockReset().mockResolvedValue("authorized");
   mocks.readPending.mockReset().mockResolvedValue(STORE_KEY);
@@ -77,13 +82,10 @@ beforeEach(() => {
 
 describe("Gateway MCP OAuth callback", () => {
   it("completes the requester row selected by exact OAuth state", async () => {
-    const result = await dispatch(
-      "/oauth/mcp/callback?code=authorization-code&state=state-1234567890",
-    );
+    const result = await dispatch();
 
     expect(result.handled).toBe(true);
-    expect(result.response.res.statusCode).toBe(200);
-    expect(result.response.getBody()).toContain("You&#39;re connected.");
+    expectPage(result, 200, "You&#39;re connected.");
     expect(result.response.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
     expect(mocks.readPending).toHaveBeenCalledWith("state-1234567890", mocks.context);
     expect(mocks.readStore).toHaveBeenCalledWith(STORE_KEY, mocks.context);
@@ -104,12 +106,7 @@ describe("Gateway MCP OAuth callback", () => {
   it("rejects a callback whose state was consumed concurrently", async () => {
     mocks.complete.mockResolvedValue("expired");
 
-    const result = await dispatch(
-      "/oauth/mcp/callback?code=authorization-code&state=state-1234567890",
-    );
-
-    expect(result.response.res.statusCode).toBe(404);
-    expect(result.response.getBody()).toContain("expired or was already used");
+    expectPage(await dispatch());
   });
 
   it("rejects unknown and replayed states with the same generic page", async () => {
@@ -118,14 +115,11 @@ describe("Gateway MCP OAuth callback", () => {
     const unknown = await dispatch(
       "/oauth/mcp/callback?code=authorization-code&state=unknown-state",
     );
-    const replay = await dispatch(
-      "/oauth/mcp/callback?code=authorization-code&state=state-1234567890",
-    );
+    const replay = await dispatch();
 
     for (const result of [unknown, replay]) {
       expect(result.handled).toBe(true);
-      expect(result.response.res.statusCode).toBe(404);
-      expect(result.response.getBody()).toContain("expired or was already used");
+      expectPage(result);
     }
     expect(mocks.readStore).not.toHaveBeenCalled();
     expect(mocks.complete).not.toHaveBeenCalled();
@@ -137,12 +131,7 @@ describe("Gateway MCP OAuth callback", () => {
       lastAuthorizationUrl: "https://accounts.example.com/authorize?state=replaced-state",
     });
 
-    const result = await dispatch(
-      "/oauth/mcp/callback?code=authorization-code&state=state-1234567890",
-    );
-
-    expect(result.response.res.statusCode).toBe(404);
-    expect(result.response.getBody()).toContain("expired or was already used");
+    expectPage(await dispatch());
     expect(mocks.complete).not.toHaveBeenCalled();
   });
 
@@ -151,20 +140,13 @@ describe("Gateway MCP OAuth callback", () => {
       "/oauth/mcp/callback?error=access_denied&error_description=nope&state=state-1234567890",
     );
 
-    expect(result.response.res.statusCode).toBe(400);
-    expect(result.response.getBody()).toContain("Ask the bot to connect again.");
+    expectPage(result, 400, "Ask the bot to connect again.");
     expect(result.response.getBody()).not.toContain("nope");
     expect(mocks.complete).not.toHaveBeenCalled();
   });
 
   it("fails generically when the configured server no longer owns the row", async () => {
-    const result = await dispatch(
-      "/oauth/mcp/callback?code=authorization-code&state=state-1234567890",
-      { config: callbackConfig("renamed") },
-    );
-
-    expect(result.response.res.statusCode).toBe(404);
-    expect(result.response.getBody()).toContain("expired or was already used");
+    expectPage(await dispatch(undefined, { config: callbackConfig("renamed") }));
     expect(mocks.complete).not.toHaveBeenCalled();
   });
 
@@ -173,18 +155,14 @@ describe("Gateway MCP OAuth callback", () => {
 
     const result = await dispatch("/oauth/mcp/callback?code=wrong-code&state=state-1234567890");
 
-    expect(result.response.res.statusCode).toBe(400);
-    expect(result.response.getBody()).toContain("Ask the bot to connect again.");
+    expectPage(result, 400, "Ask the bot to connect again.");
     expect(result.response.getBody()).not.toContain("invalid_grant");
     expect(result.response.getBody()).not.toContain("wrong-code");
     expect(result.warn).toHaveBeenCalledOnce();
   });
 
   it("leaves other methods and paths unclaimed", async () => {
-    const wrongMethod = await dispatch(
-      "/oauth/mcp/callback?code=authorization-code&state=state-1234567890",
-      { method: "POST" },
-    );
+    const wrongMethod = await dispatch(undefined, { method: "POST" });
     const wrongPath = await dispatch("/oauth/other?code=authorization-code&state=state-1234567890");
 
     expect(wrongMethod.handled).toBe(false);

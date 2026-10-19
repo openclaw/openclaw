@@ -44,6 +44,7 @@ import {
 } from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
+import { requestMcp, toolCall } from "./mcp-http.test-request.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import {
   readOperatorToolGatewayAuthority,
@@ -100,20 +101,9 @@ async function callTool(grant?: { token: string; captureKey: string }) {
   if (!runtime) {
     throw new Error("MCP runtime missing");
   }
-  const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${grant?.token ?? runtime.ownerToken}`,
-      "content-type": "application/json",
-      "x-session-key": "agent:main:scope-proof",
-      ...(grant ? { "x-openclaw-cli-capture-key": grant.captureKey } : {}),
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: { name: "scope_probe", arguments: {} },
-    }),
+  const response = await requestMcp(runtime, toolCall("scope_probe"), {
+    ...grant,
+    sessionKey: "agent:main:scope-proof",
   });
   expect(response.status).toBe(200);
   return response.json();
@@ -350,21 +340,7 @@ describe("MCP HTTP work ownership", () => {
     });
     expect(adminDispatch).toHaveBeenCalledTimes(1);
     expect(revokeMcpLoopbackClientGrant(ownerGrant.token)).toBe(true);
-    const runtimeAfter = getActiveMcpLoopbackRuntime();
-    const revoked = await fetch(`http://127.0.0.1:${runtimeAfter?.port}/mcp`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${ownerGrant.token}`,
-        "content-type": "application/json",
-        "x-openclaw-cli-capture-key": ownerGrant.captureKey,
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "tools/call",
-        params: { name: "scope_probe", arguments: {} },
-      }),
-    });
+    const revoked = await requestMcp(runtime, toolCall("scope_probe"), ownerGrant);
     expect(revoked.status).toBe(401);
     expect(adminDispatch).toHaveBeenCalledTimes(1);
   });

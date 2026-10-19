@@ -35,6 +35,7 @@ import {
 } from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
+import { requestMcp, toolCall } from "./mcp-http.test-request.js";
 
 // mock-isolation: Keep completion admission deferred while the real process and egress owners settle.
 vi.mock("../auto-reply/dispatch.js", () => ({
@@ -173,29 +174,23 @@ async function mintExecGrant(
       captureKey,
     }),
   ).not.toBe(false);
-  const request = async (method: "tools/list" | "tools/call") =>
-    fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${grant.token}`,
-        "content-type": "application/json",
-        "x-openclaw-cli-capture-key": captureKey,
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method,
-        ...(method === "tools/call"
-          ? {
-              params: {
-                name: "exec",
-                arguments: args,
-              },
-            }
-          : {}),
-      }),
-    });
+  const request = (method: "tools/list" | "tools/call") =>
+    requestMcp(
+      runtime,
+      method === "tools/call" ? toolCall("exec", args) : { jsonrpc: "2.0", id: 1, method },
+      { token: grant.token, captureKey },
+    );
   return { token: grant.token, admission, request };
+}
+
+async function expectExecResponse(response: Response, text: string) {
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    result: {
+      isError: false,
+      content: [expect.objectContaining({ text: expect.stringContaining(text) })],
+    },
+  });
 }
 
 it("executes egress-enabled commands through cached CLI grants and rejects a retired grant", async () => {
@@ -204,14 +199,7 @@ it("executes egress-enabled commands through cached CLI grants and rejects a ret
   expect(listed.status).toBe(200);
   expect(await listed.json()).toMatchObject({ result: { tools: [{ name: "exec" }] } });
   // tools/list constructed and cached the tool before this HTTP invocation.
-  const executed = await first.request("tools/call");
-  expect(executed.status).toBe(200);
-  expect(await executed.json()).toMatchObject({
-    result: {
-      isError: false,
-      content: [expect.objectContaining({ text: expect.stringContaining("mcp-egress-ok") })],
-    },
-  });
+  await expectExecResponse(await first.request("tools/call"), "mcp-egress-ok");
   first.admission.close();
   const retired = await first.request("tools/call");
   expect(retired.status).toBe(401);
@@ -219,14 +207,7 @@ it("executes egress-enabled commands through cached CLI grants and rejects a ret
 
   // A later admitted run in the same session must remain independently usable.
   const next = await mintExecGrant("mcp-egress-next");
-  const later = await next.request("tools/call");
-  expect(later.status).toBe(200);
-  expect(await later.json()).toMatchObject({
-    result: {
-      isError: false,
-      content: [expect.objectContaining({ text: expect.stringContaining("mcp-egress-ok") })],
-    },
-  });
+  await expectExecResponse(await next.request("tools/call"), "mcp-egress-ok");
 });
 
 it("routes a command started by a conversation's completion turn back to that conversation", async () => {
@@ -244,16 +225,7 @@ it("routes a command started by a conversation's completion turn back to that co
     },
     { command: "echo mcp-chain-ok", background: true },
   );
-  const started = await request("tools/call");
-  expect(started.status).toBe(200);
-  await expect(started.json()).resolves.toMatchObject({
-    result: {
-      isError: false,
-      content: [
-        expect.objectContaining({ text: expect.stringContaining("Command still running") }),
-      ],
-    },
-  });
+  await expectExecResponse(await request("tools/call"), "Command still running");
 
   await waitForExecScope(sessionKey);
   const receipt = expectDefined(completions[0], "conversation completion receipt");

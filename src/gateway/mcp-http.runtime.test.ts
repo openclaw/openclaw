@@ -45,6 +45,9 @@ function scopedToolFixture(names: string[]) {
   };
 }
 
+const toolNames = (resolved: { tools: { name?: string }[] }) =>
+  resolved.tools.map((tool) => tool.name);
+
 function computerNode(nodeId: string, actions: string[]) {
   return {
     nodeId,
@@ -123,7 +126,7 @@ describe("resolveMcpLoopbackScopedTools", () => {
       scopeParams({ toolsAllow: ["write"], nodeExecAllowed: true }),
     );
 
-    expect(scoped.tools.map((tool) => tool.name)).toEqual(["write"]);
+    expect(toolNames(scoped)).toEqual(["write"]);
     expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({
       mediatedToolNames: new Set(["write"]),
       includeNodeExecTool: false,
@@ -150,14 +153,17 @@ describe("resolveMcpLoopbackScopedTools", () => {
 
       const scoped = await resolveMcpLoopbackPolicyTools(scopeParams({ toolsAllow: allow }));
 
-      expect(scoped.tools.map((tool) => tool.name)).toEqual(expected);
+      expect(toolNames(scoped)).toEqual(expected);
     },
   );
 });
 
 describe("McpLoopbackToolCache", () => {
+  let cache: McpLoopbackToolCache;
+  beforeEach(() => {
+    cache = new McpLoopbackToolCache();
+  });
   it("does not let a source-less cached list hide a later admitted writer", async () => {
-    const cache = new McpLoopbackToolCache();
     const params = scopeParams({ toolsAllow: ["sessions"] });
     const controller = new AbortController();
     const authority = createAdmittedRunOperatorAuthority({
@@ -209,7 +215,6 @@ describe("McpLoopbackToolCache", () => {
   it.each(["evict", "clear"])(
     "does not resurrect cache rows when %s overtakes discovery",
     async (action) => {
-      const cache = new McpLoopbackToolCache();
       const params = scopeParams({ nodeExecAllowed: true, grantToken: "pending-grant" });
       const entered = createDeferred();
       const inventory = createDeferred<unknown[]>();
@@ -235,7 +240,6 @@ describe("McpLoopbackToolCache", () => {
   it.each(["discovery", "construction"] as const)(
     "does not cache tools when cancellation overtakes %s",
     async (stage) => {
-      const cache = new McpLoopbackToolCache();
       const params = scopeParams({ nodeExecAllowed: true, grantToken: "cancelled-grant" });
       const controller = new AbortController();
       const reason = new Error("synthetic request cancelled");
@@ -273,46 +277,33 @@ describe("McpLoopbackToolCache", () => {
   );
 
   it("refreshes cached bound tools when node display names change", async () => {
-    const cache = new McpLoopbackToolCache();
     const params = scopeParams({ nodeExecAllowed: true, execOverrides: { node: "shared-name" } });
     resolveGatewayScopedTools.mockImplementation(({ nodeExecAvailable, execOverrides }) =>
       scopedToolFixture(nodeExecAvailable(execOverrides.node) ? ["exec"] : []),
     );
     for (const eligibleMatches of [false, true, false]) {
-      listNodes.mockResolvedValue([
-        {
-          nodeId: "phone",
-          displayName: eligibleMatches ? "other-name" : "shared-name",
+      listNodes.mockResolvedValue(
+        ["phone", "worker"].map((nodeId) => ({
+          nodeId,
+          displayName: eligibleMatches === (nodeId === "worker") ? "shared-name" : "other-name",
           connected: true,
-          commands: [],
-        },
-        {
-          nodeId: "worker",
-          displayName: eligibleMatches ? "shared-name" : "other-name",
-          connected: true,
-          commands: ["system.run"],
-        },
-      ]);
+          commands: nodeId === "worker" ? ["system.run"] : [],
+        })),
+      );
       const scoped = await cache.resolve(params);
-      expect(scoped.tools.map((tool) => tool.name)).toEqual(eligibleMatches ? ["exec"] : []);
+      expect(toolNames(scoped)).toEqual(eligibleMatches ? ["exec"] : []);
     }
   });
 
   it("does not share cache rows across different grant allowlists", async () => {
-    const cache = new McpLoopbackToolCache();
     const cfg = {};
 
     const unrestricted = await cache.resolve(scopeParams({ cfg }));
     const restricted = await cache.resolve(scopeParams({ cfg, toolsAllow: ["memory_search"] }));
     const denied = await cache.resolve(scopeParams({ cfg, toolsAllow: [] }));
 
-    expect(unrestricted.tools.map((tool) => tool.name)).toEqual([
-      "memory_search",
-      "memory_get",
-      "message",
-      "cron",
-    ]);
-    expect(restricted.tools.map((tool) => tool.name)).toEqual(["memory_search"]);
+    expect(toolNames(unrestricted)).toEqual(["memory_search", "memory_get", "message", "cron"]);
+    expect(toolNames(restricted)).toEqual(["memory_search"]);
     expect(denied.tools).toEqual([]);
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
 
@@ -322,24 +313,18 @@ describe("McpLoopbackToolCache", () => {
   });
 
   it("does not share loopback tools across prepared vision capabilities", async () => {
-    const cache = new McpLoopbackToolCache();
     const cfg = {};
 
     await cache.resolve(scopeParams({ cfg, modelHasVision: true }));
     await cache.resolve(scopeParams({ cfg, modelHasVision: false }));
     await cache.resolve(scopeParams({ cfg, modelHasVision: true }));
 
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
-    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({
-      modelHasVision: true,
-    });
-    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({
-      modelHasVision: false,
-    });
+    expect(resolveGatewayScopedTools.mock.calls.map(([options]) => options.modelHasVision)).toEqual(
+      [true, false],
+    );
   });
 
   it("keeps pinned widget authoring out of capless cached tool lists", async () => {
-    const cache = new McpLoopbackToolCache();
     const params = scopeParams();
     resolveGatewayScopedTools.mockImplementation(({ pinnedWidgetAuthoring }) =>
       scopedToolFixture(pinnedWidgetAuthoring ? ["dashboard", "show_widget"] : ["dashboard"]),
@@ -350,7 +335,7 @@ describe("McpLoopbackToolCache", () => {
         ...params,
         context: { ...params.context, pinnedWidgetAuthoring },
       });
-      expect(result.tools.map((tool) => tool.name)).toEqual(
+      expect(toolNames(result)).toEqual(
         pinnedWidgetAuthoring ? ["dashboard", "show_widget"] : ["dashboard"],
       );
     }
@@ -358,7 +343,6 @@ describe("McpLoopbackToolCache", () => {
   });
 
   it("evicts only the revoked grant's cached tool closures", async () => {
-    const cache = new McpLoopbackToolCache();
     const cfg = {};
 
     await cache.resolve(scopeParams({ cfg, grantToken: "grant-a" }));
@@ -386,37 +370,29 @@ describe("MCP loopback Computer Use schema", () => {
     });
   });
 
-  it("does not query node inventory when the grant excludes computer", async () => {
-    const resolved = await new McpLoopbackToolCache().resolve(
-      scopeParams({
-        sessionKey: "agent:main:main",
-        senderIsOwner: true,
-        modelHasVision: true,
-        toolsAllow: ["memory_search"],
-      }),
-    );
+  it.each([
+    { boundary: "grant", toolsAllow: ["memory_search"] },
+    { boundary: "configured policy", cfg: { tools: { deny: ["computer"] } } },
+  ])(
+    "does not query node inventory when $boundary excludes computer",
+    async ({ boundary: _boundary, ...policy }) => {
+      listNodes.mockImplementation(() => {
+        throw new Error("node inventory must not be queried");
+      });
 
-    expect(resolved.toolSchema.some((tool) => tool.name === "computer")).toBe(false);
-    expect(listNodes).not.toHaveBeenCalled();
-  });
+      const resolved = await new McpLoopbackToolCache().resolve(
+        scopeParams({
+          ...policy,
+          sessionKey: "agent:main:main",
+          senderIsOwner: true,
+          modelHasVision: true,
+        }),
+      );
 
-  it("does not query node inventory when configured policy excludes computer", async () => {
-    listNodes.mockImplementation(() => {
-      throw new Error("node inventory must not be queried");
-    });
-
-    const resolved = await new McpLoopbackToolCache().resolve(
-      scopeParams({
-        cfg: { tools: { deny: ["computer"] } },
-        sessionKey: "agent:main:main",
-        senderIsOwner: true,
-        modelHasVision: true,
-      }),
-    );
-
-    expect(resolved.toolSchema.some((tool) => tool.name === "computer")).toBe(false);
-    expect(listNodes).not.toHaveBeenCalled();
-  });
+      expect(resolved.toolSchema.some((tool) => tool.name === "computer")).toBe(false);
+      expect(listNodes).not.toHaveBeenCalled();
+    },
+  );
 
   it("unions approved actions across distinct paired node identities", async () => {
     const cache = new McpLoopbackToolCache();

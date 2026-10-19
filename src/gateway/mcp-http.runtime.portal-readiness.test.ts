@@ -96,6 +96,23 @@ it.for([
       let restore: (() => void) | undefined;
       const onAbort = () => releaseAvailability.resolve();
       signal.addEventListener("abort", onAbort, { once: true });
+      const afterCatalogRead = (effect: () => void) => {
+        const prepare = projection.withPreparedExactRows.bind(projection);
+        const spy = vi
+          .spyOn(projection, "withPreparedExactRows")
+          .mockImplementation((queries, consume, options) =>
+            prepare(
+              queries,
+              (read) => {
+                const catalog = consume(read);
+                effect();
+                return catalog;
+              },
+              options,
+            ),
+          );
+        restore = () => spy.mockRestore();
+      };
       try {
         await projection.ensureMaterialized();
         await withPluginRuntimeGatewayContextResolver(
@@ -134,28 +151,16 @@ it.for([
 
             if (boundary === "final publication" || boundary === "readiness") {
               let published = false;
-              const prepare = projection.withPreparedExactRows.bind(projection);
-              const spy = vi
-                .spyOn(projection, "withPreparedExactRows")
-                .mockImplementation((queries, consume, options) =>
-                  prepare(
-                    queries,
-                    (read) => {
-                      const catalog = consume(read);
-                      if (!published) {
-                        published = true;
-                        replaceSessionEntrySync(scope, {
-                          ...entry,
-                          updatedAt: 2,
-                          modelSelectionLocked: boundary !== "readiness",
-                        });
-                      }
-                      return catalog;
-                    },
-                    options,
-                  ),
-                );
-              restore = () => spy.mockRestore();
+              afterCatalogRead(() => {
+                if (!published) {
+                  published = true;
+                  replaceSessionEntrySync(scope, {
+                    ...entry,
+                    updatedAt: 2,
+                    modelSelectionLocked: boundary !== "readiness",
+                  });
+                }
+              });
               const resolving = resolve(params);
               pending = resolving;
               expect((await withinTest(resolving, signal)).tools.map((tool) => tool.name)).toEqual(
@@ -169,21 +174,9 @@ it.for([
             }
 
             if (boundary === "authority") {
-              const prepare = projection.withPreparedExactRows.bind(projection);
-              const spy = vi
-                .spyOn(projection, "withPreparedExactRows")
-                .mockImplementation((queries, consume, options) =>
-                  prepare(
-                    queries,
-                    (read) => {
-                      const catalog = consume(read);
-                      authorityAbort.abort(new Error("Synthetic controller retirement"));
-                      return catalog;
-                    },
-                    options,
-                  ),
-                );
-              restore = () => spy.mockRestore();
+              afterCatalogRead(() => {
+                authorityAbort.abort(new Error("Synthetic controller retirement"));
+              });
               pending = resolve(params);
               await expect(pending).rejects.toThrow(
                 "admitted run operator authority is no longer active",

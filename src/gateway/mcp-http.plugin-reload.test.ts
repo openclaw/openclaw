@@ -29,6 +29,7 @@ import {
   clearMcpLoopbackToolCallCapture,
   getActiveMcpLoopbackRuntime,
 } from "./mcp-http.loopback-runtime.js";
+import { requestMcp, toolCall } from "./mcp-http.test-request.js";
 
 const fixtureLifetime = createFixtureLifetime();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -92,22 +93,11 @@ it.for(["plain", "shared"] as const)(
         if (!runtime) {
           throw new Error("MCP listener did not start");
         }
-        const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
-          method: "POST",
+        const response = await requestMcp(runtime, toolCall("generation_probe", {}, phase), {
           signal,
-          headers: {
-            authorization: `Bearer ${runtime.ownerToken}`,
-            "content-type": "application/json",
-            "x-session-key": `agent:main:generation-${phase}`,
-            "x-openclaw-cli-capture-key": captureKey,
-            connection: "close",
-          },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: phase,
-            method: "tools/call",
-            params: { name: "generation_probe", arguments: {} },
-          }),
+          sessionKey: `agent:main:generation-${phase}`,
+          captureKey,
+          connection: "close",
         });
         const payload: unknown = await response.json();
         expect(response.status, JSON.stringify(payload)).toBe(200);

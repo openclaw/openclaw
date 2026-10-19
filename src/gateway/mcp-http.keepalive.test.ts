@@ -27,6 +27,7 @@ vi.mock("./tool-resolution.js", () => ({
 
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
+import { requestMcp, toolCall as makeToolCall } from "./mcp-http.test-request.js";
 
 beforeEach(() => {
   execute.mockReset();
@@ -45,15 +46,7 @@ afterEach(async () => {
 async function startClient() {
   await ensureMcpLoopbackServer(0);
   const runtime = expectDefined(getActiveMcpLoopbackRuntime(), "MCP runtime");
-  return (method: "GET" | "POST", message?: unknown) =>
-    fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
-      method,
-      headers: {
-        authorization: `Bearer ${runtime.ownerToken}`,
-        "content-type": "application/json",
-      },
-      ...(message ? { body: JSON.stringify(message) } : {}),
-    });
+  return (method: "GET" | "POST", message?: unknown) => requestMcp(runtime, message, { method });
 }
 
 async function within<T>(promise: Promise<T>): Promise<T> {
@@ -70,12 +63,7 @@ async function within<T>(promise: Promise<T>): Promise<T> {
   }
 }
 
-const toolCall = {
-  jsonrpc: "2.0",
-  id: 1,
-  method: "tools/call",
-  params: { name: "wait_probe", arguments: {} },
-};
+const toolCall = makeToolCall("wait_probe");
 
 describe("MCP HTTP keepalive", () => {
   it("disables connection reuse for consecutive completed tool calls", async () => {
