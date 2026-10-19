@@ -8,7 +8,7 @@ import { useScrollState } from "../solid/scroll-state.ts";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
 import "../tooltip.ts";
 import "../../styles/session-panel-rail.css";
-import type { TerminalPanelViewState } from "./terminal-panel-view.tsx";
+import type { TerminalPanelViewState } from "./terminal-panel-view-types.ts";
 
 type TerminalSessionPickerState = TerminalPanelViewState["picker"];
 

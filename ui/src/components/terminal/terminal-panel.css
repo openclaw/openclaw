@@ -379,7 +379,7 @@ openclaw-terminal-panel {
     outline-offset: 3px;
     background: transparent;
     color: var(--text);
-    font: 14px var(--font-mono);
+    font: 14px var(--mono);
   }
   .tp-composer__attach,
   .tp-composer__submit {

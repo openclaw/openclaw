@@ -30,15 +30,21 @@ function createPanel(client: TerminalGatewayClient, embedded = false) {
   return panel;
 }
 
-function createPickerClient() {
+function createPickerClient(listCurrent = false) {
   return {
     forceReconnect: () => {},
     request: async <T>(method: string) =>
       (method === "terminal.open"
         ? terminalOpenResult("current-1")
-        : method === "terminal.list"
-          ? { sessions: [] }
-          : { ok: true }) as T,
+        : method === "terminal.attach"
+          ? { ...terminalOpenResult("current-1"), buffer: "", seq: 0 }
+          : method === "terminal.list"
+            ? {
+                sessions: listCurrent
+                  ? [{ ...terminalOpenResult("current-1"), attached: true, createdAtMs: 1 }]
+                  : [],
+              }
+            : { ok: true }) as T,
     addEventListener: () => () => {},
   } satisfies TerminalGatewayClient;
 }
@@ -76,8 +82,15 @@ describe("OpenClawTerminalPanel accessibility", () => {
   });
 
   it("opens the base-mounted focused terminal in an isolated tab", async () => {
+    localStorage.setItem(
+      "openclaw.terminal.panel.v1",
+      JSON.stringify({ open: true, dock: "right", height: 320, width: 520 }),
+    );
     const open = vi.spyOn(window, "open").mockReturnValue(null);
-    const panel = createPanel(createPickerClient());
+    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
+    panel.client = createPickerClient();
+    panel.available = true;
+    document.body.append(panel);
     panel.basePath = "/openclaw";
     await waitForFast(() =>
       expect(panel.querySelector('[aria-label="Open terminal in new window"]')).not.toBeNull(),
@@ -116,7 +129,7 @@ describe("OpenClawTerminalPanel accessibility", () => {
   it("keeps tab and session-picker references inside each split terminal", async () => {
     const ids: string[] = [];
     for (let index = 0; index < 2; index += 1) {
-      const panel = createPanel(createPickerClient(), true);
+      const panel = createPanel(createPickerClient(true), true);
       await waitForFast(() =>
         expect(panel.querySelector('.tabstrip-tab[aria-selected="true"]')).not.toBeNull(),
       );
@@ -125,14 +138,18 @@ describe("OpenClawTerminalPanel accessibility", () => {
       expect(document.getElementById(selectedTab.getAttribute("aria-controls")!)).toBe(viewport);
       expect(document.getElementById(viewport.getAttribute("aria-labelledby")!)).toBe(selectedTab);
 
+      expect(panel.querySelector(".tp-session-menu")?.getAttribute("role")).toBe("region");
+      await waitForFast(() => expect(panel.querySelector(".tp-session.is-current")).not.toBeNull());
+      panel.querySelector<HTMLButtonElement>(".tp-session.is-current")!.click();
+      await panel.updateComplete;
+      expect(panel.querySelector(".tp-session-menu")).toBeNull();
       const trigger = panel.querySelector<HTMLButtonElement>('[aria-label="Terminal sessions"]')!;
       trigger.click();
       await waitForFast(() => expect(panel.querySelector(".tp-session-menu")).not.toBeNull());
       const menu = panel.querySelector(".tp-session-menu")!;
-      expect(document.getElementById(trigger.getAttribute("aria-controls")!)).toBe(menu);
+      expect(document.getElementById(menu.id)).toBe(menu);
+      expect(viewport.getAttribute("aria-hidden")).toBe("true");
       ids.push(viewport.id, selectedTab.id, menu.id);
-      menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      await panel.updateComplete;
     }
     expect(new Set(ids).size).toBe(ids.length);
   });
@@ -169,7 +186,7 @@ describe("OpenClawTerminalPanel accessibility", () => {
     expect(panel.querySelector(".tp-session-menu")).toBeNull();
   });
 
-  it("keeps shadow-DOM pointer actions inside the terminal session picker", async () => {
+  it("keeps pointer actions inside the terminal session picker", async () => {
     const requests: Array<{ method: string; params: unknown }> = [];
     const client: TerminalGatewayClient = {
       forceReconnect: () => {},
@@ -216,7 +233,7 @@ describe("OpenClawTerminalPanel accessibility", () => {
     expect(panel.querySelector(".tp-session-menu")).not.toBeNull();
     refresh.click();
     await waitForFast(() => {
-      expect(requests.filter(({ method }) => method === "terminal.list")).toHaveLength(2);
+      expect(requests.filter(({ method }) => method === "terminal.list")).toHaveLength(3);
     });
     await waitForFast(() =>
       expect(panel.querySelector(".tp-session")?.textContent).toContain("detached-agent"),

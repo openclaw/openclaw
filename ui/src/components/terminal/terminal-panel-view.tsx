@@ -8,14 +8,9 @@ import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
-import {
-  terminalPanelTabIcon,
-  terminalPanelHostedTabs,
-} from "./terminal-panel-tabs.tsx";
+import { terminalPanelTabIcon, terminalPanelHostedTabs } from "./terminal-panel-tabs.tsx";
 import { Actions, SessionMenu, TerminalRail } from "./terminal-panel-view-chrome.tsx";
-import type { TerminalPanelOwner } from "./terminal-panel.ts";
-
-export type TerminalPanelViewState = TerminalPanelOwner["viewState"];
+import type { TerminalPanelViewState } from "./terminal-panel-view-types.ts";
 
 function UploadLayer(props: { state: TerminalPanelViewState }) {
   const progress = createMemo(() => props.state.upload.progress());
