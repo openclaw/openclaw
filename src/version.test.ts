@@ -79,12 +79,18 @@ describe("version resolution", () => {
   });
 
   it("continues past an oversized build id to the next candidate", async () => {
-    await withVersionFixtureDir(async (root) => {
-      const moduleUrl = await ensureModuleFixture(root);
-      await writeJsonFixture(root, "dist/build-info.json", { buildId: "x".repeat(97) });
-      await writeJsonFixture(root, "build-info.json", { buildId: "x".repeat(96) });
-      expect(readBuildIdFromBuildInfoForModuleUrl(moduleUrl)).toBe("x".repeat(96));
-    });
+    const root = await versionFixtureRoot.make("oversized-build-id");
+    await fs.mkdir(path.join(root, "dist/plugin-sdk"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "dist/build-info.json"),
+      JSON.stringify({ buildId: "x".repeat(97) }),
+    );
+    await fs.writeFile(
+      path.join(root, "build-info.json"),
+      JSON.stringify({ buildId: "x".repeat(96) }),
+    );
+    const moduleUrl = pathToFileURL(path.join(root, "dist/plugin-sdk/core.js")).href;
+    expect(readBuildIdFromBuildInfoForModuleUrl(moduleUrl)).toBe("x".repeat(96));
   });
 
   it("captures the runtime commit from startup provenance once", async () => {
