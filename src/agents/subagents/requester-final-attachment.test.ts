@@ -92,7 +92,10 @@ describe("requester final attachment", () => {
     expect(append).toHaveBeenCalledExactlyOnceWith("final");
   });
 
-  it("replacement and lifecycle rotation revoke stale callbacks", () => {
+  it.each([
+    ["rotated", 1],
+    ["current", 3],
+  ] as const)("only the %s lifecycle can finalize a replacement", (state, rearmGeneration) => {
     const first = vi.fn(() => true);
     const second = vi.fn(() => true);
     const firstRegistration = registerRequesterFinalAttachment({ ...base, append: first });
@@ -106,44 +109,25 @@ describe("requester final attachment", () => {
       promote({
         requesterTurnRunId: "run-new",
         batchRunIds: ["run-new-child"],
+        rearmGeneration,
       }),
     ).toBe(true);
 
-    lifecycle.generation = "generation-2";
-    lifecycle.rotate?.(lifecycle.generation);
+    if (state === "rotated") {
+      lifecycle.generation = "generation-2";
+      lifecycle.rotate?.(lifecycle.generation);
+    }
     finalize({
       batchRunIds: ["run-new-child"],
-      finalAssistantVisibleText: "stale",
+      rearmGeneration,
+      finalAssistantVisibleText: state === "rotated" ? "stale" : "new final",
     });
     expect(first).not.toHaveBeenCalled();
-    expect(second).not.toHaveBeenCalled();
-  });
-
-  it("exact registration revocation cannot delete a newer replacement", () => {
-    const first = vi.fn(() => true);
-    const second = vi.fn(() => true);
-    const firstRegistration = registerRequesterFinalAttachment({ ...base, append: first });
-    registerRequesterFinalAttachment({
-      ...base,
-      requesterTurnRunId: "run-new",
-      append: second,
-    });
-
-    firstRegistration.revoke();
-    expect(
-      promote({
-        requesterTurnRunId: "run-new",
-        batchRunIds: ["run-new-child"],
-        rearmGeneration: 3,
-      }),
-    ).toBe(true);
-    finalize({
-      batchRunIds: ["run-new-child"],
-      rearmGeneration: 3,
-      finalAssistantVisibleText: "new final",
-    });
-    expect(first).not.toHaveBeenCalled();
-    expect(second).toHaveBeenCalledExactlyOnceWith("new final");
+    if (state === "rotated") {
+      expect(second).not.toHaveBeenCalled();
+    } else {
+      expect(second).toHaveBeenCalledExactlyOnceWith("new final");
+    }
   });
 
   it("consumes a throwing callback without failing or replaying finalization", () => {
