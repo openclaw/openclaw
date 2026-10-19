@@ -1,5 +1,5 @@
+import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import type { WorkerLifecycle } from "./worker-lifecycle.js";
 import {
@@ -24,15 +24,8 @@ class FixtureWorker extends EventEmitter implements WorkerLifecycle {
   }
 
   postMessage(value: unknown) {
-    if (
-      typeof value !== "object" ||
-      value === null ||
-      !("taskId" in value) ||
-      typeof value.taskId !== "number" ||
-      !("input" in value)
-    ) {
-      throw new Error("Expected a worker task input");
-    }
+    assert(value !== null && typeof value === "object" && "taskId" in value && "input" in value);
+    assert(typeof value.taskId === "number", "Expected a worker task input");
     this.inputs.push({ taskId: value.taskId, input: value.input });
   }
 
@@ -40,16 +33,14 @@ class FixtureWorker extends EventEmitter implements WorkerLifecycle {
     this.emit("message", { status: "ready" });
   }
 
-  complete() {
+  complete(error?: string) {
     this.ready();
-    this.reply();
+    this.reply(error);
   }
 
   reply(error?: string) {
     const task = this.inputs.at(-1);
-    if (!task) {
-      throw new Error("No worker task was dispatched");
-    }
+    assert(task, "No worker task was dispatched");
     this.emit("message", {
       taskId: task.taskId,
       ...(error ? { status: "failed", error } : { status: "ok", value: task.input }),
@@ -58,7 +49,7 @@ class FixtureWorker extends EventEmitter implements WorkerLifecycle {
 
   ref() {}
   unref() {}
-  cpuUsage: Worker["cpuUsage"] = async () => ({ user: 0, system: 0 });
+  cpuUsage: WorkerLifecycle["cpuUsage"] = async () => ({ user: 0, system: 0 });
   async getHeapStatistics(): Promise<never> {
     throw new Error("Heap statistics are outside the bootstrap contract");
   }
@@ -98,9 +89,7 @@ function createPool({
       return { worker };
     },
     serviceNativeWorkers(nativeWorkers) {
-      for (const worker of nativeWorkers) {
-        worker.service();
-      }
+      nativeWorkers.forEach((worker) => worker.service());
     },
     prepareResources: async () => {},
     releaseTemporaryDirectory: async () => {},
@@ -144,64 +133,62 @@ function createPool({
 const unavailable = { code: "unavailable" };
 const rejected = { status: "rejected", reason: expect.objectContaining(unavailable) };
 
-async function expectCapacity(result: Promise<string>) {
+async function expectOverload(result: Promise<string>) {
   const error = await result.catch((reason: unknown) => reason);
   expect(error).toBeInstanceOf(WorkerTaskError);
-  if (!(error instanceof WorkerTaskError) || !error.capacityAvailable) {
-    throw new Error("Expected an overload readiness signal");
-  }
+  assert(error instanceof WorkerTaskError, "Expected a worker overload");
   expect(error.code).toBe("overloaded");
-  return { capacityAvailable: error.capacityAvailable };
+  return error;
 }
 
-it("publishes retired resources before dispatching queued successor input", async () => {
-  let nativeReader = false;
-  const { pool, workers, complete } = createPool({
-    onRotationComplete: () => {
-      nativeReader = false;
-    },
-  });
-  const first = pool.run(() => {
-    nativeReader = true;
-    return "first";
-  }, {});
-  complete();
-  await first;
-  const rotating = pool.rotate();
-  let previousReader: boolean | undefined;
-  const successor = pool.run(() => {
-    previousReader = nativeReader;
-    nativeReader = true;
-    return "successor";
-  }, {});
-  await rotating;
-  complete();
-  await expect(successor).resolves.toBe("successor");
-  expect(workers[0]!.threadId).toBe(-1);
-  expect(previousReader).toBe(false);
-  expect(nativeReader).toBe(true);
-});
+async function expectCapacity(result: Promise<string>) {
+  const { capacityAvailable } = await expectOverload(result);
+  assert(capacityAvailable, "Expected an overload readiness signal");
+  return { capacityAvailable };
+}
 
-it("holds queued input after resource publication fails until rotation is retried", async () => {
-  const failure = new Error("resource publication failed");
-  const released = vi.fn().mockImplementationOnce(() => {
-    throw failure;
-  });
-  const { pool, workers, complete } = createPool({ onRotationComplete: released });
-  const first = pool.run("first", {});
-  complete();
-  await first;
-  const rotating = pool.rotate();
-  const prepared = vi.fn(() => "successor");
-  const successor = pool.run(prepared, {});
-  await expect(rotating).rejects.toBe(failure);
-  expect(workers[0]!.threadId).toBe(-1);
-  expect(prepared).not.toHaveBeenCalled();
-  await pool.rotate();
-  complete();
-  await expect(successor).resolves.toBe("successor");
-  expect(released).toHaveBeenCalledTimes(2);
-});
+it.each([false, true])(
+  "publishes resources before successor dispatch (retry=%s)",
+  async (retry) => {
+    let nativeReader = false;
+    const failure = new Error("resource publication failed");
+    const released = vi.fn(() => {
+      nativeReader = false;
+    });
+    if (retry) {
+      released.mockImplementationOnce(() => {
+        throw failure;
+      });
+    }
+    const { pool, workers, complete } = createPool({ onRotationComplete: released });
+    const first = pool.run(() => {
+      nativeReader = true;
+      return "first";
+    }, {});
+    complete();
+    await first;
+    const rotating = pool.rotate();
+    let previousReader: boolean | undefined;
+    const prepared = vi.fn(() => {
+      previousReader = nativeReader;
+      nativeReader = true;
+      return "successor";
+    });
+    const successor = pool.run(prepared, {});
+    if (retry) {
+      await expect(rotating).rejects.toBe(failure);
+      expect(workers[0]!.threadId).toBe(-1);
+      expect(prepared).not.toHaveBeenCalled();
+      await pool.rotate();
+    } else {
+      await rotating;
+    }
+    complete();
+    await expect(successor).resolves.toBe("successor");
+    expect([workers[0]!.threadId, previousReader, nativeReader]).toEqual([-1, false, true]);
+    expect(released).toHaveBeenCalledTimes(retry ? 2 : 1);
+  },
+);
 
 it.each(["error", "exit", "constructor"] as const)(
   "rejects one bootstrap cohort after %s and retries only after rotation",
@@ -214,13 +201,7 @@ it.each(["error", "exit", "constructor"] as const)(
       failConstruction(new Error("module unavailable"));
     } else {
       onCreated((worker) => {
-        queueMicrotask(() => {
-          if (failure === "error") {
-            worker.emit("error", nativeFailure);
-          } else {
-            worker.emit("exit", 0);
-          }
-        });
+        queueMicrotask(() => worker.emit(failure, failure === "error" ? nativeFailure : 0));
       });
     }
     const prepare = vi.fn(() => "input");
@@ -369,8 +350,7 @@ it("does not latch malformed task input or an ordinary failure from a ready work
   ).rejects.toThrow("invalid transfer input");
   const failed = pool.run("ordinary task failure", {});
   const failedResult = expect(failed).rejects.toMatchObject({ code: "failed" });
-  workers[1]!.ready();
-  workers[1]!.reply("invalid task data");
+  workers[1]!.complete("invalid task data");
   await failedResult;
   const recovered = pool.run("valid task", {});
   workers[1]!.reply();
@@ -438,12 +418,7 @@ it("wakes an overloaded caller on close and rejects its retry as unavailable", a
 
 it("does not promise readiness for input that exceeds the pool byte limit", async () => {
   const { pool } = createPool({ requiresReady: false, maxPendingBytes: 8 });
-  const overload = await pool.run("oversized", { inputBytes: 16 }).catch((error: unknown) => error);
-  expect(overload).toBeInstanceOf(WorkerTaskError);
-  if (!(overload instanceof WorkerTaskError)) {
-    throw new Error("Expected the oversized input to be rejected");
-  }
-  expect(overload.code).toBe("overloaded");
+  const overload = await expectOverload(pool.run("oversized", { inputBytes: 16 }));
   expect(overload.capacityAvailable).toBeUndefined();
   expect(pool.getSnapshot().pendingTasks).toBe(0);
 });
