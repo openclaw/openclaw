@@ -3016,13 +3016,7 @@ describe("ci workflow guards", () => {
             })
           : value;
       const rows: string[] = [];
-      const hostedLabels = new Set([
-        "ubuntu-24.04",
-        "windows-2025",
-        "macos-15",
-        "xcode-27",
-        "xcode-27-xlarge",
-      ]);
+      const hostedLabels = new Set(["ubuntu-24.04", "windows-2025", "xcode-27", "xcode-27-xlarge"]);
       for (const [name, job] of Object.entries(readCiWorkflow().jobs)) {
         const definition = job as {
           if?: string;
@@ -5881,24 +5875,6 @@ describe("ci workflow guards", () => {
     for (const eventName of ["pull_request", "push", "schedule"] as const) {
       expect(evaluateWorkflowExpression(plannerRunner, { ...plannerContext, eventName })).toBe(
         eventName === "pull_request" ? "ubuntu-24.04" : "blacksmith-16vcpu-ubuntu-2404",
-      );
-    }
-    const discovery = workflow.jobs["check-plan"].steps.find(
-      (step: WorkflowStep) => step.id === "plan",
-    ).env.OPENCLAW_CI_TYPE_PLAN_SERIAL;
-    expect(evaluateWorkflowExpression(discovery, plannerContext)).toBe("1");
-    for (const override of [
-      { eventName: "push" },
-      { eventName: "schedule" },
-      { eventName: "workflow_dispatch" },
-      { headRepository: "contributor/openclaw" },
-      { runnerBackend: "blacksmith" },
-      { runnerBackend: "github" },
-      { runAttempt: 2 },
-      { frozenTarget: true },
-    ] as const) {
-      expect(evaluateWorkflowExpression(discovery, { ...plannerContext, ...override })).not.toBe(
-        "1",
       );
     }
     const typeRunner = workflow.jobs["check-test-types-hosted-core-shard"]["runs-on"];

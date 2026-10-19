@@ -454,6 +454,7 @@ what was recorded, not as proof of what happened:
 - Writes go through a bounded asynchronous process-owned queue; queue
   saturation, storage failure, or a bounded shutdown timeout can drop records
   and log one operational warning.
+  A rejected metadata record does not stop the queue from accepting later records.
 - Shutdown drops waiting metadata at its existing deadline but joins submitted
   worker operations before releasing the writer. Unknown worker outcomes are
   not replayed; ordinary native lock contention keeps the existing FIFO retry.
@@ -533,6 +534,11 @@ their recorded decisions. Delivery to the generic table uses the bounded audit
 queue and remains best-effort until persisted; approval-owner writes do not
 depend on that queue. The activity ledger cannot recreate either source after
 loss.
+
+Identity and decision overflow cleanup uses the existing timestamp/id indexes to
+find the retention boundary. Each write deletes the oldest overflow rows within
+the budget left after expiry cleanup, without building a set of all retained IDs.
+The transaction, retention limits, and deletion order are unchanged.
 
 Every generic decision-fact write rereads the immutable execution context and
 requires the full context, execution, and run tuple. Projection validates the

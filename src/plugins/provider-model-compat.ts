@@ -1,5 +1,4 @@
 import { resolveOpenAICompletionsCompat } from "@openclaw/ai/internal/openai-completions-compat";
-// Normalizes provider model compatibility metadata from plugins.
 import "@openclaw/ai/internal/tool-schema";
 import { normalizeModelTransportBaseUrl } from "../agents/model-compat-catalog.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";

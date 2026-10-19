@@ -6,12 +6,21 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vi
 import { withinTest } from "../../test/helpers/promise.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  loadSessionEntry,
+  readSessionTranscriptMessageEvents,
+  replaceSessionEntry,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { removeCronRunContinuationSessionIfIdle } from "../cron/run-continuation-cleanup.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
@@ -102,7 +111,8 @@ async function seedOrigin(sessionKey: string, spawnedBy?: string) {
 async function completion(signal: AbortSignal) {
   const receipt = expectDefined(receipts.at(-1), "ordinary completion receipt");
   expect(await withinTest(receipt.accepted, signal)).toEqual({ ok: true });
-  expect(await withinTest(receipt.settled, signal)).toMatchObject({
+  const outcome = await withinTest(receipt.settled, signal);
+  expect(outcome, outcome.error).toMatchObject({
     status: "completed",
     executionStarted: true,
   });
@@ -134,15 +144,35 @@ test("does not advertise detached continuation when process is unavailable", asy
   expect(result.details).not.toHaveProperty("followUp");
 });
 
-test.for(["ordinary", "live cron", "ended cron", "cron ended during admission"])(
+test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended during admission"])(
   "keeps exec completion bound to its origin: %s",
   async (scenario, { signal }) => {
     const cron = scenario !== "ordinary";
-    const sessionKey = cron ? "agent:main:cron:nightly:run:abc123" : "agent:main:main";
+    const sessionKey = cron
+      ? `agent:main:cron:nightly:run:${scenario.replaceAll(" ", "-")}`
+      : "agent:main:main";
+    const sessionId = sessionKey.replaceAll(":", "-");
+    const exact = { agentId: "main", sessionKey };
+    const base = { agentId: "main", sessionKey: "agent:main:cron:nightly" };
+    const removed = createDeferredCore();
+    let unsubscribe = () => {};
+    if (scenario === "queued cron") {
+      // Cron persists the base before the exact run claims the shared transcript window.
+      await replaceSessionEntry(base, { sessionId, updatedAt: Date.now() });
+      unsubscribe = sessionChanges.subscribeFacts((change) => {
+        if (
+          "sessionKey" in change &&
+          change.sessionKey === sessionKey &&
+          change.facts?.kind === "removed"
+        ) {
+          removed.resolve();
+        }
+      });
+    }
     await seedOrigin(sessionKey);
     const claim = claimAgentRunContext(
       "cron-run-followup",
-      { sessionKey, sessionId: sessionKey.replaceAll(":", "-"), agentId: "main" },
+      { sessionKey, sessionId, agentId: "main" },
       { trackOwner: true },
     );
     const release = () => releaseAgentRunContext("cron-run-followup", claim);
@@ -160,12 +190,47 @@ test.for(["ordinary", "live cron", "ended cron", "cron ended during admission"])
     });
     const exec = backgroundExec(sessionKey, { agentId: "main" });
     try {
-      const started = await exec.execute("cron-followup", {
-        command: nodeCommand('process.stdout.write("CRON_EXEC_DONE")'),
-        background: true,
-      });
-      const { sessionId } = runningSession(started.details);
-      await withinTest(waitForExecScope(sessionKey), signal);
+      const start = async () => {
+        const started = await exec.execute("cron-followup", {
+          command: nodeCommand('process.stdout.write("CRON_EXEC_DONE")'),
+          background: true,
+        });
+        const { sessionId: processSessionId } = runningSession(started.details);
+        await withinTest(waitForExecScope(sessionKey), signal);
+        if (scenario === "queued cron") {
+          const receipt = expectDefined(receipts[0], "queued cron completion receipt");
+          expect(await withinTest(receipt.accepted, signal)).toEqual({ ok: true });
+          expect(model).not.toHaveBeenCalled();
+          expect(
+            readSessionTranscriptMessageEvents({ agentId: "main", sessionKey, sessionId }),
+          ).toEqual([]);
+          // Successful cron teardown seals the alias after persisting its stable base.
+          await upsertSessionEntryCore(exact, {
+            cronRunContinuation: {
+              lifecycleRevision: "original",
+              phase: "ready",
+              basePersisted: true,
+            },
+          });
+          await removeCronRunContinuationSessionIfIdle(sessionKey);
+          expect(loadSessionEntry(exact)?.sessionId).toBe(sessionId);
+          release();
+        }
+        return processSessionId;
+      };
+      // Cron preparation and embedded execution share this controller admission.
+      const processSessionId =
+        scenario === "queued cron"
+          ? await withSessionTurn(
+              {
+                sessionKey,
+                sessionId,
+                agentId: "main",
+                storePath: resolveSessionStorePathCore(config.session?.store, { agentId: "main" }),
+              },
+              start,
+            )
+          : await start();
       if (scenario.includes("ended")) {
         if (scenario === "cron ended during admission") {
           expect(receipts).toHaveLength(1);
@@ -185,13 +250,23 @@ test.for(["ordinary", "live cron", "ended cron", "cron ended during admission"])
         expect(model).toHaveBeenCalledOnce();
         const [params] = expectDefined(model.mock.calls[0], "completion turn");
         expect(params.sessionKey).toBe(sessionKey);
+        if (scenario === "queued cron") {
+          await withinTest(removed.promise, signal);
+          expect(loadSessionEntry(exact)).toBeUndefined();
+          expect(loadSessionEntry(base)?.sessionId).toBe(sessionId);
+          expect(readSessionTranscriptMessageEvents({ ...base, sessionId })).toMatchObject([
+            { event: { type: "message", message: { role: "user" } } },
+          ]);
+          expect(params.prompt).toContain("CRON_EXEC_DONE");
+        }
       }
       const result = await createProcessTool({ scopeKey: sessionKey }).execute("collect", {
         action: "log",
-        sessionId,
+        sessionId: processSessionId,
       });
       expect(result.content).toContainEqual({ type: "text", text: "CRON_EXEC_DONE" });
     } finally {
+      unsubscribe();
       release();
     }
   },

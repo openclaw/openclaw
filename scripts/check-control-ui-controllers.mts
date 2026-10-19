@@ -1,29 +1,17 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as ts from "typescript/unstable/ast";
-import {
-  countMigrationSources,
-  isTest,
-  readInventorySources,
-} from "./control-ui-solid-inventory.mts";
+import { isTest, readInventorySources } from "./control-ui-solid-inventory.mts";
+import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
-import {
-  parseRatchetArgs,
-  reportRatchetFailures,
-  resolveRatchetBase,
-} from "./lib/shrink-ratchet.mts";
+import { reportRatchetFailures } from "./lib/shrink-ratchet.mts";
 
 function retiredControllerUsers(root: string, sources: ReadonlyMap<string, string>) {
-  using parser = createNativeTypeScriptParser({ cwd: root });
   const files = [...sources]
-    .filter(
-      ([, text]) =>
-        text.includes("solid-controller-host") ||
-        text.includes("subscriptions-controller") ||
-        text.includes("SolidController") ||
-        text.includes("addController") ||
-        text.includes("removeController") ||
-        text.includes("requestUpdate"),
+    .filter(([, text]) =>
+      /solid-controller-host|subscriptions-controller|SolidController|addController|removeController|requestUpdate|hostConnected|hostDisconnected|\w*Controller/u.test(
+        text,
+      ),
     )
     .map(([fileName, text]) => ({ fileName, text }));
   const users = new Set(
@@ -33,9 +21,23 @@ function retiredControllerUsers(root: string, sources: ReadonlyMap<string, strin
     ].filter((file) => sources.has(file)),
   );
   const redrawUsers = new Set<string>();
+  const patterns = new Set<string>();
+  if (files.length === 0) {
+    return { hosts: users, redraws: redrawUsers, patterns };
+  }
+  using parser = createNativeTypeScriptParser({ cwd: root });
   for (const tree of parser.parseSourceFiles(files)) {
     const file = path.relative(root, tree.fileName).split(path.sep).join("/");
     const visit = (node: ts.Node): void => {
+      if (
+        !isTest(file) &&
+        ((ts.isIdentifier(node) &&
+          (node.text === "hostConnected" || node.text === "hostDisconnected")) ||
+          ((ts.isClassDeclaration(node) || ts.isClassExpression(node)) &&
+            node.name?.text.endsWith("Controller")))
+      ) {
+        patterns.add(file);
+      }
       // Test adapters and computed property names must not preserve the retired API.
       if (
         (ts.isIdentifier(node) ||
@@ -71,39 +73,14 @@ function retiredControllerUsers(root: string, sources: ReadonlyMap<string, strin
     };
     visit(tree);
   }
-  return { hosts: users, redraws: redrawUsers };
+  return { hosts: users, redraws: redrawUsers, patterns };
 }
 
 export function main(root = process.cwd(), argv = process.argv.slice(2)) {
   try {
-    const args = parseRatchetArgs(argv);
-    if (args.prune) {
-      throw new Error("The controller guard reads its base from Git; --prune is not supported.");
-    }
-    const base = resolveRatchetBase(root, args);
-    if (!base) {
-      throw new Error("No controller guard base found; pass --base <ref>.");
-    }
-    const previous = readInventorySources(root, { ref: base, roots: ["ui/src"] });
+    const args = parseFlagArgs(argv, { staged: false }, [booleanFlag("--staged", "staged")]);
     const current = readInventorySources(root, { staged: args.staged, roots: ["ui/src"] });
     const retiredUsers = retiredControllerUsers(root, current);
-    // Parse candidates so comments and strings cannot keep the retirement gate open.
-    const candidates = (sources: ReadonlyMap<string, string>) =>
-      new Map(
-        [...sources].filter(
-          ([file, text]) =>
-            !isTest(file) &&
-            /\b(?:hostConnected|hostDisconnected|requestUpdate|\w*Controller)\b/u.test(text),
-        ),
-      );
-    const controllersRetired = [
-      ...countMigrationSources(root, candidates(previous)).values(),
-    ].every((counts) => counts.controllerPatterns === 0);
-    const reintroduced = controllersRetired
-      ? [...countMigrationSources(root, candidates(current))]
-          .filter(([, counts]) => counts.controllerPatterns > 0)
-          .map(([file]) => file)
-      : [];
     if (
       reportRatchetFailures(
         [
@@ -118,7 +95,7 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
           },
           {
             title: "Retired Control UI controller patterns must not be reintroduced:",
-            entries: reintroduced,
+            entries: [...retiredUsers.patterns],
           },
         ],
         "Use Solid ownership and cleanup; see .agents/skills/solid/SKILL.md.",
@@ -126,7 +103,7 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     ) {
       return 1;
     }
-    console.log(`Control UI controller guard OK (base ${base}).`);
+    console.log("Control UI controller guard OK.");
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

@@ -224,10 +224,16 @@ describe("refreshGatewayHealthSnapshot", () => {
         example: {
           accountId: "default",
           connected: true,
+          busy: time % 2 === 0,
+          activeRuns: time,
+          activeRunStartedAt: time,
           accounts: {
             default: {
               accountId: "default",
               connected: true,
+              busy: time % 2 === 0,
+              activeRuns: time,
+              activeRunStartedAt: time,
               authAgeMs: time,
               lastProbeAt: time,
               lastInboundAt: time,
@@ -319,7 +325,15 @@ describe("refreshGatewayHealthSnapshot", () => {
       },
       { ...initial, configReload: { hotReloadStatus: "disabled" } },
       { ...initial, eventLoop },
-      { ...initial, eventLoop: { ...eventLoop, degraded: true, reasons: ["event_loop_delay"] } },
+      {
+        ...initial,
+        eventLoop: {
+          ...eventLoop,
+          degraded: true,
+          degradedSinceMs: 60_000,
+          reasons: ["event_loop_delay"],
+        },
+      },
       { ...initial, eventLoop },
       {
         ...initial,
@@ -335,6 +349,47 @@ describe("refreshGatewayHealthSnapshot", () => {
       await healthState.refreshGatewayHealthSnapshot({ probe: false });
     }
     expect(broadcast.mock.calls.map(([summary]) => summary)).toEqual(snapshots);
+  });
+
+  it("publishes sustained event-loop degradation without broadcasting transient sample flaps", async () => {
+    const healthState = await loadHealthState();
+    const broadcast = vi.fn();
+    healthState.setBroadcastHealthUpdate(broadcast);
+    const snapshot = (degradedSinceMs: number | null): HealthSummary => ({
+      ...createHealthSummary(),
+      eventLoop: {
+        degraded: degradedSinceMs !== null,
+        degradedSinceMs,
+        reasons: degradedSinceMs === null ? [] : ["event_loop_delay"],
+        intervalMs: 1_000,
+        delayP99Ms: degradedSinceMs === null ? 10 : 1_500,
+        delayMaxMs: degradedSinceMs === null ? 20 : 1_700,
+        utilization: 0.2,
+        cpuCoreRatio: 0.1,
+      },
+    });
+    const healthy = snapshot(null);
+    const sustained = snapshot(60_000);
+    const recovered = snapshot(null);
+    for (const summary of [
+      healthy,
+      snapshot(0),
+      snapshot(59_999),
+      snapshot(null),
+      sustained,
+      recovered,
+    ]) {
+      collectGatewayHealthSnapshotMock.mockResolvedValueOnce(summary);
+      await expect(healthState.refreshGatewayHealthSnapshot({ probe: false })).resolves.toBe(
+        summary,
+      );
+      expect(healthState.getHealthCache()).toBe(summary);
+    }
+    expect(broadcast.mock.calls.map(([summary]) => summary)).toEqual([
+      healthy,
+      sustained,
+      recovered,
+    ]);
   });
 
   it("does not let a post-connect passive refresh absorb an explicit probe", async () => {

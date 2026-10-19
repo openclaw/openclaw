@@ -105,7 +105,7 @@ function matrixEntry(osId: "ubuntu" | "windows" | "macos", suite: string, node26
   const [artifact, display, runner] = {
     ubuntu: ["linux", "Linux", "blacksmith-8vcpu-ubuntu-2404"],
     windows: ["windows", "Windows", "blacksmith-32vcpu-windows-2025"],
-    macos: ["macos", "macOS", "blacksmith-6vcpu-macos-15"],
+    macos: ["macos", "macOS", "xcode-27"],
   }[osId];
   return {
     artifact_name: artifact + (node26 ? "-node26.1.0" : ""),

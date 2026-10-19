@@ -6,21 +6,20 @@ import "../components/sidebar-update-card.tsx";
 import { createTooltip, settleTooltip } from "../components/tooltip.test-support.ts";
 import { createNavigationPreferencesFixture } from "../test-helpers/application-context-fixtures.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import { createShellOwner } from "./app-host-solid.test-support.ts";
+import {
+  createConnectedShellOwner as createShellOwner,
+  createShellOwner as createDisconnectedShellOwner,
+} from "./app-host-solid.test-support.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
 import type { ShellOwnedElements } from "./app-shell-lazy-view.tsx";
 import type { ApplicationContext } from "./context.ts";
+import { COMMAND_PALETTE_ELEMENT, ensureCustomElementDefined } from "./lazy-custom-element.ts";
 import { handleNavDrawerKeydown } from "./navigation-surface.ts";
 
 type ShellNavigationState = {
   elements: ShellOwnedElements;
   runtime: { context: ApplicationContext };
-  handleNativeToggleSidebar: () => void;
-  handleNativeOpenSearch: () => void;
-  handleNativeToggleSearch: (event: Event) => void;
   handleNativeNewSession: () => void;
-  handleDocumentKeydown: (event: KeyboardEvent) => void;
-  handleNativeNavigate: (event: Event) => void;
   onboarding: boolean;
   afterCommit: () => void;
 };
@@ -107,8 +106,8 @@ describe("OpenClaw native shell", () => {
         context: { navigation: { snapshot, update } } as unknown as ApplicationContext,
       };
       const drawer = Object.assign(document.createElement("div"), { closeNavDrawer: vi.fn() });
-      const editor = document.createElement("textarea");
-      editor.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
+      const editor = document.body.appendChild(document.createElement("textarea"));
+      onTestFinished(() => editor.remove());
       try {
         for (const modifiers of [
           { metaKey: true },
@@ -122,7 +121,7 @@ describe("OpenClaw native shell", () => {
             platform === "MacIntel"
               ? Object.keys(modifiers).length === 1 && "metaKey" in modifiers
               : Object.keys(modifiers).length === 1 && "ctrlKey" in modifiers;
-          const init = { key: "b", code: "KeyB", cancelable: true, ...modifiers };
+          const init = { key: "b", code: "KeyB", bubbles: true, cancelable: true, ...modifiers };
           const event = new KeyboardEvent("keydown", init);
           editor.dispatchEvent(event);
           expect(event.defaultPrevented).toBe(expected);
@@ -139,7 +138,7 @@ describe("OpenClaw native shell", () => {
   );
 
   it("reports readiness only while the native command listener owner is connected", () => {
-    const shell = createShellOwner();
+    const shell = createDisconnectedShellOwner();
     const nativeWindow = window as Window & { __OPENCLAW_NATIVE_COMMANDS_READY__?: boolean };
     const states: boolean[] = [];
     const recordState = () =>
@@ -174,7 +173,7 @@ describe("OpenClaw native shell", () => {
       cancelable: true,
     });
 
-    shell.handleDocumentKeydown(event);
+    document.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(true);
     expect(navigate).toHaveBeenCalledWith("appearance", undefined);
@@ -209,16 +208,12 @@ describe("OpenClaw native shell", () => {
         shell.element.append(overlay);
         document.body.append(shell.element);
         onTestFinished(() => shell.element.remove());
-        shell.handleDocumentKeydown(
-          new KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
-        );
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
         expect(navigate).not.toHaveBeenCalled();
         overlay.remove();
       }
 
-      shell.handleDocumentKeydown(
-        new KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
-      );
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
 
       expect(navigate).toHaveBeenCalledWith("usage", {
         pathname: "/usage",
@@ -247,10 +242,13 @@ describe("OpenClaw native shell", () => {
     rawEditor.focus();
     const onInput = vi.fn();
     rawEditor.addEventListener("input", onInput);
-    rawEditor.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
 
     try {
-      const event = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+      const event = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
       rawEditor.dispatchEvent(event);
 
       expect(rawEditor.value).toBe('{ "gateway": { "port": 18789 } }');
@@ -284,8 +282,12 @@ describe("OpenClaw native shell", () => {
       expect(dialog.open).toBe(true);
       expect(dialog.getRootNode()).toBe(shadow);
       expect(document.querySelector("dialog[open]")).toBeNull();
-      cancel.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
-      const event = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+      const event = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      });
 
       cancel.dispatchEvent(event);
 
@@ -309,16 +311,16 @@ describe("OpenClaw native shell", () => {
       } as unknown as ApplicationContext,
     };
 
-    shell.handleNativeToggleSidebar();
+    window.dispatchEvent(new Event("openclaw:native-toggle-sidebar"));
     expect(update).toHaveBeenLastCalledWith({ navCollapsed: true });
 
-    shell.handleNativeToggleSidebar();
+    window.dispatchEvent(new Event("openclaw:native-toggle-sidebar"));
     expect(update).toHaveBeenLastCalledWith({ navCollapsed: false });
   });
 
   it.each(["operator.write", "operator.sessions.write"])(
     "opens search and starts a session from native titlebar events with %s",
-    (scope) => {
+    async (scope) => {
       const navigate = vi.fn();
       const openPalette = vi.fn();
       const togglePalette = vi.fn();
@@ -338,9 +340,9 @@ describe("OpenClaw native shell", () => {
       shell.runtime = {
         context: nativeSessionContext(navigate, "agent/a", { scopes: [scope] }),
       };
-      shell.handleNativeOpenSearch();
+      window.dispatchEvent(new Event("openclaw:native-open-search"));
       const toggleEvent = new CustomEvent("openclaw:native-toggle-search", { cancelable: true });
-      shell.handleNativeToggleSearch(toggleEvent);
+      window.dispatchEvent(toggleEvent);
       shell.handleNativeNewSession();
 
       expect(openPalette).toHaveBeenCalledOnce();
@@ -357,7 +359,12 @@ describe("OpenClaw native shell", () => {
         metaKey: true,
         cancelable: true,
       });
-      shell.handleDocumentKeydown(shortcut);
+      document.dispatchEvent(shortcut);
+      // Join the cold import before the shared runner retires this module graph.
+      await ensureCustomElementDefined(
+        COMMAND_PALETTE_ELEMENT.tagName,
+        COMMAND_PALETTE_ELEMENT.loadModule,
+      );
       expect(shortcut.defaultPrevented).toBe(true);
       expect(togglePalette).toHaveBeenCalledOnce();
     },
@@ -377,9 +384,9 @@ describe("OpenClaw native shell", () => {
         scopes: ["operator.sessions.write"],
       }),
     };
-    const textarea = document.createElement("textarea");
+    const textarea = document.body.appendChild(document.createElement("textarea"));
+    onTestFinished(() => textarea.remove());
     textarea.value = "Keep this foreground draft";
-    textarea.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
     const modifier = platform === "MacIntel" ? { metaKey: true } : { ctrlKey: true };
     try {
       // Receiver semantics only; synthetic DOM events cannot prove OS delivery.
@@ -388,6 +395,7 @@ describe("OpenClaw native shell", () => {
         : { key: "O", code: "KeyO", shiftKey: true };
       const event = new KeyboardEvent("keydown", {
         ...chord,
+        bubbles: true,
         cancelable: true,
         ...modifier,
       });
@@ -404,7 +412,12 @@ describe("OpenClaw native shell", () => {
         { ...chord, isComposing: true },
         { ...chord, keyCode: 229 },
       ]) {
-        const ignored = new KeyboardEvent("keydown", { ...modifier, ...init, cancelable: true });
+        const ignored = new KeyboardEvent("keydown", {
+          ...modifier,
+          ...init,
+          bubbles: true,
+          cancelable: true,
+        });
         textarea.dispatchEvent(ignored);
         expect(ignored.defaultPrevented).toBe(false);
       }
@@ -441,7 +454,7 @@ describe("OpenClaw native shell", () => {
           shiftKey: true,
           cancelable: true,
         });
-        shell.handleDocumentKeydown(key);
+        document.dispatchEvent(key);
         expect(key.defaultPrevented).toBe(false);
         expect(navigate).not.toHaveBeenCalled();
       } finally {
@@ -461,7 +474,7 @@ describe("OpenClaw native shell", () => {
     drawer.setAttribute("aria-modal", "true");
     Object.assign(shell, { navDrawerElement: drawer });
     try {
-      shell.handleDocumentKeydown(
+      document.dispatchEvent(
         new KeyboardEvent("keydown", {
           key: "O",
           code: "KeyO",
@@ -536,7 +549,7 @@ describe("OpenClaw native shell", () => {
         detail: { path, search },
       });
 
-      shell.handleNativeNavigate(event);
+      window.dispatchEvent(event);
 
       expect(event.defaultPrevented).toBe(true);
       expect(navigate).toHaveBeenCalledExactlyOnceWith(routeId, {
@@ -562,7 +575,7 @@ describe("OpenClaw native shell", () => {
         detail: { path: "/custodian", search },
       });
 
-      shell.handleNativeNavigate(event);
+      window.dispatchEvent(event);
 
       expect(event.defaultPrevented).toBe(true);
       expect(navigate).toHaveBeenCalledExactlyOnceWith("custodian", { pathname: "/custodian" });
@@ -584,7 +597,7 @@ describe("OpenClaw native shell", () => {
         detail: { path },
       });
 
-      shell.handleNativeNavigate(event);
+      window.dispatchEvent(event);
 
       expect(event.defaultPrevented).toBe(false);
       expect(navigate).not.toHaveBeenCalled();
@@ -646,7 +659,7 @@ describe("OpenClaw native shell", () => {
       cancelable: true,
     });
 
-    shell.handleDocumentKeydown(event);
+    document.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(false);
     expect(navigate).not.toHaveBeenCalled();

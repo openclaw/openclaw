@@ -176,13 +176,6 @@ export function applyExecAuthorizationCommit(
   file: ExecApprovalsFile,
   params: ExecAuthorizationCommitInput,
 ): ExecApprovalsFile | null {
-  if (
-    (params.authorization.source === "explicit-approval" ||
-      params.authorization.source === "auto-review") &&
-    !params.authorization.policySnapshot
-  ) {
-    throw new Error("Delayed exec authorization requires a policy snapshot");
-  }
   if (params.allowAlwaysDecision && params.allowAlwaysDecision.kind !== "one-shot") {
     if (params.authorization.source !== "explicit-approval") {
       throw new Error("Allow-always persistence requires explicit approval");

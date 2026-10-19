@@ -311,9 +311,12 @@ repeated diagnostic connections do not each rebuild the health snapshot. Explici
 checks and refreshes for missing or stale health still run immediately.
 The passive WebSocket `health` event sends the full snapshot only when health changes.
 Refresh timestamps, check duration, session activity summaries, channel traffic
-timestamps, auth age, and event-loop sample readings alone do not trigger an event.
-Channel lifecycle and error changes, event-loop degradation, and other health status
-changes still publish on the next refresh. Use `tick` for connection liveness and the
+timestamps, busy/run counters, run start times, auth age, and event-loop sample
+readings alone do not trigger an event. Event-loop degradation triggers an event
+only after the sampler observes it continuously for at least one minute; recovery
+and channel lifecycle, error, and other health status changes publish on the next
+refresh. Full snapshots still include current diagnostic samples, even when those
+samples do not independently trigger an event. Use `tick` for connection liveness and the
 `health` RPC for current diagnostic readings; hello snapshots retain their health field.
 Snapshots describe loaded and configured channels. Stored credentials alone do not
 activate a channel or add it to Gateway health; use channel setup to enable it.

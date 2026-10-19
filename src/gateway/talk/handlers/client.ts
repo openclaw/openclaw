@@ -258,7 +258,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         callId: params.callId,
         requestedVoiceSessionId: explicitVoiceSessionId ?? relaySessionId,
         args: params.args ?? {},
-        relaySessionId: normalizeOptionalString(params.relaySessionId),
+        relaySessionId,
         connId,
         onRunStarted: async (
           runId,

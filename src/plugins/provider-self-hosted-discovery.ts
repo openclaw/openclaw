@@ -181,9 +181,8 @@ function shouldProbeRuntimeProps(model: Record<string, unknown>): boolean {
 
 function resolveRuntimePropsUrl(params: { serverBaseUrl: string; modelId?: string }): string {
   const url = new URL(`${params.serverBaseUrl.replace(/\/+$/, "")}/props`);
-  const modelId = normalizeOptionalString(params.modelId);
-  if (modelId) {
-    url.searchParams.set("model", modelId);
+  if (params.modelId) {
+    url.searchParams.set("model", params.modelId);
     url.searchParams.set("autoload", "false");
   }
   return url.toString();

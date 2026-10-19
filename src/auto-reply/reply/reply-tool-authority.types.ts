@@ -30,6 +30,7 @@ export type ReplyToolAuthorityInput = {
       | "senderUsername"
       | "senderE164"
       | "senderIsOwner"
+      | "gitContributorProfileId"
       | "cwd"
       | "inputProvenance"
       | "trustedInternalHandoff"

@@ -1435,7 +1435,11 @@ console.log("relocated session card renders with bundled fonts");
         expect(config?.entry).toEqual({
           [entry]: source,
           ...(target === "worker"
-            ? { "worker/worker-chunk-highlight": "node_modules/highlight.js/lib/index.js" }
+            ? {
+                "worker/worker-chunk-highlight": "node_modules/highlight.js/lib/index.js",
+                "worker/worker-chunk-fs-safe-watch-io":
+                  "node_modules/@openclaw/fs-safe/dist/watch-io-worker.js",
+              }
             : {}),
         });
         return [target, config] as const;

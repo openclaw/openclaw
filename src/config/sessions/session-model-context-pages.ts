@@ -2,7 +2,10 @@ import type { AgentMessage } from "@openclaw/agent-core";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import { createSqliteQueryCache } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
-import { readSqliteDatabaseScopedWriteToken } from "../../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabaseScopedWriteToken,
+  sqliteSessionIdWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import { createModelContextPairing } from "./session-model-context-pairing.js";
@@ -16,12 +19,14 @@ import {
 /** Rewrites invalidate only the navigation page containing the changed row. */
 const MODEL_CONTEXT_PAGE_SIZE = 512;
 
-export function modelContextPageWriteScope(sessionId: string, seq: number): string {
-  return JSON.stringify([
-    "model-context-page",
-    sessionId,
-    Math.floor(seq / MODEL_CONTEXT_PAGE_SIZE),
-  ]);
+export function modelContextPageWriteScope(
+  sessionId: string,
+  seq: number,
+): { sessionId: string; partition: string } {
+  return {
+    ...sqliteSessionIdWriteScope(sessionId),
+    partition: `model-context-page:${Math.floor(seq / MODEL_CONTEXT_PAGE_SIZE)}`,
+  };
 }
 
 type ModelContextNavigationRow = {

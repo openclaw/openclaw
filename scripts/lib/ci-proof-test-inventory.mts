@@ -3784,7 +3784,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "test/scripts/check-openclaw-package-tarball.bundled-mcp.test.ts",
   "test/scripts/check-openclaw-package-tarball.test.ts",
   "test/scripts/check-session-accessor-boundary.test.ts",
-  "test/scripts/check-session-transcript-reader-boundary.test.ts",
   "test/scripts/check-sqlite-transaction-boundary.test.ts",
   "test/scripts/check-test-mock-exports.test.ts",
   "test/scripts/check-test-timeout-race-ratchet.test.ts",
