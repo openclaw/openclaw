@@ -118,6 +118,7 @@ describe("authenticated Gateway RPC diagnostics", () => {
   it.each([
     ["openclaw-control-ui", "control-ui"],
     ["webchat-ui", "control-ui"],
+    ["webchat", "control-ui"],
     ["openclaw-browser-copilot", "control-ui"],
     ["openclaw-macos", "macos"],
     ["openclaw-ios", "ios"],

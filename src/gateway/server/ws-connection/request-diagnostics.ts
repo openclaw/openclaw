@@ -390,6 +390,7 @@ function rpcClientKind(
   switch (id) {
     case "openclaw-control-ui":
     case "webchat-ui":
+    case "webchat":
     case "openclaw-browser-copilot":
       return "control-ui";
     case "openclaw-macos":
