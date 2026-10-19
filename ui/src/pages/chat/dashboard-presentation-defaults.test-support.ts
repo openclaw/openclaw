@@ -109,24 +109,20 @@ export function createDashboardHarness(
   const client = createGatewayBrowserClientFixture({ request });
   const harness = createTestChatPane({ client });
   const pane = harness.pane as DashboardPane;
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
   patchSettings({
     sessionKey: current.key,
     sidebarSessionLayouts: options.savedLayout ? { [current.key]: options.savedLayout } : {},
   });
-  const state = createPageState(
-    pane.context,
-    { invalidate: vi.fn(), afterCommit: () => () => {} },
-    pane,
-  );
+  const state = createPageState(pane.context, { afterCommit: () => () => {} }, pane);
   pane.state = state;
   pane.sessionKey = current.key;
   pane.routeFace = "dashboard";
   pane.dashboardExpanded = options.expandedLink ?? false;
   pane.paneWidth = 1400;
   pane.boardProvider = createMockBoardProvider(current.key);
-  // The detached pane exposes real controller methods without running unrelated
+  // The detached pane exposes real runtime methods without running unrelated
   // connectedCallback polling. Header templates are mounted separately below.
-  vi.spyOn(pane, "requestUpdate").mockImplementation(() => {});
   pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
     ["sessions.patch"],
     options.scopes ?? ["operator.write", "operator.read"],
@@ -137,6 +133,7 @@ export function createDashboardHarness(
   state.hello = pane.context.gateway.snapshot.hello;
   state.sessionKey = current.key;
   state.sessionsResult = options.metadataPending ? null : sessionsResult([current], 10);
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   const mount = document.body.appendChild(document.createElement("div"));
   const publishRow = (row: GatewaySessionRow) => {
     current = row;

@@ -188,7 +188,7 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
   },
   status: {
     defaultRuntime: { accountId: "default", running: false },
-    buildChannelSummary: ({ snapshot }) => ({ ...snapshot }),
+    buildChannelSummary: ({ snapshot }) => snapshot,
     buildAccountSnapshot: async ({ account, runtime, cfg }) => ({
       ...runtime,
       accountId: account.accountId,

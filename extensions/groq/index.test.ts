@@ -59,6 +59,39 @@ describe("groq provider compat", () => {
     }
   });
 
+  it("clamps GPT OSS thinking levels to Groq's low, medium, and high efforts", () => {
+    const catalog = buildManifestModelProviderConfig({
+      providerId: "groq",
+      catalog: manifest.modelCatalog.providers.groq,
+    });
+    const rows = catalog.models.filter((model) => model.id.includes("gpt-oss"));
+    expect(rows.map((row) => row.id)).toEqual([
+      "openai/gpt-oss-120b",
+      "openai/gpt-oss-20b",
+      "openai/gpt-oss-safeguard-20b",
+    ]);
+    for (const row of rows) {
+      const model: Model<"openai-completions"> = {
+        ...row,
+        input: ["text"],
+        provider: "groq",
+        api: "openai-completions",
+        baseUrl: catalog.baseUrl,
+      };
+      // Groq rejects `minimal` for GPT OSS with a 400.
+      for (const [reasoning, effort] of [
+        ["minimal", "low"],
+        ["medium", "medium"],
+        ["xhigh", "high"],
+      ] as const) {
+        expect(buildOpenAICompletionsParams(model, { messages: [] }, { reasoning })).toHaveProperty(
+          "reasoning_effort",
+          effort,
+        );
+      }
+    }
+  });
+
   it("maps every Qwen thinking level to Groq's binary wire contract on both completion paths", async () => {
     const [provider] = capturePluginRegistration(plugin).providers;
     const catalog = buildManifestModelProviderConfig({

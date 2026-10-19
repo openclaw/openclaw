@@ -61,6 +61,8 @@ describe("assistant delivery normalization across native parts", () => {
     { parts: ["[[audio_as_voice]]", "NO_REPLY"], display: true, hidden: false },
     { parts: ["NO_", "REPLY\n[[audio_as_voice]]NO_REPLY"], display: undefined, hidden: false },
     { parts: ["NO_REPLY"], display: undefined, hidden: true },
+    { parts: ["no_", "reply\n[[audio_as_voice]]No_Reply"], display: undefined, hidden: false },
+    { parts: ["No_Reply"], display: undefined, hidden: true },
   ])(
     "records visibility without reclassifying the prepared suffix: $parts",
     ({ parts, display, hidden }) => {

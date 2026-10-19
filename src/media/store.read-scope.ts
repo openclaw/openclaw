@@ -90,7 +90,6 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
       );
     }
   }
-  assertCurrent();
   // Own one sibling file; cleanup must never recurse into substituted staging contents.
   const temporaryPath = buildRandomTempFilePath({
     rootDir: mediaRoot.rootReal,

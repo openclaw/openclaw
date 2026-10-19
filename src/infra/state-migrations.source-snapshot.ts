@@ -73,6 +73,14 @@ export class LegacyMigrationSourceClaim<
     return await this.params.readSnapshot(claimed ? this.claimPath : this.sourcePath);
   }
 
+  async verify(snapshot: TSnapshot, mismatchMessage: string, claimed = false): Promise<TSnapshot> {
+    const current = await this.read(claimed);
+    if (!legacyMigrationSourceSnapshotsMatch(current, snapshot)) {
+      throw new Error(mismatchMessage);
+    }
+    return current;
+  }
+
   /** Roll back a link publication interrupted before its source name was removed. */
   async recoverLinkedMove(): Promise<void> {
     await recoverLegacyMigrationLinkedMove(
@@ -133,11 +141,7 @@ export class LegacyMigrationSourceClaim<
       this.sourceRelativePath,
       this.claimRelativePath,
     );
-    const claimed = await this.read(true);
-    if (!legacyMigrationSourceSnapshotsMatch(claimed, params.snapshot)) {
-      throw new Error(params.mismatchMessage);
-    }
-    return claimed;
+    return await this.verify(params.snapshot, params.mismatchMessage, true);
   }
 
   /** Drain both receipt-retired names through the caller's safe reader before removing them. */
@@ -302,12 +306,12 @@ export function readLegacyMigrationSourceSnapshotSync(params: {
   });
   const raw = buffer.toString("utf8");
   return {
-    buffer: Buffer.from(raw),
+    buffer,
     dev: exactIdentity.dev,
     ino: exactIdentity.ino,
     mtimeMs: stat.mtimeMs,
     raw,
-    sha256: createHash("sha256").update(raw).digest("hex"),
+    sha256: createHash("sha256").update(buffer).digest("hex"),
     size: buffer.byteLength,
     sourcePath: params.sourcePath,
   };

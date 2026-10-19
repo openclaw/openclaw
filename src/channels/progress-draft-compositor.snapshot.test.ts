@@ -84,8 +84,6 @@ describe("progress draft snapshot continuation", () => {
         initialSnapshot,
         update: mode === "live" ? update : undefined,
       });
-      initialSnapshot.lines[0]!.text = "Mutated note";
-      initialSnapshot.plan[0]!.step = "Mutated step";
       expect(update).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
       expect(progress.hasStarted).toBe(false);

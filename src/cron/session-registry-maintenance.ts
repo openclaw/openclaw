@@ -57,9 +57,9 @@ type RunningCronJobIds =
   | { ok: true; ids: Set<string>; count: number }
   | { ok: false; reason: string };
 
-async function readRunningCronJobIds(): Promise<RunningCronJobIds> {
+async function readRunningCronJobIds(cronStorePath: string): Promise<RunningCronJobIds> {
   try {
-    const runningJobs = (await loadCronJobsStore()).jobs.filter(
+    const runningJobs = (await loadCronJobsStore(cronStorePath)).jobs.filter(
       (job) => typeof job.state?.runningAtMs === "number",
     );
     // A running detached job may have been retargeted after its session was created. Keep its
@@ -89,11 +89,12 @@ async function readRunningCronJobIds(): Promise<RunningCronJobIds> {
 
 export async function runSessionRegistryMaintenance(params: {
   apply: boolean;
+  cronStorePath: string;
   assertCurrent?: () => void;
 }): Promise<SessionRegistryMaintenanceSummary> {
   params.assertCurrent?.();
   const cfg = getRuntimeConfig();
-  const runningCronJobs = await readRunningCronJobIds();
+  const runningCronJobs = await readRunningCronJobIds(params.cronStorePath);
   params.assertCurrent?.();
   if (!runningCronJobs.ok) {
     return {

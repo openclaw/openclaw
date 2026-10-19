@@ -76,7 +76,7 @@ describe.skipIf(process.platform === "win32")("children after a Homebrew Node up
               argv: [removedNode, "-e", "process.exit(0)"],
               env,
             }),
-          ).rejects.toThrow("Gateway runtime is stale after Node upgrade:");
+          ).rejects.toThrow("The Node.js runtime this Gateway started with");
         }
         expect(warning).toHaveBeenCalledTimes(1);
         expect(warning).toHaveBeenCalledWith(expect.stringContaining("Restart the Gateway."));
@@ -89,7 +89,7 @@ describe.skipIf(process.platform === "win32")("children after a Homebrew Node up
   it("keeps the broker on the exact runtime and reports why it cannot start", async () => {
     const host = createSpawnBrokerHost({ nativeResources: true });
     try {
-      await expect(host.ready()).rejects.toThrow("Gateway runtime is stale after Node upgrade:");
+      await expect(host.ready()).rejects.toThrow("The Node.js runtime this Gateway started with");
     } finally {
       await host.close();
     }

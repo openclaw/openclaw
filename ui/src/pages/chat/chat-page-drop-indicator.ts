@@ -1,4 +1,5 @@
-import { createSignal, onCleanup } from "solid-js";
+import { createSignal, onSettled } from "solid-js";
+import { listen } from "../../lib/reactive/listener.ts";
 import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
 import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
 import {
@@ -136,19 +137,21 @@ export function createChatPageDropIndicator(
     setIndicator(null);
   };
 
-  const listeners = new AbortController();
-  const optionsWithSignal = { signal: listeners.signal };
-  host.addEventListener("dragenter", handleDragEnter, optionsWithSignal);
-  host.addEventListener("dragover", handleDragOver, optionsWithSignal);
-  host.addEventListener("dragleave", handleDragLeave, optionsWithSignal);
-  host.addEventListener("drop", handleDrop, optionsWithSignal);
-  window.addEventListener("dragend", clear, optionsWithSignal);
-  onCleanup(() => {
-    listeners.abort();
-    pendingDragOver = null;
-    if (dragFrame) {
-      window.cancelAnimationFrame(dragFrame);
-    }
+  onSettled(() => {
+    const stop = [
+      listen(host, "dragenter", { handleEvent: handleDragEnter }),
+      listen(host, "dragover", { handleEvent: handleDragOver }),
+      listen(host, "dragleave", { handleEvent: handleDragLeave }),
+      listen(host, "drop", { handleEvent: handleDrop }),
+      listen(window, "dragend", clear),
+    ];
+    return () => {
+      stop.forEach((release) => release());
+      pendingDragOver = null;
+      if (dragFrame) {
+        window.cancelAnimationFrame(dragFrame);
+      }
+    };
   });
   return {
     indicator,

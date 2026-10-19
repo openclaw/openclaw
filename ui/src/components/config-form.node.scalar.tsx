@@ -1,7 +1,7 @@
 import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { For, createEffect, createMemo, untrack } from "solid-js";
+import { For, createEffect, createMemo } from "solid-js";
 import { i18n } from "../i18n/index.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import {
@@ -29,6 +29,7 @@ import {
 } from "./config-form.numeric.ts";
 import {
   beginScalarEdit,
+  bindControlError,
   finishScalarEdit,
   scalarEditHintForInput,
   scalarValueBranch,
@@ -110,17 +111,18 @@ type NumericInputState = { parsed?: number; message: string };
 function resolveNumericInputState(
   target: HTMLInputElement,
   { schema, isRequired }: Pick<ConfigNodeRenderParams, "schema" | "isRequired">,
+  invalidMessage = t("configForm.invalidNumber"),
 ): NumericInputState {
   const raw = target.value;
   if (raw.trim() === "") {
     return {
-      message: target.validity.badInput || isRequired === true ? t("configForm.invalidNumber") : "",
+      message: target.validity.badInput || isRequired === true ? invalidMessage : "",
     };
   }
   const parsed = coerceConfigFormNumberString(raw, schemaType(schema) === "integer");
   return typeof parsed === "number"
-    ? { parsed, message: numericConstraintMessage(parsed, schema) }
-    : { message: t("configForm.invalidNumber") };
+    ? { parsed, message: isSupportedConfigValueValid(schema, parsed) ? "" : invalidMessage }
+    : { message: invalidMessage };
 }
 
 export function TextInput(props: {
@@ -139,11 +141,11 @@ function ScalarInput(props: {
   stepped: boolean;
 }): JSX.Element {
   let input!: HTMLInputElement | HTMLTextAreaElement;
+  let error: HTMLSpanElement | undefined;
   let initialized = false;
   const state = createMemo(() => {
-    getLocale();
     const params = props.params;
-    const { schema, value, path, hints } = params;
+    const { schema, value, path, hints, isRequired } = params;
     const hint = hintForPath(path, hints);
     const field = resolveConfigFieldPresentation(params);
     const errorId = configFieldId(path, "scalar-error");
@@ -208,6 +210,18 @@ function ScalarInput(props: {
         ].join(":");
     const constraints = props.stepped ? numericInputConstraints(schema) : undefined;
     const numericStep = typeof constraints?.step === "number" ? constraints.step : 1;
+    const inputType = props.inputType;
+    const invalidString = t("configForm.invalidString");
+    const invalidNumber = t("configForm.invalidNumber");
+    const textInputState = (raw: string, editHint: ScalarEditHint) => {
+      const candidate = coerceTextInputValue(raw, schema, effectiveValue, editHint);
+      const valid = isSupportedConfigValueValid(schema, candidate);
+      const clearOptional = raw === "" && !isRequired && !valid;
+      return {
+        candidate: clearOptional ? undefined : candidate,
+        message: valid || clearOptional ? "" : invalidString,
+      };
+    };
     return {
       field,
       errorId,
@@ -229,33 +243,19 @@ function ScalarInput(props: {
       presentationIdentity,
       constraints,
       numericStep,
+      textInputState,
+      revalidate(this: void, target: HTMLInputElement | HTMLTextAreaElement) {
+        setControlValidity(
+          target,
+          effectiveRedacted
+            ? ""
+            : inputType === "number" && target instanceof HTMLInputElement
+              ? resolveNumericInputState(target, { schema, isRequired }, invalidNumber).message
+              : textInputState(target.value, scalarEditHintForInput(target, initialBranch)).message,
+        );
+      },
     };
   });
-  const textInputState = (raw: string, editHint: ScalarEditHint) => {
-    const candidate = coerceTextInputValue(
-      raw,
-      props.params.schema,
-      state().effectiveValue,
-      editHint,
-    );
-    const valid = isSupportedConfigValueValid(props.params.schema, candidate);
-    const clearOptional = raw === "" && !props.params.isRequired && !valid;
-    return {
-      candidate: clearOptional ? undefined : candidate,
-      message: valid || clearOptional ? "" : t("configForm.invalidString"),
-    };
-  };
-  const revalidate = (target: HTMLInputElement | HTMLTextAreaElement) => {
-    setControlValidity(
-      target,
-      state().effectiveRedacted
-        ? ""
-        : props.inputType === "number" && target instanceof HTMLInputElement
-          ? resolveNumericInputState(target, props.params).message
-          : textInputState(target.value, scalarEditHintForInput(target, state().initialBranch))
-              .message,
-    );
-  };
   createEffect(state, (current) => {
     // The first value is set only once; subsequent updates are owned by the
     // existing draft-preserving scalar identity contract.
@@ -270,11 +270,11 @@ function ScalarInput(props: {
       current.controlPathKey,
       current.presentationIdentity,
       current.renderedValue,
-      revalidate,
+      current.revalidate,
     );
   });
-  let patchSource = untrack(() => props.params.value);
-  let patchedValue = patchSource;
+  let patchSource: unknown;
+  let patchedValue: unknown;
   const commitScalarValue = (
     target: HTMLInputElement | HTMLTextAreaElement,
     candidate: unknown,
@@ -292,7 +292,7 @@ function ScalarInput(props: {
       return true;
     }
     target.value = state().renderedValue;
-    revalidate(target);
+    state().revalidate(target);
     return false;
   };
   const commitChange = (target: HTMLInputElement | HTMLTextAreaElement, allowClear = true) => {
@@ -314,11 +314,11 @@ function ScalarInput(props: {
     }
     const editHint = beginScalarEdit(target, state().initialBranch);
     const raw = target.value;
-    const rawState = textInputState(raw, editHint);
+    const rawState = state().textInputState(raw, editHint);
     let nextState = rawState;
     if (rawState.message || state().isPhonePresentation) {
       const normalized = raw.trim();
-      nextState = textInputState(normalized, editHint);
+      nextState = state().textInputState(normalized, editHint);
       if (!nextState.message) {
         target.value = normalized;
       }
@@ -361,6 +361,9 @@ function ScalarInput(props: {
   const controlProps = {
     ref: (element: HTMLInputElement | HTMLTextAreaElement) => {
       input = element;
+      if (error) {
+        bindControlError(element, error);
+      }
     },
     get class() {
       return ["settings-input", { "cfg-redacted": state().effectiveRedacted }];
@@ -407,7 +410,7 @@ function ScalarInput(props: {
         if (!props.stepped) {
           beginScalarEdit(target, state().initialBranch);
         }
-        revalidate(target);
+        state().revalidate(target);
         return;
       }
       if (props.inputType === "number" && target instanceof HTMLInputElement) {
@@ -417,7 +420,8 @@ function ScalarInput(props: {
         }
         return;
       }
-      const next = textInputState(target.value, beginScalarEdit(target, state().initialBranch));
+      const { textInputState, initialBranch } = state();
+      const next = textInputState(target.value, beginScalarEdit(target, initialBranch));
       if (setControlValidity(target, next.message)) {
         commitScalarValue(target, next.candidate);
       }
@@ -490,6 +494,12 @@ function ScalarInput(props: {
     <FieldRow
       {...state().field}
       errorId={state().errorId}
+      errorRef={(element) => {
+        error = element;
+        if (input) {
+          bindControlError(input, element);
+        }
+      }}
       defaultDescription={
         state().effectiveRedacted || state().masked
           ? undefined
@@ -563,7 +573,7 @@ export function SelectInput(props: {
             const accepted =
               nextSelection === unset
                 ? params.isRequired && params.schema.default !== undefined
-                  ? params.onPatch(params.path, structuredClone(params.schema.default))
+                  ? params.onPatch(params.path, params.schema.default)
                   : params.onRemove
                     ? params.onRemove(params.path)
                     : params.onPatch(params.path, undefined)

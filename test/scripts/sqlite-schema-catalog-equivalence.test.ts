@@ -25,29 +25,33 @@ const inputs = listSqliteSchemaInputs();
 const distinctInputs = [...new Map(inputs.map((input) => [input.sql, input])).values()];
 
 describe("generated SQLite schema catalogs", () => {
-  it.each(distinctInputs)("matches native catalog facts and admission for $id", ({ sql }) => {
-    const database = new DatabaseSync(":memory:");
-    try {
-      database.exec(sql);
-      const generated = readGeneratedSqliteCatalog(sql);
-      const fingerprint = readGeneratedSqliteFingerprint(sql);
-      expect(generated).toBeDefined();
-      expect(fingerprint).toBeDefined();
-      // Native per-object PRAGMAs are independent of the batched runtime reader.
-      const nativeCatalog = readNativeCatalog(database);
-      expect(generated).toEqual(nativeCatalog);
-      expect(
-        createSqliteTableContractReader(database).readCatalog(
-          nativeCatalog.views.map((view) => view.name),
-          nativeCatalog.tables.map((table) => table.name),
-        ),
-      ).toEqual(generated);
-      expect(fingerprintSqliteSchemaCatalog(nativeCatalog)).toBe(fingerprint?.fingerprint);
-      expect(collectSqliteSchemaIssues(database, sql)).toEqual([]);
-    } finally {
-      database.close();
-    }
-  });
+  it.each(distinctInputs)(
+    "matches native catalog facts and admission for $id",
+    async ({ sql, prepare }) => {
+      const database = new DatabaseSync(":memory:", { allowExtension: true });
+      try {
+        await prepare?.(database);
+        database.exec(sql);
+        const generated = readGeneratedSqliteCatalog(sql);
+        const fingerprint = readGeneratedSqliteFingerprint(sql);
+        expect(generated).toBeDefined();
+        expect(fingerprint).toBeDefined();
+        // Native per-object PRAGMAs are independent of the batched runtime reader.
+        const nativeCatalog = readNativeCatalog(database);
+        expect(generated).toEqual(nativeCatalog);
+        expect(
+          createSqliteTableContractReader(database).readCatalog(
+            nativeCatalog.views.map((view) => view.name),
+            nativeCatalog.tables.map((table) => table.name),
+          ),
+        ).toEqual(generated);
+        expect(fingerprintSqliteSchemaCatalog(nativeCatalog)).toBe(fingerprint?.fingerprint);
+        expect(collectSqliteSchemaIssues(database, sql)).toEqual([]);
+      } finally {
+        database.close();
+      }
+    },
+  );
 
   it("covers expected definitions for fresh stores and every supported upgrade start", () => {
     const registeredSql = new Set(inputs.map(({ sql }) => sql));

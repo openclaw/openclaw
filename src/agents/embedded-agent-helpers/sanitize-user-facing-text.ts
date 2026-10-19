@@ -23,9 +23,10 @@ import {
   isInsideCode,
   stripLinesOutsideCode,
 } from "../../shared/text/code-regions.js";
-import { stripFinalTags } from "../../shared/text/final-tags.js";
+import { createFinalTagProbe, stripFinalTags } from "../../shared/text/final-tags.js";
 import {
   applyTextFilters,
+  createConditionalTextProjector,
   duplicateParagraphTextFilter,
   leadingEmptyLinesTextFilter,
   type TextFilter,
@@ -242,7 +243,10 @@ export function userFacingTextFilters(
 ): readonly TextFilter[] {
   const key = `${errorContext ? "error" : "normal"}${streaming ? "-stream" : ""}` as const;
   return (userFacingFilters[key] ??= [
-    { transform: stripFinalTags, activationTokens: ["<"] },
+    {
+      transform: stripFinalTags,
+      create: () => createConditionalTextProjector(stripFinalTags, createFinalTagProbe()),
+    },
     {
       transform: streaming
         ? (text) => stripInternalRuntimeContext(text, { streaming: true })

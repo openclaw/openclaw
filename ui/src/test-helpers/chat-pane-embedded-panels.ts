@@ -58,7 +58,6 @@ export async function renderPanelFixture(
     narrow: false,
     panelDefinitions: definitions,
     primary,
-    requestUpdate: vi.fn(),
   });
   if (existing) {
     existing.update(props);
@@ -121,7 +120,6 @@ export function sidebarPanelFixtureParams(
     detail: {
       chat: createChatProps({ sessionKey: state.sessionKey }),
       host: state,
-      requestUpdate: vi.fn(),
     },
     workspace: createSessionWorkspaceProps(state),
     ...overrides,
@@ -137,11 +135,7 @@ export function createReviewFixture() {
   });
   const mount = document.body.appendChild(document.createElement("div"));
   const context = { ...createInitializationContext(), sessions };
-  const state = createPageState(
-    context,
-    { invalidate: vi.fn(), afterCommit: () => () => {} },
-    mount,
-  );
+  const state = createPageState(context, { afterCommit: () => () => {} }, mount);
   state.client = createGatewayBrowserClientFixture();
   state.connected = true;
   state.connectionEpoch = 1;

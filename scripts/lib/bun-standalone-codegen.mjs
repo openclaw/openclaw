@@ -4,7 +4,6 @@ import path from "node:path";
 
 const programOwners = [
   "src/media/staged-inputs.ts",
-  "src/shared/sandbox-workspace-paths.ts",
   "src/gateway/worker-environments/workspace-path-exclusions.ts",
   "src/gateway/worker-environments/workspace-hash-memo.ts",
   "src/gateway/worker-environments/workspace-manifest-script.runtime.ts",

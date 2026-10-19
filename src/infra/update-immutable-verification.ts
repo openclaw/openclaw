@@ -9,7 +9,6 @@ import {
   resolveGatewayRestartProbeContext,
   waitForGatewayHttpReadiness,
 } from "../cli/daemon-cli/restart-health-probe.js";
-import { INTERRUPTED_UPDATE_SETTLE_PROBES } from "../cli/daemon-cli/restart-health.constants.js";
 import {
   inspectGatewayRestart,
   isSameGatewayRestartGeneration,
@@ -167,7 +166,6 @@ export async function waitForImmutableGateway(params: {
         phase: "readiness:health",
         deadlineOutcome: "snapshot",
         requireRunningService: true,
-        settle: { probes: INTERRUPTED_UPDATE_SETTLE_PROBES },
       });
       if (!waited.healthy) {
         return inconclusive();

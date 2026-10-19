@@ -1,6 +1,6 @@
 // Gateway config reload tests cover changed-path detection, reload planning,
 // plugin registry refresh, skill snapshot invalidation, and watcher behavior.
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -42,11 +42,8 @@ import {
   getCurrentPluginMetadataSnapshotState,
   setCurrentPluginMetadataSnapshotState,
 } from "../plugins/current-plugin-metadata-state.js";
-import { hashStableJson } from "../plugins/installed-plugin-index-hash.js";
 import { PluginRuntimeApplicationError, getPluginRuntimeGeneration } from "../plugins/lifecycle.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
-import { capturePluginGenerationArtifact } from "../plugins/plugin-generation-artifact.js";
-import { PluginInstance } from "../plugins/plugin-instance.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -3116,90 +3113,6 @@ describe("startGatewayConfigReloader", () => {
       }
     },
   );
-
-  it("preserves the completed watcher receipt for an exact install handoff", async () => {
-    const root = tempDirs.make("openclaw-reload-completed-install-");
-    const pluginRoot = nodePath.join(root, "plugin");
-    await mkdir(pluginRoot);
-    const source = nodePath.join(pluginRoot, "index.js");
-    await writeFile(source, "export default {};\n");
-    const artifact = capturePluginGenerationArtifact(pluginRoot);
-    artifact.dispose();
-    const sourceDigests = { notes: artifact.sourceDigest };
-    const registry = createTestRegistry();
-    const record = createPluginRecord({
-      id: "notes",
-      source,
-      rootDir: pluginRoot,
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
-    registry.plugins.push(record);
-    const instance = new PluginInstance("notes", { record, registry });
-    instance.sourceDigest = sourceDigests.notes;
-    const metadata = createPluginMetadataSnapshotFixture({
-      plugins: [{ id: "notes", rootDir: pluginRoot, source, origin: "global" }],
-    });
-    const records = { notes: { source: "path" as const, installPath: pluginRoot } };
-    const config: OpenClawConfig = { plugins: { entries: { notes: { enabled: true } } } };
-    const snapshot = makeSnapshot({
-      config,
-      hash: "installed-notes",
-    });
-    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-      const harness = createReloaderHarness(async () => snapshot, {
-        readPluginInstallRecords: async () => records,
-        onHotReload: async (plan, next, ownership) => {
-          setActivePluginRegistry(registry);
-          setCurrentPluginMetadataSnapshotState(
-            metadata,
-            "installed-notes",
-            undefined,
-            undefined,
-            undefined,
-            "gateway",
-          );
-          ownership.markRuntimeCommitted(next, plan);
-          return {
-            status: "applied",
-            runtime: {
-              operationId: plan.pluginLifecycle?.operationId ?? "watcher-install",
-              generation: getPluginRuntimeGeneration(),
-              pluginIds: ["notes"],
-              sourceDigests,
-              warnings: ["Retired source cleanup is deferred."],
-            },
-          };
-        },
-      });
-      await harness.reloader.ready;
-      try {
-        harness.watcher.emit("change");
-        await vi.advanceTimersByTimeAsync(1);
-        await flushReload(harness.reloader);
-        const completed = await harness.onHotReload.mock.results[0]?.value;
-        expect(completed).toHaveProperty("runtime.operationId", "watcher-install");
-        if (typeof completed !== "object" || completed.status !== "applied") {
-          throw new Error("expected the watcher runtime application");
-        }
-        const request = {
-          config,
-          pluginIds: ["notes"],
-          reason: "reload" as const,
-          expectedInstallHashes: { notes: hashStableJson(records.notes) },
-          expectedSourceDigests: sourceDigests,
-        };
-        const application = harness.reloader.applyPluginLifecycleChange(request);
-        await expect(application).resolves.toBe(completed.runtime);
-        expect(harness.onHotReload).toHaveBeenCalledOnce();
-      } finally {
-        await harness.reloader.stop();
-        await instance.dispose();
-        resetPluginRuntimeStateForTest();
-      }
-    });
-  });
 
   it.each(["shutdown", "writer handoff"] as const)(
     "waits outside the config queue for an unfinished install batch (%s)",

@@ -2,10 +2,10 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ControlUiGitHubError, formatControlUiGitHubPreviewError } from "./github-api.js";
+import type { ControlUiGitHubPreviewIdentity } from "./preview-contract.js";
 import {
   loadControlUiGitHubPreview as loadPluginPreview,
   parseControlUiGitHubPreviewTarget,
-  type ControlUiGitHubPreviewIdentity,
 } from "./preview.js";
 import {
   githubJson,
@@ -369,7 +369,7 @@ describe("loadControlUiGitHubPreview", () => {
     },
   );
 
-  it("keeps concurrent readers and later cache hits independent of a disconnected caller", async () => {
+  it("evicts a disconnected caller's failed cold load for the next request", async () => {
     const started = createDeferred<void>();
     const repository = createDeferred<Response>();
     let connected = true;
@@ -395,16 +395,20 @@ describe("loadControlUiGitHubPreview", () => {
     const rejected = expect(first).rejects.toMatchObject({ reason: "changed" });
     await started.promise;
     const second = loadControlUiGitHubPreview(fixtureTarget, follower, fetchMock);
+    const secondRejected = expect(second).rejects.toMatchObject({ reason: "changed" });
     connected = false;
     repository.resolve(publicRepository());
     await rejected;
-    await expect(second).resolves.toMatchObject({ login: "octocat" });
-    const calls = fetchMock.mock.calls.length;
+    await secondRejected;
     await expect(
       loadControlUiGitHubPreview(fixtureTarget, follower, fetchMock),
     ).resolves.toMatchObject({
       login: "octocat",
     });
+    const calls = fetchMock.mock.calls.length;
+    await expect(
+      loadControlUiGitHubPreview(fixtureTarget, follower, fetchMock),
+    ).resolves.toMatchObject({ login: "octocat" });
     expect(fetchMock).toHaveBeenCalledTimes(calls);
   });
 

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -7,7 +7,7 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { DiagnosticWorkerRetainedData } from "../infra/diagnostic-process-types.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { estimateRetainedDataSize } from "../infra/retained-data-size.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { consumeLiveCatalogRefresh, recordLiveCatalogExpiry } from "./provider-catalog-expiry.js";
 
 type LiveCatalogCacheEntry<T> = {
@@ -17,9 +17,11 @@ type LiveCatalogCacheEntry<T> = {
 };
 
 const LIVE_CATALOG_CACHE_MAX_ENTRIES = 100;
-const liveCatalogCache = resolveGlobalSingleton(
+// Preserve the TTL cache across restarts and registry replacement, but release
+// its payloads when the final runtime closes.
+const liveCatalogCache = resolveGlobalMap<string, LiveCatalogCacheEntry<unknown>>(
   Symbol.for("openclaw.providerLiveCatalogCache"),
-  () => new Map<string, LiveCatalogCacheEntry<unknown>>(),
+  "close-only",
 );
 
 async function consumeLiveCatalog<T>(entry: LiveCatalogCacheEntry<T>, signal?: AbortSignal) {
@@ -33,10 +35,6 @@ async function consumeLiveCatalog<T>(entry: LiveCatalogCacheEntry<T>, signal?: A
     recordLiveCatalogExpiry(entry.expiresAt);
   }
   return value;
-}
-
-function buildLiveCatalogCacheKey(parts: readonly unknown[]): string {
-  return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }
 
 /**
@@ -64,7 +62,7 @@ export async function getCachedLiveCatalogValue<T>(params: {
   if (expiresAt === undefined) {
     return await params.load(params.signal);
   }
-  const key = buildLiveCatalogCacheKey(params.keyParts);
+  const key = sha256Hex(JSON.stringify(params.keyParts));
   const refresh = consumeLiveCatalogRefresh(key);
   // SAFETY: Callers reuse key parts only for the same catalog loader and result type.
   const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;

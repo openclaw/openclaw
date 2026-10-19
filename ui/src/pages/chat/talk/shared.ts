@@ -240,6 +240,7 @@ function getTerminalAgentWaitError(result: AgentWaitResult | undefined): Error |
     : undefined;
 }
 
+// Settlement releases this wait's Gateway subscription, abort listener, and timers together.
 export function waitForChatResult(params: {
   client: GatewayBrowserClient;
   runId: string;
@@ -495,6 +496,7 @@ function maybeSpeakRealtimeTalkControlResult(
   }
 }
 
+// Owns the consult's abort listener until its acknowledged run and result settle.
 export async function submitRealtimeTalkConsult(params: {
   ctx: RealtimeTalkTransportContext;
   args: unknown;
@@ -528,11 +530,13 @@ export async function submitRealtimeTalkConsult(params: {
     aborted = true;
     // Relay lifetimes belong to the Gateway; aborting this browser wait must not cancel them.
     if (run && !params.relaySessionId) {
-      void ctx.client.request("chat.abort", {
-        sessionKey: run.agentSessionKey,
-        agentId: run.agentId,
-        runId: run.runId,
-      });
+      void ctx.client
+        .request("chat.abort", {
+          sessionKey: run.agentSessionKey,
+          agentId: run.agentId,
+          runId: run.runId,
+        })
+        .catch(() => undefined);
     }
   };
   if (params.signal?.aborted) {

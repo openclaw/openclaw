@@ -189,12 +189,13 @@ const BridgedSettingsPage = defineSolidBridge(
 );
 
 it.each([
-  { bridged: false, detached: false },
-  { bridged: true, detached: false },
-  { bridged: true, detached: true },
+  { bridged: false, detached: false, stacked: false },
+  { bridged: false, detached: false, stacked: true },
+  { bridged: true, detached: false, stacked: false },
+  { bridged: true, detached: true, stacked: false },
 ])(
-  "publishes initial page layout ($bridged bridge, $detached detached)",
-  async ({ bridged, detached }) => {
+  "publishes initial page layout ($bridged bridge, $detached detached, $stacked stacked)",
+  async ({ bridged, detached, stacked }) => {
     const owner = new ShellLayoutOwner();
     let content!: HTMLElement;
     const container = detached ? document.createElement("div") : undefined;
@@ -219,7 +220,7 @@ it.each([
               <BridgedSettingsPage />
             ) : (
               <SettingsPage wide>
-                <SettingsPageHeader title="Native settings" />
+                <SettingsPageHeader title="Native settings" stacked={stacked} />
               </SettingsPage>
             )}
           </ShellLayoutProvider>
@@ -236,6 +237,6 @@ it.each([
     });
     expect(content.classList.contains("content--settings-page")).toBe(true);
     expect(content.classList.contains("content--settings-wide")).toBe(true);
-    expect(content.classList.contains("content--toolbar-header")).toBe(true);
+    expect(content.classList.contains("content--toolbar-header")).toBe(!stacked);
   },
 );

@@ -421,9 +421,9 @@ export function capturePlacementReplicaRead(identity: DatabasePathIdentity) {
 
 /** Synchronous SDK reads consume committed writer receipts; cold reads use the async API. */
 export function readPlacementReplica(identity: DatabasePathIdentity, sessionId: string) {
-  const owner = owners.get(identity.key);
-  const published = owner?.placements.get(sessionId);
-  if (!owner?.active || !published || hasPendingPublication(owner, sessionId)) {
+  const owner = ownerFor(identity);
+  const published = owner.placements.get(sessionId);
+  if (!owner.active || !published || hasPendingPublication(owner, sessionId)) {
     return undefined;
   }
   return { placement: published.placement };

@@ -392,7 +392,6 @@ export async function takeScreenshotViaPlaywright(
 type LabeledScreenshotOptions = InteractionTargetOptions &
   ScreenshotOptions & {
     refs?: Record<string, { role: string; name?: string; nth?: number }>;
-    maxLabels?: number;
     ref?: string;
     element?: string;
   };
@@ -414,11 +413,6 @@ async function screenshotWithLabelsOnPage(
   annotations: AnnotationItem[];
 }> {
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
-  const maxLabels =
-    typeof opts.maxLabels === "number" && Number.isFinite(opts.maxLabels)
-      ? Math.max(1, Math.floor(opts.maxLabels))
-      : ANNOTATION_MAX_LABELS_DEFAULT;
-
   const refKey = normalizeOptionalString(opts.ref);
   const elementSelector = normalizeOptionalString(opts.element);
   const locator = screenshotLocator(page, refKey, elementSelector);
@@ -481,7 +475,7 @@ async function screenshotWithLabelsOnPage(
     }
     const target = refLocator(page, ref);
     // Full-page tail refs cannot contribute annotations after the label budget fills.
-    if (space === "fullpage" && inputs.length >= maxLabels) {
+    if (space === "fullpage" && inputs.length >= ANNOTATION_MAX_LABELS_DEFAULT) {
       skippedRefs += 1;
       continue;
     }
@@ -510,7 +504,6 @@ async function screenshotWithLabelsOnPage(
     scroll: origin,
     viewport: view,
     elementRect,
-    maxLabels,
   });
 
   try {

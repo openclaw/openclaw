@@ -10,7 +10,6 @@ export {
   summarizeMSTeamsHtmlAttachments,
 } from "./attachments/html.js";
 export type {
-  MSTeamsAccessTokenProvider,
   MSTeamsAttachmentLike,
   MSTeamsHtmlAttachmentSummary,
   MSTeamsInboundMedia,

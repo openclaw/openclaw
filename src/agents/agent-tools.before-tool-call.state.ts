@@ -111,7 +111,6 @@ export function clearBatchAdmittedToolCallsForRun(runId: string): void {
   }
 }
 
-/** Clear adjusted tool parameters between isolated tests. */
 export function resetAdjustedParamsByToolCallIdForTests(): void {
   adjustedParamsByToolCallId.clear();
   preExecutionBlockedToolCallIds.clear();

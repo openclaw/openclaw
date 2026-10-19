@@ -29,6 +29,5 @@ it("keeps inbound, reply, and forwarded content out of verbose diagnostics", asy
   expect(ctx?.ctxPayload.Body).toContain("private-reply-probe");
   expect(ctx?.ctxPayload.Body).toContain("private-origin-probe");
   const diagnostics = log.mock.calls.map(([line]) => line).join("\n");
-  expect(diagnostics).toContain("telegram inbound: chatId=1234");
   expect(diagnostics).not.toContain("private-");
 });

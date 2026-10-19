@@ -45,6 +45,7 @@ import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { modelSettingPrimary, readModelSetting } from "../../lib/model-setting.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import {
   canReadSystemInfo,
@@ -75,29 +76,12 @@ import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
 } from "./session-observer-settings.ts";
-import { createConfigViewState } from "./view-state.ts";
+import { createConfigViewState, createMediaDeviceState } from "./view-state.ts";
 import type { ConfigProps, ConfigViewState } from "./view-types.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
 const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
-
-function createMediaDeviceState(): Omit<
-  NonNullable<ConfigProps["microphone"]>,
-  "selectedDeviceId"
-> & {
-  loaded: boolean;
-  requestsPermission: boolean;
-} {
-  return {
-    devices: [],
-    permissionRequired: true,
-    loading: false,
-    error: null,
-    loaded: false,
-    requestsPermission: false,
-  };
-}
 
 export function extractQuickSettingsSecurity(root: Record<string, unknown>): SecurityOverview {
   const gateway = asConfigRecord(root.gateway);
@@ -136,9 +120,24 @@ export function createConfigPage(
   route: () => { pageId: ConfigPageId; routeData: ConfigRouteData | null },
   host: () => HTMLElement,
 ) {
+  const applicationConfig = projectOwner(context.config, (owner) => owner.current);
+  const agents = projectOwner(context.agents, (owner) => owner.state);
+  const identities = projectOwner(context.agentIdentity, (owner) => owner);
+  const lobsterdex = projectSource(subscribeLobsterdex, {
+    read: getLobsterdex,
+    subscribe: (subscribe, notify) => subscribe(notify),
+    equality: "revision",
+  });
+  const webPush = projectOwner(context.webPush, (owner) => owner.snapshot);
+  const notifications = context.nativeNotifications
+    ? projectOwner(context.nativeNotifications, (owner) => owner.snapshot)
+    : null;
   // Imperative owner notifications can arrive while a descendant is rendering.
   const [revision, publish] = createSignal(0, { ownedWrite: true });
-  const invalidate = () => publish((value) => value + 1);
+  const invalidate = () => {
+    publish((value) => value + 1);
+    onSettled(afterCommit);
+  };
   const [presentation, setPresentation] = createStore<{
     formModes: Partial<Record<ConfigPageId, ConfigProps["formMode"]>>;
     selections: Partial<Record<ConfigPageId, ConfigSelection>>;
@@ -192,6 +191,7 @@ export function createConfigPage(
     const state = context.runtimeConfig.state;
     return asConfigRecord(state.configForm ?? state.configSnapshot?.config) ?? {};
   }
+
   function mutationDisabled() {
     revision();
     return isCuratedConfigMutationDisabled();
@@ -234,10 +234,6 @@ export function createConfigPage(
     synchronize();
     invalidate();
   };
-  const visibilityChanged = () => {
-    synchronize();
-  };
-
   function retireMediaPermissionRequests() {
     for (const device of Object.values(mediaDevices)) {
       device.requestsPermission = false;
@@ -336,15 +332,14 @@ export function createConfigPage(
   }
 
   function afterCommit() {
-    if (!targetBlockId || scrollFrame !== null) {
+    if (!connected || !targetBlockId || scrollFrame !== null) {
       return;
     }
     scrollFrame = requestAnimationFrame(() => {
       scrollFrame = null;
-      const target = [...(host().querySelectorAll<HTMLElement>("[id]") ?? [])].find(
-        (element) => element.id === targetBlockId,
-      );
-      if (!target) {
+      // Settings routes share one live page; keep the document's ID lookup scoped to it.
+      const target = targetBlockId ? host().ownerDocument.getElementById(targetBlockId) : null;
+      if (!target || !host().contains(target)) {
         return;
       }
       target.scrollIntoView?.({ behavior: resolveScrollBehavior(), block: "start" });
@@ -534,14 +529,12 @@ export function createConfigPage(
 
   function tabIconProps() {
     const id = context.agentSelection.state.selectedId;
-    const agent = context.agents.state.agentsList?.agents.find((entry) => entry.id === id);
-    const unlocked = getLobsterdex();
+    const agent = agents.read().agentsList?.agents.find((entry) => entry.id === id);
+    const unlocked = lobsterdex.read();
     return {
       tabIcon: settings.tabIcon,
       lobsterdexEnabled: context.theme.branding.lobsterdex,
-      tabIconAgentAvatar: agent
-        ? resolveAgentAvatarUrl(agent, context.agentIdentity.get(id))
-        : null,
+      tabIconAgentAvatar: agent ? resolveAgentAvatarUrl(agent, identities.read().get(id)) : null,
       tabIconLobsters: LOBSTER_PET_PALETTES.filter((palette) => unlocked.has(palette.id)),
       setTabIconMode: (preference: NonNullable<UiSettings["tabIcon"]>) => {
         if (
@@ -903,7 +896,6 @@ export function createConfigPage(
       customThemeImportBusy: customThemeImportOwner.snapshot.busy,
       customThemeImportMessage: customThemeImportOwner.snapshot.message,
       customThemeImportExpanded: customThemeImportOwner.snapshot.expanded,
-      customThemeImportFocusToken: customThemeImportOwner.snapshot.focusToken,
       onCustomThemeImportUrlChange: (next) => customThemeImportOwner.setUrl(next),
       onImportCustomTheme: () => void importCustomTheme(),
       onClearCustomTheme: () => clearCustomTheme(),
@@ -996,7 +988,7 @@ export function createConfigPage(
       onCameraRefresh: () => void refreshMediaDevices("camera", true),
       onCameraSelect: (deviceId) => void selectCamera(deviceId),
       gatewayUrl: context.gateway.connection.gatewayUrl,
-      assistantName: context.config.current.assistantIdentity.name,
+      assistantName: applicationConfig.read().assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: pageId === "advanced" ? undefined : titleForRoute(pageId),
       showSectionDocs: pageId !== "communications",
@@ -1005,11 +997,11 @@ export function createConfigPage(
       excludeSections,
       includeVirtualSections: pageId === "appearance" || pageId === "notifications",
       settingsLayout: pageId === "advanced" ? "accordion" : undefined,
-      nativeNotifications: context.nativeNotifications?.snapshot,
+      nativeNotifications: notifications?.read(),
       onNativeNotificationsRequestPermission: () =>
         context.nativeNotifications?.requestPermission(),
       onNativeNotificationsSendTest: () => context.nativeNotifications?.sendTest(),
-      webPush: context.webPush.snapshot,
+      webPush: webPush.read(),
       onWebPushSubscribe: () => void context.webPush.run({ kind: "enable" }),
       onWebPushUnsubscribe: () => void context.webPush.run({ kind: "disable" }),
       onWebPushTest: () => void context.webPush.run({ kind: "test" }),
@@ -1019,36 +1011,30 @@ export function createConfigPage(
         void context.webPush.run({ kind: "set", scope: "device", preferences }),
     } satisfies ConfigProps;
   }
-  const sources = [
-    context.gateway,
-    context.runtimeConfig,
-    context.settingsAgentSelection,
-    context.agentSelection,
-    context.agents,
-    context.agentIdentity,
-    context.config,
-    context.overlays,
-    context.webPush,
-    context.nativeDeviceSettings,
-    context.nativeNotifications,
-  ];
   const refresh = () => {
     synchronize();
     invalidate();
   };
+  // Route changes synchronize the config owners, lazy requests, and polling.
   createEffect(route, (next) => updateRoute(next.pageId, next.routeData));
-  createEffect(revision, () => afterCommit());
   onSettled(() => {
-    const subscriptions = sources.flatMap((source) => (source ? [source.subscribe(refresh)] : []));
+    // These notifications admit requests and retire connection-scoped work synchronously.
+    const subscriptions = [
+      context.gateway,
+      context.runtimeConfig,
+      context.settingsAgentSelection,
+      context.agentSelection,
+      context.overlays,
+    ].map((source) => source.subscribe(refresh));
     // Server selection intent can change while the stored preferences stay equal.
-    subscriptions.push(context.theme.subscribe(refresh), subscribeLobsterdex(refresh));
+    subscriptions.push(context.theme.subscribe(refresh));
     connected = true;
     settings = loadSettings();
     hiddenSessionCatalogsChanged();
     subscriptions.push(
       listen(window, SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT, hiddenSessionCatalogsChanged),
-      listen(document, "visibilitychange", visibilityChanged),
-      listen(window, "focus", visibilityChanged),
+      listen(document, "visibilitychange", synchronize),
+      listen(window, "focus", synchronize),
     );
     customThemeImportOwner.connect(context.gateway.connection.gatewayUrl);
     mediaDeviceWatch = observeRealtimeTalkDevices(() => {
@@ -1057,9 +1043,7 @@ export function createConfigPage(
     });
     synchronize();
     return () => {
-      for (const stop of subscriptions) {
-        stop();
-      }
+      subscriptions.forEach((stop) => stop());
       connected = false;
       customThemeImportOwner.retireImport();
       retireMediaPermissionRequests();

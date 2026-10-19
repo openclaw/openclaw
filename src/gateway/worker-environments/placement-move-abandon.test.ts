@@ -36,6 +36,7 @@ import {
 } from "./workspace-operation-coordinator.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+type ActivePlacement = Extract<ReturnType<WorkerSessionPlacementStore["get"]>, { state: "active" }>;
 
 describe("offline device placement abandonment", () => {
   let root: string;
@@ -63,10 +64,7 @@ describe("offline device placement abandonment", () => {
     }
   });
 
-  function seedEnvironment(
-    active: Extract<ReturnType<WorkerSessionPlacementStore["get"]>, { state: "active" }>,
-    providerId = "device",
-  ): void {
+  function seedEnvironment(active: ActivePlacement, providerId = "device"): void {
     seedAttachedPlacementEnvironment(database, {
       environmentId: active.environmentId,
       sessionId: active.sessionId,
@@ -77,10 +75,7 @@ describe("offline device placement abandonment", () => {
     });
   }
 
-  function requestFor(
-    active: Extract<ReturnType<WorkerSessionPlacementStore["get"]>, { state: "active" }>,
-    abandonSource = true,
-  ) {
+  function requestFor(active: ActivePlacement, abandonSource = true) {
     return {
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,
@@ -92,6 +87,32 @@ describe("offline device placement abandonment", () => {
       },
       target: { kind: "gateway" as const },
       ...(abandonSource ? { abandonSource: true as const } : {}),
+    };
+  }
+
+  async function dispatchDevice(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    request: Parameters<typeof harness.service.dispatch>[0] = REQUEST,
+  ) {
+    const active = await harness.service.dispatch(request);
+    harness.markEnvironmentNodeDeviceId("device-1");
+    seedEnvironment(active);
+    return active;
+  }
+
+  function turnInput(
+    active: ActivePlacement,
+    claimId: string,
+    runId: string,
+    kind: "worker" | "local" = "worker",
+  ) {
+    return {
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      claimId,
+      runId,
+      owner: { kind, environmentId: active.environmentId, ownerEpoch: active.activeOwnerEpoch },
     };
   }
 
@@ -371,21 +392,10 @@ describe("offline device placement abandonment", () => {
         beforeMoveBegin,
         afterMoveBegin: () => afterMoveBegin(),
       });
-      const active = await harness.service.dispatch(REQUEST);
-      harness.markEnvironmentNodeDeviceId("device-1");
-      seedEnvironment(active);
-      const claim = await placements.claimTurn({
-        sessionId: active.sessionId,
-        sessionKey: active.sessionKey,
-        agentId: active.agentId,
-        claimId: "offline-device-claim",
-        runId: "offline-device-run",
-        owner: {
-          kind: "worker",
-          environmentId: active.environmentId,
-          ownerEpoch: active.activeOwnerEpoch,
-        },
-      });
+      const active = await dispatchDevice(harness);
+      const claim = await placements.claimTurn(
+        turnInput(active, "offline-device-claim", "offline-device-run"),
+      );
       await placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
       if (pendingAt === "before") {
         await placements.markWorkspaceResultPending(claim);
@@ -400,27 +410,19 @@ describe("offline device placement abandonment", () => {
 
       expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
       expect(harness.environments.destroy).toHaveBeenCalledOnce();
-      expect(harness.log).toEqual(
-        expect.arrayContaining([
-          "placement:draining",
-          "placement:reconciling",
-          "placement:failed",
-          "teardown:destroy",
-          "placement:local",
-        ]),
-      );
-      expect(harness.log.indexOf("placement:draining")).toBeLessThan(
-        harness.log.indexOf("placement:reconciling"),
-      );
-      expect(harness.log.indexOf("placement:reconciling")).toBeLessThan(
-        harness.log.indexOf("placement:failed"),
-      );
-      expect(harness.log.indexOf("placement:failed")).toBeLessThan(
-        harness.log.indexOf("teardown:destroy"),
-      );
-      expect(harness.log.indexOf("teardown:destroy")).toBeLessThan(
-        harness.log.indexOf("placement:local"),
-      );
+      const ordered = [
+        "placement:draining",
+        "placement:reconciling",
+        "placement:failed",
+        "teardown:destroy",
+        "placement:local",
+      ];
+      expect(harness.log).toEqual(expect.arrayContaining(ordered));
+      for (let index = 1; index < ordered.length; index++) {
+        expect(harness.log.indexOf(ordered[index - 1]!)).toBeLessThan(
+          harness.log.indexOf(ordered[index]!),
+        );
+      }
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.validateTurnClaim(claim)).toBe(false);
       expect(placements.isWorkerTurnToolAuthorized(claim, "sessions_send")).toBe(false);
@@ -479,21 +481,10 @@ describe("offline device placement abandonment", () => {
 
   it("forces an offline remote-exec device onto the Gateway without waiting for its local claim", async () => {
     const harness = await createHarness(database, placements);
-    const active = await harness.service.dispatch({ ...REQUEST, executionMode: "remote-exec" });
-    harness.markEnvironmentNodeDeviceId("device-1");
-    seedEnvironment(active);
-    const claim = await placements.claimTurn({
-      sessionId: active.sessionId,
-      sessionKey: active.sessionKey,
-      agentId: active.agentId,
-      claimId: "offline-remote-exec-claim",
-      runId: "offline-remote-exec-run",
-      owner: {
-        kind: "local",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const active = await dispatchDevice(harness, { ...REQUEST, executionMode: "remote-exec" });
+    const claim = await placements.claimTurn(
+      turnInput(active, "offline-remote-exec-claim", "offline-remote-exec-run", "local"),
+    );
     const closeToolState = vi.spyOn(placements, "closeWorkerTurnToolState");
     const closed = vi.fn();
     const unregister = placements.registerTurnClaimClosedHandler(closed);
@@ -540,21 +531,8 @@ describe("offline device placement abandonment", () => {
     });
     const options = { beforeMoveBegin, afterMoveBegin, deviceRunnerAvailable: false };
     const harness = await createHarness(database, placements, options);
-    const active = await harness.service.dispatch(REQUEST);
-    harness.markEnvironmentNodeDeviceId("device-1");
-    seedEnvironment(active);
-    await placements.claimTurn({
-      sessionId: active.sessionId,
-      sessionKey: active.sessionKey,
-      agentId: active.agentId,
-      claimId: "offline-retry-claim",
-      runId: "offline-retry-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const active = await dispatchDevice(harness);
+    await placements.claimTurn(turnInput(active, "offline-retry-claim", "offline-retry-run"));
     const request = requestFor(active);
 
     await expect(harness.service.move(request)).rejects.toThrow(
@@ -618,18 +596,9 @@ describe("offline device placement abandonment", () => {
         },
       });
       if (scenario.outcome === "rotated-claim") {
-        await placements.claimTurn({
-          sessionId: source.sessionId,
-          sessionKey: source.sessionKey,
-          agentId: source.agentId,
-          claimId: "replacement-device-claim",
-          runId: "replacement-device-run",
-          owner: {
-            kind: "worker",
-            environmentId: source.environmentId,
-            ownerEpoch: source.activeOwnerEpoch,
-          },
-        });
+        await placements.claimTurn(
+          turnInput(source, "replacement-device-claim", "replacement-device-run"),
+        );
       } else {
         await placements.startDrain({
           sessionId: source.sessionId,
@@ -640,21 +609,8 @@ describe("offline device placement abandonment", () => {
       }
     });
     const harness = await createHarness(database, placements, { beforeMoveBegin });
-    const source = await harness.service.dispatch(REQUEST);
-    harness.markEnvironmentNodeDeviceId("device-1");
-    seedEnvironment(source);
-    await placements.claimTurn({
-      sessionId: source.sessionId,
-      sessionKey: source.sessionKey,
-      agentId: source.agentId,
-      claimId: "offline-device-claim",
-      runId: "offline-device-run",
-      owner: {
-        kind: "worker",
-        environmentId: source.environmentId,
-        ownerEpoch: source.activeOwnerEpoch,
-      },
-    });
+    const source = await dispatchDevice(harness);
+    await placements.claimTurn(turnInput(source, "offline-device-claim", "offline-device-run"));
 
     await expect(harness.service.move(requestFor(source))).rejects.toThrow(
       scenario.outcome === "persist-error"
@@ -729,9 +685,7 @@ describe("offline device placement abandonment", () => {
         },
       };
       const harness = await createHarness(database, placements, { workspaceOperations });
-      const active = await harness.service.dispatch(REQUEST);
-      harness.markEnvironmentNodeDeviceId("device-1");
-      seedEnvironment(active);
+      const active = await dispatchDevice(harness);
       const begun = await placements.beginPlacementMove(requestFor(active));
       const held = createDeferredCore();
       const release = createDeferredCore();
@@ -809,9 +763,7 @@ describe("offline device placement abandonment", () => {
         revoked = true;
       },
     });
-    const active = await harness.service.dispatch(REQUEST);
-    harness.markEnvironmentNodeDeviceId("device-1");
-    seedEnvironment(active);
+    const active = await dispatchDevice(harness);
 
     await expect(
       harness.service.move(requestFor(active), undefined, () => {
@@ -835,9 +787,7 @@ describe("offline device placement abandonment", () => {
 
   it("recovers a crash after the durable drain without remote reconciliation", async () => {
     const harness = await createHarness(database, placements, { failMoveAfterBegin: true });
-    const active = await harness.service.dispatch(REQUEST);
-    harness.markEnvironmentNodeDeviceId("device-1");
-    seedEnvironment(active);
+    const active = await dispatchDevice(harness);
 
     await expect(harness.service.move(requestFor(active))).rejects.toThrow(
       "move barrier interrupted",

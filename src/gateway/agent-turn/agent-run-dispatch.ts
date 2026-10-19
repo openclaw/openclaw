@@ -26,17 +26,20 @@ import {
 } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
-import { isAgentEventLifecycleGenerationCurrent } from "../../infra/agent-events.js";
-import {
-  clearAgentRunContext,
-  validateAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
+import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
+import {
+  getRpcSource,
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+  getRpcSourceLifecycleGeneration,
+  hasRpcSource,
+  isRpcSourceRegistered,
+  type RpcSourceRef,
+} from "../../sessions/session-controller.rpc-sources.js";
 import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { errorShapeFromError } from "../error-shape.js";
 import type { createAssistantCommentaryMediaCustody } from "../server-methods/chat-send-commentary-media.js";
 import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
@@ -53,6 +56,7 @@ import {
   resolveGatewayAgentAbortStopReason,
   resolveResolvedAgentTimeoutStopReason,
 } from "./agent-run-dispatch-outcome.js";
+import { bindGatewayAgentTerminalProducer } from "./agent-run-terminal-producer.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 type AgentRunMediaCustody = Pick<
@@ -68,18 +72,18 @@ export function dispatchAgentRunFromGateway(params: {
   assertCurrent?: () => void;
   assertSettlementCurrent?: () => void;
   followupCompletion?: FollowupCompletionOwner;
-  admittedRunEntry: ChatAbortControllerEntry | undefined;
+  admittedRunEntry: RpcSourceRef | undefined;
   ingressOpts: Parameters<typeof agentCommandFromGatewayIngress>[0];
-  loadMedia?: () => Promise<AgentRunMediaCustody>;
+  loadMedia?: () => Promise<AgentRunMediaCustody | undefined>;
   runId: string;
   cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
   dedupeKeys: readonly string[];
   /**
    * Controller whose signal is wired into `ingressOpts.abortSignal`. Used on
-   * completion to drop the matching `chatAbortControllers` entry without
+   * completion to retire the matching controller source without
    * touching a same-runId entry owned by a concurrent chat.send.
    */
-  abortController: AbortController;
+  abortController: Pick<AbortController, "signal" | "abort">;
   cleanupAbortController: () => void | Promise<void>;
   io: AgentTurnIo;
   context: AgentTurnContext;
@@ -100,13 +104,21 @@ export function dispatchAgentRunFromGateway(params: {
   );
   const assertSettlementCurrent = params.assertSettlementCurrent;
   const registeredRunEntry = params.admittedRunEntry;
-  const jobSessionBinding = registeredRunEntry ?? params.ingressOpts;
+  const captureJobSession = () =>
+    captureAgentJobSession(
+      registeredRunEntry
+        ? {
+            ...getRpcSourceIdentity(registeredRunEntry),
+            lifecycleGeneration: getRpcSourceLifecycleGeneration(registeredRunEntry),
+          }
+        : params.ingressOpts,
+    );
   let runOwnerSettled = false;
   const projectInputOutcome = (payload: unknown) =>
     projectWithdrawnAgentInput(
       payload,
       readWithdrawnUserTurnInputId(params.ingressOpts.userTurnTranscriptRecorder),
-      registeredRunEntry?.abortStopReason,
+      registeredRunEntry?.adapter.abortStopReason,
     );
   let pendingReplay: DedupeEntry | undefined;
   const publishReplay = (entry: DedupeEntry) => {
@@ -117,22 +129,30 @@ export function dispatchAgentRunFromGateway(params: {
     setGatewayDedupeEntries({
       dedupe: params.context.dedupe,
       keys: params.dedupeKeys,
-      session: captureAgentJobSession(jobSessionBinding),
+      session: captureJobSession(),
       entry: diagnostics.forReplay({ ...entry, payload: projectInputOutcome(entry.payload) }),
     });
   };
-  const registeredRunInstance = registeredRunEntry?.operationalRunInstance;
-  const registeredLifecycleGeneration = registeredRunEntry?.lifecycleGeneration;
-  const registeredSessionKey = registeredRunEntry?.sessionKey;
+  const registeredRunInstance = registeredRunEntry?.adapter.operationalRunInstance;
+  const registeredLifecycleGeneration =
+    registeredRunEntry && getRpcSourceLifecycleGeneration(registeredRunEntry);
+  const registeredSessionKey =
+    registeredRunEntry && getRpcSourceIdentity(registeredRunEntry).sessionKey;
+  const currentRunRegistration = () =>
+    getRpcSourceForGateway(
+      params.runId,
+      params.context.resolveGatewayContext,
+      registeredRunEntry?.input.target,
+    );
   const ownsRunRegistration = () => {
-    const current = params.context.chatAbortControllers.get(params.runId);
+    const current = currentRunRegistration();
     return (
       !current ||
       (current === registeredRunEntry &&
-        current.controller === params.abortController &&
-        current.operationalRunInstance === registeredRunInstance &&
-        current.lifecycleGeneration === registeredLifecycleGeneration &&
-        current.sessionKey === registeredSessionKey)
+        current.input.abortSignal === params.abortController.signal &&
+        current.adapter.operationalRunInstance === registeredRunInstance &&
+        getRpcSourceLifecycleGeneration(current) === registeredLifecycleGeneration &&
+        getRpcSourceIdentity(current).sessionKey === registeredSessionKey)
     );
   };
   const assertCurrent = () => {
@@ -149,11 +169,12 @@ export function dispatchAgentRunFromGateway(params: {
     try {
       await followupCompletion.settle(params.runId, reply, () => {
         assertSettlementCurrent?.();
-        const current = params.context.chatAbortControllers.get(params.runId);
+        const current = currentRunRegistration();
         // Another session may reuse the run ID without adopting this retained result.
         if (
           !ownsRunRegistration() &&
-          (current === registeredRunEntry || current?.sessionKey === registeredSessionKey)
+          (current === registeredRunEntry ||
+            (current && getRpcSourceIdentity(current).sessionKey === registeredSessionKey))
         ) {
           throw new Error("Followup physical execution lost its Gateway registration.");
         }
@@ -182,7 +203,11 @@ export function dispatchAgentRunFromGateway(params: {
       return runOwnerCleanup;
     }
     runOwnerCleanedUp = true;
-    if (ownsRunRegistration()) {
+    // Contexts are indexed by run ID, even when a replacement belongs to another session.
+    const ownsGlobalRegistration =
+      !hasRpcSource(params.runId) ||
+      (registeredRunEntry !== undefined && getRpcSource(params.runId) === registeredRunEntry);
+    if (ownsGlobalRegistration && ownsRunRegistration()) {
       clearAgentRunContext(params.runId, params.ingressOpts.lifecycleGeneration);
     }
     return (runOwnerCleanup = Promise.resolve(params.cleanupAbortController()).then(() => {
@@ -209,63 +234,13 @@ export function dispatchAgentRunFromGateway(params: {
   if (cronCreatorAuthorityCapability) {
     params.cronCreatorAuthority?.bindRunScope?.(cronCreatorAuthorityCapability);
   }
-  const producerRunInstance = registeredRunEntry?.operationalRunInstance;
-  const producerLifecycleGeneration = registeredRunEntry?.lifecycleGeneration;
-  const producerSessionKey = registeredRunEntry?.sessionKey;
-  const producerCompletion = createDeferredCore<unknown>();
-  let terminalSettlement: Promise<void> | undefined;
-  if (registeredRunEntry && params.ingressOpts.abortSignal === params.abortController.signal) {
-    registeredRunEntry.resolveTerminalProducer = () => {
-      const { sessionId, sessionKey } = registeredRunEntry;
-      const isCurrent = () => {
-        const authority = registeredRunEntry.agentRunDelegatedAuthority;
-        return (
-          !runOwnerCleanedUp &&
-          !params.abortController.signal.aborted &&
-          params.ingressOpts.abortSignal === params.abortController.signal &&
-          params.context.chatAbortControllers.get(params.runId) === registeredRunEntry &&
-          registeredRunEntry.controller === params.abortController &&
-          registeredRunEntry.operationalRunInstance === producerRunInstance &&
-          registeredRunEntry.lifecycleGeneration === producerLifecycleGeneration &&
-          registeredRunEntry.sessionId === sessionId &&
-          registeredRunEntry.sessionKey === sessionKey &&
-          sessionKey === producerSessionKey &&
-          !registeredRunEntry.registrationCleanupRequested &&
-          (!producerLifecycleGeneration ||
-            isAgentEventLifecycleGenerationCurrent(producerLifecycleGeneration)) &&
-          (!registeredRunEntry.executionStarted || authority !== undefined) &&
-          (!authority ||
-            (authority.operationalRunInstance === producerRunInstance &&
-              validateAgentRunDelegatedAuthority(authority)))
-        );
-      };
-      if (!isCurrent()) {
-        return undefined;
-      }
-      return {
-        sessionId,
-        sessionKey,
-        handoff: (settleTranscript) => {
-          if (!isCurrent()) {
-            return false;
-          }
-          const settlement = settleTranscript(producerCompletion.promise);
-          terminalSettlement = terminalSettlement
-            ? Promise.all([terminalSettlement, settlement]).then(() => undefined)
-            : settlement;
-          return true;
-        },
-      };
-    };
-  }
-  const completeTerminalProducer = async (producerError?: unknown) => {
-    producerCompletion.resolve(producerError);
-    let joined: Promise<void> | undefined;
-    do {
-      joined = terminalSettlement;
-      await joined;
-    } while (joined !== terminalSettlement);
-  };
+  const terminalProducer = bindGatewayAgentTerminalProducer({
+    runId: params.runId,
+    entry: registeredRunEntry,
+    controller: params.abortController,
+    ingressOpts: params.ingressOpts,
+    isOwnerReleased: () => runOwnerCleanedUp,
+  });
   const activateAgent = (media?: AgentRunMediaCustody) => {
     assertCurrent();
     const ingressOptsWithSpawnFacts = withAgentCommandExecutionIdentitySpawnFacts(
@@ -278,10 +253,11 @@ export function dispatchAgentRunFromGateway(params: {
           try {
             await media?.finalize(reply);
           } finally {
-            await completeTerminalProducer(producerError);
+            await terminalProducer.complete(producerError);
           }
         },
-        isTerminalOutcomeObserved: () => registeredRunEntry?.terminalOutcomeObserved === true,
+        isTerminalOutcomeObserved: () =>
+          registeredRunEntry?.adapter.terminalOutcomeObserved === true,
       },
       readAgentRunDispatchExecutionIdentity(params),
     );
@@ -301,8 +277,8 @@ export function dispatchAgentRunFromGateway(params: {
       if (
         !registeredRunEntry ||
         !ownsRunRegistration() ||
-        params.context.chatAbortControllers.get(params.runId) !== registeredRunEntry ||
-        registeredRunEntry.registrationCleanupRequested
+        !isRpcSourceRegistered(registeredRunEntry) ||
+        registeredRunEntry.input.retirementRequested
       ) {
         throw new Error("Followup no longer owns its Gateway run registration.");
       }
@@ -327,13 +303,13 @@ export function dispatchAgentRunFromGateway(params: {
       {
         identity: {
           runId: params.runId,
-          sessionKey: registeredRunEntry?.sessionKey,
-          sessionId: registeredRunEntry?.sessionId,
-          agentId: registeredRunEntry?.agentId,
-          ownerConnId: registeredRunEntry?.ownerConnId,
-          ownerDeviceId: registeredRunEntry?.ownerDeviceId,
-          controlUiVisible: registeredRunEntry?.controlUiVisible,
-          turnKind: registeredRunEntry?.turnKind,
+          sessionKey: registeredRunEntry && getRpcSourceIdentity(registeredRunEntry).sessionKey,
+          sessionId: registeredRunEntry && getRpcSourceIdentity(registeredRunEntry).sessionId,
+          agentId: registeredRunEntry && getRpcSourceIdentity(registeredRunEntry).agentId,
+          ownerConnId: registeredRunEntry?.adapter.requester?.connectionId,
+          ownerDeviceId: registeredRunEntry?.adapter.requester?.deviceId,
+          controlUiVisible: registeredRunEntry?.adapter.controlUiVisible,
+          turnKind: registeredRunEntry?.adapter.turnKind,
         },
         abortSignal: params.abortController.signal,
       },
@@ -355,7 +331,7 @@ export function dispatchAgentRunFromGateway(params: {
       producerError = error;
       throw error;
     } finally {
-      await completeTerminalProducer(producerError);
+      await terminalProducer.complete(producerError);
     }
   })();
   let inputCompletionWriteFailed = false;
@@ -443,7 +419,7 @@ export function dispatchAgentRunFromGateway(params: {
         publishReplay({
           ts: Date.now(),
           ok: true,
-          payload: { ...payload },
+          payload,
         });
       };
       const settled = await settle({ terminalOutcome, onRecovered: persistTerminalDedupe });
@@ -474,7 +450,13 @@ export function dispatchAgentRunFromGateway(params: {
       return { terminalOutcome, settled };
     })
     .catch(async (cause: unknown) => {
-      const aborted = isGatewayAgentAbortRejection(cause, params.abortController.signal);
+      const operation = params.admittedRunEntry?.input.claim?.operation;
+      const controllerAbortCommitted =
+        operation?.result?.kind === "aborted" &&
+        isGatewayAgentAbortRejection(operation.abortSignal.reason, operation.abortSignal);
+      const aborted =
+        controllerAbortCommitted ||
+        isGatewayAgentAbortRejection(cause, params.abortController.signal);
       const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, cause);
       const renderedErr = error.message;
       const stopReason = aborted

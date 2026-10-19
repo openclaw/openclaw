@@ -6,7 +6,7 @@ import { watchDirectory, type DirectoryWatch } from "./directory-watch-host.js";
 type Listener = (filename?: string) => void;
 type Directory = {
   path: string;
-  listeners: Map<Listener, number>;
+  listeners: Set<Listener>;
   nextFallback: { atMs: number; elapsedAtMs: number };
   source?: Source;
 };
@@ -17,11 +17,10 @@ const sources = new Map<string, Source>();
 let fallback: ReturnType<typeof setTimeout> | undefined;
 let fallbackDueAtMs = Infinity;
 const REPAIR_INTERVAL_MS = 30_000;
-const RECOVERY_INTERVAL_MS = 300_000;
 
-function nextFallback(intervalMs: number): Directory["nextFallback"] {
+function nextFallback(): Directory["nextFallback"] {
   const now = Date.now();
-  const atMs = (Math.floor(now / intervalMs) + 1) * intervalMs;
+  const atMs = (Math.floor(now / REPAIR_INTERVAL_MS) + 1) * REPAIR_INTERVAL_MS;
   return { atMs, elapsedAtMs: performance.now() + atMs - now };
 }
 
@@ -38,12 +37,6 @@ function retainEarlierFallback(directory: Directory, deadline: Directory["nextFa
     directory.nextFallback.elapsedAtMs,
     deadline.elapsedAtMs,
   );
-}
-
-function fallbackInterval(directory: Directory): number {
-  return directory.source?.path === directory.path
-    ? Math.min(RECOVERY_INTERVAL_MS, ...directory.listeners.values())
-    : REPAIR_INTERVAL_MS;
 }
 
 function scheduleFallback(changed?: Directory) {
@@ -73,7 +66,7 @@ function scheduleFallback(changed?: Directory) {
             attach(entry);
           }
           // Native events are primary; recovery covers missed notifications.
-          entry.nextFallback = nextFallback(fallbackInterval(entry));
+          entry.nextFallback = nextFallback();
           notify(entry);
         }
         scheduleFallback();
@@ -93,7 +86,7 @@ function detach(directory: Directory) {
 }
 
 function notify(directory: Directory, filename?: string) {
-  const listeners = Array.from(directory.listeners.keys());
+  const listeners = Array.from(directory.listeners);
   for (const listener of listeners) {
     listener(filename);
   }
@@ -148,7 +141,7 @@ function attach(directory: Directory) {
             for (const entry of readmit) {
               if (directories.get(entry.path) === entry) {
                 attach(entry);
-                retainEarlierFallback(entry, nextFallback(fallbackInterval(entry)));
+                retainEarlierFallback(entry, nextFallback());
                 scheduleFallback(entry);
               }
             }
@@ -163,7 +156,7 @@ function attach(directory: Directory) {
         for (const entry of affected) {
           detach(entry);
           notify(entry);
-          retainEarlierFallback(entry, nextFallback(REPAIR_INTERVAL_MS));
+          retainEarlierFallback(entry, nextFallback());
           scheduleFallback(entry);
         }
       });
@@ -182,14 +175,13 @@ function attach(directory: Directory) {
 export function observeOwnedDirectory(
   directoryPath: string,
   onChange: Listener,
-  options?: { recoveryIntervalMs?: 30_000 },
 ): { close(): void } {
   const key = path.resolve(directoryPath);
   let directory = directories.get(key);
   if (!directory) {
     directory = {
       path: key,
-      listeners: new Map(),
+      listeners: new Set(),
       nextFallback: { atMs: Infinity, elapsedAtMs: Infinity },
     };
     directories.set(key, directory);
@@ -197,8 +189,8 @@ export function observeOwnedDirectory(
   }
   const selected = directory;
   const listener: Listener = (filename) => onChange(filename);
-  selected.listeners.set(listener, options?.recoveryIntervalMs ?? RECOVERY_INTERVAL_MS);
-  retainEarlierFallback(selected, nextFallback(fallbackInterval(selected)));
+  selected.listeners.add(listener);
+  retainEarlierFallback(selected, nextFallback());
   scheduleFallback(selected);
   return {
     close() {

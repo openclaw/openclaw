@@ -1,4 +1,8 @@
-import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import {
+  admitStoreSearch,
+  type SearchSchema,
+  type EngineConnection,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   DatabaseSearchCapabilityUnavailableError,
   isPostgresSqlConnection,
@@ -21,56 +25,54 @@ import {
   matchStandingIntentsInDatabase,
 } from "./standing-intents-kernel.js";
 import type { StandingIntentWorkerOperations } from "./standing-intents-model.js";
+import { standingIntentSearchSchema } from "./standing-intents-search.js";
 
 /** The canonical agent executor retains and closes this connection. */
 export function bindSqliteWorkerBackend(
   _input: undefined,
-  context: { database: EngineConnection; admit(stage: "transaction" | "commit"): void },
+  context: {
+    database: EngineConnection;
+    admit(stage: "transaction" | "commit"): void;
+    admitSearchExtensions?: (definitions: Readonly<Record<string, SearchSchema>>) => void;
+  },
 ): SqliteWorkerBackend<StandingIntentWorkerOperations> {
-  if (isPostgresSqlConnection(context.database)) {
-    throw new DatabaseSearchCapabilityUnavailableError(
-      "fullText",
-      "PostgreSQL standing intents are unavailable until their lifecycle supports the selected engine.",
-    );
-  }
   const db = context.database;
   const transact = <T>(run: () => T): T => {
     try {
-      return runSqliteImmediateTransactionSync(
-        db,
-        () => {
-          context.admit("transaction");
-          return run();
+      return runSqliteImmediateTransactionSync(db, run, {
+        withCommit(commit) {
+          context.admit("commit");
+          commit();
         },
-        {
-          withCommit(commit) {
-            context.admit("commit");
-            commit();
-          },
-        },
-      );
+      });
     } catch (error) {
       // A refused commit must not retain deadlines from its rolled-back transitions.
       invalidateStandingIntentLifecycle(db);
       throw error;
     }
   };
-  let schemaPrepared = false;
-  // First-use installation commits independently and consumes this request's grant pair.
-  withSqlitePostCommitPublications(db, () =>
-    ensureOpenClawAgentStandingIntentsSchema(db, (run) => {
-      const result = transact(run);
-      schemaPrepared = true;
-      return result;
-    }),
-  );
+  if (isPostgresSqlConnection(db)) {
+    const definition = standingIntentSearchSchema(db);
+    try {
+      admitStoreSearch(db, definition);
+    } catch (error) {
+      if (
+        !(error instanceof DatabaseSearchCapabilityUnavailableError) ||
+        !context.admitSearchExtensions
+      ) {
+        throw error;
+      }
+      context.admitSearchExtensions({ "memory.standing-intents": definition });
+    }
+  } else {
+    // Keep first-use installation durable if the following business transaction fails.
+    withSqlitePostCommitPublications(db, () =>
+      ensureOpenClawAgentStandingIntentsSchema(db, transact),
+    );
+  }
   return bindSqliteWorkerDatabase<StandingIntentWorkerOperations>(db, {
     execute(command) {
-      if (schemaPrepared) {
-        return { kind: "schema-prepared" };
-      }
       const result = <T>(value: T) => ({
-        kind: "result" as const,
         value,
         nextDueAt: getStandingIntentLifecycleDeadline(db),
       });

@@ -4,7 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  FaceTimeHelperActionError,
+  DIAL_BUNDLES,
   FaceTimeHelperAmbiguousError,
   FaceTimeHelperUnavailableError,
   type FaceTimeHelperPeer,
@@ -27,12 +27,8 @@ type HelperSocketServerParams = {
   onStale?: (bundleIdentifier: string, processId: number) => void;
 };
 
-const FACETIME_DIAL_HELPER_BUNDLES = new Set([
-  "com.apple.FaceTime",
-  "com.apple.FaceTime.FTConversationService",
-]);
 const FACETIME_HELPER_BUNDLES = new Set([
-  ...FACETIME_DIAL_HELPER_BUNDLES,
+  ...DIAL_BUNDLES,
   "com.apple.mobilephone",
   "com.apple.TelephonyUtilities",
 ]);
@@ -324,7 +320,7 @@ export class FaceTimeHelperSocketServer {
         pending.reject(
           payload.ambiguous === true
             ? new FaceTimeHelperAmbiguousError(payload.error, result)
-            : new FaceTimeHelperActionError(payload.error),
+            : new Error(payload.error),
         );
       } else {
         pending.resolve(result);
@@ -516,7 +512,7 @@ export class FaceTimeHelperSocketServer {
       ),
     });
     if (Buffer.byteLength(envelope) > MAX_FRAME_BYTES) {
-      throw new FaceTimeHelperActionError("FaceTime helper message exceeds the frame limit");
+      throw new Error("FaceTime helper message exceeds the frame limit");
     }
     session.outgoingSequence = sequence;
     socket.write(`${envelope}\r\n`);
@@ -526,7 +522,7 @@ export class FaceTimeHelperSocketServer {
     const socket = [...this.#sockets].find(
       (candidate) =>
         !candidate.destroyed &&
-        FACETIME_DIAL_HELPER_BUNDLES.has(this.#socketPeers.get(candidate)?.bundleIdentifier ?? ""),
+        DIAL_BUNDLES.has(this.#socketPeers.get(candidate)?.bundleIdentifier ?? ""),
     );
     if (!socket) {
       throw new FaceTimeHelperUnavailableError(

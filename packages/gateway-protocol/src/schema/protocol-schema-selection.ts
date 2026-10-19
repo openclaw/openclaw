@@ -59,6 +59,7 @@ const EXCLUDED_SCHEMA_EXPORTS = [
   "GatewayClientModeSchema",
   "GitHubPublicationBodySchema",
   "GitHubPublicationActionSchema",
+  "GitHubPublicationEditSchema",
   "GitHubPublicationPublisherSchema",
   "GitHubPublicationSelectionSchema",
   "GitHubPublicationTitleSchema",

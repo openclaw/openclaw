@@ -72,6 +72,13 @@ export const STATE_SCHEMA_MIGRATION_READ_TABLES: Record<StateMigrationKind, read
   "portable-identity-columns-v22": ["acp_sessions", ...STATE_CURSOR_TABLES_V22],
   "task-run-indexes-v24": [],
   "subagent-operator-recovery-v25": [],
+  "session-state-head-layout-v26": [],
+  "state-write-indexes-v27": [],
+  "github-publication-draft-v28": [
+    "github_publication_requests",
+    "github_personal_publication_requests",
+    "github_repository_publication_requests",
+  ],
   "predicate-columns-v21": [
     "meeting_transcript_sessions",
     "meeting_transcript_summaries",
@@ -446,6 +453,15 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   }
   if (userVersion < 25) {
     migrations.push({ kind: "subagent-operator-recovery-v25", path: pathname });
+  }
+  if (userVersion < 26 && tableExists(db, "session_state_heads")) {
+    migrations.push({ kind: "session-state-head-layout-v26", path: pathname });
+  }
+  if (userVersion < 27) {
+    migrations.push({ kind: "state-write-indexes-v27", path: pathname });
+  }
+  if (userVersion < 28) {
+    migrations.push({ kind: "github-publication-draft-v28", path: pathname });
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });

@@ -5,7 +5,6 @@ import {
   createSignal,
   createRoot,
   getOwner,
-  onCleanup,
   runWithOwner,
   Show,
   useContext,
@@ -16,7 +15,7 @@ import {
 } from "../../../components/markdown-dom-ref.ts";
 import type { MarkdownJson } from "../../../components/markdown-json.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
-import { toSanitizedJsonHtml } from "../../../components/markdown.ts";
+import { partitionMarkdownHtml, toSanitizedJsonHtml } from "../../../components/markdown.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MarkdownDomMedia, MarkdownMediaRoot } from "../../../lib/markdown-dom-reconciler.ts";
@@ -41,13 +40,17 @@ export function MessageJson(props: {
   options: MessageTextOptions;
   markdownOptions: MarkdownRenderOptions;
 }) {
-  const content = createMemo(() => toSanitizedJsonHtml(props.json, props.markdownOptions));
+  const content = createMemo(() => ({
+    messageKey: props.messageKey,
+    source: props.json.text,
+    parts: partitionMarkdownHtml(toSanitizedJsonHtml(props.json, props.markdownOptions)),
+  }));
   return (
     <TextDisclosure
       source={props.json.text}
       messageKey={props.messageKey}
       options={props.options}
-      parts={[content()]}
+      parts={content().parts}
     >
       <MarkdownText content={content()} />
     </TextDisclosure>
@@ -165,7 +168,6 @@ function DisclosureContent(props: {
 }) {
   const presented = useContext(ContentPresentation);
   let element!: HTMLDivElement;
-  let previous: ((element?: Element) => void) | undefined;
   const dependencies = createMemo(
     () => ({
       parts: props.parts,
@@ -182,12 +184,15 @@ function DisclosureContent(props: {
         before.parts.every((value, index) => value === next.parts[index]),
     },
   );
+  // The overflow observer measures the rendered markdown island.
   createEffect(dependencies, ({ expanded, forwarded, connected }) => {
-    previous?.(undefined);
-    previous = connected ? messageOverflowRef(expanded, forwarded) : undefined;
-    previous?.(element);
+    if (!connected) {
+      return undefined;
+    }
+    const overflow = messageOverflowRef(expanded, forwarded);
+    overflow(element);
+    return () => overflow(undefined);
   });
-  onCleanup(() => previous?.(undefined));
   return (
     <div
       class="chat-message-disclosure__content"

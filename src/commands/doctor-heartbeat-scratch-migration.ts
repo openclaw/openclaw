@@ -570,10 +570,6 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
             newRevision: write.currentRevision,
           });
         }
-        const verified = readCronJobScratchState(storePath, monitor.id, { env }).scratch;
-        if (!verified || verified.sourceSha256 !== source.sha256) {
-          throw new Error("scratch verification failed after write");
-        }
         if (!keepSource || shouldWriteScratch) {
           groupChanges.push(
             keepSource

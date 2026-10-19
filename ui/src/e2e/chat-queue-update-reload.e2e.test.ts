@@ -453,7 +453,7 @@ suite.define(() => {
       await reloaded;
       expect(reloads).toBe(1);
       await siblingPane.locator(composer).waitFor();
-      expect(await siblingPane.locator(composer).inputValue()).toBe(siblingDraft);
+      await expect.poll(() => siblingPane.locator(composer).inputValue()).toBe(siblingDraft);
     } catch (error) {
       await page.screenshot({
         path: `${suite.artifactDir}/private-draft-update-failure.png`,

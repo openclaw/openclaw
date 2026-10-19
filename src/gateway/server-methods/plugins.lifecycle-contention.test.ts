@@ -17,7 +17,7 @@ import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { createGatewayActiveWorkTracker } from "../server-reload-active-work.js";
-import { nextGatewayReloadGeneration } from "../server-reload-generation.js";
+import { beginGatewayReloadLifecycle } from "../server-reload-generation.js";
 import { pluginMutationHandlers } from "./plugins-mutations.js";
 
 it.each(["direct", "nested"] as const)(
@@ -88,7 +88,7 @@ it.each(["direct", "nested"] as const)(
       const logReload = { warn: vi.fn(), info: vi.fn() };
       const tracker = createGatewayActiveWorkTracker({
         params: { logReload },
-        myGeneration: nextGatewayReloadGeneration(),
+        reloadSignal: beginGatewayReloadLifecycle(),
       });
       const reload = withPluginLifecycleLease({ env: state.env }, () =>
         runWithGatewayIndependentRootWorkAdmission(async () => {

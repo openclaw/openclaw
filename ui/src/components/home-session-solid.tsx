@@ -1,8 +1,9 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { formatChatWorkContext } from "../../../src/chat/work-context.js";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { ChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import "../pages/chat/chat-pane.tsx";
@@ -52,10 +53,10 @@ defineSolidBridge<Props>(
     };
     const updateSelectionAvailability = () => setSelectionAvailable(Boolean(externalSelection()));
     onSettled(() => {
-      document.addEventListener("selectionchange", updateSelectionAvailability);
+      const stop = listen(document, "selectionchange", updateSelectionAvailability);
       updateSelectionAvailability();
+      return stop;
     });
-    onCleanup(() => document.removeEventListener("selectionchange", updateSelectionAvailability));
     const attachSelection = (event: MouseEvent) => {
       // Capture on the explicit action before focus clears the selection.
       event.preventDefault();

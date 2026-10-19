@@ -1,18 +1,11 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { note as clackNote } from "@clack/prompts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../../src/infra/runtime-worker-url.js";
 import { sanitizeForLog, stripAnsi, visibleWidth } from "./ansi.js";
-import {
-  noteToStream,
-  resolveNoteColumns,
-  resolveNoteOutputColumns,
-  wrapNoteMessage,
-} from "./note.js";
 import { tableStackEntrypoint } from "./table-runtime.test-support.js";
 import { renderTable } from "./table.js";
 
@@ -34,9 +27,9 @@ function expectIntroducersToStartCompleteSequences(
 }
 
 function renderValue(value: string, width = 24) {
+  mockProcessPlatform("darwin");
   return renderTable({
     width,
-    border: "unicode",
     columns: [
       { key: "K", header: "K", minWidth: 3 },
       { key: "V", header: "V", flex: true, minWidth: 10 },
@@ -74,15 +67,22 @@ const pluginListRows = [
 ];
 
 function renderPluginListTable(width: number): string {
+  mockProcessPlatform("darwin");
   return renderTable({
     width,
-    border: "unicode",
     columns: pluginListColumns,
     rows: pluginListRows,
   });
 }
 
 describe("renderTable", () => {
+  beforeEach(() => {
+    mockProcessPlatform("win32");
+    vi.stubEnv("WT_SESSION", "");
+    vi.stubEnv("TERM_PROGRAM", "");
+    vi.stubEnv("TERM", "vt100");
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
@@ -92,8 +92,7 @@ describe("renderTable", () => {
     "materializes executable tabs as table spacing in %s cells",
     (_label, value, expectedRow) => {
       const out = renderTable({
-        border: "ascii",
-        columns: [{ key: "V", header: "V", minWidth: 9, maxWidth: 9 }],
+        columns: [{ key: "V", header: "V", minWidth: 9 }],
         rows: [{ V: value }],
       });
 
@@ -107,8 +106,7 @@ describe("renderTable", () => {
     "keeps materialized tabs visible after %s CSI restarts",
     (_label, value, expectedRow) => {
       const out = renderTable({
-        border: "ascii",
-        columns: [{ key: "V", header: "V", minWidth: 9, maxWidth: 9 }],
+        columns: [{ key: "V", header: "V", minWidth: 9 }],
         rows: [{ V: value }],
       });
 
@@ -121,7 +119,6 @@ describe("renderTable", () => {
     "sizes multiline %s headers and cells by their widest line",
     (_label, separator, open, close) => {
       const out = renderTable({
-        border: "ascii",
         columns: [
           { key: "A", header: ["abc", "def"].join(separator) },
           { key: "B", header: "B" },
@@ -148,7 +145,6 @@ describe("renderTable", () => {
     const open = "\x1b]8;id=line\nmetadata;https://example.com/\x07";
     const close = "\x1b]8;;\x07";
     const out = renderTable({
-      border: "ascii",
       columns: [{ key: "V", header: "V" }],
       rows: [{ V: `${open}abc${close}` }],
     });
@@ -176,8 +172,11 @@ describe("renderTable", () => {
       if (shape === "soft-wrap suffix") {
         expect(rendered.softWrapRowsMatch).toBe(true);
       }
-      expect(rendered.header).toMatch(/^\| Key +\|$/u);
-      expect(rendered.lastLine).toBe(rendered.firstLine);
+      expect(rendered.header).toMatch(/^([│|]) Key +\1$/u);
+      expect([
+        ["+-----+", "+-----+"],
+        ["┌─────┐", "└─────┘"],
+      ]).toContainEqual([rendered.firstLine, rendered.lastLine]);
     },
   );
 
@@ -194,18 +193,6 @@ describe("renderTable", () => {
         visibleWidth(column.header) + 2,
       );
     }
-  });
-
-  it("stops flex growth at the cap when a fractional width rounds up", () => {
-    const out = renderTable({
-      width: 20,
-      border: "ascii",
-      padding: 0,
-      columns: [{ key: "V", header: "V", minWidth: 7.999999999999999, maxWidth: 9, flex: true }],
-      rows: [{ V: "x" }],
-    });
-
-    expect(out).toBe("+---------+\n|V        |\n+---------+\n|x        |\n+---------+\n");
   });
 
   it("keeps ANSI styling when a multiline cell wraps after an unstyled line", () => {
@@ -343,11 +330,10 @@ describe("renderTable", () => {
     "preserves blank %s lines without adding rows after wrapped spacing",
     (_label, separator, open, close) => {
       const out = renderTable({
-        border: "ascii",
         width: 15,
         columns: [
-          { key: "A", header: "A", minWidth: 6, maxWidth: 6 },
-          { key: "B", header: "B", minWidth: 6, maxWidth: 6 },
+          { key: "A", header: "A", minWidth: 6 },
+          { key: "B", header: "B", minWidth: 6 },
         ],
         rows: [
           {
@@ -394,9 +380,9 @@ describe("renderTable", () => {
   ] as const)(
     "respects explicit %s newlines in cell values",
     (_name, value, open, close, styledStart) => {
+      mockProcessPlatform("darwin");
       const out = renderTable({
         width: 48,
-        border: "unicode",
         columns: [
           { key: "A", header: "A", minWidth: 6 },
           { key: "B", header: "B", minWidth: 10, flex: true },
@@ -434,12 +420,12 @@ describe("renderTable", () => {
   it.each([[" /srv/openclaw-home ", path.resolve("/srv/openclaw-home"), "$OPENCLAW_HOME"]])(
     "shortens home paths in table cells for OPENCLAW_HOME=%j",
     (override, home, prefix) => {
+      mockProcessPlatform("darwin");
       vi.stubEnv("HOME", "/home/other");
       vi.stubEnv("USERPROFILE", "");
       vi.stubEnv("OPENCLAW_HOME", override);
 
       const out = renderTable({
-        border: "none",
         columns: [{ key: "Path", header: "Path" }],
         rows: [
           { Path: home },
@@ -449,7 +435,7 @@ describe("renderTable", () => {
         ],
       });
 
-      expect(out).toContain(`${prefix}\n`);
+      expect(out.split("\n")[3]?.split("│")[1]?.trim()).toBe(prefix);
       expect(out).toContain(`${prefix}/project`);
       expect(out).toContain(`${home}2/project`);
       expect(out).toContain(`Workspace: ${prefix}/project`);
@@ -460,10 +446,9 @@ describe("renderTable", () => {
   it("terminates with aligned borders when a flex column starts at its floor", () => {
     const out = renderTable({
       width: 10,
-      border: "ascii",
       columns: [
         { key: "A", header: "long header here" },
-        { key: "B", header: "", flex: true, maxWidth: 3 },
+        { key: "B", header: "", flex: true },
       ],
       rows: [{ A: "data", B: "📸" }],
     });
@@ -478,22 +463,20 @@ describe("renderTable", () => {
   it("wraps separately executed CSI tabs with the surrounding text", () => {
     const sequence = "\x1b[31\t\t\tm";
     const out = renderTable({
-      width: 7,
-      border: "ascii",
-      padding: 0,
-      columns: [{ key: "V", header: "V", minWidth: 5 }],
+      width: 9,
+      columns: [{ key: "V", header: "V", minWidth: 7 }],
       rows: [{ V: `a bbb${sequence}d\x1b[0m` }],
     });
 
     expect(out).toBe(
       [
-        "+-----+",
-        "|V    |",
-        "+-----+",
-        "|a    |",
-        "|bbb\x1b[\x18  |",
-        "|\x1b[31md\x1b[0m    |",
-        "+-----+",
+        "+-------+",
+        "| V     |",
+        "+-------+",
+        "| a     |",
+        "| bbb\x1b[\x18   |",
+        "| \x1b[31md\x1b[0m     |",
+        "+-------+",
         "",
       ].join("\n"),
     );
@@ -544,93 +527,5 @@ describe("renderTable", () => {
 
     expect(out).toContain("┌");
     expect(out).not.toContain("+");
-  });
-});
-
-describe("wrapNoteMessage", () => {
-  it.each([["Unicode paragraph separator", "\u2029"]])(
-    "preserves note text across %s line endings",
-    (_label, separator) => {
-      const input = ["First paragraph.", "", "- Second paragraph."].join(separator);
-      const writes: string[] = [];
-      const output = {
-        columns: 80,
-        write(chunk: string) {
-          writes.push(chunk);
-          return true;
-        },
-      } as unknown as NodeJS.WriteStream;
-
-      noteToStream(input, "Note", output);
-
-      const rendered = stripAnsi(writes.join(""));
-      expect(rendered).toContain("First paragraph.");
-      expect(rendered).toContain("- Second paragraph.");
-      expect(wrapNoteMessage(input, { columns: 80 })).toBe(
-        "First paragraph.\n\n- Second paragraph.",
-      );
-    },
-  );
-
-  it("preserves long file-like underscore tokens for copy safety", () => {
-    const input = "administrators_authorized_keys_with_extra_suffix";
-    const wrapped = wrapNoteMessage(input, { maxWidth: 14, columns: 80 });
-
-    expect(wrapped).toBe(input);
-  });
-
-  it("clamps bogus TTY columns before clack wraps note text", () => {
-    expect(resolveNoteColumns(undefined)).toBe(80);
-    expect(resolveNoteColumns(0)).toBe(80);
-    expect(resolveNoteColumns(1)).toBe(80);
-    expect(resolveNoteColumns(79)).toBe(80);
-    expect(resolveNoteColumns(120)).toBe(120);
-  });
-
-  it("widens note output columns so clack does not re-wrap copy-sensitive lines", () => {
-    const wrapped = wrapNoteMessage(
-      [
-        "- Found 1 session lock file.",
-        "- ~/.openclaw/agents/main/sessions/9c2acae5-841f-4aea-936b-fdb513b60202.jsonl.lock pid=86519 (alive) age=2m47s stale=no",
-      ].join("\n"),
-      { columns: 80 },
-    );
-    const writes: string[] = [];
-    const output = {
-      columns: resolveNoteOutputColumns(wrapped, 80),
-      write(chunk: string) {
-        writes.push(chunk);
-        return true;
-      },
-    } as unknown as NodeJS.WriteStream;
-
-    clackNote(wrapped, "Session locks", { output });
-
-    const rendered = writes.join("");
-    expect(rendered).toContain(".jsonl.lock");
-    expect(rendered).not.toContain(".js\n");
-    expect(rendered).toContain(
-      "- ~/.openclaw/agents/main/sessions/9c2acae5-841f-4aea-936b-fdb513b60202.jsonl.lock",
-    );
-  });
-
-  it("coerces nullish and non-string note messages before wrapping", () => {
-    expect(wrapNoteMessage(undefined, { maxWidth: 20, columns: 80 })).toBe("");
-    expect(wrapNoteMessage(null, { maxWidth: 20, columns: 80 })).toBe("");
-    expect(wrapNoteMessage(12345, { maxWidth: 20, columns: 80 })).toBe("12345");
-    expect(wrapNoteMessage(new Error("boom"), { maxWidth: 20, columns: 80 })).toBe("Error: boom");
-    expect(wrapNoteMessage({ message: "boom" }, { maxWidth: 20, columns: 80 })).toBe("");
-  });
-
-  it("keeps wrapped lines within the visible-column budget for wide (CJK) words", () => {
-    // A long CJK run with no separators reaches word-fragment wrapping; each fullwidth char is 2 columns,
-    // so splitting by code-point count would emit lines up to 2x the budget.
-    const input = "東京特許許可局長今日休暇許可局長今日休暇東京特許";
-    const lines = wrapNoteMessage(input, { maxWidth: 20, columns: 80 }).split("\n");
-
-    for (const line of lines) {
-      expect(visibleWidth(line)).toBeLessThanOrEqual(20);
-    }
-    expect(lines.join("")).toBe(input);
   });
 });

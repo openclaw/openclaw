@@ -489,7 +489,6 @@ describe("pending tool media carry", () => {
       };
       carry.capture(voice);
       carry.capture({ toolMediaUrls: ["https://example.test/image.png"] });
-      voice.toolMediaUrls.push("/tmp/later.opus");
       const params = {
         payloads: [
           { text: selectImage ? "Selected ![image](https://example.test/image.png)" : "Done" },

@@ -1,4 +1,3 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, onCleanup } from "solid-js";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
@@ -25,10 +24,11 @@ export type SidebarAgentCardProps = {
   onToggleMenu?: (trigger: HTMLElement) => void;
   onMenuPointerMove?: (trigger: HTMLElement, event: PointerEvent) => void;
   onMenuPointerLeave?: () => void;
-  onContextMenu?: SolidJSX.EventHandler<HTMLElement, MouseEvent>;
+  onContextMenu?: (trigger: HTMLElement, event: MouseEvent) => void;
 };
 
 export function SidebarAgentCard(props: SidebarAgentCardProps) {
+  let menuTrigger: HTMLButtonElement | undefined;
   const avatarLoader = createIdentityAvatars();
   onCleanup(avatarLoader.connect());
   const avatarSource = projectOwner(avatarLoader, (owner) => owner);
@@ -48,7 +48,7 @@ export function SidebarAgentCard(props: SidebarAgentCardProps) {
   return (
     <openclaw-sidebar-agent-card
       style={{ display: "contents" }}
-      onContextMenu={(event) => props.onContextMenu?.(event)}
+      onContextMenu={(event) => props.onContextMenu?.(menuTrigger ?? event.currentTarget, event)}
     >
       <div
         class={[
@@ -57,6 +57,7 @@ export function SidebarAgentCard(props: SidebarAgentCardProps) {
         ]}
       >
         <button
+          ref={(element) => (menuTrigger = element)}
           type="button"
           class="sidebar-agent-card__main"
           aria-haspopup="menu"

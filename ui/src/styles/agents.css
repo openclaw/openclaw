@@ -55,7 +55,7 @@
 
 .agent-identity-editor {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 16px;
   width: 100%;
 }
@@ -67,18 +67,32 @@
   min-width: 0;
 }
 
-.agent-identity-editor__actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+.oc-overlay.agent-identity-editor__popover {
+  width: min(480px, calc(100dvw - 16px));
+  max-width: min(480px, calc(100dvw - 16px));
+  --oc-overlay-max-height: calc(100dvh - 16px);
+  --oc-overlay-distance: 12px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: var(--shadow-lg);
+  border-radius: 24px;
+}
+
+.agent-identity-editor__popover .avatar-picker {
+  width: 100%;
+}
+
+.agent-identity-editor__popover .avatar-picker__preview {
+  height: 112px;
 }
 
 .agent-identity-editor__avatar {
+  position: relative;
   flex: 0 0 auto;
   width: 56px;
   height: 56px;
+  padding: 0;
   border-radius: 50%;
   overflow: hidden;
   display: flex;
@@ -87,6 +101,46 @@
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   font-size: 24px;
+}
+
+.agent-identity-editor__avatar-edit {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.agent-identity-editor__avatar-edit svg {
+  width: 20px;
+  height: 20px;
+}
+
+.agent-identity-editor__avatar:disabled .agent-identity-editor__avatar-edit {
+  display: none;
+}
+
+.agent-identity-editor__avatar:is(button):is(:hover, :focus-visible, [aria-expanded="true"])
+  .agent-identity-editor__avatar-edit {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .agent-identity-editor__avatar-edit {
+    inset: auto 0 0 auto;
+    width: 25px;
+    height: 25px;
+    border-radius: 50%;
+    opacity: 1;
+  }
+
+  .agent-identity-editor__avatar-edit svg {
+    width: 15px;
+    height: 15px;
+  }
 }
 
 .agent-identity-editor__avatar img {

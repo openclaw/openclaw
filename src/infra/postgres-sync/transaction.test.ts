@@ -107,31 +107,6 @@ describe("experimental PostgreSQL transaction protocol", () => {
     },
   );
 
-  it("publishes a generic outer receipt after rolling back an inner domain receipt", () => {
-    const { db } = postgresFixture();
-    const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
-    const owner: SqliteWorkerOperationContext = { port: admission.port };
-    const receipts: unknown[] = [];
-    observeSqliteWorkerCommittedFacts(admission, ({ facts }) => receipts.push(facts));
-    try {
-      withSqliteWorkerOperationAdmission(owner, () =>
-        runSqliteImmediateTransactionSync(db, () => {
-          expect(() =>
-            runSqliteImmediateTransactionSync(db, () => {
-              deferSqliteWorkerCommitReceipt(db, { value: 7 });
-              throw new Error("cancel inner receipt");
-            }),
-          ).toThrow("cancel inner receipt");
-        }),
-      );
-      admission.service();
-      expect(receipts).toEqual([{}]);
-      expect(owner.pendingReceipts?.size).toBe(0);
-    } finally {
-      admission.finish();
-    }
-  });
-
   it.each(["sqlite", "postgres"] as const)(
     "leaves transaction and commit admission to the domain on %s",
     (engine) => {

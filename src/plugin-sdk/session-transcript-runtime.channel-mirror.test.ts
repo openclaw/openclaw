@@ -27,7 +27,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  appendAssistantMirrorMessageByIdentity,
+  appendAssistantMirrorMessageByIdentity as appendMirror,
   appendSessionTranscriptMessageByIdentity,
   readSessionTranscriptEvents,
   readVisibleSessionTranscriptMessageEntries,
@@ -36,6 +36,8 @@ import {
 } from "./session-transcript-runtime.js";
 
 describe("channel-final transcript mirrors", () => {
+  const sourceId = "openclawDeliveryMirror.sourceAssistantMessageId";
+  const chartContent = [{ type: "text", text: "Chart\nchart.png" }];
   let state: OpenClawTestState;
   let scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string };
 
@@ -76,41 +78,55 @@ describe("channel-final transcript mirrors", () => {
       scope.sessionId,
     );
   const entries = () => readVisibleSessionTranscriptMessageEntries(scope);
+  const answer = (
+    eventId: string,
+    content: unknown = "The train leaves at noon.",
+    runId?: string,
+    fields: Record<string, unknown> = {},
+  ) =>
+    append(
+      { role: "assistant", content, ...(runId ? { __openclaw: { runId } } : {}), ...fields },
+      eventId,
+    );
+  const mirrorEntries = async () => (await entries()).filter((entry) => entry.idempotencyKey);
+  const mediaDelivery = (id: string) => ({
+    ...delivery(id, "Chart"),
+    mediaUrls: ["https://example.com/one/chart.png"],
+  });
+  const expectReplay = async (...requests: SessionTranscriptAssistantMirrorAppendParams[]) => {
+    const before = rows();
+    for (const request of requests) {
+      await appendMirror(request);
+    }
+    expect(rows()).toEqual(before);
+  };
+  const expectSources = (mirrors: Awaited<ReturnType<typeof entries>>, sourceIds: string[]) =>
+    expect(mirrors).toMatchObject(
+      sourceIds.map((sourceAssistantMessageId) => ({
+        message: { openclawDeliveryMirror: { sourceAssistantMessageId } },
+      })),
+    );
 
-  it.each([true])("replays shipped SDK mirror bytes with media=%s", async (media) => {
-    const request = {
-      ...delivery("shipped-sdk-mirror", "Chart"),
-      ...(media ? { mediaUrls: ["https://example.com/one/chart.png"] } : {}),
-    };
+  it("replays shipped SDK mirror bytes with media", async () => {
+    const request = mediaDelivery("shipped-sdk-mirror");
+    const zeroTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     // Literal v2026.10.2 SDK representation, independent of the current producer.
-    const original = await append({
-      role: "assistant",
-      content: [{ type: "text", text: media ? "Chart\nchart.png" : "Chart" }],
+    const original = await answer("shipped-sdk-message", chartContent, undefined, {
       api: "openai-responses",
       provider: "openclaw",
       model: "delivery-mirror",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: { ...zeroTokens, totalTokens: 0, cost: { ...zeroTokens, total: 0 } },
       stopReason: "stop",
       timestamp: 1_700_000_000_000,
       idempotencyKey: request.idempotencyKey,
       openclawDeliveryMirror: request.deliveryMirror,
     });
     const before = rows();
-    await expect(appendAssistantMirrorMessageByIdentity(request)).resolves.toEqual({
-      ok: true,
-      messageId: original.messageId,
-    });
+    expect(await appendMirror(request)).toEqual({ ok: true, messageId: original.messageId });
     expect(rows()).toEqual(before);
-    await expect(
-      appendAssistantMirrorMessageByIdentity({ ...request, text: "Different chart" }),
-    ).rejects.toThrow("conflicts with the admitted message");
+    await expect(appendMirror({ ...request, text: "Different chart" })).rejects.toThrow(
+      "conflicts with the admitted message",
+    );
     expect(rows()).toEqual(before);
   });
 
@@ -121,40 +137,29 @@ describe("channel-final transcript mirrors", () => {
     ];
     const results = [];
     for (const mediaUrl of [...mediaUrls, mediaUrls[1]]) {
-      results.push(
-        await appendAssistantMirrorMessageByIdentity({
-          ...scope,
-          text: "Chart",
-          mediaUrls: [mediaUrl],
-          updateMode: "none",
-        }),
-      );
+      const request = { ...scope, text: "Chart", mediaUrls: [mediaUrl] };
+      results.push(await appendMirror({ ...request, updateMode: "none" }));
     }
-    expect(await readSessionTranscriptEvents(scope)).toEqual([
-      expect.objectContaining({ type: "session", id: scope.sessionId }),
-      ...mediaUrls.map((mediaUrl) =>
-        expect.objectContaining({
-          type: "message",
-          message: expect.objectContaining({
-            content: [{ type: "text", text: "Chart\nchart.png" }],
-            openclawDelivery: { mediaUrls: [mediaUrl] },
-          }),
+    expect(await readSessionTranscriptEvents(scope)).toMatchObject([
+      { type: "session", id: scope.sessionId },
+      ...mediaUrls.map((mediaUrl) => ({
+        type: "message",
+        message: expect.objectContaining({
+          content: chartContent,
+          openclawDelivery: { mediaUrls: [mediaUrl] },
         }),
-      ),
+      })),
     ]);
     expect(results[2]).toEqual(results[1]);
   });
 
   it("replays keyed media exactly and rejects a different same-basename attachment", async () => {
-    const request = {
-      ...delivery("media-delivery", "Chart"),
-      mediaUrls: ["https://example.com/one/chart.png"],
-    };
-    const first = await appendAssistantMirrorMessageByIdentity(request);
-    await expect(appendAssistantMirrorMessageByIdentity(request)).resolves.toEqual(first);
+    const request = mediaDelivery("media-delivery");
+    const first = await appendMirror(request);
+    await expect(appendMirror(request)).resolves.toEqual(first);
     const before = await readSessionTranscriptEvents(scope);
     await expect(
-      appendAssistantMirrorMessageByIdentity({
+      appendMirror({
         ...request,
         mediaUrls: ["https://example.com/two/chart.png"],
       }),
@@ -162,239 +167,121 @@ describe("channel-final transcript mirrors", () => {
     expect(await readSessionTranscriptEvents(scope)).toEqual(before);
   });
 
-  it.each(["source run"])(
-    "correlates authored media captions through %s source lookup",
-    async (lookup) => {
-      const mediaUrls = ["https://example.com/one/chart.png"];
-      await append(
-        {
-          role: "assistant",
-          content: "Chart",
-          openclawDelivery: { mediaUrls },
-          __openclaw: { runId: "media-source-run" },
-        },
-        "media-source-answer",
-      );
-      if (lookup === "source run") {
-        await append(
-          { role: "assistant", content: "Chart", __openclaw: { runId: "media-source-run" } },
-          "plain-source-answer",
-        );
-      }
-      const request = {
-        ...delivery("media-source-delivery", "Chart"),
-        mediaUrls,
-        ...(lookup === "source run" ? { sourceRunId: "media-source-run" } : {}),
-      };
-      await appendAssistantMirrorMessageByIdentity(request);
-      const plainRequest = {
-        ...delivery("plain-source-delivery", "Chart"),
-        sourceRunId: "media-source-run",
-      };
-      if (lookup === "source run") {
-        await appendAssistantMirrorMessageByIdentity(plainRequest);
-      }
-      const mirrors = (await entries()).filter((entry) => entry.idempotencyKey);
-      expect(mirrors[0]?.message).toMatchObject({
-        content: [{ type: "text", text: "Chart\nchart.png" }],
-      });
-      const sourceIds = [
-        "media-source-answer",
-        ...(lookup === "source run" ? ["plain-source-answer"] : []),
-      ];
-      expect(mirrors).toMatchObject(
-        sourceIds.map((sourceAssistantMessageId) => ({
-          message: { openclawDeliveryMirror: { sourceAssistantMessageId } },
-        })),
-      );
-      const beforeReplay = rows();
-      await appendAssistantMirrorMessageByIdentity(request);
-      if (lookup === "source run") {
-        await appendAssistantMirrorMessageByIdentity(plainRequest);
-      }
-      expect(rows()).toEqual(beforeReplay);
-    },
-  );
-
-  it.each([true])(
-    "correlates queued answers from the source run (identical text: %s)",
-    async (identical) => {
-      const firstText = "The train leaves at noon.";
-      const secondText = identical ? firstText : "The next train leaves at two.";
-      await append(
-        { role: "assistant", content: firstText, __openclaw: { runId: "queued-run" } },
-        "first-answer",
-      );
-      await append({ role: "user", content: "And the next train?" });
-      await append(
-        { role: "assistant", content: secondText, __openclaw: { runId: "queued-run" } },
-        "second-answer",
-      );
-      // Delivery can settle after another run has already appended its answer.
-      await append(
-        { role: "assistant", content: firstText, __openclaw: { runId: "later-run" } },
-        "later-answer",
-      );
-      const facts = await withSessionTranscriptWrite(scope, (writer) =>
-        writer.readMessageFacts({ idempotencyKeys: [], sourceRunId: "queued-run" }),
-      );
-      expect(facts.sourceEvents).toMatchObject([{ id: "first-answer" }, { id: "second-answer" }]);
-      const first = { ...delivery("first-delivery", firstText), sourceRunId: "queued-run" };
-      const second = { ...delivery("second-delivery", secondText), sourceRunId: "queued-run" };
-      await appendAssistantMirrorMessageByIdentity(first);
-      await appendAssistantMirrorMessageByIdentity(second);
-
-      expect((await entries()).filter((entry) => entry.idempotencyKey)).toMatchObject([
-        { message: { openclawDeliveryMirror: { sourceAssistantMessageId: "first-answer" } } },
-        { message: { openclawDeliveryMirror: { sourceAssistantMessageId: "second-answer" } } },
-      ]);
-      const beforeReplay = rows();
-      await appendAssistantMirrorMessageByIdentity(first);
-      await appendAssistantMirrorMessageByIdentity(second);
-      expect(rows()).toEqual(beforeReplay);
-    },
-  );
-
-  it("does not correlate another run's matching text when the source run does not match", async () => {
-    await append(
-      {
-        role: "assistant",
-        content: "The train leaves at noon.",
-        __openclaw: { runId: "other-run" },
-      },
-      "other-answer",
-    );
-    const request = {
-      ...delivery("unmatched-run-delivery"),
-      sourceRunId: "source-run",
-    };
-    await appendAssistantMirrorMessageByIdentity(request);
-    expect((await entries()).at(-1)?.message).not.toHaveProperty(
-      "openclawDeliveryMirror.sourceAssistantMessageId",
-    );
+  it("correlates authored media captions through source run lookup", async () => {
+    const request = { ...mediaDelivery("media-source-delivery"), sourceRunId: "media-source-run" };
+    const { mediaUrls, sourceRunId } = request;
+    await answer("media-source-answer", "Chart", sourceRunId, { openclawDelivery: { mediaUrls } });
+    await answer("plain-source-answer", "Chart", sourceRunId);
+    await appendMirror(request);
+    const plainRequest = { ...delivery("plain-source-delivery", "Chart"), sourceRunId };
+    await appendMirror(plainRequest);
+    const mirrors = await mirrorEntries();
+    expect(mirrors[0]?.message).toMatchObject({ content: chartContent });
+    expectSources(mirrors, ["media-source-answer", "plain-source-answer"]);
+    await expectReplay(request, plainRequest);
   });
 
-  it.each([
-    {
-      name: "another delivery mirror",
-      message: {
-        role: "assistant",
+  it("correlates identical queued answers from the source run", async () => {
+    const firstText = "The train leaves at noon.";
+    await answer("first-answer", firstText, "queued-run");
+    await append({ role: "user", content: "And the next train?" });
+    await answer("second-answer", firstText, "queued-run");
+    // Delivery can settle after another run has already appended its answer.
+    await answer("later-answer", firstText, "later-run");
+    const facts = await withSessionTranscriptWrite(scope, (writer) =>
+      writer.readMessageFacts({ idempotencyKeys: [], sourceRunId: "queued-run" }),
+    );
+    expect(facts.sourceEvents).toMatchObject([{ id: "first-answer" }, { id: "second-answer" }]);
+    const first = { ...delivery("first-delivery", firstText), sourceRunId: "queued-run" };
+    const second = { ...delivery("second-delivery", firstText), sourceRunId: "queued-run" };
+    await appendMirror(first);
+    await appendMirror(second);
+
+    expectSources(await mirrorEntries(), ["first-answer", "second-answer"]);
+    await expectReplay(first, second);
+  });
+
+  it.each(["another run", "preceding mirror"])("does not correlate %s", async (source) => {
+    await answer("older-answer", "The train leaves at noon.", "other-run");
+    if (source === "preceding mirror") {
+      await answer("preceding-mirror", undefined, undefined, {
         provider: "openclaw",
         model: "delivery-mirror",
-        content: "The train leaves at noon.",
-      },
-    },
-  ])("leaves the mirror uncorrelated after $name", async ({ message: precedingMessage }) => {
-    await append({ role: "assistant", content: "The train leaves at noon." }, "older-answer");
-    await append(precedingMessage);
-
-    await appendAssistantMirrorMessageByIdentity(delivery("unmatched-delivery"));
-
+      });
+    }
+    await appendMirror({
+      ...delivery("unmatched-delivery"),
+      ...(source === "another run" ? { sourceRunId: "source-run" } : {}),
+    });
     const message = (await entries()).at(-1)?.message;
     expect(message).toMatchObject({
       model: "delivery-mirror",
       idempotencyKey: "unmatched-delivery",
     });
-    expect(message).not.toHaveProperty("openclawDeliveryMirror.sourceAssistantMessageId");
+    expect(message).not.toHaveProperty(sourceId);
   });
 
   it("replays the stored mirror unchanged immediately and after a later turn", async () => {
-    await append({ role: "assistant", content: "The train leaves at noon." }, "first-answer");
+    await answer("first-answer");
     const request = delivery("stable-delivery");
-    const first = await appendAssistantMirrorMessageByIdentity(request);
+    const first = await appendMirror(request);
     const initialRows = rows();
 
-    await expect(appendAssistantMirrorMessageByIdentity(request)).resolves.toEqual(first);
+    await expect(appendMirror(request)).resolves.toEqual(first);
     expect(rows()).toEqual(initialRows);
     await append({ role: "user", content: "And the next train?" });
     await append({ role: "assistant", content: "The next train leaves at two." });
     const laterRows = rows();
-    await expect(appendAssistantMirrorMessageByIdentity(request)).resolves.toEqual(first);
+    await expect(appendMirror(request)).resolves.toEqual(first);
     expect(rows()).toEqual(laterRows);
   });
 
-  it("correlates the final answer without trusting a caller-supplied source identity", async () => {
-    await append(
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "Checking the timetable." },
-          {
-            type: "text",
-            text: "I will check the departure.",
-            textSignature: '{"v":1,"id":"commentary","phase":"commentary"}',
-          },
-          {
-            type: "text",
-            text: "The train leaves at noon.",
-            textSignature: '{"v":1,"id":"answer","phase":"final_answer"}',
-          },
-        ],
-      },
-      "real-answer",
-    );
-    const request = {
-      ...delivery("forged-delivery"),
-      deliveryMirror: {
-        kind: "channel-final",
-        sourceMessageId: "forged-delivery",
-        sourceAssistantMessageId: "caller-forged-answer",
-      },
-    } satisfies SessionTranscriptAssistantMirrorAppendParams & {
-      deliveryMirror: {
-        kind: "channel-final";
-        sourceMessageId: string;
-        sourceAssistantMessageId: string;
-      };
+  it.each([false, true])("rejects forged source IDs (suppressed=%s)", async (suppressed) => {
+    const signedText = (id: string, phase: string, text: string) => ({
+      type: "text",
+      text,
+      textSignature: JSON.stringify({ v: 1, id, phase }),
+    });
+    await answer("real-answer", [
+      { type: "thinking", thinking: "Checking the timetable." },
+      signedText("commentary", "commentary", "I will check the departure."),
+      signedText("answer", "final_answer", "The train leaves at noon."),
+    ]);
+    const request = delivery("forged-delivery");
+    const marker = suppressed
+      ? {
+          ...request.deliveryMirror,
+          kind: "channel-final-suppressed" as const,
+          reason: "stale-foreground" as const,
+        }
+      : request.deliveryMirror;
+    const forgedRequest = {
+      ...request,
+      deliveryMirror: { ...marker, sourceAssistantMessageId: "caller-forged-answer" },
     };
-
-    await appendAssistantMirrorMessageByIdentity(request);
+    await appendMirror(forgedRequest);
 
     const message = (await entries()).at(-1)?.message;
-    expect(message).toMatchObject({
-      model: "delivery-mirror",
-      idempotencyKey: "forged-delivery",
-      content: [{ type: "text", text: "The train leaves at noon." }],
-    });
-    expect(message).not.toHaveProperty(
-      "openclawDeliveryMirror.sourceAssistantMessageId",
-      "caller-forged-answer",
-    );
-    expect(message).toHaveProperty(
-      "openclawDeliveryMirror.sourceAssistantMessageId",
-      "real-answer",
-    );
+    expect(message).toMatchObject({ model: "delivery-mirror", idempotencyKey: "forged-delivery" });
+    if (suppressed) {
+      expect(message).toMatchObject({
+        openclawDeliveryMirror: { kind: "channel-final-suppressed", reason: "stale-foreground" },
+      });
+      expect(message).not.toHaveProperty(sourceId);
+    } else {
+      expect(message).toMatchObject({
+        content: [{ type: "text", text: "The train leaves at noon." }],
+        openclawDeliveryMirror: { sourceAssistantMessageId: "real-answer" },
+      });
+    }
     expect(await entries()).toHaveLength(2);
-  });
-
-  it("strips source correlation from a caller-supplied suppressed-final marker", async () => {
-    const request = {
-      ...delivery("suppressed-delivery"),
-      deliveryMirror: {
-        kind: "channel-final-suppressed",
-        reason: "stale-foreground",
-        sourceMessageId: "suppressed-delivery",
-        sourceAssistantMessageId: "caller-forged-answer",
-      },
-    } satisfies SessionTranscriptAssistantMirrorAppendParams & {
-      deliveryMirror: { kind: "channel-final-suppressed"; sourceAssistantMessageId: string };
-    };
-
-    await appendAssistantMirrorMessageByIdentity(request);
-
-    const message = (await entries()).at(-1)?.message;
-    expect(message).toMatchObject({
-      idempotencyKey: "suppressed-delivery",
-      openclawDeliveryMirror: { kind: "channel-final-suppressed", reason: "stale-foreground" },
-    });
-    expect(message).not.toHaveProperty("openclawDeliveryMirror.sourceAssistantMessageId");
   });
 
   it.each(["entry cleanup", "latest-message refusal"] as const)(
     "correlates only the selected active branch without a writer wait during %s",
     async (phase) => {
-      await append({ role: "assistant", content: "The train leaves at noon." }, "active-answer");
-      await append({ role: "assistant", content: "The train leaves at two." }, "inactive-answer");
+      await answer("active-answer");
+      await answer("inactive-answer", "The train leaves at two.");
       await appendTranscriptEvent(scope, {
         type: "leaf",
         id: "select-active-answer",
@@ -405,12 +292,11 @@ describe("channel-final transcript mirrors", () => {
       const database = openOpenClawAgentDatabase(
         toDatabaseOptions(resolveSqliteTranscriptReadScope(scope)),
       );
-      const options = { agentId: database.agentId, path: database.path };
       const retirementEntered = createDeferredCore();
       const releaseRetirement = createDeferredCore();
       let following: Promise<void> | undefined;
       const waitForWriter = () => {
-        following ??= runOpenClawAgentWriteAdmission(options, () => {});
+        following ??= runOpenClawAgentWriteAdmission(database, () => {});
         retirementEntered.resolve();
         return Promise.race([following, releaseRetirement.promise]);
       };
@@ -445,7 +331,7 @@ describe("channel-final transcript mirrors", () => {
               });
             })
           : [];
-      const appending = appendAssistantMirrorMessageByIdentity(delivery("branch-delivery"));
+      const appending = appendMirror(delivery("branch-delivery"));
       try {
         await expect(
           Promise.race([
@@ -459,16 +345,10 @@ describe("channel-final transcript mirrors", () => {
       } finally {
         releaseRetirement.resolve();
         await Promise.allSettled([appending, following]);
-        cleanup.mockRestore();
-        for (const read of reads) {
-          read.mockRestore();
-        }
+        [cleanup, ...reads].forEach((mock) => mock.mockRestore());
       }
 
-      expect((await entries()).at(-1)?.message).toHaveProperty(
-        "openclawDeliveryMirror.sourceAssistantMessageId",
-        "active-answer",
-      );
+      expect((await entries()).at(-1)?.message).toHaveProperty(sourceId, "active-answer");
     },
   );
 });

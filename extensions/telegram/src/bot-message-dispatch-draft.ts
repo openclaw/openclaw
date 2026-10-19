@@ -129,7 +129,6 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
           successfulSendThread: params.context.threadSpec,
         });
       },
-      log: logVerbose,
       // Draft delivery failures must stay operator-visible: verbose-only
       // logging hid preview send/edit/cleanup errors, so a dead progress
       // stream looked like the bot silently ignoring the user.

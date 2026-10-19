@@ -59,6 +59,7 @@ function setup(respond: (method: string, params?: unknown) => Promise<unknown>) 
     controller.sync({
       client,
       connected: true,
+      permissionsReady: overrides.connected ?? true,
       clientRevision: 1,
       target: { kind: "personal", profileId: "profile-a" },
       statusReadable: true,

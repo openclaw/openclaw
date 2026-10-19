@@ -1,5 +1,5 @@
 // Render contract between the transcript projection and the per-session
-// virtualizer host owned by ChatTranscriptController.
+// virtualizer host owned by the chat transcript owner.
 import type { JSX } from "@solidjs/web";
 import type { Virtualizer } from "@tanstack/virtual-core";
 import type { ApplicationContext } from "../../../app/context.ts";
@@ -33,7 +33,7 @@ export type TranscriptCallbacks = {
 };
 
 export const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
-export const CHAT_TRANSCRIPT_OVERSCAN = 6;
+export const CHAT_TRANSCRIPT_OVERSCAN = 2;
 // Initial virtual rows can correct their estimates for several frames. Observe
 // the range for ~200ms before accepting a saved offset that remains unreachable.
 export const CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES = 12;

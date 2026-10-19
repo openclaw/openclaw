@@ -6,17 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bindTestChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
-import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
-import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import {
   createChannelAdmissionAudit,
   consumeChannelAdmissionEvidence,
   readChannelContextAdmissionEvidence,
 } from "../message-access/admission-evidence.js";
-import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
 import { recordOutboundMessageIdentity } from "../message/outbound-echo.js";
 import {
-  hasVisibleChannelTurnDispatchFromReceipt,
+  hasVisibleChannelTurnDispatch,
   resolveChannelTurnDispatchCounts,
 } from "./dispatch-result.js";
 import { runPreparedChannelTurn } from "./execution.js";
@@ -27,6 +24,7 @@ import {
   expectDispatched,
 } from "./run-channel-turn.delivery.test-helpers.js";
 import { runChannelTurn } from "./run-channel-turn.js";
+import * as fixture from "./turn-state.test-support.js";
 import type {
   ChannelTurnHistoryFinalizeOptions,
   ChannelTurnPlan,
@@ -37,36 +35,23 @@ import type {
 const {
   recordInboundSessionCore,
   dispatchReplyWithRoutedChannelDispatcherCore,
-  emitMessageSent,
-  getGlobalHookRunner,
-  createMessageSentEmitter,
   readRecentUserAssistantTextForSession,
 } = channelTurnMocks;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let storePath: string;
 
 function pendingHistory() {
-  const historyMap = new Map<string, HistoryEntry[]>([
-    ["room", [{ sender: "Alice", body: "earlier message" }]],
-  ]);
   return {
     isGroup: true,
     historyKey: "room",
-    historyMap,
+    historyMap: new Map([["room", [{ sender: "Alice", body: "earlier message" }]]]),
     limit: 50,
   } satisfies ChannelTurnHistoryFinalizeOptions;
 }
 function prepared<T extends Partial<PreparedChannelTurn>>(overrides: T) {
   return {
-    channel: "test",
-    routeSessionKey: "agent:main:test:peer",
-    storePath,
-    ctxPayload: createCtx(),
-    recordInboundSession: createRecordInboundSession(),
-    runDispatch: vi.fn(async () => ({
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-    })),
+    ...fixture.turnContext(storePath),
+    runDispatch: vi.fn(async () => fixture.finalDispatch()),
     ...overrides,
   };
 }
@@ -88,24 +73,12 @@ const ingest = () => ({ id: "msg-1", rawText: "hello" });
 describe("channel turn finalize", () => {
   beforeEach(() => {
     storePath = path.join(tempDirs.make("openclaw-channel-turn-finalize-"), "sessions.json");
-    vi.clearAllMocks();
+    fixture.resetTurnState();
     recordInboundSessionCore.mockResolvedValue(undefined);
     dispatchReplyWithRoutedChannelDispatcherCore.mockImplementation(createDispatch());
-    outboundMessageIdentities.clear();
-    resetDiagnosticEventsForTest();
-    resetLogger();
-    setLoggerOverride({ level: "info" });
-    createMessageSentEmitter.mockImplementation(() => ({
-      emitMessageSent,
-      hasMessageSentHooks: true,
-    }));
-    getGlobalHookRunner.mockReturnValue(null);
     readRecentUserAssistantTextForSession.mockResolvedValue([]);
   });
-  afterEach(() => {
-    setLoggerOverride(null);
-    resetLogger();
-  });
+  afterEach(fixture.resetTurnLogger);
 
   it("drops repeated bot-pair turns before recording and releases prepared resources", async () => {
     const history = pendingHistory();
@@ -157,26 +130,24 @@ describe("channel turn finalize", () => {
     });
     const result = await run({
       ingest,
-      resolveTurn: () => ({
-        cfg: {},
-        channel: "discord",
-        accountId: "default",
-        agentId: "main",
-        storePath,
-        routeSessionKey: "agent:main:discord:channel:thread-1",
-        ctxPayload: createCtx({
-          Provider: "discord",
-          Surface: "discord",
-          ChatId: "thread-1",
-          MessageSid: "webhook-message-1",
+      resolveTurn: () =>
+        fixture.assembledTurn(storePath, {
+          channel: "discord",
+          accountId: "default",
+          routeSessionKey: "agent:main:discord:channel:thread-1",
+          ctxPayload: createCtx({
+            Provider: "discord",
+            Surface: "discord",
+            ChatId: "thread-1",
+            MessageSid: "webhook-message-1",
+          }),
+          outboundEchoSourceId: "webhook-1",
+          recordInboundSession,
+          dispatchReplyWithBufferedBlockDispatcher: dispatch,
+          delivery: { deliver },
+          turnAdoptionLifecycle: { onAdopted },
+          history,
         }),
-        outboundEchoSourceId: "webhook-1",
-        recordInboundSession,
-        dispatchReplyWithBufferedBlockDispatcher: dispatch,
-        delivery: { deliver },
-        turnAdoptionLifecycle: { onAdopted },
-        history,
-      }),
     });
     expect(result).toMatchObject({
       admission: { kind: "drop", reason: "outbound-echo" },
@@ -245,16 +216,14 @@ describe("channel turn finalize", () => {
   it("records dropped history with local media through the turn kernel", async () => {
     const historyMap = new Map<string, HistoryEntry[]>();
     const resolveTurn = vi.fn();
+    const image = { path: "/tmp/a.png", contentType: "image/png", kind: "image" } as const;
     const result = await run({
       ingest: () => ({ id: "msg-1", timestamp: 1700000000000, rawText: "<media:image>" }),
       preflight: () => ({
         admission: { kind: "drop", reason: "missing-mention", recordHistory: true },
         message: { bodyForAgent: "<media:image>", senderLabel: "Alice" },
         history: { key: "room-1", historyMap, limit: 5, mediaLimit: 2 },
-        media: async () => [
-          { path: "/tmp/a.png", contentType: "image/png", kind: "image" },
-          { path: "https://example.com/b.png", contentType: "image/png", kind: "image" },
-        ],
+        media: async () => [image, { ...image, path: "https://example.com/b.png" }],
       }),
       resolveTurn,
     });
@@ -269,9 +238,7 @@ describe("channel turn finalize", () => {
         body: "<media:image>",
         timestamp: 1700000000000,
         messageId: "msg-1",
-        media: [
-          { path: "/tmp/a.png", contentType: "image/png", kind: "image", messageId: "msg-1" },
-        ],
+        media: [{ ...image, messageId: "msg-1" }],
       },
     ]);
   });
@@ -309,7 +276,7 @@ describe("channel turn finalize", () => {
       }),
     );
     expect(deliver).not.toHaveBeenCalled();
-    expect(hasVisibleChannelTurnDispatchFromReceipt(result.dispatchResult)).toBe(false);
+    expect(hasVisibleChannelTurnDispatch(result.dispatchResult)).toBe(false);
     expect(resolveChannelTurnDispatchCounts(result.dispatchResult)).toEqual({
       tool: 0,
       block: 0,

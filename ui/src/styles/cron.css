@@ -751,7 +751,6 @@
   border-top: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
 }
 
 .cron-submit-reason {
@@ -989,7 +988,6 @@
 .cron-run-entry__body pre,
 .cron-run-entry__body table {
   overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
 }
 
 /* Cron markdown overrides out-specify the base .chat-text rules in chat/text.css. */
@@ -1064,7 +1062,6 @@
   .cron-run-entry__body table {
     display: block;
     overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
   }
 }
 

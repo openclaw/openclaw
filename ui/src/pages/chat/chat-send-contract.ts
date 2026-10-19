@@ -39,6 +39,8 @@ export type ChatHost = ToolStreamHost &
     canRestoreComposer?: () => boolean;
     /** Captures this composer's identity while its presentation may hand ownership off. */
     captureComposerRecoveryOwner?: () => ChatComposerRecoveryOwner | undefined;
+    /** Persists and publishes a completed composer mutation without redrawing the transcript. */
+    composerDraftChanged?: () => void;
     /** Captured once at submit; queued delivery never re-reads the current page. */
     getWorkContext?: () => ChatWorkContext | undefined;
     chatGoalDraftMode?: ChatGoalDraftMode | null;

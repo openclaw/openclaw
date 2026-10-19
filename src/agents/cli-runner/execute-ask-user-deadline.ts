@@ -12,10 +12,7 @@ export type CliLoopbackCall = {
   ambiguous: boolean;
   ambiguityGroup?: CliLoopbackAmbiguityGroup;
 };
-export type CliLoopbackAmbiguityGroup = {
-  calls: Set<CliLoopbackCall>;
-  activeToolCallIds: Set<string>;
-};
+export type CliLoopbackAmbiguityGroup = Set<CliLoopbackCall>;
 export type ActiveCliTool = Loopback.McpLoopbackToolCallStart & {
   loopbackCall?: CliLoopbackCall;
   loopbackAmbiguous: boolean;

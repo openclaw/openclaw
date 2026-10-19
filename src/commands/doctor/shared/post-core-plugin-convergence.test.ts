@@ -1,6 +1,6 @@
-// Post-core plugin convergence tests cover update convergence checks after core updates.
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as nextImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
@@ -8,39 +8,39 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 
 const mocks = vi.hoisted(() => ({
-  listManagedPluginNpmRoots: vi.fn(),
-  maybeRepairStaleManagedNpmBundledPlugins: vi.fn(),
-  repairMissingConfiguredPluginInstalls:
+  managedRoots: vi.fn(),
+  repairBundled: vi.fn(),
+  repairInstalls:
     vi.fn<
       typeof import("./missing-configured-plugin-install.js").repairMissingConfiguredPluginInstalls
     >(),
-  relinkOpenClawPeerDependenciesInManagedNpmRoot: vi.fn(),
-  runPluginPayloadSmokeCheck: vi.fn(),
+  relinkPeers: vi.fn(),
+  smokeCheck: vi.fn(),
 }));
 
+// mock-isolation: Exercise convergence without installing real plugin packages.
 vi.mock("./missing-configured-plugin-install.js", () => ({
-  repairMissingConfiguredPluginInstalls: mocks.repairMissingConfiguredPluginInstalls,
+  repairMissingConfiguredPluginInstalls: mocks.repairInstalls,
 }));
+// mock-isolation: Control repair results without mutating installed plugin state.
 vi.mock("../../doctor-plugin-registry.js", () => ({
-  maybeRepairStaleManagedNpmBundledPlugins: mocks.maybeRepairStaleManagedNpmBundledPlugins,
+  maybeRepairStaleManagedNpmBundledPlugins: mocks.repairBundled,
 }));
 vi.mock("../../../plugins/plugin-peer-link.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../plugins/plugin-peer-link.js")>();
   return {
     ...actual,
-    relinkOpenClawPeerDependenciesInManagedNpmRoot:
-      mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot,
+    relinkOpenClawPeerDependenciesInManagedNpmRoot: mocks.relinkPeers,
   };
 });
-vi.mock("../../../plugins/npm-project-roots.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../plugins/npm-project-roots.js")>();
-  return {
-    ...actual,
-    listManagedPluginNpmRoots: mocks.listManagedPluginNpmRoots,
-  };
+vi.mock("../../../plugins/installed-plugin-npm-roots.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../plugins/installed-plugin-npm-roots.js")>();
+  return { ...actual, listManagedPluginNpmRootsForInstallRecords: mocks.managedRoots };
 });
+// mock-isolation: Script payload checks without launching installed plugin code.
 vi.mock("../../../plugins/payload-verification.js", () => ({
-  runPluginPayloadSmokeCheck: mocks.runPluginPayloadSmokeCheck,
+  runPluginPayloadSmokeCheck: mocks.smokeCheck,
 }));
 
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -50,60 +50,111 @@ import {
   loadInstalledPluginIndexInstallRecords,
   readPersistedInstalledPluginIndexInstallRecordsAsync,
 } from "../../../plugins/installed-plugin-index-records.js";
+import type { PluginPayloadSmokeFailure } from "../../../plugins/payload-verification.js";
 import { seedInstalledPluginIndex } from "../../../plugins/test-helpers/installed-plugin-index.js";
+import { writeManagedNpmPlugin } from "../../../plugins/test-helpers/managed-npm-plugin.js";
 import { VERSION } from "../../../version.js";
 import { runPostCorePluginConvergence } from "./post-core-plugin-convergence.js";
 
+type Records = Record<string, PluginInstallRecord>;
+
+function repairResult(
+  records: Records = {},
+  extra: Partial<Awaited<ReturnType<typeof mocks.repairInstalls>>> = {},
+) {
+  return { changes: [], warnings: [], records, ...extra };
+}
+
+function mockRepairs(...args: Parameters<typeof repairResult>) {
+  mocks.repairInstalls.mockResolvedValue(repairResult(...args));
+}
+
+function repairWarning(message: string, owner: { kind?: "repair"; pluginId?: string } = {}) {
+  return {
+    ...owner,
+    reason: message,
+    message,
+    guidance: ["Run `openclaw update repair` to retry plugin repair."],
+  };
+}
+
+function writeJson(file: string, value: unknown) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(value), "utf8");
+}
+
+const peerResult = { checked: 0, attempted: 0, repaired: 0, skipped: 0 };
+
+function configured(...ids: string[]): OpenClawConfig {
+  return { plugins: { entries: Object.fromEntries(ids.map((id) => [id, { enabled: true }])) } };
+}
+
+function converge(
+  cfg: OpenClawConfig,
+  params: Partial<Omit<Parameters<typeof runPostCorePluginConvergence>[0], "cfg">> = {},
+) {
+  return runPostCorePluginConvergence({ cfg, env: {}, ...params });
+}
+
+function bundledEnv(bundledRoot: string) {
+  return {
+    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+    VITEST: "true",
+  };
+}
+
+function expectRepairInput(cfg: OpenClawConfig, env: NodeJS.ProcessEnv, baselineRecords?: Records) {
+  expect(mocks.repairInstalls).toHaveBeenCalledWith({
+    cfg,
+    repairVersionDrift: false,
+    env: { ...env, OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
+    ...(baselineRecords ? { baselineRecords } : {}),
+    onWarning: expect.any(Function),
+    beforePersistentEffect: expect.any(Function),
+  });
+}
+
+function reportPackageReadFailure(
+  packageDir: string,
+  error = new Error("EACCES: permission denied"),
+) {
+  mocks.relinkPeers.mockImplementation(
+    async (params: { onPackageReadError?: (error: unknown, packageDir: string) => void }) => {
+      params.onPackageReadError?.(error, packageDir);
+      return { ...peerResult, skipped: 1 };
+    },
+  );
+}
+
+function smokeResult(failure: PluginPayloadSmokeFailure) {
+  return { checked: [failure.pluginId], failures: [failure] };
+}
+
 describe("runPostCorePluginConvergence", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const makeTempDir = () => tempDirs.make("openclaw-post-core-convergence-");
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.listManagedPluginNpmRoots.mockImplementation((npmRoot: string) =>
-      Promise.resolve([npmRoot]),
-    );
-    mocks.maybeRepairStaleManagedNpmBundledPlugins.mockReturnValue(null);
-    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
-      changes: [],
-      warnings: [],
-      records: {},
-    });
-    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockResolvedValue({
-      checked: 0,
-      attempted: 0,
-      repaired: 0,
-      skipped: 0,
-    });
-    mocks.runPluginPayloadSmokeCheck.mockResolvedValue({ checked: [], failures: [] });
+    mocks.managedRoots.mockImplementation(({ npmRoot }: { npmRoot: string }) => [npmRoot]);
+    mocks.repairBundled.mockReturnValue(null);
+    mockRepairs();
+    mocks.relinkPeers.mockResolvedValue(peerResult);
+    mocks.smokeCheck.mockResolvedValue({ checked: [], failures: [] });
   });
 
-  function writeBundledPlugin(
-    rootDir: string,
-    pluginId: string,
-    version = "2026.5.20-beta.1",
-  ): string {
-    const pluginDir = path.join(rootDir, pluginId);
+  function writeBundledPlugin(pluginDir: string, version = "2026.5.20-beta.1") {
+    const pluginId = path.basename(pluginDir);
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(path.join(pluginDir, "index.js"), "export default {};\n", "utf8");
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: pluginId,
-        name: pluginId,
-        version,
-        configSchema: { type: "object" },
-      }),
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: `@openclaw/${pluginId}`,
-        version,
-      }),
-      "utf8",
-    );
-    return pluginDir;
+    writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: pluginId,
+      name: pluginId,
+      version,
+      configSchema: { type: "object" },
+    });
+    writeJson(path.join(pluginDir, "package.json"), { name: `@openclaw/${pluginId}`, version });
   }
 
   it.each(["authority", "filesystem"] as const)(
@@ -117,8 +168,8 @@ describe("runPostCorePluginConvergence", () => {
       let refuse = false;
       let completed = false;
       let siblingSettled = false;
-      mocks.listManagedPluginNpmRoots.mockResolvedValue(["first-root", "second-root"]);
-      mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockImplementation(
+      mocks.managedRoots.mockReturnValue(["first-root", "second-root"]);
+      mocks.relinkPeers.mockImplementation(
         async (params: { npmRoot: string; beforePersistentApply?: () => void }) => {
           if (params.npmRoot === "first-root") {
             await secondStarted.promise;
@@ -160,11 +211,9 @@ describe("runPostCorePluginConvergence", () => {
         });
       try {
         await firstStarted.promise;
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextImmediate();
         expect(completed).toBe(false);
-        expect(mocks.runPluginPayloadSmokeCheck).not.toHaveBeenCalled();
+        expect(mocks.smokeCheck).not.toHaveBeenCalled();
       } finally {
         releaseSibling.resolve();
         await operation;
@@ -172,241 +221,207 @@ describe("runPostCorePluginConvergence", () => {
       const result = await operation;
       expect(siblingSettled).toBe(true);
       if (kind === "authority") {
-        expect("error" in result).toBe(true);
-        if (!("error" in result)) {
-          throw new Error("Expected authority refusal");
-        }
-        expect(result.error).toBe(refusal);
+        expect("error" in result ? result.error : undefined).toBe(refusal);
         expect(laterWrite).not.toHaveBeenCalled();
-        expect(mocks.runPluginPayloadSmokeCheck).not.toHaveBeenCalled();
+        expect(mocks.smokeCheck).not.toHaveBeenCalled();
       } else {
-        expect(result).toMatchObject({
-          value: {
-            warnings: [
-              expect.objectContaining({ message: expect.stringContaining(refusal.message) }),
-            ],
-          },
-        });
+        expect(result).toHaveProperty("value.warnings", [
+          expect.objectContaining({ message: expect.stringContaining(refusal.message) }),
+        ]);
         expect(laterWrite).toHaveBeenCalledOnce();
-        expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledOnce();
+        expect(mocks.smokeCheck).toHaveBeenCalledOnce();
       }
     },
   );
 
-  it("uses the candidate runtime version over a stale inherited host version", async () => {
-    const cfg = { plugins: { entries: {} } } as unknown as OpenClawConfig;
-    await runPostCorePluginConvergence({
-      cfg,
-      env: { OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.12" },
-    });
-    expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith({
-      cfg,
-      repairVersionDrift: false,
-      env: {
-        OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
-        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
-      },
-      onWarning: expect.any(Function),
-      beforePersistentEffect: expect.any(Function),
-    });
-  });
-
-  it("uses an explicit compatibility host version for startup convergence", async () => {
-    const cfg = { plugins: { entries: {} } } as unknown as OpenClawConfig;
-    await runPostCorePluginConvergence({
-      cfg,
-      env: { OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.12" },
-      compatibilityHostVersion: "2026.7.2-beta.7",
-    });
-    expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith({
-      cfg,
-      repairVersionDrift: false,
-      env: {
-        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.7.2-beta.7",
-        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
-      },
-      onWarning: expect.any(Function),
-      beforePersistentEffect: expect.any(Function),
-    });
-  });
+  it.each([
+    [undefined, VERSION],
+    ["2026.7.2-beta.7", "2026.7.2-beta.7"],
+  ] as const)(
+    "uses startup host version %s instead of a stale inherited version",
+    async (compatibilityHostVersion, expected) => {
+      const cfg = configured();
+      await converge(cfg, {
+        compatibilityHostVersion,
+        env: { OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.12" },
+      });
+      expectRepairInput(cfg, { OPENCLAW_COMPATIBILITY_HOST_VERSION: expected });
+    },
+  );
 
   it("returns ok when no warnings/failures and includes repair changes", async () => {
-    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+    mockRepairs(
+      { discord: { source: "npm", installPath: "/p/discord" } },
+      {
+        changes: ['Repaired missing configured plugin "discord".'],
+        repairedPluginIds: ["discord"],
+      },
+    );
+    expect(await converge(configured("discord"))).toMatchObject({
+      errored: false,
       changes: ['Repaired missing configured plugin "discord".'],
       repairedPluginIds: ["discord"],
       warnings: [],
-      records: { discord: { source: "npm", installPath: "/p/discord" } },
     });
-    const result = await runPostCorePluginConvergence({
-      cfg: {
-        plugins: { entries: { discord: { enabled: true } } },
-      } as unknown as OpenClawConfig,
-      env: {},
-    });
-    expect(result.errored).toBe(false);
-    expect(result.changes).toEqual(['Repaired missing configured plugin "discord".']);
-    expect(result.repairedPluginIds).toEqual(["discord"]);
-    expect(result.warnings).toEqual([]);
   });
 
   it("repairs managed npm openclaw peer links in every managed npm project before payload smoke checks", async () => {
-    const stateDir = tempDirs.make("openclaw-post-core-convergence-");
-    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
-      changes: [],
-      warnings: [],
-      records: { codex: { source: "npm", installPath: "/p/codex" } },
-    });
-    mocks.listManagedPluginNpmRoots.mockResolvedValue([
-      path.join(stateDir, "npm"),
-      path.join(stateDir, "npm", "projects", "codex"),
-    ]);
-    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot
-      .mockResolvedValueOnce({
-        checked: 0,
-        attempted: 0,
-        repaired: 0,
-        skipped: 0,
-      })
-      .mockResolvedValueOnce({
-        checked: 1,
-        attempted: 1,
-        repaired: 1,
-        skipped: 0,
-      });
+    const stateDir = makeTempDir();
+    mockRepairs({ codex: { source: "npm", installPath: "/p/codex" } });
+    const roots = [path.join(stateDir, "npm"), path.join(stateDir, "npm", "projects", "codex")];
+    mocks.managedRoots.mockReturnValue(roots);
+    mocks.relinkPeers
+      .mockResolvedValueOnce(peerResult)
+      .mockResolvedValueOnce({ checked: 1, attempted: 1, repaired: 1, skipped: 0 });
 
-    const result = await runPostCorePluginConvergence({
-      cfg: { plugins: { entries: { codex: { enabled: true } } } } as unknown as OpenClawConfig,
+    const result = await converge(configured("codex"), {
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
 
-    expect(mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot).toHaveBeenNthCalledWith(1, {
-      npmRoot: path.join(stateDir, "npm"),
-      logger: {},
-      onPackageReadError: expect.any(Function),
-      beforePersistentApply: expect.any(Function),
-    });
-    expect(mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot).toHaveBeenNthCalledWith(2, {
-      npmRoot: path.join(stateDir, "npm", "projects", "codex"),
-      logger: {},
-      onPackageReadError: expect.any(Function),
-      beforePersistentApply: expect.any(Function),
+    roots.forEach((npmRoot, index) => {
+      expect(mocks.relinkPeers).toHaveBeenNthCalledWith(index + 1, {
+        npmRoot,
+        logger: {},
+        onPackageReadError: expect.any(Function),
+        beforePersistentApply: expect.any(Function),
+      });
     });
     expect(result.changes).toEqual([
       "Repaired OpenClaw host peer link(s) for 1 managed npm plugin package(s).",
     ]);
-    expect(
-      mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mock.invocationCallOrder[0],
-    ).toBeLessThan(
-      expectDefined(
-        mocks.runPluginPayloadSmokeCheck.mock.invocationCallOrder[0],
-        "mocks.runPluginPayloadSmokeCheck.mock.invocationCallOrder[0] test invariant",
-      ),
+    expect(mocks.relinkPeers.mock.invocationCallOrder[0]).toBeLessThan(
+      expectDefined(mocks.smokeCheck.mock.invocationCallOrder[0], "smoke check called"),
     );
+  });
+
+  it("repairs the selected generation before smoke checks without walking stale roots", async () => {
+    const stateDir = makeTempDir();
+    const packageName = "@fixture/selected";
+    const packages: string[] = [];
+    for (const generationKey of ["active", "stale-1", "stale-2"]) {
+      const flatPackage = writeManagedNpmPlugin({
+        stateDir,
+        packageName,
+        pluginId: "selected",
+        version: "1.0.0",
+      });
+      const root = resolvePluginNpmGenerationProjectDir({
+        npmDir: path.join(stateDir, "npm"),
+        packageName,
+        generationKey,
+      });
+      fs.renameSync(path.dirname(path.dirname(path.dirname(flatPackage))), root);
+      const packageDir = path.join(root, "node_modules", ...packageName.split("/"));
+      writeJson(path.join(packageDir, "package.json"), {
+        name: packageName,
+        version: "1.0.0",
+        peerDependencies: { openclaw: "*" },
+      });
+      packages.push(packageDir);
+    }
+    const active = expectDefined(packages[0], "active package");
+    mockRepairs({ selected: { source: "npm", installPath: active } });
+    const roots = await vi.importActual<
+      typeof import("../../../plugins/installed-plugin-npm-roots.js")
+    >("../../../plugins/installed-plugin-npm-roots.js");
+    const peers = await vi.importActual<typeof import("../../../plugins/plugin-peer-link.js")>(
+      "../../../plugins/plugin-peer-link.js",
+    );
+    mocks.managedRoots.mockImplementation(roots.listManagedPluginNpmRootsForInstallRecords);
+    mocks.relinkPeers.mockImplementation(peers.relinkOpenClawPeerDependenciesInManagedNpmRoot);
+    mocks.smokeCheck.mockImplementation(async () => {
+      expect(fs.realpathSync(path.join(active, "node_modules", "openclaw"))).toBe(
+        fs.realpathSync(process.cwd()),
+      );
+      return { checked: ["selected"], failures: [] };
+    });
+    const reads = vi.spyOn(fs.promises, "readdir");
+    try {
+      const result = await converge(configured("selected"), {
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+      expect(result.errored).toBe(false);
+      expect(mocks.smokeCheck).toHaveBeenCalledOnce();
+      for (const stale of packages.slice(1)) {
+        expect(fs.existsSync(path.join(stale, "node_modules", "openclaw"))).toBe(false);
+        expect(
+          reads.mock.calls.some(([dir]) =>
+            String(dir).startsWith(path.dirname(path.dirname(stale))),
+          ),
+        ).toBe(false);
+      }
+    } finally {
+      reads.mockRestore();
+    }
   });
 
   it.each(["peerDependencies", "dependencies"] as const)(
     "repairs a registered extensions-root %s stale host before the real payload smoke check",
     async (dependencyField) => {
-      const stateDir = tempDirs.make("openclaw-post-core-convergence-");
+      const stateDir = makeTempDir();
       const packageDir = path.join(stateDir, "extensions", "email");
       const staleHostDir = path.join(packageDir, "node_modules", "openclaw");
-      fs.mkdirSync(staleHostDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(packageDir, "package.json"),
-        JSON.stringify({
-          name: "@clawemail/email",
-          version: "2026.7.1",
-          [dependencyField]: { openclaw: ">=2026.7.1" },
-          openclaw: { extensions: ["./index.js"] },
-        }),
-      );
-      fs.writeFileSync(path.join(packageDir, "index.js"), "export default {};\n");
-      fs.writeFileSync(
-        path.join(staleHostDir, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.7.1-beta.2" }),
-      );
-      const records = {
-        email: { source: "npm" as const, installPath: packageDir },
-      };
-      mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
-        changes: [],
-        warnings: [],
-        records,
+      writeJson(path.join(packageDir, "package.json"), {
+        name: "@clawemail/email",
+        version: "2026.7.1",
+        [dependencyField]: { openclaw: ">=2026.7.1" },
+        openclaw: { extensions: ["./index.js"] },
       });
-      mocks.runPluginPayloadSmokeCheck.mockImplementation(async (params) => {
+      fs.writeFileSync(path.join(packageDir, "index.js"), "export default {};\n");
+      writeJson(path.join(staleHostDir, "package.json"), {
+        name: "openclaw",
+        version: "2026.7.1-beta.2",
+      });
+      const records = { email: { source: "npm" as const, installPath: packageDir } };
+      mockRepairs(records);
+      mocks.smokeCheck.mockImplementation(async (params) => {
         const actual = await vi.importActual<
           typeof import("../../../plugins/payload-verification.js")
         >("../../../plugins/payload-verification.js");
         return await actual.runPluginPayloadSmokeCheck(params);
       });
 
-      const result = await runPostCorePluginConvergence({
-        cfg: { plugins: { entries: { email: { enabled: true } } } },
+      const result = await converge(configured("email"), {
         env: { OPENCLAW_STATE_DIR: stateDir },
         baselineInstallRecords: records,
       });
 
       expect(fs.lstatSync(staleHostDir).isSymbolicLink()).toBe(true);
       expect(fs.realpathSync(staleHostDir)).toBe(fs.realpathSync(process.cwd()));
-      expect(result.errored).toBe(false);
-      expect(result.smokeFailures).toEqual([]);
+      expect(result).toMatchObject({ errored: false, smokeFailures: [] });
     },
   );
 
   it("prunes stale local bundled plugin shadows from baseline records before repair", async () => {
-    const bundledRoot = tempDirs.make("openclaw-post-core-convergence-");
-    writeBundledPlugin(bundledRoot, "discord");
+    const bundledRoot = makeTempDir();
+    writeBundledPlugin(path.join(bundledRoot, "discord"));
     const baseline = {
       discord: {
         source: "path" as const,
-        installPath: path.join(
-          tempDirs.make("openclaw-post-core-convergence-"),
-          "dist",
-          "extensions",
-          "discord",
-        ),
+        installPath: path.join(makeTempDir(), "dist", "extensions", "discord"),
         version: "2026.5.4-beta.3",
       },
       brave: { source: "npm" as const, installPath: "/p/brave" },
     };
-    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
-      changes: [],
-      warnings: [],
-      records: { brave: baseline.brave },
-    });
-    const cfg = {
-      plugins: { entries: { discord: { enabled: true }, brave: { enabled: true } } },
-    } as unknown as OpenClawConfig;
+    mockRepairs({ brave: baseline.brave });
+    const cfg = configured("discord", "brave");
 
-    const result = await runPostCorePluginConvergence({
-      cfg,
-      env: {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-        VITEST: "true",
-      },
+    const result = await converge(cfg, {
+      env: bundledEnv(bundledRoot),
       baselineInstallRecords: baseline,
     });
 
-    expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith({
+    expectRepairInput(
       cfg,
-      repairVersionDrift: false,
-      env: {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-        VITEST: "true",
+      {
+        ...bundledEnv(bundledRoot),
         OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
-        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
-      baselineRecords: {
-        brave: baseline.brave,
-      },
-      onWarning: expect.any(Function),
-      beforePersistentEffect: expect.any(Function),
+      { brave: baseline.brave },
+    );
+    expect(result).toMatchObject({
+      changes: ['Removed stale local bundled plugin install record "discord".'],
     });
-    expect(result.changes).toEqual([
-      'Removed stale local bundled plugin install record "discord".',
-    ]);
     expect(result.installRecords).toEqual({ brave: baseline.brave });
   });
 
@@ -414,44 +429,25 @@ describe("runPostCorePluginConvergence", () => {
     const message =
       'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.';
     const unclassifiedMessage = 'Failed to read plugin "discord" inventory.';
-    mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async ({ onWarning }) => {
+    mocks.repairInstalls.mockImplementation(async ({ onWarning }) => {
       onWarning?.({ message, pluginId: "discord" });
       onWarning?.({ message: unclassifiedMessage });
-      return {
-        changes: [],
-        warnings: [message, unclassifiedMessage],
-        records: {},
-      };
+      return repairResult({}, { warnings: [message, unclassifiedMessage] });
     });
-    const result = await runPostCorePluginConvergence({
-      cfg: {
-        plugins: { entries: { discord: { enabled: true } } },
-      } as unknown as OpenClawConfig,
-      env: {},
-    });
+    const result = await converge(configured("discord"));
     expect(result.errored).toBe(false);
     expect(result.warnings).toStrictEqual([
-      {
-        kind: "repair",
-        pluginId: "discord",
-        reason: message,
-        message,
-        guidance: ["Run `openclaw update repair` to retry plugin repair."],
-      },
-      {
-        reason: unclassifiedMessage,
-        message: unclassifiedMessage,
-        guidance: ["Run `openclaw update repair` to retry plugin repair."],
-      },
+      repairWarning(message, { kind: "repair", pluginId: "discord" }),
+      repairWarning(unclassifiedMessage),
     ]);
   });
 
   it("blocks convergence when a missing plugin cannot activate without capability consent", async () => {
     const message = 'Plugin "consent-fixture" requires capability consent.';
-    mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async ({ onWarning }) => {
+    mocks.repairInstalls.mockImplementation(async ({ onWarning }) => {
       onWarning?.({ message, pluginId: "consent-fixture" });
       return {
-        changes: [],
+        ...repairResult(),
         warnings: [message],
         failedPluginIds: ["consent-fixture"],
         outcomes: [
@@ -462,73 +458,39 @@ describe("runPostCorePluginConvergence", () => {
             message,
           },
         ],
-        records: {},
       };
     });
 
-    const result = await runPostCorePluginConvergence({
-      cfg: { plugins: { entries: { "consent-fixture": { enabled: true } } } },
-      env: {},
+    const result = await converge(configured("consent-fixture"));
+    expect(result).toMatchObject({
+      errored: true,
+      warnings: [expect.objectContaining({ message })],
+      smokeFailures: [],
     });
-
-    expect(result.errored).toBe(true);
-    expect(result.warnings).toEqual([
-      expect.objectContaining({ message: 'Plugin "consent-fixture" requires capability consent.' }),
-    ]);
-    expect(result.smokeFailures).toEqual([]);
     expect(result.installRecords).toEqual({});
   });
 
   it("surfaces repair notices without marking convergence errored", async () => {
-    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
-      changes: ['Installed missing configured plugin "discord".'],
-      notices: [
-        'ClawHub trust warning for "@openclaw/discord@1.2.3": ClawHub has not completed a fresh clean security check for this release. Status: security scan is pending. Review the package before enabling it.',
-      ],
-      warnings: [],
-      records: { discord: { source: "clawhub", installPath: "/p/discord" } },
-    });
-    const result = await runPostCorePluginConvergence({
-      cfg: {
-        plugins: { entries: { discord: { enabled: true } } },
-      } as unknown as OpenClawConfig,
-      env: {},
-    });
-    expect(result.errored).toBe(false);
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.notices).toStrictEqual([
-      {
-        reason:
-          'ClawHub trust warning for "@openclaw/discord@1.2.3": ClawHub has not completed a fresh clean security check for this release. Status: security scan is pending. Review the package before enabling it.',
-        message:
-          'ClawHub trust warning for "@openclaw/discord@1.2.3": ClawHub has not completed a fresh clean security check for this release. Status: security scan is pending. Review the package before enabling it.',
-        guidance: [],
-      },
-    ]);
+    const notice = 'ClawHub trust warning for "@openclaw/discord@1.2.3": security scan is pending.';
+    mockRepairs(
+      { discord: { source: "clawhub", installPath: "/p/discord" } },
+      { notices: [notice] },
+    );
+    const result = await converge(configured("discord"));
+    expect(result).toMatchObject({ errored: false, warnings: [] });
+    expect(result.notices).toStrictEqual([{ reason: notice, message: notice, guidance: [] }]);
   });
 
   it("flags errored=true when smoke check finds a missing install path", async () => {
-    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
-      changes: [],
-      warnings: [],
-      records: { brave: { source: "npm" } },
-    });
-    mocks.runPluginPayloadSmokeCheck.mockResolvedValue({
-      checked: ["brave"],
-      failures: [
-        {
-          pluginId: "brave",
-          reason: "missing-install-path",
-          detail: "Install path is missing from the plugin install record.",
-        },
-      ],
-    });
-    const result = await runPostCorePluginConvergence({
-      cfg: {
-        plugins: { entries: { brave: { enabled: true } } },
-      } as unknown as OpenClawConfig,
-      env: {},
-    });
+    mockRepairs({ brave: { source: "npm" } });
+    mocks.smokeCheck.mockResolvedValue(
+      smokeResult({
+        pluginId: "brave",
+        reason: "missing-install-path",
+        detail: "Install path is missing from the plugin install record.",
+      }),
+    );
+    const result = await converge(configured("brave"));
     expect(result.errored).toBe(true);
     expect(result.warnings).toStrictEqual([
       {
@@ -546,7 +508,7 @@ describe("runPostCorePluginConvergence", () => {
   });
 
   it("keeps an active __proto__ record in smoke and package-path classification", async () => {
-    const stateDir = tempDirs.make("openclaw-post-core-convergence-");
+    const stateDir = makeTempDir();
     const installPath = path.join(
       stateDir,
       "npm",
@@ -556,47 +518,28 @@ describe("runPostCorePluginConvergence", () => {
       "__proto__",
     );
     const record: PluginInstallRecord = { source: "npm", installPath };
-    const records = Object.create(null) as Record<string, PluginInstallRecord>;
-    Object.defineProperty(records, "__proto__", {
-      configurable: true,
-      enumerable: true,
-      value: record,
-      writable: true,
+    const records = Object.create(null) as Records;
+    Object.assign(records, { ["__proto__"]: record });
+    mockRepairs(records);
+    reportPackageReadFailure(installPath);
+    mocks.smokeCheck.mockImplementation(async (params: { records: Records }) => {
+      expect(Object.getPrototypeOf(params.records)).toBeNull();
+      expect(Object.keys(params.records)).toEqual(["__proto__"]);
+      expect(Object.getOwnPropertyDescriptor(params.records, "__proto__")?.value).toBe(record);
+      return smokeResult({
+        pluginId: "__proto__",
+        installPath,
+        reason: "unreadable-package-json",
+        detail: `Could not read package.json at ${installPath}/package.json: EACCES`,
+      });
     });
-    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
-      changes: [],
-      warnings: [],
-      records,
-    });
-    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockImplementation(
-      async (params: { onPackageReadError?: (error: unknown, packageDir: string) => void }) => {
-        params.onPackageReadError?.(new Error("EACCES: permission denied"), installPath);
-        return { checked: 0, attempted: 0, repaired: 0, skipped: 1 };
-      },
-    );
-    mocks.runPluginPayloadSmokeCheck.mockImplementation(
-      async (params: { records: Record<string, PluginInstallRecord> }) => {
-        expect(Object.getPrototypeOf(params.records)).toBeNull();
-        expect(Object.keys(params.records)).toEqual(["__proto__"]);
-        expect(Object.getOwnPropertyDescriptor(params.records, "__proto__")?.value).toBe(record);
-        return {
-          checked: ["__proto__"],
-          failures: [
-            {
-              pluginId: "__proto__",
-              installPath,
-              reason: "unreadable-package-json",
-              detail: `Could not read package.json at ${installPath}/package.json: EACCES`,
-            },
-          ],
-        };
-      },
-    );
 
-    const result = await runPostCorePluginConvergence({
-      cfg: { plugins: { enabled: true } } as unknown as OpenClawConfig,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
+    const result = await converge(
+      { plugins: { enabled: true } },
+      {
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      },
+    );
 
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toMatchObject({
@@ -610,66 +553,34 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.errored).toBe(true);
   });
 
-  it("does not promote an inactive package read error into an ownerless blocker", async () => {
-    const stateDir = tempDirs.make("openclaw-post-core-convergence-");
-    const installPath = path.join(stateDir, "npm", "projects", "brave", "node_modules", "brave");
-    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
-      changes: [],
-      warnings: [],
-      records: { brave: { source: "npm", installPath } },
-    });
-    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockImplementation(
-      async (params: { onPackageReadError?: (error: unknown, packageDir: string) => void }) => {
-        params.onPackageReadError?.(
-          new Error(`EACCES: permission denied, open '${installPath}/package.json'`),
-          installPath,
-        );
-        return { checked: 0, attempted: 0, repaired: 0, skipped: 1 };
-      },
-    );
-
-    const result = await runPostCorePluginConvergence({
-      cfg: {
-        plugins: { entries: { brave: { enabled: false } } },
-      } as unknown as OpenClawConfig,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-
-    expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledWith({
-      records: {},
-      env: expect.any(Object),
-    });
-    expect(result.warnings).toEqual([]);
-    expect(result.errored).toBe(false);
-  });
-
-  it("keeps an unowned package read error visible as a repair warning", async () => {
-    const stateDir = tempDirs.make("openclaw-post-core-convergence-");
-    const packageDir = path.join(stateDir, "npm", "node_modules", "untracked");
-    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockImplementation(
-      async (params: { onPackageReadError?: (error: unknown, packageDir: string) => void }) => {
-        params.onPackageReadError?.(new Error("EACCES: permission denied"), packageDir);
-        return { checked: 0, attempted: 0, repaired: 0, skipped: 1 };
-      },
-    );
-
-    const result = await runPostCorePluginConvergence({
-      cfg: { plugins: { entries: {} } } as unknown as OpenClawConfig,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-
-    expect(result.warnings).toStrictEqual([
-      {
-        reason: "Failed to repair installed OpenClaw host peer links: EACCES: permission denied",
-        message: "Failed to repair installed OpenClaw host peer links: EACCES: permission denied",
-        guidance: ["Run `openclaw update repair` to retry plugin repair."],
-      },
-    ]);
-    expect(result.errored).toBe(false);
-  });
+  it.each([true, false])(
+    "classifies package read errors for inactive tracked=%s installs",
+    async (tracked) => {
+      const stateDir = makeTempDir();
+      const installPath = tracked
+        ? path.join(stateDir, "npm", "projects", "brave", "node_modules", "brave")
+        : path.join(stateDir, "npm", "node_modules", "untracked");
+      mockRepairs(tracked ? { brave: { source: "npm", installPath } } : {});
+      const detail = tracked
+        ? `EACCES: permission denied, open '${installPath}/package.json'`
+        : "EACCES: permission denied";
+      reportPackageReadFailure(installPath, new Error(detail));
+      const cfg: OpenClawConfig = tracked
+        ? { plugins: { entries: { brave: { enabled: false } } } }
+        : configured();
+      const result = await converge(cfg, {
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+      const message =
+        "Failed to repair installed OpenClaw host peer links: EACCES: permission denied";
+      expect(result.warnings).toStrictEqual(tracked ? [] : [repairWarning(message)]);
+      expect(mocks.smokeCheck).toHaveBeenCalledWith({ records: {}, env: expect.any(Object) });
+      expect(result.errored).toBe(false);
+    },
+  );
 
   it("retires payload and record state before repair across two starts", async () => {
-    const stateDir = tempDirs.make("openclaw-post-core-convergence-");
+    const stateDir = makeTempDir();
     const bundledRoot = tempDirs.make("openclaw-post-core-bundled-");
     const cfg = {
       update: { channel: "beta" as const },
@@ -677,33 +588,19 @@ describe("runPostCorePluginConvergence", () => {
     };
     const env = {
       OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      VITEST: "true",
+      ...bundledEnv(bundledRoot),
     };
-    writeBundledPlugin(bundledRoot, "bundleddemo", VERSION);
+    writeBundledPlugin(path.join(bundledRoot, "bundleddemo"), VERSION);
     const npmRoot = resolvePluginNpmGenerationProjectDir({
       npmDir: path.join(stateDir, "npm"),
       packageName: "@openclaw/bundleddemo",
       generationKey: "@openclaw/bundleddemo@2026.7.2-beta.7",
     });
     const packageDir = path.join(npmRoot, "node_modules", "@openclaw", "bundleddemo");
-    fs.mkdirSync(packageDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(npmRoot, "package.json"),
-      JSON.stringify({ dependencies: { "@openclaw/bundleddemo": "2026.7.2-beta.7" } }),
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({ name: "@openclaw/bundleddemo", version: "2026.7.2-beta.7" }),
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(packageDir, "openclaw.plugin.json"),
-      JSON.stringify({ id: "bundleddemo", name: "bundleddemo", configSchema: { type: "object" } }),
-      "utf8",
-    );
+    writeBundledPlugin(packageDir, "2026.7.2-beta.7");
+    writeJson(path.join(npmRoot, "package.json"), {
+      dependencies: { "@openclaw/bundleddemo": "2026.7.2-beta.7" },
+    });
     await seedInstalledPluginIndex(
       {
         bundleddemo: {
@@ -721,45 +618,16 @@ describe("runPostCorePluginConvergence", () => {
     const actualDoctorRegistry = await vi.importActual<
       typeof import("../../doctor-plugin-registry.js")
     >("../../doctor-plugin-registry.js");
-    mocks.maybeRepairStaleManagedNpmBundledPlugins.mockImplementation(
+    mocks.repairBundled.mockImplementation(
       actualDoctorRegistry.maybeRepairStaleManagedNpmBundledPlugins,
     );
-    let installAttempts = 0;
-    mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async (params) => {
+    mocks.repairInstalls.mockImplementation(async (params) => {
       const records =
         params.baselineRecords ??
         (await loadInstalledPluginIndexInstallRecords({ env: params.env }));
-      const bundleddemoRecord = records.bundleddemo;
-      if (bundleddemoRecord) {
-        installAttempts += 1;
-        const retryRoot = resolvePluginNpmGenerationProjectDir({
-          npmDir: path.join(stateDir, "npm"),
-          packageName: "@openclaw/bundleddemo",
-          generationKey: `@openclaw/bundleddemo@retry-${installAttempts}`,
-        });
-        const retryPackageDir = path.join(retryRoot, "node_modules", "@openclaw", "bundleddemo");
-        fs.mkdirSync(retryPackageDir, { recursive: true });
-        const nextRecords = {
-          ...records,
-          bundleddemo: { ...bundleddemoRecord, installPath: retryPackageDir },
-        };
-        await seedInstalledPluginIndex(nextRecords, {
-          config: cfg,
-          env: params.env,
-        });
-        return {
-          changes: [
-            'Refreshed stale configured plugin "bundleddemo" from @openclaw/bundleddemo@beta.',
-          ],
-          warnings: [],
-          records: nextRecords,
-        };
-      }
+      expect(records).not.toHaveProperty("bundleddemo");
       if (params.baselineRecords) {
-        await seedInstalledPluginIndex(records, {
-          config: cfg,
-          env: params.env,
-        });
+        await seedInstalledPluginIndex(records, { config: cfg, env: params.env });
       }
       return { changes: [], warnings: [], records };
     });
@@ -769,7 +637,6 @@ describe("runPostCorePluginConvergence", () => {
     const second = await runPostCorePluginConvergence({ cfg, env });
 
     expect(fs.existsSync(packageDir)).toBe(false);
-    expect(installAttempts).toBe(0);
     expect(projectsAfterFirst).toHaveLength(1);
     expect(fs.readdirSync(path.join(stateDir, "npm", "projects"))).toEqual(projectsAfterFirst);
     expect(await readPersistedInstalledPluginIndexInstallRecordsAsync({ env })).not.toHaveProperty(

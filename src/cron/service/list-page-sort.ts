@@ -12,29 +12,25 @@ export function sortCronJobs(
   jobs.sort((a, b) => {
     let cmp = 0;
     if (sortBy === "name") {
-      const aName = typeof a.name === "string" ? a.name : "";
-      const bName = typeof b.name === "string" ? b.name : "";
       compareNames ??= new Intl.Collator(undefined, { sensitivity: "base" }).compare;
-      cmp = compareNames(aName, bName);
+      cmp = compareNames(a.name, b.name);
     } else if (sortBy === "updatedAtMs") {
       cmp = a.updatedAtMs - b.updatedAtMs;
     } else {
       const aNext = a.state.nextRunAtMs;
       const bNext = b.state.nextRunAtMs;
-      if (typeof aNext === "number" && typeof bNext === "number") {
+      if (aNext !== undefined && bNext !== undefined) {
         cmp = aNext - bNext;
-      } else if (typeof aNext === "number" || typeof bNext === "number") {
+      } else if (aNext !== undefined || bNext !== undefined) {
         // Missing run times stay last in either direction so paused jobs cannot hide scheduled work.
-        return typeof aNext === "number" ? -1 : 1;
+        return aNext !== undefined ? -1 : 1;
       }
     }
     if (cmp !== 0) {
       return cmp * dir;
     }
     // Stable id tiebreaker keeps pagination deterministic when sort keys match.
-    const aId = typeof a.id === "string" ? a.id : "";
-    const bId = typeof b.id === "string" ? b.id : "";
-    return aId.localeCompare(bId);
+    return a.id.localeCompare(b.id);
   });
   return jobs;
 }

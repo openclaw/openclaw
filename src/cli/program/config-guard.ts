@@ -165,12 +165,12 @@ export async function ensureConfigReady(params: {
 
   // Read-only diagnostics must not record config health. Core-only validation
   // also skips plugin metadata discovery, whose state reads create SQLite sidecars.
-  const configSnapshotOptions =
-    params.validateConfigOnly || commandName === "logs"
-      ? ({ observe: false, pluginValidation: "core-only" } as const)
-      : isManagedNodeRuntime || commandName === "status" || isRestartController
-        ? ({ observe: false } as const)
-        : undefined;
+  const isPassiveConfigOnly = params.validateConfigOnly || commandName === "logs";
+  const configSnapshotOptions = isPassiveConfigOnly
+    ? ({ observe: false, pluginValidation: "core-only" } as const)
+    : isManagedNodeRuntime || commandName === "status" || isRestartController
+      ? ({ observe: false } as const)
+      : undefined;
   const snapshot =
     preflightResult?.snapshot ?? (await getConfigSnapshot(configSnapshotOptions, params.measure));
   const isBareGatewayForegroundRun =

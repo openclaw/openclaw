@@ -15,6 +15,7 @@ import {
   readDurableAcpSignals,
   withAcpCancellationFixture,
 } from "./manager.cancel-session.worker.test-support.js";
+import { stopAcpControllerTurns } from "./manager.controller-test-support.js";
 import { DEFAULT_DEPS } from "./manager.types.js";
 
 it("preserves replacement metadata when a cancelled late handle fails its applied-model policy", async () => {
@@ -104,11 +105,8 @@ it("preserves replacement metadata when a cancelled late handle fails its applie
         turnResult,
         "Policy turn settled before backend ensure.",
       );
-      const cancellation = f.manager.cancelSession({
+      const cancellation = stopAcpControllerTurns({
         ...f.target,
-        expectedRunId: "policy-locator",
-        expectedInstanceId: context.operationalRunInstance.instanceId,
-        expectedOwnerKey: "agent:main:main",
         assertActive: () => {
           if (controlPrepared) {
             stopAdmitted.resolve();
@@ -189,7 +187,6 @@ it("preserves a durable replacement while cold cancellation ensure normalizes it
       const close = vi.spyOn(f.runtime, "close");
       const cancellation = f.manager.cancelSession({
         ...f.target,
-        expectedOwnerKey: "agent:main:main",
         reason: "cold-ensure-replacement",
       });
       const result = Promise.allSettled([cancellation]);
@@ -306,11 +303,8 @@ it.each([
             "retained-runtime",
           );
           expect(f.runTurn).not.toHaveBeenCalled();
-          const cancellation = f.manager.cancelSession({
+          const cancellation = stopAcpControllerTurns({
             ...f.target,
-            expectedRunId: "delayed-normalization",
-            expectedInstanceId: context.operationalRunInstance.instanceId,
-            expectedOwnerKey: "agent:main:main",
             assertActive: () => {
               if (controlPrepared) {
                 admitted.resolve();

@@ -330,9 +330,7 @@
   background: var(--bg-elevated);
 }
 
-.channels-wizard__option[aria-pressed="true"],
-.channels-wizard__option[checked],
-.channels-wizard__option:state(checked) {
+.channels-wizard__option[aria-pressed="true"] {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
   background: var(--accent-subtle);
 }

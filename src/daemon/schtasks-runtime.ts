@@ -11,7 +11,11 @@ import {
 import { readWindowsPortUsageSync } from "../infra/windows-port-pids.js";
 import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { spawnWithFallback } from "../process/spawn-utils.js";
+import { spawnAndWait } from "../process/spawn-utils.js";
+import {
+  buildWindowsCmdExeCommandLine,
+  isWindowsBatchCommand,
+} from "../process/windows-command.js";
 import { sleep } from "../utils.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
@@ -214,6 +218,17 @@ export async function launchFallbackTaskScript(
       cwd: command.workingDirectory || undefined,
       env: mergeProcessEnv([process.env, command.environment]),
     };
+    const executable = argv[0];
+    if (executable && isWindowsBatchCommand(executable)) {
+      argv = [
+        getWindowsCmdExePath(),
+        "/d",
+        "/s",
+        "/c",
+        buildWindowsCmdExeCommandLine(executable, argv.slice(1)),
+      ];
+      options = { ...options, shell: false, windowsVerbatimArguments: true };
+    }
   } else {
     // Preserve native missing-script errors before testing the actual cmd.exe access contract.
     await (await fs.open(scriptPath, "r")).close();
@@ -250,7 +265,7 @@ export async function launchFallbackTaskScript(
       windowsVerbatimArguments: true,
     };
   }
-  const { child } = await spawnWithFallback({
+  const child = await spawnAndWait({
     assertCurrent,
     argv,
     options: { detached: true, stdio: "ignore", windowsHide: true, ...options },

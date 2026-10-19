@@ -25,11 +25,7 @@ import {
 } from "openclaw/plugin-sdk/time-runtime";
 import { CODEX_NATIVE_TOOL_REQUIREMENTS } from "../../native-tool-policy.js";
 import type { CodexComputerContextEpoch } from "./computer-context.js";
-import {
-  isCodexRemoteExecPlacementSandbox,
-  readCodexPluginConfig,
-  type CodexPluginConfig,
-} from "./config.js";
+import { isCodexRemoteExecPlacementSandbox, type CodexPluginConfig } from "./config.js";
 import {
   createCodexHostToolSurface,
   resolveCodexToolConstructionPlan,
@@ -366,9 +362,10 @@ export async function buildDynamicTools(
       !webSearchPresent &&
       persistentCodexWebSearchSurface
     ) {
-      const webSearchPolicy = (
+      // Restart recovery can run before the Gateway projection serves this row.
+      const webSearchPolicy = await (
         await import("openclaw/plugin-sdk/agent-harness")
-      ).resolveWebSearchToolPolicy({
+      ).resolveWebSearchToolPolicyAsync({
         config: params.config,
         modelProvider: params.model.provider,
         modelId: params.modelId,
@@ -606,8 +603,7 @@ export function resolveCodexExternalSandboxPolicyForOpenClawSandbox(
     networkAccess: !dockerNetwork || (network && network !== "none") ? "enabled" : "restricted",
   };
 }
-export function disableCodexPluginThreadConfig(pluginConfig?: unknown): CodexPluginConfig {
-  const config = readCodexPluginConfig(pluginConfig);
+export function disableCodexPluginThreadConfig(config: CodexPluginConfig = {}): CodexPluginConfig {
   return {
     ...config,
     codexPlugins: {

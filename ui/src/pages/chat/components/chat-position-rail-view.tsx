@@ -5,6 +5,7 @@ import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.t
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { MarkdownContent } from "./chat-message-text-view.tsx";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
@@ -133,21 +134,15 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
     return text ? toSanitizedMarkdownHtml(text, { codeBlockChrome: "none" }) : "";
   });
   const stopScrollInput = (event: Event) => props.stopScrollInput.handleEvent(event);
-  const inputEvents = ["wheel", "touchstart", "touchmove"] as const;
-  let scroller: HTMLDivElement | undefined;
+  let stopInput: (() => void)[] = [];
   const bindInputScroller = (element: HTMLDivElement) => {
-    scroller = element;
     bindScroller(element);
     // Stop touch input here, before the transcript's native history listeners.
-    for (const event of inputEvents) {
-      element.addEventListener(event, stopScrollInput, { passive: true });
-    }
+    stopInput = ["wheel", "touchstart", "touchmove"].map((type) =>
+      listen(element, type, stopScrollInput, { passive: true }),
+    );
   };
-  onCleanup(() => {
-    for (const event of inputEvents) {
-      scroller?.removeEventListener(event, stopScrollInput);
-    }
-  });
+  onCleanup(() => stopInput.forEach((stop) => stop()));
   const Preview = () => {
     onCleanup(() => bindPreview());
     return (

@@ -176,7 +176,7 @@ export async function prepareSubagentKillSession(
           env: owner.scope?.env ?? env,
         };
         const lifetime = await prepareSessionGenerationFacts({
-          storePath: generationStorePath,
+          storePath: database.path,
           sessionKey,
           agentId,
           sessionId: entry?.sessionId ?? null,

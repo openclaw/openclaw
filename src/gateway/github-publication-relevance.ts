@@ -14,7 +14,7 @@ const gitObjectId = /^[a-f0-9]{40}$/iu;
 export async function isGitHubPublicationSuperseded(
   snapshot: AcceptedSnapshot,
   pullRequests: readonly ControlUiSessionPullRequest[],
-  { fetchImpl = fetch, assertCurrent }: { fetchImpl?: typeof fetch; assertCurrent: () => void },
+  { assertCurrent }: { assertCurrent: () => void },
 ): Promise<boolean> {
   assertCurrent();
   const tree = snapshot.workspace_tree;
@@ -38,7 +38,6 @@ export async function isGitHubPublicationSuperseded(
   // The PR reader admits one recorded repository host before returning its candidates.
   const read = prepareSessionPullRequestGitHubRead(
     new URL(candidates[0]!.pr.url).hostname,
-    fetchImpl,
     assertCurrent,
     { optionalAuth: false },
   );

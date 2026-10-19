@@ -385,6 +385,92 @@ describe("ConfigPage navigation", () => {
   });
 
   describe("ConfigPage pending section navigation", () => {
+    it.each([
+      {
+        pageId: "appearance",
+        search: "?section=__appearance__",
+        targetId: "settings-appearance-typography",
+      },
+      {
+        pageId: "appearance",
+        search: "?section=__appearance__",
+        targetId: "settings-accent-status",
+      },
+      { pageId: "ai-agents", search: "?section=session", targetId: "settings-session-storage" },
+      {
+        pageId: "communications",
+        search: "?section=transcripts",
+        targetId: "settings-communications-meeting-capture",
+      },
+    ] as const)(
+      "scrolls to the Settings $targetId anchor after rendering",
+      ({ pageId, search, targetId }) => {
+        const frames = new Map<number, FrameRequestCallback>();
+        let nextFrameId = 0;
+        vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+          const id = ++nextFrameId;
+          frames.set(id, callback);
+          return id;
+        });
+        vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+          frames.delete(id);
+        });
+        const context = routeContext();
+        context.runtimeConfig.state.configSchema = {
+          type: "object",
+          properties: {
+            session: { type: "object", properties: { enabled: { type: "boolean" } } },
+            transcripts: { type: "object", properties: { enabled: { type: "boolean" } } },
+          },
+        };
+        const view = mountConfigPage(context, {
+          pageId,
+          routeData: configRouteData({
+            pathname: `/settings/${pageId}`,
+            search,
+            hash: `#${targetId}`,
+          }),
+        });
+        const target = expectDefined(
+          view.page.querySelector<HTMLElement>(`#${targetId}`),
+          "rendered Settings anchor",
+        );
+        const scroll = vi.fn();
+        target.scrollIntoView = scroll;
+        const pending = [...frames.values()];
+        frames.clear();
+        for (const frame of pending) {
+          frame(0);
+        }
+        expect(scroll).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ block: "start" }));
+      },
+    );
+
+    it("does not scroll to a matching ID outside the Settings host", () => {
+      const outside = document.createElement("div");
+      outside.id = "external-setting-target";
+      const scroll = vi.fn();
+      outside.scrollIntoView = scroll;
+      document.body.append(outside);
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+      mountConfigPage(routeContext(), {
+        pageId: "communications",
+        routeData: configRouteData({
+          pathname: "/settings/communications",
+          search: "",
+          hash: "#external-setting-target",
+        }),
+      });
+      for (const frame of frames) {
+        frame(0);
+      }
+      expect(scroll).not.toHaveBeenCalled();
+    });
+
     it.each(["replacement", "retirement", "disconnect"] as const)(
       "does not scroll to a stale target after %s",
       async (transition) => {

@@ -77,8 +77,8 @@ describe("PostgreSQL schema generation", () => {
         kind,
       ).toEqual([]);
     }
-    expect(agent.objects.filter((item) => item.kind === "trigger" && item.sql)).toHaveLength(10);
-    expect(agent.objects.filter((item) => item.kind === "triggerFunction")).toHaveLength(4);
+    expect(agent.objects.filter((item) => item.kind === "trigger" && item.sql)).toHaveLength(4);
+    expect(agent.objects.filter((item) => item.kind === "triggerFunction")).toHaveLength(2);
     expect(agent.objects.filter((item) => item.kind === "check" && item.sql)).toHaveLength(66);
     const pending = report.pendingCapabilities.filter((item) => item.database === "agent");
     expect(pending.filter((item) => item.kind === "trigger")).toHaveLength(4);
@@ -217,6 +217,8 @@ describe("PostgreSQL schema generation", () => {
         "sqlite-daemon-catalogs.json",
         "sqlite-memory-catalogs.ts",
         "sqlite-memory-catalogs.json",
+        "sqlite-client-catalogs.ts",
+        "sqlite-client-catalogs.json",
         "state-port.json",
       ].toSorted(),
     );

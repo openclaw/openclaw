@@ -123,6 +123,35 @@ it("distinguishes explicit values that equal the defaults", () => {
   });
 });
 
+it("refreshes notification presentation from in-place owner publications", () => {
+  let publishNotifications = () => {};
+  const snapshot: NonNullable<ApplicationContext["nativeNotifications"]>["snapshot"] = {
+    permission: "granted",
+    test: { state: "sent" },
+  };
+  const nativeNotifications = {
+    snapshot,
+    subscribe: (notify: () => void) => {
+      publishNotifications = notify;
+      return () => {
+        publishNotifications = () => {};
+      };
+    },
+  };
+  const context = configContext({ nativeNotifications });
+  const { state } = mountConfigPageState(context, { pageId: "notifications" });
+  expect(state.configProps().nativeNotifications?.test?.state).toBe("sent");
+
+  snapshot.test = { state: "pending" };
+  publishNotifications();
+  flush();
+  expect(state.configProps().nativeNotifications?.test?.state).toBe("pending");
+
+  Object.assign(context.webPush.snapshot, { loading: true });
+  publishConfigSource(context.webPush);
+  expect(state.configProps().webPush?.loading).toBe(true);
+});
+
 it.each([
   ["profile writer", { id: "profile-owner" }, "operator.write", false, true, false],
   ["read-only profile", { id: "profile-viewer" }, "operator.read", true, false, true],

@@ -1,3 +1,4 @@
+import type { AgentHarnessSessionForkFailureCode } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   readVisibleSessionTranscriptMessageEntries,
   type SessionTranscriptMessageEntry,
@@ -13,11 +14,7 @@ import {
 } from "./transcript-mirror-attestation.js";
 import { readMirrorIdentity, readUpstreamUserText } from "./upstream-prompt-provenance.js";
 
-type CodexUpstreamForkBoundaryFailureCode =
-  | "steer-message"
-  | "in-progress-turn"
-  | "drift-mismatch"
-  | "upstream-unavailable";
+type CodexUpstreamForkBoundaryFailureCode = AgentHarnessSessionForkFailureCode;
 
 type CodexUpstreamForkBoundary = {
   beforeTurnId: string;

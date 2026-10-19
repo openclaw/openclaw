@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { isCloudCodeAssistFormatError } from "./classify-core.js";
 import {
   classifyFailoverReason,
   classifyFailoverSignal,
   isAuthErrorMessage,
   isBillingErrorMessage,
-  isCloudCodeAssistFormatError,
   isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./classify.js";

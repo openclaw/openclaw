@@ -133,6 +133,54 @@ describe("openclaw-file-preview-modal", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["files", "document"] as const)(
+    "updates the active %s preview and focus without untracked reads",
+    async (layout) => {
+      const warning = vi.spyOn(console, "warn");
+      const modal = await renderPreview({ layout });
+      modal.activePath = files[1]!.path;
+      await modal.updateComplete;
+
+      expect(modal.querySelector(".detail-body")?.textContent).toContain("noreply@example.com");
+      expect(document.activeElement).toBe(
+        modal.querySelector(layout === "files" ? ".search" : ".item.is-active"),
+      );
+      expect(warning.mock.calls.flat().join(" ")).not.toContain("STRICT_READ_UNTRACKED");
+    },
+  );
+
+  it("reveals active rows on list updates and only refocuses changed document paths", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const modal = await renderPreview();
+    const focusTarget = modal.querySelector<HTMLElement>(".modal")!;
+    focusTarget.tabIndex = 0;
+    focusTarget.focus();
+
+    scroll.mockClear();
+    modal.query = "digest";
+    await modal.updateComplete;
+    expect(scroll.mock.contexts.at(-1)).toBe(modal.querySelector(".item.is-active"));
+    expect(document.activeElement).toBe(focusTarget);
+
+    scroll.mockClear();
+    modal.files = files.map((file) => ({ ...file, size: "3 KB" }));
+    await modal.updateComplete;
+    expect(scroll.mock.contexts.at(-1)).toBe(modal.querySelector(".item.is-active"));
+    expect(document.activeElement).toBe(focusTarget);
+
+    scroll.mockClear();
+    modal.layout = "document";
+    await modal.updateComplete;
+    expect(scroll.mock.contexts.at(-1)).toBe(modal.querySelector(".item.is-active"));
+    expect(document.activeElement).toBe(focusTarget);
+
+    scroll.mockClear();
+    modal.activePath = files[1]!.path;
+    await modal.updateComplete;
+    expect(scroll.mock.contexts.at(-1)).toBe(modal.querySelector(".item.is-active"));
+    expect(document.activeElement).toBe(modal.querySelector(".item.is-active"));
+  });
+
   it("restores modal focus when the same element reconnects", async () => {
     const modal = await renderPreview();
     const outside = document.createElement("button");

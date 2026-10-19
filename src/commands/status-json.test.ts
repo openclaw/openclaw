@@ -21,6 +21,17 @@ vi.mock("./status.scan.fast-json.js", () => ({
   scanStatusJsonFast: mocks.scanStatusJsonFast,
 }));
 
+// mock-isolation: Command policy tests consume a fixed unavailable snapshot without reading stores.
+vi.mock("./status-database-engines.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./status-database-engines.js")>()),
+  resolveStatusDatabaseEngines: async () => ({
+    source: "unavailable",
+    stores: [],
+    reason:
+      "Physical stores unknown: admitted facts unavailable. Run openclaw doctor for recovery steps.",
+  }),
+}));
+
 vi.mock("../security/audit.runtime.js", () => ({
   runSecurityAudit: mocks.runSecurityAudit,
 }));
@@ -85,6 +96,30 @@ function createExpectedStatusPayload() {
     updateChannelSource: "config",
     memory: null,
     memoryPlugin: null,
+    databaseEngines: {
+      source: "unavailable",
+      experimental: false,
+      families: [
+        ["state", "Shared state", false],
+        ["agent", "Agent data", false],
+        ["workboard", "Workboard", false],
+        ["logbook", "Logbook", false],
+        ["team-reports", "Team Reports", false],
+        ["quarantine", "Database quarantine", true],
+        ["managed-update", "Managed update handoffs", true],
+        ["package-activation", "Package activation journal", true],
+      ].map(([id, label, fixedLocal]) => ({
+        id,
+        label,
+        default: "sqlite",
+        override: null,
+        fixedLocal,
+        effective: "sqlite",
+      })),
+      stores: [],
+      reason:
+        "Physical stores unknown: admitted facts unavailable. Run openclaw doctor for recovery steps.",
+    },
     gateway: {
       mode: "local",
       url: "ws://127.0.0.1:18789",

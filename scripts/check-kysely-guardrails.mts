@@ -90,7 +90,12 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-agent-outbox-sequence-migration.ts",
     // Versioned payload rebuild preserves native bytes and 64-bit physical rowids.
     "src/state/openclaw-agent-transcript-payload-migration.ts",
+    // Versioned trajectory storage owns payload columns and its retention index.
+    "src/state/openclaw-agent-trajectory-storage-migration.ts",
     "src/state/openclaw-agent-transcript-fts-schema.ts",
+    // Versioned physical-layout migrations own captured schema and table reconstruction.
+    "src/state/openclaw-agent-write-layout-migration.ts",
+    "src/state/sqlite-table-layout-migration.ts",
     "src/state/openclaw-state-db-audit-migration.ts",
     "src/state/openclaw-state-db-delivery-queue-backfill.ts",
     "src/state/openclaw-state-db-legacy-backfills.ts",
@@ -122,7 +127,6 @@ const rawSqliteAllowPathGroups = {
     "src/snapshot/local-repository.ts",
   ],
   "read-only shared state database access": [
-    "src/claws/package-resume.ts",
     "src/state/openclaw-agent-db-readonly.ts",
     "src/state/openclaw-state-db-readonly.ts",
   ],

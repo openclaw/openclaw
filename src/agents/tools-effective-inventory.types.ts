@@ -4,6 +4,7 @@
  * present enabled tools grouped by source.
  */
 import type { ToolsEffectiveEntry } from "../../packages/gateway-protocol/src/schema/tools-catalog.js";
+import type { ReplyToMode } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
@@ -42,7 +43,7 @@ export type ResolveEffectiveToolInventoryParams = {
   groupId?: string | null;
   groupChannel?: string | null;
   groupSpace?: string | null;
-  replyToMode?: "off" | "first" | "all" | "batched";
+  replyToMode?: ReplyToMode;
   webSearchEnabled?: boolean;
   modelHasVision?: boolean;
   requireExplicitMessageTarget?: boolean;

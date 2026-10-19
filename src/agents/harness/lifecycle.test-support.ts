@@ -36,7 +36,11 @@ export function createAttemptParams(): AgentHarnessAttemptParamsV2 {
 }
 
 export function createFinalizationParams(): AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2> {
-  const { hostCapabilities: _hostCapabilities, ...params } = createAttemptParams();
+  const {
+    hostCapabilities: _hostCapabilities,
+    onSettledTurn: _onSettledTurn,
+    ...params
+  } = createAttemptParams();
   return params;
 }
 

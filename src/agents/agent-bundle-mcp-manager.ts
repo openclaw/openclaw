@@ -294,6 +294,34 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
         (params.sessionKey ? store.sessionIdBySessionKey.get(params.sessionKey) : undefined);
       return sessionId ? store.runtimesBySessionId.get(sessionId) : undefined;
     },
+    captureSessionRetirement(params) {
+      const sessionId =
+        params.sessionId ??
+        (params.sessionKey ? store.sessionIdBySessionKey.get(params.sessionKey) : undefined);
+      if (!sessionId) {
+        return undefined;
+      }
+      const expectedRuntimes = new Map<string, SessionMcpRuntime>();
+      for (const key of lifecycle.runtimeKeysForSessionId(sessionId)) {
+        const runtime = store.runtimesBySessionId.get(key);
+        if (runtime) {
+          expectedRuntimes.set(key, runtime);
+        }
+      }
+      if (expectedRuntimes.size === 0) {
+        return undefined;
+      }
+      return {
+        sessionId,
+        retire: (assertCurrent: () => void) =>
+          lifecycle.disposeManagedRuntimes(sessionId, {
+            expectedRuntimes,
+            assertCurrent,
+            preserveActiveLeases: true,
+            preserveRequiredRetirement: store.requiredRetirementSessionIds.has(sessionId),
+          }),
+      };
+    },
     disposeSession: lifecycle.disposeManagedRuntimes,
     deferRetirement(sessionId, retirementOpts) {
       if (retirementOpts?.retainAcrossReuse === true) {

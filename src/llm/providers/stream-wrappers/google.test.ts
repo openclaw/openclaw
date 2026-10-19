@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeGoogleThinkingPayload } from "./google.js";
+import { sanitizeGoogleThinkingPayload } from "./google-thinking-payload.js";
 
 type ThinkingCase = {
   name: string;

@@ -1,24 +1,28 @@
-import { createMemo, createRenderEffect, createSignal } from "solid-js";
+import { createMemo } from "solid-js";
 import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../../lib/presentation.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
 
 /** Park immediately; reveal alongside the parent's next props unless explicitly previewing. */
 export function usePanePresentation(source: () => PresentationValue) {
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  createRenderEffect(source, (binding) => {
+  const presentation = createMemo(() => {
+    const binding = source();
     if (typeof binding === "boolean") {
-      return undefined;
+      return binding;
     }
-    const changed = () => {
-      if (!binding.isPresented() || binding.preview?.()) {
-        setRevision((value) => value + 1);
-      }
-    };
-    binding.owner.addEventListener(PRESENTATION_CHANGED_EVENT, changed);
-    return () => binding.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, changed);
+    return projectSource(binding, {
+      read: (owner) => owner.isPresented(),
+      subscribe: (owner, notify) =>
+        listen(owner.owner, PRESENTATION_CHANGED_EVENT, () => {
+          if (!owner.isPresented() || owner.preview?.()) {
+            notify();
+          }
+        }),
+      equality: "revision",
+    });
   });
   return createMemo(() => {
-    revision();
-    const binding = source();
-    return typeof binding === "boolean" ? binding : binding.isPresented();
+    const current = presentation();
+    return typeof current === "boolean" ? current : current.read();
   });
 }

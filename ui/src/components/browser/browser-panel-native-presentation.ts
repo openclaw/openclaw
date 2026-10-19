@@ -5,11 +5,11 @@ import {
 import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
+import type { BrowserPanelHost } from "./browser-panel-operation-ownership.ts";
 
 interface BrowserPanelNativePresentationHost {
   readonly host: Pick<
-    BrowserPanelControllerHost,
+    BrowserPanelHost,
     "isConnected" | "browserPanelIsOpen" | "renderRoot" | "sessionKey"
   >;
   readonly native: { readonly activeTab: NativeBrowserTab | undefined };

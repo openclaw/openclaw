@@ -19,6 +19,34 @@ steps:
     stdin: $fetch.stdout
 `;
 
+describe("YAML numeric source preservation", () => {
+  it.each([
+    { operation: "leaf replacement", address: "name", value: "updated" },
+    { operation: "map insertion", address: "options/+enabled", value: "true" },
+    { operation: "sequence append", address: "items/+", value: "2" },
+    { operation: "indexed insertion", address: "items/+0", value: "2" },
+  ])("preserves untouched numeric sources during $operation", ({ address, value }) => {
+    const before =
+      "id: 9007199254740993\nratio: 1.0000000000000001\nname: old\n" +
+      "options: {}\nitems: [9007199254740995]\n";
+    const ast = parseYaml(before).ast;
+    const result = setOcPath(ast, parseOcPath(`oc://workflow.yaml/${address}`), value);
+
+    expect(result.raw).toContain("id: 9007199254740993\n");
+    expect(result.raw).toContain("ratio: 1.0000000000000001\n");
+    expect(result.raw).toContain("9007199254740995");
+    expect(typeof parseYaml(result.raw).ast.doc.get("id")).toBe("number");
+    expect(ast.raw).toBe(before);
+  });
+
+  it("replaces the selected numeric source even when its rounded value is unchanged", () => {
+    const ast = parseYaml("untouched: 9007199254740993\nselected: 1.0000000000000001\n").ast;
+    const result = setOcPath(ast, parseOcPath("oc://workflow.yaml/selected"), "1");
+
+    expect(result.raw).toBe("untouched: 9007199254740993\nselected: 1\n");
+  });
+});
+
 describe("setYamlOcPath — direct", () => {
   it("reports unresolved for missing path", () => {
     const { ast } = parseYaml(LOBSTER);

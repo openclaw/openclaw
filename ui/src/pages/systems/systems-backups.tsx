@@ -178,11 +178,10 @@ export function SystemsBackups(props: { controller: Systems }) {
                         </button>
                         {probe() ? (
                           <p
-                            class={
-                              probe()!.state === "ok"
-                                ? "systems-backups__hint"
-                                : "systems-backup__error"
-                            }
+                            class={{
+                              "systems-backups__hint": probe()!.state === "ok",
+                              "systems-backup__error": probe()!.state !== "ok",
+                            }}
                             role="status"
                           >
                             {t("systems.backups.probe." + probe()!.state)}

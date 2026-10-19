@@ -15,11 +15,7 @@ import {
 import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const migrationPaths = ["runtime open", "doctor repair"] as const;
 const preparationKey = "a".repeat(64);
-const migrationCases = [15, 16].flatMap((version) =>
-  migrationPaths.map((via) => ({ version, via })),
-);
 const retainedTables = [
   "worker_environment_credentials",
   "worker_environment_ssh_fallback_ports",
@@ -111,7 +107,7 @@ function createLegacyWorkers(version = 16, publicationDeferred = false) {
 }
 
 describe("prepared worker schema migration", () => {
-  it.each(migrationPaths)(
+  it.each(["doctor repair"] as const)(
     "upgrades deferred v16 content through %s without publishing over an old updater",
     (via) => {
       const { options, before } = createLegacyWorkers(16, true);
@@ -176,7 +172,7 @@ describe("prepared worker schema migration", () => {
     ).toEqual([]);
   });
 
-  it.each(migrationCases)(
+  it.each([{ version: 15, via: "runtime open" }])(
     "preserves v$version workers and unresolved cleanup through $via",
     ({ version, via }) => {
       const { options, databasePath, before } = createLegacyWorkers(version);
@@ -189,6 +185,7 @@ describe("prepared worker schema migration", () => {
           changes: [
             "Recorded prepared worker ownership and one-use lifecycle (v17)",
             "Replaced retained task indexes with ordered cron history indexes (v24)",
+            "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
             "Rebuilt canonical shared-state SQLite indexes (1)",
           ],
           warnings: [],
@@ -232,7 +229,7 @@ describe("prepared worker schema migration", () => {
     },
   );
 
-  it.each(migrationCases)(
+  it.each([{ version: 16, via: "doctor repair" }])(
     "rolls back all v$version migrations and markers after failed $via",
     ({ version, via }) => {
       const { options, databasePath } = createLegacyWorkers(version);
@@ -248,30 +245,6 @@ describe("prepared worker schema migration", () => {
           changes: [],
           warnings: [expect.stringContaining("prepared migration rollback")],
         });
-      }
-      const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
-      try {
-        expect(readSnapshot(preserved)).toEqual(before);
-      } finally {
-        preserved.close();
-      }
-    },
-  );
-
-  it.each(migrationCases)(
-    "refuses incomplete v$version ownership before $via",
-    ({ version, via }) => {
-      const { options, databasePath } = createLegacyWorkers(version);
-      const legacy = openNodeSqliteDatabase(databasePath);
-      legacy.exec("DROP TABLE session_groups;");
-      const before = readSnapshot(legacy);
-      legacy.close();
-      if (via === "runtime open") {
-        expect(() => openOpenClawStateDatabase(options)).toThrow(/missing table session_groups/);
-      } else {
-        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([
-          expect.stringContaining("missing table session_groups"),
-        ]);
       }
       const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
       try {

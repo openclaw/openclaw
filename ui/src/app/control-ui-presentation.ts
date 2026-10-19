@@ -1,4 +1,5 @@
 import { controlUiAccentInk } from "./accent-contrast.ts";
+import { controlUiDocumentHead } from "./control-ui-document-head.ts";
 
 const ACCENT_CSS_VARIABLES = [
   "--ring",
@@ -20,6 +21,7 @@ let operatorSeamColor: string | undefined;
 let userAccentOverride: string | undefined;
 const systemChromeRevisions = new WeakMap<HTMLElement, string>();
 
+// Project the independently rendered shell into the static document's chrome and head metadata.
 export function syncControlUiSystemChrome(paletteChanged = false): void {
   if (typeof document === "undefined") {
     return;
@@ -52,7 +54,7 @@ export function syncControlUiSystemChrome(paletteChanged = false): void {
     return;
   }
   root.style.setProperty("--control-ui-system-chrome-background", background);
-  for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
+  for (const meta of controlUiDocumentHead().themeColors) {
     meta.content = background;
     meta.removeAttribute("media");
   }

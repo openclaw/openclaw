@@ -11,8 +11,8 @@ read_when:
 wording differs from the original text. It chunks memory into small pieces and
 searches them with embeddings, keywords, or both.
 
-The built-in index supports SQLite and PostgreSQL agent databases. PostgreSQL
-search is experimental and uses engine-local text ranking, so scores and ordering
+The built-in index supports SQLite and PostgreSQL agent databases. The PostgreSQL
+engine remains experimental. Search uses engine-local text ranking, so scores and ordering
 can differ from SQLite. It requires `unaccent` for text search, `pg_trgm` for the
 trigram tokenizer, and `vector` for semantic search. Explicit
 `memory.search.provider: "none"` enables keyword-only search without `vector`;
@@ -20,6 +20,21 @@ memory status reports this as `fts-only`. See
 [PostgreSQL memory search](/concepts/memory#postgresql-memory-search) for lifecycle
 behavior and [Database engines](/reference/database-engines#search-on-postgresql)
 for extension setup.
+
+On PostgreSQL, both body keywords and filename/path lookup use the admitted
+index. Source and selected-agent scope restrict candidates before the result
+limit; semantic retrieval also filters the embedding model. Text uses native
+full-text ranking; semantic retrieval uses exact
+cosine distance over a derived float32 vector projection. Hybrid search keeps
+the same vector/text weights, but PostgreSQL text scores are not SQLite BM25
+scores. A phrase with nearby terms can rank above scattered terms without
+promising identical ordering across engines.
+
+PostgreSQL memory queries accept at most 4,096 UTF-16 code units and 128 terms, return
+at most 200 hits, and bound each snippet to 700 characters. Larger queries return
+an actionable error before search. Memory transcript recall retains its existing
+200-candidate window followed by session visibility checks; it does not promise
+complete recall beyond that window or SQL-level session permission filtering.
 
 The result-count argument is `maxResults` (an integer of at least 1). The tool
 also accepts `max_results` and `limit` as aliases. If several are supplied,
@@ -129,12 +144,13 @@ flowchart LR
 
 - **Vector search** matches similar meaning ("gateway host" matches "the
   machine running OpenClaw").
-- **BM25 keyword search** matches exact terms (IDs, error strings, config
+- **Keyword search** matches exact terms (IDs, error strings, config
   keys). It accepts NFC and NFD Unicode spellings without rewriting notes or
   rebuilding existing indexes, including notes that mix those forms across words.
   Search first requires every query term. Only when neither body nor filename
   search finds a match does it retry body search once with any query term and
-  language-specific keyword expansion, ranked by BM25. This recovers answers
+  language-specific keyword expansion. SQLite ranks by BM25; PostgreSQL uses its
+  native full-text rank or trigram similarity. This recovers answers
   without broadening a keyword query that already has matches.
 - **Filename search** indexes paths separately from note bodies. Exact full
   paths, basenames, and filename stems rank ahead of partial path matches,

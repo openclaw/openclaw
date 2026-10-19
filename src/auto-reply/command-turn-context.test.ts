@@ -1,17 +1,31 @@
 /** Tests command-turn context normalization and source/kind conversions. */
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createCommandTurnContext,
   isAuthorizedTextSlashCommandTurn,
   isExplicitCommandTurn,
+  isExplicitFollowupCommandTurn,
   isNativeCommandTurn,
   resolveCommandTurnContext,
   resolveCommandTurnTargetSessionKey,
+  type CommandTurnContext,
+  type CommandTurnContextInput,
 } from "./command-turn-context.js";
 import { isExplicitCommandTurnContext } from "./command-turn-detection.js";
 
-const emptyConfig = {} as const satisfies OpenClawConfig;
+const isExplicit = (input: CommandTurnContextInput) => isExplicitCommandTurnContext(input, {});
+function normalTurn(body: string, visible = body): CommandTurnContextInput {
+  return {
+    CommandTurn: { kind: "normal", source: "message", authorized: false, body },
+    CommandAuthorized: true,
+    Body: visible,
+    RawBody: visible,
+    CommandBody: body,
+  };
+}
+function targetSession(turn: CommandTurnContext, key: string) {
+  return resolveCommandTurnTargetSessionKey({ CommandTurn: turn, CommandTargetSessionKey: key });
+}
 
 describe("resolveCommandTurnContext", () => {
   it("keeps normal message turns non-explicit even when command auth is true elsewhere", () => {
@@ -39,89 +53,26 @@ describe("resolveCommandTurnContext", () => {
       body: "",
       commandName: undefined,
     });
-    expect(isExplicitCommandTurnContext(input, emptyConfig)).toBe(false);
+    expect(isExplicit(input)).toBe(false);
   });
 
   it("treats authorized control command bodies as explicit without legacy source tags", () => {
-    expect(
-      isExplicitCommandTurnContext(
-        {
-          CommandAuthorized: true,
-          CommandBody: "/reset",
-        },
-        emptyConfig,
-      ),
-    ).toBe(true);
-    expect(
-      isExplicitCommandTurnContext(
-        {
-          CommandAuthorized: true,
-          CommandBody: "hey can you /status please",
-        },
-        emptyConfig,
-      ),
-    ).toBe(false);
+    expect(isExplicit({ CommandAuthorized: true, CommandBody: "/reset" })).toBe(true);
+    expect(isExplicit({ CommandAuthorized: true, CommandBody: "hey can you /status please" })).toBe(
+      false,
+    );
   });
 
   it("keeps structured normal command turns non-explicit", () => {
-    expect(
-      isExplicitCommandTurnContext(
-        {
-          CommandTurn: {
-            kind: "normal",
-            source: "message",
-            authorized: false,
-            body: "/think high through this",
-          },
-          CommandAuthorized: true,
-          Body: "through this",
-          RawBody: "through this",
-          CommandBody: "/think high through this",
-        },
-        emptyConfig,
-      ),
-    ).toBe(false);
+    expect(isExplicit(normalTurn("/think high through this", "through this"))).toBe(false);
   });
 
   it("uses cleaned command bodies for command-shaped structured normal turns", () => {
-    expect(
-      isExplicitCommandTurnContext(
-        {
-          CommandTurn: {
-            kind: "normal",
-            source: "message",
-            authorized: false,
-            body: "/reset",
-          },
-          CommandAuthorized: true,
-          Body: "/reset@openclaw",
-          RawBody: "/reset@openclaw",
-          CommandBody: "/reset",
-        },
-        emptyConfig,
-      ),
-    ).toBe(true);
+    expect(isExplicit(normalTurn("/reset", "/reset@openclaw"))).toBe(true);
   });
 
   it("normalizes bot-mentioned command bodies for structured normal turns", () => {
-    expect(
-      isExplicitCommandTurnContext(
-        {
-          CommandTurn: {
-            kind: "normal",
-            source: "message",
-            authorized: false,
-            body: "/reset@openclaw",
-          },
-          CommandAuthorized: true,
-          Body: "/reset@openclaw",
-          RawBody: "/reset@openclaw",
-          CommandBody: "/reset@openclaw",
-          BotUsername: "openclaw",
-        },
-        emptyConfig,
-      ),
-    ).toBe(true);
+    expect(isExplicit({ ...normalTurn("/reset@openclaw"), BotUsername: "openclaw" })).toBe(true);
   });
 
   it("lets structured command turns override legacy command fields", () => {
@@ -177,12 +128,7 @@ describe("resolveCommandTurnContext", () => {
 
     expect(isNativeCommandTurn(nativeTurn)).toBe(true);
     expect(isAuthorizedTextSlashCommandTurn(textTurn)).toBe(true);
-    expect(
-      resolveCommandTurnTargetSessionKey({
-        CommandTurn: nativeTurn,
-        CommandTargetSessionKey: " target-session ",
-      }),
-    ).toBe("target-session");
+    expect(targetSession(nativeTurn, " target-session ")).toBe("target-session");
     expect(
       resolveCommandTurnTargetSessionKey({
         CommandSource: "native",
@@ -191,31 +137,42 @@ describe("resolveCommandTurnContext", () => {
       }),
     ).toBe("legacy-target");
     expect(
-      resolveCommandTurnTargetSessionKey({
-        CommandTurn: createCommandTurnContext("text", {
+      targetSession(
+        createCommandTurnContext("text", {
           authorized: true,
           body: "/steer finish with a table",
           commandName: "steer",
         }),
-        CommandTargetSessionKey: " active-direct-session ",
-      }),
+        " active-direct-session ",
+      ),
     ).toBe("active-direct-session");
+    expect(targetSession(textTurn, "must-not-retarget-status")).toBeUndefined();
     expect(
-      resolveCommandTurnTargetSessionKey({
-        CommandTurn: textTurn,
-        CommandTargetSessionKey: "must-not-retarget-status",
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveCommandTurnTargetSessionKey({
-        CommandTurn: createCommandTurnContext("text", {
+      targetSession(
+        createCommandTurnContext("text", {
           authorized: false,
           body: "/steer denied",
           commandName: "steer",
         }),
-        CommandTargetSessionKey: "must-not-retarget-unauthorized",
-      }),
+        "must-not-retarget-unauthorized",
+      ),
     ).toBeUndefined();
+    const followup = createCommandTurnContext("text", {
+      authorized: true,
+      commandName: "followup",
+      body: "/followup next task",
+    });
+    expect(isExplicitFollowupCommandTurn({ CommandTurn: followup, Body: "next task" })).toBe(true);
+    expect(isExplicitFollowupCommandTurn({ CommandTurn: { ...followup, authorized: false } })).toBe(
+      false,
+    );
+    expect(isExplicitFollowupCommandTurn({ Body: "/followup untrusted text" })).toBe(false);
+    expect(
+      resolveCommandTurnTargetSessionKey({
+        CommandTurn: followup,
+        CommandTargetSessionKey: " active-direct-session ",
+      }),
+    ).toBe("active-direct-session");
     expect(isExplicitCommandTurn(undefined)).toBe(false);
   });
 });

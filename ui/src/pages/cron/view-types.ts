@@ -29,6 +29,7 @@ export type CronProps = {
   listError: string | null;
   /** Canonical gateway capability for every mutation-capable cron control. */
   canManage: boolean;
+  connected: boolean;
   jobsLoadingMore: boolean;
   status: CronStatus | null;
   jobs: CronJob[];

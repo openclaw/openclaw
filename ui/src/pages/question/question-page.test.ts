@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -163,4 +164,27 @@ it("keeps confirmed missing questions unavailable without a retry", async () => 
   await settle(page);
   expect(page.textContent).toContain("Unavailable");
   expect(retry(page)).toBeUndefined();
+});
+
+it("loads only the final question when native IDs change in one turn", async () => {
+  const request = vi.fn(async (_method: string, params?: unknown) => {
+    if (!isRecord(params) || typeof params.id !== "string") {
+      throw new Error("Expected a question ID");
+    }
+    return { question: question(params.id) };
+  });
+  const { page } = mount(request);
+  await settle(page);
+  await questionPanelIn(page);
+
+  page.questionId = "question-two";
+  page.questionId = "question-three";
+  await settle(page);
+  await questionPanelIn(page);
+
+  expect(request.mock.calls.map(([, params]) => params)).toEqual([
+    { id: "question-one" },
+    { id: "question-three" },
+  ]);
+  expect(page.textContent).toContain("Who should receive question-three?");
 });

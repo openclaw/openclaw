@@ -81,6 +81,7 @@ export async function runSessionsSendA2AFlow(params: {
   requesterSession?: AgentStepSession;
   requesterDeliveryGeneration?: SessionDeliveryGeneration;
   requesterOrigin?: DeliveryContext;
+  requester?: Parameters<typeof runAgentStep>[0]["requester"];
   requesterChannel?: string;
   reply?: AgentWaitResult & { replyText?: string };
   notifyRequesterOnWaitFailure?: boolean;
@@ -93,6 +94,7 @@ export async function runSessionsSendA2AFlow(params: {
   const requesterStepContext = {
     agentId: params.requesterAgentId,
     deliveryContext: params.requesterOrigin,
+    requester: params.requester,
     expectedSession: params.requesterSession,
     timeoutMs: params.replyTimeoutMs,
     sourceSessionKey: params.targetSessionKey,
@@ -117,8 +119,7 @@ export async function runSessionsSendA2AFlow(params: {
         ((wait.status === "error" && !wait.retryableTransportError) ||
           isTerminalAgentWaitTimeout(wait))
       ) {
-        const error =
-          typeof wait.error === "string" && wait.error.trim() ? `: ${wait.error.trim()}` : "";
+        const error = wait.error?.trim() ? `: ${wait.error.trim()}` : "";
         await deliverRequesterReply({
           ...requesterStepContext,
           sessionKey: params.requesterSessionKey,

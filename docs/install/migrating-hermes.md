@@ -159,6 +159,8 @@ openclaw migrate apply hermes --json --yes
 
 ## Troubleshooting
 
+If source directory inspection or skill listing fails, preview stops with the filesystem error instead of silently omitting files. Resolve the reported access or storage problem and rerun the preview before applying.
+
 <AccordionGroup>
   <Accordion title="Apply refuses with conflicts">
     Inspect the plan output. Each conflict identifies the source path and the existing target. Decide per item whether to skip, edit the target, or rerun with `--overwrite`.

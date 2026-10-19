@@ -24,6 +24,7 @@ const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
   "generateGatewayToken",
   "allowExec",
   "deep",
+  "fullIntegrityCheck",
   "lint",
   "postUpgrade",
   "sessionSqlite",
@@ -71,6 +72,7 @@ export function registerMaintenanceCommands(
       false,
     )
     .option("--deep", "Scan system services for extra gateway installs", false)
+    .option("--full-integrity-check", "Run full database integrity checks during migrations", false)
     .option("--lint", "Run read-only health checks and report findings", false)
     .option(
       "--post-upgrade",
@@ -224,6 +226,7 @@ export function registerMaintenanceCommands(
               generateGatewayToken: Boolean(opts.generateGatewayToken),
               allowExec: Boolean(opts.allowExec),
               deep: Boolean(opts.deep),
+              ...(opts.fullIntegrityCheck ? { fullIntegrityCheck: true } : {}),
               postUpgrade: Boolean(opts.postUpgrade),
               ...(stateSqlite ? { stateSqlite } : {}),
               ...(sessionSqlite ? { sessionSqlite } : {}),

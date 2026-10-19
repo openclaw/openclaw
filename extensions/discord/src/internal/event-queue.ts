@@ -30,16 +30,10 @@ export class DiscordEventQueue {
 
   constructor(options: DiscordEventQueueOptions = {}) {
     this.options = {
-      maxQueueSize: normalizePositiveInteger(options.maxQueueSize, DEFAULT_MAX_QUEUE_SIZE),
-      maxConcurrency: normalizePositiveInteger(options.maxConcurrency, DEFAULT_MAX_CONCURRENCY),
-      listenerTimeout: normalizePositiveInteger(
-        options.listenerTimeout,
-        DEFAULT_LISTENER_TIMEOUT_MS,
-      ),
-      slowListenerThreshold: normalizePositiveInteger(
-        options.slowListenerThreshold,
-        DEFAULT_SLOW_LISTENER_THRESHOLD_MS,
-      ),
+      maxQueueSize: options.maxQueueSize ?? DEFAULT_MAX_QUEUE_SIZE,
+      maxConcurrency: options.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY,
+      listenerTimeout: options.listenerTimeout ?? DEFAULT_LISTENER_TIMEOUT_MS,
+      slowListenerThreshold: options.slowListenerThreshold ?? DEFAULT_SLOW_LISTENER_THRESHOLD_MS,
     };
   }
 
@@ -146,11 +140,4 @@ export class DiscordEventQueue {
       `[EventQueue] Slow listener detected: ${job.listenerName} took ${durationMs}ms for event ${job.eventType}`,
     );
   }
-}
-
-function normalizePositiveInteger(value: number | undefined, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return fallback;
-  }
-  return Math.max(1, Math.floor(value));
 }

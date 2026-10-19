@@ -10,8 +10,10 @@ import {
   Switch,
   untrack,
 } from "solid-js";
+import { registerListener } from "../../../../../src/shared/listeners.js";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../../lib/presentation.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { AfterCommitEffect } from "../render-lifecycle.ts";
 import {
@@ -28,6 +30,7 @@ import {
   WorkGroupSummary,
 } from "./chat-message-stream-view.tsx";
 import { RealtimeTalkConversation } from "./chat-realtime-controls.tsx";
+import { ChatSystemEvents } from "./chat-system-events.tsx";
 import { TranscriptWorkPreviews } from "./chat-transcript-content.tsx";
 import type { TranscriptContent, TranscriptLayoutProps } from "./chat-transcript-layout.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
@@ -42,6 +45,9 @@ import { TurnRecapRow } from "./chat-working-indicator.tsx";
 function NativeRow(props: { value: NativeTranscriptView }): JSX.Element {
   return (
     <Switch>
+      <Match when={props.value.kind === "system-events" ? props.value : undefined}>
+        {(view) => <ChatSystemEvents item={view().item} />}
+      </Match>
       <Match when={props.value.kind === "group" ? props.value : undefined}>
         {(view) => <MessageGroup {...view()} />}
       </Match>
@@ -88,6 +94,7 @@ function GuardedRow(props: { value: GuardedTranscriptItem }): JSX.Element {
   });
   const current = createMemo(() => {
     dependencies();
+    // The explicit row dependency vector keeps unrelated streaming snapshots out of this row.
     return untrack(() => props.value);
   });
   return <Show when={current().native}>{(view) => <NativeRow value={view()} />}</Show>;
@@ -130,6 +137,7 @@ function TranscriptRows(props: { snapshot: TranscriptLayoutProps }) {
                   ? virtualRow().start - previous.end
                   : 0;
               });
+              // The keyed row owns one measurement binding for its entire mounted lifetime.
               const measureRef = untrack(() =>
                 props.snapshot.measureRowRefFor(String(virtualRow().key)),
               );
@@ -173,7 +181,12 @@ export class ChatTranscriptRenderer {
   private commitQueued = false;
   private readonly layoutEffects = new Set<() => void>();
   private readonly mediaDisconnect = new Set<() => void>();
+  private readonly listeners = new Set<() => void>();
   private readonly presentationChanged = () => this.publishPresentation?.();
+
+  subscribe(listener: () => void): () => void {
+    return registerListener(this.listeners, listener);
+  }
 
   private isPresented(): boolean {
     const presented = this.accepted?.presented ?? false;
@@ -240,6 +253,7 @@ export class ChatTranscriptRenderer {
     this.lifecycle.afterCommit(
       () => {
         this.commitQueued = false;
+        // Commit observes the accepted DOM snapshot without subscribing its imperative caller.
         const current = untrack(() => this.lifecycle?.snapshot());
         if (!current || !this.element) {
           return;
@@ -280,16 +294,17 @@ export class ChatTranscriptRenderer {
           const [presented, setPresented] = createSignal(this.isPresented(), { ownedWrite: true });
           this.publishPresentation = () => setPresented(this.isPresented());
           const active = () => presented() && this.isPresented();
+          const source = projectOwner(this, (owner) => {
+            if (!owner.accepted) {
+              throw new Error("Transcript render snapshot was read after disposal");
+            }
+            return owner.accepted;
+          });
           const lifecycle = createSolidRenderLifecycle({
             host: this,
             // The plain owner state also fences callbacks before the signal flushes.
             presented: active,
-            read: () => {
-              if (!this.accepted) {
-                throw new Error("Transcript render snapshot was read after disposal");
-              }
-              return this.accepted;
-            },
+            read: source.read,
           });
           this.lifecycle = lifecycle;
           const snapshot = createMemo(lifecycle.snapshot);
@@ -315,12 +330,11 @@ export class ChatTranscriptRenderer {
       );
     } else {
       this.publishPresentation?.();
+      for (const listener of this.listeners) {
+        listener();
+      }
     }
-    if (this.commitQueued) {
-      this.lifecycle?.invalidate();
-    } else {
-      this.commit();
-    }
+    this.commit();
     next.scrollElementRef(this.element);
     return this.element;
   }

@@ -214,6 +214,7 @@ export async function initializeAndRunUpdate(
                     assertCurrent,
                     nodeRunner: selectedTarget?.packageUpdateNodeRunner,
                     timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+                    fullIntegrityCheck: opts.fullIntegrityCheck,
                   });
                   assertCurrent();
                   initialization.originalRecoveryCapture = captured.ref;

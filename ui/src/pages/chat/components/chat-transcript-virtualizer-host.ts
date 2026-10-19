@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 // Per-session virtualizer host: scroll anchoring, measurement, and row sync
-// for one transcript. Owned and swapped by ChatTranscriptController.
+// for one transcript. Owned and swapped by the chat transcript owner.
 import { Virtualizer } from "@tanstack/virtual-core";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { createMcpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
@@ -160,6 +160,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   private readonly mcpAppUnmountGate: ReturnType<typeof createMcpAppUnmountGate>;
 
   constructor(
+    // Native geometry and touch-held history must commit before paint.
     private readonly invalidate: () => void,
     initialOffset: number | null = null,
     onInitialOffsetSettled?: (position: ChatSessionScrollPosition) => void,
@@ -178,10 +179,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       measureConnectedRows: () => this.presentation.measureRows(),
       queueRowMeasure: () => this.presentation.queueRowMeasure(),
       onViewportResize: () => this.callbacks.onViewportResize?.(),
-      requestUpdate: invalidate,
+      invalidate,
     });
     this.virtualizer = new Virtualizer({
-      // Every geometry notification must commit before paint, including non-sync measurements.
       onChange: invalidate,
       count: 0,
       getScrollElement: () => this.scrollElement,
@@ -205,7 +205,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
             isProgrammaticScroll: () => this.isProgrammaticScroll,
             cancelScroll: () => this.cancelScroll(),
             onLayoutCorrection: this.recordEndLayoutCorrection,
-            requestUpdate: invalidate,
+            invalidate,
             onOffset: () => this.endAnchor.recordViewport(this.scrollElement),
             onComposerLayout: (changed) => this.commitComposerResize(changed),
             onReaderScroll: (towardEnd) => {
@@ -587,16 +587,22 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     if (this.offsetState.scrollCommand === null && !this.offsetState.pendingScrollOffset) {
       return;
     }
-    // Only smooth commands skip row measurements. Replaying ordinary auto
-    // scrolling's overscan sizes can move an already settled end anchor.
-    if (this.offsetState.scrollCommand?.behavior === "smooth") {
-      this.presentation.queueRowMeasure();
-    }
+    const measureSkippedRows = this.offsetState.scrollCommand?.behavior === "smooth";
     this.offsetState.scrollCommand = null;
     this.offsetState.pendingScrollOffset = null;
     if (this.scrollRestoreHost.pendingScrollFrame !== null) {
       cancelAnimationFrame(this.scrollRestoreHost.pendingScrollFrame);
       this.scrollRestoreHost.pendingScrollFrame = null;
+    }
+    // The smooth journey may already be automatic when its skipped sizes settle.
+    if (measureSkippedRows) {
+      const adjustScroll = this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange;
+      this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
+      try {
+        this.presentation.measureRows();
+      } finally {
+        this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = adjustScroll;
+      }
     }
     const element = this.scrollElement;
     if (element) {

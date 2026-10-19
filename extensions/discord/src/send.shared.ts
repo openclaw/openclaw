@@ -16,8 +16,9 @@ import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtim
 import { isDiscordThreadChannelType } from "./channel-type.js";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { createDiscordClient, resolveDiscordRest, type DiscordClientOpts } from "./client.js";
-import { createChannelMessage } from "./internal/api.messages.js";
-import { createUserDmChannel, getChannel, RequestClient } from "./internal/discord.js";
+import { createChannelMessage, getChannel } from "./internal/api.messages.js";
+import { createUserDmChannel } from "./internal/api.users.js";
+import { RequestClient } from "./internal/rest.js";
 import { resolveDiscordReplyMessageId, type DiscordReplyReference } from "./reply-reference.js";
 import type { DiscordRetryRunner } from "./retry.js";
 import {

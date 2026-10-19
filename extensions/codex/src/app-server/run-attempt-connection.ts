@@ -544,6 +544,17 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       params.sessionRoot = sessionPermissionPolicy.root;
       (params.execOverrides ??= {}).mode = sessionPermissionPolicy.execMode;
     }
+    // Only local execution roots address Gateway settings; remote paths belong
+    // to their executor. Prepare after permission admission and before tools/startup.
+    if (
+      !sandbox?.enabled &&
+      !remoteExec &&
+      appServer.start.transport === "stdio" &&
+      !isCodexAppServerProxyLaunch(appServer.start.args) &&
+      !appServer.remoteWorkspaceRoot
+    ) {
+      params.hostCapabilities.prepareContinuationRetryCount?.({ cwd: effectiveCwd });
+    }
     const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
       configuredEvents: options.nativeHookRelay?.events,
       appServer,

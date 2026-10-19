@@ -1,4 +1,4 @@
-import { createEffect, createMemo, Match, onCleanup, Show, Switch, untrack } from "solid-js";
+import { createEffect, createMemo, Match, onCleanup, Show, Switch } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { isStaleChunkImportError } from "../../app/stale-chunk-reload.ts";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
@@ -24,23 +24,22 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
   const context = useApplication();
   const lifecycle = new PluginPageOwner(props, context, host);
   const projection = projectOwner(lifecycle, (source) => source);
+  const plugins = context.plugins && projectOwner(context.plugins, (source) => source).read;
   host.style.display = "contents";
-  // Owner notifications sample current route props without creating render dependencies.
-  const update = () => untrack(lifecycle.update);
-  const unsubscribeGateway = context.gateway.subscribe(update);
-  const unsubscribePlugins = context.plugins?.subscribe(update);
-  createEffect(() => [props.pluginId, props.tabId], update);
-  update();
+  // Gateway receipts retire bundled views and frame-auth work before a replacement connection uses them.
+  const unsubscribeGateway = context.gateway.subscribe(lifecycle.update);
+  createEffect(() => [props.pluginId, props.tabId], lifecycle.update);
   onCleanup(() => {
     unsubscribeGateway();
-    unsubscribePlugins?.();
     lifecycle.dispose();
   });
   const view = createMemo(() => {
     projection.read();
     const info = lifecycle.tabInfo();
     const key = lifecycle.tabKey();
-    const contribution = context.plugins?.registrations("pages").some((entry) => entry.key === key);
+    const contribution = plugins?.()
+      .registrations("pages")
+      .some((entry) => entry.key === key);
     const authKey = lifecycle.externalTabAuthKey(info, false);
     let mode = "unavailable";
     if (contribution) {
@@ -60,7 +59,7 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
       }
     } else if (
       context.gateway.snapshot.phase !== "connected" ||
-      context.plugins?.isLoading(props.pluginId ?? "")
+      plugins?.().isLoading(props.pluginId ?? "")
     ) {
       mode = "loading";
     }
@@ -83,13 +82,13 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
   };
   const disabled = () =>
     !view().info?.path &&
-    context.plugins?.errors.some(
+    plugins?.().errors.some(
       (entry) => entry.pluginId === props.pluginId && entry.code === "custom-plugin-ui-disabled",
     );
   const unavailableMessage = () =>
     view().info?.path
       ? t("pluginTabs.unavailableSubtitle")
-      : (context.plugins?.errors.find((entry) => entry.pluginId === props.pluginId)?.message ??
+      : (plugins?.().errors.find((entry) => entry.pluginId === props.pluginId)?.message ??
         t("pluginTabs.unavailableSubtitle"));
   return (
     <Switch>

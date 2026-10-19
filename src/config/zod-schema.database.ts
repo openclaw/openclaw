@@ -1,12 +1,11 @@
 import { z } from "zod";
-import { getMixedPostgresAgentError } from "../infra/database-engine/registry.js";
 import { projectConfigFieldMetadata } from "./schema.field-metadata.js";
 import { SecretInputSchema } from "./zod-schema.secret-input.js";
 import { configUiMetadata, sensitive } from "./zod-schema.sensitive.js";
 
 const DatabaseFamilyEngineSchema = z.enum(["sqlite", "postgres"]).register(configUiMetadata, {
   label: "Family Database Engine (Experimental)",
-  help: "Override database.engine for this family. Changing an engine requires a port and a restart; it does not migrate existing data. Port, backup/restore, and update refuse mixed-engine installations until family-scoped support is available.",
+  help: "Override database.engine for this family. Changing an engine requires database port --family and a restart; editing config does not migrate existing data. Mixed-engine backup/restore preserves each store's engine, and updates require candidate family support.",
 });
 
 const DatabaseFamilySchema = z.strictObject({ engine: DatabaseFamilyEngineSchema }).optional();
@@ -20,14 +19,7 @@ export const DatabaseConfigSchema = z
     families: z
       .strictObject({
         state: DatabaseFamilySchema,
-        agent: z
-          .strictObject({
-            engine: DatabaseFamilyEngineSchema.clone().register(configUiMetadata, {
-              label: "Agent Database Engine (Experimental)",
-              help: "Agent databases support sqlite in mixed-engine installations. PostgreSQL agents require PostgreSQL for every configurable family until mixed-pair conformance is available.",
-            }),
-          })
-          .optional(),
+        agent: DatabaseFamilySchema,
         workboard: DatabaseFamilySchema,
         logbook: DatabaseFamilySchema,
         "team-reports": DatabaseFamilySchema,
@@ -35,7 +27,7 @@ export const DatabaseConfigSchema = z
       .optional()
       .register(configUiMetadata, {
         label: "Family Database Engines (Experimental)",
-        help: "Optional engine overrides for state, agent, workboard, logbook, and team-reports. Each override requires engine. PostgreSQL agents require PostgreSQL for every configurable family; local safety journals are not configurable. All PostgreSQL families share database.postgres.",
+        help: "Optional engine overrides for state, agent, workboard, logbook, and team-reports. Each override requires engine. State and agent families may use different engines; local safety journals are not configurable. All PostgreSQL families share database.postgres.",
       }),
     postgres: z
       .strictObject({
@@ -63,12 +55,6 @@ export const DatabaseConfigSchema = z
         label: "PostgreSQL (Experimental)",
         help: "Experimental PostgreSQL connection and schema naming. Back up each PostgreSQL store schema together with its SQLite anchor.",
       }),
-  })
-  .superRefine((database, ctx) => {
-    const message = getMixedPostgresAgentError({ database });
-    if (message) {
-      ctx.addIssue({ code: "custom", path: ["families", "agent", "engine"], message });
-    }
   })
   .optional()
   .register(configUiMetadata, {

@@ -146,17 +146,27 @@ function prepareBlockedSubagentCompletion(
   const generation = params.subagent.delivery?.generation ?? 1;
   if (
     !subagent ||
-    subagent.execution.status !== "terminal" ||
-    !subagent.execution.outcome ||
-    subagent.pauseReason === "sessions_yield" ||
-    subagent.expectsCompletionMessage !== true ||
+    (!params.operatorAuthorityUnavailable &&
+      (subagent.execution.status !== "terminal" ||
+        !subagent.execution.outcome ||
+        subagent.pauseReason === "sessions_yield" ||
+        subagent.expectsCompletionMessage !== true)) ||
     (subagent.delivery?.generation ?? 1) !== generation
   ) {
     return undefined;
   }
+  if (params.operatorAuthorityUnavailable) {
+    subagent.suppressCompletionDelivery = true;
+    subagent.requesterSettleWake = undefined;
+    subagent.wakeOnDescendantSettle = undefined;
+    if (subagent.delivery?.status === "delivered") {
+      return { subagent };
+    }
+  }
   const successful = subagent.execution.outcome?.status === "ok";
   if (
     !successful &&
+    !params.operatorAuthorityUnavailable &&
     ((params.suspendedReason !== undefined && !params.storeReplaced) ||
       !["pending", "in_progress", "failed"].includes(subagent.delivery?.status ?? "pending"))
   ) {
@@ -224,6 +234,7 @@ function prepareBlockedSubagentCompletion(
   const text =
     successful &&
     !params.storeReplaced &&
+    !params.operatorAuthorityUnavailable &&
     requesterOutcome?.reason !== "operator_authority_unavailable"
       ? `Subagent completion delivery is blocked: ${params.reason} (run ${subagent.runId})`
       : null;
@@ -378,17 +389,15 @@ function mutateRequesterBatch(
       }
       const changedOwner = () =>
         new Error("subagent completion owner changed before settlement: " + expected.runId);
-      // An exact requester receipt can arrive after expiry transferred this result to its wake.
-      const acknowledgeExpiredDelivery =
-        params.outcome.delivered &&
-        subagent.delivery?.status === "suspended" &&
-        subagent.delivery.suspendedReason === "expiry";
+      // Expiry transfers settlement to the wake, including its terminal failure outcome.
+      const settleExpiredDelivery =
+        subagent.delivery?.status === "suspended" && subagent.delivery.suspendedReason === "expiry";
       let mutation: CompletionMutation = { subagent };
       if (
         subagent.pauseReason !== "sessions_yield" &&
         subagent.expectsCompletionMessage === true &&
         (["pending", "in_progress"].includes(subagent.delivery?.status ?? "pending") ||
-          acknowledgeExpiredDelivery)
+          settleExpiredDelivery)
       ) {
         if (params.outcome.delivered) {
           const delivery = ensureDeliveryState(subagent);

@@ -27,6 +27,20 @@ async function finishHover() {
 }
 
 describe("Solid menu branch lifetime", () => {
+  it("opens a clicked submenu without waiting for its pending hover delay", async () => {
+    mountMenu();
+    await openMenu();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await userEvent.hover(trigger("people-assign"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(surface("people-assign").matches(":popover-open")).toBe(false);
+    trigger("people-assign").click();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(surface("people-assign").matches(":popover-open")).toBe(true);
+    expect(document.activeElement).toBe(item("Ada Rivera", "people-assign"));
+  });
+
   it("prepares closed branches in idle slices after readiness and finishes synchronously on open", async () => {
     const frames: FrameRequestCallback[] = [];
     const idle = new Map<number, IdleRequestCallback>();

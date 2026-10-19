@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  assertNoRetiredOAuthSidecarsBeforeConfigRecovery,
+  inspectLegacyOAuthSidecarsBeforeConfigRecovery,
   listReferencedLegacyOAuthSidecarPaths,
 } from "../../commands/doctor-auth-legacy-paths.js";
 import { planLegacyConfigForUpdateChannel } from "../../commands/doctor/legacy-config-repair.js";
@@ -23,15 +23,20 @@ import { listRetiredCronStateFiles } from "../../infra/state-migrations.retired-
 import { listRetiredDeliveryQueueFiles } from "../../infra/state-migrations.retired-delivery-files.js";
 import {
   assertNoRetiredStateFiles,
+  listExistingRetiredStateFiles,
   RetiredStateFormatError,
 } from "../../infra/state-migrations.retired-files.js";
-import { assertNoRetiredRuntimeStateFiles } from "../../infra/state-migrations.retired-runtime-files.js";
+import {
+  listImportableRetiredRuntimeStateFiles,
+  listRetiredRuntimeStateFiles,
+} from "../../infra/state-migrations.retired-runtime-files.js";
 import {
   isUpdateAdmissionAuthorityEnvKey,
   parseUpdateAdmissionContext,
   type UpdateAdmissionContext,
 } from "../../infra/update-admission-contract.js";
 import { channelToNpmTag } from "../../infra/update-channels.js";
+import { assertUpdateDatabaseEngineContexts } from "../../infra/update-database-engine-admission.js";
 import {
   UPDATE_ADMISSION_PROTOCOL,
   type UpdateAdmissionVerdict,
@@ -92,9 +97,9 @@ async function inspectUpdateAdmission(
   return await withArtifactPreservingStateReads(async () => {
     if (
       !path.isAbsolute(context.installation.root) ||
-      context.installation.installKind !== "package"
+      !["package", "git"].includes(context.installation.installKind)
     ) {
-      throw new Error("Candidate admission requires an explicit package installation root.");
+      throw new Error("Candidate admission requires an explicit package or Git installation root.");
     }
     const root = await resolveUpdateRoot({ root: context.installation.root });
     const candidateRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
@@ -179,7 +184,7 @@ async function inspectUpdateAdmission(
         | Awaited<ReturnType<typeof captureTargetDatabaseSchemaContext>>
         | undefined;
       try {
-        assertNoRetiredOAuthSidecarsBeforeConfigRecovery({ env });
+        inspectLegacyOAuthSidecarsBeforeConfigRecovery({ env });
         // Doctor's existing planner supplies a source-bound projection; it never applies it here.
         const { snapshot, writeOptions } = await readConfigSnapshot(true);
         const retired = findRetiredConfigUpgradeRequirement(
@@ -243,6 +248,24 @@ async function inspectUpdateAdmission(
         return false;
       };
       if (databaseContext) {
+        if (databaseContext.config.database?.families) {
+          try {
+            const declaration = isRecord(manifest.openclaw) ? manifest.openclaw : {};
+            await assertUpdateDatabaseEngineContexts(
+              [databaseContext],
+              declaration.databaseEngines,
+              declaration.postgresFamilies,
+            );
+            // Protocol 1 already carries extensible named checks. Old candidates cannot
+            // attest that their config parser and providers understand family overrides.
+            checks.set("database-families", { status: "ok" });
+          } catch (error) {
+            if (!(error instanceof UpdatePreMutationError)) {
+              throw error;
+            }
+            refuse("database-families", error.reason, error.message);
+          }
+        }
         schemasAccepted = await checkDatabaseSchemas(databaseContext);
         if (schemasAccepted) {
           const snapshot = databaseContext.configSnapshot;
@@ -250,30 +273,33 @@ async function inspectUpdateAdmission(
             // The saved partition reads SQLite; admit its schema before inspecting live files
             // that published updaters omit from their later rehearsal snapshots.
             const stateDir = resolveStateDir(databaseContext.env);
-            assertNoRetiredRuntimeStateFiles(stateDir, databaseContext.env);
-            assertNoRetiredStateFiles(
-              "JSON delivery queues",
-              listRetiredDeliveryQueueFiles(stateDir),
+            const cronFiles = await listRetiredCronStateFiles(
+              resolveCronJobsStorePathFromConfig(
+                snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
+                databaseContext.env,
+              ),
             );
-            assertNoRetiredStateFiles("Plugin install index", [
-              resolveLegacyInstalledPluginIndexStorePath({ stateDir }),
-            ]);
-            assertNoRetiredStateFiles("OAuth credential sidecars", [
+            // A live importable source also represents an interrupted or failed Doctor commit.
+            assertNoRetiredStateFiles("Unmigrated user state", [
+              ...listImportableRetiredRuntimeStateFiles(stateDir, databaseContext.env),
+              ...cronFiles.slice(0, 2),
               ...listReferencedLegacyOAuthSidecarPaths(
                 env,
                 snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
               ),
               ...listReferencedLegacyOAuthSidecarPaths(databaseContext.env, databaseContext.config),
             ]);
-            assertNoRetiredStateFiles(
-              "Cron state",
-              await listRetiredCronStateFiles(
-                resolveCronJobsStorePathFromConfig(
-                  snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
-                  databaseContext.env,
-                ),
-              ),
-            );
+            const retired = listExistingRetiredStateFiles([
+              ...listRetiredRuntimeStateFiles(stateDir, databaseContext.env),
+              ...listRetiredDeliveryQueueFiles(stateDir),
+              resolveLegacyInstalledPluginIndexStorePath({ stateDir }),
+              ...cronFiles.slice(2),
+            ]);
+            if (retired.length > 0) {
+              const message = `Doctor will migrate or archive retired state with original bytes preserved: ${retired.join(", ")}`;
+              warnings.push({ code: "retired-state-format", message });
+              checks.set("state-format", { status: "warn", detail: message });
+            }
           } catch (error) {
             if (!(error instanceof RetiredStateFormatError)) {
               throw error;

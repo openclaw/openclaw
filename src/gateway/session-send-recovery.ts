@@ -1,6 +1,7 @@
-import { createHash } from "node:crypto";
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { resolveNestedAgentLaneForSession } from "../agents/lanes.js";
 import { discoverRestartRecoveryStoreTargets } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
+import { decodeRequesterOrigin } from "../agents/requester-origin.js";
 import type { AgentToolGatewayRequestCaller } from "../agents/tools/in-process-gateway.js";
 import {
   prepareSessionsSendCommunication,
@@ -13,6 +14,7 @@ import { readPendingInputSource } from "../config/sessions/session-pending-input
 import { discardSessionPendingInput } from "../config/sessions/session-pending-input-withdrawal.js";
 import type { SessionPendingInput } from "../config/sessions/session-pending-input.types.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
@@ -20,9 +22,16 @@ import { isTransientRestartRecoveryError } from "../infra/restart-recovery-error
 import { getRetryAttemptErrors } from "../infra/retry-attempt-errors.js";
 import { retryAsync } from "../infra/retry.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { CommunicationEndpoint } from "../sessions/communication-admission.js";
-import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
+import {
+  AgentDatabaseAdmissionError,
+  listAgentDatabaseAdmissionRefusals,
+  readAgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
+import { waitForAgentDatabasePreparation } from "../state/agent-database-preparation-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+import type { RestoredGatewayOperatorAuthority } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 import {
@@ -32,10 +41,6 @@ import {
 } from "./session-send-delivery.js";
 import { SessionStoreUnavailableError } from "./session-utils-store-error.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
-
-function sessionKeyHash(key: string): string {
-  return createHash("sha256").update(key).digest("hex").slice(0, 16);
-}
 
 class SessionSendEndpointChangedError extends Error {
   constructor(
@@ -47,7 +52,8 @@ class SessionSendEndpointChangedError extends Error {
     super(
       `${message}: ${JSON.stringify({
         endpoint,
-        sessionKeyHash: sessionKeyHash(expected.sessionKey),
+        reason: "endpoint-replaced",
+        sessionKeyHash: sha256HexPrefixCore(expected.sessionKey, 16),
         previousSessionId: expected.sessionId,
         currentSessionId: current.entry?.sessionId ?? null,
         previousGeneration: expected.lifecycleRevision ?? null,
@@ -57,6 +63,7 @@ class SessionSendEndpointChangedError extends Error {
     );
   }
 }
+class SessionSendRequesterUnavailableError extends Error {}
 
 function matches(endpoint: CommunicationEndpoint, expected: SessionSendDeliveryEndpoint): boolean {
   return (
@@ -73,11 +80,48 @@ export async function recoverSessionSendDeliveries(
   signal: AbortSignal,
   startupTrace?: GatewayStartupTrace,
 ): Promise<void> {
+  if (!context.recoveryRuntime) {
+    return;
+  }
+  const config = context.getRuntimeConfig();
+  const pendingAgents = listAgentDatabaseAdmissionRefusals()
+    .filter((refusal) => refusal.code === "agent-database-inspection-pending")
+    .map((refusal) => refusal.agentId);
+  await recoverSessionSendDeliveriesForAgents(context, config, signal, startupTrace);
+  // Discovery skips pending stores. Join their existing admission owner before rescanning.
+  const rescans = await Promise.allSettled(
+    pendingAgents.map(async (agentId) => {
+      await waitForAgentDatabasePreparation(agentId, { signal });
+      signal.throwIfAborted();
+      if (!readAgentDatabaseAdmissionRefusal(agentId)) {
+        await recoverSessionSendDeliveriesForAgents(
+          context,
+          context.getRuntimeConfig(),
+          signal,
+          startupTrace,
+          new Set([agentId]),
+        );
+      }
+    }),
+  );
+  for (const result of rescans) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+  }
+}
+
+async function recoverSessionSendDeliveriesForAgents(
+  context: GatewayRequestContext,
+  config: OpenClawConfig,
+  signal: AbortSignal,
+  startupTrace?: GatewayStartupTrace,
+  agentIds?: ReadonlySet<string>,
+): Promise<void> {
   const runtime = context.recoveryRuntime;
   if (!runtime) {
     return;
   }
-  const config = context.getRuntimeConfig();
   const assertCurrent = () => {
     signal.throwIfAborted();
     if (context.getRuntimeConfig() !== config) {
@@ -88,11 +132,11 @@ export async function recoverSessionSendDeliveries(
     isTransientRestartRecoveryError(error) ||
     (error instanceof SessionStoreUnavailableError &&
       (error.reason === "schema-missing" || isSqliteLockError(error.readError)));
-  const retry = <T>(operation: () => Promise<T>) =>
+  const retry = <T>(operation: () => Promise<T>, phase?: string) =>
     retryAsync(
       async () => {
         assertCurrent();
-        return operation();
+        return phase ? measureStartup(startupTrace, phase, operation) : operation();
       },
       {
         attempts: 3,
@@ -110,20 +154,27 @@ export async function recoverSessionSendDeliveries(
         },
       },
     );
-  const targets = await retry(() =>
-    discoverRestartRecoveryStoreTargets({
-      cfg: config,
-      shouldContinue: () => !signal.aborted,
-    }),
+  const targets = await retry(
+    () =>
+      discoverRestartRecoveryStoreTargets({
+        cfg: config,
+        agentIds,
+        shouldContinue: () => !signal.aborted,
+      }),
+    "sidecars.delivery-discovery",
   );
   let blockedCount = 0;
   let cancelledCount = 0;
   for (const target of targets) {
     assertCurrent();
-    const entries = await retry(() => readPendingInputRecoveryEntriesInWorker(target));
+    const entries = await retry(
+      () => readPendingInputRecoveryEntriesInWorker(target),
+      "sidecars.delivery-entries",
+    );
     for (const { sessionKey, entry } of entries) {
       const scope = {
         ...target,
+        agentId: parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
         sessionKey,
         sessionId: entry.sessionId,
         expectedLifecycleRevision: entry.lifecycleRevision,
@@ -134,7 +185,10 @@ export async function recoverSessionSendDeliveries(
       let before: number | undefined;
       do {
         assertCurrent();
-        const page = await retry(() => readSessionSendRecoveryPage(scope, { before }));
+        const page = await retry(
+          () => readSessionSendRecoveryPage(scope, { before }),
+          "sidecars.delivery-history",
+        );
         pending.unshift(...page.items);
         before = page.nextBefore;
       } while (before !== undefined);
@@ -144,6 +198,7 @@ export async function recoverSessionSendDeliveries(
         sourceSessionKey: string;
         reason:
           | "endpoint-replaced"
+          | "requester-unavailable"
           | "permission-denied"
           | "transient-admission"
           | "store-unavailable"
@@ -162,6 +217,9 @@ export async function recoverSessionSendDeliveries(
             attempts++;
             let communication:
               | Awaited<ReturnType<typeof prepareSessionsSendCommunication>>
+              | undefined;
+            let operator:
+              | Pick<RestoredGatewayOperatorAuthority, "authority" | "controlUiAdmin" | "release">
               | undefined;
             try {
               const retained = await readPendingInputSource(
@@ -197,7 +255,7 @@ export async function recoverSessionSendDeliveries(
                   storePath: loaded.readSource?.path ?? loaded.storePath,
                   entry: loaded.store[loaded.canonicalKey],
                 };
-                if (!matches(result, endpoint) || result.entry?.archivedAt) {
+                if (!matches(result, endpoint)) {
                   throw new SessionSendEndpointChangedError(side, endpoint, result);
                 }
                 return result;
@@ -209,7 +267,7 @@ export async function recoverSessionSendDeliveries(
               if (
                 destination.sessionKey !== sessionKey ||
                 destination.entry?.sessionId !== entry.sessionId ||
-                destination.agentId !== target.agentId
+                destination.agentId !== scope.agentId
               ) {
                 throw new SessionSendEndpointChangedError(
                   "target",
@@ -217,6 +275,12 @@ export async function recoverSessionSendDeliveries(
                   destination,
                   "Session delivery target does not own this input",
                 );
+              }
+              if (source.entry?.archivedAt || destination.entry?.archivedAt) {
+                // Archive stops work without replacing the transcript. Retain the
+                // cancelled receipt, but do not create a misleading failure notice.
+                await discardSessionPendingInput(scope, input.runId, assertCurrent);
+                return;
               }
               const callGateway: AgentToolGatewayRequestCaller = async () => {
                 // Exact endpoint lineage is already loaded above. Recovery cannot
@@ -243,6 +307,46 @@ export async function recoverSessionSendDeliveries(
                 communication!.assertCurrent();
               };
               guard();
+              const savedOrigin = input.message["__openclaw"]?.requesterOrigin;
+              const requesterOrigin = decodeRequesterOrigin(savedOrigin);
+              if (
+                (savedOrigin !== undefined && !requesterOrigin) ||
+                delivery.operatorSource === undefined
+              ) {
+                throw new SessionSendRequesterUnavailableError();
+              }
+              let accepted = false;
+              const assertRequesterCurrent = () => {
+                signal.throwIfAborted();
+                // Admission transfers custody to the turn. Pending consumption and
+                // closing this communication lease must not revoke accepted work.
+                if (!accepted) {
+                  guard();
+                }
+              };
+              try {
+                if (delivery.operatorSource !== null) {
+                  const { restoreGatewayQueuedOperatorRecovery } =
+                    await import("./operator-run-recovery.js");
+                  operator = await restoreGatewayQueuedOperatorRecovery({
+                    source: delivery.operatorSource,
+                    context,
+                    assertCurrent: assertRequesterCurrent,
+                  });
+                }
+                if (
+                  requesterOrigin?.operatorProfileId &&
+                  requesterOrigin.operatorProfileId !== operator?.authority.profileId
+                ) {
+                  throw new SessionSendRequesterUnavailableError();
+                }
+              } catch (error) {
+                if (isTransient(error)) {
+                  throw error;
+                }
+                throw new SessionSendRequesterUnavailableError(undefined, { cause: error });
+              }
+              guard();
               await withSessionSendDelivery({ delivery, acceptedMessage: input.message }, () =>
                 runtime.dispatchAgent(
                   {
@@ -260,13 +364,26 @@ export async function recoverSessionSendDeliveries(
                     lane: resolveNestedAgentLaneForSession(delivery.target.sessionKey),
                   },
                   undefined,
-                  { signal, assertAdmissionCurrent: guard },
+                  {
+                    signal,
+                    assertAdmissionCurrent: assertRequesterCurrent,
+                    operatorRunAuthority: operator?.authority,
+                    agentToolCaller: requesterOrigin
+                      ? {
+                          agentId: delivery.source.agentId,
+                          sessionKey: delivery.source.sessionKey,
+                          requesterOrigin,
+                        }
+                      : undefined,
+                  },
                 ),
               );
+              accepted = true;
             } finally {
+              operator?.release();
               communication?.close();
             }
-          });
+          }, "sidecars.delivery-replay");
         } catch (error) {
           if (signal.aborted) {
             return;
@@ -281,21 +398,23 @@ export async function recoverSessionSendDeliveries(
             reason:
               error instanceof SessionSendEndpointChangedError
                 ? "endpoint-replaced"
-                : error instanceof SessionCommunicationDeniedError
-                  ? "permission-denied"
-                  : isTransient(error)
-                    ? "transient-admission"
-                    : error instanceof SessionStoreUnavailableError ||
-                        error instanceof AgentDatabaseAdmissionError
-                      ? "store-unavailable"
-                      : "unknown",
+                : error instanceof SessionSendRequesterUnavailableError
+                  ? "requester-unavailable"
+                  : error instanceof SessionCommunicationDeniedError
+                    ? "permission-denied"
+                    : isTransient(error)
+                      ? "transient-admission"
+                      : error instanceof SessionStoreUnavailableError ||
+                          error instanceof AgentDatabaseAdmissionError
+                        ? "store-unavailable"
+                        : "unknown",
             attempts,
           });
           const causes = [
             ...new Set((getRetryAttemptErrors(error) ?? [error]).map(formatErrorMessageWithCode)),
           ];
           context.logGateway.warn(
-            `Session delivery recovery blocked after ${attempts} attempts: ${formatErrorMessageForDisplay(error, causes.join("; "))} ${JSON.stringify({ sessionKeyHash: sessionKeyHash(sessionKey), inputId: input.id, ageMs: Math.max(0, Date.now() - input.acceptedAt) })}`,
+            `Session delivery recovery blocked after ${attempts} attempts: ${formatErrorMessageForDisplay(error, causes.join("; "))} ${JSON.stringify({ sessionKeyHash: sha256HexPrefixCore(sessionKey, 16), inputId: input.id, ageMs: Math.max(0, Date.now() - input.acceptedAt) })}`,
           );
         }
       }
@@ -308,8 +427,9 @@ export async function recoverSessionSendDeliveries(
           displayed
             .map(({ sourceSessionKey, reason, attempts }) => {
               const description = {
-                "endpoint-replaced":
-                  "the source or destination session was reset, archived, or replaced",
+                "endpoint-replaced": "the source or destination session was reset or replaced",
+                "requester-unavailable":
+                  "original requester authority is unavailable; submit a new request",
                 "permission-denied": "current session permissions do not allow automatic delivery",
                 "transient-admission": `the Gateway was still unavailable after ${attempts} automatic attempts`,
                 "store-unavailable": "session storage was unavailable",

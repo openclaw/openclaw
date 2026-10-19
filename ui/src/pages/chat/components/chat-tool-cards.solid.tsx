@@ -2,7 +2,7 @@ import type { ProgressCardStep } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { dynamic, type JSX } from "@solidjs/web";
-import { For, Match, Show, Switch, createMemo } from "solid-js";
+import { For, Match, Show, Switch, createMemo, omit } from "solid-js";
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
 import { browserTabKey } from "../../../components/browser/browser-target.ts";
@@ -23,13 +23,12 @@ import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import { resolveSpawnedSubagent, type SpawnedSubagent } from "../chat-spawned-subagent.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import { BrowserTabCardHost } from "./browser-tab-card.tsx";
 import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
-import { DiffStatChips } from "./chat-diff-render.solid.tsx";
+import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import { ChatPermissionCard } from "./chat-divider.tsx";
 import type { BrowserTabPreview } from "./chat-tool-cards.ts";
 import { ExpandedToolCardContent } from "./chat-tool-content.solid.tsx";
@@ -577,46 +576,30 @@ function ToolCardView(props: ToolCardProps) {
   );
 }
 
-const ToolCardHost = defineSolidBridge<{
-  card: ToolCard | null;
-  options: ToolCardOptions;
-  hasChildren: boolean;
-}>(
-  "openclaw-chat-tool-card",
-  (props) => (
-    <Show when={props.card}>
-      {(card) => (
-        <ToolCardView card={card()} options={props.options} hasChildren={props.hasChildren}>
-          {props.children}
-        </ToolCardView>
-      )}
-    </Show>
-  ),
-  {
-    properties: {
-      card: { default: null, attribute: false },
-      options: {
-        default: { messageKey: "", expanded: false, onToggleExpanded: () => {} },
-        attribute: false,
-      },
-      hasChildren: { default: false, attribute: false },
-    },
-  },
-);
-export const ChatToolIcon = defineSolidBridge<{
-  name: string;
-  tool?: { toolName: string; pluginToolIcons?: PluginToolIcons };
-}>("openclaw-chat-tool-icon", (props) => <ToolIcon name={props.name} tool={props.tool} />, {
-  properties: {
-    name: { default: "puzzle", attribute: false },
-    tool: { default: undefined, attribute: false },
-  },
-});
-export const ChatToolApprovalReviews = defineSolidBridge<{ card: ToolCard | null }>(
-  "openclaw-chat-tool-reviews",
-  (props) => <Show when={props.card}>{(card) => <ToolApprovalReviews card={card()} />}</Show>,
-  { properties: { card: { default: null, attribute: false } } },
-);
+export function ChatToolIcon(
+  props: {
+    name: string;
+    tool?: { toolName: string; pluginToolIcons?: PluginToolIcons };
+  } & JSX.HTMLAttributes<HTMLElement>,
+) {
+  const attributes = omit(props, "name", "tool", "children");
+  return (
+    <openclaw-chat-tool-icon {...attributes}>
+      <ToolIcon name={props.name} tool={props.tool} />
+    </openclaw-chat-tool-icon>
+  );
+}
+
+export function ChatToolApprovalReviews(
+  props: { card: ToolCard } & JSX.HTMLAttributes<HTMLElement>,
+) {
+  const attributes = omit(props, "card", "children");
+  return (
+    <openclaw-chat-tool-reviews {...attributes}>
+      <ToolApprovalReviews card={props.card} />
+    </openclaw-chat-tool-reviews>
+  );
+}
 
 export function ChatToolCard(props: ToolCardProps) {
   return (
@@ -625,14 +608,15 @@ export function ChatToolCard(props: ToolCardProps) {
       props={toolResultSurfaceProps(props.card, props.options)}
       presented={props.options.presented ?? true}
       renderDefault={() => (
-        <ToolCardHost
-          style={{ display: "contents" }}
-          card={props.card}
-          options={props.options}
-          hasChildren={props.hasChildren ?? Boolean(props.children)}
-        >
-          {props.children}
-        </ToolCardHost>
+        <openclaw-chat-tool-card style={{ display: "contents" }}>
+          <ToolCardView
+            card={props.card}
+            options={props.options}
+            hasChildren={props.hasChildren ?? Boolean(props.children)}
+          >
+            {props.children}
+          </ToolCardView>
+        </openclaw-chat-tool-card>
       )}
     />
   );

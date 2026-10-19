@@ -83,6 +83,13 @@ const cronInventoryScopes = new WeakMap<
   CronJobsState<unknown>,
   CronJobsState["cronAgentId" | "cronSessionFilter"]
 >();
+const cronInventoryRequests = new WeakMap<CronJobsState<unknown>, object>();
+
+export function retireCronJobsRequest(state: CronJobsState<unknown>) {
+  cronInventoryRequests.delete(state);
+  state.cronLoading = false;
+  state.cronJobsLoadingMore = false;
+}
 
 const fullCronJobsProjection: CronJobsProjection<CronJob> = {
   readRows: (rows) => rows.filter((job) => getCronJobPayload(job) !== null),
@@ -153,7 +160,10 @@ async function loadCronJobsProjectionPage<Row>(
     return;
   }
   const scope = state.cronSessionFilter ?? state.cronAgentId;
-  const isCurrentScope = () => (state.cronSessionFilter ?? state.cronAgentId) === scope;
+  const request = {};
+  const isCurrentScope = () =>
+    cronInventoryRequests.get(state) === request &&
+    (state.cronSessionFilter ?? state.cronAgentId) === scope;
   // An editor can survive scope hydration; its inventory cannot. Retire both
   // retained rows and late responses before a failed replacement can expose them.
   if (cronInventoryScopes.has(state) && cronInventoryScopes.get(state) !== scope) {
@@ -176,6 +186,7 @@ async function loadCronJobsProjectionPage<Row>(
     return;
   }
   const loadingKey = append ? "cronJobsLoadingMore" : "cronLoading";
+  cronInventoryRequests.set(state, request);
   state[loadingKey] = true;
   state.cronJobsError = null;
   try {
@@ -227,7 +238,10 @@ async function loadCronJobsProjectionPage<Row>(
       state.cronJobsError = formatUiError(err);
     }
   } finally {
-    state[loadingKey] = false;
-    await drainPendingCronJobsReload(state, projection);
+    if (cronInventoryRequests.get(state) === request) {
+      cronInventoryRequests.delete(state);
+      state[loadingKey] = false;
+      await drainPendingCronJobsReload(state, projection);
+    }
   }
 }

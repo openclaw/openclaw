@@ -1,4 +1,5 @@
 import type { buildStatusOverviewSurfaceRows } from "./status-all/format.js";
+import type { StatusDatabaseEngines } from "./status-database-engines.js";
 import type { NodeOnlyGatewayInfo } from "./status.node-mode.js";
 
 type StatusOverviewRowInput = Parameters<typeof buildStatusOverviewSurfaceRows>[0];
@@ -24,4 +25,5 @@ export type StatusOverviewSurface = Omit<
   keyof StatusOverviewFormatOptions | "nodeOnlyGateway"
 > & {
   nodeOnlyGateway?: NodeOnlyGatewayInfo | null;
+  databaseEngines?: StatusDatabaseEngines;
 };

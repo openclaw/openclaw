@@ -291,7 +291,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
           Object.assign(this.current, mocks.applyPromptToolsAllow({ toolsAllow }));
           return this.current;
         },
-        prepareForDispatch: () => undefined,
+        hasBaselineTools: () => true,
         refresh() {
           return this.current;
         },

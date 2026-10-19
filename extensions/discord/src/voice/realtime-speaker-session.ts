@@ -179,7 +179,6 @@ export class DiscordRealtimeSpeakerSession {
       consultToolsAllow: () => this.policy.consultToolsAllow,
       debounceMs: () => this.realtimeConfig?.debounceMs,
       isAgentProxy: () => this.params.mode === "agent-proxy" && !this.policy.handlesAgentConsult,
-      isWakeNameRequired: () => this.isWakeNameRequired(),
       playback: this.playback,
       runAgentTurn: (turn) => this.trackOperation(() => this.params.runAgentTurn(turn)),
       turns: this.turns,

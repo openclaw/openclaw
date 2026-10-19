@@ -23,6 +23,8 @@ export type ChatWelcomeProps = {
   currentAgentId?: string;
   agents?: AgentsListResult["agents"];
   assistantName: string;
+  /** Existing agent picker, shown in the new-session welcome heading. */
+  assistantNameControl?: JSX.Element;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
   /** Hero hint override; defaults to the chat slash-command hint. */
@@ -118,7 +120,12 @@ function WelcomeHero(props: ChatWelcomeProps) {
         <AgentIdentityAvatar agent={resolveAssistantDisplayAvatar(props)} />
       </span>
       <div class="agent-chat__welcome-identity-copy">
-        <h2>{props.assistantName || "Assistant"}</h2>
+        <h2 class={props.assistantNameControl ? "sr-only" : undefined}>
+          {props.assistantName || "Assistant"}
+        </h2>
+        <Show when={props.assistantNameControl}>
+          <div class="agent-chat__welcome-name">{props.assistantNameControl}</div>
+        </Show>
         <p class="agent-chat__hint">
           {props.hint ?? (
             <>

@@ -269,7 +269,10 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
   );
   // Names survive worker transport without loading the state owner's runtime here.
   const stateRefusal = errors.find(
-    (error): error is Error => error instanceof Error && error.name === "StateDatabaseAccessError",
+    (error): error is Error =>
+      error instanceof Error &&
+      (error.name === "StateDatabaseAccessError" ||
+        error.name === "StateDatabaseMaintenanceScopeError"),
   );
   const reason = (error: unknown) =>
     `[openclaw] Reason: ${formatCliOperatorError(error, { argv, env })}`;

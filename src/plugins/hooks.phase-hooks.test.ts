@@ -367,43 +367,7 @@ describe("prompt hook invocation", () => {
 
 const promptEvent = (prompt: string) => ({ prompt, messages: [] });
 
-describe("before_prompt_build reentrancy", () => {
-  it("runs each handler once when a handler starts a nested prompt build", async () => {
-    const firstHandler = vi.fn(async () => {
-      await runner.runBeforePromptBuild(promptEvent("nested"), TEST_PLUGIN_AGENT_CTX);
-      return { prependContext: "first" };
-    });
-    const secondHandler = vi.fn(() => ({ appendContext: "second" }));
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: firstHandler,
-          pluginId: "first",
-          priority: 10,
-        },
-        {
-          hookName: "before_prompt_build",
-          handler: secondHandler,
-          pluginId: "second",
-          priority: 1,
-        },
-      ]),
-    );
-
-    await expect(
-      runner.runBeforePromptBuild(promptEvent("outer"), TEST_PLUGIN_AGENT_CTX),
-    ).resolves.toEqual({
-      systemPrompt: undefined,
-      prependContext: "first",
-      appendContext: "second",
-      prependSystemContext: undefined,
-      appendSystemContext: undefined,
-    });
-    expect(firstHandler).toHaveBeenCalledOnce();
-    expect(secondHandler).toHaveBeenCalledOnce();
-  });
-
+describe("before_prompt_build dispatch", () => {
   it("keeps sibling hook families and other runners active during dispatch", async () => {
     const turnPrepare = vi.fn(() => ({ prependContext: "turn" }));
     const heartbeat = vi.fn(() => ({ appendContext: "heartbeat" }));

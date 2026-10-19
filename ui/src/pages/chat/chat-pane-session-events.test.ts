@@ -81,8 +81,8 @@ describe("mounted pane session event ownership", () => {
     }
     const talk = new RealtimeTalkSession(client, row.key);
     const stop = vi.spyOn(talk, "stop").mockResolvedValue(undefined);
-    pane.state.realtimeTalkSession = talk;
-    pane.state.realtimeTalkActive = true;
+    pane.state.realtimeTalk.update({ realtimeTalkSession: talk });
+    pane.state.realtimeTalk.update({ realtimeTalkActive: true });
     emitGatewayEvent("sessions.changed", {
       sessionKey: row.key,
       agentId: "main",
@@ -97,10 +97,10 @@ describe("mounted pane session event ownership", () => {
       },
     });
     expect(stop).toHaveBeenCalledTimes(1);
-    expect(pane.state.realtimeTalkSession).toBeNull();
-    expect(pane.state.realtimeTalkActive).toBe(false);
+    expect(pane.state.realtimeTalk.snapshot.realtimeTalkSession).toBeNull();
+    expect(pane.state.realtimeTalk.snapshot.realtimeTalkActive).toBe(false);
     await pane.state.toggleRealtimeTalk();
-    expect(pane.state.realtimeTalkSession).toBeNull();
+    expect(pane.state.realtimeTalk.snapshot.realtimeTalkSession).toBeNull();
   });
 
   it("publishes one shared event and applies its message to every mounted pane", async () => {
@@ -934,8 +934,8 @@ describe("mounted pane session event ownership", () => {
           expect(delivered.mock.calls[0]?.[1]).toEqual({ applied: false });
         }
         laterHistory.reject(new Error("Incarnation history temporarily unavailable"));
-        await refresh;
         if (preservesSuccessor) {
+          await refresh;
           expect(getChatHistoryLoadState(state)).toMatchObject({
             phase: "failed",
             sessionKey: row.key,

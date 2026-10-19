@@ -1,4 +1,8 @@
 import { expect, it } from "vitest";
+import {
+  waitForControlUiGatewayReady,
+  waitForControlUiGatewayReconnecting,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -215,7 +219,22 @@ suite.define(() => {
         await expect.poll(() => row.textContent()).not.toContain(`${generatedTitle} updated`);
         await openRename();
         await expect.poll(() => field.inputValue()).toBe(generatedTitle);
-        await gateway.closeLatest();
+        if (surface === "sidebar") {
+          const dialog = page.getByRole("dialog", { name: "Rename session", exact: true });
+          await gateway.setOnline(false);
+          await waitForControlUiGatewayReconnecting(page);
+          expect(await field.inputValue()).toBe(generatedTitle);
+          expect(await field.isEnabled()).toBe(true);
+          await expect
+            .poll(() => dialog.getByRole("button", { name: "Save", exact: true }).isEnabled())
+            .toBe(false);
+          await gateway.setOnline(true);
+          await waitForControlUiGatewayReady(page);
+          expect(await field.inputValue()).toBe(generatedTitle);
+          await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+        } else {
+          await gateway.closeLatest();
+        }
         await field.waitFor({ state: "detached" });
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
       } finally {

@@ -1,13 +1,8 @@
-/**
- * Converts embedded run failures into provider failover signals.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isExecLikeToolName, type ToolErrorSummary } from "../tool-error-summary.js";
 import type { EmbeddedRunFailureSignal } from "./types.js";
 
 /**
- * Converts terminal tool errors from unattended embedded runs into failure signals.
- *
  * Cron runs need fatal execution-denied signals so schedulers do not treat blocked shell access as
  * a normal silent completion.
  */

@@ -112,7 +112,10 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
           : true);
   return (
     <div
-      class={`agent-chat__goal agent-chat__goal--${props.resumeRecovery ? "resuming" : props.goal.status}`}
+      class={[
+        "agent-chat__goal",
+        `agent-chat__goal--${props.resumeRecovery ? "resuming" : props.goal.status}`,
+      ]}
       data-expanded={String(props.expanded)}
       role="group"
       aria-label={
@@ -164,7 +167,7 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
                   {visibleAction(action) ? (
                     <openclaw-tooltip content={t(`chat.goals.${action}`)}>
                       <button
-                        class={`agent-chat__goal-action agent-chat__goal-${action}`}
+                        class={["agent-chat__goal-action", `agent-chat__goal-${action}`]}
                         type="button"
                         aria-label={t(`chat.goals.${action}`)}
                         onClick={() => {

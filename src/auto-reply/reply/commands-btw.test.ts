@@ -219,4 +219,24 @@ describe("handleBtwCommand", () => {
     expectObjectFields(runnerArgs().sessionEntry, { sessionId: "target-session" });
     expectReply(result, "target context", "what changed?");
   });
+
+  it.each([
+    [
+      "/btw why does this fail?\nError: ENOSPC\n  at write",
+      "why does this fail?\nError: ENOSPC\n  at write",
+    ],
+    ["/btw\nwhy does this fail?", "why does this fail?"],
+    ["/side first\n\nsecond", "first\n\nsecond"],
+  ])(
+    "passes every line of a multi-line side question to the runner: %s",
+    async (body, question) => {
+      runBtwSideQuestionMock.mockResolvedValue({ text: "answer" });
+      const params = activeParams(body);
+
+      const result = await run(params);
+
+      expect(runnerArgs().question).toBe(question);
+      expectReply(result, "answer", question);
+    },
+  );
 });

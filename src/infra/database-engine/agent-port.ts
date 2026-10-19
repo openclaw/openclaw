@@ -6,9 +6,9 @@ import type { DatabasePortProvider } from "./port-descriptor.js";
 export const agentPortProvider: DatabasePortProvider = {
   id: "agent",
   minimumPostgresVersion: 16,
-  async loadDescriptor() {
+  async loadDescriptor(_owner, version) {
     const { loadAgentPortDescriptor } = await import("./agent-port-descriptor.js");
-    return loadAgentPortDescriptor();
+    return loadAgentPortDescriptor(version);
   },
   matchesSqlite: (tables) =>
     ["schema_meta", "session_nodes", "transcript_events"].every((table) => tables.has(table)),
@@ -21,12 +21,14 @@ export async function resolveAgentPortRoots(
   registeredDatabases?: readonly OpenClawRegisteredAgentDatabase[],
 ): Promise<string[]> {
   const [
+    { listAgentIds },
     { resolveSharedMainAuthAgentDir },
     { resolveConfiguredAgentDatabaseTargets },
     { listDefaultAgentDatabasePaths },
     { inspectOpenClawRegisteredAgentDatabases },
     { resolveDatabaseEngineSelection },
   ] = await Promise.all([
+    import("../../agents/agent-roster.js"),
     import("../../agents/auth-profiles/shared-main-dir.js"),
     import("../../config/sessions/targets.js"),
     import("../../state/agent-database-path-discovery.js"),
@@ -48,6 +50,8 @@ export async function resolveAgentPortRoots(
       ...resolveConfiguredAgentDatabaseTargets(context.config, {
         env,
         registeredDatabases: registered,
+        // Unconfigured reserved stores come from discovery/registration, not expected roots.
+        nativeAgentIds: new Set(listAgentIds(context.config)),
       }).map((entry) => entry.path),
       ...registered.map((entry) => entry.path),
     ]),

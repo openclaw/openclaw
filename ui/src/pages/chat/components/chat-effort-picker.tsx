@@ -21,18 +21,12 @@ export type ChatEffortPickerParams = {
   thinkingDisabled: boolean;
   thinking: ChatThinkingSelectState;
   onFastModeSelect: (value: ChatFastModeSelectValue, sessionKey: string) => Promise<unknown>;
-  onRequestUpdate?: () => void;
   onThinkingSelect: (value: string, sessionKey: string) => Promise<unknown>;
   reserved?: boolean;
 };
 
 function formatEffortLabel(label: string): string {
   return label.replace(/^Inherited:\s*/u, "");
-}
-
-function refreshAfterSelection(pending: Promise<unknown>, requestUpdate?: () => void) {
-  void pending.finally(() => requestUpdate?.());
-  requestUpdate?.();
 }
 
 export function ChatEffortPicker(props: ChatEffortPickerParams) {
@@ -210,10 +204,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
     if (props.thinkingDisabled || !stop || stop.value === view().selectedThinkingValue) {
       return;
     }
-    refreshAfterSelection(
-      props.onThinkingSelect(stop.value, props.sessionKey),
-      props.onRequestUpdate,
-    );
+    void props.onThinkingSelect(stop.value, props.sessionKey);
   };
   return (
     <Show when={visible()}>
@@ -424,10 +415,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                             }
                             const stop = view().onlyStop;
                             if (stop) {
-                              refreshAfterSelection(
-                                props.onThinkingSelect(stop.value, props.sessionKey),
-                                props.onRequestUpdate,
-                              );
+                              void props.onThinkingSelect(stop.value, props.sessionKey);
                             }
                           }}
                         >
@@ -471,10 +459,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                                   !option().disabled &&
                                   option().value !== props.fastMode.persistedOverride
                                 ) {
-                                  refreshAfterSelection(
-                                    props.onFastModeSelect(option().value, props.sessionKey),
-                                    props.onRequestUpdate,
-                                  );
+                                  void props.onFastModeSelect(option().value, props.sessionKey);
                                 }
                               }}
                             >

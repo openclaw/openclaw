@@ -202,6 +202,7 @@ function fixture() {
     resource,
     missingResource,
     candidatePath,
+    currentPath,
     scratch,
     capturePrefix,
   };
@@ -235,6 +236,8 @@ it("explains prepared schema crossings and complete live inventory without chang
   const f = fixture();
   const daemon = path.join(f.stateDir, "control", "services.sqlite");
   database(daemon, 1).close();
+  const client = path.join(f.stateDir, "client", "credentials.sqlite");
+  database(client, 1).close();
   const before = sourceFiles(f.root, path.join(f.root, "cache"));
   const coverage = await inspectImmutableUpdateCoverage({ root: f.root });
   expect(coverage.warnings).toEqual([]);
@@ -246,6 +249,12 @@ it("explains prepared schema crossings and complete live inventory without chang
   expect(coverage.databases).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ path: f.shared, userVersion: 1, coverage: "matching-version" }),
+      expect.objectContaining({
+        path: client,
+        userVersion: 1,
+        targetVersion: 1,
+        coverage: "matching-version",
+      }),
       expect.objectContaining({
         path: daemon,
         userVersion: 1,
@@ -309,9 +318,43 @@ it("explains prepared schema crossings and complete live inventory without chang
   );
 });
 
+it("reports recorded build isolation for current and prepared generations", async () => {
+  const f = fixture();
+  for (const generation of [f.currentPath, f.candidatePath]) {
+    write(
+      path.join(generation, "dist", "build-info.json"),
+      JSON.stringify({
+        immutableBuild: {
+          builtBy: "operator",
+          isolation: "none",
+          account: "fixture",
+          uid: 1002,
+          gid: 1002,
+        },
+      }),
+    );
+  }
+  const coverage = await inspectImmutableUpdateCoverage({ root: f.root });
+  expect(coverage.warnings).toEqual([
+    expect.stringContaining(
+      "Current generation was built by the operator fixture (uid 1002, gid 1002)",
+    ),
+    expect.stringContaining(
+      "Prepared generation was built by the operator fixture (uid 1002, gid 1002)",
+    ),
+  ]);
+  expect(formatImmutableUpdateCoverage(coverage).join("\n")).toContain(
+    "https://docs.openclaw.ai/cli/update",
+  );
+});
+
 it("keeps an unprepared SHA unknown without reading or running the retained candidate", async () => {
   const f = fixture();
   write(path.join(f.candidatePath, "package.json"), "invalid prepared metadata must not be read");
+  write(
+    path.join(f.candidatePath, "dist", "build-info.json"),
+    JSON.stringify({ immutableBuild: { builtBy: "operator", isolation: "none" } }),
+  );
   const before = sourceFiles(f.root, path.join(f.root, "cache"));
   const targetSha = "c".repeat(40);
   const coverage = await inspectImmutableUpdateCoverage({ root: f.root, targetSha });

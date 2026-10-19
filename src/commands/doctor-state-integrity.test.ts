@@ -51,10 +51,23 @@ vi.mock("../channels/plugins/bundled-ids.js", async (importOriginal) => ({
   listBundledChannelIds: () => ["matrix", "whatsapp"],
 }));
 
-vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
-  listBundledChannelIdsWithPersistedAuthState: () => ["matrix", "whatsapp"],
-  hasBundledChannelPersistedAuthState: () => false,
-}));
+vi.mock("../channels/plugins/package-state-probes.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../channels/plugins/package-state-probes.js")>();
+  return {
+    ...actual,
+    listBundledChannelIdsForPackageState: (
+      ...args: Parameters<typeof actual.listBundledChannelIdsForPackageState>
+    ) =>
+      args[0] === "persistedAuthState"
+        ? ["matrix", "whatsapp"]
+        : actual.listBundledChannelIdsForPackageState(...args),
+    hasBundledChannelPackageState: (
+      params: Parameters<typeof actual.hasBundledChannelPackageState>[0],
+    ) =>
+      params.metadataKey !== "persistedAuthState" && actual.hasBundledChannelPackageState(params),
+  };
+});
 
 describe("doctor state integrity", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -78,6 +91,8 @@ describe("doctor state integrity", () => {
       recursive: true,
     });
   }
+  const warning = (target: string, message: string) =>
+    expect.objectContaining({ severity: "warning", path: target, message });
 
   beforeEach(() => {
     envSnapshot = captureEnv([
@@ -131,11 +146,7 @@ describe("doctor state integrity", () => {
     });
     if (process.platform !== "win32") {
       expect(issues.map(stateIntegrityIssueToHealthFinding)).toContainEqual(
-        expect.objectContaining({
-          severity: "warning",
-          path: configPath,
-          message: "Config file is group/world readable. Recommend chmod 600.",
-        }),
+        warning(configPath, "Config file is group/world readable. Recommend chmod 600."),
       );
     }
     expect(issues.some((issue) => issue.kind === "missing-runtime-dir")).toBe(false);
@@ -152,16 +163,8 @@ describe("doctor state integrity", () => {
     const issues = detectStateIntegrityHealthIssues({}, { configPath });
     expect(issues.map(stateIntegrityIssueToHealthFinding)).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          severity: "warning",
-          path: stateDir,
-          message: "State directory permissions are too open. Recommend chmod 700.",
-        }),
-        expect.objectContaining({
-          severity: "warning",
-          path: configPath,
-          message: "Config file is group/world readable. Recommend chmod 600.",
-        }),
+        warning(stateDir, "State directory permissions are too open. Recommend chmod 700."),
+        warning(configPath, "Config file is group/world readable. Recommend chmod 600."),
       ]),
     );
   });
@@ -224,11 +227,10 @@ describe("doctor state integrity", () => {
     const confirmRuntimeRepair = decline();
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
     expect(hasRepairPromptMessage(confirmRuntimeRepair, "Create OAuth dir at")).toBe(false);
-    expect(stateIntegrityText()).toContain("OAuth dir not present");
-    expect(stateIntegrityText()).not.toContain("CRITICAL: OAuth dir missing");
-    expect(stateIntegrityText()).not.toMatch(
-      /CRITICAL: (?:Sessions dir|Session store dir) missing/,
-    );
+    const text = stateIntegrityText();
+    expect(text).toContain("OAuth dir not present");
+    expect(text).not.toContain("CRITICAL: OAuth dir missing");
+    expect(text).not.toMatch(/CRITICAL: (?:Sessions dir|Session store dir) missing/);
     expect(repairPromptCalls(confirmRuntimeRepair)).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({

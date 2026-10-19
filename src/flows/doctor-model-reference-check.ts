@@ -1,4 +1,3 @@
-/** Doctor checks configured references against known provider and catalog facts. */
 import { resolveKnownModelRefMigrationTarget } from "../commands/doctor/shared/codex-route-warnings.js";
 import { readModelCatalogWarnings } from "../commands/models/catalog-warnings.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";

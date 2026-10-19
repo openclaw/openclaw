@@ -127,7 +127,122 @@ it("rereads native model ownership after its harness plugin config changes", asy
   });
 });
 
-it.for(["once", "continued", "failure"] as const)(
+it("keeps archived native sessions searchable after catalog replacement", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = {
+      agents: { entries: { main: {} }, defaults: { model: "example/fallback" } },
+    };
+    const archivedKey = "agent:main:harness:row-native:archived";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: archivedKey },
+      {
+        sessionId: "archived-native",
+        updatedAt: 1,
+        archivedAt: 1,
+        agentHarnessId: "row-native",
+        modelSelectionLocked: true,
+      },
+    );
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:dashboard:scheduled-target" },
+      { sessionId: "scheduled-target", updatedAt: 2 },
+    );
+    const previousRegistry = captureActivePluginRegistrySnapshot();
+    const registry = createEmptyPluginRegistry();
+    let nativeModel = "original-native";
+    registry.agentHarnesses.push({
+      pluginId: "row-native",
+      source: "test",
+      harness: {
+        id: "row-native",
+        label: "Archived native fixture",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("Presentation must not run a model");
+        },
+        resolveSessionRuntimeOwnershipAsync: async () => ({
+          model: "native",
+          auth: "native",
+          modelRef: { provider: "example", model: nativeModel },
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "row-native", activation: { onAgentHarnesses: ["row-native"] } }],
+    });
+    const catalog = () =>
+      new Map([
+        [
+          "main",
+          createPreparedGatewayModelCatalog({
+            config: cfg,
+            entries: [{ provider: "example", id: nativeModel, name: nativeModel }],
+            pluginRegistry: registry,
+            metadataSnapshot,
+          }),
+        ],
+      ]);
+    const release = retainSessionListForegroundWork();
+    let projection: SessionRowProjection | undefined;
+    try {
+      projection = await createSessionRowProjection({
+        cfg,
+        getModelCatalog: async () => catalog(),
+      });
+      const respond = vi.fn();
+      const list = async (search?: string, archived: boolean | "all" = "all") => {
+        respond.mockClear();
+        await sessionReadHandlers["sessions.list"]!({
+          req: { type: "req", id: "archived-native-search", method: "sessions.list" },
+          params: { agentId: "main", search, archived, limit: 5, includeLastMessage: false },
+          client: null,
+          context: bindSessionRowProjection(requestContext(cfg), () => projection!),
+          isWebchatConnect: () => false,
+          respond,
+        });
+      };
+      await list(undefined, true);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          sessions: expect.arrayContaining([
+            expect.objectContaining({ sessionId: "archived-native", model: "original-native" }),
+          ]),
+        }),
+      );
+      await list("scheduled-target");
+      const expectTarget = () =>
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            sessions: [expect.objectContaining({ sessionId: "scheduled-target" })],
+          }),
+        );
+      expectTarget();
+      nativeModel = "replacement-native";
+      notifyPreparedModelRuntimePublication({ phase: "published" });
+      await projection.ensureMaterialized();
+      await list("scheduled-target");
+      expectTarget();
+      await list("replacement-native");
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          sessions: [
+            expect.objectContaining({ sessionId: "archived-native", model: "replacement-native" }),
+          ],
+        }),
+      );
+    } finally {
+      projection?.dispose();
+      release();
+      restoreActivePluginRegistrySnapshot(previousRegistry);
+    }
+  });
+});
+
+it.for(["change", "failure"] as const)(
   "keeps native ownership changes local to one listed row: %s",
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -153,7 +268,6 @@ it.for(["once", "continued", "failure"] as const)(
       const previousRegistry = captureActivePluginRegistrySnapshot();
       const registry = createEmptyPluginRegistry();
       const failure = new AgentHarnessPreflightError("Synthetic native read failure");
-      let changed = false;
       let reads = 0;
       let changing = false;
       registry.agentHarnesses.push({
@@ -171,8 +285,7 @@ it.for(["once", "continued", "failure"] as const)(
             if (changing && change === "failure") {
               throw failure;
             }
-            if (changing && (!changed || change === "continued")) {
-              changed = true;
+            if (changing) {
               const registration = registry.agentHarnesses[0]!;
               registration.harness = { ...registration.harness };
               params.assertCurrent?.();
@@ -191,18 +304,34 @@ it.for(["once", "continued", "failure"] as const)(
       try {
         projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
         await projection.ensureMaterialized();
+        expect(projection.needsMaterialization).toBe(false);
+        const initialReads = reads;
+        const sql = observeHostDataSql();
+        try {
+          expect(projection.snapshot({ agentId: "main", key })).toEqual({ row: null });
+          expect(sql.queries).toEqual([]);
+          expect(reads).toBe(initialReads);
+        } finally {
+          sql.restore();
+        }
+        expect((await listProjectedSessions({ projection, opts: {} })).sessions[0]).toMatchObject({
+          sessionId: "changing",
+          model: "gpt-5.6-sol",
+        });
         changing = true;
         reads = 0;
         sessionChanges.emit({ agentId: "main", sessionKey: key, factsInvalidated: true });
         const respond = vi.fn();
-        const request = sessionReadHandlers["sessions.list"]!({
-          req: { type: "req", id: "ownership-change-list", method: "sessions.list" },
-          params: {},
-          client: null,
-          context: bindSessionRowProjection(requestContext(cfg), () => projection!),
-          isWebchatConnect: () => false,
-          respond,
-        });
+        const list = (id: string) =>
+          sessionReadHandlers["sessions.list"]!({
+            req: { type: "req", id, method: "sessions.list" },
+            params: {},
+            client: null,
+            context: bindSessionRowProjection(requestContext(cfg), () => projection!),
+            isWebchatConnect: () => false,
+            respond,
+          });
+        const request = list("ownership-change-list");
         if (change === "failure") {
           await expect(request).rejects.toBe(failure);
           expect(respond).not.toHaveBeenCalled();
@@ -214,35 +343,40 @@ it.for(["once", "continued", "failure"] as const)(
               sessions: [
                 expect.objectContaining({
                   sessionId: "changing",
-                  model: change === "continued" ? "gpt-5.5" : "gpt-5.6-sol",
+                  model: "gpt-5.5",
                 }),
                 expect.objectContaining({ sessionId: "unaffected" }),
               ],
             }),
           );
+          expect(reads).toBe(1);
+          changing = false;
+          respond.mockClear();
+          await list("ownership-stable-list");
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({
+              sessions: [
+                expect.objectContaining({ sessionId: "changing", model: "gpt-5.5" }),
+                expect.objectContaining({ sessionId: "unaffected" }),
+              ],
+            }),
+          );
+          expect(reads).toBe(1);
+
+          sessionChanges.emit({ agentId: "main", sessionKey: key, factsInvalidated: true });
+          respond.mockClear();
+          await list("ownership-invalidated-list");
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({
+              sessions: [
+                expect.objectContaining({ sessionId: "changing", model: "gpt-5.6-sol" }),
+                expect.objectContaining({ sessionId: "unaffected" }),
+              ],
+            }),
+          );
           expect(reads).toBe(2);
-          if (change === "continued") {
-            changing = false;
-            respond.mockClear();
-            await sessionReadHandlers["sessions.list"]!({
-              req: { type: "req", id: "ownership-stable-list", method: "sessions.list" },
-              params: {},
-              client: null,
-              context: bindSessionRowProjection(requestContext(cfg), () => projection!),
-              isWebchatConnect: () => false,
-              respond,
-            });
-            expect(respond).toHaveBeenCalledWith(
-              true,
-              expect.objectContaining({
-                sessions: [
-                  expect.objectContaining({ sessionId: "changing", model: "gpt-5.6-sol" }),
-                  expect.objectContaining({ sessionId: "unaffected" }),
-                ],
-              }),
-            );
-            expect(reads).toBe(3);
-          }
         }
       } finally {
         projection?.dispose();
@@ -312,6 +446,7 @@ it("prepares native model ownership in workers and invalidates only its committe
       });
       await projection.ensureMaterialized();
       const snapshot = () => projection!.snapshot({ agentId: "main", key }).row;
+      snapshot();
       const sql = observeHostDataSql();
       try {
         expect(snapshot()).toMatchObject({ modelProvider: "openai", model: "gpt-5.6-sol" });

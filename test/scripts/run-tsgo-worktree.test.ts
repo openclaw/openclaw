@@ -1,11 +1,13 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import {
   materializeNativeCompiler,
+  materializeTypeChecker,
   overrideNativeFixtureExecutable,
   resolveInstalledNativeCompiler,
   writeNativeFixtureFile,
@@ -13,9 +15,7 @@ import {
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 const sourceRoot = process.cwd();
-// Commit only the wrapper's runtime closure: staging all of scripts/lib (~480
-// files) exceeded the fixture's Git budget on loaded hosts. The CLI shim loads
-// the implementation and its tsx loader by path, so they are explicit inputs.
+// Keep fixture Git work bounded to the wrapper, implementation and loader closure.
 const WRAPPER_FILES = collectRuntimeImportClosure(
   sourceRoot,
   ["scripts/run-tsgo.mjs", "scripts/run-tsgo.mts", "scripts/tsx.mjs"],
@@ -27,41 +27,25 @@ function createLinkedCheckoutFixture() {
   const primary = path.join(directory, "primary");
   const root = path.join(directory, "linked");
   fs.mkdirSync(primary);
-  // Isolate fixture Git writes from hook-owned indexes/objects. Wrapper commands
-  // below still inherit the untouched environment and exercise the real bootstrap.
-  const gitEnv = { ...process.env };
-  for (const key of [
-    "GIT_DIR",
-    "GIT_COMMON_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_QUARANTINE_PATH",
-  ]) {
-    delete gitEnv[key];
-  }
-  const git = (args: string[]) => {
-    const result = spawnSync(
+  // Isolate Git writes from hook-owned indexes; wrappers inherit the real environment.
+  const gitEnv = createNestedGitEnv();
+  delete gitEnv.GIT_COMMON_DIR;
+  const git = (args: string[]) =>
+    execFileSync(
       "git",
       [
         `--git-dir=${path.join(primary, ".git")}`,
         `--work-tree=${primary}`,
-        "-c",
-        `core.hooksPath=${path.join(directory, "unused-hooks")}`,
-        "-c",
-        "commit.gpgsign=false",
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.invalid",
+        ...[
+          `core.hooksPath=${path.join(directory, "unused-hooks")}`,
+          "commit.gpgsign=false",
+          "user.name=Fixture",
+          "user.email=fixture@example.invalid",
+        ].flatMap((config) => ["-c", config]),
         ...args,
       ],
       { cwd: primary, env: gitEnv, encoding: "utf8", timeout: 10_000 },
     );
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-  };
   git(["init", "-q"]);
   writeNativeFixtureFile(primary, "package.json", '{"private":true,"type":"module"}\n');
   writeNativeFixtureFile(primary, "pnpm-workspace.yaml", "packages: []\n");
@@ -77,6 +61,9 @@ function createLinkedCheckoutFixture() {
   // An ancestor install must not let the worktree's own preload skip its Git fallback.
   expect(path.relative(primary, root)).toBe(`..${path.sep}linked`);
   expect(fs.lstatSync(path.join(root, ".git")).isFile()).toBe(true);
+  materializeNativeCompiler(primary, { javaScriptApi: false });
+  materializeTypeChecker(primary);
+  linkCheckoutTools(primary);
   return { primary, root, git };
 }
 
@@ -88,47 +75,36 @@ function linkCheckoutTools(root: string) {
   }
 }
 
-function installCheckoutTools(root: string) {
-  const native = materializeNativeCompiler(root, { javaScriptApi: false });
-  linkCheckoutTools(root);
-  return native;
-}
-
 function runTsgoEntry(
   root: string,
   args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; status?: number } = {},
 ) {
-  return spawnSync(process.execPath, [path.join(root, "scripts/run-tsgo.mjs"), ...args], {
+  const result = spawnSync(process.execPath, [path.join(root, "scripts/run-tsgo.mjs"), ...args], {
     cwd: options.cwd ?? root,
     env: options.env ?? process.env,
     encoding: "utf8",
     timeout: 25_000,
     killSignal: "SIGKILL",
   });
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stdout + result.stderr).toBe(options.status ?? 0);
+  return result;
 }
 
 describe("run-tsgo linked worktree entry", () => {
   it("selects its own root compiler from src while preserving relative project semantics", () => {
-    const { primary, root } = createLinkedCheckoutFixture();
-    installCheckoutTools(primary);
+    const { root } = createLinkedCheckoutFixture();
     linkCheckoutTools(root);
     const native = resolveInstalledNativeCompiler();
     const write = (file: string, text: string) => writeNativeFixtureFile(root, file, text);
-    const compilerOptions = {
-      module: "NodeNext",
-      target: "ES2023",
-      types: [],
-      strict: true,
-      noEmit: true,
-    };
+    const compilerOptions = { types: [], noEmit: true };
     write("tsconfig.json", JSON.stringify({ compilerOptions, files: ["wrong-entry.ts"] }));
     write("wrong-entry.ts", 'export const value: number = "wrong project";\n');
     write("src/tsconfig.json", JSON.stringify({ compilerOptions, files: ["entry.ts"] }));
     write("src/entry.ts", "export const value: number = 1;\n");
     const selectionPath = path.join(root, "compiler-selection.json");
-    // Record the selected executable and cwd, then let the unchanged native compiler
-    // parse -p and check the real project. No bootstrap or compiler result is mocked.
+    // Record selection, then let the real compiler parse -p and check the project.
     write(
       "native-compiler.mjs",
       `#!/usr/bin/env node
@@ -153,8 +129,6 @@ process.exitCode = result.status ?? 1;
       cwd,
       env: { ...process.env, OPENCLAW_CI_STATIC_EVIDENCE: "1" },
     });
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stdout + result.stderr).toBe(0);
     const selected: { cwd: string; args: string[] } = JSON.parse(
       fs.readFileSync(selectionPath, "utf8"),
     );
@@ -163,18 +137,18 @@ process.exitCode = result.status ?? 1;
     if (process.platform !== "win32") {
       const receipts = result.stdout.trim().split("\n");
       expect(receipts).toHaveLength(2);
-      const leaf = JSON.parse(receipts[0]!.slice(receipts[0]!.indexOf(" ") + 1));
+      const parseReceipt = (line: string) => JSON.parse(line.slice(line.indexOf(" ") + 1));
+      const leaf = parseReceipt(receipts[0]!);
+      const header = { version: 1, id: expect.any(String) };
       expect(leaf).toEqual({
-        version: 1,
-        id: expect.any(String),
+        ...header,
         config: "tsconfig.json",
         exitCode: 0,
         stdout: "",
         stderr: "",
       });
-      expect(JSON.parse(receipts[1]!.slice(receipts[1]!.indexOf(" ") + 1))).toEqual({
-        version: 1,
-        id: expect.any(String),
+      expect(parseReceipt(receipts[1]!)).toEqual({
+        ...header,
         planned: 1,
         completed: 1,
         leaves: [leaf.id],
@@ -185,25 +159,19 @@ process.exitCode = result.status ?? 1;
 
   it("refuses a missing local install through its own wrapper without creating dependency links", () => {
     const { primary, root } = createLinkedCheckoutFixture();
-    installCheckoutTools(primary);
     const installed = runTsgoEntry(primary, ["--version"]);
-    expect(installed.error).toBeUndefined();
-    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
     expect(installed.stdout).toMatch(/^Version \d/m);
     const modules = path.join(root, "node_modules");
     expect(fs.lstatSync(modules, { throwIfNoEntry: false })).toBeUndefined();
 
-    const result = runTsgoEntry(root, ["--version"]);
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stdout + result.stderr).toBe(1);
+    const result = runTsgoEntry(root, ["--version"], { status: 1 });
     expect(result.stdout).not.toMatch(/^Version \d/m);
     expect(result.stderr.trim().split("\n").at(-1)).toBe("[tsgo] FAILED (exit 1)");
     expect(fs.lstatSync(modules, { throwIfNoEntry: false })).toBeUndefined();
   }, 30_000);
 
   it("visibly skips a missing sparse project through its own wrapper before creating dependencies or outputs", () => {
-    const { primary, root, git } = createLinkedCheckoutFixture();
-    installCheckoutTools(primary);
+    const { root, git } = createLinkedCheckoutFixture();
     git(["config", "core.sparseCheckout", "true"]);
     const result = runTsgoEntry(
       root,
@@ -215,8 +183,6 @@ process.exitCode = result.status ?? 1;
       ],
       { env: { ...process.env, OPENCLAW_TSGO_SPARSE_SKIP: "1", OPENCLAW_CI_STATIC_EVIDENCE: "1" } },
     );
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stderr).toContain("skipping sparse-missing project");
     expect(result.stderr).toContain("OPENCLAW_TSGO_SPARSE_SKIP=1");
     expect(result.stdout).not.toContain("[ci-static:tsgo:");

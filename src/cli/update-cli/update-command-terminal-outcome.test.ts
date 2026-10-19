@@ -376,7 +376,7 @@ async function scenario(
         expect(await fs.readdir(swap.transaction.backupRoot)).toEqual([]);
         injected = true;
         throw Object.assign(new Error("fixture obsolete backup deletion denied"), {
-          code: "EACCES",
+          code: "EPERM",
         });
       }
       await rmdir(...args);
@@ -403,7 +403,7 @@ async function scenario(
   });
   vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
     if (kind === "retained" && String(args[0]) === swap.transaction.backupRoot) {
-      throw Object.assign(new Error("fixture fallback rename denied"), { code: "EACCES" });
+      throw Object.assign(new Error("fixture fallback rename denied"), { code: "EBUSY" });
     }
     return rename(...args);
   });
@@ -732,6 +732,7 @@ describe("composed cleanup and terminal outcome", () => {
 
   it.each([
     { kind: "renamed", json: true },
+    { kind: "retained", json: true },
     { kind: "cleanup-deadline", json: true },
   ] as const)(
     "reports the $kind backup after verified activation and repeated completion",
@@ -758,6 +759,10 @@ describe("composed cleanup and terminal outcome", () => {
       expect(output).toContain(value.expectedRetained);
       expect(JSON.stringify(value.history)).toContain(value.expectedRetained);
       expect(value.report).toContain(value.expectedRetained);
+      if (kind === "retained") {
+        expect(value.report).toContain("EPERM");
+        expect(value.report).toContain("EBUSY");
+      }
       expect(value.afterRepeat).toEqual(value.beforeRepeat);
       if (kind !== "cleanup-deadline") {
         expect(value.repeatedCompletion).toMatchObject({

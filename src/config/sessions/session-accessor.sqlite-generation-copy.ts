@@ -9,6 +9,10 @@ import {
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  prepareTrajectoryPayload,
+  readTrajectoryPayload,
+} from "../../trajectory/runtime-payload.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import type {
   SqliteSessionGenerationClaim,
@@ -27,7 +31,11 @@ import {
   reconcileSessionTranscriptIndexInTransaction,
 } from "./session-transcript-index.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import { transcriptEventJsonSql, type TranscriptPayloadRecord } from "./transcript-payload.js";
+import {
+  readTranscriptStorageEncoding,
+  transcriptEventJsonSql,
+  type TranscriptPayloadRecord,
+} from "./transcript-payload.js";
 import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
 
 export function readSqliteSessionGenerationWindows(
@@ -172,7 +180,7 @@ function readSqliteSessionGenerationFacts(
     "trajectory",
     row.seq,
     row.run_id,
-    row.event_json,
+    readTrajectoryPayload(row),
   ]);
   hashRows("parentStreamEvents", rows.parentStreamEvents, (row) => [
     "parentStream",
@@ -300,7 +308,7 @@ export function copySqliteSessionGenerationRows(params: {
   // UTF-8 SQLite can preserve encoded payloads without another codec round trip.
   const destinationEncoding = isPostgresSqlConnection(params.destination.db)
     ? undefined
-    : params.destination.db.prepare("PRAGMA encoding").get()?.encoding;
+    : readTranscriptStorageEncoding(params.destination.db);
   if (destinationEncoding !== "UTF-8") {
     for (const row of iterateSqliteQuerySync(
       params.source.db,
@@ -346,7 +354,18 @@ export function copySqliteSessionGenerationRows(params: {
   for (const row of trajectoryEvents) {
     executeSqliteQuerySync(
       params.destination.db,
-      destinationDb.insertInto("trajectory_runtime_events").values(row),
+      destinationDb.insertInto("trajectory_runtime_events").values(
+        destinationEncoding === "UTF-8"
+          ? row
+          : {
+              ...row,
+              ...prepareTrajectoryPayload(
+                params.destination.db,
+                readTrajectoryPayload(row),
+                destinationEncoding ?? "UTF-8",
+              ),
+            },
+      ),
     );
   }
   for (const row of parentStreamEvents) {

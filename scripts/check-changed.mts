@@ -20,6 +20,7 @@ import {
   hasConfigDocInput,
   isConfigDocSchemaSourcePath,
   hasDeadcodeScannedSource,
+  hasLineCapRatchetInput,
   hasProtocolEventCoverageInput,
   listChangedPathsFromGit,
   listStagedChangedPaths,
@@ -495,8 +496,6 @@ export function createChangedCheckPlan(
   const controllerGuardArgs = [
     "check:control-ui-controllers",
     ...(options.staged ? ["--staged"] : []),
-    "--base",
-    options.base ?? (options.staged ? "HEAD" : baseEnv.CHECKOUT_BASE_SHA || "origin/main"),
   ];
   delete baseEnv.OPENCLAW_OXLINT_CHANGED_PATHS;
   const cwd = process.cwd();
@@ -719,9 +718,7 @@ export function createChangedCheckPlan(
     );
   }
   add("conflict markers", ["check:no-conflict-markers"]);
-  if (
-    result.paths.some((file) => /\.(?:ts|tsx|mts|mjs)$/u.test(file) || file === ".oxlintrc.json")
-  ) {
+  if (hasLineCapRatchetInput(result.paths)) {
     add("line-cap growth ratchet", [
       "check:line-cap-ratchet",
       ...(options.staged ? ["--staged"] : []),

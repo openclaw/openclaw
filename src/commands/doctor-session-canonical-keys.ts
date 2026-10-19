@@ -189,7 +189,7 @@ function mergeCanonicalSessionEntryCandidates(
       preferred = incomingPreferred;
     }
   }
-  return winner ? { entry: structuredClone(winner.entry), winner } : undefined;
+  return winner ? { entry: winner.entry, winner } : undefined;
 }
 
 function selectCanonicalSessionCandidate(

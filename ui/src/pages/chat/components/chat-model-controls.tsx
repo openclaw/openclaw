@@ -90,7 +90,6 @@ export type ChatModelControlsProps = {
   onModelSelect?: (value: string, sessionKey: string, agentRuntime?: string | null) => unknown;
   onModelPickerTargetRetry?: (groupId: string) => unknown;
   onModelPickerTargetSelect?: (groupId: string, value: string) => unknown;
-  onRequestUpdate?: () => void;
   onThinkingSelect?: (value: string, sessionKey: string) => unknown;
 };
 
@@ -546,7 +545,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       effortMutationDisabled ||
       !hasResolvableModel ||
       (thinking.options.length === 0 && fastMode.disabled);
-    // CSS keeps the empty effort slot beside an open picker until its catalog resolves.
+    // Keep the effort control mounted but hidden until its catalog resolves.
     const reserveEffortPicker = !hasResolvableModel;
     return {
       model: {
@@ -596,7 +595,6 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
           props.onModelSelect?.(next, targetSessionKey, agentRuntime),
         onTargetRetry: props.onModelPickerTargetRetry,
         onTargetSelect: props.onModelPickerTargetSelect,
-        onRequestUpdate: props.onRequestUpdate,
       },
       effort: {
         disabled: effortDisabled,
@@ -610,7 +608,6 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         thinking,
         onFastModeSelect: async (next, targetSessionKey) =>
           props.onFastModeSelect?.(next, targetSessionKey),
-        onRequestUpdate: props.onRequestUpdate,
         onThinkingSelect: async (next, targetSessionKey) =>
           props.onThinkingSelect?.(next, targetSessionKey),
         reserved: reserveEffortPicker,

@@ -51,6 +51,9 @@ async function sendChannelMessage(params: {
     {
       api: {
         serviceUrl,
+        fromServiceUrl() {
+          return this;
+        },
         conversations: { activities },
       },
     } as unknown as MSTeamsApp,

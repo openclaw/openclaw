@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createReplyRestartRecoveryClaimController } from "../../auto-reply/reply/restart-recovery-claim.js";
 import { createReplyRecoveryActorFixture } from "../../auto-reply/reply/restart-recovery-claim.test-support.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import * as commandSecretGateway from "../../cli/command-secret-gateway.js";
+import * as commandSecretTargets from "../../cli/command-secret-targets.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
@@ -12,7 +14,7 @@ import {
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -23,7 +25,10 @@ import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-deliv
 import { readToolResultDetails } from "../tool-result-error.js";
 import { createMessageTool } from "./message-tool-execution.js";
 
+const runRealMessageAction = messageActionRunner.runMessageAction;
+
 afterEach(() => {
+  vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
   resetPluginRuntimeStateForTest();
 });
@@ -118,6 +123,28 @@ describe("stranded retry message delivery", () => {
         toolContext: source,
       });
       try {
+        vi.spyOn(messageActionRunner, "runMessageAction").mockImplementation((input) =>
+          runRealMessageAction({
+            ...input,
+            gateway: {
+              request: send,
+              terminalSourceReplyReceiptOwner: "caller",
+              clientName: "gateway-client",
+              mode: "backend",
+            },
+          }),
+        );
+        vi.spyOn(commandSecretTargets, "getScopedChannelsCommandSecretTargets").mockReturnValue({
+          targetIds: new Set<string>(),
+        });
+        vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementation(
+          async ({ config: resolvedConfig }) => ({
+            resolvedConfig,
+            diagnostics: [],
+            targetStatesByPath: {},
+            hadUnresolvedTargets: false,
+          }),
+        );
         const tool = createMessageTool({
           ...identity,
           ...source,
@@ -127,23 +154,6 @@ describe("stranded retry message delivery", () => {
           agentAccountId: "default",
           messageActionTurnCapability: capability,
           sourceReplyDeliveryMode: "message_tool_only",
-          runMessageAction: (input) =>
-            runMessageAction({
-              ...input,
-              gateway: {
-                request: send,
-                terminalSourceReplyReceiptOwner: "caller",
-                clientName: "gateway-client",
-                mode: "backend",
-              },
-            }),
-          getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-          resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
-            resolvedConfig,
-            diagnostics: [],
-            targetStatesByPath: {},
-            hadUnresolvedTargets: false,
-          }),
         });
         const first = await tool.execute("first-send", {
           action: "send",
@@ -181,6 +191,7 @@ describe("stranded retry message delivery", () => {
           expect(send).toHaveBeenCalledTimes(1);
         }
       } finally {
+        vi.restoreAllMocks();
         revokeMessageActionTurnCapability(capability);
       }
     });

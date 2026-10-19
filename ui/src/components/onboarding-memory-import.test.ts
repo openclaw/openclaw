@@ -4,7 +4,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import "./onboarding-memory-import.ts";
+import "./onboarding-memory-import-solid.tsx";
 
 type OnboardingMemoryImportElement = HTMLElement & {
   active: boolean;
@@ -182,15 +182,34 @@ describe("OnboardingMemoryImport", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("waits for the agents list and triggers loading it", async () => {
+  it("loads agents once through its own notifications and retries on a later notification", async () => {
     const request = vi.fn();
     const context = createContext(request, { agentsLoaded: false });
-    await mount(context);
-    await waitForSolid(() => expect(context.agents.ensureList).toHaveBeenCalledTimes(1));
+    const notify = contextNotifications.get(context)!;
+    const ensureList = vi.mocked(context.agents.ensureList);
+    let finishList!: () => void;
+    ensureList.mockImplementationOnce(async () => {
+      context.agents.state.agentsLoading = true;
+      notify();
+      await new Promise<void>((resolve) => {
+        finishList = resolve;
+      });
+      context.agents.state.agentsLoading = false;
+      context.agents.state.agentsError = "Agent list unavailable";
+      notify();
+      return null;
+    });
+    const element = await mount(context);
+    await waitForSolid(() => expect(ensureList).toHaveBeenCalledTimes(1));
     expect(request).not.toHaveBeenCalled();
-    await Promise.resolve();
-    contextNotifications.get(context)!();
-    await waitForSolid(() => expect(context.agents.ensureList).toHaveBeenCalledTimes(2));
+    notify();
+    finishList();
+    await ensureList.mock.results[0]!.value;
+    await element.updateComplete;
+    expect(ensureList).toHaveBeenCalledTimes(1);
+
+    notify();
+    await waitForSolid(() => expect(ensureList).toHaveBeenCalledTimes(2));
   });
 
   it("sets the guard after a successful plan with no offers", async () => {
@@ -253,6 +272,31 @@ describe("OnboardingMemoryImport", () => {
     expectUnOffered(element);
   });
 
+  it("aborts pending planning when onboarding deactivates without completing the guard", async () => {
+    let resolvePlan!: (plan: ReturnType<typeof createPlan>) => void;
+    let signal!: AbortSignal;
+    const request = vi.fn(
+      async (_method: string, _params: unknown, options: { signal: AbortSignal }) => {
+        signal = options.signal;
+        return await new Promise<ReturnType<typeof createPlan>>((resolve) => {
+          resolvePlan = resolve;
+        });
+      },
+    );
+    const element = await mount(createContext(request));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
+    expect(signal.aborted).toBe(false);
+    element.active = false;
+    await element.updateComplete;
+    await waitForSolid(() => expect(signal.aborted).toBe(true));
+
+    resolvePlan(createPlan([]));
+    await request.mock.results[0]!.value;
+    await element.updateComplete;
+    expectUnOffered(element);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("sends frozen provider plans with fresh idempotency keys", async () => {
     const request = vi.fn(async (method: string, params?: { providerId?: string }) => {
       if (method === "migrations.memory.plan") {
@@ -290,6 +334,44 @@ describe("OnboardingMemoryImport", () => {
       },
     ]);
     expect(randomUuid).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses same-turn selection and admits only one import while completion is pending", async () => {
+    let resolveApply!: (result: ReturnType<typeof createApplyResult>) => void;
+    const request = vi.fn(async (method: string) =>
+      method === "migrations.memory.plan"
+        ? createPlan(["codex", "claude"])
+        : await new Promise<ReturnType<typeof createApplyResult>>((resolve) => {
+            resolveApply = resolve;
+          }),
+    );
+    const element = await mount(createContext(request));
+    const button = await waitForAction(element);
+    const codex = element.querySelector<HTMLInputElement>("[data-provider-id='codex'] input")!;
+    codex.checked = false;
+    codex.dispatchEvent(new Event("change", { bubbles: true }));
+    button.click();
+    button.click();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenLastCalledWith(
+      "migrations.memory.apply",
+      expect.objectContaining({ providerId: "claude" }),
+    );
+    const cancel = new Event("modal-cancel", { bubbles: true, cancelable: true });
+    element.querySelector("openclaw-modal-dialog")!.dispatchEvent(cancel);
+    expect(cancel.defaultPrevented).toBe(true);
+    resolveApply(createApplyResult("claude"));
+    await waitForAction(element, "continue");
+    expect(element.textContent).toContain("Migrated 1, skipped 0");
+  });
+
+  it("retires a displayed offer synchronously on disconnect", async () => {
+    const request = successfulRequest();
+    const element = await mount(createContext(request));
+    const button = await waitForAction(element);
+    element.remove();
+    button.click();
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("drops a displayed plan when the gateway context changes", async () => {
@@ -357,11 +439,15 @@ describe("OnboardingMemoryImport", () => {
 
   it("sets the guard when skipped", async () => {
     const request = vi.fn(async () => createPlan());
-    const element = await mount(createContext(request));
+    const context = createContext(request);
+    const element = await mount(context);
     (await waitForAction(element, "skip")).click();
     await element.updateComplete;
     expect(sessionStorage.getItem(guardKey)).toBe("done");
     expect(element.querySelector("openclaw-modal-dialog")).toBeNull();
+    const remounted = await mount(context);
+    expect(remounted.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("continues with later providers after a provider error", async () => {

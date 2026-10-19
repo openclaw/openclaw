@@ -40,7 +40,7 @@ it.each([
     };
     const state = createPageState(
       context,
-      { invalidate: () => {}, afterCommit: () => () => {} },
+      { afterCommit: () => () => {} },
       {
         sessionKey: `agent:${agentId}:topic`,
         dispatchEvent: () => true,

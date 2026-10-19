@@ -84,6 +84,5 @@ export type SessionWorkspaceHost = {
   sessionWorkspaceDraftScope?: string;
   sessionWorkspaceDraftContext?: { sessionTitle?: string; paneLabel?: string };
   sidebarContent: SidebarSelection | null;
-  requestUpdate?: () => void;
   handleOpenSidebar: (content: SidebarSelection | null) => void;
 };

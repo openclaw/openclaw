@@ -15,7 +15,7 @@ import { Type, type Static } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
-import { logDebug, logWarn } from "../../logger.js";
+import { logWarn } from "../../logger.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
@@ -237,14 +237,6 @@ function formatWebFetchErrorDetail(params: {
     text = markdownToText(withTitle);
   }
   return truncateWebFetchText(text.trim(), DEFAULT_ERROR_MAX_CHARS).text;
-}
-
-function redactUrlForDebugLog(rawUrl: string): string {
-  const parsed = URL.parse(rawUrl);
-  if (!parsed) {
-    return "[invalid-url]";
-  }
-  return parsed.pathname && parsed.pathname !== "/" ? `${parsed.origin}/...` : parsed.origin;
 }
 
 const WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD = wrapWebContent("", "web_fetch").length;
@@ -671,13 +663,6 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
     res = result.response;
     finalUrl = result.finalUrl;
     release = result.release;
-
-    const markdownTokens = res.headers.get("x-markdown-tokens");
-    if (markdownTokens) {
-      logDebug(
-        `[web-fetch] x-markdown-tokens: ${markdownTokens} (${redactUrlForDebugLog(finalUrl)})`,
-      );
-    }
   } catch (error) {
     if (error instanceof SsrFBlockedError || params.signal?.aborted) {
       throw error;

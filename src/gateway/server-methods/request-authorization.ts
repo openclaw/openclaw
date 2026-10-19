@@ -215,6 +215,24 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     if (unavailableError) {
       return { error: unavailableError };
     }
+    if (
+      params.method === "send" &&
+      !readSessionSharingStringParam(params.requestParams, "sessionKey")
+    ) {
+      const agentId = readSessionSharingStringParam(params.requestParams, "agentId");
+      const selected = resolveRequestedSessionAgentId(
+        params.context.getRuntimeConfig(),
+        agentId ? undefined : "main",
+        agentId,
+      );
+      if (!selected.ok) {
+        const error = selected.error;
+        if (error.retryable) {
+          error.details = { ...gatewayStartupUnavailableDetails(), method: params.method };
+        }
+        return { error };
+      }
+    }
     const startup =
       startupReadMethods.has(params.method) &&
       (params.method !== "sessions.list" ||

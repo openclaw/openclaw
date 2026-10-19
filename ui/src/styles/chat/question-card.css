@@ -45,7 +45,6 @@ openclaw-chat-question-panel {
 @supports (backdrop-filter: blur(1px)) {
   .chat-question-panel {
     backdrop-filter: blur(18px) saturate(1.35);
-    -webkit-backdrop-filter: blur(18px) saturate(1.35);
   }
 }
 

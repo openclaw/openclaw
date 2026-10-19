@@ -22,7 +22,6 @@ await runWithFailedTrailer("lint", async () => {
       },
     },
   );
-  const base = args.base || (!args.staged && process.env.CHECKOUT_BASE_SHA);
   let failure = 0;
   const collect = (status: number) => {
     // Timeouts and cancellation deliberately stop admitting new work.
@@ -31,14 +30,7 @@ await runWithFailedTrailer("lint", async () => {
     process.exitCode = failure;
     return stopped;
   };
-  if (
-    collect(
-      runControllerGuard(process.cwd(), [
-        ...(args.staged ? ["--staged"] : []),
-        ...(base ? ["--base", base] : []),
-      ]),
-    )
-  ) {
+  if (collect(runControllerGuard(process.cwd(), args.staged ? ["--staged"] : []))) {
     return;
   }
   const tsxPath = resolveRepoToolBinPath("tsx");

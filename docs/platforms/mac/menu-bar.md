@@ -8,7 +8,8 @@ title: "Menu bar"
 **Open Dashboard** and Gateway window actions use the **Web** experience by
 default. Enable **Native experience (Experimental)** under **Dashboard → Settings
 → This Mac → App** to use native chat windows. The preference applies to the menu
-bar, Dock, main **Gateways** menu, and **File → New Gateway Window…** (Cmd-N).
+bar, Dock, main **Gateways** menu, and **File → New Gateway Window…** (Shift-Cmd-N).
+Cmd-N opens a new session in the selected experience.
 Settings always opens the web Dashboard settings page. See
 [WebChat](/platforms/mac/webchat) for switching behavior and native chat features.
 

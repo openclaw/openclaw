@@ -219,7 +219,11 @@ it.skipIf(process.platform !== "win32")(
       path: path.join(source, "control", "services.sqlite"),
       userVersion: null,
     });
-    expect(inspected).toHaveLength(4);
+    expect(inspected).toContainEqual({
+      path: path.join(source, "client", "credentials.sqlite"),
+      userVersion: null,
+    });
+    expect(inspected).toHaveLength(5);
     expect(
       updateStateSchemaVersionsMatch(releasedBaseline, inspected, { sharedPath: shared }),
     ).toBe(true);

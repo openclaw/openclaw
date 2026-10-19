@@ -1,4 +1,3 @@
-// Shared status scan helpers for gateway probing, Tailscale URL formatting, and memory status.
 // This file owns the cross-command contracts reused by normal, JSON, and status-all scans.
 
 import { existsSync } from "node:fs";
@@ -116,6 +115,7 @@ async function applyLocalStatusRpcFallback(params: {
         config: params.cfg,
         configPath: params.configPath,
         method: "status",
+        params: { includeChannelSummary: false, includeCliProjection: true },
         token: params.gatewayProbeAuth.token,
         password: params.gatewayProbeAuth.password,
         timeoutMs,

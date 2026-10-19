@@ -1,10 +1,11 @@
-import { createEffect, createSignal, untrack } from "solid-js";
+import { onSettled } from "solid-js";
 import { createOverlayAnchor } from "../../../components/overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../../../components/overlay-lifecycle.ts";
 import { registryFor } from "../../../components/overlay-registry.ts";
 import "../../../components/solid/overlay.css";
 import { consumeTooltipEscape } from "../../../components/tooltip.ts";
 import { acquireNativeOverlaySurface } from "../../../lib/native-overlay-occlusion.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { clearChatModelSearchOnEscape } from "./chat-model-picker-search.ts";
 
 const MOBILE_COMPOSER_OVERLAY_QUERY =
@@ -54,11 +55,12 @@ function bindChatPickerOverlay(
   };
   details.setAttribute("data-chat-native-picker", "");
   let lastOpen = overlay.open;
+  // Mirror each open/close edge into native details and its dismissal callback synchronously.
   const stop = overlay.subscribe((open) => {
     details.open = open;
     if (open !== lastOpen) {
       lastOpen = open;
-      untrack(() => onOpenChange?.(details));
+      onOpenChange?.(details);
     }
   });
   const toggle = () => {
@@ -67,7 +69,7 @@ function bindChatPickerOverlay(
     }
     sync();
   };
-  const activate = (event: MouseEvent) => {
+  const activate = (event: Event) => {
     if (event.defaultPrevented || !event.composedPath().includes(trigger)) {
       return;
     }
@@ -78,12 +80,12 @@ function bindChatPickerOverlay(
     details.open = !details.open;
     toggle();
   };
-  details.addEventListener("click", activate);
-  details.addEventListener("toggle", toggle);
+  const stopClick = listen(details, "click", activate);
+  const stopToggle = listen(details, "toggle", toggle);
   sync();
   return () => {
-    details.removeEventListener("click", activate);
-    details.removeEventListener("toggle", toggle);
+    stopClick();
+    stopToggle();
     stop();
     details.removeAttribute("data-chat-native-picker");
     overlay.dispose();
@@ -95,11 +97,11 @@ function bindChatPickerOverlay(
 export function createChatPickerOverlay(
   onOpenChange?: (details: HTMLDetailsElement) => void,
 ): (details: HTMLDetailsElement) => void {
-  const [element, setElement] = createSignal<HTMLDetailsElement>();
-  createEffect(element, (details) =>
-    details ? bindChatPickerOverlay(details, onOpenChange) : undefined,
-  );
-  return (details) => setElement(details);
+  let element!: HTMLDetailsElement;
+  onSettled(() => bindChatPickerOverlay(element, onOpenChange));
+  return (details) => {
+    element = details;
+  };
 }
 
 // Split panes and Home can overlap New Session. Keep one document listener set
@@ -125,7 +127,7 @@ function connectChatComposerPickerDismissal(ownerDocument: Document): () => void
   const controller = new AbortController();
   const options = { capture: true, signal: controller.signal };
 
-  function dismissChatComposerPickersOutside(event: PointerEvent): void {
+  function dismissChatComposerPickersOutside(event: Event): void {
     const path = event.composedPath();
     for (const menu of ownerDocument.querySelectorAll<HTMLElement>(INVOCATION_MENUS)) {
       if (!path.includes(menu)) {
@@ -164,13 +166,20 @@ function connectChatComposerPickerDismissal(ownerDocument: Document): () => void
       ?.focus({ preventScroll: true });
   }
 
-  ownerDocument.addEventListener("pointerdown", dismissChatComposerPickersOutside, options);
+  listen(ownerDocument, "pointerdown", dismissChatComposerPickersOutside, options);
   // Native surfaces consume Escape before invocation menus beneath them.
-  ownerDocument.defaultView?.addEventListener(
-    "keydown",
-    dismissChatComposerPickersOnEscape,
-    options,
-  );
+  if (ownerDocument.defaultView) {
+    listen(
+      ownerDocument.defaultView,
+      "keydown",
+      (event) => {
+        if (event instanceof KeyboardEvent) {
+          dismissChatComposerPickersOnEscape(event);
+        }
+      },
+      options,
+    );
+  }
 
   return () => controller.abort();
 }

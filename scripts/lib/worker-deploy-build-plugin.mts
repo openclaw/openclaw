@@ -6,6 +6,11 @@ import {
   WORKER_BUNDLE_CHUNK_PATH_PATTERN,
   WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH,
 } from "../../src/shared/worker-bundle-hash.ts";
+import {
+  createFsSafeWindowsHelperAssetPlugin,
+  resolveFsSafePackageManifest,
+  resolveFsSafeWindowsHelper,
+} from "./fs-safe-windows-helper-asset.mts";
 
 const WORKER_DEPLOY_BUILD_PLUGIN_NAME = "openclaw:worker-deploy";
 export const WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID = `${path.resolve("src/worker/worker-deploy-runtime.ts")}?optional-native`;
@@ -43,6 +48,7 @@ const WS_DIRECT_RUNTIME_FRAGMENTS = [
 ] as const;
 const TREE_SITTER_INIT = "TreeSitter.Parser.init()";
 const TREE_SITTER_BASH_WASM = 'require.resolve("tree-sitter-bash/tree-sitter-bash.wasm")';
+const FS_SAFE_WATCH_WORKER = 'new URL("./watch-io-worker.js", import.meta.url)';
 const PHOTON_WASM_INIT = `const path = require('path').join(__dirname, 'photon_rs_bg.wasm');
 const bytes = require('fs').readFileSync(path);`;
 const FS_SAFE_NATIVE_BATCH = `    if (options.native) {
@@ -59,18 +65,13 @@ export function resolveWorkerDeployGeneratorInputs(rootDir = process.cwd()) {
   return [
     path.join(playwrightRoot, "package.json"),
     path.join(playwrightRoot, "browsers.json"),
-    fs.realpathSync(
-      path.resolve(
-        rootDir,
-        "node_modules/@openclaw/fs-safe/dist",
-        WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH,
-      ),
-    ),
+    resolveFsSafeWindowsHelper(rootDir),
     fs.realpathSync(path.resolve(rootDir, "node_modules/web-tree-sitter/web-tree-sitter.wasm")),
     fs.realpathSync(path.resolve(rootDir, "node_modules/tree-sitter-bash/tree-sitter-bash.wasm")),
     fs.realpathSync(
       path.resolve(rootDir, "node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm"),
     ),
+    resolveFsSafePackageManifest(rootDir),
   ] as const;
 }
 
@@ -125,14 +126,11 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
       "dist/windows-security-command.js",
     ),
   );
-  const [
-    packageJsonPath,
-    browsersJsonPath,
-    windowsSecurityHelperPath,
-    treeSitterWasmPath,
-    bashWasmPath,
-    photonWasmPath,
-  ] = resolveWorkerDeployGeneratorInputs(rootDir);
+  const fsSafeWatchIoPath = fs.realpathSync(
+    path.join(path.dirname(require.resolve("@openclaw/fs-safe/package.json")), "dist/watch-io.js"),
+  );
+  const [packageJsonPath, browsersJsonPath, , treeSitterWasmPath, bashWasmPath, photonWasmPath] =
+    resolveWorkerDeployGeneratorInputs(rootDir);
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
     name: string;
     version: string;
@@ -142,17 +140,13 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
     packageJSON = ${JSON.stringify({ name: packageJson.name, version: packageJson.version })};
     binPath = packageRoot;`;
 
+  const fsSafeAssets = createFsSafeWindowsHelperAssetPlugin(
+    rootDir,
+    `worker/${WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH}`,
+  );
   return {
+    ...fsSafeAssets,
     name: WORKER_DEPLOY_BUILD_PLUGIN_NAME,
-    buildStart(this: {
-      emitFile(file: { type: "asset"; fileName: string; source: Uint8Array }): string;
-    }) {
-      this.emitFile({
-        type: "asset",
-        fileName: `worker/${WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH}`,
-        source: fs.readFileSync(windowsSecurityHelperPath),
-      });
-    },
     generateBundle(
       this: { error(message: string): never },
       _options: unknown,
@@ -178,6 +172,10 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
         : null;
     },
     transform(this: { error(message: string): never }, code: string, id: string) {
+      const fsSafeTransform = fsSafeAssets.transform.call(this, code, id);
+      if (fsSafeTransform !== null) {
+        return fsSafeTransform;
+      }
       let resolvedId: string;
       try {
         resolvedId = fs.realpathSync(path.resolve(id));
@@ -186,6 +184,16 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
       }
       if (resolvedId === browserRuntimeBridgePath) {
         return WORKER_BROWSER_RUNTIME_COMPOSITION;
+      }
+      if (resolvedId === fsSafeWatchIoPath) {
+        if (code.split(FS_SAFE_WATCH_WORKER).length !== 2) {
+          this.error("fs-safe watch worker bootstrap changed; update the worker deploy transform");
+        }
+        // The archive carries the dependency worker as a bundled entry, not its source sibling.
+        return code.replace(
+          FS_SAFE_WATCH_WORKER,
+          'new URL("./worker-chunk-fs-safe-watch-io.mjs", import.meta.url)',
+        );
       }
       if (resolvedId === fsSafeWindowsSecurityPath) {
         if (code.split(FS_SAFE_NATIVE_BATCH).length !== 2) {

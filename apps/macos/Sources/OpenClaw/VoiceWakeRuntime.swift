@@ -128,7 +128,7 @@ actor VoiceWakeRuntime {
         }
         guard generation == self.refreshGeneration, self.pauseLeases.isEmpty, self.diagnostic == nil else { return }
 
-        guard self.permissions.supported(), snapshot.0 else {
+        guard snapshot.0 else {
             self.stop()
             return
         }

@@ -14,7 +14,7 @@ import {
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
-  tableExists,
+  sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { buildMatchQueryFromTerms, planKeywordSearch } from "./keyword-query.js";
 import { memoryTextSearchSchema, memoryVectorSearchSchema } from "./manager-search-schema.js";
@@ -46,6 +46,12 @@ type PathResult = SearchRowResult & {
   exactPathSpecificity: ExactPathSpecificity;
   hasBodyMatch: false;
 };
+
+function sessionExclusion(paths: readonly string[], alias?: string): RawBuilder<boolean> {
+  const source = sql.ref(alias ? `${alias}.source` : "source");
+  const path = sql.ref(alias ? `${alias}.path` : "path");
+  return sql<boolean>`(${source} != 'sessions' OR ${path} NOT IN ${sqliteStringSet(paths)})`;
+}
 
 function textIntent(
   query: string,
@@ -81,12 +87,6 @@ export async function searchPostgresMemoryVector(
   if (query.limit <= 0 || query.candidateIds?.length === 0 || query.queryVec.length === 0) {
     return [];
   }
-  if (!tableExists(database, "memory_index_chunks_vec")) {
-    throw new DatabaseSearchCapabilityUnavailableError(
-      "vector",
-      'PostgreSQL memory has no admitted vector index. Have a database administrator run CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public; then configure an embedding provider and run openclaw memory index. For keyword-only memory set memory.search.provider to "none".',
-    );
-  }
   const search = admitStoreSearch(database, memoryVectorSearchSchema(query.queryVec.length));
   if (!search.vector) {
     throw new DatabaseSearchCapabilityUnavailableError("vector", search.diagnostics.join("; "));
@@ -102,6 +102,9 @@ export async function searchPostgresMemoryVector(
       .where("c.model", "in", models);
     if (query.sourceFilter.params.length) {
       selected = selected.where("c.source", "in", query.sourceFilter.params);
+    }
+    if (query.sourceFilter.excludedSessionPaths?.length) {
+      selected = selected.where(sessionExclusion(query.sourceFilter.excludedSessionPaths, "c"));
     }
     if (query.candidateIds) {
       selected = selected.where("c.id", "in", query.candidateIds);
@@ -164,6 +167,9 @@ function searchBody(
     .where(textMatch(fullText, index, intent));
   if (query.sourceFilter.params.length) {
     selected = selected.where("source", "in", query.sourceFilter.params);
+  }
+  if (query.sourceFilter.excludedSessionPaths?.length) {
+    selected = selected.where(sessionExclusion(query.sourceFilter.excludedSessionPaths));
   }
   const rows = executeSqliteQuerySync<KeywordRow>(
     database,
@@ -262,6 +268,9 @@ function searchPaths(
     }
     if (query.sourceFilter.params.length) {
       paths = paths.where("s.source", "in", query.sourceFilter.params);
+    }
+    if (query.sourceFilter.excludedSessionPaths?.length) {
+      paths = paths.where(sessionExclusion(query.sourceFilter.excludedSessionPaths, "s"));
     }
     const retained = paths
       .orderBy(exact ? specificity : rank, "desc")

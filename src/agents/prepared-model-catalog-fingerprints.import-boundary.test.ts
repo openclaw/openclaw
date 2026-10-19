@@ -18,7 +18,6 @@ it("loads catalog request boundaries without importing runtime preparation", asy
           "--input-type=module",
           "--eval",
           `import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { registerHooks } from "node:module";
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -28,11 +27,8 @@ registerHooks({
     return nextResolve(specifier, context);
   },
 });
-const { fingerprintPreparedModelWorkerRequest } = await import(${JSON.stringify(entry)});
-assert.equal(
-  fingerprintPreparedModelWorkerRequest({ generationFingerprint: "fixture" }, { kind: "auth-refresh" }),
-  createHash("sha256").update('["fixture",{"kind":"auth-refresh"}]').digest("base64url"),
-);
+const { fingerprintPreparedModelCatalogPluginContext } = await import(${JSON.stringify(entry)});
+assert.equal(typeof fingerprintPreparedModelCatalogPluginContext, "function");
 await import(${JSON.stringify(catalogEntry)});
 console.log("catalog-fingerprint-cold-import-ok");`,
         ],

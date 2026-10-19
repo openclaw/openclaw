@@ -1,3 +1,4 @@
+import { getReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
 import type { ReplyPayload } from "../types.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import { accountAgentTurn } from "./agent-runner-result-accounting.js";
@@ -6,7 +7,6 @@ import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.
 import { prepareReplyAgentPayloads } from "./agent-runner-result-payloads.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { enqueueGoalContinuation } from "./goal-continuation.js";
-import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 
 export async function finalizeReplyAgentRun(
   context: FinalizeReplyAgentRunInput,
@@ -20,6 +20,7 @@ export async function finalizeReplyAgentRun(
       entry: context.activeSessionEntry,
       writer: context.execution.sessionWriter,
       operation: context.replyOperation,
+      activitySummaryCompletion: context.activitySummaryCompletion,
       prepareRestartClaimCleanup: context.prepareRestartClaimCleanup,
       publish(entry) {
         context.activeSessionEntry = entry;

@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../agents/delivery-evidence-values.js";
+import { stripMixedSilentReplyTokens } from "../auto-reply/reply/mixed-silent-reply-tokens.js";
 import { isSilentReplyText } from "../auto-reply/tokens.js";
 import { hasPersistedMedia } from "../sessions/user-turn-media.js";
 
@@ -33,7 +34,7 @@ const assistantTextSignatureCache = new WeakMap<
   { text: unknown; result: AssistantTextSignature }
 >();
 
-function isAssistantTextContentBlockType(value: unknown): boolean {
+export function isAssistantTextContentBlockType(value: unknown): boolean {
   return value === "text" || value === "input_text" || value === "output_text";
 }
 
@@ -280,7 +281,7 @@ export function prepareAssistantTranscriptText(
   }
   return record.display !== true &&
     !readTerminalSourceReplyDeliveryMirror(message) &&
-    text?.startsWith("NO_REPLY\n")
-    ? text.slice("NO_REPLY\n".length)
+    text !== undefined
+    ? (stripMixedSilentReplyTokens(text) ?? text)
     : text;
 }

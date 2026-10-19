@@ -278,7 +278,7 @@ export function createConfigFileWriteGuard(
       assertOwner();
       publication?.targetPathProof?.assertCurrent();
     };
-    assertRollbackOwner();
+    assertOwner();
     assertPublishedIdentity();
     if (publishedIdentity === undefined) {
       throw new ConfigMutationConflictError("config write has no publication to roll back", {

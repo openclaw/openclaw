@@ -5,10 +5,10 @@ import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-exe
 import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
 import { runWithAgentToolSourceExecutionScope } from "../../agents/agent-tool-source-execution-guard.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun,
+  createEmbeddedRunHandle,
+  registerTestEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -17,6 +17,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { readSqliteDatabaseScopedWriteTokensForPath } from "../../infra/sqlite-database-admission.js";
 import { runBeforeAgentReplyForTurn } from "../../plugins/before-agent-reply.js";
 import {
   initializeGlobalHookRunner,
@@ -84,16 +85,20 @@ describe("runSkillExperienceReview", () => {
     const interactiveHandle = createEmbeddedRunHandle({ abort: vi.fn() });
     mocks.runEmbeddedAgent.mockImplementation(
       async (params: Parameters<typeof runSkillWorkshopReview>[0]) => {
-        setActiveEmbeddedRun(params.sessionId, ownHandle, params.sessionKey);
+        registerTestEmbeddedRun(params.sessionId, ownHandle, params.sessionKey);
         try {
           expect(params.abortSignal?.aborted).toBe(false);
-          setActiveEmbeddedRun("interactive-session", interactiveHandle, "agent:other:interactive");
+          registerTestEmbeddedRun(
+            "interactive-session",
+            interactiveHandle,
+            "agent:other:interactive",
+          );
           expect(params.abortSignal?.aborted).toBe(true);
           expect(interactiveHandle.abort).not.toHaveBeenCalled();
           return { meta: { durationMs: 1, aborted: true } };
         } finally {
-          clearActiveEmbeddedRun("interactive-session", interactiveHandle);
-          clearActiveEmbeddedRun(params.sessionId, ownHandle);
+          clearTestEmbeddedRun("interactive-session", interactiveHandle);
+          clearTestEmbeddedRun(params.sessionId, ownHandle);
         }
       },
     );
@@ -197,7 +202,7 @@ describe("runSkillExperienceReview", () => {
     );
   });
 
-  it("keeps a later append live without MAIN SQL and denies unprepared use after revocation", async () => {
+  it("keeps prepared effects live through receipt pressure without MAIN SQL and denies revocation", async () => {
     const candidate = await createExperienceReviewCandidate(
       "review-append",
       [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
@@ -229,6 +234,12 @@ describe("runSkillExperienceReview", () => {
             // The model response resumes before the next tool can prepare its source scope.
             assertCurrent!();
             await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+              expect(
+                readSqliteDatabaseScopedWriteTokensForPath(
+                  candidate.source.storePath,
+                  Array.from({ length: 5_000 }, (_, index) => `unrelated-review-${index}`),
+                ),
+              ).toHaveLength(5_000);
               assertCurrent!();
             });
             expect(refreshedSql.queries).toEqual([]);

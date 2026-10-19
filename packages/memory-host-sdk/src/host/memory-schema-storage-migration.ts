@@ -23,7 +23,8 @@ import {
   type SqliteTableContractReader,
 } from "./openclaw-runtime-sqlite.js";
 
-const CHUNK_REVISION_TRIGGERS = ["insert", "update", "delete"].map((event) => ({
+// Pre-v23 rebuild admission still recognizes the triggers installed by shipped schemas.
+const LEGACY_CHUNK_REVISION_TRIGGERS = ["insert", "update", "delete"].map((event) => ({
   name: `memory_index_chunks_revision_after_${event}`,
   sql: `CREATE TRIGGER IF NOT EXISTS memory_index_chunks_revision_after_${event}
     AFTER ${event.toUpperCase()} ON memory_index_chunks
@@ -76,7 +77,7 @@ function storageShape(
       allowedMissingIndexes: indexes.map((index) => index.name),
       optionalCanonicalTriggerGroups: chunks
         ? [
-            { tableName: table, triggers: CHUNK_REVISION_TRIGGERS },
+            { tableName: table, triggers: LEGACY_CHUNK_REVISION_TRIGGERS },
             ...(shape === "binary"
               ? [{ tableName: table, triggers: MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS }]
               : []),
@@ -90,7 +91,7 @@ function storageShape(
       db,
       table,
       indexes.map((index) => index.name),
-      chunks ? CHUNK_REVISION_TRIGGERS.map((trigger) => trigger.name) : [],
+      chunks ? LEGACY_CHUNK_REVISION_TRIGGERS.map((trigger) => trigger.name) : [],
     );
   }
   return shape;

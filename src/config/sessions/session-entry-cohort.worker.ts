@@ -6,7 +6,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   assertOpenClawAgentDatabaseIdentity,
   readOpenClawAgentDatabaseIdentity,
@@ -76,7 +76,7 @@ export function createSessionEntryReadScope(capturedDatabase?: OpenClawAgentRead
     snapshot: <T>(database: OpenClawAgentReadOnlyDatabase, read: () => T) =>
       capturedDatabase?.db === database.db && database.db.isTransaction
         ? read()
-        : runSqliteDeferredTransactionSync(database.db, read),
+        : runSqliteReadSnapshotSync(database.db, read),
   };
 }
 
@@ -228,7 +228,7 @@ export function readSessionEntryCohort(
   // A single statement owns simple facts; richer cohorts retain one shared snapshot.
   return database.db.isTransaction || !requiresSnapshot
     ? runSqliteReadOperationSync(database.db, read)
-    : runSqliteDeferredTransactionSync(database.db, read);
+    : runSqliteReadSnapshotSync(database.db, read);
 }
 
 /** Standalone data reads retain their original canonical kernel without a cohort transaction. */

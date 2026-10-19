@@ -47,6 +47,27 @@ async function readLive(name: string) {
 }
 
 describe("workshop library", () => {
+  it("reports unreadable skill files instead of returning an incomplete inventory", async () => {
+    const skillDir = path.join(resolveWorkshopSkillsDir({}, "main"), "oversized");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), Buffer.alloc(1024 * 1024 + 1, "x"));
+
+    await expect(listWorkshopSkills({}, "main")).rejects.toThrow(
+      /file exceeds limit of 1048576 bytes/,
+    );
+  });
+
+  it("skips directories without SKILL.md but still lists hand-edited broken frontmatter", async () => {
+    const skillsRoot = resolveWorkshopSkillsDir({}, "main");
+    await fs.mkdir(path.join(skillsRoot, "missing"), { recursive: true });
+    await fs.mkdir(path.join(skillsRoot, "broken"));
+    await fs.writeFile(path.join(skillsRoot, "broken", "SKILL.md"), "---\nname: [\n---\n");
+
+    expect(await listWorkshopSkills({}, "main")).toMatchObject([
+      { name: "broken", description: "", files: ["SKILL.md"] },
+    ]);
+  });
+
   it("reuses retained changes across runs and refreshes after a workshop write", async () => {
     const reads = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
     try {

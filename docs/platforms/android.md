@@ -48,6 +48,12 @@ Reset pinned items** restores these defaults. The **Settings** gear beside the
 Gateway selector opens all settings, including while offline. Settings stays in
 the footer rather than the Pages menu or pin editor.
 
+Expanded session catalogs refresh every two minutes while the sidebar is visible
+and the app is in the foreground. Active catalogs refresh immediately when you
+return to the sidebar or reconnect. Polling pauses when all catalogs are collapsed
+after initial discovery; expanding the first catalog resumes it immediately.
+Failed requests and source errors retry every 30 seconds while polling is active.
+
 Use the **pencil beside Pages** to open Agents, Automations, Usage, Skills,
 Skill Workshop, Dreaming, Terminal, or Desktop (when available). Pin the pages
 you use often with **Edit pinned items**. These work pages also remain reachable

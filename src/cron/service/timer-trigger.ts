@@ -231,7 +231,7 @@ export function normalizeQueuedSystemEventHandle(
   if (typeof result === "boolean") {
     return { accepted: result };
   }
-  if (result && typeof result === "object") {
+  if (result) {
     return {
       accepted: result.accepted !== false,
       ...(result.remove ? { remove: result.remove } : {}),

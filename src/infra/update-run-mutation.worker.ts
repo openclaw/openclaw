@@ -3,6 +3,7 @@ import {
   openExistingOpenClawStateWriter,
   type ExistingOpenClawStateWriter,
 } from "../state/openclaw-state-db-existing-write.js";
+import { isPostgresSqlConnection } from "./sql-connection.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import {
@@ -87,7 +88,7 @@ export function recordUpdateRunMutationInWorker(
     return writer().run(({ db }) => {
       entered = true;
       // The longer wait is for BEGIN only; mutation and commit keep the normal lock budget.
-      if (busyTimeoutMs > OPENCLAW_SQLITE_BUSY_TIMEOUT_MS) {
+      if (!isPostgresSqlConnection(db) && busyTimeoutMs > OPENCLAW_SQLITE_BUSY_TIMEOUT_MS) {
         setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
       }
       if (input.requireNoRecovery) {

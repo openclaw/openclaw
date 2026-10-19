@@ -47,7 +47,7 @@ it("reads recovery health from the admitted snapshot without overwriting a forei
   const { deps, configPath } = fixture();
   await closeOpenClawStateDatabaseAsync();
   using writer = new DatabaseSync(resolveOpenClawStateSqlitePath(deps.env));
-  using observation = captureConfigHealthStateStore(deps, configPath);
+  const observation = captureConfigHealthStateStore(deps, configPath);
   const before = await withOpenClawStateDatabaseReadSnapshot(
     async () => {
       writer
@@ -60,13 +60,29 @@ it("reads recovery health from the admitted snapshot without overwriting a forei
     { env: deps.env },
   );
   expect(before?.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe("before");
-  if (!before) {
-    throw new Error("Expected a current recovery observation");
-  }
   await observation.update({ lastObservedSuspiciousSignature: "stale recovery" }, before);
   expect(
     readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastObservedSuspiciousSignature,
   ).toBe("foreign commit");
+});
+
+it("reads committed worker health writes and rejects a stale patch basis", async () => {
+  const { deps, configPath } = fixture();
+  const observation = captureConfigHealthStateStore(deps, configPath);
+  const before = await observation.read();
+  if (!before) {
+    throw new Error("Expected a current health observation");
+  }
+  await observation.update({ lastObservedSuspiciousSignature: "after" }, before);
+
+  const current = captureConfigHealthStateStore(deps, configPath);
+  expect((await current.read())?.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe(
+    "after",
+  );
+  await current.update({ lastObservedSuspiciousSignature: "stale" }, before);
+  expect((await current.read())?.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe(
+    "after",
+  );
 });
 
 it("compares every raw health field and absence before applying an observed patch", async () => {
@@ -81,11 +97,8 @@ it("compares every raw health field and absence before applying an observed patc
     ["last_observed_suspicious_signature", null],
     ["updated_at_ms", 123],
   ] as const) {
-    using observation = captureConfigHealthStateStore(deps, configPath);
+    const observation = captureConfigHealthStateStore(deps, configPath);
     const before = await observation.read();
-    if (!before) {
-      throw new Error("Expected a current observation");
-    }
     writer
       .prepare(`UPDATE config_health_entries SET ${column} = ? WHERE config_path = ?`)
       .run(value, configPath);
@@ -95,11 +108,8 @@ it("compares every raw health field and absence before applying an observed patc
   }
 
   writer.prepare("DELETE FROM config_health_entries WHERE config_path = ?").run(configPath);
-  using observation = captureConfigHealthStateStore(deps, configPath);
+  const observation = captureConfigHealthStateStore(deps, configPath);
   const absent = await observation.read();
-  if (!absent) {
-    throw new Error("Expected a current absence observation");
-  }
   writer
     .prepare(
       "INSERT INTO config_health_entries(config_path, last_observed_suspicious_signature, updated_at_ms) VALUES (?, ?, ?)",
@@ -111,12 +121,12 @@ it("compares every raw health field and absence before applying an observed patc
 });
 
 it.each([false, true])(
-  "publishes nested health invalidation only on outer commit (rollback: %s)",
+  "preserves nested health facts and original-row comparison across outer rollback: %s",
   async (rollback) => {
     const { deps, configPath } = fixture();
-    using observation = captureConfigHealthStateStore(deps, configPath);
+    const observation = captureConfigHealthStateStore(deps, configPath);
     const before = await observation.read();
-    expect(before?.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe("before");
+    expect(before.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe("before");
     const abort = new Error("fixture outer rollback");
     const mutate = () =>
       runOpenClawStateWriteTransaction(
@@ -124,7 +134,7 @@ it.each([false, true])(
           patchConfigHealthEntryToStore(deps, configPath, {
             lastObservedSuspiciousSignature: "after",
           });
-          expect(observation.isCurrent()).toBe(true);
+          expect(() => observation.assertCurrent()).not.toThrow();
           if (rollback) {
             throw abort;
           }
@@ -142,42 +152,25 @@ it.each([false, true])(
     if (rollback) {
       expect(await observation.read()).toEqual(before);
     } else {
-      expect(await observation.read()).toBeNull();
+      await observation.update({ lastObservedSuspiciousSignature: "stale" }, before);
+      expect(
+        readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastObservedSuspiciousSignature,
+      ).toBe("after");
     }
   },
 );
 
-it("disposes newer scopes without reviving superseded observations and preserves other paths", async () => {
+it("retains its captured database when the environment changes after planning", async () => {
   const { deps, configPath } = fixture();
-  using older = captureConfigHealthStateStore(deps, configPath);
-  using otherPath = captureConfigHealthStateStore(deps, path.join(deps.env.HOME, "other.json"));
-  expect(older.isCurrent()).toBe(true);
-  {
-    using newer = captureConfigHealthStateStore(deps, configPath);
-    expect(await older.read()).toBeNull();
-    expect(await newer.read()).not.toBeNull();
-    expect(otherPath.isCurrent()).toBe(true);
-  }
-  expect(await older.read()).toBeNull();
-  expect(await otherPath.read()).not.toBeNull();
-});
-
-it("continuations retain their captured database after planning scope disposal", async () => {
-  const { deps, configPath } = fixture();
-  let continueObservation: () => ReturnType<typeof captureConfigHealthStateStore>;
-  {
-    using planning = captureConfigHealthStateStore(deps, configPath);
-    expect(await planning.read()).not.toBeNull();
-    continueObservation = () => planning.captureContinuation();
-  }
+  const planning = captureConfigHealthStateStore(deps, configPath);
+  expect(await planning.read()).not.toBeNull();
   deps.env.OPENCLAW_STATE_DIR = directories.make("openclaw-other-health-store-");
   patchConfigHealthEntryToStore(deps, configPath, {
     lastObservedSuspiciousSignature: "other-store",
   });
-  using continuation = continueObservation();
-  expect(
-    (await continuation.read())?.state.entries?.[configPath]?.lastObservedSuspiciousSignature,
-  ).toBe("before");
+  expect((await planning.read()).state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe(
+    "before",
+  );
 });
 
 it("keeps sibling health rows and pending async observations independent of a sync observation", async () => {
@@ -194,16 +187,13 @@ it("keeps sibling health rows and pending async observations independent of a sy
   patchConfigHealthEntryToStore(deps, siblingPath, {
     lastObservedSuspiciousSignature: "sibling-before",
   });
-  using sibling = captureConfigHealthStateStore(deps, siblingPath);
+  const sibling = captureConfigHealthStateStore(deps, siblingPath);
   const before = await sibling.read();
   expect(before?.basis?.[siblingPath]).toBeDefined();
-  if (!before) {
-    throw new Error("Expected current sibling observation");
-  }
 
   now.mockReturnValue(1_700_000_000_001);
   observeConfigSnapshotSync(normalizeConfigIoDeps(deps), snapshot);
-  expect(sibling.isCurrent()).toBe(true);
+  expect(() => sibling.assertCurrent()).not.toThrow();
   expect((await sibling.read())?.basis?.[siblingPath]).toEqual(before.basis?.[siblingPath]);
   await sibling.update({ lastObservedSuspiciousSignature: "sibling-after" }, before);
   await closeOpenClawStateDatabaseAsync();
@@ -228,11 +218,8 @@ it("preserves worker-updated fields omitted by an already-read synchronous obser
     parsed: snapshot.parsed,
     stat: fs.statSync(configPath),
   });
-  using workerObservation = captureConfigHealthStateStore(deps, configPath);
+  const workerObservation = captureConfigHealthStateStore(deps, configPath);
   const basis = await workerObservation.read();
-  if (!basis) {
-    throw new Error("Expected current worker observation");
-  }
   await workerObservation.update({ lastPromotedGood: promoted }, basis);
   const committed = readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastPromotedGood;
   expect(committed).toEqual(promoted);
@@ -252,11 +239,8 @@ it.each(["read", "update"] as const)(
   "rejects retired database admission during health %s",
   async (operation) => {
     const { deps, configPath } = fixture();
-    using observation = captureConfigHealthStateStore(deps, configPath);
+    const observation = captureConfigHealthStateStore(deps, configPath);
     const before = await observation.read();
-    if (!before) {
-      throw new Error("Expected current observation");
-    }
     await closeOpenClawStateDatabaseAsync();
     await expect(
       operation === "read"
@@ -272,7 +256,7 @@ it.each(["read", "update"] as const)(
 
 it("keeps a confirmed health write successful when its database is then closed", async () => {
   const { deps, configPath } = fixture();
-  using observation = captureConfigHealthStateStore(deps, configPath);
+  const observation = captureConfigHealthStateStore(deps, configPath);
   const before = await observation.read();
   if (!before) {
     throw new Error("Expected current observation");

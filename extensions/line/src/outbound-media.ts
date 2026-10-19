@@ -62,7 +62,7 @@ function resolveLineMediaKind(
   if (opts.mediaKind !== undefined) {
     return { mediaKind: opts.mediaKind, kindSource: "declared" };
   }
-  if (typeof opts.durationMs === "number") {
+  if (opts.durationMs !== undefined) {
     return { mediaKind: "audio", kindSource: "metadata" };
   }
   if (opts.trackingId?.trim()) {
@@ -129,7 +129,7 @@ export async function buildLineMediaMessage(
       return {
         type: "audio",
         originalContentUrl: trimmedUrl,
-        duration: typeof opts.durationMs === "number" ? opts.durationMs : 60000,
+        duration: opts.durationMs ?? 60000,
       };
     default:
       return {

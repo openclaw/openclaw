@@ -58,9 +58,7 @@ let sessionBindingState: ReturnType<typeof createBindingFixture>;
 const roots = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     try {
-      await drainGlobalSingletonLifecycleState();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
+      await resetState();
       cleanup();
     } finally {
       vi.restoreAllMocks();
@@ -69,20 +67,23 @@ const roots = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function createAdapter(channel: string, accountId: string): SessionBindingAdapter {
+async function resetState() {
+  await drainGlobalSingletonLifecycleState();
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+}
+
+function createAdapter(): SessionBindingAdapter {
   return {
-    channel,
-    accountId,
+    channel: "discord",
+    accountId: "isolated",
     bind: sessionBindingState.bind,
     listBySession: () => [],
     resolveByConversation: sessionBindingState.resolveByConversation,
   };
 }
 
-function createDiscordCodexBindRequest(
-  conversationId: string,
-  summary: string,
-): PluginBindingRequestInput {
+function bindRequest(conversationId: string, summary = conversationId): PluginBindingRequestInput {
   return {
     pluginId: "fixture-plugin",
     pluginName: "Fixture Plugin",
@@ -114,7 +115,31 @@ function holdWorkerOperation() {
   return { entered, release, spy };
 }
 
-async function approveBindingRequest(approvalId: string, decision: PluginBindingDecision) {
+function holdBindingOperation() {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const original = sessionBindingState.bind.getMockImplementation()!;
+  const spy = sessionBindingState.bind.mockImplementationOnce(async (input) => {
+    entered.resolve();
+    await release.promise;
+    return await original(input);
+  });
+  return { entered, release, spy };
+}
+
+const observe = <T>(promise: Promise<T>) =>
+  promise.then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+
+async function expectHeld(entered: Promise<void>, observed: Promise<unknown>) {
+  expect(await Promise.race([entered.then(() => "held"), observed.then(() => "settled")])).toBe(
+    "held",
+  );
+}
+
+async function approve(approvalId: string, decision: PluginBindingDecision) {
   return await resolvePluginConversationBindingApproval({
     approvalId,
     decision,
@@ -130,22 +155,20 @@ async function flushMicrotasks(): Promise<void> {
 
 describe("plugin conversation approval worker lifetime", () => {
   beforeEach(async () => {
-    await drainGlobalSingletonLifecycleState();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await resetState();
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("conversation-approval-worker-"));
     runOpenClawStateWriteTransaction(() => undefined);
     sessionBindingState = createBindingFixture();
     setActivePluginRegistry(createEmptyPluginRegistry());
-    registerSessionBindingAdapter(createAdapter("discord", "isolated"));
+    registerSessionBindingAdapter(createAdapter());
   });
 
   it.each(["before-commit", "after-commit"] as const)(
     "preserves binding admission and settlement when authority changes %s",
     async (revokeAt) => {
-      const input = createDiscordCodexBindRequest("channel:owner-check", "original binding");
+      const input = bindRequest("channel:owner-check", "original binding");
       const pending = await requestPendingBinding(input);
-      const approved = await approveBindingRequest(pending.approvalId, "allow-once");
+      const approved = await approve(pending.approvalId, "allow-once");
       assert(approved.status === "approved", "expected approved bind result");
       const original = approved.binding;
       const bind = sessionBindingState.bind.getMockImplementation();
@@ -188,22 +211,14 @@ describe("plugin conversation approval worker lifetime", () => {
     requireNodeSqlite();
     const sql = observeMainThreadSql({ includeClose: true });
     try {
-      const pending = await requestPendingBinding(
-        createDiscordCodexBindRequest("channel:worker", "worker proof"),
-      );
-      expect((await approveBindingRequest(pending.approvalId, "allow-always")).status).toBe(
-        "approved",
-      );
+      const pending = await requestPendingBinding(bindRequest("channel:worker"));
+      expect((await approve(pending.approvalId, "allow-always")).status).toBe("approved");
       await drainGlobalSingletonLifecycleState();
       await closeOpenClawStateDatabaseAsync();
-      registerSessionBindingAdapter(createAdapter("discord", "isolated"));
-      expect(
-        (
-          await requestPluginConversationBinding(
-            createDiscordCodexBindRequest("channel:worker-reopen", "reopen"),
-          )
-        ).status,
-      ).toBe("bound");
+      registerSessionBindingAdapter(createAdapter());
+      await expect(
+        requestPluginConversationBinding(bindRequest("channel:worker-reopen")),
+      ).resolves.toMatchObject({ status: "bound" });
       sql.expectIdle();
     } finally {
       sql.restore();
@@ -213,7 +228,7 @@ describe("plugin conversation approval worker lifetime", () => {
   it.each(["read", "upsert", "decision"] as const)(
     "preserves current ownership and admitted decisions after a held approval %s",
     async (mode) => {
-      const input = createDiscordCodexBindRequest("channel:storage-race", "race");
+      const input = bindRequest("channel:storage-race", "race");
       const pending = mode !== "read" ? await requestPendingBinding(input) : undefined;
       const { entered, release, spy } = holdWorkerOperation();
       const resolutionParams = {
@@ -224,14 +239,9 @@ describe("plugin conversation approval worker lifetime", () => {
       const result = pending
         ? resolvePluginConversationBindingApproval(resolutionParams)
         : requestPluginConversationBinding(input);
-      const observed = result.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+      const observed = observe<Awaited<typeof result>>(result);
       try {
-        expect(
-          await Promise.race([entered.promise.then(() => "held"), observed.then(() => "settled")]),
-        ).toBe("held");
+        await expectHeld(entered.promise, observed);
         if (mode === "decision") {
           resolutionParams.decision = "deny";
         } else {
@@ -271,84 +281,55 @@ describe("plugin conversation approval worker lifetime", () => {
     },
   );
 
-  it("joins a consumed approval and cache publication before resetting its lifecycle", async () => {
-    const pending = await requestPendingBinding(
-      createDiscordCodexBindRequest("channel:reset-write", "reset"),
-    );
-    const { entered, release, spy } = holdWorkerOperation();
-    const resolution = approveBindingRequest(pending.approvalId, "allow-always");
-    const observed = resolution.then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
-    let resetting: Promise<void> | undefined;
-    try {
-      expect(
-        await Promise.race([entered.promise.then(() => "held"), observed.then(() => "settled")]),
-      ).toBe("held");
-      expect((await approveBindingRequest(pending.approvalId, "allow-once")).status).toBe(
-        "expired",
+  it.each(["write", "bind"] as const)(
+    "joins an admitted %s before resetting its lifecycle",
+    async (stage) => {
+      const pending = await requestPendingBinding(bindRequest(`channel:reset-${stage}`));
+      const gate = stage === "write" ? holdWorkerOperation() : holdBindingOperation();
+      const resolution = approve(
+        pending.approvalId,
+        stage === "write" ? "allow-always" : "allow-once",
       );
-      expect(sessionBindingState.bind).not.toHaveBeenCalled();
-      let resetFinished = false;
-      resetting = drainGlobalSingletonLifecycleState().then(() => {
-        resetFinished = true;
-      });
-      await flushMicrotasks();
-      expect(resetFinished).toBe(false);
-      release.resolve();
-      expect(await observed).toMatchObject({
-        error: expect.objectContaining({ message: expect.stringContaining("operation closed") }),
-      });
-      await resetting;
-      expect(sessionBindingState.bind).not.toHaveBeenCalled();
-      spy.mockRestore();
-      await closeOpenClawStateDatabaseAsync();
-      registerSessionBindingAdapter(createAdapter("discord", "isolated"));
-      expect(
-        (
-          await requestPluginConversationBinding(
-            createDiscordCodexBindRequest("channel:after-reset", "after"),
-          )
-        ).status,
-      ).toBe("bound");
-    } finally {
-      release.resolve();
-      await observed;
-      await resetting;
-      spy.mockRestore();
-    }
-  });
-
-  it("retains an already started binding until lifecycle reset can finish", async () => {
-    const pending = await requestPendingBinding(
-      createDiscordCodexBindRequest("channel:reset-bind", "reset binding"),
-    );
-    const entered = createDeferred();
-    const release = createDeferred();
-    const original = sessionBindingState.bind.getMockImplementation()!;
-    sessionBindingState.bind.mockImplementationOnce(async (input) => {
-      entered.resolve();
-      await release.promise;
-      return await original(input);
-    });
-    const resolution = approveBindingRequest(pending.approvalId, "allow-once");
-    let resetting: Promise<void> | undefined;
-    try {
-      await entered.promise;
-      let finished = false;
-      resetting = drainGlobalSingletonLifecycleState().then(() => {
-        finished = true;
-      });
-      await flushMicrotasks();
-      expect(finished).toBe(false);
-      release.resolve();
-      expect((await resolution).status).toBe("approved");
-      await resetting;
-    } finally {
-      release.resolve();
-      await resolution;
-      await resetting;
-    }
-  });
+      const observed = observe(resolution);
+      let resetting: Promise<void> | undefined;
+      try {
+        await expectHeld(gate.entered.promise, observed);
+        if (stage === "write") {
+          expect((await approve(pending.approvalId, "allow-once")).status).toBe("expired");
+          expect(sessionBindingState.bind).not.toHaveBeenCalled();
+        }
+        let finished = false;
+        resetting = drainGlobalSingletonLifecycleState().then(() => {
+          finished = true;
+        });
+        await flushMicrotasks();
+        expect(finished).toBe(false);
+        gate.release.resolve();
+        if (stage === "bind") {
+          expect(await observed).toMatchObject({ value: { status: "approved" } });
+        } else {
+          expect(await observed).toMatchObject({
+            error: expect.objectContaining({
+              message: expect.stringContaining("operation closed"),
+            }),
+          });
+        }
+        await resetting;
+        if (stage === "write") {
+          expect(sessionBindingState.bind).not.toHaveBeenCalled();
+          gate.spy.mockRestore();
+          await closeOpenClawStateDatabaseAsync();
+          registerSessionBindingAdapter(createAdapter());
+          await expect(
+            requestPluginConversationBinding(bindRequest("channel:after-reset")),
+          ).resolves.toMatchObject({ status: "bound" });
+        }
+      } finally {
+        gate.release.resolve();
+        await observed;
+        await resetting;
+        gate.spy.mockRestore();
+      }
+    },
+  );
 });

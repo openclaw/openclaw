@@ -528,7 +528,7 @@ async function handleMessageEvent(
 
     const messageContext = await buildLineMessageContext({
       event: answerAs,
-      allMedia: [...allMedia],
+      allMedia,
       mediaUnavailable,
       ...(context.missingParts === undefined ? {} : { missingParts: context.missingParts }),
       cfg,
@@ -685,7 +685,7 @@ function orderedLineSetMessages(
  * event is the turn's own and the rest are the set parts behind it.
  */
 export async function handleLineWebhookEvents(
-  events: WebhookEvent[],
+  events: readonly WebhookEvent[],
   context: LineHandlerContext,
 ): Promise<void> {
   const [event, ...setParts] = events;

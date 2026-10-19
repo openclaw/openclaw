@@ -307,7 +307,6 @@ export async function handleBrowserGatewayRequest({
   }
   if (nodeTarget) {
     try {
-      assertRequesterCurrent();
       preparedUpload = await prepareBrowserProxyUploadRequest({
         method: methodRaw,
         path,

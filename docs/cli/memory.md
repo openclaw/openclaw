@@ -129,13 +129,18 @@ extra-path details before showing indexing progress. The completion message
 reports the indexed file count. An empty corpus is a successful no-op: the
 command reports the resolved workspace path and that nothing was indexed, and
 leaves the missing `memory/` directory for the first memory write to create.
-Internal dreaming-narrative, cron, and heartbeat session transcripts are
+Internal Active Memory recall, dreaming-narrative, cron, and heartbeat session transcripts are
 excluded from indexing, including retained compressed narrative archives whose
 original sessions are no longer active. Sessions previously selected by
 `memory forget` also remain excluded. `--force` removes stale index records for
 both groups without reindexing their retained transcripts. Ordinary retained,
 reset, and deleted user-session archives remain eligible until explicitly
 targeted.
+
+Recognizable Active Memory recall helpers are also excluded from existing search
+indexes before result limits are applied. Ordinary synchronization removes their
+stale index records without `--force` or re-embedding unchanged conversations.
+Historical transcripts without a recognizable helper identity remain eligible.
 
 Full rebuilds wait for temporary database cleanup before reporting completion.
 File removal runs asynchronously so cleanup does not block the Gateway event loop.

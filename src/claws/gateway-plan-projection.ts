@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type {
   ClawActionEffect,
   ClawConfiguredAccess,
@@ -45,15 +45,11 @@ function safeAction(action: { kind: string; id: string; action: string; blocked:
 
 function projectActionsWithEffects<
   T extends { kind: string; id: string; action: string; blocked: boolean },
->(
-  operation: "add" | "update" | "remove",
-  actions: readonly T[],
-  projectEffect: (action: T) => ClawActionEffect | undefined,
-) {
+>(actions: readonly T[], projectEffect: (action: T) => ClawActionEffect | undefined) {
   const blockers: Array<{ code: string; path: string; message: string }> = [];
   const projected = actions.map((action) => {
     const safe = safeAction(action);
-    if (!clawActionNeedsEffect(operation, action)) {
+    if (!clawActionNeedsEffect(action)) {
       return safe;
     }
     try {
@@ -141,9 +137,7 @@ function sealClawLifecyclePlan(
   plan: Omit<ClawLifecyclePlanResult, "schemaVersion" | "planIntegrity">,
   canonicalPlanIntegrity: string,
 ): ClawLifecyclePlanResult {
-  const planIntegrity = `sha256:${createHash("sha256")
-    .update(stableStringify({ canonicalPlanIntegrity, plan }))
-    .digest("hex")}`;
+  const planIntegrity = `sha256:${sha256Hex(stableStringify({ canonicalPlanIntegrity, plan }))}`;
   return { schemaVersion: "openclaw.clawsGatewayPlan.v1", planIntegrity, ...plan };
 }
 
@@ -177,9 +171,7 @@ function canonicalizeClawSourcePlan(value: unknown, sourceRoot: string): unknown
 
 function sourceStablePlanIntegrity(plan: { planIntegrity: string }, sourceRoot: string): string {
   const { planIntegrity: _planIntegrity, ...content } = plan;
-  return `sha256:${createHash("sha256")
-    .update(stableStringify(canonicalizeClawSourcePlan(content, sourceRoot)))
-    .digest("hex")}`;
+  return `sha256:${sha256Hex(stableStringify(canonicalizeClawSourcePlan(content, sourceRoot)))}`;
 }
 
 export function plansMatchAcrossSourceRoots(params: {
@@ -203,7 +195,7 @@ export function projectClawAddPlan(
   config: OpenClawConfig,
   source?: Extract<ClawReadResult, { ok: true }>,
 ): ClawLifecyclePlanResult {
-  const effects = projectActionsWithEffects("add", plan.actions, (action) =>
+  const effects = projectActionsWithEffects(plan.actions, (action) =>
     projectClawAddActionEffect(action, sourceRoot),
   );
   let scheduledJobs: ClawScheduledJobs | undefined;

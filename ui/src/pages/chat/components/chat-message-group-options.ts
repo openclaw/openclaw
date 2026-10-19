@@ -61,6 +61,4 @@ export type RenderMessageGroupOptions = Omit<
     frameContent?: readonly unknown[];
     frameActionOwner?: MessageGroup["messages"][number] | null;
     latestAssistant?: boolean;
-    /** Rendered as a transcript search result, outside its turn. */
-    searchResult?: boolean;
   } & MessageReactionOptions;

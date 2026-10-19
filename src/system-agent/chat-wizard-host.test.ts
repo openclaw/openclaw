@@ -1,6 +1,7 @@
 import "./chat-engine.mocks.test-support.js";
 import { describe, expect, it, vi } from "vitest";
 import {
+  operationMocks,
   fakeOverviewLoader,
   classifySystemAgentApprovalText,
   useTempStateDir,
@@ -320,7 +321,7 @@ describe("SystemAgentChatEngine wizard", () => {
   });
 
   it("voids a stale host proposal before an exact wizard, including cancellation", async () => {
-    const runConfigSet = vi.fn(async () => {});
+    const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
     const runAgentTurn = vi.fn(async (params: { approvalArmed: boolean }) => ({
       text: params.approvalArmed ? "unexpected approval" : "No pending change.",
     }));
@@ -328,7 +329,6 @@ describe("SystemAgentChatEngine wizard", () => {
       runAgentTurn: runAgentTurn as never,
       classifyApproval: async ({ message }) => classifySystemAgentApprovalText(message),
       runChannelSetupWizard: tokenWizard(),
-      deps: { runConfigSet },
     });
     engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
 

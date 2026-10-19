@@ -1,4 +1,4 @@
-import { Show, createMemo, createUniqueId } from "solid-js";
+import { Show, createMemo, createUniqueId, mapArray } from "solid-js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { readPanelHostedTabs, type PanelHostedTab } from "../../../components/panel-hosted-tabs.ts";
 import {
@@ -34,6 +34,7 @@ type SidebarRegionHeaderProps = RegionProps & {
   host: RegionElement;
   hostedRevision: () => number;
   refreshHostedTabs: () => void;
+  onFocusActiveReady: (focus: ((options?: FocusOptions) => void) | null) => void;
 };
 
 type RegionTab = SolidPanelTabStripTab & {
@@ -43,16 +44,8 @@ type RegionTab = SolidPanelTabStripTab & {
   iconName?: IconName;
 };
 
-export function readRegionPanelHost(host: HTMLElement, slot: SidebarSlotId): Element | null {
-  const container = host.parentElement?.querySelector(`[data-panel-slot="${slot}"]`);
-  // Native panel views have an interop wrapper; raw plugin content still owns its first element.
-  return (
-    container?.querySelector("[data-sidebar-panel-host]") ?? container?.firstElementChild ?? null
-  );
-}
-
-export function readRegionHostedTabs(host: HTMLElement, panel: SidebarPanel) {
-  return readPanelHostedTabs(readRegionPanelHost(host, panel.slot));
+export function readRegionHostedTabs(host: RegionElement, panel: SidebarPanel) {
+  return readPanelHostedTabs(host.readPanelHost(panel.slot));
 }
 
 export function sidebarPanelType(definitions: SidebarPanelDefinition[], slot: SidebarSlotId) {
@@ -97,23 +90,42 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
   const id = createUniqueId();
   const openSlots = () =>
     new Set((props.layout.columns[0]?.panels ?? []).map((panel) => panel.slot));
-  const items = createMemo<MenuItem[]>(() =>
-    props.panelDefinitions
-      .filter(
-        (type) =>
-          type.available &&
-          (HOSTED_TAB_REQUESTS.some(([slot]) => slot === type.slot) || !openSlots().has(type.slot)),
-      )
-      .map((type) => ({
-        id: type.slot,
-        label: type.label,
-        class: "side-panel-type-menu__item session-menu__item",
-        content: <PanelTypeOption type={type} />,
-      })),
+  const types = () =>
+    props.panelDefinitions.filter(
+      (type) =>
+        type.available &&
+        (HOSTED_TAB_REQUESTS.some(([slot]) => slot === type.slot) || !openSlots().has(type.slot)),
+    );
+  const entries = createMemo(
+    () =>
+      mapArray(
+        types,
+        (current): MenuItem => ({
+          get id() {
+            return current().slot;
+          },
+          get label() {
+            return current().label;
+          },
+          class: "side-panel-type-menu__item session-menu__item",
+          icon: <Icon name={current().icon} class="side-panel-type-option__icon" />,
+          labelClass: "side-panel-type-option__label",
+          details: (
+            <Show when={current().shortcut}>
+              {(shortcut) => (
+                <KeyboardShortcut combo={shortcut()} class="side-panel-type-option__shortcut" />
+              )}
+            </Show>
+          ),
+        }),
+        { keyed: (type) => type.slot },
+      ),
+    { lazy: true },
   );
+  const items = createMemo(() => entries()(), { lazy: true });
   return (
     <Menu
-      lazy
+      lazy="while-open"
       id={`side-panel-type-${id}`}
       class="side-panel-type-menu"
       panelClass="side-panel-type-menu__panel"
@@ -202,6 +214,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
           badge: tab.badge,
           className: tab.className,
           closeLabel: `${t("browser.closeTab")}: ${tab.label}`,
+          closeDisabled: tab.closeDisabled,
           group: panel.id,
           draggable: false,
           reorderId: panel.id,
@@ -262,6 +275,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
     >
       <div class="side-panel__header-tabs">
         <PanelTabStrip
+          onFocusActiveReady={props.onFocusActiveReady}
           renderIcon={(tab) => (
             <Show
               when={tab().hostedTab}

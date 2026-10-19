@@ -348,7 +348,6 @@ export async function resolveRuntimeModel(params: {
     provider: runtimeProvider,
     modelId: runtimeModelId,
     agentId: params.agentId,
-    harnessRuntime: params.harnessId,
     agentDir,
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,

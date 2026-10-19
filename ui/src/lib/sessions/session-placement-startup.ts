@@ -111,7 +111,7 @@ async function readPlacement(
     return {
       status: "read",
       placement: described?.session?.placement,
-      ...(typeof sessionId === "string" && sessionId.trim() ? { sessionId } : {}),
+      ...(sessionId?.trim() ? { sessionId } : {}),
     };
   } catch (error) {
     if (isAwaitingGatewayFailure(error, null)) {
@@ -342,7 +342,7 @@ export async function startSessionPlacementInitialTurn(
 ): Promise<SessionPlacementStartOutcome> {
   const { client } = requests;
   const message = params.message;
-  const mentions = params.mentions?.map((mention) => ({ ...mention }));
+  const mentions = params.mentions;
   const cleanupOnCancellation = params.cleanupOnCancellation ?? (() => true);
   const resolvePlacement = (mode: SessionPlacementStartMode, initial?: SessionPlacement) =>
     resolveActivePlacement(

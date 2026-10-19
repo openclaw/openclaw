@@ -120,6 +120,7 @@ describe("entry compile cache", () => {
     await Promise.allSettled(pending.splice(0));
     process.exitCode = originalExitCode;
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     envSnapshot.restore();
   });
 
@@ -264,6 +265,18 @@ describe("entry compile cache", () => {
       expect(writeStderr).not.toHaveBeenCalled();
     },
   );
+
+  it("passes only CLI args and the parent marker through a standalone cache respawn", async () => {
+    await markSourceCheckout();
+    vi.stubGlobal("__openclawStandaloneRootUrl", new URL(`file://${root}/`).href);
+    const { completion } = await startRespawn({ currentFile: entryFile });
+    const [command, args, options] = expectDefined(spawn.mock.calls[0], "standalone cache respawn");
+    expect(command).toBe(process.execPath);
+    expect(args).toEqual(["status", "--json"]);
+    expect(options?.env?.OPENCLAW_CLI_RESPAWN_PARENT).toBe(String(process.pid));
+    child.emit("close", 0, null);
+    await expect(completion).resolves.toBe(true);
+  });
 
   const commands = {
     hooks: ["hooks", "relay", "--relay-id", "relay-1"],

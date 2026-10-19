@@ -55,7 +55,7 @@ export async function prepareMSTeamsDebounceEntry(params: {
     : extractTextFromHtmlAttachments(attachments) ||
       stripMSTeamsMentionTags(serializeMSTeamsAdaptiveCardActionValue(activity.value) || "");
   const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
-  const replyToId = activity.replyToId ?? undefined;
+  const replyToId = activity.replyToId;
   const implicitMentionKinds: Array<"reply_to_bot"> =
     conversationId &&
     replyToId &&
@@ -125,9 +125,7 @@ export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
   const conversationType = conversation?.conversationType ?? "personal";
   const isChannel = conversationType === "channel";
   const teamId = activity.channelData?.team?.id;
-  const threadId = isChannel
-    ? (conversationMessageId ?? activity.replyToId ?? undefined)
-    : undefined;
+  const threadId = isChannel ? (conversationMessageId ?? activity.replyToId) : undefined;
   const advertisedMedia = resolveMSTeamsAdvertisedMedia(entry.attachments);
 
   return {

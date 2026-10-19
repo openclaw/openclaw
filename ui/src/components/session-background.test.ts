@@ -21,7 +21,7 @@ import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { readBackgroundImage } from "./session-background-image.ts";
 import { backgroundImageOpacityLimit } from "./session-background-opacity.ts";
 import { SessionBackgroundView } from "./session-background-view.tsx";
-import { SessionBackground, backgroundSourceForSurface } from "./session-background.ts";
+import { SessionBackground, backgroundSourceForSurface } from "./session-background.tsx";
 
 const profilePreferences = vi.hoisted(() => ({ ready: true }));
 // mock-isolation: Drive readiness without hydrating the process-wide profile preference cache.
@@ -109,6 +109,48 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+it("keeps the fade centered on the composer after resizing and releases its observer", async () => {
+  const observe = vi.fn();
+  const disconnect = vi.fn();
+  let resize = () => {};
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: () => void) {
+        resize = callback;
+      }
+      observe = observe;
+      disconnect = disconnect;
+    },
+  );
+  const source = fixture();
+  source.settings.background = selectBackgroundSource({ kind: "none" });
+  const background = mountBackground(source.context);
+  const composer = document.createElement("div");
+  composer.className = "agent-chat__input";
+  const scroll = document.createElement("div");
+  scroll.className = "new-session-page__scroll";
+  scroll.scrollTop = 30;
+  background.parentElement!.append(composer, scroll);
+  vi.spyOn(background, "getBoundingClientRect").mockReturnValue(
+    DOMRect.fromRect({ y: 20, height: 1000 }),
+  );
+  const composerRect = vi.spyOn(composer, "getBoundingClientRect");
+  composerRect.mockReturnValue(DOMRect.fromRect({ y: 100, height: 40 }));
+  source.settings.background = selectBackgroundSource({ kind: "theme" });
+  source.notify();
+  await waitForSolid(() => {
+    expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("130px");
+  });
+  expect(observe).toHaveBeenCalledWith(composer);
+  composerRect.mockReturnValue(DOMRect.fromRect({ y: 150, height: 60 }));
+  resize();
+  expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("190px");
+  disconnect.mockClear();
+  background.remove();
+  await waitForSolid(() => expect(disconnect).toHaveBeenCalledOnce());
 });
 
 it("tracks late and replaced theme owners without recreating the lazy background slot", async () => {

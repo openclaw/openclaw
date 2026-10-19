@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, Show } from "solid-js";
+import { createMemo, Loading, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
@@ -29,35 +29,19 @@ export function AttachmentRemove(props: {
 }
 
 function AttachmentVideoPreview(props: { attachment: ChatAttachment }) {
-  const [poster, setPoster] = createSignal<string | undefined>(undefined, { ownedWrite: true });
-  const source = createMemo(
-    () => ({ pending: getChatAttachmentVideoPosterUrl(props.attachment) }),
-    { equals: (before, next) => before.pending === next.pending },
+  const poster = createMemo(
+    async () => (await getChatAttachmentVideoPosterUrl(props.attachment)) ?? undefined,
   );
-  createEffect(source, ({ pending }) => {
-    let active = true;
-    setPoster(undefined);
-    void pending?.then((src) => {
-      if (active) {
-        setPoster(src ?? undefined);
-      }
-    });
-    return () => {
-      active = false;
-    };
-  });
   return (
     <span class="chat-attachment-file__preview" aria-hidden="true">
-      {poster() ? (
-        <>
+      <Loading on={props.attachment} fallback={<Icon name="play" />}>
+        <Show when={poster()} fallback={<Icon name="play" />}>
           <img src={poster()} alt="" />
           <span class="chat-attachment-video__play">
             <Icon name="play" />
           </span>
-        </>
-      ) : (
-        <Icon name="play" />
-      )}
+        </Show>
+      </Loading>
     </span>
   );
 }

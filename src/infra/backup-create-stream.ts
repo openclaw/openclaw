@@ -6,6 +6,7 @@ import { createGzip } from "node:zlib";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
+import { createAbortError, isAbortError } from "./abort-signal.js";
 
 const BACKUP_ARCHIVE_IDLE_TIMEOUT_MS = 5 * 60_000;
 
@@ -91,6 +92,12 @@ export async function writeArchiveStreamToFile(params: {
   let lastProgress: BackupArchiveProgress | undefined;
   const bytes = { output: 0, raw: 0 };
   let settled = false;
+  const describeProgress = () => {
+    const entrySuffix = lastEntryPath
+      ? `, entry=${JSON.stringify(sliceUtf16Safe(lastEntryPath, -512))}`
+      : "";
+    return `phase=${lastProgress?.phase ?? "starting"}${entrySuffix}, rawBytes=${bytes.raw}, outputBytes=${bytes.output}`;
+  };
   const reportProgress = (progress?: BackupArchiveProgress) => {
     // One archive owns this watchdog. Late producer callbacks must not refresh
     // its timer after cleanup has completed.
@@ -113,11 +120,8 @@ export async function writeArchiveStreamToFile(params: {
     idleTimer =
       idleTimer?.refresh() ??
       setTimeout(() => {
-        const entrySuffix = lastEntryPath
-          ? `, entry=${JSON.stringify(sliceUtf16Safe(lastEntryPath, -512))}`
-          : "";
         idleTimeoutError = new Error(
-          `Backup archive write stalled: no progress observed for ${BACKUP_ARCHIVE_IDLE_TIMEOUT_MS}ms (phase=${lastProgress?.phase ?? "starting"}${entrySuffix}, rawBytes=${bytes.raw}, outputBytes=${bytes.output})`,
+          `Backup archive write stalled: no progress observed for ${BACKUP_ARCHIVE_IDLE_TIMEOUT_MS}ms (${describeProgress()})`,
         );
         controller.abort(idleTimeoutError);
       }, BACKUP_ARCHIVE_IDLE_TIMEOUT_MS);
@@ -160,13 +164,23 @@ export async function writeArchiveStreamToFile(params: {
     signal.throwIfAborted();
     return { archivePath: params.archivePath, identity: currentIdentity };
   } catch (err) {
+    let failure = idleTimeoutError ?? err;
+    if (!idleTimeoutError && signal.aborted && err instanceof Error && isAbortError(err)) {
+      // Capture the last observed activity before cleanup; never modify the
+      // shared abort reason or let late producer callbacks rewrite the failure.
+      const abortError = createAbortError(`${err.message} (${describeProgress()})`, { cause: err });
+      if ("code" in err && (typeof err.code === "string" || typeof err.code === "number")) {
+        Object.assign(abortError, { code: err.code });
+      }
+      failure = abortError;
+    }
     archiveWriteStream.destroy();
     // A synchronous producer failure can precede open. Join descriptor closure
     // before checked unlink so a late open cannot recreate the partial archive.
     await finished(archiveWriteStream, { cleanup: true }).catch(() => undefined);
     if (!opened) {
       // A refused exclusive open never owned the pre-existing pathname.
-      throw idleTimeoutError ?? err;
+      throw failure;
     }
     let cleanupReceipt: BackupArchiveCleanupReceipt | undefined = {
       archivePath: params.archivePath,
@@ -193,7 +207,7 @@ export async function writeArchiveStreamToFile(params: {
     ) {
       params.onPartialArchive(cleanupReceipt);
     }
-    throw idleTimeoutError ?? err;
+    throw failure;
   } finally {
     settled = true;
     if (idleTimer) {

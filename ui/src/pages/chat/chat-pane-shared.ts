@@ -171,6 +171,7 @@ const CHAT_DROPDOWN_KEYS = new Set([
 // Shortcut menus own only advertised, enabled keys; every other printable key
 // can still transfer to the composer through the normal browser input pipeline.
 function keyboardShortcutTargetOwnsKey(target: HTMLElement, key: string): boolean {
+  // Browser menu DOM owns shortcut admission across independently rendered surfaces.
   return (
     /^[a-z0-9]$/iu.test(key) &&
     (target.matches("[data-chat-autotype-shortcuts][open]") ||
@@ -199,6 +200,7 @@ function keyboardEventPathHasInteractiveTarget(event: KeyboardEvent): boolean {
 }
 
 function openDropdownOwnsKey(root: ParentNode, key: string): boolean {
+  // Portaled menus can belong to any surface in the containing app.
   const surface = root instanceof Element ? (root.closest("openclaw-app") ?? root) : root;
   return [...surface.querySelectorAll<HTMLElement>('[role="menu"][popover]')].some(
     (dropdown) =>
@@ -212,6 +214,7 @@ export function focusChatComposerFromPrintableKeydown(
   root: ParentNode,
   event: KeyboardEvent,
 ): void {
+  // Native callers cross modal and composer renderer boundaries to transfer keyboard ownership.
   if (
     event.defaultPrevented ||
     event.isComposing ||

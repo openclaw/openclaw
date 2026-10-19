@@ -23,8 +23,7 @@ import {
   captureLifecycleDatabaseScope,
   resolveSqliteScope,
   prepareSqliteScope,
-  resolveSqliteWriteAdmissionScope,
-  runExclusiveSqliteSessionWrite,
+  withPreparedSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type {
@@ -383,22 +382,13 @@ export async function createSessionEntryWithTranscript<TError = string>(
   const storePath = resolveSessionStorePathForScope(captured);
   const agentId = captured.agentId ?? resolveAgentIdFromSessionKey(captured.sessionKey);
   const target = { ...captured, agentId, storePath };
-  // Preserve earlier queued writes for existing-key adoption and protect shared-store
-  // discovery from sibling cold registration. Commit custody is acquired separately.
-  const admission = isMainThread ? resolveSqliteWriteAdmissionScope(target) : undefined;
-  const prepare = () => prepareSqliteScope(target);
-  const resolved = captureLifecycleDatabaseScope(
-    isMainThread
-      ? admission
-        ? await runExclusiveSqliteSessionWrite(
-            admission,
-            prepare,
-            "session.entry.create-with-transcript",
-          )
-        : await prepare()
-      : resolveSqliteScope(target),
+  return withPreparedSqliteScope(target, (prepared) =>
+    createSessionEntryWithTranscriptInScope(
+      captureLifecycleDatabaseScope(prepared),
+      createEntry,
+      options,
+    ),
   );
-  return createSessionEntryWithTranscriptInScope(resolved, createEntry, options);
 }
 
 export function cloneSessionEntries(

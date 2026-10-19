@@ -13,7 +13,7 @@ import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.typ
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import { restoreGatewayOperatorRecovery } from "./operator-run-recovery.js";
+import { restoreGatewayRunRecovery } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 
@@ -32,6 +32,7 @@ export async function createOperatorRecoveryFixture(params: {
   clientInfo?: Pick<GatewayClientInfo, "id" | "mode">;
   localOperator?: boolean;
   sourceIngress?: "control-ui" | "internal";
+  sourceRunId?: string;
 }) {
   let config = params.config;
   const context = params.context;
@@ -104,7 +105,7 @@ export async function createOperatorRecoveryFixture(params: {
     sessionKey: params.sessionKey ?? "agent:main:recovery-authority",
     sessionId: params.sessionId ?? "recovery-authority-session",
     storePath: path.join(params.stateDir, "agents", "main", "sessions", "sessions.json"),
-    sourceRunId: "original-operator-turn",
+    sourceRunId: params.sourceRunId ?? "original-operator-turn",
     recoveryRunId: "recovered-operator-turn",
   };
   const entry: InternalSessionEntry = {
@@ -151,6 +152,15 @@ export async function createOperatorRecoveryFixture(params: {
     retire: () => {
       current = false;
     },
-    restore: () => restoreGatewayOperatorRecovery({ target, context, assertCurrent }),
+    restore: async () =>
+      (
+        await restoreGatewayRunRecovery({
+          target,
+          context,
+          assertCurrent,
+          restoreOperator: true,
+          restoreRequester: false,
+        })
+      ).operator,
   };
 }

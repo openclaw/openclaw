@@ -883,12 +883,7 @@ export class VoiceCallWebhookServer {
   private async processParsedEvents(events: NormalizedEvent[]): Promise<boolean> {
     let replayable = false;
     for (const event of events) {
-      try {
-        replayable = (await this.processEventWithAutoResponse(event)) || replayable;
-      } catch (err) {
-        this.logger.error(`Error processing event ${event.type}: ${String(err)}`);
-        throw err;
-      }
+      replayable = (await this.processEventWithAutoResponse(event)) || replayable;
     }
     return replayable;
   }

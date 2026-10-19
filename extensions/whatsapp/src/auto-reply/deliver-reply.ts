@@ -11,7 +11,6 @@ import {
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
-import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   listWhatsAppSendResultMessageIds,
   mergeWhatsAppAcceptedSendError,
@@ -112,7 +111,6 @@ type WhatsAppReplyDeliveryParams = {
     warn: (obj: object, msg: string) => void;
   };
   connectionId?: string;
-  skipLog?: boolean;
   tableMode?: MarkdownTableMode;
   onMediaAccepted?: (mediaUrl: string) => void;
 };
@@ -122,8 +120,7 @@ export async function deliverWebReply(params: WhatsAppReplyDeliveryParams) {
 }
 
 async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParams) {
-  const { replyResult, transport, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } =
-    params;
+  const { replyResult, transport, maxMediaBytes, textLimit, replyLogger, connectionId } = params;
   const conversationId = transport.conversationId;
   const isGroupConversation = transport.conversationKind === "group";
   const replyStarted = Date.now();
@@ -245,17 +242,9 @@ async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParam
   };
 
   if (mediaList.length === 0 && textChunks.length) {
-    const totalChunks = textChunks.length;
-    for (const [index, chunk] of textChunks.entries()) {
-      const chunkStarted = Date.now();
+    for (const chunk of textChunks) {
       const quote = getQuote();
       await sendText(chunk, () => quote);
-      if (!skipLog) {
-        const durationMs = Date.now() - chunkStarted;
-        whatsappOutboundLog.debug(
-          `Sent chunk ${index + 1}/${totalChunks} to ${conversationId} (${durationMs.toFixed(0)}ms)`,
-        );
-      }
     }
     const delivery = finishDelivery();
     const logPayload = {
@@ -290,12 +279,6 @@ async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParam
         }),
         mediaUrl,
       );
-      if (shouldLogVerbose()) {
-        logVerbose(
-          `Web auto-reply media size: ${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB`,
-        );
-        logVerbose(`Web auto-reply media kind: ${media.kind}`);
-      }
       const quote = getQuote();
       const mediaContent =
         media.kind === "image"
@@ -316,9 +299,6 @@ async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParam
       if (media.kind === "audio" && caption) {
         await sendText(caption, () => quote);
       }
-      whatsappOutboundLog.info(
-        `Sent media reply to ${conversationId} (${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB)`,
-      );
       replyLogger.info(
         {
           correlationId: transport.correlationId ?? newConnectionId(),

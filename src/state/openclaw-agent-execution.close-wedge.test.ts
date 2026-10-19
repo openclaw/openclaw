@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as backoff from "../infra/backoff.js";
@@ -9,8 +10,9 @@ import type { SqliteWorkerExecutionAuthority } from "../infra/sqlite-worker-cont
 import {
   createSqliteWorkerOperationAdmission,
   readSqliteWorkerExecutionAuthority,
-  type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { resolveSqliteBrokerWorkerCount } from "../infra/worker-pool-sizing.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import {
@@ -19,6 +21,7 @@ import {
 } from "./openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { readAgentDatabaseExecutionAuthority } from "./openclaw-agent-execution-authority.js";
+import type { AgentDatabaseExecutionScope } from "./openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 
@@ -175,13 +178,11 @@ it.each(["retry", "deadline", "shutdown"] as const)(
 
 function executionSource(
   observe?: (authority: SqliteWorkerExecutionAuthority) => void,
-  beforeAuthorize?: (request: SqliteWorkerAdmissionRequest) => void,
 ): AgentDatabaseRequestExecutionSource {
   return {
     assertCurrent: () => undefined,
     createAdmission: (binding) => () => {
       const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-        beforeAuthorize?.(request);
         binding.authorize(request);
         const authority = readSqliteWorkerExecutionAuthority(admission);
         if (authority) {
@@ -209,20 +210,34 @@ function readEntries(
   );
 }
 
-it("recovers after a failed operation with successful native close", async () => {
+it("recovers retained borrowers after native loss without replaying the failed operation", async () => {
   const env = makeEnv();
   const first = capture(env);
-  await first.prepare(source);
-  expect(await first.runExisting(source, async () => "healthy")).toBe("healthy");
+  const sibling = capture(env);
+  try {
+    await first.prepare(source);
+    const claim = sibling.captureGenerationClaim();
+    const failed = vi.fn((scope: AgentDatabaseExecutionScope) =>
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: [fault.marker] } }),
+    );
+    Atomics.store(faultState, 0, 2);
+    await expect(first.runExisting(source, failed)).rejects.toBeInstanceOf(Error);
+    Atomics.store(faultState, 0, 0);
+    expect(failed).toHaveBeenCalledOnce();
+    expect(() => claim.assertCurrent()).toThrow();
 
-  Atomics.store(faultState, 0, 2);
-  await expect(readEntries(first, fault.marker)).rejects.toBeInstanceOf(Error);
-  Atomics.store(faultState, 0, 0);
-  await first.release().catch(() => undefined);
-  const retry = capture(env);
-  await retry.prepare(source);
-  expect(await readEntries(retry, "recovered")).toMatchObject({ entries: [] });
-  await retry.release();
+    // Another live chat retains this borrower while the failed command settles.
+    expect(await readEntries(sibling, "recovered")).toMatchObject({ entries: [] });
+    const replacement = sibling.capturePreparedGenerationClaim();
+    expect(replacement?.identity).toBe(claim.identity);
+    expect(replacement?.incarnation).not.toBe(claim.incarnation);
+    expect(() => claim.assertCurrent()).toThrow();
+    expect(await readEntries(first, "still-healthy")).toMatchObject({ entries: [] });
+    expect(failed).toHaveBeenCalledOnce();
+  } finally {
+    Atomics.store(faultState, 0, 0);
+    await Promise.allSettled([first.release(), sibling.release()]);
+  }
 });
 
 it("reopens a native generation lost between operations before dispatch", async () => {
@@ -248,7 +263,7 @@ it("reopens a native generation lost between operations before dispatch", async 
   const replacement = execution.capturePreparedGenerationClaim();
   expect(replacement?.identity).toBe(claim.identity);
   expect(replacement?.incarnation).not.toBe(claim.incarnation);
-  expect(() => claim.assertCurrent()).toThrow("Agent database execution generation was replaced");
+  expect(() => claim.assertCurrent()).toThrow("Agent database execution lost its native owner");
   expect(await readEntries(execution, "still-healthy")).toMatchObject({ entries: [] });
   await execution.release();
 });
@@ -335,20 +350,19 @@ it("keeps another agent's admitted database usable after a deleted agent refuses
   );
   const refused = capture(env, "removed");
   let survivors: Promise<PromiseSettledResult<unknown>[]> | undefined;
-  const refusingSource = executionSource(undefined, (request) => {
+  const observed = probe.admission(workerAdmission, (request, grant, admit) => {
     if (
       !survivors &&
-      request.stage === "prepare" &&
-      request.facts &&
-      typeof request.facts === "object" &&
-      "kind" in request.facts &&
-      request.facts.kind === "shared-owner"
+      request.stage === "open" &&
+      isRecord(request.facts) &&
+      request.facts.databasePath === refused.path
     ) {
       survivors = Promise.allSettled(admitted.map((survivor) => readEntries(survivor, [])));
     }
+    admit(request, grant);
   });
   try {
-    await expect(refused.prepare(refusingSource)).rejects.toThrow("agent removed is deleted");
+    await expect(refused.prepare(source)).rejects.toThrow("agent removed is deleted");
     expect(survivors).toBeDefined();
     const results = await survivors;
     for (const survivor of admitted) {
@@ -367,6 +381,7 @@ it("keeps another agent's admitted database usable after a deleted agent refuses
       await repeated.release();
     }
   } finally {
+    observed.mockRestore();
     await Promise.allSettled([
       retained.release(),
       refused.release(),

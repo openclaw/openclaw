@@ -212,6 +212,25 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
       "idx_memory_index_chunks_source",
     ],
   ],
+  ["memory_index_chunks_fts", []],
+  ["memory_index_chunks_fts_config", []],
+  ["memory_index_chunks_fts_content", []],
+  ["memory_index_chunks_fts_data", []],
+  ["memory_index_chunks_fts_docsize", []],
+  ["memory_index_chunks_fts_idx", []],
+  ["memory_index_paths_fts", []],
+  ["memory_index_paths_fts_config", []],
+  ["memory_index_paths_fts_content", []],
+  ["memory_index_paths_fts_data", []],
+  ["memory_index_paths_fts_docsize", []],
+  ["memory_index_paths_fts_idx", []],
+  ["memory_index_chunks_fts", []],
+  ["memory_index_paths_fts", []],
+  ["memory_index_chunks_vec", []],
+  ["memory_index_chunks_vec_chunks", []],
+  ["memory_index_chunks_vec_info", []],
+  ["memory_index_chunks_vec_rowids", []],
+  ["memory_index_chunks_vec_vector_chunks00", []],
 ];
 const fingerprints: Readonly<Record<string, CatalogReference>> = {
   // memory-index-v1-cache-0
@@ -415,6 +434,41 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "memory-chunks-text-strict-1-recall-7",
     "8422ba9c6185a2156a9345807b90032db6858b2f5a12541268d9f4c7967d32e9",
     [33],
+    [],
+  ],
+  // memory-body-fts-v1-unicode61
+  "0ab7773eb3198fc86adb541fe032581ce24b93cd39b7aa229fdf50c8b3f9fe6c": [
+    "memory-body-fts-v1-unicode61",
+    "c16bed5072a5a006ca243b73fefb1fc86bce894f87a6c8713e87dced77493eb2",
+    [34, 35, 36, 37, 38, 39],
+    [],
+  ],
+  // memory-path-fts-v1-unicode61
+  "315cb6d0263f5aff152863d03d253f867104d86d5028ad2c51e348d10fba2f1a": [
+    "memory-path-fts-v1-unicode61",
+    "b18b06cf6a1ea0655eeff9c0451fae13336f2ac280468680e7d91370016cf23b",
+    [40, 41, 42, 43, 44, 45],
+    [],
+  ],
+  // memory-body-fts-v1-trigram
+  "32a102b66f747e2fb75d4b23b2a83928c69d086604e997a29a713eac7a62ec46": [
+    "memory-body-fts-v1-trigram",
+    "15c47771111fc5beb3af779b2f20333755c0069b7bb113ac6aac160f6aabef7f",
+    [46, 35, 36, 37, 38, 39],
+    [],
+  ],
+  // memory-path-fts-v1-trigram
+  "02ae4f88ed6c87a22d6eaeb0e4e0a4ececc8d7dd37017aa04659494fd8481ccd": [
+    "memory-path-fts-v1-trigram",
+    "e2b47e11cf4fa6228471d8f6be5654a6d35ec80d5e0c9e7fd5d6654f47ac200e",
+    [47, 41, 42, 43, 44, 45],
+    [],
+  ],
+  // memory-vector-v1
+  "8a70e5b7bb1c8163cf6d4f38a6a69165a01f3f44204bbd910428f371ebc376c7": [
+    "memory-vector-v1",
+    "ebe6798602214794cd87d21d200eaa88c4864fcb30bf8fc0b902246a7fce5023",
+    [48, 49, 50, 51, 52],
     [],
   ],
 };

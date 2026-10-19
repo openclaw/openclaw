@@ -269,6 +269,9 @@ function boundedCatchup(
   jobs: ReadonlyMap<string, CronJob>,
   options?: { skipJobIds?: string[]; deferAgentWork?: boolean },
 ): { immediate: CronJob[]; overflow: Map<string, StartupOverflow> } {
+  if (jobs.size === 0) {
+    return { immediate: [], overflow: new Map() };
+  }
   const { config } = snapshot;
   const maxImmediate = Math.max(
     0,

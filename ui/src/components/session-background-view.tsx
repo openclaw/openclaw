@@ -1,10 +1,10 @@
-import { createEffect, createMemo } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import type { ApplicationContext } from "../app/context.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
-import type { SessionBackground } from "./session-background.ts";
+import type { SessionBackground } from "./session-background.tsx";
 
-const renderer = createIdleImport(() => import("./session-background.ts"));
+const renderer = createIdleImport(() => import("./session-background.tsx"));
 
 type Props = {
   context?: ApplicationContext;
@@ -29,19 +29,24 @@ export function SessionBackgroundView(props: Props) {
       (props.surface === "new-session" ? preference.showOnNewSession : preference.showInSessions),
     );
   });
-  createEffect(active, (value) => {
-    if (value) {
-      void renderer.load().catch(() => undefined);
-    }
-  });
   return (
-    <openclaw-session-background
-      aria-hidden="true"
-      hidden={!active()}
-      prop:context={props.context}
-      prop:surface={props.surface}
-      prop:presented={props.presented !== false}
-    />
+    <>
+      <Show when={active()}>
+        {(_active) => {
+          onSettled(() => {
+            void renderer.load().catch(() => undefined);
+          });
+          return null;
+        }}
+      </Show>
+      <openclaw-session-background
+        aria-hidden="true"
+        hidden={!active()}
+        prop:context={props.context}
+        prop:surface={props.surface}
+        prop:presented={props.presented !== false}
+      />
+    </>
   );
 }
 

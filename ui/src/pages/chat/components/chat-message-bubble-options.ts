@@ -25,6 +25,8 @@ export type ActivityOperationProps = {
 export type GroupedMessageOptions = {
   isStreaming: boolean;
   isForwarded?: boolean;
+  /** Search reveals matching transcript text inside disclosures. */
+  searchResult?: boolean;
   sessionKey?: string;
   presented?: boolean;
   transcriptVisible?: PresentationValue;
@@ -48,7 +50,7 @@ export type GroupedMessageOptions = {
   isToolExpanded?: (toolCardId: string) => boolean;
   onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
   toolCardOverrides?: ReadonlyMap<ToolCard, ActivityOperationProps | null>;
-  onRequestUpdate?: () => void;
+  mediaOwner?: object;
   canvasPluginSurfaceUrl?: string | null;
   resourceBasePath?: string;
   mediaPolicyKey?: string;

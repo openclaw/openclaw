@@ -1,4 +1,3 @@
-// Config validation helpers shared by commands that need fail-fast config loading.
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "../cli/config-recovery-hints.js";
 import { isJsonOutputModeActive } from "../cli/json-output-mode.js";

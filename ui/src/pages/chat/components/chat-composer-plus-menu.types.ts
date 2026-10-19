@@ -63,6 +63,7 @@ export type ChatComposerCapabilityMenuProps = {
   adminBlockedReason: string | null;
   addServerDialog?: JSX.Element;
   onLoadSkills: () => void;
+  onLoadView?: (view: ChatComposerPlusMenuView) => void;
   onPatchToolOverrides: (next: SessionToolOverrides | null) => void;
   onNavigate: (
     routeId: "mcp" | "plugins" | "skills",

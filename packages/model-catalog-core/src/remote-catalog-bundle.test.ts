@@ -2,8 +2,10 @@ import { expect, it, vi } from "vitest";
 import {
   parseRemoteModelCatalogBundle,
   parseRemoteModelCatalogBundleV2,
+  parseRemoteModelCatalogBundleV3,
   validateAndSanitizeRemoteModelCatalogBundle,
   validateAndSanitizeRemoteModelCatalogBundleV2,
+  validateAndSanitizeRemoteModelCatalogBundleV3,
 } from "./remote-catalog-bundle.js";
 
 const contextWindows = [
@@ -328,4 +330,42 @@ it("strips v2 transport metadata while preserving transport-like provider identi
   });
   expect(bundle.models[0]?.compat).toEqual({ supportsTools: true, nested: {} });
   expect(() => parseRemoteModelCatalogBundleV2(bundle)).not.toThrow();
+});
+
+it("negotiates task metadata only on v3 and rejects malformed declarations per row", () => {
+  const inference = {
+    chat: false,
+    decision: {
+      protocol: "fixture.decisions",
+      input: ["text"],
+      questions: { boolean: { probabilities: "boolean", abstention: false } },
+      billing: { unit: "tokens", source: "provider-docs", usdPerMillion: { input: 0, output: 0 } },
+    },
+  };
+  const native = { ...firstModel, inference, compat: { nested: transport } };
+  const candidate = { ...validBundleV2, schemaVersion: 3, models: [native] };
+  expect(() => parseRemoteModelCatalogBundleV2(candidate)).toThrow();
+  expect(() => parseRemoteModelCatalogBundleV2({ ...candidate, schemaVersion: 2 })).toThrow();
+  expect(parseRemoteModelCatalogBundleV3(candidate).models[0]?.inference).toEqual(inference);
+  const warn = vi.fn();
+  const admitted = validateAndSanitizeRemoteModelCatalogBundleV3(
+    {
+      ...candidate,
+      models: [
+        native,
+        {
+          ...native,
+          id: "invalid",
+          inference: {
+            ...inference,
+            decision: { ...inference.decision, protocol: "invalid protocol" },
+          },
+        },
+      ],
+    },
+    warn,
+  );
+  expect(admitted.models).toHaveLength(1);
+  expect(admitted.models[0]).toMatchObject({ inference, compat: { nested: {} } });
+  expect(warn).toHaveBeenCalledOnce();
 });

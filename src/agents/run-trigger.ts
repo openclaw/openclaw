@@ -51,13 +51,3 @@ export function resolveModelCallUrgency(provenance: {
   }
   return "normal";
 }
-
-/** Bounded internal diagnostic labels, independent of execution policy triggers. */
-export type IsolatedCompletionPurpose =
-  | "isolated-completion"
-  | "session-activity-summary"
-  | "session-observer"
-  | "conversation-label"
-  | "progress-narration"
-  | "transcript-summary"
-  | "plugin-completion";

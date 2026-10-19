@@ -8,7 +8,6 @@ import {
 import { hasConfiguredUnavailableCredentialStatus } from "../channels/account-snapshot-fields.js";
 import { formatChannelAllowFrom } from "../channels/account-summary.js";
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
-import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { formatTimeAgo } from "./format-time/format-relative.ts";
@@ -16,7 +15,6 @@ import { formatTimeAgo } from "./format-time/format-relative.ts";
 type ChannelSummaryOptions = {
   colorize?: boolean;
   includeAllowFrom?: boolean;
-  plugins?: readonly ChannelPlugin[];
   sourceConfig?: OpenClawConfig;
 };
 
@@ -25,33 +23,30 @@ type ChannelAccountEntry = ChannelAccountInspectionResult & {
 };
 
 export async function buildChannelSummary(
-  cfg?: OpenClawConfig,
+  cfg: OpenClawConfig,
   options?: ChannelSummaryOptions,
 ): Promise<string[]> {
-  const effective = cfg ?? (await import("../config/config.js")).getRuntimeConfig();
   const lines: string[] = [];
   const { colorize = false, includeAllowFrom = false } = options ?? {};
-  const sourceConfig = options?.sourceConfig ?? effective;
+  const sourceConfig = options?.sourceConfig ?? cfg;
 
-  const plugins =
-    options?.plugins ??
-    (await (
-      await import("../channels/plugins/read-only.js")
-    ).listReadOnlyChannelPluginsForConfigAsync(effective, {
-      activationSourceConfig: sourceConfig,
-      includeSetupFallbackPlugins: false,
-    }));
+  const plugins = await (
+    await import("../channels/plugins/read-only.js")
+  ).listReadOnlyChannelPluginsForConfigAsync(cfg, {
+    activationSourceConfig: sourceConfig,
+    includeSetupFallbackPlugins: false,
+  });
   for (const plugin of plugins) {
-    const accountIds = plugin.config.listAccountIds(effective);
+    const accountIds = plugin.config.listAccountIds(cfg);
     const defaultAccountId =
-      plugin.config.defaultAccountId?.(effective) ?? accountIds[0] ?? DEFAULT_ACCOUNT_ID;
+      plugin.config.defaultAccountId?.(cfg) ?? accountIds[0] ?? DEFAULT_ACCOUNT_ID;
     const resolvedAccountIds = accountIds.length > 0 ? accountIds : [defaultAccountId];
     const entries: ChannelAccountEntry[] = [];
 
     for (const accountId of resolvedAccountIds) {
       const inspected = await resolveInspectedChannelAccount({
         plugin,
-        cfg: effective,
+        cfg,
         sourceConfig,
         accountId,
       });
@@ -69,7 +64,7 @@ export async function buildChannelSummary(
       fallbackEntry?.kind === "resolved" && plugin.status?.buildChannelSummary
         ? await plugin.status.buildChannelSummary({
             account: fallbackEntry.account,
-            cfg: effective,
+            cfg,
             defaultAccountId,
             snapshot: fallbackEntry.snapshot,
           })
@@ -160,7 +155,7 @@ export async function buildChannelSummary(
       if (includeAllowFrom && snapshot.allowFrom?.length) {
         const formatted = formatChannelAllowFrom({
           plugin,
-          cfg: effective,
+          cfg,
           accountId: snapshot.accountId,
           allowFrom: snapshot.allowFrom,
         }).slice(0, 2);

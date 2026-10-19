@@ -118,6 +118,15 @@ describe("public session document", () => {
     );
   });
 
+  it("preserves ordinary silent-token fragments outside heartbeat context", () => {
+    const html = render([
+      { role: "assistant", content: "no_r" },
+      { role: "assistant", display: true, content: "NO_R" },
+    ]);
+    expect(html).toContain("<p>no_r</p>");
+    expect(html).toContain("<p>NO_R</p>");
+  });
+
   it("groups tool work between every assistant message with bounded unmasked summaries", () => {
     const secret = `sk-${"a".repeat(48)}`;
     const html = render([

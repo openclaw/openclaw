@@ -7,7 +7,7 @@ import {
   type SessionMethodAccessRequest,
 } from "../lib/session-method-access.ts";
 import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
-import type { SessionMenuActionKind } from "./session-menu.ts";
+import type { SessionMenuActionKind } from "./session-menu-solid.tsx";
 import { sessionPlacementActionReason } from "./session-placement-action.ts";
 
 type SessionMenuAccessRow = Pick<

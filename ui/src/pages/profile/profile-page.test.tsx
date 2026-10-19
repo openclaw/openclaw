@@ -9,6 +9,9 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+// These tests own identity loading, not the lazy preference reader; settle that module at setup
+// so its cold transform cannot consume the one-second UI waits on a loaded CI runner.
+import "../../app/user-prefs-request.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
@@ -946,7 +949,7 @@ it("distinguishes unreported permissions from an explicit empty grant", async ()
   );
 });
 
-it("reconnects through the connection owner, retiring grants and preserving the editor", async () => {
+it("reconnects through the connection owner while retaining the last access summary and editor", async () => {
   const scope = "operator.admin";
   const harness = createConnectedContext(
     vi.fn(async () => ({})) as GatewayBrowserClient["request"],
@@ -964,9 +967,10 @@ it("reconnects through the connection owner, retiring grants and preserving the 
   reconnect?.click();
   expect(harness.context.gateway.connect).toHaveBeenCalledExactlyOnceWith();
   flush();
-  expect(page.querySelector("#settings-profile-access")).toBeNull();
-  expect(page.textContent).not.toContain("You have permission to manage this server.");
-  expect(page.querySelector('[role="status"]')?.textContent).toContain("Connecting…");
+  expect(page.querySelector("#settings-profile-access .settings-row__value")?.textContent).toBe(
+    scope,
+  );
+  expect(page.textContent).toContain("You have permission to manage this server.");
   expect(page.querySelector("openclaw-personal-instructions")).toBe(personalEditor);
 
   harness.emitHello(gatewayHelloForMethods([], ["operator.read"]));

@@ -826,7 +826,7 @@ module.exports = { stateMigrations: [{
     expect(result.stepReceipts[0]).toMatchObject({ outcome: "completed" });
     expect(result.stepReceipts[0]?.changes.length).toBeGreaterThan(0);
     expect(result.stepReceipts[1]).toMatchObject({
-      id: "plugin-install-index",
+      id: "retired-core-state",
       outcome: "skipped",
     });
     expect(result.stepReceipts[2]).toMatchObject({

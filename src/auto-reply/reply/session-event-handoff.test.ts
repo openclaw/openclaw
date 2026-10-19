@@ -8,10 +8,13 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { withAgentDeletion } from "../../agents/agent-lifecycle-registry.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
@@ -126,6 +129,132 @@ afterAll(() => {
 });
 
 describe("session event target custody", () => {
+  it("cleans up a settled cron event in its captured state and store", async ({ signal }) => {
+    await withTargetFixture(
+      async (state) => {
+        const baseKey = "agent:main:cron:captured-store";
+        const runKey = `${baseKey}:run:original`;
+        const captured = {
+          agentId: "main",
+          env: { ...state.env, OPENCLAW_STATE_DIR: state.path("captured-state") },
+          storePath: state.path("captured-sessions.sqlite"),
+        };
+        const replacement = { agentId: "main", env: state.env, storePath: state.storePath };
+        openOpenClawStateDatabase({ env: captured.env });
+        for (const [scope, sessionId] of [
+          [captured, "captured-session"],
+          [replacement, "replacement-session"],
+        ] as const) {
+          await replaceSessionEntry({ ...scope, sessionKey: baseKey }, { sessionId, updatedAt: 1 });
+          await replaceSessionEntry(
+            { ...scope, sessionKey: runKey },
+            {
+              sessionId,
+              updatedAt: 1,
+              cronRunContinuation: {
+                lifecycleRevision: "original",
+                phase: "ready",
+                basePersisted: true,
+              },
+            },
+          );
+        }
+        const cfg = { agents: { entries: { main: {} } } };
+        setRuntimeConfigSnapshot({ ...cfg, session: { store: captured.storePath } });
+        const target = await captureSessionEventTargetForHost("main", runKey, {
+          env: captured.env,
+        });
+        setRuntimeConfigSnapshot({ ...cfg, session: { store: replacement.storePath } });
+        const receipt = enqueueSessionEventForHost("Process completed", {
+          agentId: "main",
+          sessionKey: runKey,
+          source: "exec",
+          expectedTarget: target,
+        });
+        receipt.cancel();
+        expect(await withinTest(receipt.settled, signal)).toMatchObject({ status: "cancelled" });
+        await withinTest(
+          Promise.allSettled(
+            continuation.mock.results.flatMap((result) =>
+              result.type === "return" ? [result.value] : [],
+            ),
+          ),
+          signal,
+        );
+        expect(loadSessionEntry({ ...captured, sessionKey: runKey })).toBeUndefined();
+        expect(loadSessionEntry({ ...captured, sessionKey: baseKey })?.sessionId).toBe(
+          "captured-session",
+        );
+        expect(loadSessionEntry({ ...replacement, sessionKey: runKey })?.sessionId).toBe(
+          "replacement-session",
+        );
+        expect(dispatch).not.toHaveBeenCalled();
+      },
+      { empty: true, native: true },
+    );
+  });
+
+  it("rejects deletion-revoked events with worker-prepared authority and no native journal reads", async () => {
+    await withTargetFixture(
+      async (state) => {
+        const { env, storePath } = state;
+        const observed = observeHostDataSql();
+        const target = await captureSessionEventTargetForHost("main", sessionKey, { env }).finally(
+          observed.restore,
+        );
+        expect(observed.queries.filter((sql) => /\bagent_deletion_journal\b/i.test(sql))).toEqual(
+          [],
+        );
+        expect(target).toMatchObject({
+          agentId: "main",
+          sessionKey,
+          sessionId: "original-session",
+          lifecycleRevision: "original-revision",
+          storePath,
+          deliveryContext: route,
+          settings: { permissionMode: "full" },
+        });
+        expect(() => assertSessionEventTargetCurrent(target)).not.toThrow();
+        await withAgentDeletion(
+          "main",
+          async (begin) => {
+            const deletion = await begin({
+              agentId: "main",
+              agentDir: state.agentDir("main"),
+              workspaceDir: state.path("workspace"),
+              sessionsDir: state.sessionsDir("main"),
+              phase: "draining",
+            });
+            expect(() => assertSessionEventTargetCurrent(target)).toThrow(
+              "Session event owner is being deleted",
+            );
+            for (const expectedTarget of [target, undefined]) {
+              const receipt = enqueueSessionEventForHost("Process completed", {
+                agentId: "main",
+                sessionKey,
+                source: "exec",
+                expectedTarget,
+              });
+              await expect(receipt.settled).resolves.toMatchObject({
+                status: "failed",
+                executionStarted: false,
+                delivered: false,
+                error: expect.stringContaining("Session event agent is being deleted"),
+              });
+            }
+            expect(dispatch).not.toHaveBeenCalled();
+            expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+            await deletion.rollback();
+          },
+          { env },
+        );
+        expect(() => assertSessionEventTargetCurrent(target)).not.toThrow();
+        expect(target.deliveryContext).toEqual(route);
+      },
+      { native: true },
+    );
+  });
+
   it("preserves cold event capture across an empty usage refresh", async () => {
     const { refreshCostUsageCacheForAgent } =
       await import("../../infra/session-cost-usage-aggregation.js");

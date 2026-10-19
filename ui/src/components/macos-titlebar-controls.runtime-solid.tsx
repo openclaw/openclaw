@@ -21,7 +21,7 @@ function TitlebarButton(props: {
     <openclaw-tooltip prop:content={props.label}>
       <button
         type="button"
-        class={`topbar-icon-btn macos-titlebar-controls__button ${props.class}`}
+        class={["topbar-icon-btn macos-titlebar-controls__button", props.class]}
         aria-label={props.label}
         disabled={props.disabled || !props.onClick}
         onClick={() => props.onClick?.()}

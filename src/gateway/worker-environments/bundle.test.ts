@@ -20,12 +20,21 @@ import {
   resolveWorkerNpmInstallationArtifact,
   type WorkerInstallationArtifact,
 } from "./bundle.js";
+import type { WorkerBundleBuildOptions } from "./node-bootstrap-artifact-contract.js";
 import { createWorkerPreparationIdentity } from "./preparation-identity.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import { listRetainedWorkerBundleHashes } from "./worker-bundle-retention.js";
 import { workerWorkspaceRsyncReceiverEntryPath } from "./workspace-sync-helpers.js";
 
 type WorkerBundleArtifact = Extract<WorkerInstallationArtifact, { install: "bundle" }>;
+
+// mock-isolation: keep staging fault injection beside the builder; the worker suite covers isolation.
+vi.mock("./node-bootstrap-artifact-worker.js", () => ({
+  prepareNodeArtifactInWorker: async (_kind: "bundle", options: WorkerBundleBuildOptions) => {
+    const { prepareWorkerBundle } = await import("./bundle.js");
+    return await prepareWorkerBundle(options);
+  },
+}));
 
 async function writeFixture(
   packageRoot: string,

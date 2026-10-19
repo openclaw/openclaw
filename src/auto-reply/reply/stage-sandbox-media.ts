@@ -7,8 +7,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { assertSandboxPath } from "../../agents/sandbox-paths.js";
-import { prepareSandboxWorkspaceForSession, resolveSandboxContext } from "../../agents/sandbox.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
+import {
+  prepareSandboxWorkspaceForSession,
+  resolveSandboxContext,
+} from "../../agents/sandbox/context.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -75,8 +78,6 @@ export async function stageSandboxMedia(params: {
   const remoteWorkspace = getAgentWorkspaceAccess(workspaceDir, "prepareTurnAttachments");
   if (remoteWorkspace?.prepareTurnAttachments && !ctx.MediaRemoteHost) {
     // Keep managed originals on Gateway; the admitted turn transfers them to the Harness.
-    // This is an intentional handoff, not a failure — keep it at debug level.
-    logVerbose("Inbound media staging skipped: remote workspace owns attachment preparation");
     return EMPTY_STAGE_RESULT;
   }
   const forceRemoteCache =

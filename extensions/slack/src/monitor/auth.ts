@@ -11,6 +11,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { collectSlackCursorPages } from "../cursor-pages.js";
 import { getSlackRuntime } from "../runtime.js";
+import type { SlackMessageEvent } from "../types.js";
 import {
   allowListMatches,
   normalizeSlackAllowOwnerEntry,
@@ -38,7 +39,7 @@ type SlackChannelMembersCacheEntry = {
   pending?: Promise<Set<string>>;
 };
 
-type SlackIngressChannelType = "im" | "mpim" | "channel" | "group";
+type SlackIngressChannelType = NonNullable<SlackMessageEvent["channel_type"]>;
 type SlackSystemEventAuthorization = ({ allowed: true } | { allowed: false; reason: string }) &
   Partial<{ channelType: SlackIngressChannelType; channelName: string }>;
 
@@ -434,7 +435,7 @@ export async function authorizeSlackSystemEventSender(params: {
   if (channelId) {
     const info: {
       name?: string;
-      type?: "im" | "mpim" | "channel" | "group";
+      type?: NonNullable<SlackMessageEvent["channel_type"]>;
     } = await params.ctx.resolveChannelName(channelId, params.eventScope).catch(() => ({}));
     channelName = info.name;
     const resolvedTypeSource = params.channelType ?? info.type;

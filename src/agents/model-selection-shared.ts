@@ -324,10 +324,7 @@ export function inferUniqueProviderFromConfiguredModels(
   const matcher = collectModelMapProviders(params.cfg.agents?.defaults?.models);
   const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer(params);
   for (const [providerId, providerConfig] of Object.entries(params.cfg.models?.providers ?? {})) {
-    if (!Array.isArray(providerConfig?.models)) {
-      continue;
-    }
-    for (const entry of providerConfig.models) {
+    for (const entry of providerConfig.models ?? []) {
       const modelId = entry?.id?.trim();
       if (modelId) {
         matcher.add(providerId, modelId, normalizeModelId(providerId, modelId));
@@ -913,10 +910,11 @@ function buildAllowedModelSetFromPrepared(
     visibility,
     policyAliasIndex,
     metadata,
-    catalog,
+    catalog: inventory,
     defaultRef,
   }: ReturnType<typeof prepareModelPolicy>,
 ): AllowedModelSet {
+  const catalog = inventory.filter((entry) => entry.inference?.chat !== false);
   const wildcardModelKeys = visibility.wildcardModelKeys;
   const allowAny = !visibility.hasEntries;
   const defaultKey = defaultRef ? modelKey(defaultRef.provider, defaultRef.model) : undefined;
@@ -1116,7 +1114,7 @@ function hasConfiguredProviderModelRows(
   }
   return Object.entries(providers).some(
     ([providerRaw, provider]) =>
-      Array.isArray(provider?.models) &&
+      provider.models !== undefined &&
       (scope === "all" || normalizeProviderId(providerRaw) !== "openai"),
   );
 }
@@ -1178,10 +1176,10 @@ export function buildConfiguredModelCatalog(params: {
   const catalog: ModelCatalogEntry[] = [];
   for (const [providerRaw, provider] of Object.entries(providers)) {
     const providerId = normalizeProviderId(providerRaw);
-    if (!providerId || !Array.isArray(provider?.models)) {
+    if (!providerId) {
       continue;
     }
-    for (const model of provider.models) {
+    for (const model of provider.models ?? []) {
       const rawId = normalizeOptionalString(model?.id) ?? "";
       const id = rawId ? normalizeModelId(providerId, rawId) : "";
       if (!id) {
@@ -1207,7 +1205,7 @@ export function buildConfiguredModelCatalog(params: {
         typeof model?.contextTokens === "number" && model.contextTokens > 0
           ? model.contextTokens
           : undefined;
-      const input = Array.isArray(model?.input) ? model.input : undefined;
+      const input = model.input;
       const reasoning =
         model.reasoning ?? (isVllmQwenThinkingCompat(providerId, model.compat) ? true : undefined);
       catalog.push({

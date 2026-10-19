@@ -22,7 +22,7 @@ import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
-import { createShellOwner } from "./app-host-solid.test-support.ts";
+import { connectShellEvents, createShellOwner } from "./app-host-solid.test-support.ts";
 import {
   committedRouterState,
   createLazyElementSpec,
@@ -99,6 +99,7 @@ type ShellLifecycle = Pick<ShellChromeEventState, "connect" | "disconnect">;
 
 type ShellLazySurfaceState = ShellKeyboardState &
   ShellLifecycle & {
+    elements: object;
     commandPaletteElement: TestOptionalCustomElement;
     lazyCustomElements: LazyCustomElementRequests;
     openPalette: () => void;
@@ -114,9 +115,9 @@ function roster(defaultId: string, agents: GatewayAgentRow[]): AgentsListResult 
 }
 
 type ShellChromeEventState = {
+  elements: object;
   runtime: { context: ApplicationContext };
   navDrawerOpen: boolean;
-  handleShellNavDrawerToggle: (event: Event) => void;
   openPalette: () => void;
   connect: () => void;
   disconnect: () => void;
@@ -126,7 +127,6 @@ type ShellNavDrawerCloseState = { element: HTMLElement } & ShellChromeEventState
     desktopNavigationExpanded: boolean;
     navDrawerTrigger: HTMLElement | null;
     closeNavDrawer: (options?: { restoreFocus?: boolean }) => void;
-    handleWindowResize: () => void;
     toggleNavigationSurface: () => void;
   };
 
@@ -154,11 +154,11 @@ function configureLazyPaletteShell(
     configurable: true,
     get: () => Promise.resolve(true),
   });
-  Object.defineProperty(shell, "commandPalette", {
+  Object.defineProperty(shell.elements, "commandPalette", {
     configurable: true,
     get: () =>
       customElements.get(element.tagName)
-        ? { isOpen: false, openPalette, togglePalette: vi.fn() }
+        ? { isConnected: true, isOpen: false, openPalette, togglePalette: vi.fn() }
         : undefined,
   });
   return shell;
@@ -683,7 +683,8 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     shell.navDrawerOpen = true;
     shell.navDrawerTrigger = trigger;
 
-    shell.handleWindowResize();
+    connectShellEvents(shell);
+    window.dispatchEvent(new Event("resize"));
 
     expect(closeNavDrawer).toHaveBeenCalledExactlyOnceWith({ restoreFocus: false });
     expect(dismissTransientMenus).toHaveBeenCalledOnce();
@@ -711,24 +712,17 @@ describe("OpenClaw shell keyboard shortcuts", () => {
         navigation: { snapshot: { navCollapsed: false }, update: vi.fn() },
       } as unknown as ApplicationContext,
     };
-    Object.defineProperty(shell, "commandPalette", {
+    Object.defineProperty(shell.elements, "commandPalette", {
       configurable: true,
-      value: { isOpen: false, openPalette, togglePalette: vi.fn() },
+      value: { isConnected: true, isOpen: false, openPalette, togglePalette: vi.fn() },
     });
 
-    const handlePaletteOpen = () => openPalette();
-    window.addEventListener(COMMAND_PALETTE_OPEN_EVENT, handlePaletteOpen);
-    try {
-      shell.handleShellNavDrawerToggle(
-        new CustomEvent(SHELL_NAV_DRAWER_TOGGLE_EVENT, { detail: { trigger } }),
-      );
-      shell.openPalette();
+    connectShellEvents(shell);
+    window.dispatchEvent(new CustomEvent(SHELL_NAV_DRAWER_TOGGLE_EVENT, { detail: { trigger } }));
+    window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT));
 
-      expect(shell.navDrawerOpen).toBe(true);
-      expect(openPalette).toHaveBeenCalledOnce();
-    } finally {
-      window.removeEventListener(COMMAND_PALETTE_OPEN_EVENT, handlePaletteOpen);
-    }
+    expect(shell.navDrawerOpen).toBe(true);
+    expect(openPalette).toHaveBeenCalledOnce();
   });
 
   it.each(["MacIntel"])(
@@ -739,6 +733,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       const openPalette = vi.fn();
       const shell = configureLazyPaletteShell(element, openPalette);
       stubRenderedWhenDefined(shell);
+      connectShellEvents(shell);
       const chord = (metaKey: boolean) =>
         new KeyboardEvent("keydown", {
           key: "л",
@@ -748,12 +743,12 @@ describe("OpenClaw shell keyboard shortcuts", () => {
           cancelable: true,
         });
       const other = chord(platform !== "MacIntel");
-      shell.handleDocumentKeydown(other);
+      document.dispatchEvent(other);
       expect(other.defaultPrevented).toBe(false);
       expect(openPalette).not.toHaveBeenCalled();
 
       const primary = chord(platform === "MacIntel");
-      shell.handleDocumentKeydown(primary);
+      document.dispatchEvent(primary);
       expect(primary.defaultPrevented).toBe(true);
       await vi.waitFor(() => expect(openPalette).toHaveBeenCalledOnce());
     },

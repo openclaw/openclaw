@@ -27,6 +27,7 @@ export function AgentsHomePage(props: { active?: boolean }) {
   const agents = projectAgents(context.agents);
   const runtimeConfig = projectRuntimeConfig(context.runtimeConfig);
   const [catalogOpen, setCatalogOpen] = createSignal(false);
+  // Load Gateway runtime configuration when the retained home page becomes active.
   createEffect(
     () => props.active ?? true,
     (active) => {

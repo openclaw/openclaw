@@ -16,14 +16,18 @@ import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
   assistantMessageIsInterrupted,
+  isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
+import {
+  createChatItemsGroupingCache,
+  rowsAfterHiddenTurns,
+} from "./chat-thread-grouping-cache.ts";
 import { readChatThreadMessageIdentity, userTurnRunId } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsForwardedBoundary,
-  chatItemStartsDisplayTurn,
   chatItemStartsUserTurn,
   hasForwardedSource,
   isInterSessionMessage,
@@ -35,6 +39,9 @@ import type { ChatReasoning } from "./tool-stream-contract.ts";
 const TERMINAL_WORK_STATUSES = new Set(["done", "failed", "timeout", "killed"]);
 
 function assistantMessageKind(message: unknown, visibleContent: MessageGroup["visibleContent"]) {
+  if (isProviderVoiceTranscript(message)) {
+    return "voice-transcript";
+  }
   return (
     resolveAssistantReplyPhase(message) ??
     (asRecord(message)?.stopReason === "toolUse"
@@ -190,6 +197,8 @@ export type ReplyAttributionContext = {
   localPerson?: string;
 };
 
+const groupChatItems = createChatItemsGroupingCache(groupChatItemSegment);
+
 export function groupMessages(
   items: ChatItem[],
   replyContext: ReplyAttributionContext = {},
@@ -213,23 +222,7 @@ export function groupMessages(
   return stampReplyAttribution(result, context, replyContext);
 }
 
-/** Search hides rows, not turns: a row after a hidden turn start never joins the group before it. */
-function rowsAfterHiddenTurns(items: ChatItem[], context: ChatItem[]): Set<string> {
-  const visible = new Set(items.map((item) => item.key));
-  const rows = new Set<string>();
-  let hiddenTurn = false;
-  for (const item of context) {
-    if (!visible.has(item.key)) {
-      hiddenTurn ||= chatItemStartsDisplayTurn(item);
-    } else if (hiddenTurn) {
-      rows.add(item.key);
-      hiddenTurn = false;
-    }
-  }
-  return rows;
-}
-
-function groupChatItems(
+function groupChatItemSegment(
   items: ChatItem[],
   visibleReasoning: ReadonlySet<string>,
   rowsAfterHiddenTurn?: ReadonlySet<string>,
@@ -456,7 +449,12 @@ function isTurnOutputGroup(item: TurnRenderItem): item is MessageGroup {
 }
 
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
-  if (item.kind !== "group" || item.isStreaming || groupHasVisibleReplyContent(item, false)) {
+  if (
+    item.kind !== "group" ||
+    item.isStreaming ||
+    groupHasVisibleReplyContent(item, false) ||
+    item.messages.some(({ message }) => isProviderVoiceTranscript(message))
+  ) {
     return false;
   }
   const role = item.role.toLowerCase();
@@ -490,6 +488,7 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
   return (
     group.role.toLowerCase() === "assistant" &&
     !assistantGroupIsForwardedBoundary(group) &&
+    !group.messages.some(({ message }) => isProviderVoiceTranscript(message)) &&
     groupHasVisibleReplyContent(group)
   );
 }

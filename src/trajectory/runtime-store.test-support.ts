@@ -4,6 +4,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -46,7 +47,11 @@ export function appendSerializedTrajectoryRuntimeEvents(
       { operationLabel: label },
     );
   const input = { ...scope, events };
-  const { database } = appendSqliteTrajectoryRuntimeEventsWithWriter(input, write);
+  const { database } = appendSqliteTrajectoryRuntimeEventsWithWriter(
+    input,
+    openOpenClawAgentDatabase(options),
+    write,
+  );
   const state = trajectoryRuntimeRetentionState(database);
   const now = Date.now();
   // A nested append cannot commit maintenance independently of its caller.

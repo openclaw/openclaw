@@ -1,5 +1,4 @@
-import { extractWWWAuthenticateParams } from "@modelcontextprotocol/sdk/client/auth.js";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { extractWWWAuthenticateParams, type FetchLike } from "@modelcontextprotocol/client";
 import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 import type { McpOAuthConfig } from "./mcp-oauth.js";
 

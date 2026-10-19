@@ -8,9 +8,9 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createFileSharedActivityBody,
   createSignedCreateMessageRequest,
-  createSignedFileSharedActivityRequest,
-  createSignedVoiceMessageActivityRequest,
+  createVoiceMessageActivityBody,
 } from "./monitor.test-fixtures.js";
 import {
   migrateNextcloudTalkLegacyReplayState,
@@ -87,7 +87,7 @@ afterEach(() => {
 
 describe("Nextcloud Talk durable ingress", () => {
   it("accepts file metadata without the optional hide-download flag", () => {
-    const { body } = createSignedFileSharedActivityRequest();
+    const body = createFileSharedActivityBody();
     const envelope = JSON.parse(body) as { object: { content: string } };
     const content = JSON.parse(envelope.object.content) as {
       parameters: { file: Record<string, unknown> };
@@ -363,7 +363,7 @@ describe("Nextcloud Talk durable ingress", () => {
 
   it("rejects a duplicate file_shared activity after completion", async () => {
     await withQueue(async (queue) => {
-      const { body } = createSignedFileSharedActivityRequest();
+      const body = createFileSharedActivityBody();
       const deliver = vi.fn(async (_message, lifecycle) => {
         await lifecycle.onAdopted();
       });
@@ -387,7 +387,7 @@ describe("Nextcloud Talk durable ingress", () => {
 
   it("replays an interrupted file_shared activity in its original room lane", async () => {
     await withQueue(async (queue) => {
-      const { body } = createSignedFileSharedActivityRequest();
+      const body = createFileSharedActivityBody();
       const interruptedDeliver = vi.fn(async (_message, lifecycle) => {
         lifecycle.onDeferred();
       });
@@ -425,7 +425,7 @@ describe("Nextcloud Talk durable ingress", () => {
 
   it("durably admits Talk file_shared activities", async () => {
     await withQueue(async (queue) => {
-      const { body } = createSignedFileSharedActivityRequest();
+      const body = createFileSharedActivityBody();
       const deliver = vi.fn(async (_message, lifecycle) => {
         lifecycle.onDeferred();
       });
@@ -463,9 +463,9 @@ describe("Nextcloud Talk durable ingress", () => {
     });
   });
 
-  it("admits a signed Talk file share with a numeric byte size", async () => {
+  it("admits a Talk file share with a numeric byte size", async () => {
     await withQueue(async (queue) => {
-      const { body } = createSignedFileSharedActivityRequest({ fileSize: 1_234_567 });
+      const body = createFileSharedActivityBody({ fileSize: 1_234_567 });
       const deliver = vi.fn<NextcloudTalkIngressDeliver>(async () => {});
       await withSpool(startSpool(queue, deliver), async (spool) => {
         await expect(spool.receive(body)).resolves.toBe("accepted");
@@ -482,7 +482,7 @@ describe("Nextcloud Talk durable ingress", () => {
 
   it("durably admits canonical native Talk voice-message activities", async () => {
     await withQueue(async (queue) => {
-      const { body } = createSignedVoiceMessageActivityRequest();
+      const body = createVoiceMessageActivityBody();
       const deliver = vi.fn(async (_message, lifecycle) => {
         lifecycle.onDeferred();
       });
@@ -521,8 +521,8 @@ describe("Nextcloud Talk durable ingress", () => {
 
   it("bounds malformed file metadata as an unavailable attachment", async () => {
     await withQueue(async (queue) => {
-      const fixture = createSignedFileSharedActivityRequest();
-      const payload = JSON.parse(fixture.body) as { object: { id: string; content: string } };
+      const fixture = createFileSharedActivityBody();
+      const payload = JSON.parse(fixture) as { object: { id: string; content: string } };
       payload.object.id = "4245";
       payload.object.content = JSON.stringify({
         message: "{file}",
@@ -551,8 +551,8 @@ describe("Nextcloud Talk durable ingress", () => {
 
   it("keeps malformed normal-message activities without a file parameter ignored", async () => {
     await withQueue(async (queue) => {
-      const fixture = createSignedFileSharedActivityRequest();
-      const payload = JSON.parse(fixture.body) as { object: { id: string; content: string } };
+      const fixture = createFileSharedActivityBody();
+      const payload = JSON.parse(fixture) as { object: { id: string; content: string } };
       payload.object.id = "4246";
       payload.object.content = "{not-json";
       const deliver = vi.fn();
@@ -566,8 +566,8 @@ describe("Nextcloud Talk durable ingress", () => {
 
   it("keeps unrelated Talk Activity events ignored", async () => {
     await withQueue(async (queue) => {
-      const fixture = createSignedFileSharedActivityRequest();
-      const payload = JSON.parse(fixture.body) as {
+      const fixture = createFileSharedActivityBody();
+      const payload = JSON.parse(fixture) as {
         object: { id: string; name: string; content: string };
       };
       payload.object.id = "4243";
@@ -591,8 +591,8 @@ describe("Nextcloud Talk durable ingress", () => {
 
   it("keeps Talk object_shared activities ignored", async () => {
     await withQueue(async (queue) => {
-      const fixture = createSignedFileSharedActivityRequest();
-      const payload = JSON.parse(fixture.body) as {
+      const fixture = createFileSharedActivityBody();
+      const payload = JSON.parse(fixture) as {
         object: { id: string; name: string; content: string };
       };
       payload.object.id = "4244";

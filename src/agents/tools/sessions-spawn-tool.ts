@@ -158,7 +158,7 @@ function buildSessionsSpawnToolSchema(params: {
   const spawnModes = params.threadAvailable ? SUBAGENT_SPAWN_MODES : (["run"] as const);
   const schema = {
     task: Type.String(),
-    user: requesterProfileSchema(),
+    user: requesterProfileSchema({ defaultToTurnOwner: true }),
     taskName: Type.Optional(
       Type.String({
         description:
@@ -583,6 +583,7 @@ export function createSessionsSpawnTool(
           onSpawnEffectsStart,
           agentSessionKey: opts?.agentSessionKey,
           senderIsOwner: opts?.senderIsOwner,
+          gitContributorProfileId: opts?.gitContributorProfileId,
           expectedParentSessionId: opts?.expectedParentSessionId,
           requesterTurnRunId: opts?.requesterTurnRunId,
           completionOwnerKey: opts?.completionOwnerKey,

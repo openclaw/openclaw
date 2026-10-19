@@ -420,6 +420,10 @@ describePosix("prior-CI forward main admission", () => {
           ? "Admin landing parent audit matched"
           : "Admin landing parent audit drift",
       );
+      if (stage === "final verification") {
+        expect(result.output).toContain("Main advanced since the original admission snapshot");
+        expect(result.output).not.toContain("non-atomic race");
+      }
     }
     expect(f.git(["rev-parse", `${f.record().landed}^1`])).toBe(main);
   });

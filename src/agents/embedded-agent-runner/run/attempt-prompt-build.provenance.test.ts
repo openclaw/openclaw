@@ -1,5 +1,6 @@
 // #143821: prompt-build hook context must carry the turn's typed input provenance so
 // plugins can distinguish inter-session deliveries from human messages.
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -18,11 +19,12 @@ import {
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import {
-  createSubagentRunRecord,
-  markPendingFinalDelivery,
-} from "../../subagent-test-fixtures.test-helpers.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { testing as announceTesting } from "../../subagents/announce/subagent-announce-output.test-support.js";
+import {
+  ensureDeliveryState,
+  loadPendingFinalDeliveryPayload,
+} from "../../subagents/registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "../../subagents/registry/subagent-lifecycle-events.js";
 import {
   createLifecycleControllerFixture,
@@ -84,7 +86,17 @@ async function assembleWithCapturedHookCtx(
 ) {
   const config = attemptOverrides?.config ?? {};
   setRuntimeConfigSnapshot(config);
-  const { session, sessionManager, modelRegistry } = await createTestSession();
+  const { session, sessionManager, modelRegistry } = await createTestSession({
+    customTools: [
+      {
+        name: "read",
+        label: "Read",
+        description: "Read a fixture file",
+        parameters: Type.Object({}),
+        execute: async () => ({ content: [{ type: "text", text: "fixture" }], details: {} }),
+      },
+    ],
+  });
   const admission = prepareSystemAgentRunAdmission(config, runId, "main", "provenance-hook-test");
   onTestFinished(() => {
     admission.close();
@@ -145,6 +157,7 @@ async function assembleWithCapturedHookCtx(
     runtimeModel: testModel.id,
     systemPromptText: "Base system prompt",
     runAbortSignal: new AbortController().signal,
+    hasBaselineTools: () => session.getActiveToolNames().length > 0,
     applyPromptBuildToolsAllow: promptPolicy.applyPromptBuildToolsAllow ?? (() => []),
     prepareSystemPrompt: promptPolicy.prepareSystemPrompt,
     setActiveSessionSystemPrompt: setSystemPrompt,
@@ -317,7 +330,10 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
           throw new Error("expected completed child");
         }
         const draft = structuredClone(current);
-        markPendingFinalDelivery({ entry: draft });
+        Object.assign(ensureDeliveryState(draft), {
+          status: "pending",
+          payload: loadPendingFinalDeliveryPayload(draft),
+        });
         return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
       },
       { runs },

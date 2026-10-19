@@ -39,7 +39,7 @@ import { showChatAnnotationEditor } from "./components/chat-selection-popup.ts";
 import type { ChatSwarmProgressProps } from "./components/chat-swarm-progress.solid.tsx";
 import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.tsx";
 import { getTranscriptState, type ChatThreadProps } from "./components/chat-thread-interactions.ts";
-import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
+import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
 import { chatFailureRunId } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
@@ -71,7 +71,7 @@ export type ChatProps = Omit<
   ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {
     onCompanionStageAttachment?: (attachment: ChatAttachment, sourceSessionKey: string) => boolean;
-    transcript: ChatTranscriptController;
+    transcript: ChatTranscript;
     asyncQuestionStorage?:
       | import("../../lib/chat/composer-draft-store.runtime.ts").DurableComposerDraftScope
       | null;
@@ -80,6 +80,7 @@ export type ChatProps = Omit<
       itemId?: string,
       sourceMessageId?: string,
     ) => Promise<boolean>;
+    getQueue?: () => readonly ChatQueueItem[];
     presented?: PresentationValue;
     historyState?: ChatState;
     awaitingActivity?: boolean;
@@ -133,7 +134,7 @@ const placementQueues = new WeakMap<
   { initialTurn: ChatQueueItem; queue: ChatQueueItem[] }
 >();
 
-export function createChatViewFrame(props: ChatProps) {
+export function createChatViewFrame(props: ChatProps, getRoot: () => HTMLElement | undefined) {
   // The request session hosts the card; only sourceSessionKey names the requester.
   const approvalSourceSessionKey = props.inlineApproval?.sourceSessionKey;
   const approvalSourceSession = approvalSourceSessionKey
@@ -145,12 +146,9 @@ export function createChatViewFrame(props: ChatProps) {
   const displayedPendingInputs = pendingInputs
     ? [...pendingInputs.page.items.filter((input) => !input.queued), ...pendingInputs.queuedInputs]
     : undefined;
-  const requestUpdate = props.onRequestUpdate ?? (() => {});
+  // Focus crosses the transcript boundary into either the native or plugin-owned composer.
   const focusComposer = (selector = ".agent-chat__composer-combobox > textarea") =>
-    props.transcript.scrollElement
-      ?.closest(".chat")
-      ?.querySelector<HTMLElement>(selector)
-      ?.focus({ preventScroll: true });
+    getRoot()?.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
   const openSelectionComment = (
     selection: ChatSelectionSource,
     anchorRect: DOMRect,
@@ -195,6 +193,8 @@ export function createChatViewFrame(props: ChatProps) {
   const questionState = getTranscriptState(props.paneId);
   const asyncQuestions = createAsyncQuestionPresentation(questionState, {
     ...props,
+    // Question publications can precede the pane's next queue props frame.
+    queue: props.getQueue?.() ?? props.queue,
     onReopen: (itemId, scope) => {
       const composer = getChatComposerState(props.paneId);
       composer.restoreComposerFocus ||= composer.questionTakeoverActive;
@@ -254,7 +254,6 @@ export function createChatViewFrame(props: ChatProps) {
     questionPrompts: props.gatewayQuestionPrompts,
     agents: props.agentsList?.agents,
     onOpenImage: openImage,
-    onRequestUpdate: requestUpdate,
     queuedMessageAction: props.placementStartup?.initialTurn
       ? {
           id: props.placementStartup.initialTurn.id,
@@ -295,7 +294,6 @@ export function createChatViewFrame(props: ChatProps) {
                   ...(props.getAttachments?.() ?? props.attachments ?? []),
                   attachment,
                 ]);
-                requestUpdate();
                 focusComposer();
                 return true;
               },
@@ -337,7 +335,6 @@ export function createChatViewFrame(props: ChatProps) {
   return {
     approvalSourceSession,
     pendingInputs,
-    requestUpdate,
     asyncQuestions,
     openImmediateImage,
     attachmentDropHandlers,

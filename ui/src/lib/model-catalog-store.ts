@@ -163,9 +163,13 @@ export function settleModelCatalogRequests(
   scope: ModelsListParams,
 ): Promise<void> | undefined {
   const key = modelCatalogKey(modelCatalogParams(scope));
-  const pending = Array.from(modelCatalogCache.get(client)?.requests.get(key)?.values() ?? []).map(
-    (request) => request.transportSettled,
-  );
+  const cache = modelCatalogCache.get(client);
+  const pending = [
+    ...(cache?.requests.get(key)?.values() ?? []),
+    ...Array.from(cache?.retiredRequests ?? []).filter(
+      (request) => modelCatalogKey(request.scope) === key,
+    ),
+  ].map((request) => request.transportSettled);
   return pending.length ? Promise.allSettled(pending).then(() => {}) : undefined;
 }
 
@@ -178,30 +182,52 @@ export async function loadModelCatalog(
   signal?.throwIfAborted();
   const params = modelCatalogParams(requestOptions);
   if (!params.refresh) {
+    const snapshot = modelCatalogCache.get(client)?.snapshot;
+    if (
+      snapshot &&
+      (timeoutMs == null || timeoutMs >= 1_000) &&
+      (!snapshot.scope ||
+        modelCatalogKey({
+          ...snapshot.scope,
+          agentId: snapshot.scope.agentId ?? params.agentId,
+        }) === modelCatalogKey(params))
+    ) {
+      // Short URLs acquire their scope from publication; the lookup below still
+      // requires the exact projection before reusing its result.
+      await subscribeToSharedRequest(
+        { promise: snapshot.promise, subscribers: new Set<object>() },
+        {},
+        signal,
+      );
+      signal?.throwIfAborted();
+      if (modelCatalogCache.get(client) !== snapshot.cache) {
+        throw new DOMException("Model catalog connection retired", "AbortError");
+      }
+    }
     const result = peekModelCatalog(client, params);
-    // A connect snapshot can precede native discovery. Explicit catalog reads
-    // must still admit demand; prepared-only projections stay passive.
-    if (result && (params.preparedOnly || !result.pendingProviders?.length)) {
+    if (result) {
       return result;
     }
   }
   const cache = getModelCatalogCache(client);
   const key = modelCatalogKey(params);
-  const budgets =
-    cache.requests.get(key) ??
-    new Map<GatewayProtocolRequestOptions["timeoutMs"], ModelCatalogRequest>();
-  cache.requests.set(key, budgets);
-  const existing = budgets.get(timeoutMs);
+  const existing = cache.requests.get(key)?.get(timeoutMs);
   if (existing && !existing.controller.signal.aborted && (!params.refresh || existing.refresh)) {
     return await subscribeToSharedRequest(existing, {}, signal);
   }
   if (params.refresh) {
     invalidateModelCatalogCache(client);
   }
+  // Invalidation may retire this key's budgets, so admit the new request afterwards.
+  const budgets =
+    cache.requests.get(key) ??
+    new Map<GatewayProtocolRequestOptions["timeoutMs"], ModelCatalogRequest>();
+  cache.requests.set(key, budgets);
   const controller = new AbortController();
   const completion = createDeferredCore<ModelCatalogResult>();
   const settled = createDeferredCore();
   const pending: ModelCatalogRequest = {
+    scope: params,
     refresh: params.refresh === true,
     controller,
     promise: completion.promise,
@@ -213,7 +239,6 @@ export async function loadModelCatalog(
   budgets.set(timeoutMs, pending);
   const subscription = subscribeToSharedRequest(pending, {}, signal);
   const read = beginModelCatalogRead(client, params, controller.signal);
-  // A catalog change during this request may display the older list until its next refresh.
   const request = async () => {
     for (let attempt = 0; ; attempt += 1) {
       try {
@@ -234,15 +259,19 @@ export async function loadModelCatalog(
   };
   void request()
     .then((result) => {
-      publishModelCatalogResult(read, params, result);
+      // Its original readers still settle, but the reply may predate the change.
+      if (!pending.retired) {
+        publishModelCatalogResult(read, params, result);
+      }
       pending.resolve(result);
     }, pending.reject)
     .catch(pending.reject)
     .finally(() => {
       settled.resolve();
+      cache.retiredRequests.delete(pending);
       if (budgets.get(timeoutMs) === pending) {
         budgets.delete(timeoutMs);
-        if (budgets.size === 0) {
+        if (budgets.size === 0 && cache.requests.get(key) === budgets) {
           cache.requests.delete(key);
         }
       }

@@ -65,7 +65,6 @@ export async function waitForGatewayUpdateRecovery(
     expectedBuildId,
     timeoutMs,
     requireRunningService: true,
-    settle: { probes: 12 },
   });
 }
 

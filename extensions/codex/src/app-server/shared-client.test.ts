@@ -95,12 +95,18 @@ vi.mock("./auth-bridge.js", () => ({
     path.join(path.resolve(agentDir), "codex-home"),
 }));
 
+vi.mock("./computer-use-artifacts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./computer-use-artifacts.js")>()),
+  reconcileCodexComputerUseStartArtifacts: mocks.reconcileCodexComputerUseStartArtifacts,
+}));
+
 vi.mock("./auth-profile.js", () => ({
   resolveCodexAppServerAuthProfileIdForAgent: mocks.resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerAuthProfileStore: mocks.resolveCodexAppServerAuthProfileStore,
 }));
 
-vi.mock("./auth-cache-key.js", () => ({
+vi.mock("./auth-cache-key.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-cache-key.js")>()),
   fingerprintTokenAuthProfileCacheKey: (accessToken: string) => `token:${accessToken}`,
   resolveCodexAppServerFallbackApiKeyCacheKey: mocks.resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerPreparedApiKeyCacheKey: mocks.resolveCodexAppServerPreparedApiKeyCacheKey,
@@ -128,7 +134,6 @@ import {
   getSharedCodexAppServerClient,
   readCodexAppServerClientDesktopGeneration,
 } from "./shared-client.js";
-import { resolveCodexAppServerSpawnIdentity } from "./spawn-identity.js";
 
 let listCodexAppServerModels: typeof import("./models.js").listCodexAppServerModels;
 let clearSharedCodexAppServerClientAndWait: typeof import("./shared-client.js").clearSharedCodexAppServerClientAndWait;
@@ -426,20 +431,6 @@ describe("shared Codex app-server client", () => {
     );
     expect(harness.process.stdin.destroyed).toBe(true);
     startSpy.mockRestore();
-  });
-
-  it("fingerprints argv without exposing secret-shaped config overrides", () => {
-    const identity = resolveCodexAppServerSpawnIdentity(
-      createStartOptions({
-        homeScope: "agent",
-        command: "/usr/local/bin/codex",
-        commandSource: "config",
-        args: ["-c", "provider.api_key=super-secret-value", "app-server"],
-      }),
-    );
-
-    expect(identity.argsFingerprint).toMatch(/^[a-f0-9]{64}$/);
-    expect(JSON.stringify(identity)).not.toContain("super-secret-value");
   });
 
   it("does not resolve startup context for a pre-aborted acquire", async () => {

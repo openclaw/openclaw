@@ -712,18 +712,3 @@ export async function terminateGatewayProcessTree(
     throw new Error(`gateway process ${pid} exit could not be confirmed after taskkill`);
   }
 }
-
-export async function waitForGatewayPortRelease(
-  port: number,
-  probeHosts: readonly string[],
-): Promise<boolean> {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    const diagnostics = await inspectPortUsage(port, { probeHosts }).catch(() => null);
-    if (diagnostics?.status === "free") {
-      return true;
-    }
-    await sleep(250);
-  }
-  return false;
-}

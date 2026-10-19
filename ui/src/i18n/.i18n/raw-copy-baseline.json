@@ -460,7 +460,7 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/debug/view.tsx",
+      "path": "ui/src/pages/debug/debug-page.tsx",
       "text": "openclaw security audit --deep"
     },
     {

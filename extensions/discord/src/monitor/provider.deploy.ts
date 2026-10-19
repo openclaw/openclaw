@@ -85,25 +85,21 @@ async function deployDiscordCommands(params: {
     rest: params.client.rest,
   });
   try {
-    try {
-      await params.client.deployCommands();
-    } catch (err) {
-      if (isDiscordDeployDailyCreateLimit(err)) {
-        params.runtime.log?.(
-          warn(
-            `[${accountId}] slash command deploy skipped: daily application command create limit reached. Existing slash commands stay active until Discord resets the quota; message send/receive is unaffected.`,
-          ),
-        );
-        return;
-      }
-      const rateLimitWarning = formatDiscordDeployRateLimitWarning(err, accountId);
-      if (rateLimitWarning) {
-        params.runtime.log?.(warn(rateLimitWarning));
-        return;
-      }
-      throw err;
-    }
+    await params.client.deployCommands();
   } catch (err) {
+    if (isDiscordDeployDailyCreateLimit(err)) {
+      params.runtime.log?.(
+        warn(
+          `[${accountId}] slash command deploy skipped: daily application command create limit reached. Existing slash commands stay active until Discord resets the quota; message send/receive is unaffected.`,
+        ),
+      );
+      return;
+    }
+    const rateLimitWarning = formatDiscordDeployRateLimitWarning(err, accountId);
+    if (rateLimitWarning) {
+      params.runtime.log?.(warn(rateLimitWarning));
+      return;
+    }
     params.runtime.log?.(
       warn(
         `[${accountId}] slash command deploy failed (message send/receive unaffected): ${formatDiscordDeployErrorMessage(err)}${formatDiscordDeployErrorDetails(err)}`,

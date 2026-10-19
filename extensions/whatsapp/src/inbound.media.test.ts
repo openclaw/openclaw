@@ -748,10 +748,7 @@ describe("web inbound media saves with extension", () => {
     expect(diagnostic).toContain('"failureStage":"direct"');
     expect(diagnostic).toContain('"errorClass":"Error"');
     expect(diagnostic).toContain('"statusCode":410');
-    expect(diagnostic).toContain("expired media reference");
-    expect(diagnostic).toContain("[redacted-url]");
-    expect(diagnostic).toContain("[redacted-phone]");
-    expect(diagnostic).toContain("[redacted-jid]");
+    expect(diagnostic).not.toContain("expired media reference");
     expect(diagnostic).not.toContain("media.example/private");
     expect(diagnostic).not.toContain("+15551234567");
     expect(diagnostic).not.toContain("111@s.whatsapp.net");
@@ -762,9 +759,9 @@ describe("web inbound media saves with extension", () => {
     const terminalDiagnostic = observedConsoleWarnings.mock.calls.find(
       ([message]) => message === "WhatsApp inbound media materialization failed",
     )?.[1]?.consoleMessage;
-    expect(terminalDiagnostic).toContain("stage=direct");
-    expect(terminalDiagnostic).toContain("status=410");
-    expect(terminalDiagnostic).toContain("[redacted-url]");
+    expect(terminalDiagnostic).toBe(
+      "WhatsApp inbound media materialization failed (stage=direct class=Error kind=image status=410)",
+    );
     expect(terminalDiagnostic).not.toContain("media.example/private");
     expect(terminalDiagnostic).not.toContain("789@hosted.lid");
     expect(terminalDiagnostic).not.toContain("42@c.us");
@@ -814,7 +811,7 @@ describe("web inbound media saves with extension", () => {
     expect(diagnostic).toContain('"failureStage":"quoted"');
     expect(diagnostic).toContain('"errorClass":"Error"');
     expect(diagnostic).toContain('"statusCode":410');
-    expect(diagnostic).toContain("quoted media reference expired");
+    expect(diagnostic).not.toContain("quoted media reference expired");
     expect(diagnostic).not.toContain("7@hosted");
     expect(diagnostic).not.toContain("88@newsletter");
     expect(diagnostic).not.toContain(QUOTED_SYNTHETIC_API_KEY);
@@ -822,8 +819,9 @@ describe("web inbound media saves with extension", () => {
     const terminalDiagnostic = observedConsoleWarnings.mock.calls.find(
       ([message]) => message === "WhatsApp inbound media materialization failed",
     )?.[1]?.consoleMessage;
-    expect(terminalDiagnostic).toContain("stage=quoted");
-    expect(terminalDiagnostic).toContain("status=410");
+    expect(terminalDiagnostic).toBe(
+      "WhatsApp inbound media materialization failed (stage=quoted class=Error kind=image status=410)",
+    );
     expect(terminalDiagnostic).not.toContain("7@hosted");
     expect(terminalDiagnostic).not.toContain("88@newsletter");
     expect(terminalDiagnostic).not.toContain(QUOTED_SYNTHETIC_API_KEY);

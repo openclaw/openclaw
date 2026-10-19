@@ -19,12 +19,12 @@ export function ComposerQuestionDock(props: { panel: QuestionPanelProps | null }
 }
 
 export function createComposerQuestionPanel(
-  readProps: () => ChatComposerProps & { renderRevision?: object },
+  readProps: () => ChatComposerProps,
   state: ChatComposerState,
+  readComposition?: () => { key: string; value: string } | null,
 ) {
   const source = createMemo(() => {
     const props = readProps();
-    void props.renderRevision;
     const gatewayQuestions =
       props.gatewayQuestionPrompts?.filter((prompt) => prompt.status === "pending") ?? [];
     const asyncQuestions = props.asyncQuestions;
@@ -71,11 +71,10 @@ export function createComposerQuestionPanel(
   const syncTakeover = (active: boolean, draftKey: string) => {
     if (active && !state.questionTakeoverActive) {
       // Commit an interrupted IME draft before the store update unmounts its input.
-      if (state.composingDraft?.key === draftKey) {
-        const value = state.composingDraft.value;
+      const composition = untrack(() => readComposition?.());
+      if (state.composerComposing && composition?.key === draftKey) {
         // Sample the live draft owner without subscribing this imperative commit.
-        untrack(() => commitComposerDraft(readProps(), value));
-        state.composingDraft = null;
+        untrack(() => commitComposerDraft(readProps(), composition.value));
       }
       state.composerComposing = false;
     }

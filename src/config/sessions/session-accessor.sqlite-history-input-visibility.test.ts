@@ -6,7 +6,10 @@ import {
   OpenClawAgentDatabaseReadOnlyScope,
   withScopedOpenClawAgentDatabaseReadOnly,
 } from "../../state/openclaw-agent-db-readonly-scope.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
@@ -104,6 +107,20 @@ it.each([false, true])(
       }
       await replaceTranscriptEvents(scope, events);
       await waitForSessionTranscriptProjection(scope);
+      if (compacted) {
+        runOpenClawAgentWriteTransaction(
+          (writeDatabase) => {
+            writeDatabase.db
+              .prepare(`UPDATE transcript_events
+            SET navigation_type = NULL, navigation_custom_type = NULL,
+                navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
+                navigation_last_custom_type = NULL, navigation_valid = 1
+            WHERE session_id = ?`)
+              .run(scope.sessionId);
+          },
+          { agentId: database.agentId, path: database.path },
+        );
+      }
 
       const nativeJson = new DatabaseSync(":memory:");
       // JSONB preserves nested JSON values across the counting callback's SQL boundary.

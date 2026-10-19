@@ -221,7 +221,7 @@ export async function verifyUpdatedGateway(
     assertCurrent,
     deadline: params.opts.run?.deadline ?? params.deadline,
   });
-  const channelWarnings = [
+  const verificationWarnings = [
     ...(health.channelProbeErrors ?? []),
     ...(health.channelProbeTimeouts ?? []),
     ...(health.channelRuntimeWarnings ?? []),
@@ -231,6 +231,14 @@ export async function verifyUpdatedGateway(
       { env: params.serviceEnv, stateDir: resolveStateDir(params.serviceEnv) },
     ),
   );
+  if (health.healthy && health.authenticationError) {
+    verificationWarnings.push(
+      redactSupportDiagnosticLine(
+        `Gateway RPC authentication rejected (${health.authenticationError}); verified through local HTTP readiness and runtime identity.`,
+        { env: params.serviceEnv, stateDir: resolveStateDir(params.serviceEnv) },
+      ),
+    );
+  }
   if (launchAgentRecovery && launchAgentRecovery.status !== "not-needed") {
     defaultRuntime.error(
       launchAgentRecovery.status === "recovered"
@@ -280,8 +288,8 @@ export async function verifyUpdatedGateway(
       durationMs: endedAtMs - startedAtMs,
       exitCode: failureFacts ? 1 : warning && params.purpose === "recovery" ? null : 0,
       ...(failureFacts ? { failureFacts } : {}),
-      ...(channelWarnings.length
-        ? { warnings: [...(warning ? [warning] : []), ...channelWarnings] }
+      ...(verificationWarnings.length
+        ? { warnings: [...(warning ? [warning] : []), ...verificationWarnings] }
         : {}),
       ...(warning
         ? {
@@ -337,15 +345,19 @@ export async function verifyUpdatedGateway(
             : "Gateway: restarted and verified.",
         ),
       );
-      for (const warning of [...pluginWarnings.map((entry) => entry.message), ...channelWarnings]) {
+      for (const warning of [
+        ...pluginWarnings.map((entry) => entry.message),
+        ...verificationWarnings,
+      ]) {
         defaultRuntime.log(theme.warn(warning));
       }
     }
     return {
       ok: true,
       score: 7,
-      summary:
-        channelWarnings.length > 0
+      summary: health.authenticationError
+        ? "Gateway service, version, and readiness verified through local HTTP; RPC authentication needs attention."
+        : verificationWarnings.length > 0
           ? "Gateway service, version, and readiness verified; channel warnings need attention."
           : pluginWarnings.length > 0
             ? "Gateway service, version, channels, and readiness verified; plugin failures need a retry."

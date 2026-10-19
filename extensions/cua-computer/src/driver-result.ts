@@ -22,7 +22,7 @@ import {
   type CuaFrameState,
 } from "./frame.js";
 
-const CUA_WIRE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
+export const CUA_WIRE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
 const CUA_COMMON_ACTION_NAMES = [
   "screenshot",
   ...CUA_WIRE_ACTION_NAMES.filter((action) => action !== "hold_key"),

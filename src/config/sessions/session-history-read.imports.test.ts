@@ -11,6 +11,18 @@ it("keeps history worker transport independent of host config loading", () => {
   ).toEqual([]);
 });
 
+it("keeps transcript title and topology workers independent of host config loading", () => {
+  expect(
+    findSourceImportBackedges(
+      [
+        "src/gateway/session-transcript-title-reader.worker.ts",
+        "src/config/sessions/combined-store-topology.worker.ts",
+      ],
+      ["src/config/io.ts", "src/config/io.runtime.ts", "src/config/sessions/session-accessor.ts"],
+    ),
+  ).toEqual([]);
+});
+
 const readOwners = [
   "src/config/sessions/session-transcript.worker.ts",
   "src/config/sessions/session-accessor.sqlite-branches.ts",

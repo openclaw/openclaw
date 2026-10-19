@@ -6,7 +6,7 @@ import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveOpenClawCliInvocation } from "./cli-invocation.mjs";
+import { resolveOpenClawCliInvocation, resolveOpenClawCliRespawn } from "./cli-invocation.mjs";
 import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
 import {
   enableOpenClawCompileCache,
@@ -133,10 +133,12 @@ const respawnWithoutCompileCacheIfNeeded = () => {
     [COMPILE_CACHE_DISABLED_RESPAWNED_ENV]: "1",
   };
   delete env.NODE_COMPILE_CACHE;
-  const invocation = resolveOpenClawCliInvocation({
-    entryPath: resolveCompileCacheRespawnLauncher(),
-  });
-  return runRespawnedChild(invocation.command, invocation.args, env);
+  return runRespawnedChild(
+    resolveOpenClawCliRespawn({
+      entryPath: resolveCompileCacheRespawnLauncher(),
+      env,
+    }),
+  );
 };
 
 const respawnWithPackagedCompileCacheIfNeeded = (directory) => {
@@ -151,7 +153,12 @@ const respawnWithPackagedCompileCacheIfNeeded = (directory) => {
   if (foregroundGateway && process.platform !== "win32" && process.execve) {
     process.execve(command, [command, ...args], env);
   }
-  return runRespawnedChild(command, args, env);
+  return runRespawnedChild(
+    resolveOpenClawCliRespawn({
+      entryPath: resolveCompileCacheRespawnLauncher(),
+      env,
+    }),
+  );
 };
 
 const getErrorMessage = (err) =>

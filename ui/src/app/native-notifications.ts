@@ -1,4 +1,5 @@
 import { registerListener } from "../../../src/shared/listeners.js";
+import { listen } from "../lib/reactive/listener.ts";
 import { webKitHostWindow } from "./native-webkit-bridge.ts";
 
 export type NativeNotificationsPermission = "granted" | "denied" | "notDetermined";
@@ -86,8 +87,10 @@ export function createNativeNotificationsCapability() {
   // Permission may change in System Settings while the app is backgrounded.
   const refreshStatus = () => postMessage({ type: "status" });
 
-  window.addEventListener(NATIVE_NOTIFICATIONS_STATUS_EVENT, handleStatus);
-  window.addEventListener("focus", refreshStatus);
+  const stops = [
+    listen(window, NATIVE_NOTIFICATIONS_STATUS_EVENT, handleStatus),
+    listen(window, "focus", refreshStatus),
+  ];
   refreshStatus();
 
   return {
@@ -110,8 +113,7 @@ export function createNativeNotificationsCapability() {
       postMessage({ type: "background-session-completed", ...completion });
     },
     dispose(this: void) {
-      window.removeEventListener(NATIVE_NOTIFICATIONS_STATUS_EVENT, handleStatus);
-      window.removeEventListener("focus", refreshStatus);
+      stops.forEach((stop) => stop());
       listeners.clear();
     },
   };

@@ -4,7 +4,7 @@ import {
   findOverlayParent,
   type Overlay,
 } from "../../../components/overlay-lifecycle.ts";
-import { TextareaTokenAnchor } from "../../../components/textarea-token-anchor.ts";
+import { createTextareaTokenAnchor } from "../../../components/textarea-token-anchor.ts";
 import "../../../components/solid/overlay.css";
 import {
   emojiForShortcode,
@@ -44,7 +44,7 @@ export function createComposerEmojiMenu() {
   let popup: Overlay | null = null;
   let unsubscribePopup: (() => void) | undefined;
   let textarea: HTMLTextAreaElement | null = null;
-  const anchor = new TextareaTokenAnchor(() => dismiss(textarea));
+  const anchor = createTextareaTokenAnchor(() => dismiss(textarea));
 
   function updatePresentation(target: HTMLTextAreaElement, start: number | null) {
     textarea = target;
@@ -58,6 +58,7 @@ export function createComposerEmojiMenu() {
   function popupRef(overlay?: Overlay) {
     unsubscribePopup?.();
     popup = overlay ?? null;
+    // A close edge dismisses the editing target even if the overlay reopens before rendering.
     unsubscribePopup = popup?.subscribe((open) => {
       if (!open && state.items.length) {
         dismiss(textarea);

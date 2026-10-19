@@ -4,8 +4,7 @@ import { MessagePort, type Transferable } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   serveOwnedWorkerTasks as serveRuntimeWorkerTasks,
-  type WorkerTaskChannel,
-  type WorkerTaskControl,
+  type WorkerTaskHandler,
 } from "@openclaw/worker-runtime/worker";
 import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import { loggingState } from "../logging/state.js";
@@ -16,7 +15,7 @@ import {
 } from "./agent-database-readers.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import type { DiagnosticWorkerRetainedData } from "./diagnostic-process-types.js";
-import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission.js";
+import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission-context.js";
 import {
   bindSqliteDatabaseAdmissionUpstream,
   exchangeSqliteDatabaseAdmissions,
@@ -28,15 +27,9 @@ import { WORKER_TASK_PORT_MESSAGE, type WorkerTaskContext } from "./worker-task-
 
 export type { WorkerTaskChannel } from "@openclaw/worker-runtime/worker";
 
-type WorkerTaskHandler<Output> = (
-  input: unknown,
-  channel: WorkerTaskChannel | undefined,
-  control: WorkerTaskControl,
-) => Output | Promise<Output>;
-
 /** Pool dispatch is serial per worker; handlers finish cleanup before returning their result. */
-export function serveWorkerTasks<Output>(
-  handler: WorkerTaskHandler<Output>,
+export function serveWorkerTasks<Output, Input = unknown>(
+  handler: WorkerTaskHandler<Output, Input>,
   options: {
     transferList?: (value: Output) => Transferable[];
     retireOnError?: boolean;
@@ -48,8 +41,8 @@ export function serveWorkerTasks<Output>(
 }
 
 /** Every served worker closes its agent database readers by path between tasks; owners may add more. */
-export function serveOwnedWorkerTasks<Output>(
-  handler: WorkerTaskHandler<Output>,
+export function serveOwnedWorkerTasks<Output, Input = unknown>(
+  handler: WorkerTaskHandler<Output, Input>,
   options: {
     transferList?: (value: Output) => Transferable[];
     closeResource?: (key?: string) => void | Promise<void>;
@@ -91,7 +84,7 @@ export function serveOwnedWorkerTasks<Output>(
       ? withDatabaseEngineSelection(databaseEngineSelection, run)
       : run();
   };
-  serveRuntimeWorkerTasks<Output, WorkerTaskContext>(
+  serveRuntimeWorkerTasks<Output, WorkerTaskContext, Input>(
     (input, channel, control) =>
       withSqliteDatabaseAdmissionWait(
         {

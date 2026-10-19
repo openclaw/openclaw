@@ -9,5 +9,3 @@ export type { UsageSummary as ProviderUsageSummary } from "../../../../src/infra
 export type CostUsageDailyEntry = CostUsageSummary["daily"][number];
 
 export type { CostUsageSummary } from "../../../../src/infra/session-cost-usage.types.js";
-
-export type { SessionUsageTimePoint } from "../../../../src/shared/session-usage-timeseries-types.js";

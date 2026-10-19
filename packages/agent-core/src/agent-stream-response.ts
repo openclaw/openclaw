@@ -329,6 +329,15 @@ export async function streamAgentResponse(
             case "toolcall_delta":
             case "toolcall_end":
               if (partialMessage) {
+                // Only updates assembled here prove appends; provider snapshots can correct text.
+                const priorBlock = partialMessage.content[event.contentIndex];
+                const append =
+                  repetitionGuard && event.type === "text_delta" && event.partial === undefined
+                    ? {
+                        offset: priorBlock?.type === "text" ? priorBlock.text.length : 0,
+                        delta: event.delta,
+                      }
+                    : undefined;
                 const message = resolveAssistantMessageUpdate(event, partialMessage);
                 partialMessage = message;
                 if (event.contentIndex < committedContentCount) {
@@ -338,6 +347,7 @@ export async function streamAgentResponse(
                   message,
                   committedContentCount,
                   event.type === "toolcall_end" ? undefined : event.contentIndex,
+                  append,
                 );
                 if (stopped) {
                   modelAbort.abort(new Error(REPETITIVE_OUTPUT_ERROR_MESSAGE));

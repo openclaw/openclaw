@@ -650,36 +650,6 @@ describe("diagnostic-events", () => {
     ).toBe(true);
   });
 
-  it("emits a bounded summary when async diagnostics are dropped at saturation", async () => {
-    const events: DiagnosticEventPayload[] = [];
-    onDiagnosticEvent((event) => {
-      events.push(event);
-    });
-
-    for (let index = 0; index < 10_001; index += 1) {
-      emitDiagnosticEvent(modelStartedEvent(`drop-run-${index}`, `drop-call-${index}`));
-    }
-    emitTrustedDiagnosticEvent({ type: "gateway.rpc", method: "health", phase: "received" });
-
-    await waitForDiagnosticEventsDrained();
-
-    const dropSummary = events.find(
-      (
-        event,
-      ): event is Extract<DiagnosticEventPayload, { type: "diagnostic.async_queue.dropped" }> =>
-        event.type === "diagnostic.async_queue.dropped",
-    );
-    expect(dropSummary).toMatchObject({
-      type: "diagnostic.async_queue.dropped",
-      droppedEvents: 1,
-      droppedUntrustedEvents: 1,
-      maxQueueLength: 10_000,
-      drainBatchSize: 100,
-    });
-    expect(events.filter((event) => event.type === "model.call.started")).toHaveLength(10_000);
-    expect(events.some((event) => event.type === "gateway.rpc")).toBe(false);
-  });
-
   it("keeps trusted private data off shared internal diagnostic listeners", async () => {
     const internalEvents: DiagnosticEventPayload[] = [];
     const trustedEvents: Array<{
@@ -875,11 +845,16 @@ describe("queued runtime diagnostic phases", () => {
 
   it("uses the bounded diagnostic queue without displacing required lifecycle terminals", async () => {
     const events: DiagnosticEventPayload[] = [];
+    const publicEvents: DiagnosticEventPayload[] = [];
+    onDiagnosticEvent((event) => publicEvents.push(event));
     onTrustedInternalDiagnosticEvent((event) => events.push(event));
     const emit = createQueuedDiagnosticPhaseEmitter()!;
-    for (let index = 0; index < 10_001; index++) {
+    for (let index = 0; index < 9_999; index++) {
       emit(phase);
     }
+    emitDiagnosticEvent(modelStartedEvent("queued", "queued"));
+    emit(phase);
+    emitDiagnosticEvent(modelStartedEvent("dropped", "dropped"));
     emitTrustedDiagnosticEvent({
       type: "tool.execution.completed",
       toolName: "exec",
@@ -888,17 +863,23 @@ describe("queued runtime diagnostic phases", () => {
     expect(events).toHaveLength(0);
     await waitForDiagnosticEventsDrained();
     expect(events.filter((event) => event.type === "diagnostic.phase.completed")).toHaveLength(
-      9_999,
+      9_998,
     );
     expect(events).toContainEqual(expect.objectContaining({ type: "tool.execution.completed" }));
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "diagnostic.async_queue.dropped",
+        droppedEvents: 3,
         droppedTrustedEvents: 2,
+        droppedUntrustedEvents: 1,
         maxQueueLength: 10_000,
         drainBatchSize: 100,
       }),
     );
+    expect(publicEvents.map((event) => event.type)).toEqual([
+      "model.call.started",
+      "diagnostic.async_queue.dropped",
+    ]);
   });
 });
 
@@ -1047,6 +1028,22 @@ describe("diagnostic event plugin usage attribution", () => {
 describe("private diagnostic data", () => {
   beforeEach(resetDiagnosticEventsForTest);
   afterEach(resetDiagnosticEventsForTest);
+
+  it("shares the frozen empty private payload with OTel listeners", () => {
+    const received: DiagnosticEventPrivateData[] = [];
+    onTrustedInternalDiagnosticEvent((_evt, _meta, data) => received.push(data));
+    onTrustedInternalDiagnosticEvent(
+      markTrustedOtelDiagnosticListener((_evt, _meta, data) => received.push(data)),
+    );
+
+    emitTrustedDiagnosticEvent({ type: "model.usage", usage: { input: 1 } });
+    emitTrustedDiagnosticEvent({ type: "model.usage", usage: { input: 2 } });
+
+    expect(received).toHaveLength(4);
+    expect(received[0]).toEqual({});
+    expect(Object.isFrozen(received[0])).toBe(true);
+    expect(new Set(received).size).toBe(1);
+  });
 
   it("replaces private-data policy with listener interests and clears it on reset", () => {
     const received = vi.fn();

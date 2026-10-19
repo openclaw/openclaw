@@ -26,12 +26,7 @@ export function createSqliteSchemaEnsurer(
       if (present(database)) {
         return;
       }
-      const install = () => {
-        // A standalone ensure refreshes again after acquiring its writer transaction.
-        if (!present(database)) {
-          database.exec(schemaSql()); // sqlite-allow-raw -- Canonical additive DDL only.
-        }
-      };
+      const install = () => database.exec(schemaSql()); // sqlite-allow-raw -- Canonical additive DDL only.
       if (database.isTransaction) {
         install();
       } else {

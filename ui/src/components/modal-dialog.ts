@@ -1,7 +1,8 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createComponent, createEffect, onSettled, untrack } from "solid-js";
+import { createComponent, onSettled } from "solid-js";
 import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { composedParent } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
 import { containsComposed } from "./overlay-registry.ts";
@@ -32,6 +33,7 @@ type ModalDialogAttributes = SolidJSX.HTMLAttributes<OpenClawModalDialog> & {
   label: string;
   manual?: boolean;
   description?: string;
+  "prop:onOpenChange"?: ModalDialogProperties["onOpenChange"];
   "onModal-cancel"?: (event: Event) => void;
 };
 
@@ -344,13 +346,16 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
     if (detaching || disposed || !host.isConnected) {
       return;
     }
-    host.open = open;
-    if (!force && reportedOpen === open) {
-      return;
+    const changed = force || reportedOpen !== open;
+    if (changed) {
+      reportedOpen = open;
+      publication += 1;
     }
-    reportedOpen = open;
-    publication += 1;
-    untrack(() => props.onOpenChange?.(open));
+    // Host writes reenter request(); commit the publication before that callback.
+    host.open = open;
+    if (changed) {
+      props.onOpenChange?.(open);
+    }
   };
 
   const request = (next: boolean, controlled = true) => {
@@ -413,15 +418,6 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
   };
   const state = stateFor(host);
   state.policy = policy;
-
-  createEffect(
-    () => props.open,
-    (open) => {
-      if (mounted) {
-        request(open);
-      }
-    },
-  );
 
   const cancel = (event: Event) => {
     if (event.target === dialog) {
@@ -495,11 +491,13 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
   };
   onSettled(() => {
     mounted = true;
-    dialog.addEventListener("cancel", cancel);
-    dialog.addEventListener("pointerdown", pointerdown, true);
-    dialog.addEventListener("mousedown", mousedown, true);
-    dialog.addEventListener("keydown", keydown, true);
-    dialog.addEventListener("focusin", focusin);
+    const stopListeners = [
+      listen(dialog, "cancel", cancel),
+      listen(dialog, "pointerdown", pointerdown, true),
+      listen(dialog, "mousedown", { handleEvent: mousedown }, true),
+      listen(dialog, "keydown", { handleEvent: keydown }, true),
+      listen(dialog, "focusin", { handleEvent: focusin }),
+    ];
     overlay.bindSurface(dialog);
     overlay.setParent(findOverlayParent(host));
     overlay.subscribe((open) => {
@@ -522,11 +520,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
       overlay.dispose();
       setModalLayer(host, false);
       restoreReturnFocus();
-      dialog.removeEventListener("cancel", cancel);
-      dialog.removeEventListener("pointerdown", pointerdown, true);
-      dialog.removeEventListener("mousedown", mousedown, true);
-      dialog.removeEventListener("keydown", keydown, true);
-      dialog.removeEventListener("focusin", focusin);
+      stopListeners.forEach((stop) => stop());
       if (state.policy === policy) {
         state.policy = undefined;
       }
@@ -561,6 +555,11 @@ export const ModalDialog = defineSolidBridge<ModalDialogProperties, ModalDialogM
       label: { default: "", type: String },
       description: { default: "", type: String },
       onOpenChange: { default: undefined, attribute: false },
+    },
+    propertyChanged(host, key) {
+      if (key === "open") {
+        states.get(host)?.policy?.request(host.open);
+      }
     },
     connected(host) {
       if (host.manual) {

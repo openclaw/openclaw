@@ -130,82 +130,60 @@ describe("createMattermostDraftStream", () => {
     expect(stream.postId()).toBe("post-1");
   });
 
-  it.each([
-    { timing: "immediately after retraction", delayFirstPublication: false },
-    { timing: "while deletion is pending", delayFirstPublication: false },
-    {
-      timing: "after the retiring publication completes",
-      delayFirstPublication: true,
-    },
-  ])("keeps the identical plan replacement $timing", async ({ timing, delayFirstPublication }) => {
-    const deleteStarted = createDeferred<void>();
-    const releaseDelete = createDeferred<void>();
-    const firstPublicationVisible = createDeferred<void>();
-    const releaseFirstPublication = createDeferred<void>();
-    let firstUpdate = true;
-    const { stream, posts } = createProviderPostFixture({
-      beforeDelete: async () => {
-        deleteStarted.resolve();
-        await releaseDelete.promise;
-      },
-    });
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: false } } },
-      mode: "progress",
-      active: true,
-      seed: "plan-retraction",
-      update: async (text, options) => {
-        const delayCompletion = firstUpdate && delayFirstPublication;
-        firstUpdate = false;
-        stream.update(text);
-        if (options?.flush) {
-          await stream.flush();
-        }
-        if (delayCompletion) {
-          firstPublicationVisible.resolve();
-          await releaseFirstPublication.promise;
-        }
-      },
-      deleteCurrent: () => stream.deleteCurrentMessage(),
-    });
-    let firstPublication: Promise<boolean> | undefined;
-    let retraction: Promise<boolean> | undefined;
-    let replacementPublication: Promise<boolean> | undefined;
-    try {
-      firstPublication = progress.pushPlanProgress([{ step: "Inspect", status: "in_progress" }]);
-      if (delayFirstPublication) {
-        await firstPublicationVisible.promise;
-      } else {
+  it.each([{ timing: "immediately after retraction" }, { timing: "while deletion is pending" }])(
+    "keeps the identical plan replacement $timing",
+    async ({ timing }) => {
+      const deleteStarted = createDeferred<void>();
+      const releaseDelete = createDeferred<void>();
+      const { stream, posts } = createProviderPostFixture({
+        beforeDelete: async () => {
+          deleteStarted.resolve();
+          await releaseDelete.promise;
+        },
+      });
+      const progress = createChannelProgressDraftCompositor({
+        entry: { streaming: { mode: "progress", progress: { label: false } } },
+        mode: "progress",
+        active: true,
+        seed: "plan-retraction",
+        update: async (text, options) => {
+          stream.update(text);
+          if (options?.flush) {
+            await stream.flush();
+          }
+        },
+        deleteCurrent: () => stream.deleteCurrentMessage(),
+      });
+      let firstPublication: Promise<boolean> | undefined;
+      let retraction: Promise<boolean> | undefined;
+      let replacementPublication: Promise<boolean> | undefined;
+      try {
+        firstPublication = progress.pushPlanProgress([{ step: "Inspect", status: "in_progress" }]);
         await firstPublication;
-      }
-      expect([...posts.values()]).toEqual([expect.stringContaining("Inspect")]);
+        expect([...posts.values()]).toEqual([expect.stringContaining("Inspect")]);
 
-      retraction = progress.pushPlanProgress([]);
-      if (timing !== "immediately after retraction") {
+        retraction = progress.pushPlanProgress([]);
+        if (timing !== "immediately after retraction") {
+          await deleteStarted.promise;
+        }
+        replacementPublication = progress.pushPlanProgress([
+          { step: "Inspect", status: "in_progress" },
+        ]);
         await deleteStarted.promise;
-      }
-      if (delayFirstPublication) {
-        releaseFirstPublication.resolve();
-        await firstPublication;
-      }
-      replacementPublication = progress.pushPlanProgress([
-        { step: "Inspect", status: "in_progress" },
-      ]);
-      await deleteStarted.promise;
-      releaseDelete.resolve();
-      await Promise.all([retraction, replacementPublication]);
-      await stream.flush();
+        releaseDelete.resolve();
+        await Promise.all([retraction, replacementPublication]);
+        await stream.flush();
 
-      expect([...posts.values()]).toEqual([expect.stringContaining("Inspect")]);
-      expect(posts.has(stream.postId() ?? "")).toBe(true);
-    } finally {
-      releaseFirstPublication.resolve();
-      releaseDelete.resolve();
-      await Promise.allSettled([firstPublication, retraction, replacementPublication]);
-      progress.cancel();
-      await stream.clear();
-    }
-  });
+        expect([...posts.values()]).toEqual([expect.stringContaining("Inspect")]);
+        expect(posts.has(stream.postId() ?? "")).toBe(true);
+      } finally {
+        releaseDelete.resolve();
+        await Promise.allSettled([firstPublication, retraction, replacementPublication]);
+        progress.cancel();
+        await stream.clear();
+      }
+    },
+  );
 
   it.each([false, true])(
     "retries retired preview cleanup at stop while preserving the final (retry fails: %s)",

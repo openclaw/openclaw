@@ -301,6 +301,35 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     await cleanup();
   });
 
+  it("reports failed cleanup without hiding the original startup error", async () => {
+    const logger = createLogger();
+    const failed = createDeferred();
+    logger.error.mockImplementation((message: string) => {
+      if (message === "failed to start native approval handler: Error: startup failed") {
+        failed.resolve();
+      }
+    });
+    handlerFactory.mockResolvedValue({
+      start: vi.fn().mockRejectedValue(new Error("startup failed")),
+      stop: vi.fn().mockRejectedValue(new Error("cleanup failed")),
+    });
+
+    const cleanup = await startTestBootstrap(logger);
+    const lease = registerApprovalContext();
+    try {
+      await failed.promise;
+      expect(logger.error).toHaveBeenCalledWith(
+        "failed to clean up native approval handler: Error: cleanup failed",
+      );
+      expect(logger.error).toHaveBeenCalledWith(
+        "failed to start native approval handler: Error: startup failed",
+      );
+    } finally {
+      await cleanup();
+      lease.dispose();
+    }
+  });
+
   it.each(["retryable", "terminal"] as const)("handles %s startup failures", async (kind) => {
     const terminal = kind === "terminal";
     const error = terminal

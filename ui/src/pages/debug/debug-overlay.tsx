@@ -1,4 +1,4 @@
-import { createComponent, createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createComponent, createEffect, createSignal, onCleanup, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   clearLazyShellAction,
@@ -12,8 +12,9 @@ import {
 } from "../../app/stale-chunk-reload.ts";
 import { DEBUG_OVERLAY_REQUEST_EVENT } from "../../components/panel-toggle-contract.ts";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
-import { useApplication } from "../../lib/reactive/context.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { DebugOverlayFrame } from "./debug-overlay-frame-view.tsx";
 import { DebugOverlayLoading } from "./debug-overlay-loading-view.tsx";
@@ -27,7 +28,8 @@ type Props = {
 type Methods = { open(mode: DebugOverlayMode): void; toggle(): void };
 
 function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
-  const inherited = untrack(() => props.context) ? undefined : useApplication();
+  // A bridge's provider ancestry is fixed for this renderer lifetime.
+  const inherited = useOptionalApplication();
   const close = () => {
     host.mode = "closed";
   };
@@ -98,6 +100,7 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
       close();
     }
   };
+  // The overlay mode owns its lazy-module request and document Escape handler.
   createEffect(
     () => ({ mode: props.mode, key: props.contentKey, loaded: Boolean(Content()) }),
     (current, previous) => {
@@ -106,13 +109,13 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
         setError(null);
         return undefined;
       }
-      document.addEventListener("keydown", keydown, true);
+      const stopKeydown = listen(document, "keydown", keydown, true);
       if (current.key !== previous?.key && !current.loaded) {
         cancel();
         recoveryActionPending = persistLazyShellAction({ eventType: DEBUG_OVERLAY_REQUEST_EVENT });
         void load();
       }
-      return () => document.removeEventListener("keydown", keydown, true);
+      return stopKeydown;
     },
   );
   onCleanup(() => {

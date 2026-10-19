@@ -54,6 +54,7 @@ function metadataEntryFor(
       sessionDefaults?: UiSessionDefaultsHost,
       {
         sessionOnly = false,
+        retireCatalog = false,
         matchesCatalog,
         commandsChanged = true,
         delayMs = 0,
@@ -90,6 +91,7 @@ function metadataEntryFor(
           type: "invalidated",
           scope: sessionOnly ? "session" : "full",
           refreshSessionFacts: sessionOnly || !scope?.sessionKey,
+          ...(retireCatalog ? { retireCatalog: true } : {}),
         });
         entry.release();
       }

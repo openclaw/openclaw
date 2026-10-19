@@ -9,11 +9,9 @@ import {
   profilePresenceViewer,
 } from "../lib/presence-users.ts";
 import { profileDirectory } from "../lib/profile-directory.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
-import {
-  resolveSessionPreferredFace,
-  sessionNavigationTarget,
-} from "../lib/sessions/route-navigation.ts";
+import { resolveSessionPreferredFace } from "../lib/sessions/route-navigation.ts";
 import {
   isUiGlobalScopeConfigured,
   resolveUiConfiguredMainKey,
@@ -27,7 +25,7 @@ import {
 import { updatePersonActivityCard } from "./person-activity-card.tsx";
 import { observePersonActivityData } from "./person-activity-data.ts";
 import { personActivityRouting } from "./person-activity-link.ts";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 
 let nextCardId = 0;
 
@@ -40,14 +38,22 @@ export class SidebarPeopleRuntime {
     gateway: ApplicationGateway;
     client: GatewayBrowserClient | null;
   } | null = null;
-  private readonly portal = new PortaledHovercardController(() => this.close(), 100);
+  private readonly portal = createPortaledHovercardOwner(() => this.close(), 100);
   private readonly observer = new MutationObserver(() => this.sync());
   private lastOpenAt = -Infinity;
   private activity: ReturnType<typeof observePersonActivityData> | undefined;
   private readonly stopLocale: () => void;
+  private readonly stopGateway: (() => void) | undefined;
+  private stopListeners: Array<() => void> = [];
 
   constructor(private readonly host: AppSidebarSessionNavigationElement) {
     this.stopLocale = i18n.subscribe(() => this.sync());
+    // Retire connection-bound cards without waiting for a sidebar repaint.
+    this.stopGateway = host.sessionDataContext?.gateway.subscribe(() => {
+      if (!this.isCurrent()) {
+        this.close();
+      }
+    });
   }
 
   private scope(): string {
@@ -134,7 +140,7 @@ export class SidebarPeopleRuntime {
   }
 
   private activate(row: HTMLElement, delay: number): void {
-    const trigger = row.querySelector<HTMLElement>("[data-person-card-trigger]") ?? row;
+    const trigger = this.host.personCardTriggers.get(row) ?? row;
     const id = trigger.dataset.personCardKey;
     if (!id || !this.host.connected) {
       return;
@@ -157,9 +163,11 @@ export class SidebarPeopleRuntime {
     };
     this.portal.markTrigger(trigger);
     this.observer.observe(this.host.hostElement, { childList: true, subtree: true });
-    document.addEventListener("pointerdown", this.outsideInteraction, true);
-    document.addEventListener("focusin", this.outsideInteraction, true);
-    document.addEventListener("keydown", this.outsideKey, true);
+    this.stopListeners = [
+      listen(document, "pointerdown", this.outsideInteraction, true),
+      listen(document, "focusin", this.outsideInteraction, true),
+      listen(document, "keydown", this.outsideKey, true),
+    ];
     this.portal.scheduleOpen(delay, () => {
       if (this.portal.held) {
         this.show();
@@ -257,16 +265,8 @@ export class SidebarPeopleRuntime {
           },
           () => this.close(),
         ),
-        openSession: (row, agentId) => {
+        openSession: (row, agentId, options) => {
           const face = resolveSessionPreferredFace(row);
-          const target = sessionNavigationTarget({
-            face,
-            sessionKey: row.key,
-            row,
-            fallbackAgentId: agentId,
-            basePath: this.host.basePath,
-            mainKey: resolveUiConfiguredMainKey(defaults),
-          });
           this.close();
           runSessionNavigationIntent(this.host, {
             agentId,
@@ -281,8 +281,8 @@ export class SidebarPeopleRuntime {
               ) {
                 return false;
               }
-              this.host.prepareSessionNavigation(row.key, target.options.pathname);
-              this.host.onNavigate?.(face, target.options);
+              this.host.prepareSessionNavigation(row.key, options.pathname);
+              this.host.onNavigate?.(face, options);
               selectApplicationSession({
                 selection: context.agentSelection,
                 gateway: context.gateway,
@@ -300,7 +300,7 @@ export class SidebarPeopleRuntime {
       return;
     }
     this.lastOpenAt = performance.now();
-    card.addEventListener("pointerleave", this.portal.handleCardPointerLeave);
+    this.stopListeners.push(listen(card, "pointerleave", this.portal.handleCardPointerLeave));
     this.portal.mount(active.row, card, "horizontal", true, () => updatePersonActivityCard(card));
   }
 
@@ -334,9 +334,8 @@ export class SidebarPeopleRuntime {
     this.activity?.dispose();
     this.activity = undefined;
     this.observer.disconnect();
-    document.removeEventListener("pointerdown", this.outsideInteraction, true);
-    document.removeEventListener("focusin", this.outsideInteraction, true);
-    document.removeEventListener("keydown", this.outsideKey, true);
+    this.stopListeners.forEach((stop) => stop());
+    this.stopListeners = [];
     this.portal.reset();
     this.active?.trigger.setAttribute("aria-haspopup", "dialog");
     this.active?.trigger.setAttribute("aria-expanded", "false");
@@ -352,5 +351,6 @@ export class SidebarPeopleRuntime {
   dispose(): void {
     this.close();
     this.stopLocale();
+    this.stopGateway?.();
   }
 }

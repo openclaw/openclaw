@@ -36,8 +36,10 @@ import {
   beginPluginStatePublication,
   recordPluginStateReadDependency,
   withPluginStatePublication,
+  type PluginStatePublicationScope,
 } from "./plugin-state-publication.js";
 import { wrapPluginStateError } from "./plugin-state-store.database.js";
+import { isRetainedPluginStateNamespace } from "./plugin-state-store.kernel.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
 import {
   pluginStateWorkerOperations,
@@ -75,6 +77,42 @@ type PluginStateCommand = {
     input: PluginStateWorkerOperations[Key]["input"];
   };
 }[keyof PluginStateWorkerOperations];
+
+function publicationScope(command: PluginStateCommand): PluginStatePublicationScope | undefined {
+  switch (command.type) {
+    case "pluginState.register":
+    case "pluginState.registerIfAbsent":
+    case "pluginState.replaceEntry":
+    case "pluginState.compareUpdate": {
+      const { pluginId, namespace, key, overflowPolicy } = command.input;
+      // These policies cannot evict another live key; readers already filter expiry.
+      return {
+        pluginId,
+        namespace,
+        ...(overflowPolicy === "reject-new" || isRetainedPluginStateNamespace(namespace)
+          ? { key }
+          : {}),
+      };
+    }
+    case "pluginState.observe":
+    case "pluginState.consume":
+    case "pluginState.delete":
+    case "pluginState.deleteIfEqual":
+    case "pluginState.compareDelete": {
+      const { pluginId, namespace, key } = command.input;
+      return { pluginId, namespace, key };
+    }
+    case "pluginState.replace":
+    case "pluginState.clear":
+    case "pluginState.clearRuntimeHealth": {
+      const { pluginId, namespace } = command.input;
+      return { pluginId, namespace };
+    }
+    default:
+      // Compound operations retain database-wide denial without an exact write scope.
+      return undefined;
+  }
+}
 
 function prepareCommandOrder(
   coordinationKey: string,
@@ -153,6 +191,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     }
     // SAFETY: Key and input are correlated by every caller; this forms the dispatch union.
     const typedCommand = command as PluginStateCommand;
+    const writeScope = publicationScope(typedCommand);
     order = prepareCommandOrder(context.admission.coordinationKey, typedCommand);
     if (
       order?.finish ||
@@ -162,6 +201,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       publication = beginPluginStatePublication(
         () => context.admission.identity.key,
         context.assertPublicationCurrent ?? context.admission.assertCurrent,
+        writeScope,
       );
     }
     if (order?.ready) {
@@ -358,7 +398,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     const result = await runOpenClawStateWorkerOperation(context, operation, {
       signal,
       assertCurrent: assertAdmission,
-      createAdmission: withPluginStatePublication(baseAdmission, context, onCommitted),
+      createAdmission: withPluginStatePublication(baseAdmission, context, onCommitted, writeScope),
       existingOnly: existingOnly !== undefined,
     });
     if (result === undefined && existingOnly) {

@@ -1,18 +1,32 @@
-import { execFile, spawnSync } from "node:child_process";
+import { readProcessIdentity } from "@openclaw/proc-safe/identity";
 import {
-  readDarwinBunProcessCensus,
-  type DarwinProcess as DarwinCensusProcess,
-} from "./supervisor/darwin-bun-process-census.js";
+  listProcesses,
+  readProcessCommand,
+  type ProcessSnapshot,
+} from "@openclaw/proc-safe/inspect";
 
-export type DarwinProcess = DarwinCensusProcess & { startedAt: string };
+export type DarwinProcess = {
+  pid: number;
+  ppid: number;
+  pgid: number;
+  state: string;
+  owner: ProcessSnapshot["owner"];
+  startedAt: string;
+};
+type DarwinCensusProcess = Omit<DarwinProcess, "startedAt">;
+type DarwinSnapshot = ProcessSnapshot &
+  Required<Pick<ProcessSnapshot, "parentPid" | "processGroupId" | "state">>;
 
 export class DarwinProcessInspectionError extends Error {
+  readonly code: "ETIMEDOUT" | "EPERM" | "EIO";
+
   constructor(
     readonly reason: "deadline" | "permission" | "unavailable",
     options?: ErrorOptions,
   ) {
     super(`Darwin process inspection ${reason}`, options);
     this.name = "DarwinProcessInspectionError";
+    this.code = reason === "deadline" ? "ETIMEDOUT" : reason === "permission" ? "EPERM" : "EIO";
   }
 }
 
@@ -39,94 +53,63 @@ function remaining(deadline: number): number {
   return ms;
 }
 
-const columns = "pid=,ppid=,pgid=,stat=,uid=,lstart=";
-const maxBuffer = 8 * 1024 * 1024;
-function argsFor(pids?: readonly number[]): string[] {
-  return pids ? ["-o", columns, "-p", pids.join(",")] : ["-axo", columns];
+const states = {
+  running: "R",
+  sleeping: "S",
+  stopped: "T",
+  zombie: "Z",
+  idle: "I",
+  unknown: "?",
+} as const;
+
+function hasReadableTopology(row: ProcessSnapshot): row is DarwinSnapshot {
+  if (row.parentPid === undefined || row.processGroupId === undefined || row.state === undefined) {
+    // A PID can disappear during enumeration. Only current kernel absence lets
+    // us omit an incomplete row; inaccessible live topology still fails closed.
+    if (readProcessIdentity(row.pid) === null) {
+      return false;
+    }
+    throw new DarwinProcessInspectionError("unavailable");
+  }
+  return true;
 }
 
-function parse(output: string): DarwinProcess[] {
-  return output
-    .split("\n")
-    .filter((line) => line.trim())
-    .map((line) => {
-      const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(-?\d+)\s+(.+?)\s*$/.exec(line);
-      if (!match) {
-        throw new DarwinProcessInspectionError("unavailable");
-      }
-      if (!match.slice(1, 4).every((value) => Number.isSafeInteger(Number(value)))) {
-        throw new DarwinProcessInspectionError("unavailable");
-      }
-      return {
-        pid: Number(match[1]),
-        ppid: Number(match[2]),
-        pgid: Number(match[3]),
-        state: match[4]!,
-        uid: Number(match[5]) >>> 0,
-        startedAt: match[6]!.replace(/\s+/g, " "),
-      };
-    });
+function topology(row: DarwinSnapshot): DarwinCensusProcess {
+  return {
+    pid: row.pid,
+    ppid: row.parentPid,
+    pgid: row.processGroupId,
+    state: states[row.state],
+    owner: row.owner,
+  };
 }
 
-function nativeCensus(deadline: number, pids?: readonly number[]): DarwinProcess[] {
+function startIdentity(identity: ProcessSnapshot["identity"]): string {
+  if (!identity) {
+    throw new DarwinProcessInspectionError("permission");
+  }
+  const date = new Date(Math.floor(identity.startTimeMicros / 1_000_000) * 1000);
+  if (!Number.isFinite(date.getTime()) || identity.startTimeMicros <= 0) {
+    throw new DarwinProcessInspectionError("unavailable");
+  }
+  // Match normalized LC_ALL=C TZ=UTC ps lstart: Codex persists these identities
+  // across upgrades and Node/Bun switches. Fingerprints guard second-level reuse.
+  const [day, dayOfMonth, month, year, time] = date.toUTCString().split(" ");
+  return `${day!.slice(0, -1)} ${month} ${Number(dayOfMonth)} ${time} ${year}`;
+}
+
+function census(deadline: number, pids?: readonly number[]): DarwinSnapshot[] {
   try {
-    const rows = [...readDarwinBunProcessCensus(remaining(deadline), pids, true)].map((row) => {
-      if (!row.startedAt) {
-        throw new DarwinProcessInspectionError("unavailable");
-      }
-      return {
-        pid: row.pid,
-        ppid: row.ppid,
-        pgid: row.pgid,
-        state: row.state,
-        uid: row.uid,
-        startedAt: row.startedAt,
-      };
-    });
+    const rows = listProcesses({
+      timeoutMs: remaining(deadline),
+      ...(pids ? { pids } : {}),
+    }).filter(hasReadableTopology);
     remaining(deadline);
     return rows;
   } catch (cause) {
     remaining(deadline);
     throw failure(cause);
   }
-}
-
-/** Node has no FFI, and proc-safe has no Darwin census API. Keep its bounded ps path. */
-async function ps(args: string[], deadline: number): Promise<string> {
-  const ms = remaining(deadline);
-  return await new Promise<string>((resolve, reject) => {
-    let settled = false;
-    const settle = (cause: unknown, output = "") => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      if (performance.now() >= deadline) {
-        reject(new DarwinProcessInspectionError("deadline"));
-      } else if (cause) {
-        reject(failure(cause));
-      } else {
-        resolve(output);
-      }
-    };
-    const child = execFile(
-      "ps",
-      args,
-      { encoding: "utf8", maxBuffer, env: { ...process.env, LC_ALL: "C", TZ: "UTC" } },
-      settle,
-    );
-    const timer = setTimeout(() => {
-      settle(new DarwinProcessInspectionError("deadline"));
-      child.stdout?.destroy();
-      child.stderr?.destroy();
-      child.kill("SIGKILL");
-      child.unref();
-    }, ms);
-    timer.unref?.();
-  }).catch((cause: unknown) => {
-    throw failure(cause);
-  });
 }
 
 /** Complete census, or selected identities. Missing PIDs are omitted; inspection errors throw. */
@@ -140,17 +123,11 @@ export async function readDarwinProcessSnapshot(
   if (pids?.length === 0) {
     return [];
   }
-  if (process.versions.bun) {
-    return nativeCensus(deadline, pids);
-  }
-  // ps exits 1 when no requested PIDs remain. A readable observer distinguishes
-  // that ordinary absence from failed inspection without accepting exit errors.
-  const selected = pids ? [...new Set([process.pid, ...pids])] : undefined;
-  const rows = parse(await ps(argsFor(selected), deadline));
-  if (selected && !rows.some((row) => row.pid === process.pid)) {
-    throw new DarwinProcessInspectionError("unavailable");
-  }
-  return pids ? rows.filter((row) => pids.includes(row.pid)) : rows;
+  const rows = census(deadline, pids).map((row) =>
+    Object.assign(topology(row), { startedAt: startIdentity(row.identity) }),
+  );
+  remaining(deadline);
+  return rows;
 }
 
 /** Inspect a complete lineage without requiring start-time access to unrelated users. */
@@ -158,71 +135,38 @@ export async function readDarwinProcessTree(
   deadline: number,
   roots: readonly number[],
 ): Promise<DarwinProcess[]> {
-  const census = process.versions.bun
-    ? [...readDarwinProcessCensus(remaining(deadline))]
-    : await readDarwinProcessSnapshot(deadline);
+  const tree = census(deadline).map((row) => ({
+    process: topology(row),
+    identity: row.identity,
+  }));
   const selected = new Set([process.pid, ...roots]);
   const pending = [...roots];
   for (const parent of pending) {
-    for (const row of census) {
+    for (const { process: row } of tree) {
       if (row.ppid === parent && !selected.has(row.pid)) {
         selected.add(row.pid);
         pending.push(row.pid);
       }
     }
   }
-  // The short census supplies topology only. Every relevant process still needs
-  // readable start identity; permission denial cannot prove it disappeared.
-  return process.versions.bun
-    ? readDarwinProcessSnapshot(deadline, [...selected])
-    : census.filter((row): row is DarwinProcess => selected.has(row.pid) && Boolean(row.startedAt));
+  // Unrelated users may deny birth identities. Only the selected lineage needs
+  // them; missing relevant identity must never be treated as disappearance.
+  const result = tree
+    .filter(({ process: row }) => selected.has(row.pid))
+    .map(({ process: row, identity }) =>
+      Object.assign(row, { startedAt: startIdentity(identity) }),
+    );
+  remaining(deadline);
+  return result;
 }
 
-/** Synchronous census for the dependency-free process-group cleanup worker. */
+/** Synchronous census for the process-group cleanup worker, without spawning ps. */
 export function* readDarwinProcessCensus(timeoutMs: number): Generator<DarwinCensusProcess> {
   const deadline = performance.now() + timeoutMs;
-  if (process.versions.bun) {
-    try {
-      yield* readDarwinBunProcessCensus(remaining(deadline));
-    } catch (cause) {
-      remaining(deadline);
-      throw failure(cause);
-    }
-    return;
-  }
-  // Group cleanup needs topology only; preserve Node's existing ps projection.
-  const result = spawnSync("/bin/ps", ["-A", "-o", "pid=,pgid=,stat=,ppid=,uid="], {
-    encoding: "utf8",
-    timeout: remaining(deadline),
-    maxBuffer,
-    env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
-  });
-  remaining(deadline);
-  if (result.error || result.status !== 0) {
-    throw failure(result.error);
-  }
-  for (const line of result.stdout.split("\n")) {
+  const rows = census(deadline).map(topology);
+  for (const row of rows) {
     remaining(deadline);
-    if (!line.trim()) {
-      continue;
-    }
-    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\d+)\s+(-?\d+)\s*$/.exec(line);
-    if (
-      !match ||
-      ![match[1], match[2], match[4]].every((value) => Number.isSafeInteger(Number(value)))
-    ) {
-      throw new DarwinProcessInspectionError("unavailable");
-    }
-    const pid = Number(match[1]);
-    if (pid !== result.pid) {
-      yield {
-        pid,
-        pgid: Number(match[2]),
-        state: match[3]!,
-        ppid: Number(match[4]),
-        uid: Number(match[5]) >>> 0,
-      };
-    }
+    yield row;
   }
   remaining(deadline);
 }
@@ -230,16 +174,12 @@ export function* readDarwinProcessCensus(timeoutMs: number): Generator<DarwinCen
 /** Arguments only: never request or return process environment values. */
 export async function readDarwinProcessCommandLine(pid: number, deadline: number): Promise<string> {
   remaining(deadline);
-  if (!process.versions.bun) {
-    return (await ps(["-o", "command=", "-p", String(pid)], deadline)).split("\n")[0]?.trim() ?? "";
-  }
   try {
-    const { readProcessCommand } = await import("@openclaw/proc-safe/inspect");
-    remaining(deadline);
     const command = readProcessCommand(pid);
     remaining(deadline);
     return command?.argv.join(" ") ?? "";
   } catch (cause) {
+    remaining(deadline);
     throw failure(cause);
   }
 }

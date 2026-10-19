@@ -1,12 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
 import { buildBrowserExtensionPairing } from "./extension-pairing.js";
+import { ensureExtensionRelayToken } from "./extension-relay/relay-auth.js";
+
+vi.mock("./extension-relay/relay-auth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./extension-relay/relay-auth.js")>();
+  return { ...actual, ensureExtensionRelayToken: vi.fn(actual.ensureExtensionRelayToken) };
+});
 
 const RELAY_KEY = relayTestKey(5);
-const ensureToken = async () => RELAY_KEY;
+beforeEach(() => {
+  vi.mocked(ensureExtensionRelayToken).mockResolvedValue(RELAY_KEY);
+});
 
 describe("buildBrowserExtensionPairing", () => {
   it("binds native bootstrap to the selected profile instead of the first extension relay", async () => {
@@ -22,7 +30,6 @@ describe("buildBrowserExtensionPairing", () => {
     const legacy = await buildBrowserExtensionPairing({
       cfg,
       localTransport: "gateway",
-      ensureToken,
     });
     expect(legacy.relayPort).toBe(19441);
     expect(new URL(legacy.pairingString).searchParams.has("profile")).toBe(false);
@@ -30,16 +37,19 @@ describe("buildBrowserExtensionPairing", () => {
       cfg,
       profile: "work",
       localTransport: "gateway",
-      ensureToken,
     });
     expect(result.relayPort).toBe(19442);
     expect(new URL(result.pairingString).searchParams.get("profile")).toBe("work");
-    await expect(
-      buildBrowserExtensionPairing({ cfg, profile: "missing", ensureToken }),
-    ).rejects.toThrow("existing extension profile");
+    await expect(buildBrowserExtensionPairing({ cfg, profile: "missing" })).rejects.toThrow(
+      "existing extension profile",
+    );
   });
 
   it("pairs with the first writer's key when its file is already open but empty", async () => {
+    const actual = await vi.importActual<typeof import("./extension-relay/relay-auth.js")>(
+      "./extension-relay/relay-auth.js",
+    );
+    vi.mocked(ensureExtensionRelayToken).mockImplementation(actual.ensureExtensionRelayToken);
     await withTempDir("openclaw-pairing-", async (dir) => {
       const stateDir = fs.realpathSync(dir);
       const credentials = path.join(stateDir, "credentials");
@@ -84,7 +94,6 @@ describe("buildBrowserExtensionPairing", () => {
             profiles: { chrome: { driver: "extension", cdpPort: 19_198 } },
           },
         },
-        ensureToken,
       }),
     ).resolves.toEqual({
       pairingString: `ws://127.0.0.1:19198/extension?gateway=${testCase.encodedGateway}#${RELAY_KEY}`,
@@ -102,7 +111,6 @@ describe("buildBrowserExtensionPairing", () => {
           },
         },
         gatewayUrl: "wss://gateway.example.com:9443",
-        ensureToken,
       }),
     ).resolves.toEqual({
       pairingString: `wss://gateway.example.com:9443/browser/extension?gateway=wss%3A%2F%2Fgateway.example.com%3A9443#${RELAY_KEY}`,
@@ -115,7 +123,6 @@ describe("buildBrowserExtensionPairing", () => {
     await expect(
       buildBrowserExtensionPairing({
         cfg: { gateway: { tls: { enabled: true } } },
-        ensureToken,
       }),
     ).rejects.toThrow("--gateway-url wss://<certificate-host>");
   });

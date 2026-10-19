@@ -7,12 +7,8 @@ import type { ModelProviderLogin } from "./login-controller.ts";
 import { renderProviderAccountSummary } from "./profiles-view.tsx";
 
 export function ModelProviderLoginView(props: { controller: ModelProviderLogin }) {
-  const picker = createMemo(() => {
-    return props.controller.pickerView();
-  });
-  const wizard = createMemo(() => {
-    return props.controller.wizardViewProps;
-  });
+  const picker = createMemo(() => props.controller.pickerView());
+  const wizard = createMemo(() => props.controller.wizardViewProps);
   return (
     <Show
       when={picker()}
@@ -207,6 +203,7 @@ function LoginOption(props: {
   focusTarget?: (element: HTMLButtonElement) => void;
 }) {
   let button!: HTMLButtonElement;
+  // The login focus owner follows the first method button as choices change.
   createEffect(
     () => props.focusTarget,
     (target) => target?.(button),
@@ -235,9 +232,7 @@ function LoginOption(props: {
 }
 
 export function ModelProviderAccountRecovery(props: { controller: ModelProviderLogin }) {
-  const recovery = createMemo(() => {
-    return props.controller.recoveryView();
-  });
+  const recovery = createMemo(() => props.controller.recoveryView());
   return (
     <Show when={recovery()}>
       {(current) => (

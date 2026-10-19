@@ -369,13 +369,13 @@ async function runModelAuthStatus(agent: string) {
 async function runModelAuthLogout(provider: string, agent: string) {
   const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
   const { resolveAgentDir } = await import("../../agents/agent-scope.js");
-  const { listProfilesForProvider, loadAuthProfileStoreForRuntime } =
+  const { listProfilesForProvider, loadAuthProfileStoreForRuntimeAsync } =
     await import("../../agents/auth-profiles.js");
   const { updateAuthProfileStoreWithLock } =
     await import("../../agents/auth-profiles/store-runtime.js");
   const cfg = await captureRuntimeConfigAsyncReader()();
   const agentDir = resolveAgentDir(cfg, agent);
-  const store = loadAuthProfileStoreForRuntime(agentDir);
+  const store = await loadAuthProfileStoreForRuntimeAsync(agentDir);
   const profileIds = listProfilesForProvider(store, provider);
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
@@ -435,18 +435,12 @@ export function registerModelCapabilityCommands(capability: Command): void {
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const { resolveCapabilityAgentOption, resolveTransport } = await import("./shared.js");
         const prompt = opts.prompt;
-        if (typeof prompt !== "string" || normalizeOptionalString(prompt) === undefined) {
+        if (normalizeOptionalString(prompt) === undefined) {
           throw new Error("--prompt cannot be empty or whitespace-only.");
         }
-        let thinking: ThinkLevel | undefined;
-        if (opts.thinking !== undefined) {
-          if (typeof opts.thinking !== "string") {
-            throw new Error("--thinking must be a string.");
-          }
-          thinking = normalizeThinkLevel(opts.thinking);
-          if (!thinking) {
-            throw new Error(`Invalid thinking level. Use one of: ${THINKING_LEVELS_HELP}.`);
-          }
+        const thinking = normalizeThinkLevel(opts.thinking);
+        if (opts.thinking !== undefined && !thinking) {
+          throw new Error(`Invalid thinking level. Use one of: ${THINKING_LEVELS_HELP}.`);
         }
         const transport = resolveTransport({
           local: Boolean(opts.local),

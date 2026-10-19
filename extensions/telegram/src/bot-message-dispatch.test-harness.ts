@@ -11,10 +11,7 @@ import { withTelegramTestSettledReceipt } from "./bot-message-dispatch-receipt.t
 import type { TelegramBotFixtureMocks } from "./bot-module-mocks.test-support.js";
 import { createTestDraftStream } from "./draft-stream.test-helpers.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
-import {
-  clearTelegramRuntimeForTest as clearTelegramRuntime,
-  resetTelegramReplyFenceForTest as resetTelegramReplyFenceForTests,
-} from "./runtime.test-support.js";
+import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 
 export type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
   TelegramBotFixtureMocks["dispatchReplyWithBufferedBlockDispatcher"]
@@ -455,7 +452,6 @@ async function resetTelegramDispatchTestState() {
   testState = await createOpenClawTestState({ label: "telegram-dispatch", layout: "state-only" });
   resetPluginStateStoreForTests({ closeDatabase: false });
   setTelegramPluginStateRuntimeForTests();
-  resetTelegramReplyFenceForTests();
   createTelegramDraftStream.mockReset();
   dispatchReplyWithBufferedBlockDispatcher.mockReset();
   emitTelegramMessageSentHooks.mockReset();
@@ -565,28 +561,20 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
   return actual;
 }
 
-function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
-  const call = mock.mock.calls[callIndex];
+function mockCallArg(mock: ReturnType<typeof vi.fn>) {
+  const call = mock.mock.calls[0];
   if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
+    throw new Error("Expected mock call 0");
   }
-  return call[argIndex];
+  return call[0];
 }
 
 export function expectDraftStreamParams(expected: Record<string, unknown>) {
   return expectRecordFields(mockCallArg(createTelegramDraftStream), expected);
 }
 
-function expectDeliverRepliesParams(expected: Record<string, unknown>, callIndex = 0) {
-  return expectRecordFields(mockCallArg(deliverReplies, callIndex), expected);
-}
-
-export function expectDeliveredReply(
-  index: number,
-  expected: Record<string, unknown>,
-  callIndex = 0,
-) {
-  const params = expectDeliverRepliesParams({}, callIndex);
+export function expectDeliveredReply(index: number, expected: Record<string, unknown>) {
+  const params = expectRecordFields(mockCallArg(deliverReplies), {});
   const replies = params.replies as Array<unknown> | undefined;
   if (!Array.isArray(replies)) {
     throw new Error("Expected delivered replies array");
