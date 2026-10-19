@@ -97,14 +97,20 @@ export async function createSystemdCommandQuery(
           ? undefined
           : inspection?.assertReadCurrent) ?? inspection?.assertCurrent;
       if (budget.now() >= deadlineAt) {
-        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
+          kind: "phase",
+          check: `effective command ${args[0] === "call" ? args[4] : args.slice(4).join(", ")}`,
+        });
       }
       if (peer) {
         runServiceInspectionGuard(assertCurrent);
         const values = await peer.query(args, signatures, deadlineAt, inspection);
         runServiceInspectionGuard(assertCurrent);
         if (budget.now() >= deadlineAt) {
-          throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+          throw new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
+            kind: "phase",
+            check: `effective command ${args[0] === "call" ? args[4] : args.slice(4).join(", ")}`,
+          });
         }
         return values;
       }

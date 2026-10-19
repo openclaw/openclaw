@@ -7,7 +7,7 @@ const SERVICE_INSPECTION_MESSAGES = {
   "service-membership-unverified": UPDATE_PREFLIGHT_DETAILS["service-membership-unverified"],
   "service-ancestry-unverified": UPDATE_PREFLIGHT_DETAILS["service-ancestry-unverified"],
   "service-manager-unavailable":
-    "No supported service manager detected. Restart the Gateway you launched manually after the update.",
+    "No supported service manager detected. Manage the Gateway through the supervisor or terminal that started it.",
   "systemd-user-bus-unavailable":
     "The systemd user session bus is unavailable. Check XDG_RUNTIME_DIR for the service account. Log in once or enable the user manager with sudo loginctl enable-linger <user>, then verify systemctl --user status. On Debian/Ubuntu, install dbus-user-session and run systemctl --user start dbus.socket if the runtime bus is missing. Verify busctl --user list with DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus, then retry.",
   "systemd-inspection-deadline-exceeded":
@@ -37,6 +37,8 @@ export type ServiceInspectionDiagnostic =
   | { kind: "invalid-response" }
   | { kind: "native"; exitCode: number | null; hresult?: number };
 
+type ServiceInspectionPhase = { kind: "phase"; check: string };
+
 export function isServiceInspectionReason(value: string): value is ServiceInspectionReason {
   return Object.hasOwn(SERVICE_INSPECTION_MESSAGES, value);
 }
@@ -52,9 +54,11 @@ export function formatServiceInspectionReason(reason: ServiceInspectionReason): 
 }
 
 function formatServiceInspectionDiagnostic(
-  diagnostic: ServiceInspectionDiagnostic,
+  diagnostic: ServiceInspectionDiagnostic | ServiceInspectionPhase,
 ): string | undefined {
   switch (diagnostic.kind) {
+    case "phase":
+      return `Stalled check: ${diagnostic.check}.`;
     case "timeout":
       return Number.isSafeInteger(diagnostic.timeoutMs) && diagnostic.timeoutMs > 0
         ? `Task Scheduler check timed out after ${diagnostic.timeoutMs} ms.`
@@ -85,10 +89,10 @@ function formatServiceInspectionDiagnostic(
 export class ServiceInspectionError extends Error {
   constructor(
     readonly reason: ServiceInspectionReason | undefined,
-    diagnostic?: ServiceInspectionDiagnostic,
+    diagnostic?: ServiceInspectionDiagnostic | ServiceInspectionPhase,
   ) {
     const detail =
-      reason === "windows-task-inspection-failed" && diagnostic
+      diagnostic && (reason === "windows-task-inspection-failed" || diagnostic.kind === "phase")
         ? formatServiceInspectionDiagnostic(diagnostic)
         : undefined;
     super(

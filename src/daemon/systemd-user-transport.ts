@@ -37,8 +37,8 @@ const versionArgs = [
 ];
 export class SystemdTransportInspectionTimeout extends ServiceInspectionError {
   constructor(check: string, detail = "") {
-    super("systemd-inspection-deadline-exceeded");
-    this.message = `${detail ? `${detail}\n` : ""}${this.message} Stalled check: ${check}.`;
+    super("systemd-inspection-deadline-exceeded", { kind: "phase", check });
+    this.message = `${detail ? `${detail}\n` : ""}${this.message}`;
   }
 }
 const addressFor = (socket: string) =>

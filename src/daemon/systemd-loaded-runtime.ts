@@ -71,7 +71,10 @@ export async function readLoadedSystemdServiceRuntime(
       runServiceInspectionGuard(assertCurrent);
       const remaining = deadline - budget.now();
       if (remaining <= 0) {
-        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
+          kind: "phase",
+          check: `loaded runtime ${args.slice(0, 5).join(" ")}`,
+        });
       }
       if (remainingQueries <= 0) {
         throw unavailable();
@@ -87,7 +90,10 @@ export async function readLoadedSystemdServiceRuntime(
         }
         runServiceInspectionGuard(assertCurrent);
         if (budget.now() >= deadline) {
-          throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+          throw new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
+            kind: "phase",
+            check: `loaded runtime ${args.slice(0, 5).join(" ")}`,
+          });
         }
         return values;
       }
@@ -99,7 +105,10 @@ export async function readLoadedSystemdServiceRuntime(
           : await execBusctlUser(env, queryArgs, callTimeout, assertCurrent);
       runServiceInspectionGuard(assertCurrent);
       if (budget.now() >= deadline) {
-        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
+          kind: "phase",
+          check: `loaded runtime ${args.slice(0, 5).join(" ")}`,
+        });
       }
       if (result.code !== 0 || result.termination !== "exit") {
         throw systemdInspectionError(result, unavailable().message, scope);

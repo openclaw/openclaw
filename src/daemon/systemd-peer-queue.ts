@@ -16,7 +16,12 @@ export function createSystemdPeerQueue() {
         let expired = false;
         const expire = () => {
           expired = true;
-          reject(new ServiceInspectionError("systemd-inspection-deadline-exceeded"));
+          reject(
+            new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
+              kind: "phase",
+              check: "waiting for the systemd connection query queue",
+            }),
+          );
         };
         const remaining = deadline - now();
         if (remaining <= 0) {

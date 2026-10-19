@@ -182,7 +182,7 @@ it.each([
         expect(inspected.serviceUpdateVerdict).toMatchObject({
           kind: "unavailable",
           inspectionReason: "service-manager-unavailable",
-          message: expect.stringContaining("Restart the Gateway you launched manually"),
+          message: expect.stringContaining("openclaw --profile caller gateway stop"),
         });
         expect(inspected.blockMessage).toBeUndefined();
         expect(inspected.serviceEnv).toBeUndefined();

@@ -103,7 +103,10 @@ export function systemdInspectionError(
     return new ServiceInspectionError("service-manager-unavailable");
   }
   if (result.termination === "timeout" || result.termination === "no-output-timeout") {
-    return new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+    return new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
+      kind: "phase",
+      check: `${scope} manager command`,
+    });
   }
   if (result.termination === "error" && ["EACCES", "EPERM"].includes(result.errorCode ?? "")) {
     return new ServiceInspectionError("service-manager-access-denied");

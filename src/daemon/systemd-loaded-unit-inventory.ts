@@ -185,14 +185,20 @@ export async function listLoadedSystemdUnits(
       ];
       const remaining = deadline - budget.now();
       if (remaining <= 0) {
-        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
+          kind: "phase",
+          check: `systemctl --${scope} list-units`,
+        });
       }
       const listed =
         scope === "user"
           ? await execSystemctlUser(env, args, remaining)
           : await execSystemctl(["--system", ...args], undefined, remaining);
       if (budget.now() >= deadline) {
-        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
+          kind: "phase",
+          check: `systemctl --${scope} list-units`,
+        });
       }
       if (listed.termination !== "exit" || listed.code !== 0) {
         throw new Error("Loaded systemd service list could not be inspected.");
@@ -277,7 +283,10 @@ export async function listLoadedSystemdUnits(
       throw failure.error;
     }
     if (budget.now() >= deadline) {
-      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded", {
+        kind: "phase",
+        check: "loaded unit inventory cleanup",
+      });
     }
     return units;
   });
