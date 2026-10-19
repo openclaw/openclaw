@@ -497,7 +497,11 @@ describe("Code Mode worker lifecycle", () => {
         }),
         5_000,
       );
-    const probe = parkedResult(await execute());
+    const probe = await execute();
+    expect(probe.status).toBe("waiting");
+    if (probe.status !== "waiting") {
+      throw new Error("expected a suspended guest");
+    }
     const encodedBytes = QuickJS.serializeSnapshot(probe.continuation).byteLength;
 
     expect(await execute(encodedBytes)).toMatchObject({ status: "waiting" });
