@@ -37,6 +37,7 @@ const codexId = "openai:default";
 const anthropicId = "anthropic:default";
 const copilotId = "github-copilot:github";
 const testNow = 1_700_000_000_000;
+type FailureReason = Parameters<typeof markAuthProfileFailure>[0]["reason"];
 const codexStore = (stats?: ProfileUsageStats) =>
   makeStore(stats === undefined ? undefined : { [codexId]: stats });
 const blockedStats = (now: number): ProfileUsageStats => ({
@@ -108,29 +109,19 @@ vi.mock("./usage-write.js", async () => ({
     .withAuthProfileUsage,
 }));
 // mock-isolation: Keep native auth-store I/O outside the in-memory quota fixture.
-vi.mock("./store-runtime.js", async () => {
-  const { storeMocks: mocks } = await import("./usage-fixture.test-support.js");
-  return {
-    loadAuthProfileStoreWithoutExternalProfilesAsync:
-      mocks.loadAuthProfileStoreWithoutExternalProfilesAsync,
-    resolvePersistedAuthProfileOwnerAgentDirAsync:
-      mocks.resolvePersistedAuthProfileOwnerAgentDirAsync,
-    updateAuthProfileStoreWithLock: mocks.updateAuthProfileStoreWithLock,
-    saveAuthProfileStore: mocks.saveAuthProfileStore,
-  };
-});
+vi.mock(
+  "./store-runtime.js",
+  async () => (await import("./usage-fixture.test-support.js")).storeMocks,
+);
 
 beforeEach(() => {
-  storeMocks.resolvePersistedAuthProfileOwnerAgentDirAsync.mockReset();
+  for (const mock of [...Object.values(storeMocks), fetchMock, resolveApiKeyForProfileMock]) {
+    mock.mockReset();
+  }
   storeMocks.resolvePersistedAuthProfileOwnerAgentDirAsync.mockImplementation(
     async (params: { agentDir?: string }) => params.agentDir,
   );
-  storeMocks.saveAuthProfileStore.mockReset();
-  storeMocks.loadAuthProfileStoreWithoutExternalProfilesAsync.mockReset();
-  storeMocks.updateAuthProfileStoreWithLock.mockReset();
   resetAuthProfileUsageMocks();
-  fetchMock.mockReset();
-  resolveApiKeyForProfileMock.mockReset();
   // Vitest can bypass manual factories during concurrent lazy imports. Keep both
   // quota operations on the same mocked export without serializing their work.
   resolveApiKeyForProfileSpy = vi
@@ -156,11 +147,7 @@ async function atTime(time: number, run: () => Promise<void>) {
     clock.mockRestore();
   }
 }
-async function markFailureAt(
-  store: AuthProfileStore,
-  reason: Parameters<typeof markAuthProfileFailure>[0]["reason"],
-  time: number,
-) {
+async function markFailureAt(store: AuthProfileStore, reason: FailureReason, time: number) {
   mockLockedUpdateForStore(store);
   await atTime(time, () => markAuthProfileFailure({ store, profileId: anthropicId, reason }));
 }
@@ -237,43 +224,17 @@ describe("failure retry windows (#23516)", () => {
 });
 
 describe("markAuthProfileBlockedUntil", () => {
+  const model = "gpt-5.4";
+  const sibling = "gpt-5.4-mini";
   it.each([
-    {
-      name: "keeps repeated same-model blocks scoped",
-      previous: 60_000,
-      model: "gpt-5.4",
-      scoped: true,
-      incoming: 120_000,
-      expected: {
-        blockedModel: "gpt-5.4",
-        blockedScope: "model",
-        cooldownClassification: undefined,
-      },
-      checks: [true, false],
-    },
-    {
-      name: "widens after a different model fails",
-      previous: 60_000,
-      model: "gpt-5.4-mini",
-      scoped: true,
-      incoming: 120_000,
-      expected: { blockedModel: undefined, blockedScope: undefined },
-      checks: [true],
-    },
-    {
-      name: "never narrows an active profile-wide block",
-      previous: 120_000,
-      model: "gpt-5.4",
-      scoped: false,
-      incoming: 60_000,
-      expected: { blockedUntil: 120_000, blockedModel: undefined, blockedScope: undefined },
-      checks: [true],
-    },
-  ])("$name", async ({ previous, model, scoped, incoming, expected, checks }) => {
+    ["same model stays scoped", false, model, model, [true, false]],
+    ["different model widens", false, sibling, undefined, [true]],
+    ["profile-wide never narrows", true, model, undefined, [true]],
+  ] as const)("%s", async (_name, wide, incomingModel, expectedModel, checks) => {
     const now = Date.parse("2026-05-30T18:00:00.000Z");
     const store = codexStore({
-      blockedUntil: now + previous,
-      ...(scoped ? { blockedModel: "gpt-5.4", blockedScope: "model" as const } : {}),
+      blockedUntil: now + (wide ? 120_000 : 60_000),
+      ...(!wide ? { blockedModel: model, blockedScope: "model" as const } : {}),
       ...(checks.length === 2 ? { cooldownClassification: "wham_token_expired" as const } : {}),
     });
     mockLockedUpdateForStore(store);
@@ -281,16 +242,18 @@ describe("markAuthProfileBlockedUntil", () => {
       markAuthProfileBlockedUntil({
         store,
         profileId: codexId,
-        blockedUntil: now + incoming,
+        blockedUntil: now + (wide ? 60_000 : 120_000),
         source: "codex_rate_limits",
-        modelId: model,
+        modelId: incomingModel,
       }),
     );
     expect(store.usageStats?.[codexId]).toMatchObject({
-      ...expected,
-      ...(expected.blockedUntil !== undefined ? { blockedUntil: now + expected.blockedUntil } : {}),
+      blockedModel: expectedModel,
+      blockedScope: expectedModel ? "model" : undefined,
+      ...(wide ? { blockedUntil: now + 120_000 } : {}),
+      ...(checks.length === 2 ? { cooldownClassification: undefined } : {}),
     });
-    const models = checks.length === 2 ? ["gpt-5.4", "gpt-5.4-mini"] : ["gpt-5.4-mini"];
+    const models = checks.length === 2 ? [model, sibling] : [sibling];
     expect(models.map((id) => isProfileInCooldown(store, codexId, now, id))).toEqual(checks);
   });
 
@@ -310,17 +273,10 @@ describe("markAuthProfileBlockedUntil", () => {
 
 it("does not persist unverifiable failures for API-key profiles", async () => {
   const store = makeStore(undefined);
-  store.profiles["azure-foundry:default"] = createApiKeyCredential(
-    "azure-foundry",
-    "azure-foundry-test-key",
-  );
+  store.profiles["azure-foundry:default"] = createApiKeyCredential("azure-foundry", "test-key");
 
   for (const profileId of ["azure-foundry:default", "openai:api-key"]) {
-    await markAuthProfileFailure({
-      store,
-      profileId,
-      reason: "no_error_details",
-    });
+    await markAuthProfileFailure({ store, profileId, reason: "no_error_details" });
   }
 
   expect(store.usageStats).toBeUndefined();
@@ -335,11 +291,7 @@ it("drops bookkeeping without an unlocked full-store save", async () => {
   usageMocks.record.mockResolvedValueOnce(null);
   setLoggerOverride({ level: "silent", consoleLevel: "warn" });
   try {
-    await markAuthProfileFailure({
-      store,
-      profileId: anthropicId,
-      reason: "rate_limit",
-    });
+    await markAuthProfileFailure({ store, profileId: anthropicId, reason: "rate_limit" });
     expect(store.usageStats).toBeUndefined();
     expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
     expect(
@@ -364,23 +316,24 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
   }
 
   async function markCodexFailureAt({
-    store,
-    now,
+    store = makeStore({}),
     reason = "rate_limit",
     modelId,
     mockLock = true,
   }: {
-    store: AuthProfileStore;
-    now: number;
+    store?: AuthProfileStore;
     reason?: "auth" | "rate_limit" | "no_error_details" | "unknown";
     modelId?: string;
     mockLock?: boolean;
-  }) {
+  } = {}) {
     storeMocks.loadAuthProfileStoreWithoutExternalProfilesAsync.mockResolvedValue(store);
     if (mockLock) {
       mockLockedUpdateForStore(store);
     }
-    await atTime(now, () => markAuthProfileFailure({ store, profileId: codexId, reason, modelId }));
+    await atTime(testNow, () =>
+      markAuthProfileFailure({ store, profileId: codexId, reason, modelId }),
+    );
+    return store;
   }
 
   it.each([true, false])(
@@ -398,14 +351,10 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
         return resolvedCredential(refreshed, codexId);
       });
       mockLockedUpdatesForStore(store);
-      mockWhamResponse(200, {
-        rate_limit: available
-          ? { limit_reached: false }
-          : {
-              limit_reached: true,
-              primary_window: { used_percent: 100, reset_after_seconds: 3600 },
-            },
-      });
+      mockWhamResponse(
+        200,
+        available ? whamResponse(false) : whamResponse(true, whamWindow(100, 3600)),
+      );
       const params = {
         store,
         profileIds: [codexId],
@@ -630,9 +579,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     });
     mockWhamResponse(200, whamResponse(true, whamWindow(100, 3_600)));
     mockLockedUpdatesForStore(store);
-    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
-
-    try {
+    await atTime(now, async () => {
       await maybeReprobeWhamBlockedProfiles({
         store,
         profileIds: [codexId],
@@ -642,93 +589,79 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
       await vi.waitFor(() => {
         expect(store.usageStats?.[codexId]?.blockedUntil).toBe(now + 3_600_000);
       });
-    } finally {
-      dateNowSpy.mockRestore();
-    }
+    });
     expect(store.usageStats?.[codexId]?.lastProbeAt).toBe(now);
     expect(store.usageStats?.[codexId]?.blockedModel).toBe("gpt-5.5");
     expect(store.usageStats?.[codexId]?.blockedScope).toBe("model");
   });
 
+  const available = whamResponse(false, whamWindow(45, 9_000));
   it.each([
-    {
-      label: "burst contention without an active cooldown",
-      fresh: true,
-      response: whamResponse(false, whamWindow(45, 9_000)),
-      expectedMs: 15_000,
-    },
-    {
-      label: "burst contention with an active cooldown",
-      response: whamResponse(false, whamWindow(45, 9_000)),
-      expectedMs: 6 * 60 * 60 * 1000,
-    },
-    {
-      label: "team rolling window",
-      response: whamResponse(true, whamWindow(100, 7_200), whamWindow(85, 201_600)),
-      expectedMs: 7_200_000,
-      exactBlocked: true,
-    },
-    {
-      label: "team weekly window",
-      response: whamResponse(true, whamWindow(90, 7_200), whamWindow(100, 28_800)),
-      expectedMs: 28_800_000,
-      exactBlocked: true,
-    },
-  ])(
-    "maps $label to the expected cooldown",
-    async ({ response, expectedMs, exactBlocked, fresh }) => {
-      const now = testNow;
-      const store = makeStore(
-        fresh
-          ? undefined
-          : {
-              [codexId]: {
-                cooldownUntil: now + 6 * 60 * 60 * 1000,
-                cooldownReason: "rate_limit",
-                errorCount: 12,
-                failureCounts: { rate_limit: 12 },
-                lastFailureAt: now - 1_000,
-              },
+    ["fresh burst", available, 15_000, "fresh"],
+    ["active burst", available, 6 * 3_600_000, "cooldown"],
+    [
+      "team rolling",
+      whamResponse(true, whamWindow(100, 7_200), whamWindow(85, 201_600)),
+      7_200_000,
+      "blocked",
+    ],
+    [
+      "team weekly",
+      whamResponse(true, whamWindow(90, 7_200), whamWindow(100, 28_800)),
+      28_800_000,
+      "blocked",
+    ],
+  ] as const)("maps %s to the expected cooldown", async (_name, response, expectedMs, state) => {
+    const now = testNow;
+    const store = makeStore(
+      state === "fresh"
+        ? undefined
+        : {
+            [codexId]: {
+              cooldownUntil: now + 6 * 60 * 60 * 1000,
+              cooldownReason: "rate_limit",
+              errorCount: 12,
+              failureCounts: { rate_limit: 12 },
+              lastFailureAt: now - 1_000,
             },
-      );
-      mockWhamResponse(200, response);
-
-      await markCodexFailureAt({ store, now });
-
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(fetchMock.mock.calls[0]).toMatchObject([
-        "https://chatgpt.com/backend-api/wham/usage",
-        {
-          method: "GET",
-          headers: {
-            Authorization: "Bearer codex-access-token",
-            "ChatGPT-Account-Id": "acct_test_123",
-            originator: "openclaw",
-            "User-Agent": expect.stringMatching(/^openclaw\//),
           },
+    );
+    mockWhamResponse(200, response);
+
+    await markCodexFailureAt({ store });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]).toMatchObject([
+      "https://chatgpt.com/backend-api/wham/usage",
+      {
+        method: "GET",
+        headers: {
+          Authorization: "Bearer codex-access-token",
+          "ChatGPT-Account-Id": "acct_test_123",
+          originator: "openclaw",
+          "User-Agent": expect.stringMatching(/^openclaw\//),
         },
-      ]);
-      const stats = store.usageStats?.[codexId];
-      expect(stats?.lastProbeAt).toBe(now);
-      if (exactBlocked) {
-        expect(stats?.blockedUntil).toBe(now + expectedMs);
-        expect(stats?.blockedReason).toBe("subscription_limit");
-        expect(stats?.cooldownUntil).toBeUndefined();
-      } else {
-        expect(stats?.cooldownUntil).toBe(now + expectedMs);
-      }
-    },
-  );
+      },
+    ]);
+    const stats = store.usageStats?.[codexId];
+    expect(stats?.lastProbeAt).toBe(now);
+    if (state === "blocked") {
+      expect(stats?.blockedUntil).toBe(now + expectedMs);
+      expect(stats?.blockedReason).toBe("subscription_limit");
+      expect(stats?.cooldownUntil).toBeUndefined();
+    } else {
+      expect(stats?.cooldownUntil).toBe(now + expectedMs);
+    }
+  });
 
   it("does not apply a stale WHAM result after the profile changes", async () => {
-    const now = testNow;
     const store = makeStore(undefined);
     mockWhamResponse(200, whamResponse(false, whamWindow(45, 9_000)));
     const freshStore = structuredClone(store);
     freshStore.profiles[codexId] = createApiKeyCredential("openai", "rotated-api-key");
     usageMocks.readFresh.mockReturnValueOnce(store).mockReturnValue(freshStore);
 
-    await markCodexFailureAt({ store, now, reason: "no_error_details", mockLock: false });
+    await markCodexFailureAt({ store, reason: "no_error_details", mockLock: false });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(store.usageStats).toBeUndefined();
@@ -742,9 +675,8 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     "persists WHAM HTTP %s auth classification and fallback reason",
     async (status, hours, reason, classification) => {
       const now = testNow;
-      const store = makeStore({});
       mockWhamResponse(status);
-      await markCodexFailureAt({ store, now, modelId: "gpt-5.6-luna" });
+      const store = await markCodexFailureAt({ modelId: "gpt-5.6-luna" });
       expect(store.usageStats?.[codexId]).toMatchObject({
         cooldownUntil: now + hours * 3_600_000,
         cooldownReason: reason,
@@ -764,7 +696,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
       profile.authFlow = authFlow;
       mockWhamResponse(401);
 
-      await markCodexFailureAt({ store, now });
+      await markCodexFailureAt({ store });
       expect(fetchMock).not.toHaveBeenCalled();
       expect(store.usageStats?.[codexId]?.cooldownUntil).toBe(now + 30_000);
 
@@ -786,7 +718,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     profile.expires = now - 1;
     mockWhamResponse(401);
 
-    await markCodexFailureAt({ store, now });
+    await markCodexFailureAt({ store });
 
     expect(fetchMock).not.toHaveBeenCalled();
     const stats = store.usageStats?.[codexId];
@@ -797,12 +729,11 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
 
   it("cancels WHAM HTTP error response bodies", async () => {
     const now = testNow;
-    const store = makeStore({});
     const response = new Response("server busy", { status: 500 });
     const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
     fetchMock.mockResolvedValueOnce(response);
 
-    await markCodexFailureAt({ store, now });
+    const store = await markCodexFailureAt();
 
     expect(cancel).toHaveBeenCalledOnce();
     expect(store.usageStats?.[codexId]?.cooldownUntil).toBe(now + 30_000);
@@ -810,10 +741,8 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
 
   it("falls back to a 30s cooldown when the WHAM probe fails", async () => {
     const now = testNow;
-    const store = makeStore({});
     fetchMock.mockRejectedValueOnce(new Error("network unavailable"));
-
-    await markCodexFailureAt({ store, now, reason: "unknown" });
+    const store = await markCodexFailureAt({ reason: "unknown" });
 
     expect(store.usageStats?.[codexId]?.cooldownUntil).toBe(now + 30_000);
   });
@@ -831,7 +760,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
       },
     });
 
-    await markCodexFailureAt({ store, now });
+    await markCodexFailureAt({ store });
 
     const stats = store.usageStats?.[codexId];
     expect(stats?.blockedUntil).toBeUndefined();
@@ -841,98 +770,74 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
 });
 
 describe("markAuthProfileFailure — per-model cooldown metadata", () => {
-  type FailureReason = Parameters<typeof markAuthProfileFailure>[0]["reason"];
-
   const now = 1_000_000;
-  const activeStats = (
-    reason: FailureReason,
-    modelId: string,
-  ): NonNullable<AuthProfileStore["usageStats"]>[string] => ({
+  const sonnet = "claude-sonnet-4.6";
+  const activeStats = (reason: FailureReason): ProfileUsageStats => ({
     cooldownUntil: now + 30_000,
     cooldownReason: reason,
-    cooldownModel: modelId,
+    cooldownModel: sonnet,
     errorCount: 1,
     lastFailureAt: now - 1_000,
   });
-  type ModelCase = [
-    name: string,
-    initialStats: ProfileUsageStats,
-    reason: FailureReason,
-    modelId: string,
-    expectedModel: string | undefined,
-    options?: {
-      expectedUntil?: number;
-      availability?: Array<{ modelId: string; expected: boolean }>;
-      useFakeTime?: boolean;
+  type ModelCase = {
+    name: string;
+    reason: FailureReason;
+    before?: ProfileUsageStats;
+    modelId?: string;
+    expectedModel?: string | null;
+    until?: number;
+    checkSibling?: boolean;
+    realTime?: boolean;
+  };
+  const cases: ModelCase[] = [
+    { name: "first rate limit", reason: "rate_limit" },
+    {
+      name: "same-model not-found retry",
+      reason: "model_not_found",
+      before: activeStats("model_not_found"),
+      until: now + 30_000,
+    },
+    {
+      name: "not-found keeps sibling available (#116464)",
+      reason: "model_not_found",
+      checkSibling: true,
+    },
+    {
+      name: "different model widens",
+      reason: "rate_limit",
+      before: activeStats("rate_limit"),
+      modelId: "gpt-4.1",
+      expectedModel: null,
+    },
+    {
+      name: "auth supersedes rate limit",
+      reason: "auth",
+      before: activeStats("rate_limit"),
+      modelId: "claude-opus-4.6",
+      expectedModel: null,
+      realTime: true,
     },
   ];
-  const sonnet = "claude-sonnet-4.6";
-  const cases: ModelCase[] = [
-    ["records model on first rate_limit", {}, "rate_limit", sonnet, sonnet],
-    [
-      "preserves model on repeated model_not_found",
-      activeStats("model_not_found", sonnet),
-      "model_not_found",
-      sonnet,
-      sonnet,
-      { expectedUntil: now + 30_000 },
-    ],
-    [
-      "keeps healthy sibling after model_not_found (#116464)",
-      {},
-      "model_not_found",
-      sonnet,
-      sonnet,
-      {
-        availability: [
-          { modelId: sonnet, expected: true },
-          { modelId: "gpt-4.1", expected: false },
-        ],
-      },
-    ],
-    [
-      "widens model scope when a different model fails",
-      activeStats("rate_limit", sonnet),
-      "rate_limit",
-      "gpt-4.1",
-      undefined,
-    ],
-    [
-      "auth failure supersedes active rate_limit",
-      activeStats("rate_limit", sonnet),
-      "auth",
-      "claude-opus-4.6",
-      undefined,
-      { useFakeTime: false },
-    ],
-  ];
 
-  it.each(cases)("%s", async (name, initialStats, reason, modelId, expectedModel, options = {}) => {
-    const store = makeStore({ [copilotId]: structuredClone(initialStats) });
+  it.each(cases)("$name", async (row) => {
+    const modelId = row.modelId ?? sonnet;
+    const store = makeStore({ [copilotId]: structuredClone(row.before ?? {}) });
     store.profiles[copilotId] = createApiKeyCredential("github-copilot", "ghu_test");
-    if (options.useFakeTime !== false) {
+    if (!row.realTime) {
       vi.useFakeTimers();
       vi.setSystemTime(now);
     }
     mockLockedUpdateForStore(store);
-    try {
-      await markAuthProfileFailure({ store, profileId: copilotId, reason, modelId });
-    } finally {
-      if (options.useFakeTime !== false) {
-        vi.useRealTimers();
-      }
-    }
-    const stats = store.usageStats?.[copilotId];
-    expect(stats?.cooldownReason, name).toBe(reason);
-    expect(stats?.cooldownModel, name).toBe(expectedModel);
-    if (options.expectedUntil !== undefined) {
-      expect(stats?.cooldownUntil).toBe(options.expectedUntil);
-    }
-    for (const availability of options.availability ?? []) {
+    await markAuthProfileFailure({ store, profileId: copilotId, reason: row.reason, modelId });
+    expect(store.usageStats?.[copilotId]).toMatchObject({
+      cooldownReason: row.reason,
+      cooldownModel: row.expectedModel === null ? undefined : (row.expectedModel ?? sonnet),
+      ...(row.until !== undefined ? { cooldownUntil: row.until } : {}),
+    });
+    if (row.checkSibling) {
       expect(
-        isProfileInCooldown(store, copilotId, now, availability.modelId),
-        `${name}: ${availability.modelId}`,
-      ).toBe(availability.expected);
+        [sonnet, "gpt-4.1"].map((id) => isProfileInCooldown(store, copilotId, now, id)),
+      ).toEqual([true, false]);
     }
   });
 });
