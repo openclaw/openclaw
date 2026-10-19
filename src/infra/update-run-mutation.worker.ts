@@ -47,8 +47,9 @@ export function withUpdateRunWriteAdmission<T>(
       facts: undefined,
       ...(stage === "commit" ? { deadlineMs: SQLITE_WORKER_ADMISSION_DEADLINE_MS } : {}),
     });
-  // Required update evidence retains its retry policy; each attempt obtains fresh admission.
-  return retrySqliteWorkerAdmission(() => operation(assertCurrent), { maxAttempts: Infinity });
+  // A slow host policy snapshot can exceed every commit grant. Repeating it
+  // forever rewrites the same database without ever recording progress.
+  return retrySqliteWorkerAdmission(() => operation(assertCurrent), { maxAttempts: 3 });
 }
 
 export function recordUpdateRunMutationInWorker(
