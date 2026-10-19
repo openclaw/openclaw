@@ -24,7 +24,7 @@ import { watchAgentScope } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
-import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner, projectMutableSource } from "../../lib/reactive/projection.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccessRequest,
@@ -1530,16 +1530,8 @@ export function createSessionsPage(
     openSessionMenu,
     archive: archiveActions.archive,
   };
-  const projection = projectSource(application, {
-    read: () => state,
-    subscribe: (_source, notify) => {
-      publish = notify;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const projection = projectMutableSource(application, () => state);
+  publish = projection.publish;
   const presentationSources = [
     application.agentIdentity,
     application.navigation,

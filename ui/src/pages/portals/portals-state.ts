@@ -13,7 +13,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { probePortalReachable, type PortalReachability } from "./portal-reachability.ts";
 
 export type PortalsPresentation = {
@@ -98,16 +98,8 @@ export function createPortals(
   const lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
   let client = context.gateway.snapshot.client;
   let presentationScope = gatewayPresentationScope(context.gateway);
-  const projection = projectSource(state, {
-    read: (value) => value,
-    subscribe: (_value, listener) => {
-      publish = listener;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const projection = projectMutableSource(state, (value) => value);
+  publish = projection.publish;
   // Connection receipts retire portal requests, probes, and presentation acknowledgements before reconnect.
   const stopGateway = context.gateway.subscribe((value) => {
     const nextPresentationScope = gatewayPresentationScope(context.gateway);

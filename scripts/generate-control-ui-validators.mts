@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { format } from "oxfmt";
 import { ObjectOptions, Type, type TSchema } from "typebox";
-import { Build } from "typebox/schema";
+import { Build, Intern } from "typebox/schema";
 import { AgentRuntimeRestrictionErrorDetailsSchema } from "../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
 import {
   SessionApprovalEventSchema,
@@ -65,6 +65,7 @@ const additionalLintRules: Partial<Record<Group, string[]>> = {
     "eslint/prefer-object-has-own",
     "unicorn/no-instanceof-builtins",
     "unicorn/no-array-sort",
+    "unicorn/no-useless-length-check",
     "typescript/prefer-for-of",
     "typescript/no-unnecessary-type-conversion",
     "typescript/prefer-includes",
@@ -253,7 +254,10 @@ async function main() {
     "sender-identity",
   ] as const) {
     const selected = validators.filter((entry) => entry[3] === group);
-    const compiled = selected.map(([name, schema]) => compile(name, schema)).join("\n");
+    // Approval unions repeat presentations; scalar-heavy validators stay inlined.
+    const compiled = selected
+      .map(([name, schema]) => compile(name, group === "approvals" ? Intern(schema) : schema))
+      .join("\n");
     // Import the compiler's exact helpers by name so one scalar check does not bundle every guard.
     const source = [
       ...(compiled.includes("Guard.")

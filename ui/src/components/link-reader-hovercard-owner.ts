@@ -100,6 +100,7 @@ export class HovercardOwner {
     }
     this.stopGateway?.();
     this.stopConfig?.();
+    // Retire connection-bound reads before a replacement client can publish.
     this.stopGateway = this.host.pagePreviewContext?.gateway.subscribe(() => {
       this.retirePage();
       const page = this.page;
@@ -126,6 +127,7 @@ export class HovercardOwner {
       this.retirePage();
       this.update();
     };
+    // Fetch-policy changes retire cached previews and in-flight reads synchronously.
     this.stopConfig = this.host.pagePreviewContext?.config.subscribe(syncConfig);
     syncConfig();
   }

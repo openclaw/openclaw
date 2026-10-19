@@ -473,9 +473,6 @@ export async function createUpdateDatabaseBackup({
         paths: await discoverBackupDatabasePaths({ ...input, agentRegistry: [] }),
         pluginOwners: undefined,
       };
-  const postgresPaths = prepared.paths.filter(
-    (file) => readBackupEngine(file).engine === "postgres",
-  );
   const additionalPaths = [...(input.additionalPaths ?? []), ...prepared.paths].map((file) =>
     path.resolve(file),
   );
@@ -508,6 +505,11 @@ export async function createUpdateDatabaseBackup({
         acquisition?.mode === "maintenance-owner" &&
         maintenanceOwnerHasSourceCustody(scope, shared) &&
         !openClawStateDatabaseCache.isOpenClawStateDatabaseOpen(shared);
+      // Only maintenance admission consumes this classification. Other callers
+      // let the backup worker inspect engines without another full source image.
+      const postgresPaths = custody
+        ? prepared.paths.filter((file) => readBackupEngine(file).engine === "postgres")
+        : [];
       const inspectionPlan =
         custody && maintenanceOwnerMayCopySourcesInProcess(scope, shared)
           ? await discoverUpdateStateSchemaInspectionInProcess({
