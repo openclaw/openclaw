@@ -86,6 +86,7 @@ function discoveryContext(request: ReturnType<typeof vi.fn>, scopes = ["operator
 function mountCatalog(context: unknown, initial: Parameters<typeof McpAppCatalog>[0] = {}) {
   const [props, setProps] = createSignal(initial);
   // SAFETY: Fixtures supply precisely the capabilities exercised by these catalog flows.
+  const application = context as ApplicationContext;
   const mounted = mountSolid(
     () =>
       createComponent(McpAppCatalog, {
@@ -102,10 +103,11 @@ function mountCatalog(context: unknown, initial: Parameters<typeof McpAppCatalog
           return props().filePath;
         },
       }),
-    { wrapper: createSolidApplicationContextProvider(context as ApplicationContext).wrapper },
+    { wrapper: createSolidApplicationContextProvider(application).wrapper },
   );
   return {
     ...mounted,
+    application,
     element: mounted.container.querySelector<HTMLElement>("openclaw-mcp-app-catalog")!,
     update(next: Partial<Parameters<typeof McpAppCatalog>[0]>) {
       setProps((current) => ({ ...current, ...next }));
@@ -404,8 +406,7 @@ describe("app launch catalog", () => {
     const resources = document.createElement("openclaw-mcp-app-resources");
     resources.sessionKey = "agent:main:one";
     resources.agentId = "main";
-    // SAFETY: The unchanged native resources host uses the same discovery capabilities.
-    const provider = createApplicationContextProvider(context as ApplicationContext);
+    const provider = createApplicationContextProvider(sidebarMount.application);
     provider.append(resources);
     document.body.append(provider);
     await resources.updateComplete;
