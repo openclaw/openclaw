@@ -3,7 +3,7 @@ import { createOverlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { t } from "../../i18n/index.ts";
 import * as attachmentInputs from "../chat/components/chat-attachment-inputs.tsx";
-import type { ChatDetailPanel } from "../chat/components/chat-detail-panel.tsx";
+import type { ChatDetailPanel } from "../chat/components/chat-sidebar-content-types.ts";
 import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
