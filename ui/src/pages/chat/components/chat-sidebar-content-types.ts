@@ -12,6 +12,9 @@ import type {
   ArtifactDownloadResolver,
 } from "./chat-message-media.ts";
 
+/** Destination selected by the content owner; void keeps an existing reader in place. */
+export type SidebarOpenResult = "detail" | "workspace" | void;
+
 export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
 
 export type SessionWorkspaceTreeState = {
