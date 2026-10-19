@@ -245,6 +245,32 @@ openclaw-chat-details-progress {
   gap: 8px;
   margin-top: 4px;
 }
+.chat-details__change-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: end;
+  align-items: center;
+  gap: 3px 7px;
+  color: var(--muted);
+}
+.chat-details__change-summary > span {
+  white-space: nowrap;
+}
+.chat-details__change-files,
+.chat-details__change-status {
+  color: var(--muted);
+}
+.chat-details__change-lines {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.chat-details__change-lines--add {
+  color: var(--ok);
+}
+.chat-details__change-lines--del {
+  color: var(--danger);
+}
 .chat-details__meta-actions > button,
 .chat-details__participants > summary {
   width: auto;
@@ -615,8 +641,17 @@ button.chat-details__process:is(:hover, :focus-visible) {
 .chat-details__changes .chat-details__caption {
   padding-inline-end: 92px;
 }
+.chat-details__changes--summary .chat-details__caption {
+  min-height: 56px;
+  padding-inline-end: 185px;
+}
 .chat-details__all-changes {
   position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: end;
+  gap: 4px;
+  max-width: calc(100% - 100px);
   inset-block-start: 10px;
   inset-inline-end: 4px;
   min-height: 28px;

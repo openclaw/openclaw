@@ -160,6 +160,7 @@ export const healthHandlers: GatewayRequestHandlers = {
         pid: process.pid,
         shutdownBudget: shutdownStatus,
         childRuntime: readChildRuntimeViability(),
+        pluginReload: context.getPluginReloadStatus?.(),
       },
       undefined,
     );

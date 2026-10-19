@@ -1,9 +1,10 @@
-import { For, createEffect, createMemo, createSignal } from "solid-js";
+import { For, createMemo, createSignal } from "solid-js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { collectSessionDescendantRows } from "../../../components/app-sidebar-session-parent.ts";
 import { formatWebUiIconErrorText } from "../../../components/error-presentation.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createInterval } from "../../../lib/reactive/timers.ts";
 import { sessionRowAttention } from "../../../lib/session-attention.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
@@ -39,22 +40,17 @@ export const ChatChildAttention = defineSolidBridge<Props>(
         return attention.kind === "none" ? [] : [{ row, attention }];
       });
     });
-    createEffect(rows, (current) => {
-      const expiry = Math.min(
-        ...current.flatMap(({ row, attention }) =>
-          attention.kind === "agent" && row.agentStatus ? [row.agentStatus.expiresAt] : [],
-        ),
-      );
-      if (!Number.isFinite(expiry)) {
-        return undefined;
-      }
-      // Canonical rows own clearing; this one-shot only repaints at their next TTL.
-      const timer = setTimeout(
-        () => setClock((value) => value + 1),
-        Math.max(0, expiry - Date.now() + 1),
-      );
-      return () => clearTimeout(timer);
-    });
+    createInterval(
+      () => setClock((value) => value + 1),
+      () => {
+        const expiry = Math.min(
+          ...rows().flatMap(({ row, attention }) =>
+            attention.kind === "agent" && row.agentStatus ? [row.agentStatus.expiresAt] : [],
+          ),
+        );
+        return Number.isFinite(expiry) ? Math.max(0, expiry - Date.now() + 1) : undefined;
+      },
+    );
     return (
       <For each={rows()} keyed={(item) => item.row.key}>
         {(item) => {

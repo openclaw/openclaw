@@ -1,5 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { createEffect, createMemo, createSignal, onSettled } from "solid-js";
+import { createMemo, createSignal, onSettled } from "solid-js";
 import {
   DEFAULT_BACKGROUND_PREFERENCE,
   USER_BACKGROUND_MAX_INPUT_BYTES,
@@ -56,7 +56,7 @@ async function readFileBase64(file: File): Promise<string> {
 }
 
 export function createAppearanceBackground(
-  currentContext: () => ApplicationContext | undefined,
+  application: ApplicationContext,
   host: () => HTMLElement,
   previewCanvas: () => SessionBackground,
   fileInput: () => HTMLInputElement | undefined,
@@ -66,9 +66,7 @@ export function createAppearanceBackground(
   const publish = () => setRevision((value) => value + 1);
   const [message, setMessage] = createSignal<BackgroundViewProps["message"]>(null);
 
-  let application: ApplicationContext | undefined;
   let connected = false;
-  const subscriptions: Array<() => void> = [];
   let imageUrl: string | null = null;
   let metadata:
     | (BackgroundScope & {
@@ -86,78 +84,6 @@ export function createAppearanceBackground(
     revision();
     return canvasPreview() ? readPreference() : undefined;
   };
-
-  function synchronizeContext(nextContext: ApplicationContext | undefined) {
-    if (!connected || application === nextContext) {
-      return;
-    }
-    subscriptions.splice(0).forEach((stop) => stop());
-    dismissCanvasPreview();
-    retireMutation();
-    releasePreview();
-    metadataAbort?.abort();
-    metadata = null;
-    metadataKey = [];
-    application = nextContext;
-    if (!nextContext) {
-      publish();
-      return;
-    }
-    subscriptions.push(
-      // Revoke an active preview immediately when its selected background changes.
-      nextContext.theme.subscribe(() => {
-        retireChangedCanvasPreview();
-        refreshPreview();
-        publish();
-      }),
-      // Connection receipts retire upload and image-preview authority synchronously.
-      nextContext.gateway.subscribe(() => {
-        if ((mutationScope && !owns(mutationScope)) || (metadata && !owns(metadata))) {
-          retireMutation();
-        }
-        retireChangedPreview();
-        retireChangedCanvasPreview();
-        refreshPreview();
-        publish();
-      }),
-      nextContext.gateway.subscribeEvents((event) => {
-        if (
-          event.event !== "users.prefs.changed" ||
-          !isConnected() ||
-          application?.gateway !== nextContext.gateway ||
-          !captureScope()
-        ) {
-          return;
-        }
-        const keys = asNullableRecord(event.payload)?.keys;
-        if (Array.isArray(keys) && !keys.includes(USER_BACKGROUND_PREFERENCE_KEY)) {
-          return;
-        }
-        metadataRevision += 1;
-        releasePreview();
-        refreshPreview();
-        publish();
-      }),
-      subscribeServerUiPrefWrites(publish),
-      nextContext.router.subscribe(dismissCanvasPreview), // Retire the canvas before route rendering.
-    );
-    const ownerWindow = host().ownerDocument.defaultView ?? window;
-    const document = host().ownerDocument;
-    subscriptions.push(
-      listen(ownerWindow, "blur", dismissCanvasPreview),
-      listen(ownerWindow, "resize", dismissCanvasPreview),
-      listen(document, "keydown", { handleEvent: onPreviewEscape }, true),
-      listen(document, "visibilitychange", () => {
-        if (document.visibilityState === "hidden") {
-          dismissCanvasPreview();
-        }
-      }),
-      listen(document, "pointerup", { handleEvent: endCanvasPreview }, true),
-      listen(document, "pointercancel", dismissCanvasPreview, true),
-    );
-    refreshPreview();
-    publish();
-  }
 
   async function readMetadata() {
     metadataAbort?.abort();
@@ -194,7 +120,6 @@ export function createAppearanceBackground(
   let previewSuppressedUntilPointerUp = false;
   let previewOwner: {
     canvas: HTMLElement;
-    context: ApplicationContext;
     client: GatewayBrowserClient | null;
     phase: ApplicationContext["gateway"]["snapshot"]["phase"];
     profileId: string | undefined;
@@ -204,8 +129,8 @@ export function createAppearanceBackground(
   let mutationScope: BackgroundScope | null = null;
   let imagePreview: { identity: string; controller: AbortController } | null = null;
   function captureScope(): BackgroundScope | null {
-    const snapshot = application?.gateway.snapshot;
-    return snapshot?.phase === "connected" && snapshot.client && snapshot.selfUser?.id
+    const snapshot = application.gateway.snapshot;
+    return snapshot.phase === "connected" && snapshot.client && snapshot.selfUser?.id
       ? { client: snapshot.client, profileId: snapshot.selfUser.id }
       : null;
   }
@@ -223,22 +148,20 @@ export function createAppearanceBackground(
   }
 
   function readPreference(): BackgroundPreference {
-    return application?.theme.settings.background ?? DEFAULT_BACKGROUND_PREFERENCE;
+    return application.theme.settings.background ?? DEFAULT_BACKGROUND_PREFERENCE;
   }
 
   function readWriteStatus() {
     return resolveServerUiPrefWriteStatus(
       "background",
-      application?.gateway.connection.gatewayUrl ?? "",
+      application.gateway.connection.gatewayUrl,
       captureScope()?.profileId,
     );
   }
 
   function canUpload(): boolean {
     return Boolean(
-      captureScope() &&
-      application &&
-      canSyncAppearancePreference(application, "background") === true,
+      captureScope() && canSyncAppearancePreference(application, "background") === true,
     );
   }
 
@@ -254,8 +177,7 @@ export function createAppearanceBackground(
 
   function retireChangedPreview() {
     const assetId = readSnapshot()?.asset?.assetId;
-    const identity =
-      application && assetId ? backgroundImageReadIdentity(application, assetId) : null;
+    const identity = assetId ? backgroundImageReadIdentity(application, assetId) : null;
     if (imagePreview && imagePreview.identity !== identity) {
       releasePreview();
     }
@@ -284,8 +206,8 @@ export function createAppearanceBackground(
     retireChangedPreview();
     const context = application;
     const assetId = readSnapshot()?.asset?.assetId;
-    const identity = context && assetId ? backgroundImageReadIdentity(context, assetId) : null;
-    if (!context || !assetId || !identity || imagePreview) {
+    const identity = assetId ? backgroundImageReadIdentity(context, assetId) : null;
+    if (!assetId || !identity || imagePreview) {
       return;
     }
     const preview = { identity, controller: new AbortController() };
@@ -321,11 +243,10 @@ export function createAppearanceBackground(
     const context = application;
     if (
       owner &&
-      (owner.context !== context ||
-        owner.client !== context?.gateway.snapshot.client ||
-        owner.phase !== context?.gateway.snapshot.phase ||
-        owner.profileId !== context?.gateway.snapshot.selfUser?.id ||
-        owner.gatewayUrl !== context?.gateway.connection.gatewayUrl ||
+      (owner.client !== context.gateway.snapshot.client ||
+        owner.phase !== context.gateway.snapshot.phase ||
+        owner.profileId !== context.gateway.snapshot.selfUser?.id ||
+        owner.gatewayUrl !== context.gateway.connection.gatewayUrl ||
         readPreference().source.kind === "none")
     ) {
       dismissCanvasPreview();
@@ -361,7 +282,6 @@ export function createAppearanceBackground(
     const context = application;
     if (
       !isConnected() ||
-      !context ||
       busy() ||
       previewSuppressedUntilPointerUp ||
       readPreference().source.kind === "none"
@@ -392,7 +312,6 @@ export function createAppearanceBackground(
     clearPreviewTimer();
     previewOwner = {
       canvas,
-      context,
       client: context.gateway.snapshot.client,
       phase: context.gateway.snapshot.phase,
       profileId: context.gateway.snapshot.selfUser?.id,
@@ -458,7 +377,7 @@ export function createAppearanceBackground(
   };
 
   function change(patch: Partial<BackgroundPreference>) {
-    if (!application || busy()) {
+    if (busy()) {
       return;
     }
     patchSettings({ background: { ...readPreference(), ...patch } });
@@ -475,7 +394,7 @@ export function createAppearanceBackground(
         change(
           selectBackgroundSource(
             { kind, assetId: asset.assetId },
-            application?.theme.settings.background,
+            application.theme.settings.background,
           ),
         );
       } else {
@@ -483,7 +402,7 @@ export function createAppearanceBackground(
       }
       return;
     }
-    change(selectBackgroundSource({ kind }, application?.theme.settings.background));
+    change(selectBackgroundSource({ kind }, application.theme.settings.background));
   }
 
   async function mutate(file?: File) {
@@ -549,13 +468,13 @@ export function createAppearanceBackground(
       adoptCommittedBackgroundPreference({
         client: scope.client,
         profileId: scope.profileId,
-        scope: application?.gateway.connection.gatewayUrl,
+        scope: application.gateway.connection.gatewayUrl,
         preference: result.preference,
         expectedPreference: current.preference,
         isCurrent,
       });
       metadata = { ...scope, revision: metadataRevision, snapshot: result };
-      application?.theme.refresh();
+      application.theme.refresh();
       setMessage({
         kind: "status",
         text: t(
@@ -617,7 +536,7 @@ export function createAppearanceBackground(
           ? () => {
               retryServerUiPrefWrite(
                 "background",
-                application!.gateway.connection.gatewayUrl,
+                application.gateway.connection.gatewayUrl,
                 scope?.profileId,
               );
               publish();
@@ -625,14 +544,58 @@ export function createAppearanceBackground(
           : undefined,
     };
   }
-  // Replace subscriptions and requests when the application owner changes.
-  createEffect(currentContext, (context) => synchronizeContext(context));
   onSettled(() => {
     connected = true;
-    synchronizeContext(currentContext());
+    const ownerWindow = host().ownerDocument.defaultView ?? window;
+    const document = host().ownerDocument;
+    const subscriptions = [
+      // Revoke an active preview immediately when its selected background changes.
+      application.theme.subscribe(() => {
+        retireChangedCanvasPreview();
+        refreshPreview();
+        publish();
+      }),
+      // Connection receipts retire upload and image-preview authority synchronously.
+      application.gateway.subscribe(() => {
+        if ((mutationScope && !owns(mutationScope)) || (metadata && !owns(metadata))) {
+          retireMutation();
+        }
+        retireChangedPreview();
+        retireChangedCanvasPreview();
+        refreshPreview();
+        publish();
+      }),
+      application.gateway.subscribeEvents((event) => {
+        if (event.event !== "users.prefs.changed" || !isConnected() || !captureScope()) {
+          return;
+        }
+        const keys = asNullableRecord(event.payload)?.keys;
+        if (Array.isArray(keys) && !keys.includes(USER_BACKGROUND_PREFERENCE_KEY)) {
+          return;
+        }
+        metadataRevision += 1;
+        releasePreview();
+        refreshPreview();
+        publish();
+      }),
+      subscribeServerUiPrefWrites(publish),
+      application.router.subscribe(dismissCanvasPreview), // Retire the canvas before route rendering.
+      listen(ownerWindow, "blur", dismissCanvasPreview),
+      listen(ownerWindow, "resize", dismissCanvasPreview),
+      listen(document, "keydown", { handleEvent: onPreviewEscape }, true),
+      listen(document, "visibilitychange", () => {
+        if (document.visibilityState === "hidden") {
+          dismissCanvasPreview();
+        }
+      }),
+      listen(document, "pointerup", { handleEvent: endCanvasPreview }, true),
+      listen(document, "pointercancel", dismissCanvasPreview, true),
+    ];
+    refreshPreview();
+    publish();
     return () => {
       connected = false;
-      for (const stop of subscriptions.splice(0)) {
+      for (const stop of subscriptions) {
         stop();
       }
       metadataAbort?.abort();

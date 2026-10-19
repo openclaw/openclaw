@@ -84,9 +84,33 @@ afterEach(async () => {
     unmountWidget(host);
   }
   document.body.replaceChildren();
+  delete document.documentElement.dataset.themeMode;
 });
 
 describe("widget-card", () => {
+  it("keeps theme delivery attached to a retained mounted frame", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    mountWidget(
+      { ...canvasPreview, url: "https://example.test/theme-widget", sandbox: "scripts" },
+      { allowExternalEmbedUrls: true },
+      host,
+    );
+    const frame = host.querySelector("iframe")!;
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    frame.dispatchEvent(new Event("load"));
+    frame.className = "";
+    post.mockClear();
+
+    document.documentElement.dataset.themeMode = "light";
+    await Promise.resolve();
+    expect(host.querySelector("iframe")).toBe(frame);
+    expect(post).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "openclaw:widget-theme", mode: "light" }),
+      "*",
+    );
+  });
+
   it("keeps initialized frames stable through capability and transport generations", () => {
     const firstPreview = {
       ...canvasPreview,

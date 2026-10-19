@@ -838,7 +838,7 @@ it("retires legacy private input during a queue update", () => {
   expect(row).toMatchObject({ draftRevision: 7, queue: [{ text: "Edited submitted message" }] });
 });
 
-it("retires a draft when its write notification reveals Incognito metadata", () => {
+it("retires a draft when its write notification reveals Incognito metadata", async () => {
   const state = createState();
   const persistence = startPersistence(state);
   const reader = createStoredChatOutboxReader();
@@ -866,6 +866,7 @@ it("retires a draft when its write notification reveals Incognito metadata", () 
     stopReader();
     unsubscribe();
     persistence.stop();
+    await vi.dynamicImportSettled();
   }
 });
 

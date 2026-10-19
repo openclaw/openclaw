@@ -76,3 +76,44 @@ it("replaces pending feedback and cancels on request or owner disposal", () => {
   vi.advanceTimersByTime(100);
   expect(callback).toHaveBeenCalledTimes(1);
 });
+
+it("preserves a reactive deadline across equal refreshes and cancels when paused or disposed", () => {
+  vi.useFakeTimers();
+  const callback = vi.fn();
+  const [source, setSource] = createSignal<{ delay?: number }>({ delay: 100 });
+  const dispose = createRoot((stop) => {
+    createTimeout(callback, () => source().delay);
+    return stop;
+  });
+  onTestFinished(dispose);
+  flush();
+  vi.advanceTimersByTime(50);
+  setSource({ delay: 100 });
+  flush();
+  vi.advanceTimersByTime(50);
+  expect(callback).toHaveBeenCalledTimes(1);
+  vi.advanceTimersByTime(100);
+  expect(callback).toHaveBeenCalledTimes(1);
+
+  setSource({ delay: 200 });
+  flush();
+  vi.advanceTimersByTime(100);
+  setSource({ delay: 50 });
+  flush();
+  vi.advanceTimersByTime(49);
+  expect(callback).toHaveBeenCalledTimes(1);
+  vi.advanceTimersByTime(1);
+  expect(callback).toHaveBeenCalledTimes(2);
+
+  setSource({ delay: 100 });
+  flush();
+  setSource({});
+  flush();
+  vi.advanceTimersByTime(100);
+  expect(callback).toHaveBeenCalledTimes(2);
+  setSource({ delay: 100 });
+  flush();
+  dispose();
+  vi.advanceTimersByTime(100);
+  expect(callback).toHaveBeenCalledTimes(2);
+});

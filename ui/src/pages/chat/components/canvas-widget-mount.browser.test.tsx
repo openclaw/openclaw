@@ -136,12 +136,22 @@ it.each(["commit", "retirement"])(
     setRow("committed");
     flush();
     expect(root.container.querySelector("openclaw-canvas-widget-view")).toBe(widget);
-    expect(widget.querySelector("iframe")?.srcdoc).toBe(documentView.html);
+    const frame = widget.querySelector("iframe")!;
+    expect(frame.srcdoc).toBe(documentView.html);
     expect(request.mock.calls.filter(([method]) => method === "canvas.document.view")).toHaveLength(
       2,
     );
+    frame.style.width = "100%";
+    frame.style.boxSizing = "border-box";
+    const bounds = frame.getBoundingClientRect();
+    expect(bounds.width).toBeGreaterThan(0);
+    expect(bounds.height).toBeGreaterThan(0);
     root.unmount();
+    expect(frame.isConnected).toBe(true);
+    expect(frame.getBoundingClientRect().width).toBe(bounds.width);
+    expect(frame.getBoundingClientRect().height).toBe(bounds.height);
     vi.advanceTimersByTime(1_001);
+    expect(frame.isConnected).toBe(false);
     sessions.dispose();
   },
 );

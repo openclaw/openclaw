@@ -1,12 +1,4 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  createStore,
-  For,
-  onCleanup,
-  Show,
-} from "solid-js";
+import { createMemo, createSignal, createStore, For, onCleanup, onSettled, Show } from "solid-js";
 import type {
   MemoryMigrationProviderPlan,
   MigrationsMemoryApplyResult,
@@ -128,27 +120,35 @@ function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImpor
   let agentsListRequest: ApplicationContext["agents"] | undefined;
   let disposed = false;
 
-  createEffect(
-    () => {
-      const context = sources().read();
-      return { context, list: context?.agents.state.agentsList };
-    },
-    ({ context, list }) => {
-      if (list) {
-        agentsListRequest = undefined;
-      } else if (context && agentsListRequest !== context.agents) {
-        const agents = context.agents;
-        agentsListRequest = agents;
-        void agents
-          .ensureList()
-          .catch(() => null)
-          .then(() => {
-            if (host.context?.agents === agents && !agents.state.agentsList) {
+  const agentsLifetime = (
+    <Show when={sources()} keyed>
+      {(source) => {
+        onSettled(() => {
+          const requestList = () => {
+            const context = source.read();
+            if (context?.agents.state.agentsList) {
               agentsListRequest = undefined;
+            } else if (context && agentsListRequest !== context.agents) {
+              const agents = context.agents;
+              // Hold the latch through the owner's loading and failure notifications.
+              agentsListRequest = agents;
+              void agents
+                .ensureList()
+                .catch(() => null)
+                .then(() => {
+                  if (host.context?.agents === agents && !agents.state.agentsList) {
+                    agentsListRequest = undefined;
+                  }
+                });
             }
-          });
-      }
-    },
+          };
+          const stop = source.subscribe(requestList);
+          requestList();
+          return stop;
+        });
+        return null;
+      }}
+    </Show>
   );
 
   const planInputs = createMemo(
@@ -167,60 +167,68 @@ function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImpor
     },
     { equals: (left, right) => left.every((value, index) => value === right[index]) },
   );
-  createEffect(planInputs, ([active, closedInput, guarded, client, admin, agentId]) => {
-    // Hiding an import must retain its frozen offer and eventual completion view.
-    if (applyingProviderId !== null || done) {
-      return undefined;
-    }
-    setOffer((binding = null));
-    if (!active || closedInput || guarded || !client || !admin || !agentId) {
-      return undefined;
-    }
-    const controller = new AbortController();
-    abortPlan = controller;
-    void client
-      .request<MigrationsMemoryPlanResult>(
-        "migrations.memory.plan",
-        { agentId, overwrite: false },
-        { signal: controller.signal },
-      )
-      .then((plan) => {
-        const context = host.context;
-        if (
-          controller.signal.aborted ||
-          disposed ||
-          !host.isConnected ||
-          context?.gateway.snapshot.client !== client ||
-          currentAgentId(context) !== agentId ||
-          plan.agentId !== agentId
-        ) {
-          return;
-        }
-        const providers = offeredProviders(plan);
-        if (providers.length === 0) {
-          if (!plan.providers.some((provider) => provider.error)) {
-            finish();
+  const planLifetime = (
+    <Show when={planInputs()} keyed>
+      {(inputs) => {
+        onSettled(() => {
+          const [active, closedInput, guarded, client, admin, agentId] = inputs;
+          // Hiding an import must retain its frozen offer and eventual completion view.
+          if (applyingProviderId !== null || done) {
+            return undefined;
           }
-          return;
-        }
-        setOffer((binding = { client, agentId, plan }));
-        selectedByProvider = Object.fromEntries(
-          providers.map((provider) => [provider.providerId, true]),
-        );
-        setSelection(selectedByProvider);
-        setResults(() => ({}));
-        setDone((done = false));
-      })
-      .catch(() => {
-        // Planning is an optional, silent onboarding offer.
-      });
-    return () => {
-      controller.abort();
-      if (abortPlan === controller) {
-        abortPlan = undefined;
-      }
-    };
-  });
+          setOffer((binding = null));
+          if (!active || closedInput || guarded || !client || !admin || !agentId) {
+            return undefined;
+          }
+          const controller = new AbortController();
+          abortPlan = controller;
+          void client
+            .request<MigrationsMemoryPlanResult>(
+              "migrations.memory.plan",
+              { agentId, overwrite: false },
+              { signal: controller.signal },
+            )
+            .then((plan) => {
+              const context = host.context;
+              if (
+                controller.signal.aborted ||
+                disposed ||
+                !host.isConnected ||
+                context?.gateway.snapshot.client !== client ||
+                currentAgentId(context) !== agentId ||
+                plan.agentId !== agentId
+              ) {
+                return;
+              }
+              const providers = offeredProviders(plan);
+              if (providers.length === 0) {
+                if (!plan.providers.some((provider) => provider.error)) {
+                  finish();
+                }
+                return;
+              }
+              setOffer((binding = { client, agentId, plan }));
+              selectedByProvider = Object.fromEntries(
+                providers.map((provider) => [provider.providerId, true]),
+              );
+              setSelection(selectedByProvider);
+              setResults(() => ({}));
+              setDone((done = false));
+            })
+            .catch(() => {
+              // Planning is an optional, silent onboarding offer.
+            });
+          return () => {
+            controller.abort();
+            if (abortPlan === controller) {
+              abortPlan = undefined;
+            }
+          };
+        });
+        return null;
+      }}
+    </Show>
+  );
   const currentBinding = (candidate: PlanBinding | null) => {
     const context = props.context;
     return candidate?.client === context?.gateway.snapshot.client &&
@@ -396,66 +404,70 @@ function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImpor
     }
   };
   return (
-    <Show when={isVisible()}>
-      <openclaw-modal-dialog
-        class="onboarding-memory-import-dialog"
-        label={t("onboarding.memoryImport.title")}
-        description={t("onboarding.memoryImport.body")}
-        onModal-cancel={(event: Event) => {
-          if (applyingProviderId !== null) {
-            event.preventDefault();
-          } else {
-            finish();
-          }
-        }}
-      >
-        <section class="onboarding-memory-import">
-          <header>
-            <h2>
-              {isDone()
-                ? t("onboarding.memoryImport.doneTitle")
-                : t("onboarding.memoryImport.title")}
-            </h2>
-            <p>
-              {isDone()
-                ? t("onboarding.memoryImport.doneBody", {
-                    migrated: String(total("migrated")),
-                    skipped: String(total("skipped")),
-                  })
-                : t("onboarding.memoryImport.body")}
-            </p>
-          </header>
-          <ul>
-            <For each={providers()}>{(provider) => <Provider provider={provider} />}</For>
-          </ul>
-          <openclaw-modal-actions class="onboarding-memory-import__actions">
-            <For each={actions()}>
-              {(action) => (
-                <button
-                  class={[
-                    "btn",
-                    {
-                      primary: action === "import" || action === "continue",
-                      "btn--ghost onboarding-memory-import__review": action === "review",
-                    },
-                  ]}
-                  type="button"
-                  data-test-id={
-                    action === "review" ? undefined : `onboarding-memory-import-${action}`
-                  }
-                  disabled={
-                    action !== "continue" && (busy() || (action === "import" && !hasSelected()))
-                  }
-                  onClick={() => runAction(action)}
-                >
-                  {actionLabels()[action]}
-                </button>
-              )}
-            </For>
-          </openclaw-modal-actions>
-        </section>
-      </openclaw-modal-dialog>
-    </Show>
+    <>
+      {agentsLifetime}
+      {planLifetime}
+      <Show when={isVisible()}>
+        <openclaw-modal-dialog
+          class="onboarding-memory-import-dialog"
+          label={t("onboarding.memoryImport.title")}
+          description={t("onboarding.memoryImport.body")}
+          onModal-cancel={(event: Event) => {
+            if (applyingProviderId !== null) {
+              event.preventDefault();
+            } else {
+              finish();
+            }
+          }}
+        >
+          <section class="onboarding-memory-import">
+            <header>
+              <h2>
+                {isDone()
+                  ? t("onboarding.memoryImport.doneTitle")
+                  : t("onboarding.memoryImport.title")}
+              </h2>
+              <p>
+                {isDone()
+                  ? t("onboarding.memoryImport.doneBody", {
+                      migrated: String(total("migrated")),
+                      skipped: String(total("skipped")),
+                    })
+                  : t("onboarding.memoryImport.body")}
+              </p>
+            </header>
+            <ul>
+              <For each={providers()}>{(provider) => <Provider provider={provider} />}</For>
+            </ul>
+            <openclaw-modal-actions class="onboarding-memory-import__actions">
+              <For each={actions()}>
+                {(action) => (
+                  <button
+                    class={[
+                      "btn",
+                      {
+                        primary: action === "import" || action === "continue",
+                        "btn--ghost onboarding-memory-import__review": action === "review",
+                      },
+                    ]}
+                    type="button"
+                    data-test-id={
+                      action === "review" ? undefined : `onboarding-memory-import-${action}`
+                    }
+                    disabled={
+                      action !== "continue" && (busy() || (action === "import" && !hasSelected()))
+                    }
+                    onClick={() => runAction(action)}
+                  >
+                    {actionLabels()[action]}
+                  </button>
+                )}
+              </For>
+            </openclaw-modal-actions>
+          </section>
+        </openclaw-modal-dialog>
+      </Show>
+    </>
   );
 }
 

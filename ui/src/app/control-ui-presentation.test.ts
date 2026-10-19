@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
+import { bindControlUiDocumentHead } from "./control-ui-document-head.ts";
 import { applyControlUiPresentation } from "./control-ui-environment-presentation.runtime.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
@@ -10,6 +11,7 @@ import { loadSettings, patchSettings, saveSettings } from "./settings.ts";
 afterEach(() => {
   applyControlUiAccent();
   applyControlUiPresentation({ environment: null });
+  bindControlUiDocumentHead({ themeColors: [], favicons: [] });
   document.documentElement.removeAttribute("style");
   document.body.replaceChildren();
 });
@@ -21,10 +23,17 @@ describe("Control UI accent presentation", () => {
     root.dataset.theme = "claw";
     root.dataset.themeMode = "dark";
     const shell = document.body.appendChild(document.createElement("div"));
-    const meta = document.createElement("meta");
-    meta.name = "theme-color";
-    meta.media = "(prefers-color-scheme: dark)";
-    document.head.append(meta);
+    const metas = ["light", "dark"].map((mode) => {
+      const meta = document.createElement("meta");
+      meta.name = "theme-color";
+      meta.media = `(prefers-color-scheme: ${mode})`;
+      return meta;
+    });
+    const unrelatedMeta = document.createElement("meta");
+    unrelatedMeta.name = "theme-color";
+    unrelatedMeta.content = "#123456";
+    document.head.append(...metas, unrelatedMeta);
+    bindControlUiDocumentHead({ themeColors: metas, favicons: [] });
     const palette = document.createElement("style");
     palette.textContent = ":root { --bg-content: #203040; }";
     document.head.append(palette);
@@ -33,8 +42,11 @@ describe("Control UI accent presentation", () => {
     vi.stubGlobal("matchMedia", () => ({ matches: narrow }));
     const reads = vi.spyOn(globalThis, "getComputedStyle");
     const expectChrome = (color: string) => {
-      expect(meta.content).toBe(color);
-      expect(meta.hasAttribute("media")).toBe(false);
+      for (const meta of metas) {
+        expect(meta.content).toBe(color);
+        expect(meta.hasAttribute("media")).toBe(false);
+      }
+      expect(unrelatedMeta.content).toBe("#123456");
       expect(root.style.getPropertyValue("--control-ui-system-chrome-background")).toBe(color);
     };
     try {
@@ -79,7 +91,9 @@ describe("Control UI accent presentation", () => {
       expect(reads).not.toHaveBeenCalled();
     } finally {
       reads.mockRestore();
-      meta.remove();
+      for (const meta of [...metas, unrelatedMeta]) {
+        meta.remove();
+      }
       palette.remove();
       root.classList.remove("control-ui-chat-shell");
       delete root.dataset.theme;

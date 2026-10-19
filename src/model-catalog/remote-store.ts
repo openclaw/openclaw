@@ -51,17 +51,13 @@ export async function readRemoteModelCatalogAsync(
   const artifactPreservingReadOnly = isArtifactPreservingStateRead();
   const { runOpenClawStateWorkerOperation } =
     await import("../state/openclaw-state-worker-store.js");
-  context.admission.assertCurrent();
   return runOpenClawStateWorkerOperation(
     context,
-    async (scope) => {
-      const row = await scope.execute({
+    (scope) =>
+      scope.execute({
         type: "modelCatalog.remote.read",
         input: { artifactPreservingReadOnly },
-      });
-      context.admission.assertCurrent();
-      return row;
-    },
+      }),
     { existingOnly: true },
   );
 }

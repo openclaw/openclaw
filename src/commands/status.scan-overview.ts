@@ -108,6 +108,7 @@ export type StatusScanOverviewResult = {
         | "installationReplacementWarning"
         | "childRuntime"
         | "secretEgressProxy"
+        | "pluginReload"
         | "sqliteWal"
         | "databaseStores"
       > &
@@ -306,6 +307,7 @@ export async function collectStatusScanOverview(params: {
           installationReplacementWarning: status.installationReplacementWarning,
           ...(params.opts.deep && status.childRuntime ? { childRuntime: status.childRuntime } : {}),
           secretEgressProxy: status.secretEgressProxy,
+          pluginReload: status.pluginReload,
           sqliteWal: status.sqliteWal,
           ...(status.databaseStores ? { databaseStores: status.databaseStores } : {}),
           // The Gateway owns route readiness; CLI channel runtimes stay unloaded.

@@ -47,6 +47,26 @@ export function PickerContent<Option extends PickerOption>(props: {
   let input: HTMLInputElement | undefined;
   let back: HTMLButtonElement | undefined;
   const optionElements = new Map<string, HTMLDivElement>();
+  const groupButtons = new Set<HTMLButtonElement>();
+  const groupButtonRef = () => {
+    let button!: HTMLButtonElement;
+    onSettled(() => {
+      groupButtons.add(button);
+      return () => groupButtons.delete(button);
+    });
+    return (element: HTMLButtonElement) => (button = element);
+  };
+  const focusElements = () => [
+    trigger,
+    ...(back ? [back] : []),
+    ...(input ? [input] : []),
+    list,
+    ...groupButtons,
+    ...optionElements.values(),
+  ];
+  onSettled(() => {
+    props.params.focusRef?.({ trigger, elements: focusElements });
+  });
   let sheetScroll: { root: Element; top: number } | undefined;
   let hoverTimer: ReturnType<typeof setTimeout> | undefined;
   let hoverOpened = false;
@@ -551,6 +571,7 @@ export function PickerContent<Option extends PickerOption>(props: {
                 {(group) => (
                   <div class="picker-select__group" role="group" aria-label={group().label}>
                     <button
+                      ref={groupButtonRef()}
                       class="picker-select__group-toggle"
                       type="button"
                       tabindex={opened() ? 0 : -1}

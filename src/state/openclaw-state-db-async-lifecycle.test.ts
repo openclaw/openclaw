@@ -68,22 +68,17 @@ describe("canonical shared-state resource drainage", () => {
     writeFileSync(pathname, "");
     withExistingOpenClawStateSchema({ path: pathname }, () => {
       const source = prepareOpenClawStateReadSource({ path: pathname });
-      const capture = source.current;
-      const retained = capture();
-      const resolve = vi.spyOn(path, "resolve");
-      let reused = true;
-      let resolutions: number;
-      try {
-        for (let index = 0; index < 100; index++) {
-          const current = capture();
-          reused &&= current === retained;
-        }
-        resolutions = resolve.mock.calls.length;
-      } finally {
-        resolve.mockRestore();
+      const retained = source.current();
+      using resolve = vi.spyOn(path, "resolve");
+      using identity = vi.spyOn(databaseIdentity, "assertExistingDatabaseIdentity");
+      for (let index = 0; index < 100; index++) {
+        expect(source.current()).toBe(retained);
       }
-      expect(resolutions).toBe(0);
-      expect(reused).toBe(true);
+      expect(resolve).not.toHaveBeenCalled();
+      for (let index = 0; index < 100; index++) {
+        source.workerContext();
+      }
+      expect(identity).not.toHaveBeenCalled();
     });
   });
 
@@ -115,8 +110,8 @@ describe("canonical shared-state resource drainage", () => {
     writeFileSync(pathname, "");
     const replacement = captureOpenClawStateReadContext(pathname);
     expect(replacement.admission.identity.key).not.toBe(created.admission.identity.key);
-    expect(source.current).toThrow(/identity changed/);
-    expect(source.workerContext).toThrow(/identity changed/);
+    expect(source.current).toThrow(/Prepared state read source changed/);
+    expect(source.workerContext).toThrow(/Prepared state read source changed/);
   });
 
   it("keeps captured schema scope lifetime separate from shared physical admission", async () => {

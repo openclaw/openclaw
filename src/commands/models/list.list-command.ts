@@ -129,7 +129,6 @@ export async function modelsListCommand(
           target: "local model catalog",
           onForeignOwner: "refuse",
           runLocal: async ({ assertCurrent }) => {
-            assertCurrent();
             const refreshed = await readLocal();
             assertCurrent();
             return refreshed;
