@@ -301,6 +301,7 @@ export async function* iterateModelStream<T>(
   for await (const event of events) {
     await waitForModelStreamTurn(signal);
     yield event;
+    throwIfModelStreamAborted(signal);
   }
 }
 

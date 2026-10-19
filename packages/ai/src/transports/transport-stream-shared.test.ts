@@ -323,6 +323,29 @@ describe("model stream cooperative scheduler", { concurrent: false }, () => {
     }
   });
 
+  it("stops before pulling upstream again after cancellation", async () => {
+    const controller = new AbortController();
+    const reason = Object.assign(new Error("Stream canceled"), { code: "TEST_CANCELED" });
+    let pulls = 0;
+    let closed = false;
+    const upstream = (async function* () {
+      try {
+        pulls++;
+        yield "first";
+        pulls++;
+        throw new Error("Upstream advanced after cancellation");
+      } finally {
+        closed = true;
+      }
+    })();
+    const stream = iterateModelStream(upstream, controller.signal);
+    await expect(stream.next()).resolves.toEqual({ done: false, value: "first" });
+    controller.abort(reason);
+    await expect(stream.next()).rejects.toBe(reason);
+    expect(pulls).toBe(1);
+    expect(closed).toBe(true);
+  });
+
   it("starts a fresh elapsed-time budget after a delayed yield", async () => {
     const stream = iterateModelStream(["first", "second", "third"]);
     await expect(stream.next()).resolves.toEqual({ done: false, value: "first" });
