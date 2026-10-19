@@ -11,6 +11,16 @@ import { setSlackRuntime } from "./runtime.js";
 
 const THREAD_TS = "1712345678.123456";
 
+// Inbound Slack resolves MPIM and legacy group channels to the "group" chat
+// type, so the advertised capabilities must not omit it.
+it("advertises every chat type its inbound resolver produces", async () => {
+  const { resolveSlackChatType } = await import("./monitor/channel-type.js");
+  const advertised = slackPlugin.capabilities.chatTypes;
+  for (const channelType of ["im", "mpim", "group", "channel"] as const) {
+    expect(advertised).toContain(resolveSlackChatType(channelType));
+  }
+});
+
 function slackConfig(slack: NonNullable<OpenClawConfig["channels"]>["slack"]): OpenClawConfig {
   return { channels: { slack } };
 }

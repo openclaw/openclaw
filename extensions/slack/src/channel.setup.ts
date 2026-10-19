@@ -22,7 +22,7 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   },
   setupWizard: createSlackSetupWizardProxy(() => import("./setup-surface.js")),
   capabilities: {
-    chatTypes: ["direct", "channel", "thread"],
+    chatTypes: ["direct", "channel", "group", "thread"],
     reactions: true,
     threads: true,
     media: true,
