@@ -1,6 +1,24 @@
 import type { ElementHandle, Locator, Page } from "playwright";
 import { expect } from "vitest";
 
+export async function openChatDashboardMenu(scope: Page | Locator): Promise<Locator> {
+  const menu = nativePane(scope).locator(".chat-dashboard-menu").filter({ visible: true });
+  const trigger = menu.getByRole("button", { name: "Dashboard options", exact: true });
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+    await trigger.click();
+  }
+  await menu.getByRole("menu", { name: "Dashboard options", exact: true }).waitFor();
+  return menu;
+}
+
+export async function closeChatDashboardMenu(scope: Page | Locator): Promise<void> {
+  const menu = nativePane(scope).locator(".chat-dashboard-menu").filter({ visible: true });
+  await menu.getByRole("button", { name: "Dashboard options", exact: true }).click();
+  await menu.getByRole("menu", { name: "Dashboard options", exact: true }).waitFor({
+    state: "hidden",
+  });
+}
+
 type DomChatLayoutScope = {
   container: ParentNode;
   click: (element: HTMLElement) => Promise<void>;
@@ -150,6 +168,17 @@ export async function selectChatLayoutAction(
     await waitForMenuClose(menu);
     return;
   }
+  if (name === "Use current view as default") {
+    const menu = await openChatDashboardMenu(scope);
+    await menu
+      .getByRole("menuitem", { name, exact: true })
+      .or(menu.getByRole("menuitemcheckbox", { name, exact: true }))
+      .click();
+    await menu.getByRole("menu", { name: "Dashboard options", exact: true }).waitFor({
+      state: "hidden",
+    });
+    return;
+  }
   const host = nativePane(scope).locator(".chat-mobile-host");
   const closeHost = host
     .locator(".chat-mobile-host__header")
@@ -170,11 +199,7 @@ export async function selectChatLayoutAction(
     nativeControl &&
     // Layout Focus targets the main pane; keep that action while its entry is available.
     (name !== "Focus" ||
-      !(await scope
-        .locator("button.chat-pane__layout-trigger:not([inert] *)")
-        .first()
-        .isVisible())) &&
-    (await nativeControl.isVisible())
+      !(await scope.locator("button.chat-pane__layout-trigger:not([inert] *)").first().isVisible()))
   ) {
     await nativeControl.click();
     return;

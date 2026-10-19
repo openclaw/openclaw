@@ -593,6 +593,25 @@ suite.define(() => {
           }
           await captureProof(page, "hide-" + name + "-expanded-before.png");
           await card.getByRole("button", { name: "Task progress options" }).click();
+          if (active) {
+            await gateway.emitGatewayEvent("chat", {
+              sessionKey,
+              runId: "progress-run",
+              state: "delta",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "The workspace inspection is still running." }],
+              },
+            });
+            await page
+              .getByText("The workspace inspection is still running.", { exact: true })
+              .waitFor();
+            await expect
+              .poll(() =>
+                card.getByRole("menuitem", { name: "Hide this card", exact: true }).isVisible(),
+              )
+              .toBe(true);
+          }
           await card.getByRole("menuitem", { name: "Hide this card", exact: true }).click();
           await expect.poll(() => card.count()).toBe(0);
           await captureProof(page, "hide-" + name + "-after.png");
