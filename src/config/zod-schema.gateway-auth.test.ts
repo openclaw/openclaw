@@ -4,6 +4,28 @@ import { ModelsConfigSchema } from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { SessionSchema } from "./zod-schema.session.js";
 
+function expectSchemaIssue(raw: unknown, path: string[], message?: string) {
+  const result = OpenClawSchema.safeParse(raw);
+  expect(result.success).toBe(false);
+  expect(result.error?.issues).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        path,
+        ...(message ? { message: expect.stringContaining(message) } : {}),
+      }),
+    ]),
+  );
+}
+
+function validated(raw: unknown) {
+  const result = validateConfigObject(raw);
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error("Expected valid config");
+  }
+  return result.config;
+}
+
 describe("Cloudflare Access OIDC GitHub identity config", () => {
   const trusted = {
     issuer: "https://example.cloudflareaccess.com",
@@ -12,20 +34,12 @@ describe("Cloudflare Access OIDC GitHub identity config", () => {
   };
 
   test.each([
-    {
-      name: "non-Access issuer",
-      mapping: { ...trusted, issuer: "https://example.test" },
-      success: false,
-    },
-    {
-      name: "HTTP issuer",
-      mapping: { ...trusted, issuer: "http://example.cloudflareaccess.com" },
-      success: false,
-    },
-    { name: "blank provider", mapping: { ...trusted, providerId: " " }, success: false },
-    { name: "blank claim", mapping: { ...trusted, githubAccountIdClaim: " " }, success: false },
-    { name: "incomplete mapping", mapping: { issuer: trusted.issuer }, success: false },
-  ])("validates $name", ({ mapping, success }) => {
+    ["non-Access issuer", { ...trusted, issuer: "https://example.test" }],
+    ["HTTP issuer", { ...trusted, issuer: "http://example.cloudflareaccess.com" }],
+    ["blank provider", { ...trusted, providerId: " " }],
+    ["blank claim", { ...trusted, githubAccountIdClaim: " " }],
+    ["incomplete mapping", { issuer: trusted.issuer }],
+  ])("rejects %s", (_name, mapping) => {
     expect(
       OpenClawSchema.safeParse({
         gateway: {
@@ -38,7 +52,7 @@ describe("Cloudflare Access OIDC GitHub identity config", () => {
           },
         },
       }).success,
-    ).toBe(success);
+    ).toBe(false);
   });
 });
 
@@ -53,50 +67,27 @@ describe("gateway operator role config", () => {
   });
 
   test.each([
-    {
-      name: "unknown assigned role",
-      byGithubLogin: { octocat: "missing" },
-      login: "octocat",
-      message: "must name a configured role definition",
-    },
-    {
-      name: "malformed GitHub login",
-      byGithubLogin: { octo_cat: "guest" },
-      login: "octo_cat",
-      message: "Invalid GitHub login",
-    },
-    {
-      name: "case-insensitive duplicate GitHub logins",
-      byGithubLogin: { Octocat: "guest", octocat: "guest" },
-      login: "octocat",
-      message: "Duplicate GitHub login",
-    },
-  ])("rejects $name", ({ byGithubLogin, login, message }) => {
-    const result = OpenClawSchema.safeParse({
-      gateway: {
-        roles: {
-          default: "guest",
-          definitions: { guest: validRole },
-          assignments: { byGithubLogin },
+    [{ octocat: "missing" }, "octocat", "must name a configured role definition"],
+    [{ octo_cat: "guest" }, "octo_cat", "Invalid GitHub login"],
+    [{ Octocat: "guest", octocat: "guest" }, "octocat", "Duplicate GitHub login"],
+  ] as const)("rejects GitHub assignment %j", (byGithubLogin, login, message) => {
+    expectSchemaIssue(
+      {
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: { guest: validRole },
+            assignments: { byGithubLogin },
+          },
         },
       },
-    });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            path: ["gateway", "roles", "assignments", "byGithubLogin", login],
-            message: expect.stringContaining(message),
-          }),
-        ]),
-      );
-    }
+      ["gateway", "roles", "assignments", "byGithubLogin", login],
+      message,
+    );
   });
 
   test("validates model source, scoped aliases, empty membership and future-family exclusions", () => {
-    const result = validateConfigObject({
+    const config = validated({
       agents: {
         entries: {
           shared: { model: "fixture/primary", models: { "fixture/fallback": { alias: "backup" } } },
@@ -119,14 +110,11 @@ describe("gateway operator role config", () => {
         },
       },
     });
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.gateway?.roles?.definitions.guest?.modelPolicy).toEqual({
-        sourceAgent: "shared",
-        allow: ["backup"],
-        deny: ["fixture/restricted-*"],
-      });
-    }
+    expect(config.gateway?.roles?.definitions.guest?.modelPolicy).toEqual({
+      sourceAgent: "shared",
+      allow: ["backup"],
+      deny: ["fixture/restricted-*"],
+    });
   });
 
   test.each([
@@ -161,26 +149,18 @@ describe("gateway operator role config", () => {
     { name: "missing session policy", role: { agents: "*", scopes: ["operator.read"] } },
     { name: "freeform capability", role: { ...validRole, capability: "sessions.delete" } },
   ])("rejects $name", ({ role }) => {
-    const result = OpenClawSchema.safeParse(withRole(role));
-
-    expect(result.success).toBe(false);
+    expect(OpenClawSchema.safeParse(withRole(role)).success).toBe(false);
   });
 
   test("rejects a default role that has no definition", () => {
-    const result = OpenClawSchema.safeParse({
-      gateway: {
-        roles: { default: "missing", definitions: { guest: validRole } },
+    expectSchemaIssue(
+      {
+        gateway: {
+          roles: { default: "missing", definitions: { guest: validRole } },
+        },
       },
-    });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ path: ["gateway", "roles", "default"] }),
-        ]),
-      );
-    }
+      ["gateway", "roles", "default"],
+    );
   });
 
   test.each([
@@ -195,14 +175,7 @@ describe("gateway operator role config", () => {
       issuePath: ["gateway", "roles", "definitions"],
     },
   ])("rejects $name", ({ roles, issuePath }) => {
-    const result = OpenClawSchema.safeParse({ gateway: { roles } });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toEqual(
-        expect.arrayContaining([expect.objectContaining({ path: issuePath })]),
-      );
-    }
+    expectSchemaIssue({ gateway: { roles } }, issuePath);
   });
 });
 
@@ -312,11 +285,7 @@ describe("gateway.tls schema", () => {
       certPath: "  /etc/ssl/cert.pem  ",
       keyPath: "  /etc/ssl/private/server.key  ",
     };
-    const result = validateConfigObject({ gateway: { tls } });
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.gateway?.tls).toEqual(tls);
-    }
+    expect(validated({ gateway: { tls } }).gateway?.tls).toEqual(tls);
   });
 });
 
