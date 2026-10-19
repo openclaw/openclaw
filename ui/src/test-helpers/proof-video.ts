@@ -16,13 +16,11 @@ import { resolveSystemBin } from "../../../src/infra/resolve-system-bin.ts";
 import { rasterizeProofAnnotations } from "./proof-annotations.ts";
 
 type Rect = NonNullable<Awaited<ReturnType<Locator["boundingBox"]>>>;
+type UntimedCue<T = ProofVideoCue> = T extends ProofVideoCue ? Omit<T, "start" | "end"> : never;
 
 export async function rasterizeProofOverlays(browser: Browser, cues: ProofVideoCues, dir: string) {
   validateProofVideoCues(cues);
-  for (const cue of cues.cues) {
-    if (cue.kind !== "annotation") {
-      continue;
-    }
+  for (const cue of cues.cues.filter((item) => item.kind === "annotation")) {
     const image = path.join(dir, cue.image);
     await mkdir(path.dirname(image), { recursive: true });
     await writeFile(
@@ -46,20 +44,15 @@ export async function rasterizeProofOverlays(browser: Browser, cues: ProofVideoC
       div{box-sizing:border-box;max-width:calc(100vw - 160px);padding:12px 24px;
       border-radius:16px;background:rgba(12,16,24,.92);text-align:center;white-space:pre-wrap}
       </style><div></div>`);
-    for (const cue of cues.cues) {
-      if (cue.kind !== "caption") {
-        continue;
-      }
-      await page.locator("div").evaluate((element, text) => {
+    const card = page.locator("div");
+    for (const cue of cues.cues.filter((item) => item.kind === "caption")) {
+      await card.evaluate((element, text) => {
         element.textContent = text;
       }, cue.text);
       await page.evaluate(() => document.fonts.ready);
-      const fits = await page
-        .locator("div")
-        .evaluate(
-          (element) =>
-            element.scrollHeight <= innerHeight && element.scrollWidth <= innerWidth - 160,
-        );
+      const fits = await card.evaluate(
+        (element) => element.scrollHeight <= innerHeight && element.scrollWidth <= innerWidth - 160,
+      );
       if (!fits) {
         throw new Error(`Caption is too long for the card: ${cue.text}`);
       }
@@ -114,13 +107,10 @@ export async function startProofRecording(
       },
     },
   });
-  let page;
-  try {
-    page = await context.newPage();
-  } catch (error) {
+  const page = await context.newPage().catch(async (error) => {
     await context.close();
     throw error;
-  }
+  });
   const video = page.video()!;
   let finished = false;
   const open = new Map<ProofVideoCue["kind"], ProofVideoCue>();
@@ -137,10 +127,13 @@ export async function startProofRecording(
     }
     open.delete(kind);
   };
-  const add = (cue: ProofVideoCue) => {
-    end(cue.kind, cue.start);
-    sidecar.cues.push(cue);
-    open.set(cue.kind, cue);
+  const cueImage = (kind: "caption" | "annotation") =>
+    `${kind}s/${sidecar.cues.filter((cue) => cue.kind === kind).length}.png`;
+  const add = (start: number, cue: UntimedCue) => {
+    const timed = { ...cue, start, end: start };
+    end(cue.kind, start);
+    sidecar.cues.push(timed);
+    open.set(cue.kind, timed);
   };
   return {
     page,
@@ -150,31 +143,19 @@ export async function startProofRecording(
       if (!text.trim()) {
         throw new Error("Caption text must not be empty");
       }
-      add({
-        kind: "caption",
-        start,
-        end: start,
-        text,
-        image: `captions/${sidecar.cues.filter((cue) => cue.kind === "caption").length}.png`,
-      });
+      add(start, { kind: "caption", text, image: cueImage("caption") });
     },
-    clearCaption() {
-      end("caption", now());
-    },
+    clearCaption: () => end("caption", now()),
     annotate(annotations: ProofAnnotation[]) {
       const start = now();
       validateProofAnnotations(annotations, viewport);
-      add({
+      add(start, {
         kind: "annotation",
-        start,
-        end: start,
         annotations: structuredClone(annotations),
-        image: `annotations/${sidecar.cues.filter((cue) => cue.kind === "annotation").length}.png`,
+        image: cueImage("annotation"),
       });
     },
-    clearAnnotations() {
-      end("annotation", now());
-    },
+    clearAnnotations: () => end("annotation", now()),
     async zoom(target: Locator | Rect, { factor = 2, padding = 24, ease = 0.5 } = {}) {
       now();
       if (
@@ -203,11 +184,9 @@ export async function startProofRecording(
         throw new Error("Zoom target is outside the viewport");
       }
       const start = now();
-      add({ kind: "zoom", start, end: start, rect: { x, y, width, height }, factor, ease });
+      add(start, { kind: "zoom", rect: { x, y, width, height }, factor, ease });
     },
-    zoomOut() {
-      end("zoom", now());
-    },
+    zoomOut: () => end("zoom", now()),
     speed(factor: number) {
       const start = now();
       if (!Number.isFinite(factor) || factor <= 0) {
@@ -215,7 +194,7 @@ export async function startProofRecording(
       }
       end("speed", start);
       if (factor !== 1) {
-        add({ kind: "speed", start, end: start, factor });
+        add(start, { kind: "speed", factor });
       }
     },
     async finish() {
