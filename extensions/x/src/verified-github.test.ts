@@ -1,6 +1,5 @@
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -52,20 +51,16 @@ afterEach(() => {
 });
 
 async function withService(
-  host: ReturnType<typeof fixture>,
+  { runtime, logger }: ReturnType<typeof fixture>,
   cfg: OpenClawConfig,
   run: (clock: ReturnType<typeof createGatewaySchedulerClock>) => Promise<void>,
 ) {
   const clock = createGatewaySchedulerClock(Date.now());
   const gateway = createTestGatewayScheduler(clock.clock);
   const scheduler = createTestPluginServiceScheduler(gateway);
-  const service = createXGitHubService({ runtime: host.runtime });
-  const context: OpenClawPluginServiceContextV2 = {
-    config: cfg,
-    stateDir: host.runtime.state.resolveStateDir(),
-    logger: host.logger,
-    scheduler,
-  };
+  const service = createXGitHubService({ runtime });
+  const stateDir = runtime.state.resolveStateDir();
+  const context = { config: cfg, stateDir, logger, scheduler };
   try {
     await service.start(context);
     await run(clock);
@@ -77,32 +72,22 @@ async function withService(
 }
 
 function githubFixture(dailyUsd = 1) {
-  const cfg: OpenClawConfig = {
-    ...config,
-    channels: {
-      x: {
-        ...config.channels?.x,
-        verifiedFromGitHub: { repo: "test/repo", token: "synthetic-token" },
-      },
-    },
-  };
+  const verifiedFromGitHub = { repo: "test/repo", token: "synthetic-token" };
+  const x = { ...config.channels?.x, verifiedFromGitHub };
+  const cfg: OpenClawConfig = { ...config, channels: { x } };
   const host = fixture({ posts: [], cfg });
   const source = { people: [{ login: "writer", handle: "alice" }], failing: false };
+  const permissions = { push: true, maintain: false, admin: false };
   network.github.mockImplementation(async (input) => {
     if (source.failing) {
       return Response.json({ message: "private upstream details" }, { status: 503 });
     }
-    const url = new URL(input);
-    const path = url.pathname;
+    const { pathname: path, searchParams } = new URL(input);
     if (path.endsWith("/collaborators")) {
-      const page = Number(url.searchParams.get("page") ?? "1");
+      const page = Number(searchParams.get("page") ?? "1");
       return Response.json(
         source.people
-          .map((person, index) => ({
-            id: index + 1,
-            login: person.login,
-            permissions: { push: true, maintain: false, admin: false },
-          }))
+          .map(({ login }, index) => ({ id: index + 1, login, permissions }))
           .slice((page - 1) * 100, page * 100),
       );
     }
@@ -142,7 +127,7 @@ function githubFixture(dailyUsd = 1) {
   });
   vi.mocked(getXApi).mockResolvedValue(api);
   const account = resolveXAccount(cfg, "default");
-  const github = createXGitHubReader({ token: "synthetic-token" });
+  const github = createXGitHubReader({ token: verifiedFromGitHub.token });
   const abort = new AbortController();
   const sync = () =>
     syncXGitHub({
@@ -159,6 +144,8 @@ function githubFixture(dailyUsd = 1) {
   const ingress = (id: string, author = "101") => resolveXIngress("default", post(id, author), cfg);
   return { ...host, cfg, source, ids, lookups, spend, account, sync, status, snapshot, ingress };
 }
+
+const maintainerAccess = { tier: "maintainer", ingress: { senderAccess: { allowed: true } } };
 
 describe("X GitHub verification sync", () => {
   it("persists resolved IDs, charges only returned users, and looks up only new or changed declarations", async () => {
@@ -210,8 +197,7 @@ describe("X GitHub verification sync", () => {
     });
     await test.sync();
     const authorized = await test.ingress("501");
-    expect(authorized.tier).toBe("maintainer");
-    expect(authorized.ingress.senderAccess.allowed).toBe(true);
+    expect(authorized).toMatchObject(maintainerAccess);
     const alice = { id: "101", username: "alice", name: "Alice" };
     expect(formatXSenderLine(authorized.tier, alice.id, alice, authorized.github)).toBe(
       "This is from a verified user: @alice (Alice), X user id 101, GitHub @writer with write access to test/repo.",
@@ -251,8 +237,7 @@ describe("X GitHub verification sync", () => {
     expect(policy()).toBeDefined();
     for (const id of ["10", "30"]) {
       const retained = await test.ingress("504", id);
-      expect(retained.tier).toBe("maintainer");
-      expect(retained.ingress.senderAccess.allowed).toBe(true);
+      expect(retained).toMatchObject(maintainerAccess);
     }
   });
 
@@ -275,7 +260,6 @@ describe("X GitHub verification sync", () => {
     vi.setSystemTime(Date.now() + 24 * 60 * 60_000);
     const completed = await test.sync();
     expect(test.lookups).toEqual([handles.slice(0, 100), ["writer100"]]);
-    expect(completed.entries).toHaveLength(101);
     expect(completed.entries.map((entry) => entry.xUserId)).toEqual(
       Array.from({ length: 101 }, (_, index) => String(1_000 + index)),
     );
@@ -326,8 +310,7 @@ describe("X GitHub verification service", () => {
       expect(authorized.assertCurrent).not.toThrow();
       expect(test.logger.warn.mock.calls[0]?.[0]).not.toContain("private upstream details");
       const retained = await test.ingress("501");
-      expect(retained.tier).toBe("maintainer");
-      expect(retained.ingress.senderAccess.allowed).toBe(true);
+      expect(retained).toMatchObject(maintainerAccess);
       test.source.failing = false;
       await nextSync();
       expect(await test.status()).toMatchObject({ stale: false, lastSyncAt: Date.now() });

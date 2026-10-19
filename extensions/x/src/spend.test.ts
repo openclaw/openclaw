@@ -5,52 +5,44 @@ import { resolveXCostLimits, type XCostLimits } from "./cost-limits.js";
 import { openXSpend, XBudgetExceededError } from "./spend.js";
 import { createKeyedState } from "./test-support/monitor.js";
 
+type WriteHook = (operation: "register" | "delete", key: string) => void | Promise<void>;
+
 function fixture(config: Partial<XCostLimits> = {}) {
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   const openKeyedStore = createKeyedState();
   const stateDir = `synthetic-x-spend-${randomUUID()}`;
-  const runtime = {
-    state: { openKeyedStore, resolveStateDir: () => stateDir },
-    logging: { getChildLogger: () => logger },
-  };
+  const state = { openKeyedStore, resolveStateDir: () => stateDir };
+  const runtime = { state, logging: { getChildLogger: () => logger } };
   const limits = resolveXCostLimits(config);
-  return {
-    runtime,
-    limits,
-    spend: openXSpend(runtime, "default", () => limits),
-    store: openKeyedStore<number>({ namespace: "x.spend" }),
-  };
-}
-
-function replaceStore(
-  test: ReturnType<typeof fixture>,
-  beforeWrite: (operation: "register" | "delete", key: string) => void | Promise<void>,
-) {
-  const original = test.runtime.state.openKeyedStore;
-  const state = {
-    ...test.runtime.state,
-    openKeyedStore<T>(options: Parameters<typeof original>[0]): PluginStateKeyedStore<T> {
-      const store = original<T>(options);
-      return {
-        ...store,
-        async register(key, value, params) {
-          await beforeWrite("register", key);
-          await store.register(key, value, params);
-        },
-        async delete(key, params) {
-          await beforeWrite("delete", key);
-          return await store.delete(key, params);
-        },
-      };
-    },
-  };
-  return openXSpend({ ...test.runtime, state }, "default", () => test.limits);
+  const spend = openXSpend(runtime, "default", () => limits);
+  const store = openKeyedStore<number>({ namespace: "x.spend" });
+  function replaceStore(beforeWrite: WriteHook) {
+    const replacement = {
+      ...state,
+      openKeyedStore<T>(options: Parameters<typeof openKeyedStore>[0]): PluginStateKeyedStore<T> {
+        const original = openKeyedStore<T>(options);
+        return {
+          ...original,
+          async register(key, value, params) {
+            await beforeWrite("register", key);
+            await original.register(key, value, params);
+          },
+          async delete(key, params) {
+            await beforeWrite("delete", key);
+            return await original.delete(key, params);
+          },
+        };
+      },
+    };
+    return openXSpend({ ...runtime, state: replacement }, "default", () => limits);
+  }
+  return { limits, spend, store, replaceStore };
 }
 
 function blockWrites(test: ReturnType<typeof fixture>) {
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const spend = replaceStore(test, async (operation) => {
+  const spend = test.replaceStore(async (operation) => {
     if (operation === "register") {
       entered.resolve();
       await release.promise;
@@ -117,7 +109,7 @@ describe("X spend", () => {
       const test = fixture({ dailyUsd: 1 });
       const reservation = await test.spend.reserve(800_000);
       vi.setSystemTime("2026-10-20T00:00:00Z");
-      replaceStore(test, (operation, key) => {
+      test.replaceStore((operation, key) => {
         if (operation === rejectedOperation && (rejectedKey === null || key === rejectedKey)) {
           throw new Error("synthetic disk failure");
         }

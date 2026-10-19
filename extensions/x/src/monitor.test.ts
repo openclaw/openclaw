@@ -21,6 +21,8 @@ import { createQueue } from "./test-support/monitor.js";
 import { openXWorkOrigins } from "./work-origin.js";
 
 type MonitorFixture = ReturnType<typeof createFixture>;
+const frontDoor = "agent:maintainer:x:group:500";
+const referenceHeading = "X work-session references";
 const active: MonitorFixture[] = [];
 function fixture({
   completeOn,
@@ -64,7 +66,7 @@ function registerWork(
       sessionId: key.split(":").at(-1)!,
       updatedAt: 1,
       createdVia: "spawn",
-      spawnedBy: "agent:maintainer:x:group:500",
+      spawnedBy: frontDoor,
       ...entry,
     });
   }
@@ -111,7 +113,7 @@ describe("X account monitor", () => {
     test.start();
     await vi.advanceTimersByTimeAsync(0);
     const first = test.dispatch.mock.calls[0]![0];
-    expect(first.ctxPayload.BodyForAgent).not.toContain("X work-session references");
+    expect(first.ctxPayload.BodyForAgent).not.toContain(referenceHeading);
     test.sessionEntries.set(workKey, {
       sessionId: "existing-demo",
       updatedAt: 1,
@@ -124,16 +126,14 @@ describe("X account monitor", () => {
     );
     await vi.advanceTimersByTimeAsync(60_000);
     await test.completed;
-    const followup = test.dispatch.mock.calls[1]![0];
-    expect(followup.route).toEqual(first.route);
-    expect(followup.ctxPayload.BodyForAgent).toContain("X work-session references");
-    expect(followup.ctxPayload.BodyForAgent).toContain(workKey);
-    expect(followup.ctxPayload.BodyForAgent).toContain(
-      "https://x.com/config_maintainer/status/501",
-    );
-    expect(followup.ctxPayload.BodyForAgent).not.toContain("Private implementation notes");
-    expect(followup.ctxPayload.RawBody).toBe("@roboclawbot update your demo");
-    expect(followup.ctxPayload.ReplyToId).toBe("502");
+    const { ctxPayload: payload, route } = test.dispatch.mock.calls[1]![0];
+    const body = payload.BodyForAgent;
+    expect(route).toEqual(first.route);
+    expect(body).toContain(referenceHeading);
+    expect(body).toContain(workKey);
+    expect(body).toContain("https://x.com/config_maintainer/status/501");
+    expect(body).not.toContain("Private implementation notes");
+    expect(payload).toMatchObject({ RawBody: "@roboclawbot update your demo", ReplyToId: "502" });
     expect(await openXWorkOrigins(test.runtime).lookup(workKey)).toMatchObject({ postId: "501" });
   });
 
@@ -179,7 +179,7 @@ describe("X account monitor", () => {
           : `agent:${agent}:dashboard:previous`;
       await registerWork(test, key, origin, entry);
       if (sandboxed) {
-        test.sessionEntries.set("agent:maintainer:x:group:500", {
+        test.sessionEntries.set(frontDoor, {
           sessionId: "source",
           updatedAt: 1,
           sandbox: "required",
@@ -193,7 +193,7 @@ describe("X account monitor", () => {
       if (included) {
         expect(body).toContain(key);
       } else {
-        expect(body).not.toContain("X work-session references");
+        expect(body).not.toContain(referenceHeading);
       }
     },
   );
@@ -216,8 +216,8 @@ describe("X account monitor", () => {
     await vi.advanceTimersByTimeAsync(0);
     await test.completed;
     const [first, second] = test.dispatch.mock.calls.map(([plan]) => plan);
-    const context = second!.ctxPayload.BodyForAgent!.split("X work-session references")[1]!;
-    expect(context).toBe(first!.ctxPayload.BodyForAgent!.split("X work-session references")[1]);
+    const context = second!.ctxPayload.BodyForAgent!.split(referenceHeading)[1]!;
+    expect(context).toBe(first!.ctxPayload.BodyForAgent!.split(referenceHeading)[1]);
     const references = context.split("\n").filter((line) => line.startsWith('{"sessionKey":'));
     expect(references).toHaveLength(8);
     expect(references[0]).toContain("agent:maintainer:dashboard:work-0");
@@ -225,7 +225,7 @@ describe("X account monitor", () => {
     expect(context).not.toContain("dashboard:work-8");
     expect(context).toContain("do not route by thread membership alone");
     expect(context).toContain("do not spawn a duplicate or claim the work resumed");
-    expect(second!.route.sessionKey).toBe("agent:maintainer:x:group:500");
+    expect(second!.route.sessionKey).toBe(frontDoor);
     expect(second!.ctxPayload.RawBody).toBe("@roboclawbot a new, unrelated topic");
   });
 
@@ -457,14 +457,11 @@ describe("X account monitor", () => {
       })),
     );
     const turn = test.dispatch.mock.calls[0]![0];
-    expect(turn.route).toEqual({
-      agentId: "maintainer",
-      sessionKey: "agent:maintainer:x:group:500",
-    });
+    expect(turn.route).toEqual({ agentId: "maintainer", sessionKey: frontDoor });
     expect(turn.ctxPayload).toMatchObject({
       WasMentioned: true,
       GroupRequireMention: true,
-      SessionKey: "agent:maintainer:x:group:500",
+      SessionKey: frontDoor,
       ChatType: "group",
       SenderId: "10",
       SenderName: "@config_maintainer",
@@ -478,7 +475,7 @@ describe("X account monitor", () => {
     expect(test.resolveStable).toHaveBeenCalledWith(
       expect.objectContaining({
         contextBinding: expect.objectContaining({
-          sessionKey: "agent:maintainer:x:group:500",
+          sessionKey: frontDoor,
           inboundEventKind: "user_request",
         }),
       }),
