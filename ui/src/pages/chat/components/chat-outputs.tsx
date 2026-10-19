@@ -6,7 +6,7 @@ import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx
 import { t } from "../../../lib/reactive/i18n.ts";
 import "./chat-outputs.css";
 
-export type ChatOutputsDashboard = {
+type ChatOutputsDashboard = {
   title: string;
   onOpen: () => void;
 };
