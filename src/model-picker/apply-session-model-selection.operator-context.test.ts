@@ -1,10 +1,9 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
 import { preparePublishedModelRuntimeChoice } from "../agents/model-runtime-choice.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOperatorToolGatewayAuthority } from "../gateway/server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "../gateway/server-plugin-runtime-client.js";
@@ -13,11 +12,12 @@ import {
   type ApplySessionModelSelectionParams,
 } from "../plugin-sdk/model-session-runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
-  onSessionLifecycleEvent,
-  type SessionLifecycleEvent,
-} from "../sessions/session-lifecycle-events.js";
-import { createModelSelectionInputs } from "./apply-session-model-selection.test-support.js";
+  configuredModels,
+  createModelSelectionInputs,
+  useSelectionEffects,
+} from "./apply-session-model-selection.test-support.js";
 
 vi.mock("../agents/model-runtime-choice.js", () => ({
   preparePublishedModelRuntimeChoice: vi.fn<
@@ -51,18 +51,11 @@ vi.mock(
   factories.placementRuntimePreparation,
 );
 
-let lifecycleEvents: SessionLifecycleEvent[];
-let unsubscribeLifecycle: () => void;
-beforeEach(() => {
-  resetMocks();
-  vi.mocked(loadProviderScopedThinkingCatalog).mockReset().mockResolvedValue([]);
-  lifecycleEvents = [];
-  unsubscribeLifecycle = onSessionLifecycleEvent((event) => lifecycleEvents.push(event));
-});
-afterEach(() => {
-  unsubscribeLifecycle();
-  vi.clearAllMocks();
-});
+const { lifecycleEvents, expectNoSelectionEffects: expectNoPublishedEffects } = useSelectionEffects(
+  { effects, resetMocks },
+  onSessionLifecycleEvent,
+  loadProviderScopedThinkingCatalog,
+);
 
 function restrictedSelection(options: { empty?: boolean; assertCurrent?: () => void } = {}) {
   const { createParams, createEntry } = createModelSelectionInputs();
@@ -79,22 +72,7 @@ function restrictedSelection(options: { empty?: boolean; assertCurrent?: () => v
         modelPolicy: { allow: ["fixture/primary", "fixture/manual"] },
       },
     },
-    models: {
-      providers: {
-        fixture: {
-          api: "openai-completions",
-          baseUrl: "https://fixture.invalid/v1",
-          models: models.map<ModelDefinitionConfig>(({ id, name }) => ({
-            id,
-            name,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            maxTokens: 1024,
-          })),
-        },
-      },
-    },
+    models: configuredModels(models, 1024),
   };
   const operatorAuthority = createAdmittedRunOperatorAuthority({
     profileId: "limited-operator",
@@ -162,10 +140,8 @@ it.each([
 );
 
 function expectNoSelectionEffects() {
-  expect(lifecycleEvents).toEqual([]);
+  expectNoPublishedEffects();
   expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
-  expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
-  expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
   expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
 }
 

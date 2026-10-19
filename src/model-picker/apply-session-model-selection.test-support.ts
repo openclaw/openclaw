@@ -1,7 +1,61 @@
-import { vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { InternalApplySessionModelSelectionParams } from "./apply-session-model-selection.js";
+
+export function useSelectionEffects(
+  mocks: Pick<ReturnType<typeof createModelSelectionMocks>, "effects" | "resetMocks">,
+  onSessionLifecycleEvent: typeof import("../sessions/session-lifecycle-events.js").onSessionLifecycleEvent,
+  loadProviderScopedThinkingCatalog: typeof import("../agents/model-catalog.runtime.js").loadProviderScopedThinkingCatalog,
+) {
+  const lifecycleEvents: SessionLifecycleEvent[] = [];
+  let unsubscribe: () => void;
+  beforeEach(() => {
+    mocks.resetMocks();
+    vi.mocked(loadProviderScopedThinkingCatalog).mockReset().mockResolvedValue([]);
+    lifecycleEvents.length = 0;
+    unsubscribe = onSessionLifecycleEvent((event) => lifecycleEvents.push(event));
+  });
+  afterEach(() => unsubscribe());
+  return {
+    lifecycleEvents,
+    expectNoSelectionEffects() {
+      expect(lifecycleEvents).toEqual([]);
+      for (const effect of [
+        mocks.effects.triggerSessionPatchHook,
+        mocks.effects.refreshQueuedFollowupSession,
+        mocks.effects.enqueueSystemEvent,
+      ]) {
+        expect(effect).not.toHaveBeenCalled();
+      }
+    },
+  };
+}
+
+export function configuredModels(
+  models: ModelCatalogEntry[],
+  maxTokens = 4096,
+): NonNullable<OpenClawConfig["models"]> {
+  return {
+    providers: {
+      fixture: {
+        api: "openai-completions",
+        baseUrl: "https://fixture.invalid/v1",
+        models: models.map<ModelDefinitionConfig>(({ id, name }) => ({
+          id,
+          name,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          maxTokens,
+        })),
+      },
+    },
+  };
+}
 
 export function createModelSelectionMocks() {
   const effects = {
@@ -111,6 +165,20 @@ export function createModelSelectionInputs() {
     };
   }
 
+  function createSelectedEntry(
+    provider: string,
+    model: string,
+    overrides: Partial<SessionEntry> = {},
+  ) {
+    return createEntry({
+      providerOverride: provider,
+      modelOverride: model,
+      modelOverrideSource: "user",
+      modelOverrideRouteResolution: "resolved",
+      ...overrides,
+    });
+  }
+
   function createParams(overrides: Partial<InternalApplySessionModelSelectionParams> = {}) {
     const sessionEntry = overrides.sessionEntry ?? createEntry();
     const sessionKey = overrides.sessionKey ?? "agent:main:dm:1";
@@ -138,5 +206,5 @@ export function createModelSelectionInputs() {
     } satisfies InternalApplySessionModelSelectionParams;
   }
 
-  return { catalog, createEntry, createParams };
+  return { catalog, createEntry, createSelectedEntry, createParams };
 }
