@@ -1,7 +1,5 @@
 import { EventEmitter } from "node:events";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { execNodeEvalSync } from "../../test-utils/node-process.js";
 import {
   registerActiveManagedProxyUrl,
@@ -24,10 +22,7 @@ const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
 afterEach(() => {
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
-  poolCtor.mockReset();
-  proxyAgentCtor.mockReset();
-  proxyConnect.mockReset();
-  logDebug.mockReset();
+  [poolCtor, proxyAgentCtor, proxyConnect, logDebug].forEach((mock) => mock.mockReset());
 });
 
 class MockClient extends EventEmitter {
@@ -78,24 +73,21 @@ function installUndiciRuntimeDeps(): void {
     fetch: vi.fn(),
   };
 }
+beforeEach(installUndiciRuntimeDeps);
 
-function expectOptionsRecord(options: unknown, message: string): Record<string, unknown> {
+function requireOptions(mock: ReturnType<typeof vi.fn>, index: number): Record<string, unknown> {
+  const options = mock.mock.calls[0]?.[index];
   if (typeof options !== "object" || options === null || Array.isArray(options)) {
-    throw new Error(message);
+    throw new Error("expected constructor options");
   }
   return options as Record<string, unknown>;
 }
 
-function requireOptions(mock: ReturnType<typeof vi.fn>, index: number): Record<string, unknown> {
-  return expectOptionsRecord(mock.mock.calls[0]?.[index], "expected constructor options");
-}
-
-describe("installed dispatcher lifecycle", () => {
-  it("loads lazily, retries failed initialization, and reuses the installed API behind overrides", () => {
-    const runtimeUrl = pathToFileURL(path.resolve("src/infra/net/undici-runtime.ts")).href;
-    const packageUrl = pathToFileURL(path.resolve("package.json")).href;
-    const output = execNodeEvalSync(
-      `
+it("loads lazily, retries failed initialization, and reuses the installed API behind overrides", () => {
+  const runtimeUrl = new URL("./undici-runtime.ts", import.meta.url).href;
+  const packageUrl = new URL("../../../package.json", import.meta.url).href;
+  const output = execNodeEvalSync(
+    `
       import assert from "node:assert/strict";
       import { EventEmitter } from "node:events";
       import { createRequire, registerHooks } from "node:module";
@@ -153,75 +145,61 @@ describe("installed dispatcher lifecycle", () => {
         assert.ok(dispatchers.every((dispatcher) => dispatcher.destroyed));
       }
       `,
-      { imports: ["tsx"] },
-    );
+    { imports: ["tsx"] },
+  );
 
-    expect(output.trim()).toBe("ok");
-  });
+  expect(output.trim()).toBe("ok");
 });
+it("handles an internal error from direct agent client before connect", () => {
+  const agent = createHttp1Agent() as unknown as MockAgent;
+  const client = agent.createOriginDispatcher({ connections: 1 });
+  const error = new Error("stream handler aborted");
 
-describe("undici dispatcher errors", () => {
-  it("handles an internal error from direct agent client before connect", () => {
-    installUndiciRuntimeDeps();
-    const agent = createHttp1Agent() as unknown as MockAgent;
-    const client = agent.createOriginDispatcher({ connections: 1 });
-    const error = new Error("stream handler aborted");
-
-    expect(() => client.emit("error", error)).not.toThrow();
-    expect(logDebug).toHaveBeenCalledWith(expect.stringContaining(error.message));
-  });
+  expect(() => client.emit("error", error)).not.toThrow();
+  expect(logDebug).toHaveBeenCalledWith(expect.stringContaining(error.message));
 });
+it("adds active managed proxy CA trust to explicit ProxyAgent options", () => {
+  const registration = registerActiveManagedProxyUrl(new URL("https://proxy.test:8443"), {
+    proxyTls: { ca: "explicit-proxy-agent-ca" },
+  });
 
-describe("createHttp1ProxyAgent", () => {
-  it("adds active managed proxy CA trust to explicit ProxyAgent options", () => {
-    installUndiciRuntimeDeps();
-    const registration = registerActiveManagedProxyUrl(new URL("https://proxy.test:8443"), {
+  try {
+    createHttp1ProxyAgent({ uri: "https://proxy.test:8443" });
+
+    expect(requireOptions(proxyAgentCtor, 0)).toMatchObject({
+      uri: "https://proxy.test:8443",
+      allowH2: false,
       proxyTls: { ca: "explicit-proxy-agent-ca" },
     });
-
-    try {
-      createHttp1ProxyAgent({ uri: "https://proxy.test:8443" });
-
-      expect(requireOptions(proxyAgentCtor, 0)).toMatchObject({
-        uri: "https://proxy.test:8443",
-        allowH2: false,
-        proxyTls: { ca: "explicit-proxy-agent-ca" },
-      });
-    } finally {
-      stopActiveManagedProxyRegistration(registration);
-    }
-  });
+  } finally {
+    stopActiveManagedProxyRegistration(registration);
+  }
 });
+it.each([
+  { mode: "fixed", servername: "proxy.example", preserve: true },
+  { mode: "environment", servername: "127.0.0.1", preserve: false },
+])("handles $servername through the $mode proxy", ({ mode, servername, preserve }) => {
+  const uri = `https://${servername}:8443`;
+  if (mode === "environment") {
+    createHttp1EnvHttpProxyAgent({ httpsProxy: uri });
+  } else {
+    createHttp1ProxyAgent({ uri });
+  }
+  const { clientFactory } = requireOptions(proxyAgentCtor, 0);
+  if (typeof clientFactory !== "function") {
+    throw new Error("expected ProxyAgent clientFactory");
+  }
+  clientFactory(new URL("https://127.0.0.1:8443"), { connect: proxyConnect });
+  const { connect } = requireOptions(poolCtor, 1);
+  if (typeof connect !== "function") {
+    throw new Error("expected wrapped Client connect");
+  }
+  connect({ host: "127.0.0.1:8443", servername }, vi.fn());
 
-describe("proxy SNI policy", () => {
-  it.each([
-    { mode: "fixed", servername: "proxy.example", preserve: true },
-    { mode: "environment", servername: "127.0.0.1", preserve: false },
-  ])("handles $servername through the $mode proxy", ({ mode, servername, preserve }) => {
-    installUndiciRuntimeDeps();
-
-    const uri = `https://${servername}:8443`;
-    if (mode === "environment") {
-      createHttp1EnvHttpProxyAgent({ httpsProxy: uri });
-    } else {
-      createHttp1ProxyAgent({ uri });
-    }
-    const { clientFactory } = requireOptions(proxyAgentCtor, 0);
-    if (typeof clientFactory !== "function") {
-      throw new Error("expected ProxyAgent clientFactory");
-    }
-    clientFactory(new URL("https://127.0.0.1:8443"), { connect: proxyConnect });
-    const { connect } = requireOptions(poolCtor, 1);
-    if (typeof connect !== "function") {
-      throw new Error("expected wrapped Client connect");
-    }
-    connect({ host: "127.0.0.1:8443", servername }, vi.fn());
-
-    expect(proxyConnect).toHaveBeenCalledWith(
-      preserve
-        ? expect.objectContaining({ servername })
-        : expect.not.objectContaining({ servername }),
-      expect.any(Function),
-    );
-  });
+  expect(proxyConnect).toHaveBeenCalledWith(
+    preserve
+      ? expect.objectContaining({ servername })
+      : expect.not.objectContaining({ servername }),
+    expect.any(Function),
+  );
 });
