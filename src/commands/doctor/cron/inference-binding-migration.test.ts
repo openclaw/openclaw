@@ -1,49 +1,32 @@
 import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
-import { persistAuthProfileBatch } from "../../../agents/auth-profiles/upsert-with-lock.js";
+import { upsertAuthProfileWithLockOrThrow } from "../../../agents/auth-profiles/upsert-with-lock.js";
 import { resolveCronJobConfigRevision } from "../../../cron/config-revision.js";
 import { captureCronInferenceBinding } from "../../../cron/inference-binding.runtime.js";
 import { loadCronJobsStore, saveCronJobsStore } from "../../../cron/store.js";
-import {
-  claimCronRunReceiptInDatabaseForTest,
-  prepareCronRunReceiptClaim,
-} from "../../../cron/store/run-receipt-store.test-support.js";
+import * as receipts from "../../../cron/store/run-receipt-store.test-support.js";
 import type { CronStoredJob } from "../../../cron/types.js";
 import { runLegacyCronHealth } from "../../../flows/doctor-health-contribution-runners.state.js";
 import { mintCronStandingGrantLocked } from "../../../gateway/operator-approval-standing-grants.worker.js";
-import {
-  validateCronStandingGrant,
-  revokeCronStandingGrant,
-} from "../../../gateway/operator-approval-store.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../../../state/openclaw-state-db.js";
+import * as grants from "../../../gateway/operator-approval-store.js";
+import * as stateDb from "../../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import {
-  prepareDoctorContext,
-  withDoctorConfigMaintenance,
-} from "../../doctor-config-flow.test-support.js";
+import * as doctor from "../../doctor-config-flow.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 async function repair(configPath: string) {
-  await withDoctorConfigMaintenance(async () => {
-    await using ctx = await prepareDoctorContext(configPath);
+  await doctor.withDoctorConfigMaintenance(async () => {
+    await using ctx = await doctor.prepareDoctorContext(configPath);
     await runLegacyCronHealth(ctx);
   });
 }
 
 function legacyJob(id: string, model?: string): CronStoredJob {
   return {
-    id,
-    name: id,
-    agentId: "main",
-    enabled: true,
-    createdAtMs: 1,
+    ...receipts.makeCronReceiptJob(id, "main"),
     updatedAtMs: 2,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
-    sessionTarget: "isolated",
     wakeMode: "now",
     delivery: { mode: "none" },
     payload: {
@@ -76,20 +59,16 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
       vi.spyOn(globalThis, "fetch").mockRejectedValue(
         new Error("Unexpected network request in offline migration"),
       );
-      await persistAuthProfileBatch({
-        profiles: [
-          {
-            profileId: "openai:default",
-            credential: {
-              type: "oauth",
-              provider: "openai",
-              access: "synthetic-access",
-              refresh: "synthetic-refresh",
-              expires: Date.now() + 3_600_000,
-              accountId: "synthetic-account",
-            },
-          },
-        ],
+      await upsertAuthProfileWithLockOrThrow({
+        profileId: "openai:default",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "synthetic-access",
+          refresh: "synthetic-refresh",
+          expires: Date.now() + 3_600_000,
+          accountId: "synthetic-account",
+        },
       });
       const binding = await captureCronInferenceBinding({
         cfg,
@@ -107,26 +86,22 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
       const inactive = { ...legacyJob("disabled", "openai/gpt-5.5"), enabled: false };
       await saveCronJobsStore(storePath, { version: 1, jobs });
       await saveCronJobsStore(inactivePath, { version: 1, jobs: [inactive] });
-      await expect(fs.stat(state.statePath("cron", "jobs-quarantine.json"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-
-      const query = (sql: string) => openOpenClawStateDatabase().db.prepare(sql).get();
+      const query = (sql: string) => stateDb.openOpenClawStateDatabase().db.prepare(sql).get();
       const backupsOnDisk = async () =>
         (await fs.readdir(state.statePath("state"))).filter(
           (name) => name.includes(".doctor-cron-") && name.endsWith(".bak"),
         );
-      openOpenClawStateDatabase()
-        .db.prepare(
-          `INSERT INTO operator_approvals (cursor_id, approval_id, resolution_ref, kind, status, presentation_json, reviewer_device_ids_json, audience_session_keys_json, runtime_epoch, created_at_ms, expires_at_ms, updated_at_ms, decision, terminal_reason, resolved_at_ms, resolver_kind) VALUES (1, 'legacy-approval', ?, 'exec', 'allowed', '{}', '[]', '[]', 'synthetic-epoch', 1, 3, 2, 'allow-always', 'user', 2, 'device')`,
-        )
-        .run("a".repeat(43));
+      stateDb
+        .openOpenClawStateDatabase()
+        .db.exec(
+          `INSERT INTO operator_approvals (cursor_id, approval_id, resolution_ref, kind, status, presentation_json, reviewer_device_ids_json, audience_session_keys_json, runtime_epoch, created_at_ms, expires_at_ms, updated_at_ms, decision, terminal_reason, resolved_at_ms, resolver_kind) VALUES (1, 'legacy-approval', '${"a".repeat(43)}', 'exec', 'allowed', '{}', '[]', '[]', 'synthetic-epoch', 1, 3, 2, 'allow-always', 'user', 2, 'device')`,
+        );
       const approvedOperation = {
         agentId: "main",
         cronJobId: "pinned",
         operationBinding: "synthetic-approved-operation",
       };
-      runOpenClawStateWriteTransaction((db) =>
+      stateDb.runOpenClawStateWriteTransaction((db) =>
         mintCronStandingGrantLocked(db, {
           ...approvedOperation,
           approvalId: "legacy-approval",
@@ -136,26 +111,21 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
         }),
       );
       const grantSql =
-        "SELECT * FROM operator_approval_standing_grants WHERE cron_job_id = 'pinned'";
-      const generationSql =
-        "SELECT grant_definition_generation FROM cron_jobs WHERE job_id = 'pinned'";
+        "SELECT g.*, j.grant_definition_generation FROM operator_approval_standing_grants g JOIN cron_jobs j ON j.job_id = g.cron_job_id WHERE g.cron_job_id = 'pinned'";
       const grantBefore = query(grantSql)!;
-      const generationBefore = query(generationSql);
 
       await repair(state.configPath);
       const repaired = (await loadCronJobsStore(storePath)).jobs;
-      for (const [index, job] of repaired.entries()) {
-        expect(job.inferenceBinding).toMatchObject({
-          provider: "openai",
-          profileId: "openai:default",
-          authRequirement: "subscription",
-        });
-        const { inferenceBinding: _binding, ...definition } = job;
-        const { inferenceBinding: _previous, ...before } = jobs[index]!;
-        expect(definition).toEqual(before);
-      }
-      expect(repaired[1]!.payload).not.toHaveProperty("model");
-      expect(repaired[2]!.inferenceBinding).toEqual(binding);
+      const adopted = expect.objectContaining({
+        provider: "openai",
+        profileId: "openai:default",
+        authRequirement: "subscription",
+      });
+      expect(repaired).toEqual(
+        jobs.map((job) =>
+          Object.assign({}, job, { inferenceBinding: job.inferenceBinding ?? adopted }),
+        ),
+      );
       expect((await loadCronJobsStore(inactivePath)).jobs[0]).toMatchObject({
         ...inactive,
         inferenceBinding: { profileId: "openai:default" },
@@ -165,25 +135,15 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
       await repair(state.configPath);
       expect((await loadCronJobsStore(storePath)).jobs).toEqual(repaired);
       expect(await backupsOnDisk()).toEqual(backups);
-      const migratedJob = repaired[0]!;
-      const revision = resolveCronJobConfigRevision(migratedJob);
+      const revision = resolveCronJobConfigRevision(repaired[0]!);
       const grantAfter = query(grantSql)!;
       expect(grantAfter).toEqual({ ...grantBefore, job_config_revision: revision });
-      expect(query(generationSql)).toEqual(generationBefore);
-      const prepared = prepareCronRunReceiptClaim({
-        storePath,
-        job: migratedJob,
-        agentId: "main",
-        startedAtMs: Date.now(),
-      });
-      const handle = runOpenClawStateWriteTransaction(({ db }) =>
-        claimCronRunReceiptInDatabaseForTest({ database: db, prepared }),
-      );
+      const handle = receipts.claimCronRunReceiptForTest(storePath, repaired[0]!, Date.now());
       const lookup = { ...approvedOperation, jobConfigRevision: revision, handle };
-      expect(await validateCronStandingGrant(lookup)).toMatchObject({ outcome: "consumed" });
+      expect(await grants.validateCronStandingGrant(lookup)).toMatchObject({ outcome: "consumed" });
       const grantId = String(grantAfter.grant_id);
-      await revokeCronStandingGrant({ grantId, revokedBy: "synthetic-operator" });
-      expect(await validateCronStandingGrant(lookup)).toMatchObject({ outcome: "revoked" });
+      await grants.revokeCronStandingGrant({ grantId, revokedBy: "synthetic-operator" });
+      expect(await grants.validateCronStandingGrant(lookup)).toMatchObject({ outcome: "revoked" });
     },
   );
 });

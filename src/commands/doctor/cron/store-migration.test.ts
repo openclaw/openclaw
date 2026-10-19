@@ -74,7 +74,7 @@ function normalizeWithBlockedTargets(
 }
 
 describe("normalizeStoredCronJobs", () => {
-  it("normalizes legacy cron fields and reports migration issues", () => {
+  it.each(["provider", "channel"])("normalizes legacy cron %s fields", (channelField) => {
     const jobs = [
       {
         jobId: "legacy-job",
@@ -82,7 +82,7 @@ describe("normalizeStoredCronJobs", () => {
         message: "say hi",
         model: "openai/gpt-5.5",
         deliver: true,
-        provider: " TeLeGrAm ",
+        [channelField]: " TeLeGrAm ",
         to: "12345",
         threadId: " 77 ",
       },
@@ -105,7 +105,7 @@ describe("normalizeStoredCronJobs", () => {
       delivery: { mode: "announce", channel: "telegram", to: "12345", threadId: "77" },
       payload: { kind: "agentTurn", message: "say hi", model: "openai/gpt-5.5" },
     });
-    for (const key of ["jobId", "message", "provider"]) {
+    for (const key of ["jobId", "message", channelField, "to", "threadId"]) {
       expect(jobs[0]?.[key]).toBeUndefined();
     }
   });
@@ -121,8 +121,7 @@ describe("normalizeStoredCronJobs", () => {
 
     const result = normalizeStoredCronJobs(jobs);
 
-    expect(result.mutated).toBe(true);
-    expect(result.issues.legacyPayloadProvider).toBe(1);
+    expect(result).toMatchObject({ mutated: true, issues: { legacyPayloadProvider: 1 } });
     expect(jobs[0]).toMatchObject({
       payload: { kind: "agentTurn", message: "ping" },
       delivery: { mode: "announce", channel: "slack" },
