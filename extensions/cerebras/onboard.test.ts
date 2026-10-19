@@ -22,9 +22,9 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
 
 const CEREBRAS_PUBLIC_MODELS_URL = "https://api.cerebras.ai/public/v1/models";
 const NATIVE_TEXT_MODEL = {
-  id: "fixture-text-model",
+  id: "text",
   object: "model",
-  name: "Fixture Text Model",
+  name: "Text",
   pricing: { prompt: "0.00000035", completion: "0.00000075" },
   capabilities: { reasoning: true, vision: false, tools: true },
   limits: { max_context_length: 131072, max_completion_tokens: 40960 },
@@ -32,23 +32,13 @@ const NATIVE_TEXT_MODEL = {
 
 type CatalogContext = Parameters<NonNullable<ProviderPlugin["catalog"]>["run"]>[0];
 
-function createCatalogContext(): CatalogContext {
-  return {
-    config: {},
-    env: {},
-    resolveProviderApiKey: () => ({
-      apiKey: "fixture-cerebras-key",
-      discoveryApiKey: "fixture-discovery-key",
-      profileId: "cerebras:fixture-profile",
-    }),
-    resolveProviderAuth: () => ({
-      apiKey: "fixture-cerebras-key",
-      discoveryApiKey: "fixture-discovery-key",
-      mode: "api_key",
-      source: "env",
-    }),
-  };
-}
+const keys = { apiKey: "fixture-cerebras-key", discoveryApiKey: "fixture-discovery-key" };
+const createCatalogContext = (): CatalogContext => ({
+  config: {},
+  env: {},
+  resolveProviderApiKey: () => ({ ...keys, profileId: "cerebras:fixture-profile" }),
+  resolveProviderAuth: () => ({ ...keys, mode: "api_key", source: "env" }),
+});
 
 function mockCatalogResponse(body: unknown, init?: ResponseInit) {
   ssrfRuntimeMocks.fetchWithSsrFGuard.mockImplementation(async ({ url }) => ({
@@ -58,25 +48,23 @@ function mockCatalogResponse(body: unknown, init?: ResponseInit) {
   }));
 }
 
-async function runCerebrasCatalog(ctx = createCatalogContext()) {
+async function runCerebrasCatalog() {
   const provider = await registerSingleProviderPlugin(plugin);
-  const result = await provider.catalog?.run(ctx);
+  const result = await provider.catalog?.run(createCatalogContext());
   if (!result || !("provider" in result)) {
     throw new Error("expected authenticated Cerebras provider catalog");
   }
   return result.provider;
 }
 
-beforeEach(() => {
-  clearLiveCatalogCacheForTests();
-});
+beforeEach(clearLiveCatalogCacheForTests);
 
 afterEach(() => {
   clearLiveCatalogCacheForTests();
   ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
 });
 
-describe("Cerebras onboarding", () => {
+describe("Cerebras", () => {
   it("selects the default and alias when seeding a replace-mode catalog", () => {
     const config = applyCerebrasConfig({ models: { mode: "replace" } });
 
@@ -89,9 +77,7 @@ describe("Cerebras onboarding", () => {
       [CEREBRAS_DEFAULT_MODEL_REF]: { alias: "Cerebras GPT OSS 120B" },
     });
   });
-});
 
-describe("Cerebras native catalog", () => {
   it("discovers native prices, limits, and capabilities without sending credentials", async () => {
     mockCatalogResponse({
       object: "list",
@@ -99,8 +85,8 @@ describe("Cerebras native catalog", () => {
         NATIVE_TEXT_MODEL,
         {
           ...NATIVE_TEXT_MODEL,
-          id: "fixture-vision-model",
-          name: "Fixture Vision Model",
+          id: "vision",
+          name: "Vision",
           pricing: { prompt: "0.00000099", completion: "0.00000149" },
           capabilities: { reasoning: false, vision: true, tools: true },
           limits: { max_context_length: 262144, max_completion_tokens: 65536 },
@@ -120,28 +106,23 @@ describe("Cerebras native catalog", () => {
       apiKey: "fixture-cerebras-key",
       api: "openai-completions",
       baseUrl: "https://api.cerebras.ai/v1",
-      models: [
-        {
-          id: "fixture-text-model",
-          name: "Fixture Text Model",
-          reasoning: true,
-          input: ["text"],
-          contextWindow: 131072,
-          maxTokens: 40960,
-        },
-        {
-          id: "fixture-vision-model",
-          name: "Fixture Vision Model",
-          reasoning: false,
-          input: ["text", "image"],
-          contextWindow: 262144,
-          maxTokens: 65536,
-        },
-      ],
     });
+    expect(
+      catalog.models.map(({ id, name, reasoning, input, contextWindow, maxTokens }) => [
+        id,
+        name,
+        reasoning,
+        input,
+        contextWindow,
+        maxTokens,
+      ]),
+    ).toEqual([
+      ["text", "Text", true, ["text"], 131072, 40960],
+      ["vision", "Vision", false, ["text", "image"], 262144, 65536],
+    ]);
     for (const [id, input, output] of [
-      ["fixture-text-model", 0.35, 0.75],
-      ["fixture-vision-model", 0.99, 1.49],
+      ["text", 0.35, 0.75],
+      ["vision", 0.99, 1.49],
     ] as const) {
       const model = catalog.models.find((entry) => entry.id === id);
       expect(model?.cost.input).toBeCloseTo(input, 10);
@@ -186,9 +167,7 @@ describe("Cerebras native catalog", () => {
     ]);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
   });
-});
 
-describe("Cerebras prompt cache routing", () => {
   it.each([
     { baseUrl: "https://api.cerebras.ai/v1", key: "synthetic-session" },
     { baseUrl: "https://proxy.example/v1", key: undefined },
