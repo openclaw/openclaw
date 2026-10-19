@@ -613,7 +613,6 @@
   "ui/src/components/assistant-panel-solid.tsx",
   "ui/src/components/assistant-panel-view.tsx",
   "ui/src/components/browser/browser-target.ts",
-  "ui/src/components/catalog-session-menu-solid.tsx",
   "ui/src/components/cloud-worker-stop.ts",
   "ui/src/components/command-palette-contract.ts",
   "ui/src/components/command-palette-input.tsx",

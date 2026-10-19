@@ -49,6 +49,7 @@ export {
 } from "./app-sidebar-session-menu-renderers.tsx";
 export { renderSidebarPluginNavigationMenuForMenus } from "./app-sidebar-plugin-navigation-menu.tsx";
 export { renderSidebarPeopleFilterMenuForMenus } from "./app-sidebar-people-filter-menu.tsx";
+export { CatalogSessionMenu } from "./catalog-session-menu-solid.tsx";
 
 export function renderSidebarRailPinMenuForMenus(
   menus: SidebarMenus,
