@@ -1,4 +1,4 @@
-import { rmSync, writeFileSync } from "node:fs";
+import { rmSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
@@ -7,13 +7,14 @@ import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   GatewayOperatorAccessDeniedError,
-  resolveGatewayOperatorAccessAuthority,
+  resolveGatewayOperatorAccessAuthority as resolveAccess,
 } from "../gateway/operator-access-policy.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import {
   loadAndActivateRootPluginRegistry,
@@ -67,14 +68,11 @@ it.each([
       },
     });`,
   });
-  writeFileSync(
-    path.join(plugin.dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: plugin.id,
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-      contracts: { tools: ["runtime_owner_probe"] },
-    }),
-  );
+  writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+    id: plugin.id,
+    configSchema: { type: "object", additionalProperties: false, properties: {} },
+    contracts: { tools: ["runtime_owner_probe"] },
+  });
   const createFacets = (owner: string): Pick<PluginRuntime, "nodes" | "subagent"> => {
     const facets: Pick<PluginRuntime, "nodes" | "subagent"> = {
       nodes: {
@@ -247,10 +245,13 @@ it.each(["missing manifest", "registration failure", "disabled", "loaded"] as co
         },
       } satisfies OpenClawConfig;
       const visitor = ensureProfileForEmail("loader-visitor@example.test");
-      const staff = ensureProfileForEmail("loader-staff@example.test");
-      const unbound = ensureProfileForEmail("loader-unbound@example.test");
-      setUserProfileRole(staff.id, "staff");
-      setUserProfileRole(unbound.id, "unbound");
+      const withRole = (role: string) => {
+        const profile = ensureProfileForEmail(`loader-${role}@example.test`);
+        setUserProfileRole(profile.id, role);
+        return profile;
+      };
+      const staff = withRole("staff");
+      const unbound = withRole("unbound");
       let registry: Awaited<ReturnType<typeof loadAndActivateRootPluginRegistry>> | undefined;
       const catalog = await prepareUserProfileCatalog();
       process.on(optionalCheckEvent, optionalChecks);
@@ -284,7 +285,7 @@ it.each(["missing manifest", "registration failure", "disabled", "loaded"] as co
         );
         if (state === "loaded") {
           const authority = expectDefined(
-            resolveGatewayOperatorAccessAuthority(visitor.id, config),
+            resolveAccess(visitor.id, config),
             "loaded required access policy authority",
           );
           expect(authority.assertCurrent).not.toThrow();
@@ -294,21 +295,19 @@ it.each(["missing manifest", "registration failure", "disabled", "loaded"] as co
             gateway: { roles: { ...config.gateway.roles, default: "staff" } },
           };
           for (const unboundConfig of [staffDefault, { ...config, gateway: {} }]) {
-            expect(resolveGatewayOperatorAccessAuthority(visitor.id, unboundConfig)).toBeNull();
-            expect(resolveGatewayOperatorAccessAuthority(staff.id, unboundConfig)).toBeNull();
+            expect(resolveAccess(visitor.id, unboundConfig)).toBeNull();
+            expect(resolveAccess(staff.id, unboundConfig)).toBeNull();
           }
         } else {
-          expect(() => resolveGatewayOperatorAccessAuthority(visitor.id, config)).toThrow(
-            GatewayOperatorAccessDeniedError,
-          );
+          expect(() => resolveAccess(visitor.id, config)).toThrow(GatewayOperatorAccessDeniedError);
           expect(optionalChecks).not.toHaveBeenCalled();
         }
-        expect(resolveGatewayOperatorAccessAuthority(staff.id, config)).toBeNull();
-        expect(resolveGatewayOperatorAccessAuthority(unbound.id, config)).toBeNull();
-        expect(optionalChecks).toHaveBeenCalledWith(staff.id, false);
-        expect(optionalChecks).toHaveBeenCalledWith(unbound.id, false);
+        for (const profile of [staff, unbound]) {
+          expect(resolveAccess(profile.id, config)).toBeNull();
+          expect(optionalChecks).toHaveBeenCalledWith(profile.id, false);
+        }
         optionalChecks.mockClear();
-        expect(resolveGatewayOperatorAccessAuthority(GATEWAY_OWNER_PROFILE_ID, config)).toBeNull();
+        expect(resolveAccess(GATEWAY_OWNER_PROFILE_ID, config)).toBeNull();
         expect(optionalChecks).not.toHaveBeenCalled();
       } finally {
         process.off(optionalCheckEvent, optionalChecks);

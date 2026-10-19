@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import {
+  callFixtureGatewayMethod,
+  disposeLoaderFixtures,
+  writeFixtureJson,
+} from "./loader-fixture-builders.test-support.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
@@ -11,18 +16,12 @@ import {
 } from "./loader.test-fixtures.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import type { PluginRegistry } from "./registry-types.js";
-import { disposePluginRegistryInstances } from "./runtime.js";
 import { getPluginRuntimeLoadContext } from "./runtime/load-context.js";
 
 const registries: PluginRegistry[] = [];
 const caches: ReturnType<typeof createPluginCache>[] = [];
 afterEach(async () => {
-  for (const registry of registries.splice(0).toReversed()) {
-    await disposePluginRegistryInstances(registry);
-  }
-  for (const cache of caches.splice(0).toReversed()) {
-    await cache[Symbol.asyncDispose]();
-  }
+  await disposeLoaderFixtures(registries, caches);
   resetPluginLoaderTestStateForTest();
 });
 
@@ -87,15 +86,7 @@ it.each(["manifest", "config"] as const)(
       const handler = next.gatewayHandlers["semantic-retention.probe"];
       assert(handler);
       expect(handler).toBe(initial.gatewayHandlers["semantic-retention.probe"]);
-      const respond = vi.fn();
-      await handler({
-        req: { type: "req", id: "semantic-retention", method: "semantic-retention.probe" },
-        params: {},
-        client: null,
-        isWebchatConnect: () => false,
-        respond,
-        context: {} as Parameters<typeof handler>[0]["context"],
-      });
+      const respond = await callFixtureGatewayMethod(handler, "semantic-retention.probe");
       expect(respond).toHaveBeenCalledWith(true, "available", undefined, undefined);
     }
     // An ordered setting or real manifest value still invalidates registration.
@@ -143,16 +134,13 @@ it("retains an untracked plugin across Control UI rebuilds, not declaration chan
       fs.writeFileSync(path.join(plugin.dir, assetDir, "index.js"), "export {};\n");
       fs.writeFileSync(path.join(plugin.dir, assetDir, "index.css"), ":root { color: blue; }\n");
     }
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: plugin.id,
-        configSchema,
-        ...(build
-          ? { controlUi: { entry: `${assetDir}/index.js`, styles: [`${assetDir}/index.css`] } }
-          : {}),
-      }),
-    );
+    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+      id: plugin.id,
+      configSchema,
+      ...(build
+        ? { controlUi: { entry: `${assetDir}/index.js`, styles: [`${assetDir}/index.css`] } }
+        : {}),
+    });
   };
   const load = (loadModules = true, previousRegistry = registries.at(-1)) => {
     // Each reload reads fresh disk metadata, as the Gateway's plugin operation does.

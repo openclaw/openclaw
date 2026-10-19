@@ -12,6 +12,8 @@ import {
 } from "./current-plugin-metadata-snapshot.js";
 import { selectCurrentPluginMetadataCache } from "./current-plugin-metadata-state.js";
 import { createHookRunner } from "./hooks.js";
+import { disposeLoaderFixtures, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
+import type { PluginLoadOptions } from "./loader-types.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   makePluginLoaderTempDir,
@@ -39,7 +41,17 @@ import {
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "./runtime/load-context.js";
 
-afterEach(resetPluginLoaderTestStateForTest);
+const registries: PluginRegistry[] = [];
+afterEach(async () => {
+  await disposeLoaderFixtures(registries);
+  resetPluginLoaderTestStateForTest();
+});
+
+function load(options: PluginLoadOptions) {
+  const registry = loadOpenClawPlugins(options);
+  registries.push(registry);
+  return registry;
+}
 
 function resolveProbe(registry: PluginRegistry) {
   const tool = registry.tools
@@ -114,11 +126,10 @@ it.each(["installed", "bundled-mjs"] as const)(
     };
     const manifestPath = path.join(plugin.dir, "openclaw.plugin.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    fs.writeFileSync(
-      manifestPath,
-      JSON.stringify({ ...manifest, contracts: { tools: ["recovery_inbound_probe"] } }),
-    );
-    const registries: PluginRegistry[] = [];
+    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+      ...manifest,
+      contracts: { tools: ["recovery_inbound_probe"] },
+    });
     const previousCache = getProcessPluginCache();
     await using operationCache = createPluginCache();
     await using publishedCache = createPluginCache();
@@ -145,8 +156,7 @@ it.each(["installed", "bundled-mjs"] as const)(
             runtimeSideEffects: true,
             throwOnLoadError: true,
           };
-          const previous = withPluginCache(publishedCache, () => loadOpenClawPlugins(options));
-          registries.push(previous);
+          const previous = withPluginCache(publishedCache, () => load(options));
           const oldRecord = previous.plugins.find((record) => record.id === id)!;
           expect(oldRecord.origin).toBe(bundled ? "bundled" : "config");
           const oldInstance = getPluginInstance(oldRecord)!;
@@ -158,7 +168,7 @@ it.each(["installed", "bundled-mjs"] as const)(
           try {
             await disposePluginRegistryInstances(previous);
             const candidate = withPluginCache(operationCache, () =>
-              loadOpenClawPlugins({
+              load({
                 ...options,
                 config: {
                   plugins: {
@@ -172,7 +182,6 @@ it.each(["installed", "bundled-mjs"] as const)(
                 throwOnLoadError: false,
               }),
             );
-            registries.push(candidate);
             expect(candidate.plugins.find((record) => record.id === id)?.error).toContain(
               "replacement registration failed",
             );
@@ -185,12 +194,11 @@ it.each(["installed", "bundled-mjs"] as const)(
               fs.rmSync(plugin.dir, { recursive: true });
             }
             await withPluginCache(operationCache, async () => {
-              const restored = loadOpenClawPlugins({
+              const restored = load({
                 ...options,
                 previousRegistry: previous,
                 moduleRecoveries: new Map([[id, recovery]]),
               });
-              registries.push(restored);
               const restoredRecord = restored.plugins.find((record) => record.id === id)!;
               expect(restoredRecord).not.toBe(oldRecord);
               expect(getPluginInstance(restoredRecord)).not.toBe(oldInstance);
@@ -226,7 +234,6 @@ it.each(["installed", "bundled-mjs"] as const)(
                   ),
                 );
                 expect(inbound).toBe(restored);
-                expect(inbound.tools[0]).toBe(restored.tools[0]);
                 expect(await resolveProbe(inbound).execute("inbound", {})).toMatchObject(expected);
               }
               expect(registered).toHaveBeenCalledTimes(3);
@@ -239,9 +246,7 @@ it.each(["installed", "bundled-mjs"] as const)(
       );
     } finally {
       await clearActivePluginRegistry();
-      for (const registry of registries.toReversed()) {
-        await disposePluginRegistryInstances(registry);
-      }
+      await disposeLoaderFixtures(registries);
       selectCurrentPluginMetadataCache(previousCache);
       process.off(evaluatedEvent, evaluated);
       process.off(registeredEvent, registered);
@@ -272,7 +277,6 @@ it("joins a failed candidate's declared stop hook before recovering the previous
   );
   const config = pluginConfig(plugin.id, plugin.file, { fail: false });
   const options = { config, activate: false, runtimeSideEffects: true, cache: false };
-  const registries: PluginRegistry[] = [];
   let recovery: ReturnType<typeof capturePluginRuntimeRecovery>;
   const stop = (registry: PluginRegistry) =>
     createHookRunner(registry, { catchErrors: false }).runGatewayStop(
@@ -280,13 +284,12 @@ it("joins a failed candidate's declared stop hook before recovering the previous
       { port: 0, config, getCron: () => undefined },
     );
   try {
-    const old = loadOpenClawPlugins(options);
-    registries.push(old);
+    const old = load(options);
     recovery = capturePluginRuntimeRecovery(old.plugins[0]!);
     const manifestRegistry = getPluginRuntimeLoadContext(old)!.manifestRegistry;
     await stop(old);
     await disposePluginRegistryInstances(old);
-    const candidate = loadOpenClawPlugins({
+    const candidate = load({
       ...options,
       config: pluginConfig(plugin.id, plugin.file, { fail: true }),
       manifestRegistry,
@@ -302,7 +305,6 @@ it("joins a failed candidate's declared stop hook before recovering the previous
         });
       },
     });
-    registries.push(candidate);
     expect(candidate.plugins[0]!.error).toContain("candidate registration failed");
     expect(candidate.typedHooks).toEqual([]);
     expect(fs.existsSync(lock)).toBe(true);
@@ -316,14 +318,13 @@ it("joins a failed candidate's declared stop hook before recovering the previous
     await retirement;
     expect(fs.existsSync(lock)).toBe(false);
 
-    const restored = loadOpenClawPlugins({
+    const restored = load({
       ...options,
       manifestRegistry,
       previousRegistry: old,
       moduleRecoveries: new Map([[plugin.id, recovery!]]),
       throwOnLoadError: true,
     });
-    registries.push(restored);
     expect(restored.plugins[0]!.status).toBe("loaded");
     expect(fs.existsSync(lock)).toBe(true);
     await stop(restored);
@@ -331,9 +332,7 @@ it("joins a failed candidate's declared stop hook before recovering the previous
   } finally {
     gate.resolve();
     recovery?.module.dispose();
-    for (const registry of registries.toReversed()) {
-      await disposePluginRegistryInstances(registry);
-    }
+    await disposeLoaderFixtures(registries);
   }
 });
 
@@ -347,23 +346,16 @@ it("preserves the registration error and disposes resources when cleanup prepara
       throw new Error('original registration failure');
     } };`,
   });
-  let registry: PluginRegistry | undefined;
-  try {
-    registry = loadOpenClawPlugins({
-      config: pluginConfig(plugin.id, plugin.file),
-      activate: false,
-      cache: false,
-      prepareRegistrationFailureCleanup() {
-        throw new Error("cleanup preparation failure");
-      },
-    });
-    expect(registry.plugins[0]!.error).toContain("original registration failure");
-    expect(registry.plugins[0]!.error).toContain("cleanup preparation failure");
-    await disposePluginRegistryInstances(registry);
-    expect(fs.readFileSync(marker, "utf8")).toBe("disposed");
-  } finally {
-    if (registry) {
-      await disposePluginRegistryInstances(registry);
-    }
-  }
+  const registry = load({
+    config: pluginConfig(plugin.id, plugin.file),
+    activate: false,
+    cache: false,
+    prepareRegistrationFailureCleanup() {
+      throw new Error("cleanup preparation failure");
+    },
+  });
+  expect(registry.plugins[0]!.error).toContain("original registration failure");
+  expect(registry.plugins[0]!.error).toContain("cleanup preparation failure");
+  await disposePluginRegistryInstances(registry);
+  expect(fs.readFileSync(marker, "utf8")).toBe("disposed");
 });
