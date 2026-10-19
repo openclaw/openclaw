@@ -6,7 +6,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import radiusPlugin from "./index.js";
-import { authContext, devicePayload, tokenPayload } from "./test-support.js";
+import * as fixture from "./test-support.js";
 
 const { fetchGuard, streamFetch, resolveAuth } = vi.hoisted(() => ({
   fetchGuard: vi.fn(),
@@ -31,39 +31,31 @@ afterEach(() => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function catalogModel(id: string, name: string, contextWindow = 64_000) {
-  return {
-    id,
-    name,
-    reasoning: true,
-    input: ["text"],
-    contextWindow,
-    maxTokens: 4096,
-    cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-  };
+function mockCatalog(model: ReturnType<typeof fixture.catalogModel>) {
+  fetchGuard.mockResolvedValue({
+    response: Response.json({ baseUrl: fixture.baseUrl, models: [model] }),
+    release: async () => {},
+  });
 }
 
 it.each([true, false])(
   "returns Radius credentials with credentialOnly=%s and discovers models only for setup",
   async (credentialOnly) => {
     const provider = await registerSingleProviderPlugin(radiusPlugin);
-    const method = provider.auth.find((auth) => auth.id === "oauth");
-    if (!method) {
-      throw new Error("Radius OAuth method is not registered");
-    }
+    const method = provider.auth.find((auth) => auth.id === "oauth")!;
     fetchGuard.mockImplementation(async ({ url }: { url: string }) => {
       const payload = url.endsWith("/oauth/device")
-        ? devicePayload
+        ? fixture.devicePayload
         : url.endsWith("/oauth/token")
-          ? tokenPayload
+          ? fixture.tokenPayload
           : {
-              models: [catalogModel("balanced", "Balanced")],
-              baseUrl: "https://radius.pi.dev/v1",
+              models: [fixture.catalogModel("balanced", "Balanced")],
+              baseUrl: fixture.baseUrl,
             };
       return { response: Response.json(payload), release: async () => {} };
     });
     const { promise: deviceCode, resolve: codeShown } = Promise.withResolvers<void>();
-    const { ctx } = authContext({
+    const { ctx } = fixture.authContext({
       config: { agents: { defaults: { model: { primary: "other/existing" } } } },
       credentialOnly,
       isRemote: true,
@@ -100,11 +92,8 @@ it.each([true, false])(
 );
 
 it("routes a discovered organization model through the registered native transport", async () => {
-  const metadata = catalogModel("organization/custom-model", "Organization model", 100_000);
-  fetchGuard.mockResolvedValue({
-    response: Response.json({ baseUrl: "https://radius.pi.dev/v1", models: [metadata] }),
-    release: async () => undefined,
-  });
+  const metadata = fixture.catalogModel("organization/custom-model", "Organization model", 100_000);
+  mockCatalog(metadata);
   const provider = await registerSingleProviderPlugin(radiusPlugin);
   const catalog = await runSingleProviderCatalog(provider, {
     resolveProviderAuth: () => ({
@@ -125,23 +114,13 @@ it("routes a discovered organization model through the registered native transpo
     modelId: model.id,
     provider: "radius",
   });
-  const usage = {
-    input: 1,
-    output: 1,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 2,
-    cost: { input: 0.000001, output: 0.000002, cacheRead: 0, cacheWrite: 0, total: 0.000003 },
-  };
   streamFetch.mockResolvedValue(
     new Response(
-      [
+      fixture.sse([
         { type: "text_start", contentIndex: 0 },
         { type: "text_end", contentIndex: 0, content: "Connected" },
-        { type: "done", reason: "stop", usage },
-      ]
-        .map((event) => `data: ${JSON.stringify(event)}\n\n`)
-        .join(""),
+        { type: "done", reason: "stop", usage: fixture.usage },
+      ]),
     ),
   );
   const stream = await streamFn(
@@ -153,7 +132,7 @@ it("routes a discovered organization model through the registered native transpo
     api: "pi-messages",
     stopReason: "stop",
     content: [{ type: "text", text: "Connected" }],
-    usage,
+    usage: fixture.usage,
   });
   const [url, request] = streamFetch.mock.calls[0]!;
   expect(url).toBe("https://radius.pi.dev/v1/messages");
@@ -161,11 +140,8 @@ it("routes a discovered organization model through the registered native transpo
 });
 
 it("resolves a cold agent's model from its pinned account without inventing unknown models", async () => {
-  const model = catalogModel("organization/cold-model", "Cold model");
-  fetchGuard.mockResolvedValue({
-    response: Response.json({ baseUrl: "https://radius.pi.dev/v1", models: [model] }),
-    release: async () => undefined,
-  });
+  const model = fixture.catalogModel("organization/cold-model", "Cold model");
+  mockCatalog(model);
   resolveAuth.mockResolvedValue({ apiKey: "test-pinned-key" });
   const provider = await registerSingleProviderPlugin(radiusPlugin);
   const ctx = {
@@ -179,7 +155,7 @@ it("resolves a cold agent's model from its pinned account without inventing unkn
     ...model,
     provider: "radius",
     api: "pi-messages",
-    baseUrl: "https://radius.pi.dev/v1",
+    baseUrl: fixture.baseUrl,
   });
   expect(resolveAuth).toHaveBeenCalledWith(
     expect.objectContaining({
