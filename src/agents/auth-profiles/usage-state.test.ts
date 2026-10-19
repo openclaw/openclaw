@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createAuthProfileUsageStore as makeStore } from "./credential-fixtures.test-support.js";
-import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
+import type { ProfileUsageStats } from "./types.js";
 import {
   clearExpiredCooldowns,
   resetAuthProfileFailureState,
@@ -27,14 +27,13 @@ it("preserves a sibling model cooldown until that model succeeds", () => {
   };
   const siblingSuccess = resetAuthProfileFailureState(existing, { lastUsed: 2_000 }, "fallback");
   expect(siblingSuccess).toMatchObject({ ...existing, lastUsed: 2_000 });
-  const primarySuccess = resetAuthProfileFailureState(
-    siblingSuccess,
-    { lastUsed: 32_000 },
-    "primary",
-  );
-  expect(primarySuccess.cooldownUntil).toBeUndefined();
-  expect(primarySuccess.failureCounts).toBeUndefined();
-  expect(primarySuccess.lastUsed).toBe(32_000);
+  expect(
+    resetAuthProfileFailureState(siblingSuccess, { lastUsed: 32_000 }, "primary"),
+  ).toMatchObject({
+    cooldownUntil: undefined,
+    failureCounts: undefined,
+    lastUsed: 32_000,
+  });
 });
 
 const now = 1_700_000_000_000;
@@ -43,6 +42,7 @@ const anthropic = "anthropic:default";
 const copilot = "github-copilot:github";
 const sonnet = "claude-sonnet-4.6";
 const gemini = "gemini-3-flash-preview";
+const openrouter = "openrouter:default";
 const cooldown = (
   reason?: ProfileUsageStats["cooldownReason"],
   model?: string,
@@ -53,6 +53,22 @@ const cooldown = (
   cooldownModel: model,
   ...extra,
 });
+const billingDisable: ProfileUsageStats = { disabledUntil: until, disabledReason: "billing" };
+const modelBlock: ProfileUsageStats = {
+  blockedUntil: until,
+  blockedReason: "subscription_limit",
+  blockedScope: "model",
+  blockedModel: gemini,
+};
+const withFailures = (
+  failureCounts: ProfileUsageStats["failureCounts"],
+  reason?: ProfileUsageStats["cooldownReason"],
+) => cooldown(reason, undefined, { failureCounts });
+type Model = string | null | undefined;
+const modelChecks = (blocked: Model[], allowed: Model[] = []): Array<[Model, boolean]> => [
+  ...blocked.map((model): [Model, boolean] => [model, true]),
+  ...allowed.map((model): [Model, boolean] => [model, false]),
+];
 
 describe("auth profile usage state", () => {
   beforeEach(() =>
@@ -95,7 +111,7 @@ describe("auth profile usage state", () => {
   it.each(["rate_limit", "overloaded"] as const)(
     "ignores only the managed %s cooldown window",
     (reason) => {
-      const profileId = "openrouter:default";
+      const profileId = openrouter;
       const raw = { ...cooldown(reason), cooldownUntil: now + 120_000 };
       const store = makeStore({ [profileId]: raw });
       expect(isProfileInCooldown(store, profileId, now)).toBe(false);
@@ -106,7 +122,7 @@ describe("auth profile usage state", () => {
       expect(store.usageStats?.[profileId]).toEqual(raw);
 
       for (const permanent of [
-        { disabledUntil: until, disabledReason: "billing" },
+        billingDisable,
         { disabledUntil: until, disabledReason: "auth_permanent" },
         { blockedUntil: until, blockedReason: "subscription_limit", blockedSource: "wham" },
       ] satisfies Partial<ProfileUsageStats>[]) {
@@ -124,7 +140,7 @@ describe("auth profile usage state", () => {
   it.each(["auth", undefined] as const)(
     "keeps managed %s failures and inline credential health",
     (reason) => {
-      const profileId = "openrouter:default";
+      const profileId = openrouter;
       const stats = cooldown(reason);
       const store = makeStore({ [profileId]: stats, "inline-api-key:openrouter": stats });
       expect(isProfileInCooldown(store, profileId, now)).toBe(true);
@@ -140,7 +156,7 @@ describe("auth profile usage state", () => {
   ] as const)(
     "preserves the managed %s model scope",
     (reason, model, targetBlocked, siblingBlocked, accountBlocked) => {
-      const profileId = "openrouter:default";
+      const profileId = openrouter;
       const store = makeStore({ [profileId]: cooldown(reason, model) });
       expect(isProfileInCooldown(store, profileId, now, model)).toBe(targetBlocked);
       expect(isProfileInCooldown(store, profileId, now, "sibling")).toBe(siblingBlocked);
@@ -149,13 +165,11 @@ describe("auth profile usage state", () => {
   );
 
   it("keeps model-scoped subscription blocks while ignoring managed transient cooldowns", () => {
-    const profileId = "openrouter:default";
+    const profileId = openrouter;
     const store = makeStore({
       [profileId]: cooldown("rate_limit", "target", {
-        blockedUntil: until,
-        blockedReason: "subscription_limit",
+        ...modelBlock,
         blockedSource: "wham",
-        blockedScope: "model",
         blockedModel: "target",
       }),
     });
@@ -166,86 +180,61 @@ describe("auth profile usage state", () => {
     expect(getSoonestCooldownExpiry(store, [profileId], { now, forModel: "sibling" })).toBeNull();
   });
 
-  type CooldownCase = [
+  const scenario = (
     name: string,
-    profileId: string,
     stats: ProfileUsageStats | undefined,
-    checks: Array<[forModel: string | null | undefined, expected: boolean]>,
-  ];
-  const copilotChecks: CooldownCase[3] = [
-    ["gpt-4.1", false],
-    [sonnet, true],
-    [undefined, true],
-  ];
-  const cooldownCases: CooldownCase[] = [
-    ["missing stats", anthropic, undefined, [[undefined, false]]],
-    ["expired cooldown", anthropic, { cooldownUntil: now - 1_000 }, [[undefined, false]]],
-    [
+    checks: Array<[Model, boolean]>,
+    profileId = anthropic,
+  ) => ({ name, stats, checks, profileId });
+  const copilotChecks = modelChecks([sonnet, undefined], ["gpt-4.1"]);
+  it.each([
+    scenario("missing stats", undefined, modelChecks([], [undefined])),
+    scenario("expired cooldown", { cooldownUntil: now - 1_000 }, modelChecks([], [undefined])),
+    scenario(
       "active disable",
-      anthropic,
-      { cooldownUntil: now - 1_000, disabledUntil: until },
-      [[undefined, true]],
-    ],
-    ["model-scoped rate limit", copilot, cooldown("rate_limit", sonnet), copilotChecks],
-    [
-      "model-scoped timeout (#87462)",
-      "google:default",
+      { cooldownUntil: now - 1_000, ...billingDisable },
+      modelChecks([undefined]),
+    ),
+    scenario("scoped rate limit", cooldown("rate_limit", sonnet), copilotChecks, copilot),
+    scenario(
+      "scoped timeout (#87462)",
       cooldown("timeout", gemini),
-      [
-        ["gemini-3.1-flash-lite", false],
-        ["gemini-2.5-flash", false],
-        [gemini, true],
-        [undefined, true],
-      ],
-    ],
-    ["model not found (#116464)", copilot, cooldown("model_not_found", sonnet), copilotChecks],
-    [
-      "model not found without a model (#116464)",
-      copilot,
+      modelChecks([gemini, undefined], ["gemini-3.1-flash-lite", "gemini-2.5-flash"]),
+      "google:default",
+    ),
+    scenario("not found (#116464)", cooldown("model_not_found", sonnet), copilotChecks, copilot),
+    scenario(
+      "unscoped not found (#116464)",
       cooldown("model_not_found"),
-      [
-        ["gpt-4.1", true],
-        [sonnet, true],
-      ],
-    ],
-    [
-      "disable prevents sibling bypass",
+      modelChecks(["gpt-4.1", sonnet]),
       copilot,
-      cooldown("rate_limit", sonnet, {
-        disabledUntil: now + 120_000,
-        disabledReason: "billing",
-      }),
-      [["gpt-4.1", true]],
-    ],
-    [
+    ),
+    scenario(
+      "disable prevents sibling bypass",
+      cooldown("rate_limit", sonnet, { ...billingDisable, disabledUntil: now + 120_000 }),
+      modelChecks(["gpt-4.1"]),
+      copilot,
+    ),
+    scenario(
       "model-scoped block permits siblings",
+      cooldown("timeout", gemini, { ...modelBlock, blockedUntil: now + 120_000 }),
+      modelChecks([gemini], ["gemini-3.1-flash-lite"]),
       "google:default",
-      cooldown("timeout", gemini, {
-        blockedUntil: now + 120_000,
-        blockedReason: "subscription_limit",
-        blockedModel: gemini,
-        blockedScope: "model",
-      }),
-      [
-        [gemini, true],
-        ["gemini-3.1-flash-lite", false],
-      ],
-    ],
-    [
+    ),
+    scenario(
       "legacy blocks remain profile-wide",
-      "google:default",
       { blockedUntil: now + 120_000, blockedModel: gemini },
-      [["gemini-3.1-flash-lite", true]],
-    ],
-    [
+      modelChecks(["gemini-3.1-flash-lite"]),
+      "google:default",
+    ),
+    scenario(
       "account-wide ignores model cooldown",
-      "openai:api-key",
       cooldown("rate_limit", "gpt-5.5"),
-      [[null, false]],
-    ],
-    ["account-wide keeps profile cooldown", anthropic, cooldown("rate_limit"), [[null, true]]],
-  ];
-  it.each(cooldownCases)("checks cooldown: %s", (name, profileId, stats, checks) => {
+      modelChecks([], [null]),
+      "openai:api-key",
+    ),
+    scenario("account-wide keeps profile cooldown", cooldown("rate_limit"), modelChecks([null])),
+  ])("checks cooldown: $name", ({ name, profileId, stats, checks }) => {
     const store = makeStore(stats === undefined ? undefined : { [profileId]: stats });
     for (const [forModel, expected] of checks) {
       expect(
@@ -256,87 +245,59 @@ describe("auth profile usage state", () => {
   });
 
   it("excludes sibling models from model_not_found expiry (#116464)", () => {
-    const store = makeStore({
-      [copilot]: cooldown("model_not_found", sonnet),
-    });
+    const store = makeStore({ [copilot]: cooldown("model_not_found", sonnet) });
     const expiry = (forModel: string) =>
       getSoonestCooldownExpiry(store, [copilot], { now, forModel });
     expect(expiry(sonnet)).toBe(until);
     expect(expiry("gpt-4.1")).toBeNull();
   });
 
-  const reasonCases: Array<
-    [
-      name: string,
-      usageStats: AuthProfileStore["usageStats"],
-      expected: ReturnType<typeof resolveProfilesUnavailableReason>,
-    ]
-  > = [
-    [
-      "explicit cooldown beats stale counts",
-      { primary: cooldown("auth", undefined, { failureCounts: { rate_limit: 99 } }) },
-      "auth",
-    ],
-    [
+  const reasonCase = (
+    name: string,
+    expected: ReturnType<typeof resolveProfilesUnavailableReason>,
+    primary: ProfileUsageStats,
+    backup?: ProfileUsageStats,
+  ) => ({ name, expected, usageStats: { primary, ...(backup ? { backup } : {}) } });
+  it.each([
+    reasonCase("explicit beats stale counts", "auth", withFailures({ rate_limit: 99 }, "auth")),
+    reasonCase(
       "all sessions expired",
-      {
-        primary: cooldown(undefined, undefined, { failureCounts: { session_expired: 1 } }),
-        backup: cooldown(undefined, undefined, { failureCounts: { session_expired: 1 } }),
-      },
       "session_expired",
-    ],
-    [
+      withFailures({ session_expired: 1 }),
+      withFailures({ session_expired: 1 }),
+    ),
+    reasonCase(
       "most frequent reason",
-      {
-        primary: cooldown(undefined, undefined, {
-          failureCounts: { overloaded: 2, rate_limit: 1 },
-        }),
-      },
       "overloaded",
-    ],
-    ["missing reason history", { primary: cooldown() }, "unknown"],
-    [
+      withFailures({ overloaded: 2, rate_limit: 1 }),
+    ),
+    reasonCase("missing reason history", "unknown", cooldown()),
+    reasonCase(
       "expired windows",
-      {
-        primary: { cooldownUntil: now - 1_000, failureCounts: { auth: 5 } },
-        backup: { disabledUntil: now - 500, disabledReason: "billing" },
-      },
       null,
-    ],
-    [
-      "priority breaks ties",
-      { primary: cooldown(undefined, undefined, { failureCounts: { timeout: 2, auth: 2 } }) },
-      "auth",
-    ],
-  ];
-  it.each(reasonCases)("resolves unavailability reason: %s", (_name, usageStats, expected) => {
+      { cooldownUntil: now - 1_000, failureCounts: { auth: 5 } },
+      { disabledUntil: now - 500, disabledReason: "billing" },
+    ),
+    reasonCase("priority breaks ties", "auth", withFailures({ timeout: 2, auth: 2 })),
+  ])("resolves unavailability reason: $name", ({ usageStats, expected }) => {
     expect(
       resolveProfilesUnavailableReason({
         store: makeStore(usageStats),
-        profileIds: Object.keys(usageStats ?? {}),
+        profileIds: Object.keys(usageStats),
         now,
       }),
     ).toBe(expected);
   });
 
-  const unchangedCases: Array<[string, AuthProfileStore["usageStats"]]> = [
+  it.each([
     ["missing stats", undefined],
-    [
-      "non-finite cooldowns",
-      {
-        primary: { cooldownUntil: Number.NaN, errorCount: 2 },
-        backup: { cooldownUntil: Infinity, errorCount: 3 },
-      },
-    ],
-    [
-      "non-positive cooldowns",
-      {
-        primary: { cooldownUntil: 0, errorCount: 1 },
-        backup: { cooldownUntil: -1, errorCount: 1 },
-      },
-    ],
-  ];
-  it.each(unchangedCases)("leaves %s unchanged", (_name, usageStats) => {
+    ["non-finite cooldowns", [Number.NaN, Infinity, 2, 3]],
+    ["non-positive cooldowns", [0, -1, 1, 1]],
+  ] as const)("leaves %s unchanged", (_name, values) => {
+    const usageStats = values && {
+      primary: { cooldownUntil: values[0], errorCount: values[2] },
+      backup: { cooldownUntil: values[1], errorCount: values[3] },
+    };
     const store = makeStore(structuredClone(usageStats));
     expect(clearExpiredCooldowns(store, now)).toBe(false);
     expect(store.usageStats).toEqual(usageStats);
@@ -349,10 +310,14 @@ describe("auth profile usage state", () => {
     cooldownModel: undefined,
   };
   const clearedDisable = { disabledUntil: undefined, disabledReason: undefined };
-  const expiryCases: Array<
-    [name: string, before: ProfileUsageStats, after: ProfileUsageStats, useClock?: boolean]
-  > = [
-    [
+  const expires = (
+    name: string,
+    before: ProfileUsageStats,
+    changed: ProfileUsageStats,
+    useClock = false,
+  ) => ({ name, before, after: { ...before, ...changed }, useClock });
+  it.each([
+    expires(
       "expiry boundary clears classification",
       {
         cooldownUntil: now,
@@ -361,9 +326,9 @@ describe("auth profile usage state", () => {
         failureCounts: { timeout: 1 },
         lastFailureAt: now - 120_000,
       },
-      { ...clearedCooldown, errorCount: 0, failureCounts: undefined, lastFailureAt: now - 120_000 },
-    ],
-    [
+      { ...clearedCooldown, errorCount: 0, failureCounts: undefined },
+    ),
+    expires(
       "expired cooldown preserves active disable",
       {
         cooldownUntil: now - 1_000,
@@ -372,15 +337,9 @@ describe("auth profile usage state", () => {
         errorCount: 5,
         failureCounts: { rate_limit: 3, billing: 2 },
       },
-      {
-        ...clearedCooldown,
-        disabledUntil: now + 3_600_000,
-        disabledReason: "billing",
-        errorCount: 5,
-        failureCounts: { rate_limit: 3, billing: 2 },
-      },
-    ],
-    [
+      clearedCooldown,
+    ),
+    expires(
       "expired disable preserves active cooldown",
       {
         cooldownUntil: now + 300_000,
@@ -388,9 +347,9 @@ describe("auth profile usage state", () => {
         disabledReason: "billing",
         errorCount: 3,
       },
-      { cooldownUntil: now + 300_000, ...clearedDisable, errorCount: 3 },
-    ],
-    [
+      clearedDisable,
+    ),
+    expires(
       "all expired windows preserve rate-limit history",
       {
         cooldownUntil: now - 2_000,
@@ -400,8 +359,8 @@ describe("auth profile usage state", () => {
         failureCounts: { rate_limit: 2, billing: 2 },
       },
       { ...clearedCooldown, ...clearedDisable, errorCount: 0, failureCounts: { rate_limit: 2 } },
-    ],
-    [
+    ),
+    expires(
       "expired provider block preserves retry backoff",
       {
         blockedUntil: now - 1_000,
@@ -419,12 +378,10 @@ describe("auth profile usage state", () => {
         blockedScope: undefined,
         errorCount: 0,
         failureCounts: { rate_limit: 4 },
-        lastFailureAt: now - 120_000,
       },
       true,
-    ],
-  ];
-  it.each(expiryCases)("clears %s", (_name, before, after, useClock) => {
+    ),
+  ])("clears $name", ({ before, after, useClock }) => {
     const store = makeStore({ primary: structuredClone(before) });
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     try {
