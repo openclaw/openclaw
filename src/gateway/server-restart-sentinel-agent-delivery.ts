@@ -33,6 +33,7 @@ import {
   mergeSessionDeliveryPreparedMediaBlocks,
 } from "../infra/session-delivery-queue-storage.js";
 import {
+  SessionDeliveryAttemptStartError,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
   SessionDeliverySafeRetryError,
@@ -506,18 +507,6 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
   const queuedRunId = resolveQueuedAgentRunId(entry);
   const cronLifecycleRevision = sessionEntry?.cronRunContinuation?.lifecycleRevision?.trim();
   const cronSessionId = cronLifecycleRevision ? sessionEntry?.sessionId?.trim() : undefined;
-  // Fence before gateway admission. Recovery clears it only for an explicit
-  // pre-acceptance safe retry; an accepted turn may already have effects.
-  await markSessionDeliveryAttemptStarted(entry, {
-    ...params.queueContext,
-    admission: {
-      ...params.queueContext.admission,
-      assertCurrent: () => {
-        params.queueContext.admission.assertCurrent();
-        assertRequesterIdle();
-      },
-    },
-  });
   const completionOwner =
     entry.owner?.kind === "subagent_completion" ? subagentRuns.get(entry.owner.runId) : undefined;
   let controllerInput: SessionControllerInput | undefined;
@@ -527,6 +516,25 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
     controllerInput = completionOwner
       ? await reserveSubagentCompletionControllerSource(completionOwner, queuedRunId)
       : undefined;
+    assertRequesterAdmissionCurrent();
+    if (completionOwner && !controllerInput) {
+      await deferSessionDelivery(entry.id, AGENT_DELIVERY_OWNERSHIP_RETRY_MS, params.queueContext);
+      throw new SessionDeliveryDeferredError(
+        "queued generated-media completion is waiting for its requester source",
+      );
+    }
+    // Fence after source custody, before gateway admission. Recovery clears it only
+    // for an explicit pre-acceptance safe retry; an accepted turn may have effects.
+    await markSessionDeliveryAttemptStarted(entry, {
+      ...params.queueContext,
+      admission: {
+        ...params.queueContext.admission,
+        assertCurrent: () => {
+          params.queueContext.admission.assertCurrent();
+          assertRequesterIdle();
+        },
+      },
+    });
     assertRequesterAdmissionCurrent();
     await dispatchGatewayMethodInProcess(
       "agent",
@@ -567,6 +575,12 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
       },
     );
   } catch (error) {
+    if (
+      error instanceof SessionDeliveryAttemptStartError ||
+      (completionOwner && !controllerInput && error instanceof SessionDeliveryDeferredError)
+    ) {
+      throw error;
+    }
     if (error instanceof SessionDeliveryDeadLetteredError) {
       return await abandonCompletion(error.message);
     }

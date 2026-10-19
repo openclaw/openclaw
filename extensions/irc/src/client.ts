@@ -76,7 +76,6 @@ export type IrcClientOptions = {
   onNotice?: (text: string, target?: string) => void;
   onError?: (error: Error) => void;
   onDisconnect?: () => void;
-  onLine?: (line: string) => void;
 };
 
 type IrcNickServOptions = Omit<IrcNickServConfig, "passwordFile">;
@@ -339,8 +338,6 @@ export async function connectIrcClient(options: IrcClientOptions) {
       if (!rawLine) {
         continue;
       }
-      options.onLine?.(rawLine);
-
       const line = parseIrcLine(rawLine);
       if (!line) {
         continue;

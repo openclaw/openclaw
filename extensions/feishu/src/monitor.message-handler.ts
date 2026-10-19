@@ -408,10 +408,10 @@ export function createFeishuMessageReceiveHandler({
     if (claim.kind === "claimed" && turnAdoptionLifecycle) {
       // The durable drain can abandon before the debounce timer flushes. Tie
       // the logical claim and queued entry to that earlier lifecycle.
-      turnAdoptionLifecycle.registerAbandonHandler?.(() => {
+      turnAdoptionLifecycle.onBeforeAbandon = () => {
         debounceEntry.abandoned = true;
         claim.handle.release({ error: new Error("feishu-ingress-abandoned-before-flush") });
-      });
+      };
     }
     if (turnAdoptionLifecycle) {
       try {

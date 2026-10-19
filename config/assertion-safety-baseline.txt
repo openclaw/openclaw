@@ -856,7 +856,7 @@ extensions/tlon/src/types.ts	1
 extensions/tlon/src/urbit/sse-client.ts	4
 extensions/tokenjuice/tool-result-middleware.ts	1
 extensions/twitch/src/config.ts	6
-extensions/twitch/src/outbound.ts	2
+extensions/twitch/src/outbound.ts	1
 extensions/twitch/src/resolver.ts	1
 extensions/twitch/src/setup-surface.ts	1
 extensions/twitch/src/token.ts	3
@@ -2000,7 +2000,7 @@ src/infra/net/ssrf.ts	7
 src/infra/net/undici-dispatcher-options.ts	3
 src/infra/net/undici-global-dispatcher.ts	2
 src/infra/node-commands.ts	1
-src/infra/npm-managed-root.ts	6
+src/infra/npm-managed-root.ts	3
 src/infra/oauth-loopback-callback.ts	1
 src/infra/openclaw-cli-shim.ts	1
 src/infra/openclaw-root.ts	1
@@ -2036,7 +2036,6 @@ src/infra/restart-handoff.ts	1
 src/infra/restart-sentinel.ts	1
 src/infra/restart-stale-pids.ts	2
 src/infra/retry-policy.ts	3
-src/infra/session-cost-usage-collection.ts	2
 src/infra/session-cost-usage-pricing.ts	4
 src/infra/session-cost-usage-reporting.ts	5
 src/infra/session-sqlite-migration-readers.ts	2

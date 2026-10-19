@@ -25,14 +25,22 @@ import {
   createReplyOperation as createSessionReplyOperation,
   type ReplyOperation,
 } from "../../sessions/session-controller.js";
+import { releaseSessionControllerClaim } from "../../sessions/session-controller.mailbox.js";
+import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
-import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
-import { createTestFollowupRun, withTestModelContextTokens } from "./agent-runner.test-fixtures.js";
-import type { FollowupRun, QueueSettings } from "./queue.js";
+import {
+  createDirectRuntimeReplyParams,
+  directSessionKey,
+  staleCfg,
+} from "./agent-runner-direct-runtime-config.test-fixtures.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
+import * as agentRunnerResult from "./agent-runner-result.js";
+import { withTestModelContextTokens } from "./agent-runner.test-fixtures.js";
+import type { FollowupRun } from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import {
@@ -40,21 +48,9 @@ import {
   resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { createMockTypingController } from "./test-helpers.js";
 
 const freshCfg = { runtimeFresh: true };
-const staleCfg = {
-  runtimeFresh: false,
-  skills: {
-    entries: {
-      whisper: {
-        apiKey: { source: "env" as const, provider: "default", id: "OPENAI_API_KEY" },
-      },
-    },
-  },
-};
 const sentinelError = new Error("stop-after-preflight");
-const directSessionKey = "agent:main:telegram:default:direct:test";
 
 const resolveQueuedReplyExecutionConfigMock = vi.fn();
 const resolveReplyToModeMock = vi.fn();
@@ -130,17 +126,6 @@ vi.mock("./queue.js", async () => {
 
 const { runReplyAgent } = await import("./agent-runner-run.js");
 
-function createTelegramSessionCtx(): TemplateContext {
-  return {
-    Provider: "telegram",
-    OriginatingChannel: "telegram",
-    OriginatingTo: "12345",
-    AccountId: "default",
-    ChatType: "dm",
-    MessageSid: "msg-1",
-  } as unknown as TemplateContext;
-}
-
 type TestReplyOperation = ReplyOperation & {
   setPhase: ReturnType<typeof vi.fn<ReplyOperation["setPhase"]>>;
 };
@@ -163,49 +148,6 @@ function createReplyOperation(): TestReplyOperation {
   const replyOperation = createOwnedReplyOperation();
   const setPhase = vi.spyOn(replyOperation, "setPhase");
   return Object.assign(replyOperation, { setPhase });
-}
-
-function createDirectRuntimeReplyParams({
-  shouldFollowup = false,
-  isActive = false,
-  queueMode = "interrupt",
-}: {
-  shouldFollowup?: boolean;
-  isActive?: boolean;
-  queueMode?: QueueSettings["mode"];
-} = {}) {
-  const sessionKey = directSessionKey;
-  const followupRun = createTestFollowupRun({
-    sessionId: "session-1",
-    sessionKey,
-    messageProvider: "telegram",
-    config: staleCfg,
-    provider: "openai",
-    model: "gpt-5.4",
-  });
-  followupRun.originatingChannel = "telegram";
-  followupRun.originatingTo = "12345";
-  const resolvedQueue = { mode: queueMode } as QueueSettings;
-  const replyParams: Parameters<typeof runReplyAgent>[0] = {
-    commandBody: "hello",
-    followupRun,
-    queueKey: sessionKey,
-    resolvedQueue,
-    shouldSteer: false,
-    shouldFollowup,
-    isActive,
-    typing: createMockTypingController(),
-    sessionCtx: createTelegramSessionCtx(),
-    defaultModel: "openai/gpt-5.4",
-    resolvedVerboseLevel: "off",
-    isNewSession: false,
-    blockStreamingEnabled: false,
-    resolvedBlockStreamingBreak: "message_end",
-    shouldInjectGroupIntro: false,
-    typingMode: "instant",
-  };
-
-  return { followupRun, resolvedQueue, replyParams };
 }
 
 function requireResolveQueuedReplyExecutionConfigCall(index = 0) {
@@ -291,11 +233,152 @@ describe("runReplyAgent runtime config", () => {
     });
   });
 
+  it.each(["completed", "failed"] as const)(
+    "reports one %s terminal outcome after finalization settles",
+    async (outcome) => {
+      const { replyParams } = createDirectRuntimeReplyParams();
+      const onAgentRunTerminalOutcome = vi.fn();
+      replyParams.opts = { onAgentRunTerminalOutcome };
+      runSessionCompactionIfNeededMock.mockImplementation(runRequiredCheckpoint);
+      executeAgentTurnMock.mockImplementationOnce(async (params: AgentTurnParams) => {
+        params.opts?.onAgentRunTerminalOutcome?.("completed");
+        return {
+          runId: "runtime-config-test",
+          outcome: {
+            kind: "settled",
+            status: "ok",
+            result: { payloads: [], meta: {} },
+            resolved: { provider: "openai", model: "gpt-5.4" },
+            fallback: { exhausted: false, attempts: [] },
+            autoCompactionCount: 0,
+            didLogHeartbeatStrip: false,
+          },
+        };
+      });
+      const finalize = vi
+        .spyOn(agentRunnerResult, "finalizeReplyAgentRun")
+        .mockImplementationOnce(async () => {
+          expect(onAgentRunTerminalOutcome).not.toHaveBeenCalled();
+          if (outcome === "failed") {
+            throw sentinelError;
+          }
+          return { text: "done" };
+        });
+      try {
+        if (outcome === "failed") {
+          await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);
+        } else {
+          await expect(runReplyAgent(replyParams)).resolves.toEqual({ text: "done" });
+        }
+        expect(finalize).toHaveBeenCalledOnce();
+        expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith(outcome);
+      } finally {
+        finalize.mockRestore();
+      }
+    },
+  );
+
+  it("reports a queued recovery failure after the parent terminal outcome", async () => {
+    await withTestDir({ prefix: "openclaw-terminal-recovery-" }, async (tempDir) => {
+      const { replyParams, followupRun } = createDirectRuntimeReplyParams();
+      const sessionKey = directSessionKey;
+      const sessionEntry: SessionEntry = {
+        sessionId: followupRun.run.sessionId,
+        lifecycleRevision: "terminal-recovery",
+        updatedAt: 1,
+      };
+      const storePath = join(tempDir, "sessions.json");
+      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+      replyParams.sessionKey = sessionKey;
+      replyParams.queueKey = sessionKey;
+      replyParams.storePath = storePath;
+      replyParams.sessionEntry = sessionEntry;
+      replyParams.sessionStore = { [sessionKey]: sessionEntry };
+      followupRun.run.workspaceDir = tempDir;
+      const onAgentRunTerminalOutcome = vi.fn();
+      followupRun.runObservers = { onAgentRunTerminalOutcome };
+      replyParams.opts = {
+        sourceReplyDeliveryMode: "message_tool_only",
+        onAgentRunTerminalOutcome,
+        onBlockReply: vi.fn(async () => {}),
+      };
+      resolveQueuedReplyExecutionConfigMock.mockResolvedValue({
+        ...freshCfg,
+        session: { store: storePath },
+        messages: { visibleReplies: "message_tool" },
+      });
+      runSessionCompactionIfNeededMock.mockImplementation(runRequiredCheckpoint);
+      enqueueFollowupRunMock.mockReturnValue(true);
+      const finalText = "This is the substantive reply that still needs to reach the user. ".repeat(
+        8,
+      );
+      executeAgentTurnMock
+        .mockImplementationOnce(async (params: AgentTurnParams) => {
+          params.opts?.onAgentRunTerminalOutcome?.("completed");
+          return {
+            runId: "parent-turn",
+            outcome: {
+              kind: "settled",
+              status: "ok",
+              result: {
+                payloads: [{ text: finalText }],
+                meta: {
+                  finalAssistantVisibleText: finalText,
+                  terminalReply: { disposition: "visible", text: finalText },
+                },
+              },
+              resolved: { provider: "openai", model: "gpt-5.4" },
+              fallback: { exhausted: false, attempts: [] },
+              autoCompactionCount: 0,
+              didLogHeartbeatStrip: false,
+            },
+          };
+        })
+        .mockImplementationOnce(async (params: AgentTurnParams) => {
+          params.opts?.onAgentRunTerminalOutcome?.("failed");
+          return {
+            runId: "recovery-turn",
+            outcome: { kind: "rejected", payload: { text: "Recovery failed", isError: true } },
+          };
+        });
+
+      await runReplyAgent(replyParams);
+      expect(onAgentRunTerminalOutcome.mock.calls).toEqual([["completed"]]);
+      expect(isSessionRunActive(sessionEntry.sessionId)).toBe(false);
+      expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
+      const queuedCall = enqueueFollowupRunMock.mock.calls[0] as
+        | Parameters<typeof import("./queue.js").enqueueFollowupRun>
+        | undefined;
+      if (!queuedCall?.[4]) {
+        throw new Error("Expected the queued recovery runner");
+      }
+      expect(queuedCall[1].strandedReplyRetry).toBe(true);
+      try {
+        await queuedCall[4](queuedCall[1]);
+
+        expect(queuedCall[1].controllerInput?.claim).toBeDefined();
+        expect(executeAgentTurnMock).toHaveBeenCalledTimes(2);
+        expect(onAgentRunTerminalOutcome.mock.calls).toEqual([["completed"], ["failed"]]);
+        expect(isSessionRunActive(sessionEntry.sessionId)).toBe(false);
+      } finally {
+        // This direct invocation also owns the claim cleanup normally performed by the queue drain.
+        const claim = queuedCall[1].controllerInput?.claim;
+        if (claim) {
+          releaseSessionControllerClaim(claim);
+          await claim.settlement.promise;
+        }
+      }
+    });
+  });
+
   it("resolves direct reply runs before early helpers read config", async () => {
     const { followupRun, replyParams } = createDirectRuntimeReplyParams();
+    const onAgentRunTerminalOutcome = vi.fn();
+    replyParams.opts = { onAgentRunTerminalOutcome };
 
     await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);
 
+    expect(onAgentRunTerminalOutcome).not.toHaveBeenCalled();
     expect(followupRun.run.config).toBe(freshCfg);
     expect(resolveQueuedReplyExecutionConfigMock).toHaveBeenCalledTimes(1);
     const [configArg, configContextArg] = requireResolveQueuedReplyExecutionConfigCall();

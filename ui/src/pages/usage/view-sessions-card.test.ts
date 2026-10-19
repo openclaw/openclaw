@@ -3,7 +3,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { SessionBarRow } from "./view-session-row.tsx";
+import { SessionsCard } from "./view-sessions-card.tsx";
+import { createUsageProps, usageSession } from "./view.test-support.ts";
 
 const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
 
@@ -30,19 +31,17 @@ it("retires pending usage session label copying when its payload changes", async
   vi.stubGlobal("navigator", { clipboard: { writeText } });
   Object.defineProperty(document, "execCommand", { configurable: true, value: fallback });
   const owner = document.body.appendChild(document.createElement("section"));
-  const [label, setLabel] = createSignal("first");
+  const [sessions, setSessions] = createSignal([
+    { ...usageSession("session", "main", "openai"), label: "first" },
+  ]);
   mountSolid(
     () =>
-      SessionBarRow({
-        sessionKey: "session",
-        get displayLabel() {
-          return label();
+      SessionsCard({
+        get sessions() {
+          return sessions();
         },
-        meta: [],
-        agentId: undefined,
-        valueLabel: "0",
-        isSelected: false,
-        onSelect: vi.fn(),
+        usage: createUsageProps(),
+        totalSessions: 1,
       }),
     { container: owner },
   );
@@ -51,7 +50,7 @@ it("retires pending usage session label copying when its payload changes", async
   button.click();
   expect(writeText).toHaveBeenCalledOnce();
 
-  setLabel("second");
+  setSessions([{ ...usageSession("session", "main", "openai"), label: "second" }]);
   flush();
   const current = owner.querySelector<HTMLButtonElement>(".session-bar-actions button")!;
   const availableBeforeSettlement = !current.disabled;
