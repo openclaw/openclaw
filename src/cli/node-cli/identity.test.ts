@@ -19,7 +19,12 @@ function runNodeIdentity(json = false, identity?: string) {
   const program = new Command().exitOverride();
   registerNodeCli(program);
   return program.parseAsync(
-    ["node", "identity", ...(json ? ["--json"] : []), ...(identity ? ["--identity", identity] : [])],
+    [
+      "node",
+      "identity",
+      ...(json ? ["--json"] : []),
+      ...(identity ? ["--identity", identity] : []),
+    ],
     { from: "user" },
   );
 }
@@ -72,6 +77,7 @@ describe("node identity command", () => {
     expect(logSpy).not.toHaveBeenCalled();
     expect(writeStdoutSpy).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(stateDir, "client", "credentials.sqlite"))).toBe(false);
+    expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
   });
 
   it("writes deviceId and raw public key JSON to stdout", async () => {
@@ -116,8 +122,6 @@ describe("node identity command", () => {
       deviceId: identity.deviceId,
       publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
     });
-    await expect(runNodeIdentity(false, "unknown")).rejects.toBeInstanceOf(
-      ExpectedCliError,
-    );
+    await expect(runNodeIdentity(false, "unknown")).rejects.toBeInstanceOf(ExpectedCliError);
   });
 });
