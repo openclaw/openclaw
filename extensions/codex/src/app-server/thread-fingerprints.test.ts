@@ -101,7 +101,10 @@ describe.each(["ordinary", "restricted"] as const)("%s proxied thread fingerprin
     auth = "personal",
     hooks = true,
   ) {
-    const route = { baseUrl: `http://127.0.0.1:${port}/private-route`, upstream };
+    const route = {
+      baseUrl: `http://127.0.0.1:${port}/private-route`,
+      configurationIdentity: upstream,
+    };
     const request = {
       config: {
         openai_base_url: route.baseUrl,

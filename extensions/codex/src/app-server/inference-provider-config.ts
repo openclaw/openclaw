@@ -3,13 +3,13 @@ import { isJsonObject, type JsonObject } from "./protocol.js";
 
 export type ProviderKind = "openai" | "azure" | "other";
 
-type InferenceRouteIdentity = Pick<CodexInferenceProxy, "baseUrl" | "upstream">;
+type InferenceRouteIdentity = Pick<CodexInferenceProxy, "baseUrl" | "configurationIdentity">;
 export type CodexThreadFingerprintInference = {
   inferenceRoute?: InferenceRouteIdentity;
   inferenceProviderRoutes?: ReadonlyMap<string, InferenceRouteIdentity>;
 };
 
-/** Hash the owned upstream, not the process-local relay address and capability token. */
+/** Hash owned route configuration, not the process-local relay address and capability token. */
 export function resolveCodexThreadFingerprintConfig(
   config: JsonObject,
   inference?: CodexThreadFingerprintInference,
@@ -21,7 +21,7 @@ export function resolveCodexThreadFingerprintConfig(
   for (const provider of configuredProviders(config)) {
     const route = inference.inferenceProviderRoutes?.get(provider) ?? inference.inferenceRoute;
     if (route && readProviderBaseUrl(config, provider) === route.baseUrl) {
-      normalized = withProviderBaseUrl(normalized, provider, route.upstream);
+      normalized = withProviderBaseUrl(normalized, provider, route.configurationIdentity);
     }
   }
   return normalized;
