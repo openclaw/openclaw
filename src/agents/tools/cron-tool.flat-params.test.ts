@@ -33,11 +33,8 @@ function updatePatch() {
   const params = gateway.mock.calls[0]?.[2] as { patch?: Record<string, unknown> } | undefined;
   return params?.patch;
 }
-async function rejectDottedKey(key: string, value: string) {
-  await expect(execute({ action: "update", jobId: "job", [key]: value })).rejects.toThrow(
-    "job required",
-  );
-  expect(gateway).not.toHaveBeenCalled();
+function update(params: Record<string, unknown>) {
+  return execute({ action: "update", jobId: "job", ...params });
 }
 
 beforeEach(() => {
@@ -45,9 +42,7 @@ beforeEach(() => {
   gateway.mockReset().mockResolvedValue({ ok: true });
 });
 
-afterEach(() => {
-  clearRuntimeConfigSnapshot();
-});
+afterEach(clearRuntimeConfigSnapshot);
 
 describe("cron shorthand recovery", () => {
   it("presents list metadata without private job content", () => {
@@ -68,37 +63,24 @@ describe("cron shorthand recovery", () => {
     expect(presentation({ action: "add" }, result)).toBeUndefined();
   });
 
-  it.each([
-    {
-      name: "script before agent-turn hints",
-      input: {
-        everyMs: 60_000,
-        script: "return { notify: 'changed' }",
-        timeoutSeconds: 30,
-        toolBudget: 12,
-      },
-      expected: {
-        payload: {
-          kind: "script",
-          script: "return { notify: 'changed' }",
-          timeoutSeconds: 30,
-          toolBudget: 12,
-        },
-      },
-    },
-    {
-      name: "out-of-range timestamp for gateway validation",
-      input: { atMs: 8_640_000_000_000_001, message: "report" },
-      expected: { schedule: { kind: "at", at: 8_640_000_000_000_001 } },
-    },
-  ])("recovers $name", async ({ input, expected }) => {
-    await execute({ action: "add", name: "reminder", ...input });
-    expectAdd(expected);
+  it("prefers a script payload to agent-turn hints", async () => {
+    const script = { script: "return { notify: 'changed' }", timeoutSeconds: 30, toolBudget: 12 };
+    await execute({ action: "add", name: "reminder", everyMs: 60_000, ...script });
+    expectAdd({ payload: { kind: "script", ...script } });
   });
-
-  it.each([
-    { action: "add", kind: "on-exit", command: "pnpm build", cwd: "/repo", message: "rebuilt" },
-  ])("rejects explicit or inferred on-exit shorthand on $action", async (args) => {
+  it("forwards out-of-range timestamps for gateway validation", async () => {
+    const atMs = 8_640_000_000_000_001;
+    await execute({ action: "add", name: "reminder", atMs, message: "report" });
+    expectAdd({ schedule: { kind: "at", at: atMs } });
+  });
+  it("rejects on-exit shorthand", async () => {
+    const args = {
+      action: "add",
+      kind: "on-exit",
+      command: "pnpm build",
+      cwd: "/repo",
+      message: "rebuilt",
+    };
     await expect(execute(args)).rejects.toThrow(
       "automation on-exit schedules cannot be created or edited",
     );
@@ -144,38 +126,25 @@ describe("cron shorthand recovery", () => {
   });
 
   it("preserves canonical/padded conflicts for gateway rejection (#95407)", async () => {
-    await execute({
-      action: "add",
-      job: {
-        ...job,
-        "schedule ": { kind: "every", everyMs: 60_000 },
-        enabled: false,
-        "enabled ": true,
-      },
-    });
-    expectAdd({
-      schedule: job.schedule,
-      enabled: false,
+    const conflict = () => ({
       "schedule ": { kind: "every", everyMs: 60_000 },
+      enabled: false,
       "enabled ": true,
     });
+    await execute({ action: "add", job: { ...job, ...conflict() } });
+    expectAdd({ schedule: job.schedule, ...conflict() });
   });
 
-  it("merges sibling dotted keys under one recovered object (#120616)", async () => {
-    await execute({
-      action: "update",
-      jobId: "job-dotted-siblings",
-      "job.payload.message": "after",
-      "job.payload.kind": "agentTurn",
-    });
-
+  it.each([
+    { "job.payload.message": "after", "job.payload.kind": "agentTurn" },
+    { '"job.payload.message"': "after" },
+  ])("recovers sibling or quoted dotted keys: %j (#120616)", async (params) => {
+    await update(params);
     expect(updatePatch()).toEqual({ payload: { kind: "agentTurn", message: "after" } });
   });
 
   it("keeps the explicit structured value authoritative over a conflicting dotted key (#120616)", async () => {
-    await execute({
-      action: "update",
-      jobId: "job-dotted-conflict",
+    await update({
       payload: { kind: "agentTurn", message: "before" },
       "job.payload.message": "after",
     });
@@ -184,22 +153,12 @@ describe("cron shorthand recovery", () => {
     expect(updatePatch()).not.toHaveProperty("job.payload.message");
   });
 
-  it("recovers quoted dotted job keys (#120616)", async () => {
-    await execute({
-      action: "update",
-      jobId: "job-dotted-quoted",
-      '"job.payload.message"': "after",
-    });
-
-    expect(updatePatch()).toEqual({ payload: { kind: "agentTurn", message: "after" } });
-  });
-
-  it("does not nest dotted keys rooted at a scalar cron field (#120616)", async () => {
-    await rejectDottedKey("job.name", "nightly.report");
-  });
-
-  it("does not nest dotted keys that would reach Object.prototype (#120616)", async () => {
-    await rejectDottedKey("job.payload.__proto__.polluted", "yes");
+  it.each([
+    ["job.name", "nightly.report"],
+    ["job.payload.__proto__.polluted", "yes"],
+  ])("does not nest scalar or prototype paths: %s (#120616)", async (key, value) => {
+    await expect(update({ [key]: value })).rejects.toThrow("job required");
+    expect(gateway).not.toHaveBeenCalled();
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 });
