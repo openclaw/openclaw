@@ -10,7 +10,8 @@ const { editMessage, sendMessage, sendTyping } = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   sendTyping: vi.fn(),
 }));
-vi.mock("./send.js", () => ({
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
   editMessageTelegram: editMessage,
   sendMessageTelegram: sendMessage,
   sendTypingTelegram: sendTyping,
@@ -100,10 +101,7 @@ async function deliver(
   }
   await transport.deliverPending({ ...params, pendingPayload, preparedTarget: prepared.target });
 }
-function terminalEntry(
-  request: SystemAgentApprovalRequest,
-  text: string,
-) {
+function terminalEntry(request: SystemAgentApprovalRequest, text: string) {
   return {
     ...base,
     request,
