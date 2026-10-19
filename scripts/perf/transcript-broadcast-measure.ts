@@ -582,7 +582,8 @@ const mock = createServer((req, res) => {
         if (
           (retentionScenario || soakScenario) &&
           (primary || continuation) &&
-          "response" in event
+          "response" in event &&
+          event.response !== undefined
         ) {
           const reasoning = {
             type: "reasoning",
