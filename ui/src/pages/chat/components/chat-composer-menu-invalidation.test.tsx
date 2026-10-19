@@ -121,6 +121,18 @@ it.each<ChatComposerPlusMenuView>([
           ?.matches(":popover-open"),
       ).toBe(true),
     );
+    const expectedContent = {
+      root: "Web search",
+      skills: "Focused skill",
+      connectors: "docs",
+      "tools:docs": "Search documents",
+      "library:missing": "Library ready",
+    }[view];
+    await waitForSolid(() =>
+      expect(
+        mounted.container.querySelector(".agent-chat__capability-menu-panel")?.textContent,
+      ).toContain(expectedContent),
+    );
     const observer = new MutationObserver(() => {});
     observer.observe(mounted.container, { childList: true, subtree: true });
     onTestFinished(() => observer.disconnect());
