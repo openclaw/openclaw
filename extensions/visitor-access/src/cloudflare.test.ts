@@ -18,13 +18,15 @@ const githubProvider = {
   providerId: "github-provider",
   githubAccountIdClaim: "github_account_id",
 };
-const githubRule = {
+const oidc = (overrides: Record<string, unknown> = {}) => ({
   oidc: {
     identity_provider_id: githubProvider.providerId,
     claim_name: githubProvider.githubAccountIdClaim,
     claim_value: "42",
+    ...overrides,
   },
-};
+});
+const githubRule = oidc();
 
 function namedPolicy(targets: (string | number)[] = ["first@example.com"]) {
   return {
@@ -51,6 +53,10 @@ function fetchSequence(...responses: Response[]) {
   return fetcher;
 }
 
+function fetchResults(...results: unknown[]) {
+  return fetchSequence(...results.map((result) => cloudflareResponse(result)));
+}
+
 function requestBody(fetcher: ReturnType<typeof fetchSequence>, index: number) {
   const body = fetcher.mock.calls[index]?.[1]?.body;
   if (typeof body !== "string") {
@@ -68,12 +74,7 @@ describe("VisitorPolicyClient", () => {
     async ({ field, afterResponse }) => {
       let provider: typeof githubProvider | undefined;
       const policy = namedPolicy([42]);
-      const fetcher = fetchSequence(
-        cloudflareResponse([]),
-        cloudflareResponse(policy),
-        cloudflareResponse([policy]),
-        cloudflareResponse(policy),
-      );
+      const fetcher = fetchResults([], policy, [policy], policy);
       const client = new VisitorPolicyClient(config, fetcher, undefined, () => provider);
       const changeMapping = () => {
         provider = {
@@ -108,22 +109,19 @@ describe("VisitorPolicyClient", () => {
 
   it("rereads the named policy and preserves mixed dashboard targets and restrictions on update", async () => {
     const original = namedPolicy(["FIRST@example.com", 42]);
-    const updated = {
-      ...namedPolicy(["first@example.com", "manual@example.com", 42]),
+    const restrictions = {
       precedence: 9,
       session_duration: "12h",
       approval_required: true,
       approval_groups: [{ approvals_needed: 1, email_addresses: ["approver@example.com"] }],
       mfa_config: { mfa_disabled: false },
+    };
+    const updated = {
+      ...namedPolicy(["first@example.com", "manual@example.com", 42]),
+      ...restrictions,
       created_at: "2026-08-28T00:00:00Z",
     };
-    const fetcher = fetchSequence(
-      cloudflareResponse([original]),
-      cloudflareResponse(original),
-      cloudflareResponse([updated]),
-      cloudflareResponse(updated),
-      cloudflareResponse(updated),
-    );
+    const fetcher = fetchResults([original], original, [updated], updated, updated);
     const client = new VisitorPolicyClient(config, fetcher, undefined, () => githubProvider);
     await expect(client.read()).resolves.toEqual({
       id: original.id,
@@ -142,19 +140,9 @@ describe("VisitorPolicyClient", () => {
         { email: { email: "manual@example.com" } },
         githubRule,
         { email: { email: "next@example.com" } },
-        {
-          oidc: {
-            identity_provider_id: "github-provider",
-            claim_name: "github_account_id",
-            claim_value: "84",
-          },
-        },
+        oidc({ claim_value: "84" }),
       ],
-      precedence: 9,
-      session_duration: "12h",
-      approval_required: true,
-      approval_groups: updated.approval_groups,
-      mfa_config: updated.mfa_config,
+      ...restrictions,
     });
     expect(fetcher.mock.calls[4]?.[0]).toBe(`${collectionUrl}/${original.id}`);
     expect(fetcher.mock.calls[4]?.[1]?.method).toBe("PUT");
@@ -167,18 +155,13 @@ describe("VisitorPolicyClient", () => {
     ["unsupported includes", { include: [{ everyone: {} }] }],
     ["mixed email rules", { include: [{ email: { email: "first@example.com" }, everyone: {} }] }],
     ["unconfigured GitHub mapping", { include: [githubRule] }, null],
-    [
-      "another OIDC provider",
-      {
-        include: [{ oidc: { ...githubRule.oidc, identity_provider_id: "other-provider" } }],
-      },
-    ],
-    ["another OIDC claim", { include: [{ oidc: { ...githubRule.oidc, claim_name: "login" } }] }],
+    ["another OIDC provider", { include: [oidc({ identity_provider_id: "other-provider" })] }],
+    ["another OIDC claim", { include: [oidc({ claim_name: "login" })] }],
     ["mixed OIDC rules", { include: [{ ...githubRule, everyone: {} }] }],
-    ["extra OIDC fields", { include: [{ oidc: { ...githubRule.oidc, login: "visitor" } }] }],
+    ["extra OIDC fields", { include: [oidc({ login: "visitor" })] }],
     ...["042", "9007199254740992", 42].map((claimValue): [string, Record<string, unknown>] => [
       `noncanonical account ID ${JSON.stringify(claimValue)}`,
-      { include: [{ oidc: { ...githubRule.oidc, claim_value: claimValue } }] },
+      { include: [oidc({ claim_value: claimValue })] },
     ]),
     ["required restrictions", { require: [{ email_domain: { domain: "example.com" } }] }],
     ["excluded identities", { exclude: [{ email: { email: "excluded@example.com" } }] }],
@@ -188,10 +171,7 @@ describe("VisitorPolicyClient", () => {
     "refuses %s before running a change or writing Cloudflare",
     async (_name, override, provider = githubProvider) => {
       const policy = namedPolicy();
-      const fetcher = fetchSequence(
-        cloudflareResponse([policy]),
-        cloudflareResponse({ ...policy, ...override }),
-      );
+      const fetcher = fetchResults([policy], { ...policy, ...override });
       const change = vi.fn(() => ["next@example.com"]);
       await expect(
         new VisitorPolicyClient(config, fetcher, undefined, () => provider ?? undefined).update(

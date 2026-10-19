@@ -10,6 +10,8 @@ import {
   visitorGrant,
 } from "./visitors.test-support.js";
 
+const EMAIL = "visitor@example.com";
+
 describe("VisitorAccessService authority", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
@@ -64,7 +66,7 @@ describe("VisitorAccessService authority", () => {
   });
 
   it("ends access at the deadline while another serialized provider write is waiting", async () => {
-    const grant = visitorGrant("visitor@example.com", { expiresAt: NOW + 1_000 });
+    const grant = visitorGrant(EMAIL, { expiresAt: NOW + 1_000 });
     const fixture = visitorFixture({ grants: [grant], emails: [grant.email] });
     await fixture.service.initialize();
     const authority = fixture.service.authorize([grant.email]);
@@ -74,7 +76,7 @@ describe("VisitorAccessService authority", () => {
       writing.resolve();
       await release.promise;
     };
-    const pending = fixture.service.invite({ email: "other@example.com" }, fixture.authority);
+    const pending = fixture.invite({ email: "other@example.com" });
     await writing.promise;
     await vi.advanceTimersByTimeAsync(1_000);
     expect(authority.signal.aborted).toBe(true);
@@ -106,7 +108,7 @@ describe("VisitorAccessService authority", () => {
     expect(fixture.service.resume([other.email], grantId, [84])).toBeUndefined();
 
     await vi.advanceTimersByTimeAsync(DAY_MS / 2);
-    await fixture.service.invite({ github: "renamed-login", days: 30 }, fixture.authority);
+    await fixture.invite({ github: "renamed-login", days: 30 });
     expect(fixture.grants.get("github:42")).toMatchObject({
       grantId,
       githubAccountId: 42,
@@ -153,7 +155,7 @@ describe("VisitorAccessService authority", () => {
   });
 
   it("closes retained access before provider revocation settles and serializes a later renewal", async () => {
-    const grant = visitorGrant("visitor@example.com");
+    const grant = visitorGrant(EMAIL);
     const fixture = visitorFixture({ grants: [grant], emails: [grant.email] });
     await fixture.service.initialize();
     const authority = fixture.service.authorize([grant.email]);
@@ -163,12 +165,9 @@ describe("VisitorAccessService authority", () => {
       writing.resolve();
       await release.promise;
     };
-    const revoking = fixture.service.revoke(
-      { email: grant.email },
-      fixture.authority.assertCurrent,
-    );
+    const revoking = fixture.revoke({ email: grant.email });
     await writing.promise;
-    const renewing = fixture.service.invite({ email: grant.email }, fixture.authority);
+    const renewing = fixture.invite({ email: grant.email });
     expect(authority.signal.aborted).toBe(true);
     expect(() => fixture.service.authorize([grant.email])).toThrow(/active visitor invitation/);
     release.resolve();
@@ -178,7 +177,7 @@ describe("VisitorAccessService authority", () => {
   });
 
   it("does not start a durable revocation after closing during the grant read", async () => {
-    const grant = visitorGrant("visitor@example.com");
+    const grant = visitorGrant(EMAIL);
     const fixture = visitorFixture({ grants: [grant], emails: [grant.email] });
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
@@ -188,10 +187,7 @@ describe("VisitorAccessService authority", () => {
       await release.promise;
       return read();
     };
-    const revoking = fixture.service.revoke(
-      { email: grant.email },
-      fixture.authority.assertCurrent,
-    );
+    const revoking = fixture.revoke({ email: grant.email });
     await entered.promise;
     fixture.service.close();
     release.resolve();
@@ -203,7 +199,7 @@ describe("VisitorAccessService authority", () => {
   it.each(["rejected", "committed but response lost"] as const)(
     "preserves the prior grant and lifetime when renewal is %s",
     async (outcome) => {
-      const grant = visitorGrant("visitor@example.com");
+      const grant = visitorGrant(EMAIL);
       const fixture = visitorFixture({ grants: [grant], emails: [grant.email] });
       await fixture.service.initialize();
       const original = fixture.service.authorize([grant.email]);
@@ -213,9 +209,9 @@ describe("VisitorAccessService authority", () => {
       fixture.cloudflare.failWrites = outcome === "rejected";
       fixture.cloudflare.loseWriteResponse = outcome === "committed but response lost";
 
-      await expect(
-        fixture.service.invite({ email: grant.email, days: 2 }, fixture.authority),
-      ).rejects.toBeInstanceOf(VisitorAccessError);
+      await expect(fixture.invite({ email: grant.email, days: 2 })).rejects.toBeInstanceOf(
+        VisitorAccessError,
+      );
 
       expect(fixture.grants.get(grant.email)).toEqual(recorded);
       expect(() => original.assertCurrent()).not.toThrow();
@@ -228,7 +224,7 @@ describe("VisitorAccessService authority", () => {
   it.each(["invite", "renew"] as const)(
     "requires current authority to activate %s after a confirmed provider effect",
     async (operation) => {
-      const email = "visitor@example.com";
+      const email = EMAIL;
       const previous = operation === "renew" ? visitorGrant(email) : undefined;
       const fixture = visitorFixture({ grants: previous ? [previous] : [] });
       let current = true;
@@ -241,9 +237,7 @@ describe("VisitorAccessService authority", () => {
         current = false;
       };
 
-      await expect(fixture.service.invite({ email, days: 2 }, fixture.authority)).rejects.toThrow(
-        /no longer current/,
-      );
+      await expect(fixture.invite({ email, days: 2 })).rejects.toThrow(/no longer current/);
 
       expect(fixture.emails()).toEqual([email]);
       expect(fixture.grants.get(email)).toEqual(

@@ -81,7 +81,7 @@ export function visitorGrant(target: VisitorTarget, overrides: GrantOverrides = 
   };
 }
 
-type ProfileFixture = {
+export type ProfileFixture = {
   id: string;
   emails: readonly string[];
   role?: string;
@@ -95,6 +95,9 @@ export function visitorProfileFixture(
   initial: ProfileFixture[] = [],
   githubProfiles: Array<{ accountId: number; profileId: string }> = [],
 ) {
+  const unexpected = (operation: string) => async () => {
+    throw new Error(`Unexpected ${operation}`);
+  };
   let profiles = initial;
   const response = async (method: string, params?: Record<string, unknown>) => {
     if (method !== "users.list") {
@@ -133,21 +136,13 @@ export function visitorProfileFixture(
   };
   const gateway: PluginRuntime["gateway"] = {
     isAvailable: async () => true,
-    async request() {
-      throw new Error("Expected a mocked Gateway request");
-    },
+    request: unexpected("Gateway request"),
     subscribeSessionChanges() {
       throw new Error("Unexpected session change subscription");
     },
-    async readSessionFacts() {
-      throw new Error("Unexpected session facts request");
-    },
-    async withSessionFacts() {
-      throw new Error("Unexpected selected session facts request");
-    },
-    async openPluginPanel() {
-      throw new Error("Unexpected plugin panel request");
-    },
+    readSessionFacts: unexpected("session facts request"),
+    withSessionFacts: unexpected("selected session facts request"),
+    openPluginPanel: unexpected("plugin panel request"),
     withUserProfileIdentity,
     resolveGitHubAccount: async ({ login }) => ({ accountId: 42, login }),
   };
@@ -198,25 +193,20 @@ export function visitorFixture(
       grants.set(key, structuredClone(grant));
       return true;
     },
-    async lookup(key) {
-      return structuredClone(grants.get(key));
-    },
+    lookup: async (key) => structuredClone(grants.get(key)),
     async consume(key) {
       const grant = grants.get(key);
       grants.delete(key);
       return structuredClone(grant);
     },
-    async delete(key) {
-      return grants.delete(key);
-    },
-    async entries() {
-      return [...grants].map(([key, value]) => ({
+    delete: async (key) => grants.delete(key),
+    entries: async () =>
+      [...grants].map(([key, value]) => ({
         key,
         value: structuredClone(value),
         createdAt: value.createdAt,
-      }));
-    },
-    async clear() {
+      })),
+    clear: async () => {
       grants.clear();
     },
     withCurrent({ assertCurrent }) {
@@ -364,6 +354,9 @@ export function visitorFixture(
     service,
     store,
     authority: { assertCurrent },
+    invite: (input: unknown) => service.invite(input, { assertCurrent }),
+    revoke: (input: unknown) => service.revoke(input, assertCurrent),
+    list: () => service.list(assertCurrent),
     emails: () =>
       cloudflare.policy?.include.flatMap((rule) => ("email" in rule ? [rule.email.email] : [])) ??
       [],
