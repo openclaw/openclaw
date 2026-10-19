@@ -9,7 +9,12 @@ import {
 
 const { spawnMock, ptyKillMock, signalProcessTreeMock, signalPtySessionTreeMock } = vi.hoisted(
   () => ({
-    spawnMock: vi.fn(),
+    spawnMock:
+      vi.fn<
+        (
+          ...args: Parameters<typeof import("../../terminal-pty.js").spawnTerminalPty>
+        ) => ReturnType<typeof createStubPty> | Promise<ReturnType<typeof createStubPty>>
+      >(),
     ptyKillMock: vi.fn(),
     signalProcessTreeMock: vi.fn(),
     signalPtySessionTreeMock: vi.fn(),
@@ -18,7 +23,7 @@ const { spawnMock, ptyKillMock, signalProcessTreeMock, signalPtySessionTreeMock 
 
 vi.mock("../../terminal-pty.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../terminal-pty.js")>()),
-  spawnTerminalPty: (...args: unknown[]) => spawnMock(...args),
+  spawnTerminalPty: spawnMock,
 }));
 
 vi.mock("../../kill-tree.js", () => ({
@@ -47,22 +52,7 @@ function createStubPty(pid = 1234) {
   };
 }
 
-function expectSpawnOptions() {
-  const [call] = spawnMock.mock.calls;
-  if (!call) {
-    throw new Error("expected spawn call");
-  }
-  const [options] = call;
-  if (typeof options !== "object" || options === null || Array.isArray(options)) {
-    throw new Error("expected spawn options to be an object");
-  }
-  return options as {
-    file: string;
-    args: string[];
-    env?: Record<string, string>;
-    name?: string;
-  };
-}
+const expectSpawnOptions = () => spawnMock.mock.calls[0]![0];
 
 describe("createPtyAdapter", () => {
   let createPtyAdapter: typeof import("./pty.js").createPtyAdapter;
@@ -224,22 +214,17 @@ describe("createPtyAdapter", () => {
 
   it("wraps Linux PTY spawns so shell children inherit higher OOM score", async () => {
     setPlatform("linux");
-    const restoreLinuxShell = mockLinuxOomWrapperShell();
+    using shell = { [Symbol.dispose]: mockLinuxOomWrapperShell() };
+    void shell;
     vi.resetModules();
-    try {
-      const { createPtyAdapter: createLinuxPtyAdapter } = await import("./pty.js");
-      const stub = createStubPty();
-      spawnMock.mockReturnValue(stub);
-
-      const adapter = await createLinuxPtyAdapter({
-        shell: "bash",
-        args: ["-lc", "env"],
-        env: { PATH: "/usr/bin", BASH_ENV: "/tmp/bashenv", TERM: "dumb" },
-      });
-      expect(adapter.oomScoreWrapperSelected).toBe(true);
-    } finally {
-      restoreLinuxShell();
-    }
+    const { createPtyAdapter: createLinuxPtyAdapter } = await import("./pty.js");
+    spawnMock.mockReturnValue(createStubPty());
+    const adapter = await createLinuxPtyAdapter({
+      shell: "bash",
+      args: ["-lc", "env"],
+      env: { PATH: "/usr/bin", BASH_ENV: "/tmp/bashenv", TERM: "dumb" },
+    });
+    expect(adapter.oomScoreWrapperSelected).toBe(true);
 
     expect(expectSpawnOptions().file).toBe("/bin/sh");
     expect(expectSpawnOptions().args).toEqual([

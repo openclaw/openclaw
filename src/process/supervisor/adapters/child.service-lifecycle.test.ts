@@ -45,9 +45,7 @@ function parsePidPair(output: string, track = false): [number, number] {
   }
   const pids: [number, number] = [Number.parseInt(match[1], 10), Number.parseInt(match[2], 10)];
   if (track) {
-    for (const pid of pids) {
-      activePids.add(pid);
-    }
+    pids.forEach((pid) => activePids.add(pid));
   }
   return pids;
 }
@@ -98,9 +96,7 @@ async function expectPending<T>(promise: Promise<T>) {
 afterEach(async () => {
   vi.useRealTimers();
   delete process.env.OPENCLAW_SERVICE_MARKER;
-  for (const pid of activePids) {
-    killPidIfAlive(pid);
-  }
+  activePids.forEach((pid) => killPidIfAlive(pid));
   await waitFor(() => [...activePids].every((pid) => !isAlive(pid))).catch(() => {});
   activePids.clear();
 });
@@ -197,8 +193,8 @@ describeSpawnTransports(
     it("rejects NUL input before creating a relay and leaves shutdown clean", async () => {
       process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
       const supervisor = createProcessSupervisor();
-      const relay = vi.spyOn(relayIntegration, "spawnServiceChildRelay");
       try {
+        using relay = vi.spyOn(relayIntegration, "spawnServiceChildRelay");
         await expect(
           supervisor.spawn({ mode: "child", argv: ["/bin/sh", "-c", "printf bad\0command"] }),
         ).rejects.toThrow(/NUL bytes|null bytes/);
@@ -210,7 +206,6 @@ describeSpawnTransports(
         await expect(run.wait()).resolves.toMatchObject({ exitCode: 0, stdout: "ready" });
         await run.waitForExtinction?.();
       } finally {
-        relay.mockRestore();
         await supervisor.shutdown();
       }
     });

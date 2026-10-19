@@ -20,12 +20,11 @@ import {
   mockLinuxOomWrapperShell,
 } from "./test-support.js";
 
-const { spawnMock, signalMock, decoderMock, relayMock } = vi.hoisted(() => ({
+const { spawnMock, signalMock, decoderMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
   signalMock: vi.fn<typeof import("../../kill-tree.js").signalProcessTree>(),
   decoderMock:
     vi.fn<typeof import("../../../infra/windows-encoding.js").createWindowsOutputDecoder>(),
-  relayMock: vi.fn(),
 }));
 vi.mock("../../spawn-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../spawn-utils.js")>()),
@@ -36,7 +35,7 @@ vi.mock("../../kill-tree.js", async (importOriginal) => ({
   signalProcessTree: signalMock,
 }));
 vi.mock("../../../infra/windows-encoding.js", () => ({ createWindowsOutputDecoder: decoderMock }));
-vi.mock("../service-child-relay-host.js", () => ({ createServiceChildRelayAdapter: relayMock }));
+vi.mock("../service-child-relay-host.js", () => ({ createServiceChildRelayAdapter: vi.fn() }));
 
 let start: ReturnType<typeof readyChildAdapter>;
 let roots: typeof import("../../../infra/windows-install-roots.js").getWindowsInstallRoots;
@@ -111,7 +110,6 @@ beforeEach(async () => {
   spawnMock.mockReset();
   signalMock.mockReset().mockImplementation((_pid, _signal, options) => options?.onComplete?.());
   decoderMock.mockReset().mockImplementation(() => ({ decode, flush: () => "" }));
-  relayMock.mockReset().mockResolvedValue({ ready: Promise.resolve(), adapter: {} });
   vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
 });
 afterEach(() => {
@@ -361,35 +359,32 @@ it("unwraps an npm script shim without reparsing prompt argv", async () => {
 
 it.each([false, true])("handles Linux spawn environment (exact=%s)", async (exact) => {
   setPlatform("linux");
-  const restoreShell = mockLinuxOomWrapperShell();
+  using shell = { [Symbol.dispose]: mockLinuxOomWrapperShell() };
+  void shell;
   const shellEnv = { BASH_ENV: "/tmp/bashenv", ENV: "/tmp/env", CDPATH: "/tmp" };
   for (const [key, value] of Object.entries(shellEnv)) {
     vi.stubEnv(key, value);
   }
-  try {
-    const argv = ["/usr/bin/node", "worker"];
-    const env = { HOME: "/worker-home", PATH: "/usr/bin", DROP_ME: undefined };
-    await setup({ argv, exactEnv: exact ? true : undefined, env: exact ? env : undefined });
-    expect(spawnArgs().argv).toEqual(
-      exact
-        ? argv
-        : [
-            "/bin/sh",
-            "-c",
-            'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
-            ...argv,
-          ],
-    );
-    if (exact) {
-      expect(spawnArgs().options?.env).toEqual({ HOME: "/worker-home", PATH: "/usr/bin" });
-    } else {
-      expect(spawnArgs().options?.env).toBeDefined();
-      for (const key of Object.keys(shellEnv)) {
-        expect(spawnArgs().options?.env?.[key]).toBeUndefined();
-      }
+  const argv = ["/usr/bin/node", "worker"];
+  const env = { HOME: "/worker-home", PATH: "/usr/bin", DROP_ME: undefined };
+  await setup({ argv, exactEnv: exact ? true : undefined, env: exact ? env : undefined });
+  expect(spawnArgs().argv).toEqual(
+    exact
+      ? argv
+      : [
+          "/bin/sh",
+          "-c",
+          'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
+          ...argv,
+        ],
+  );
+  if (exact) {
+    expect(spawnArgs().options?.env).toEqual({ HOME: "/worker-home", PATH: "/usr/bin" });
+  } else {
+    expect(spawnArgs().options?.env).toBeDefined();
+    for (const key of Object.keys(shellEnv)) {
+      expect(spawnArgs().options?.env?.[key]).toBeUndefined();
     }
-  } finally {
-    restoreShell();
   }
 });
 
