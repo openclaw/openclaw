@@ -232,6 +232,8 @@ const { values } = parseArgs({
     "session-event-churn": { type: "boolean", default: false },
     "duplicate-boot-reads": { type: "boolean", default: false },
     "closed-menu-members": { type: "boolean", default: false },
+    "session-menu-details": { type: "boolean", default: false },
+    route: { type: "string", default: "dashboard" },
     "capture-ms": { type: "string", default: "0" },
     "sidebar-row-transfer": { type: "string", default: "full" },
     "bundle-dir": { type: "string" },
@@ -265,6 +267,9 @@ if (!values["sidebar-list-churn"] && sidebarRowTransfer !== "full") {
   throw new Error("sidebar-row-transfer requires sidebar-list-churn");
 }
 const sidebarView = values["sidebar-view"];
+if (values.route !== "chat" && values.route !== "dashboard") {
+  throw new Error("Expected route chat or dashboard");
+}
 if (sidebarView !== "sessions" && sidebarView !== "online") {
   throw new Error("Expected sidebar-view sessions or online");
 }
@@ -325,7 +330,7 @@ const fixture = createControlUiTeamScaleFixture({
   sidebarLiveChurn: values["sidebar-live-churn"],
   sessionEventChurn: values["session-event-churn"],
   duplicateBootReads: values["duplicate-boot-reads"],
-  closedMenuMembers: values["closed-menu-members"],
+  closedMenuMembers: values["closed-menu-members"] || values["session-menu-details"],
   largeSnapshot: values["large-snapshot"],
 });
 const streamingReply = values["streaming-reply"] ? createControlUiStreamingReply() : undefined;
@@ -421,7 +426,11 @@ try {
       return asset ? route.fulfill({ status: 200, ...asset }) : route.fallback();
     });
   }
-  if (values["sidebar-live-churn"] || values["closed-menu-members"]) {
+  if (
+    values["sidebar-live-churn"] ||
+    values["closed-menu-members"] ||
+    values["session-menu-details"]
+  ) {
     await page.route("**/api/users/*/avatar?*", async (route) => {
       const asset = fixture.assets.get(new URL(route.request().url()).pathname);
       if (!asset) {
@@ -467,7 +476,7 @@ try {
   await page.addInitScript({
     content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !values["session-event-churn"] })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
   });
-  const url = controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, "dashboard");
+  const url = controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, values.route);
   async function settle() {
     try {
       await page.locator(".chat-pane__header").first().waitFor();
@@ -479,21 +488,25 @@ try {
       if (sidebarView === "online") {
         await page.locator('[data-online-user-id="team-person-120"]').waitFor();
       }
-      await page
-        .frameLocator(".board-widget__frame")
-        .frameLocator("iframe")
-        .getByText("Team metric 1", { exact: true })
-        .waitFor();
+      if (values.route === "dashboard") {
+        await page
+          .frameLocator(".board-widget__frame")
+          .frameLocator("iframe")
+          .getByText("Team metric 1", { exact: true })
+          .waitFor();
+      }
       await page
         .frameLocator(".chat-tool-card__preview-frame")
         .last()
         .frameLocator("iframe")
         .getByText("Team metric 12", { exact: true })
         .waitFor();
-      await page.waitForFunction(() => {
-        const ready = Reflect.get(window, "__readWidgetReadiness")();
-        return ready.firstBoardReadyMs !== null;
-      });
+      if (values.route === "dashboard") {
+        await page.waitForFunction(() => {
+          const ready = Reflect.get(window, "__readWidgetReadiness")();
+          return ready.firstBoardReadyMs !== null;
+        });
+      }
       await page.waitForFunction(
         (eventCount) => {
           const state = Reflect.get(window, "__coldLoad")?.read();
@@ -998,6 +1011,28 @@ try {
         );
       }
     }
+    let sessionMenuDetails;
+    if (values["session-menu-details"]) {
+      const closed = await page.evaluate(() => ({
+        ownerAvatars: document.querySelectorAll(".session-menu__avatar").length,
+        participantAvatars: document.querySelectorAll(".session-menu__avatar .viewer-avatar")
+          .length,
+        avatarRequests: performance
+          .getEntriesByType("resource")
+          .filter((entry) => new URL(entry.name).pathname.match(/^\/api\/users\/[^/]+\/avatar$/u))
+          .length,
+      }));
+      const trigger = ".chat-header-session-menu__trigger";
+      const header = await probeColdLoadOverlays(page, artifactDir, run, [
+        ["session", trigger, ".chat-header-session-menu__panel .oc-menu-item"],
+      ]);
+      await page.locator(trigger).click();
+      const owners = await probeColdLoadOverlays(page, artifactDir, run, [
+        ["owners", '[data-value="submenu:assign-owner"]', ".session-menu__avatar"],
+      ]);
+      await page.keyboard.press("Escape");
+      sessionMenuDetails = { closed, firstOpen: { ...header.firstOpen, ...owners.firstOpen } };
+    }
     const overlays = values["overlay-probe"]
       ? await probeColdLoadOverlays(
           page,
@@ -1028,6 +1063,7 @@ try {
       warmReload,
       snapshotSave,
       overlays,
+      sessionMenuDetails,
     };
     results.push(result);
     console.log(JSON.stringify(result));

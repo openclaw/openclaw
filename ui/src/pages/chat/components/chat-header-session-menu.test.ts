@@ -36,6 +36,7 @@ afterEach(() => {
     container.remove();
   }
   clearNativeGatewayTestState();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -68,6 +69,7 @@ async function mountMenu(
       | "onboarding"
       | "preferencesBrowserOnly"
       | "compact"
+      | "prewarm"
       | "bubbleModeEnabled"
       | "copyMarkdownAllowed"
       | "splitAllowed"
@@ -220,6 +222,45 @@ async function select(menu: HeaderMenuElement, value: string) {
 }
 
 describe("chat header session menu", () => {
+  it("leaves owner avatars unmounted while prewarming a closed menu", async () => {
+    const frames: FrameRequestCallback[] = [];
+    const idle = new Map<number, IdleRequestCallback>();
+    let nextIdle = 0;
+    const animation = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
+      idle.set(++nextIdle, callback);
+      return nextIdle;
+    });
+    vi.stubGlobal("cancelIdleCallback", (id: number) => idle.delete(id));
+    const owner = createSessionOwnerMenuHarness();
+    await profileDirectory(owner.context.gateway).load();
+    const menu = await mountMenu({ context: owner.context, prewarm: true }, false);
+    for (let turn = 0; turn < 20 && (frames.length || idle.size); turn++) {
+      for (const callback of frames.splice(0)) {
+        callback(0);
+      }
+      for (const [id, callback] of [...idle]) {
+        idle.delete(id);
+        callback({ didTimeout: false, timeRemaining: () => 10 });
+      }
+      flush();
+    }
+    expect(item(menu, "Assign to…")).toBeDefined();
+    expect(menu.querySelectorAll(".session-menu__avatar")).toHaveLength(0);
+    animation.mockRestore();
+    expect(menu.openMenu()).toBe(true);
+    flush();
+    await menu.updateComplete;
+    item(menu, "Assign to…").click();
+    flush();
+    await menu.updateComplete;
+    expect(item(menu, "Research")).toBeDefined();
+    expect(menu.querySelectorAll(".session-menu__avatar").length).toBeGreaterThan(0);
+  });
+
   it("keeps current session actions and their DOM identity across reopening", async () => {
     const menu = await mountMenu({}, false);
     expect(menu.querySelector(".chat-header-session-menu__trigger")).not.toBeNull();
