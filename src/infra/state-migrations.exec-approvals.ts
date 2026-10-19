@@ -34,7 +34,6 @@ import {
 import {
   LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist,
-  legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
   readLegacyMigrationSourceSnapshot,
   type LegacyMigrationSourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
@@ -291,10 +290,7 @@ async function migrateWithExclusiveStateOwnership(params: {
 
   try {
     params.beforeVerify?.();
-    const current = await source.read();
-    if (!snapshotsMatch(current, snapshot)) {
-      throw new Error("legacy exec approvals changed after migration loaded them");
-    }
+    await source.verify(snapshot, "legacy exec approvals changed after migration loaded them");
     await source.claim({
       snapshot,
       mismatchMessage: "legacy exec approvals changed before migration could claim them",

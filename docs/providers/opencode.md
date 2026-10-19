@@ -171,10 +171,10 @@ may also show [**Ultra**](/tools/thinking), a separate harness mode.
 
 ### Go
 
-| Property         | Value                                                                             |
-| ---------------- | --------------------------------------------------------------------------------- |
-| Runtime provider | `opencode-go`                                                                     |
-| Example models   | `opencode-go/kimi-k3`, `opencode-go/deepseek-v4-flash`, `opencode-go/qwen3.8-max` |
+| Property         | Value                                                                               |
+| ---------------- | ----------------------------------------------------------------------------------- |
+| Runtime provider | `opencode-go`                                                                       |
+| Example models   | `opencode-go/kimi-k3`, `opencode-go/deepseek-v4.1-flash`, `opencode-go/qwen3.8-max` |
 
 See [OpenCode Go](/providers/opencode-go) for discovery, routing, and access
 requirements. Go's model-list endpoint advertises its general lineup; listing

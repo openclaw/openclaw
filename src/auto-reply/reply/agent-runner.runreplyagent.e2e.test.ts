@@ -46,13 +46,13 @@ import {
   runBeforeAgentReplyForTurn,
 } from "../../plugins/before-agent-reply.js";
 import {
-  clearReplyRunForResetBySessionId,
   createReplyOperation,
   type ReplyOperation,
   getSessionControllerOperation,
-  captureCurrentReplyMessageInjectionTarget,
 } from "../../sessions/session-controller.js";
 import { captureSessionControllerSettlement } from "../../sessions/session-controller.lifecycle.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
+import { clearReplyRunForResetBySessionId } from "../../sessions/session-controller.stop-runtime.js";
 import { testing as controllerTesting } from "../../sessions/session-controller.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {

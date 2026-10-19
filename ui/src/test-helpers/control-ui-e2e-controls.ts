@@ -1,5 +1,9 @@
 import type { Page } from "playwright";
-import type { MockGatewayControls, MockGatewayWindow } from "./control-ui-e2e-contract.ts";
+import type {
+  ControlUiMockGateway,
+  MockGatewayControls,
+  MockGatewayWindow,
+} from "./control-ui-e2e-contract.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
   type ControlUiE2eDiagnosticEvent,
@@ -7,6 +11,14 @@ import {
 import { controlUiE2eWaitTimeoutMs } from "./control-ui-e2e-readiness.ts";
 
 let mockRequestBindingSequence = 0;
+
+type GatewayMutation = {
+  [K in keyof ControlUiMockGateway]: ControlUiMockGateway[K] extends (...args: never[]) => infer R
+    ? R extends void
+      ? K
+      : never
+    : never;
+}[keyof ControlUiMockGateway];
 
 export async function installMockGatewayScript(
   page: Page,
@@ -36,28 +48,21 @@ export function createMockGatewayControls(
   diagnosticEvents: ControlUiE2eDiagnosticEvent[],
   methodResponses: Record<string, unknown>,
 ): MockGatewayControls {
-  const emitGatewayEvent = async (event: string, payload?: unknown) => {
-    await page.evaluate(
-      ({ eventName, eventPayload }) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        gateway.emit(eventName, eventPayload);
-      },
-      { eventName: event, eventPayload: payload },
-    );
-  };
-
-  const deliverLatest = async (frame: unknown) => {
-    await page.evaluate((payload) => {
+  const mutate = async <K extends GatewayMutation>(
+    method: K,
+    ...args: Parameters<ControlUiMockGateway[K]>
+  ): Promise<void> => {
+    const operation: { method: GatewayMutation; args: unknown[] } = { method, args };
+    await page.evaluate(({ method: targetMethod, args: values }) => {
       const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
       if (!gateway) {
         throw new Error("Mock Gateway is not installed");
       }
-      gateway.deliverLatest(payload);
-    }, frame);
+      Reflect.apply(gateway[targetMethod], gateway, values);
+    }, operation);
   };
+  const emitGatewayEvent: MockGatewayControls["emitGatewayEvent"] = (...args) =>
+    mutate("emit", ...args);
 
   const getRequests = async (
     method?: string,
@@ -73,19 +78,8 @@ export function createMockGatewayControls(
     );
 
   return {
-    async closeLatest(code, reason) {
-      await page.evaluate(
-        ({ closeCode, closeReason }) => {
-          const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-          if (!gateway) {
-            throw new Error("Mock Gateway is not installed");
-          }
-          gateway.closeLatest(closeCode, closeReason);
-        },
-        { closeCode: code, closeReason: reason },
-      );
-    },
-    deliverLatest,
+    closeLatest: (...args) => mutate("closeLatest", ...args),
+    deliverLatest: (...args) => mutate("deliverLatest", ...args),
     async deferNext(method, match, options) {
       return await page.evaluate(
         ({ targetMethod, requestMatch, requestOptions }) => {
@@ -121,132 +115,31 @@ export function createMockGatewayControls(
         return gateway.getSessionRow(sessionKey);
       }, key);
     },
-    async getSocketCount() {
-      return await page.evaluate(() => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        return gateway?.socketCount() ?? 0;
-      });
-    },
-    async getSocketUrls() {
-      return await page.evaluate(() => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        return gateway?.socketUrls() ?? [];
-      });
-    },
-    async rejectDeferred(method, error, options) {
-      await page.evaluate(
-        ({ targetMethod, responseError, requestOptions }) => {
-          const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-          if (!gateway) {
-            throw new Error("Mock Gateway is not installed");
-          }
-          gateway.rejectDeferred(targetMethod, responseError, requestOptions);
-        },
-        { targetMethod: method, responseError: error, requestOptions: options },
-      );
-    },
-    async resolveDeferred(method, payload, options) {
-      await page.evaluate(
-        ({ targetMethod, responsePayload, requestOptions }) => {
-          const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-          if (!gateway) {
-            throw new Error("Mock Gateway is not installed");
-          }
-          gateway.resolveDeferred(targetMethod, responsePayload, requestOptions);
-        },
-        { targetMethod: method, responsePayload: payload, requestOptions: options },
-      );
-    },
-    async suspendLatest() {
-      await page.evaluate(() => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        gateway.suspendLatest();
-      });
-    },
-    async setOnline(online) {
-      await page.evaluate((nextOnline) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        gateway.setOnline(nextOnline);
-      }, online);
-    },
-    async setGatewayBootId(bootId) {
-      await page.evaluate((nextBootId) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        gateway.setGatewayBootId(nextBootId);
-      }, bootId);
-    },
-    async setServerBuildId(buildId) {
-      await page.evaluate((nextBuildId) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        gateway.setServerBuildId(nextBuildId);
-      }, buildId);
-    },
-    async setOperatorScopes(scopes) {
-      await page.evaluate((nextScopes) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        gateway.setOperatorScopes(nextScopes);
-      }, scopes);
-    },
-    async setHistoryMessages(messages) {
-      await page.evaluate((nextMessages) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        gateway.setHistoryMessages(nextMessages);
-      }, messages);
-    },
+    getSocketCount: () =>
+      page.evaluate(
+        () => (window as MockGatewayWindow).openclawControlUiE2eGateway?.socketCount() ?? 0,
+      ),
+    getSocketUrls: () =>
+      page.evaluate(
+        () => (window as MockGatewayWindow).openclawControlUiE2eGateway?.socketUrls() ?? [],
+      ),
+    rejectDeferred: (...args) => mutate("rejectDeferred", ...args),
+    resolveDeferred: (...args) => mutate("resolveDeferred", ...args),
+    suspendLatest: () => mutate("suspendLatest"),
+    setOnline: (...args) => mutate("setOnline", ...args),
+    setGatewayBootId: (...args) => mutate("setGatewayBootId", ...args),
+    setServerBuildId: (...args) => mutate("setServerBuildId", ...args),
+    setOperatorScopes: (...args) => mutate("setOperatorScopes", ...args),
+    setHistoryMessages: (...args) => mutate("setHistoryMessages", ...args),
     async setMethodResponse(method, payload) {
       methodResponses[method] = payload;
-      await page.evaluate(
-        ({ targetMethod, responsePayload }) => {
-          const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-          if (!gateway) {
-            throw new Error("Mock Gateway is not installed");
-          }
-          gateway.setMethodResponse(targetMethod, responsePayload);
-        },
-        { targetMethod: method, responsePayload: payload },
-      );
+      await mutate("setMethodResponse", method, payload);
     },
-    async setSessionsListResponse(payload) {
-      await page.evaluate((responsePayload) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        gateway.setSessionsListResponse(responsePayload);
-      }, payload);
-    },
-    async setSessionSharingPolicy(policy) {
-      await page.evaluate((nextPolicy) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        gateway.setSessionSharingPolicy(nextPolicy);
-      }, policy);
-    },
+    setSessionsListResponse: (...args) => mutate("setSessionsListResponse", ...args),
+    setSessionSharingPolicy: (...args) => mutate("setSessionSharingPolicy", ...args),
     async waitForRequest(method, options) {
       const deadline = Date.now() + controlUiE2eWaitTimeoutMs;
-      const after = options?.after;
-      const match = options?.match;
-      const exactParams = options?.exactParams;
+      const { after, match, exactParams } = options ?? {};
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           await page.waitForFunction(
@@ -254,7 +147,7 @@ export function createMockGatewayControls(
               const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
               const matching =
                 gateway?.findRequests(targetMethod, requestMatch, requestOptions) ?? [];
-              return matching.length > (priorCount ?? 0);
+              return matching.length > priorCount;
             },
             {
               targetMethod: method,

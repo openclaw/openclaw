@@ -61,18 +61,17 @@ import { Icon } from "./solid/icon.tsx";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
 
 export class AppSidebarOwner extends AppSidebarSessionNavigationElement implements SessionListHost {
-  readNarration: () => ReturnType<SidebarNarration["read"]> | undefined = () => undefined;
   private readonly emptyNarrationLines = new Map<string, string>();
   private readonly emptyNarrationTools = new Map<string, SidebarToolActivity>();
   private readonly emptyObserverDigests = new Map<string, SessionObserverDigest>();
   override get sidebarNarrationLines() {
-    return this.readNarration()?.lines ?? this.emptyNarrationLines;
+    return this.narration?.read().lines ?? this.emptyNarrationLines;
   }
   override get sidebarTools() {
-    return this.readNarration()?.tools ?? this.emptyNarrationTools;
+    return this.narration?.read().tools ?? this.emptyNarrationTools;
   }
   override get sidebarObserverDigests() {
-    return this.readNarration()?.observerDigests ?? this.emptyObserverDigests;
+    return this.narration?.read().observerDigests ?? this.emptyObserverDigests;
   }
 
   override readonly sessionOrganizer = new SessionOrganizer(this, () => this.invalidate());
@@ -444,7 +443,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
             !host().contextualSidebar
           }
           sections={sections()}
-          involvingMe={host().sessionInvolvingMeFilterActive}
         />
       </Show>
     );

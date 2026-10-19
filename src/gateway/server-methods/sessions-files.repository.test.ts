@@ -571,6 +571,15 @@ it("browses, previews, edits and diffs only the live repository without a Gatewa
     { path: "changed.txt", patch: expect.stringContaining("+after") },
     { path: "second.txt", patch: expect.stringContaining("+second edit") },
   ]);
+  const summary = await loadSessionDiff({ sessionKey, summaryOnly: true }, context as never);
+  expect(summary.root).toBeUndefined();
+  expect(summary.files).toEqual([
+    { path: "changed.txt", status: "modified", additions: 1, deletions: 1 },
+    { path: "second.txt", status: "added", additions: 1, deletions: 0, untracked: true },
+  ]);
+  expect(summary.additions).toBe(2);
+  expect(summary.deletions).toBe(1);
+  expect(summary.commits).toBeUndefined();
   const reveal = await files.ok("reveal");
   expect(reveal).toMatchObject({
     ok: false,

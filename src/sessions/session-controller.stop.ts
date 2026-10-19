@@ -37,8 +37,6 @@ export {
   captureSessionControllerStop,
   captureSessionControllerStopCandidates,
   type SessionControllerStopCapture,
-  type SessionControllerStopEffect,
-  type SessionControllerStopRunEffect,
 };
 
 export type SessionControllerStopResult = {
@@ -108,7 +106,6 @@ export type SessionStopHookContext = Readonly<{
   senderId?: string;
 }>;
 
-export type { SessionStopChildrenResult } from "./session-controller.contracts.js";
 type SessionStopTargetStatus = "aborted" | "finalizing" | "unchanged";
 
 /** An active parent owned outside the controller, stopped after its captured controller owners. */

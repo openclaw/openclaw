@@ -875,10 +875,10 @@ async function runCliWithPreparedOutputMode(
   await configureStartupTraces();
   if (!isHelpOrVersionInvocation && isGatewayRunInvocation) {
     await startupTrace.measure("gateway-run-select-environment", async () => {
-      const [{ selectGatewayRunEnvironment }, { defaultRuntime }] = await Promise.all([
-        import("./gateway-cli/pre-bootstrap.js"),
-        import("../runtime.js"),
-      ]);
+      const [{ selectGatewayRunEnvironment }, { defaultRuntime }] = await startupTrace.measure(
+        "gateway-run-select-environment-imports",
+        () => Promise.all([import("./gateway-cli/pre-bootstrap.js"), import("../runtime.js")]),
+      );
       const opts = resolveGatewayRunPreBootstrapOptions(normalizedArgv) ?? {};
       await selectGatewayRunEnvironment({ opts, runtime: defaultRuntime });
     });

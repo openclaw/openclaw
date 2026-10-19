@@ -117,8 +117,13 @@ function MemoryMemories(props: MemoryMemoriesProps) {
 
   function toggleResult(result: SearchResult, index: number) {
     const key = resultKey(result, index);
-    setOpenResultKey((current) => (current === key ? null : key));
-    if (!detailRequests.has(result.path)) {
+    const opening = openResultKey() !== key;
+    setOpenResultKey(opening ? key : null);
+    // Reopening retries a failed read, such as one interrupted by a reconnect.
+    if (
+      opening &&
+      (!detailRequests.has(result.path) || details().get(result.path)?.kind === "error")
+    ) {
       void loadDetail(result.path);
     }
   }
@@ -303,7 +308,11 @@ function MemoryMemories(props: MemoryMemoriesProps) {
           {(error) => (
             <div class="memory-memories__state" role="alert">
               <p>{t("memoryPage.memories.error", { message: error.message })}</p>
-              <button class="btn btn--sm" onClick={() => void search(error.query)}>
+              <button
+                class="btn btn--sm"
+                disabled={!props.snapshot.connected || !props.snapshot.agentId}
+                onClick={() => void search(error.query)}
+              >
                 {t("memoryPage.memories.retry")}
               </button>
             </div>

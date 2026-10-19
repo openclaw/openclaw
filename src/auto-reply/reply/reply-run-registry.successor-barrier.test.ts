@@ -5,10 +5,10 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import {
   registerReplyOperationSuccessorBarrier,
   ReplyRunSuccessorAdmissionBlockedError,
-  waitForReplyRunSuccessorAdmission,
 } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
 
 async function withFakeReplyTimers<T>(run: () => Promise<T>): Promise<T> {

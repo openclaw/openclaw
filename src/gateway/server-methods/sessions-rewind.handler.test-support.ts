@@ -73,7 +73,7 @@ type MessageCutMethod =
   | "sessions.fork"
   | "sessions.rewind";
 
-export function messageCutContext(): GatewayRequestContext {
+function messageCutContext(): GatewayRequestContext {
   return {
     broadcastToConnIds: vi.fn(),
     getRuntimeConfig: () => cfg,

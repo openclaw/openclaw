@@ -636,6 +636,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/get-reply.workspace-failure.test.ts",
   "src/auto-reply/reply/restart-recovery-claim.test.ts",
   "src/auto-reply/reply/restart-recovery-claim.durability.test.ts",
+  "src/auto-reply/reply/restart-recovery-claim.pending-input.test.ts",
   "src/auto-reply/reply/restart-recovery-claim.successor.test.ts",
   "src/auto-reply/reply/restart-recovery-claim.lifecycle.test.ts",
   "src/auto-reply/reply/agent-runner-memory.private-transcript.test.ts",

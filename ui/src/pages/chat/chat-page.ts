@@ -8,7 +8,7 @@ import type { ChatPageHost, ChatPageProps } from "./chat-page-types.ts";
 import "../../styles/chat.ts";
 import "../../styles/chat/composer.css";
 
-export type ChatPage = ChatPageHost & {
+type ChatPageElement = ChatPageHost & {
   readonly sessionSplitAvailable: boolean;
 };
 
@@ -44,11 +44,8 @@ defineSolidBridge<ChatPageProps>(
   },
 );
 
-// SAFETY: defineSolidBridge synchronously registers this exact host contract.
-export const ChatPage = customElements.get("openclaw-chat-page") as { new (): ChatPage };
-
 declare global {
   interface HTMLElementTagNameMap {
-    "openclaw-chat-page": ChatPage;
+    "openclaw-chat-page": ChatPageElement;
   }
 }

@@ -243,13 +243,17 @@ export function exitLightboxVideoFullscreen(video: HTMLVideoElement | undefined,
   return true;
 }
 
-export function trapLightboxTabFocus(event: KeyboardEvent, focusables: NodeListOf<HTMLElement>) {
+export function trapLightboxTabFocus(event: KeyboardEvent, focusables: Iterable<HTMLElement>) {
   if (event.key !== "Tab") {
     return;
   }
-  const actions = [...focusables].filter(
-    (action) => !(action instanceof HTMLButtonElement && action.disabled),
-  );
+  const actions = [...focusables]
+    .filter(
+      (action) => action.isConnected && !(action instanceof HTMLButtonElement && action.disabled),
+    )
+    .toSorted((left, right) =>
+      left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+    );
   const first = actions[0];
   const last = actions.at(-1);
   if (!first || !last) {

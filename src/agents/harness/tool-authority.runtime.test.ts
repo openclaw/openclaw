@@ -14,9 +14,9 @@ import {
   beginReplyMessageInjectionTarget,
   createReplyOperation,
   getSessionControllerOperation,
-  captureCurrentReplyMessageInjectionTarget,
 } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { resolveSessionRunProgressState } from "../../sessions/session-controller.queries.js";
 import { testing as replyTesting } from "../../sessions/session-controller.test-support.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";

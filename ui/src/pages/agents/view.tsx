@@ -164,15 +164,22 @@ export function Agents(props: AgentsProps) {
               {(agent) => (
                 <>
                   <Show when={agent().id} keyed>
-                    {(id) => (
-                      <button
-                        type="button"
-                        class="btn btn--sm btn--ghost"
-                        onClick={(event) => void handleCopyButton(event, id, t("agents.copyId"))}
-                      >
-                        <span data-copy-label>{t("agents.copyId")}</span>
-                      </button>
-                    )}
+                    {(id) => {
+                      let label!: HTMLSpanElement;
+                      return (
+                        <button
+                          type="button"
+                          class="btn btn--sm btn--ghost"
+                          onClick={(event) =>
+                            void handleCopyButton(event, id, t("agents.copyId"), { label })
+                          }
+                        >
+                          <span ref={(element) => (label = element)} data-copy-label>
+                            {t("agents.copyId")}
+                          </span>
+                        </button>
+                      );
+                    }}
                   </Show>
                   <button
                     type="button"

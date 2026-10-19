@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
+import { registerMcpAppUnmountTarget } from "../../../components/mcp-app-unmount.ts";
 import {
   PANEL_HOSTED_TABS_CHANGE_EVENT,
   readPanelHostedTabs,
@@ -543,6 +544,7 @@ describe("workspace file tabs", () => {
         headersAtRestart.push(panel.querySelector(".rail-header") !== null),
       );
       Object.assign(app, { teardown, restartAfterTeardown: restart });
+      onTestFinished(registerMcpAppUnmountTarget(app));
       const editor = document.createElement("textarea");
       const previews: SessionWorkspacePreview[] = [
         {

@@ -155,26 +155,38 @@ describe("board MCP App cell lifecycle", () => {
     expect(allow.disabled).toBe(false);
   });
 
-  it("keeps failed frame retries visible and clears their presentation on recovery", async () => {
-    const cell = await mount({}, { widget: widget({ contentKind: "html" }) });
-    expect(cell.querySelector('[data-test-id="board-widget-error"]')).not.toBeNull();
-    expect(cell.querySelector(".board-widget__body--scrollable")).not.toBeNull();
+  it.each(["resolver replacement", "in-place revision"] as const)(
+    "keeps failed frame retries visible and clears their presentation after %s",
+    async (recovery) => {
+      const current = widget({ contentKind: "html" });
+      const cell = await mount({}, { widget: current });
+      expect(cell.querySelector('[data-test-id="board-widget-error"]')).not.toBeNull();
+      expect(cell.querySelector(".board-widget__body--scrollable")).not.toBeNull();
 
-    await update(cell, {
-      widgetFrameUrl: () => {
-        throw new Error("Frame unavailable");
-      },
-    });
-    expect(cell.querySelector('[data-test-id="board-widget-error"]')?.textContent).toContain(
-      "Frame unavailable",
-    );
-    expect(cell.querySelector(".board-widget__body--scrollable")).not.toBeNull();
+      await update(cell, {
+        widgetFrameUrl: (_name, revision) => {
+          if (recovery === "in-place revision" && revision === 2) {
+            return "/recovered-frame";
+          }
+          throw new Error("Frame unavailable");
+        },
+      });
+      expect(cell.querySelector('[data-test-id="board-widget-error"]')?.textContent).toContain(
+        "Frame unavailable",
+      );
+      expect(cell.querySelector(".board-widget__body--scrollable")).not.toBeNull();
 
-    await update(cell, { widgetFrameUrl: () => "/recovered-frame" });
-    expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
-    expect(cell.querySelector(".board-widget__body--scrollable")).toBeNull();
-    expect(cell.querySelector("iframe")?.getAttribute("src")).toBe("/recovered-frame");
-  });
+      if (recovery === "in-place revision") {
+        current.revision = 2;
+        await update(cell, { boardRevision: 1 });
+      } else {
+        await update(cell, { widgetFrameUrl: () => "/recovered-frame" });
+      }
+      expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
+      expect(cell.querySelector(".board-widget__body--scrollable")).toBeNull();
+      expect(cell.querySelector("iframe")?.getAttribute("src")).toBe("/recovered-frame");
+    },
+  );
 
   it("refreshes an in-place HTML widget when its board revision changes", async () => {
     const current = widget({ contentKind: "html" });

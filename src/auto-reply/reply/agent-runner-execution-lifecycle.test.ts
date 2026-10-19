@@ -15,11 +15,11 @@ import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-r
 import { useBundledProviderPolicyArtifactsForTest } from "../../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
 import {
   createReplyOperation,
-  hasReplyOperationExecutionStarted,
   getSessionControllerOperation,
   type ReplyOperation,
 } from "../../sessions/session-controller.js";
 import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
+import { hasReplyOperationExecutionStarted } from "../../sessions/session-controller.state.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   setupAgentRunnerExecutionTestState,

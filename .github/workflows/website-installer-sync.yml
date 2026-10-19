@@ -158,6 +158,11 @@ jobs:
   linux-docker:
     needs: scope
     if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
+    name: Docker installers (${{ matrix.debian }})
+    strategy: &debian_strategy
+      fail-fast: false
+      matrix:
+        debian: [bookworm, trixie]
     runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
@@ -169,7 +174,7 @@ jobs:
         run: |
           timeout --kill-after=30s 20m docker run --rm \
             -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
-            node:24-bookworm-slim \
+            node:24-${{ matrix.debian }}-slim \
             bash -lc 'bash /tmp/install.sh --version latest && openclaw --version'
 
       - name: install-cli.sh in Docker
@@ -178,12 +183,14 @@ jobs:
             -e OPENCLAW_NO_ONBOARD=1 \
             -e OPENCLAW_NO_PROMPT=1 \
             -v "$PWD/dist/installers/install-cli.sh:/tmp/install-cli.sh:ro" \
-            node:24-bookworm-slim \
+            node:24-${{ matrix.debian }}-slim \
             bash -lc 'apt-get update -y && apt-get install -y curl && bash /tmp/install-cli.sh --prefix /tmp/openclaw --no-onboard --version latest && /tmp/openclaw/bin/openclaw --version'
 
   debian-installer:
     needs: scope
     if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
+    name: Debian installer (${{ matrix.debian }})
+    strategy: *debian_strategy
     runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
@@ -195,7 +202,7 @@ jobs:
         run: |
           timeout --kill-after=30s 20m docker run --rm -i \
             -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
-            debian:bookworm-slim \
+            debian:${{ matrix.debian }}-slim \
             bash -s <<'CONTAINER'
           set -euo pipefail
           apt-get update -qq
@@ -214,6 +221,8 @@ jobs:
   linux-build-tools-failure:
     needs: scope
     if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
+    name: Build tools failure (${{ matrix.debian }})
+    strategy: *debian_strategy
     runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
@@ -225,7 +234,7 @@ jobs:
         run: |
           timeout --kill-after=10s 5m docker run --rm -i \
             -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
-            debian:bookworm \
+            debian:${{ matrix.debian }} \
             bash -s <<'CONTAINER'
           set -euo pipefail
           export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -281,6 +290,8 @@ jobs:
   linux-non-root:
     needs: scope
     if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
+    name: Non-root installer (${{ matrix.debian }})
+    strategy: *debian_strategy
     runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
@@ -292,7 +303,7 @@ jobs:
         run: |
           timeout --kill-after=30s 20m docker run --rm -i \
             -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
-            node:24-bookworm-slim \
+            node:24-${{ matrix.debian }}-slim \
             bash -s <<'CONTAINER'
           set -euo pipefail
           apt-get update -qq

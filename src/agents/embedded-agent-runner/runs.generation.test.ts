@@ -766,8 +766,8 @@ describe("embedded run registry lifecycle generations", () => {
     });
 
     const replyRunsB = await importFreshModule<
-      typeof import("../../sessions/session-controller.js")
-    >(import.meta.url, "../../sessions/session-controller.js?scope=generation-b");
+      typeof import("../../sessions/session-controller.queries.js")
+    >(import.meta.url, "../../sessions/session-controller.queries.js?scope=generation-b");
     rotateAgentEventLifecycleGeneration();
 
     expect(cancel).toHaveBeenCalledExactlyOnceWith("restart");

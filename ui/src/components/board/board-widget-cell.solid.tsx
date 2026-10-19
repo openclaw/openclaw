@@ -67,12 +67,10 @@ function BoardWidgetCellContent(
   const [actionError, setActionError] = createSignal("");
   const [actionPending, setActionPending] = createSignal(false);
   const [widgetRoot, setWidgetRoot] = createSignal<HTMLElement>();
-  const [bodyErrored, setBodyErrored] = createSignal(false, { ownedWrite: true });
   let mcpElement: HTMLElementTagNameMap["mcp-app-view"] | undefined;
   // Signals commit later; admission must reject a second action in the same tick.
   let actionInFlight = false;
   let menu: MenuHandle | undefined;
-  let resetBodyError: (() => void) | undefined;
   let connected = true;
   // Retain the MCP renderer until its teardown acknowledgement releases it.
   const [renderedMcp, setRenderedMcp] = createSignal(
@@ -107,6 +105,19 @@ function BoardWidgetCellContent(
     },
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
+  // A replacement binding retries a failed body; healthy bindings retain their subtree.
+  const [bodyError, setBodyError] = createSignal<{ error: unknown } | undefined>(
+    () => {
+      void props.widget;
+      void props.boardRevision;
+      void props.widgetFrameUrl;
+      plugins.revision();
+      gatewayBinding();
+      return undefined;
+    },
+    { ownedWrite: true },
+  );
+  const bodyErrored = () => bodyError() !== undefined;
   const loader = createLazyCustomElementRequests();
   const loadState = projectOwner(loader, (owner) => owner.visibleState);
   const loadError = () => {
@@ -260,18 +271,6 @@ function BoardWidgetCellContent(
       if (props.loadingCovered && presentationReady()) {
         host.dispatchEvent(new Event("openclaw-board-widget-presentation", { bubbles: true }));
       }
-    },
-  );
-  let observedErrorBinding = false;
-  createEffect(
-    () => [props.widget, props.widgetFrameUrl, plugins.revision(), gatewayBinding()] as const,
-    () => {
-      // The first observation belongs to the initial render, including its error fallback.
-      if (observedErrorBinding && bodyErrored()) {
-        setBodyErrored(false);
-        resetBodyError?.();
-      }
-      observedErrorBinding = true;
     },
   );
   onCleanup(() => {
@@ -460,6 +459,21 @@ function BoardWidgetCellContent(
     </Switch>
   );
 
+  const BodyBoundary = () => (
+    <>
+      {createErrorBoundary(
+        () => (
+          <Body />
+        ),
+        (error) => {
+          const caught = error();
+          setBodyError((current) => current ?? { error: caught });
+          return null;
+        },
+      )}
+    </>
+  );
+
   const presentation = () =>
     props.widget?.contentKind === "html" || props.widget?.frameUrl
       ? (props.widget.presentation ?? "card")
@@ -593,17 +607,9 @@ function BoardWidgetCellContent(
             },
           ]}
         >
-          {createErrorBoundary(
-            () => (
-              <Body />
-            ),
-            (error, reset) => {
-              resetBodyError = reset;
-              // Signal equality keeps repeated fallback renders from republishing the error.
-              setBodyErrored(true);
-              return <BoardWidgetError error={error()} />;
-            },
-          )}
+          <Show when={bodyError()} fallback={<BodyBoundary />}>
+            {(failure) => <BoardWidgetError error={failure().error} />}
+          </Show>
           <Show when={state().error && props.widget!.grantState !== "pending"}>
             <div class="board-widget__error-overlay">
               <BoardWidgetError error={state().error} action />
