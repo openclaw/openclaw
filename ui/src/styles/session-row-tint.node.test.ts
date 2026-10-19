@@ -10,8 +10,7 @@ const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executab
 const colors = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"];
 let browser: Browser;
 
-// CSS owns this contract. The existing session-color E2E owns applying/removing
-// colors through menus; this bounded browser fixture isolates cascade and paint.
+// Menu application/removal is covered by session-color E2E; this proves paint.
 describe("sidebar session row tint", () => {
   beforeAll(async () => {
     expect(canRunPlaywrightChromium(executablePath), "Chromium is required for paint proof").toBe(
@@ -33,40 +32,23 @@ describe("sidebar session row tint", () => {
         .flatMap((pinned) =>
           ["none", ...colors].map((color) => {
             const id = (pinned ? "pinned-" : "recent-") + color;
-            return (
-              `<div class="` +
-              (pinned ? "sidebar-zone-entry" : "") +
-              `"><div id="` +
-              id +
-              `"
-          class="sidebar-recent-session session-row-host ` +
-              (color !== "none" ? "sidebar-recent-session--colored" : "") +
-              `"
-          style="--session-color:var(--session-color-` +
-              color +
-              `)">
+            return `<div class="${pinned ? "sidebar-zone-entry" : ""}"><div id="${id}"
+          class="sidebar-recent-session session-row-host ${color !== "none" ? "sidebar-recent-session--colored" : ""}"
+          style="--session-color:var(--session-color-${color})">
           <a class="sidebar-recent-session__link" href="#"><span class="sidebar-recent-session__text">
             <span class="sidebar-recent-session__title-row"><span class="sidebar-recent-session__name">Design review</span></span>
             <span class="sidebar-recent-session__details"><span class="sidebar-recent-session__subtitle">Ready for review</span></span>
           </span></a><span class="sidebar-recent-session__aside session-row-aside"><span class="session-row-trail">3m</span></span>
-        </div></div>`
-            );
+        </div></div>`;
           }),
         )
         .join("");
       await page.setContent(
-        `<!doctype html><html data-theme-mode="` +
-          theme +
-          `"><head><style>` +
-          css +
-          `</style>
+        `<!doctype html><html data-theme-mode="${theme}"><head><style>${css}</style>
         <style>.sidebar{width:280px}.sidebar-recent-session,.sidebar-zone-entry .sidebar-recent-session{transition:none}</style></head>
-        <body><aside class="sidebar"><div class="sidebar-shell">` +
-          rows +
-          `</div></aside></body></html>`,
+        <body><aside class="sidebar"><div class="sidebar-shell">${rows}</div></aside></body></html>`,
       );
-      // Force the real :hover selector on all rows together, without timed mouse
-      // motion, transitions, or starting a browser per palette/state combination.
+      // Force real :hover selectors without timed mouse motion or transitions.
       const cdp = await page.context().newCDPSession(page);
       await cdp.send("DOM.enable");
       await cdp.send("CSS.enable");
@@ -163,6 +145,7 @@ describe("sidebar session row tint", () => {
                 id: row.id,
                 colored,
                 outerBackground: style.backgroundColor,
+                fillBackground: fill.backgroundColor,
                 insets: [
                   Number.parseFloat(style.borderTopWidth) + Number.parseFloat(fill.top),
                   Number.parseFloat(style.borderBottomWidth) + Number.parseFloat(fill.bottom),
@@ -190,11 +173,7 @@ describe("sidebar session row tint", () => {
               ).toBeLessThanOrEqual(1),
             );
           } else if (state === "idle") {
-            expect(
-              await page
-                .locator("#" + sample.id)
-                .evaluate((row) => getComputedStyle(row, "::after").backgroundColor),
-            ).toBe("rgba(0, 0, 0, 0)");
+            expect(sample.fillBackground).toBe("rgba(0, 0, 0, 0)");
           }
           expect(sample.title, label + " neutral title").toEqual(sample.expectedTitle);
           if (sample.colored) {

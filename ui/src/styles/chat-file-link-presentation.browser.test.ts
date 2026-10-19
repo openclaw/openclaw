@@ -1,4 +1,3 @@
-// Control UI tests cover how recognized workspace file links present in chat.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,8 +14,7 @@ const describeFileLinkPresentation = canRunPlaywrightChromium(chromiumExecutable
   ? describe
   : describe.skip;
 
-// The declarations the inline-code chip paints. File-link labels match across
-// authoring syntax except for glyph spacing owned by the outer anchor.
+// File-link labels match except for glyph spacing owned by the outer anchor.
 const CHIP_PROPERTIES = [
   "backgroundColor",
   "borderTopWidth",
@@ -30,8 +28,7 @@ const CHIP_PROPERTIES = [
   "color",
 ] as const;
 
-// sidebar-markdown.css must load after chat/text.css, matching the import order
-// in styles/chat.ts — the file-link rules are written to win at that order.
+// Match styles/chat.ts: sidebar-markdown must load after chat/text.
 function readChatCss(): string {
   return [
     "ui/src/styles/base.css",
@@ -43,42 +40,22 @@ function readChatCss(): string {
     .join("\n");
 }
 
-// Both file links carry the same kind so any difference is the authoring
-// syntax, not the glyph. The trailing code span is the control: it is not a
-// file link and must keep the chip.
 function fixtureDocument(themeMode: "dark" | "light"): string {
   const themeAttributes =
     themeMode === "light" ? `data-theme="light" data-theme-mode="light"` : `data-theme="dark"`;
+  const links = (prefix: string) => `<p>
+    <a id="${prefix}from-text" class="markdown-file-link" data-file-kind="code" data-file-path="src/app.ts">app.ts</a>
+    <a id="${prefix}from-code" class="markdown-file-link" data-file-kind="code" data-file-path="ui/app.ts"><code>app.ts</code></a>
+    <code id="${prefix}plain-code">npm run dev</code></p>`;
   return `<!doctype html><html ${themeAttributes}><head><style>${readChatCss()}</style></head><body>
-    <div class="chat-text">
-      <p>
-        <a id="from-text" class="markdown-file-link" data-file-kind="code"
-          data-file-path="src/app.ts">app.ts</a>
-        <a id="from-code" class="markdown-file-link" data-file-kind="code"
-          data-file-path="ui/app.ts"><code>app.ts</code></a>
-        <code id="plain-code">npm run dev</code>
-      </p>
-    </div>
-    <article class="sidebar-markdown">
-      <p>
-        <a id="panel-from-text" class="markdown-file-link" data-file-kind="code"
-          data-file-path="src/app.ts">app.ts</a>
-        <a id="panel-from-code" class="markdown-file-link" data-file-kind="code"
-          data-file-path="ui/app.ts"><code>app.ts</code></a>
-        <code id="panel-plain-code">npm run dev</code>
-      </p>
-    </article>
-  </body></html>`;
+    <div class="chat-text">${links("")}</div>
+    <article class="sidebar-markdown">${links("panel-")}</article></body></html>`;
 }
 
-// The reported scenario: a numbered list whose prose puts a parenthesized file
-// reference near the line edge. The second chip carries a label the parser could
-// not shorten to a basename, which is the case that has to stay inside the column.
+// The reported list-edge reference includes a path the parser cannot shorten.
 const LONG_CHIP_PATH = "packages/gateway-protocol/src/session-transport-envelope.ts";
 
-// Cases for the glyph-attachment probe below. `unbroken` has no `/`, `-`, or `_`
-// to break on, so only the inherited `overflow-wrap: anywhere` can wrap it —
-// the condition that starves the glyph's own line of a break opportunity.
+// Unbroken labels need overflow-wrap; the glyph must stay with the first character.
 const SEPARATION_CASES = [
   { filePath: "src/app.ts", id: "sep-short", label: "app.ts", line: undefined },
   {
@@ -88,16 +65,12 @@ const SEPARATION_CASES = [
     line: undefined,
   },
   { filePath: LONG_CHIP_PATH, id: "sep-path-with-line", label: LONG_CHIP_PATH, line: 182 },
-  // Far wider than any column below, so the label must wrap several times: the
-  // first cut has to land inside the label, never between glyph and first char.
   {
     filePath: `${"abcdefghij".repeat(24)}.ts`,
     id: "sep-enormous",
     label: `${"abcdefghij".repeat(24)}.ts`,
     line: 7,
   },
-  // Non-ASCII labels reach the chip through host-local hrefs, so the glyph has
-  // to stay attached to a first character the shortener never produced.
   {
     filePath: "~/repo/docs/spec.md",
     id: "sep-cjk",
@@ -106,10 +79,7 @@ const SEPARATION_CASES = [
   },
 ] as const;
 
-// Both renderers paint the same parser output, so every wrap invariant has to
-// hold in each. The Detail Panel is the one that proves the chip owns its wrap
-// policy: .chat-text would hand it one by inheritance, .sidebar-markdown never
-// does, and the panel body hides horizontal overflow.
+// The panel does not inherit chat-text's wrapping and clips horizontal overflow.
 const WRAP_CONTAINERS = ["chat-text", "sidebar-markdown"] as const;
 type WrapContainer = (typeof WRAP_CONTAINERS)[number];
 
@@ -142,13 +112,8 @@ function wrapFixtureDocument(themeMode: "dark" | "light", container: WrapContain
 type SeparationSample = {
   readonly caseId: (typeof SEPARATION_CASES)[number]["id"];
   readonly columnWidth: number;
-  // A full line-height means the glyph is stranded above a label that wrapped
-  // away from it; on the same line it is only font-ascent noise.
   readonly glyphToLabelGapPx: number;
   readonly lineHeightPx: number;
-  // How far the painted label runs past the column's content edge. max-width
-  // caps the chip's box, not the text inside it, so the box measures clean while
-  // an unwrappable label still paints into the clipped region.
   readonly labelOverflowPx: number;
   readonly wrapped: boolean;
 };
@@ -161,9 +126,7 @@ type WrapSample = {
   readonly longChipWidth: number;
 };
 
-// Sweeping the column instead of hand-picking one width: the chip has to be
-// atomic at every position it can land in, and a single tuned width would stop
-// exercising the boundary as soon as the prose or the font metrics move.
+// Sweep widths so changing fonts/prose cannot silently miss the wrap boundary.
 async function probeWrap(
   themeMode: "dark" | "light",
   container: WrapContainer,
@@ -176,8 +139,6 @@ async function probeWrap(
   const page = await browser.newPage();
   try {
     await page.goto(`file://${fixtureFile}`);
-    // No explicit type argument: a lone one binds `evaluate`'s `Arg` to `void`
-    // and the case ids arrive untyped. Inference reads both from the call.
     return await page.evaluate(
       (caseIds) => {
         const resolve = (selector: string) => {
@@ -199,8 +160,6 @@ async function probeWrap(
         for (let columnWidth = 220; columnWidth <= 900; columnWidth += 4) {
           column.style.width = `${columnWidth}px`;
           samples.push({
-            // One client rect per line fragment: a chip split between its glyph and
-            // its label reports two, an atomic chip always reports one.
             chipLineCount: chip.getClientRects().length,
             chipTop: chip.getBoundingClientRect().top,
             columnWidth,
@@ -208,9 +167,7 @@ async function probeWrap(
             longChipWidth: longChip.getBoundingClientRect().width,
           });
         }
-        // Its own narrower sweep: a short basename never wraps in a realistic
-        // 220-900px column, so that range would leave the vacuity guard below
-        // unsatisfiable. This failure is about the space beside the glyph.
+        // Narrower widths force even short basenames to wrap.
         for (let columnWidth = 40; columnWidth <= 320; columnWidth += 4) {
           column.style.width = `${columnWidth}px`;
           const columnRight = column.getBoundingClientRect().right;
@@ -246,25 +203,6 @@ async function probeWrap(
   }
 }
 
-type StyleSnapshot = Record<(typeof CHIP_PROPERTIES)[number], string>;
-type GlyphSnapshot = {
-  readonly fontSize: string;
-  readonly height: string;
-  readonly maskImage: string;
-  readonly paddingInlineStart: string;
-  readonly position: string;
-  readonly width: string;
-};
-type PresentationProbe = {
-  readonly chatGlyph: GlyphSnapshot;
-  readonly fromCode: StyleSnapshot;
-  readonly fromText: StyleSnapshot;
-  readonly panelFromCode: StyleSnapshot;
-  readonly panelFromText: StyleSnapshot;
-  readonly panelGlyph: GlyphSnapshot;
-  readonly plainCode: StyleSnapshot;
-};
-
 let browser: Browser;
 let fixtureDirectory: string;
 
@@ -287,15 +225,13 @@ afterAll(async () => {
   }
 });
 
-async function probe(themeMode: "dark" | "light"): Promise<PresentationProbe> {
+async function probe(themeMode: "dark" | "light") {
   const fixtureFile = path.join(fixtureDirectory, `${themeMode}.html`);
   fs.writeFileSync(fixtureFile, fixtureDocument(themeMode), "utf8");
   const page = await browser.newPage();
   try {
     await page.goto(`file://${fixtureFile}`);
-    // The probe builds its snapshots from CHIP_PROPERTIES at runtime, so the
-    // shape is asserted here rather than inferred from Object.fromEntries.
-    const probed = await page.evaluate((properties: readonly string[]) => {
+    return await page.evaluate((properties) => {
       const resolve = (selector: string) => {
         const element = document.querySelector(selector);
         if (!element) {
@@ -305,9 +241,7 @@ async function probe(themeMode: "dark" | "light"): Promise<PresentationProbe> {
       };
       const read = (selector: string) => {
         const computed = getComputedStyle(resolve(selector));
-        return Object.fromEntries(
-          properties.map((property) => [property, computed[property as never] as string]),
-        );
+        return Object.fromEntries(properties.map((property) => [property, computed[property]]));
       };
       const glyph = (selector: string) => {
         const computed = getComputedStyle(resolve(selector), "::before");
@@ -330,7 +264,6 @@ async function probe(themeMode: "dark" | "light"): Promise<PresentationProbe> {
         plainCode: read("#plain-code"),
       };
     }, CHIP_PROPERTIES);
-    return probed as PresentationProbe;
   } finally {
     await page.close();
   }
@@ -350,8 +283,6 @@ describeFileLinkPresentation("chat file link presentation", () => {
     "leaves the chip on code spans that are not file links in %s",
     async (themeMode) => {
       const { fromText, plainCode } = await probe(themeMode);
-      // Guards the reset from widening into every code span: the control keeps a
-      // painted background and a real border, and the file link has neither.
       expect(plainCode.backgroundColor).not.toBe(fromText.backgroundColor);
       expect(plainCode.borderTopWidth).not.toBe("0px");
       expect(fromText.borderTopWidth).toBe("0px");
@@ -363,8 +294,6 @@ describeFileLinkPresentation("chat file link presentation", () => {
     "gives the Chat Detail Panel the same file-link treatment in %s",
     async (themeMode) => {
       const probed = await probe(themeMode);
-      // The panel renders the same parser output, so it must not drift from the
-      // message bubble: same chip reset, both authoring origins, and the glyph.
       expect(probed.panelFromText).toEqual(probed.fromText);
       expect(probed.panelFromCode).toEqual(probed.fromCode);
       expect(probed.panelGlyph).toEqual(probed.chatGlyph);
@@ -389,8 +318,7 @@ describeFileLinkPresentation("chat file link presentation", () => {
     "wraps a file link as one unit at every column width in $container/$themeMode",
     async ({ container, themeMode }) => {
       const { samples } = await probeWrap(themeMode, container);
-      // Vacuity guard: the chip must actually change lines across the sweep, or
-      // the assertion below would pass on a fixture that never wraps at all.
+      // Prove the sweep actually changes lines.
       expect(new Set(samples.map((sample) => Math.round(sample.chipTop))).size).toBeGreaterThan(1);
       const split = samples.filter((sample) => sample.chipLineCount !== 1);
       expect(split).toEqual([]);
@@ -401,27 +329,17 @@ describeFileLinkPresentation("chat file link presentation", () => {
     "keeps an unshortened file label inside the column in $container/$themeMode",
     async ({ container, themeMode }) => {
       const { samples, separation } = await probeWrap(themeMode, container);
-      // A label wider than the column wraps inside the chip rather than spilling
-      // past it; both scroll containers set overflow-x: hidden, so an overflowing
-      // chip would be clipped away instead of merely looking wide.
       const overflowing = samples.filter(
         (sample) => sample.longChipWidth > sample.columnWidth + 0.5,
       );
       expect(overflowing).toEqual([]);
       expect(samples.every((sample) => sample.longChipLineCount === 1)).toBe(true);
-      // The separation cases carry the labels with no `/` or `-` to break on, so
-      // only the chip's own wrap policy can keep them in the column. Inheriting
-      // one from .chat-text is not enough: .sidebar-markdown declares none.
       const spilling = separation.filter((sample) => sample.labelOverflowPx > 0.5);
       expect(spilling).toEqual([]);
     },
   );
 
-  // An inline-block chip reports one client rect from the outside even when the
-  // glyph splits from its label inside its own box, so the two tests above
-  // cannot see that split. This compares the chip's top — where the glyph
-  // paints, being first in the box — against the label's first character: same
-  // line is font-ascent noise, a stranded glyph is a full line-height.
+  // The outer inline-block rect cannot detect an internally stranded glyph.
   it.each(WRAP_CASES)(
     "keeps the glyph attached to the label's first character in $container/$themeMode",
     async ({ container, themeMode }) => {
@@ -429,9 +347,7 @@ describeFileLinkPresentation("chat file link presentation", () => {
       for (const testCase of SEPARATION_CASES) {
         const caseSamples = separation.filter((sample) => sample.caseId === testCase.id);
         expect(caseSamples.length).toBeGreaterThan(0);
-        // Vacuity guard: each case must actually wrap somewhere in the sweep, or
-        // the no-separation assertion below would pass on a chip that never
-        // reflows at all.
+        // Each fixture must wrap; otherwise the attachment check is vacuous.
         expect(caseSamples.some((sample) => sample.wrapped)).toBe(true);
         const separated = caseSamples.filter(
           (sample) => sample.glyphToLabelGapPx > sample.lineHeightPx / 2,

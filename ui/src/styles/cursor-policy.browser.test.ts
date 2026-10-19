@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import postcss from "postcss";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
@@ -73,27 +73,27 @@ const CURSOR_CASES: readonly CursorCase[] = [
 
 function readUiCss(): string {
   const css = [
-    "ui/src/styles/base.css",
-    "ui/src/styles/components.css",
-    "ui/src/styles/layout.css",
-    "ui/src/styles/sidebar-update-card.css",
-    "ui/src/styles/sidebar-issues.css",
-    "ui/src/styles/sidebar-markdown.css",
-    "ui/src/styles/sessions.css",
-    "ui/src/styles/settings-controls.css",
-    "ui/src/styles/settings.css",
-    "ui/src/styles/agents.css",
-    "ui/src/styles/skill-workshop.css",
-    "ui/src/styles/rail-header.css",
-    "ui/src/styles/chat/startup-layout.css",
-    "ui/src/styles/chat/layout.css",
-    "ui/src/styles/chat/message-layout.css",
-    "ui/src/styles/chat/composer-surface.css",
-    "ui/src/styles/chat/composer.css",
-    "ui/src/styles/chat/split-view.css",
-    "ui/src/styles/chat/text.css",
+    "base",
+    "components",
+    "layout",
+    "sidebar-update-card",
+    "sidebar-issues",
+    "sidebar-markdown",
+    "sessions",
+    "settings-controls",
+    "settings",
+    "agents",
+    "skill-workshop",
+    "rail-header",
+    "chat/startup-layout",
+    "chat/layout",
+    "chat/message-layout",
+    "chat/composer-surface",
+    "chat/composer",
+    "chat/split-view",
+    "chat/text",
   ]
-    .map((file) => readStyleSheet(file))
+    .map((name) => readStyleSheet(`ui/src/styles/${name}.css`))
     .join("\n");
   return postcss([controlUiHoverGuardPlugin()]).process(css, { from: undefined }).css;
 }
@@ -207,6 +207,13 @@ function expectedCursors(): Record<string, string> {
   );
 }
 
+function style(
+  locator: Locator,
+  property: "color" | "textDecorationLine" | "textDecorationThickness",
+) {
+  return locator.evaluate((element, key) => getComputedStyle(element)[key], property);
+}
+
 let fixtureDirectory: string;
 let fixtureFile: string;
 let tabBrowser: Browser;
@@ -255,24 +262,16 @@ describeCursorPolicy("Control UI cursor policy", () => {
       await page.evaluate((mode) => {
         document.documentElement.dataset.themeMode = mode;
       }, theme);
-      expect(
-        await page.locator("#new-tab-link").evaluate((element) => getComputedStyle(element).color),
-      ).toBe(
-        await page
-          .locator("#new-tab-button")
-          .evaluate((element) => getComputedStyle(element).color),
+      expect(await style(page.locator("#new-tab-link"), "color")).toBe(
+        await style(page.locator("#new-tab-button"), "color"),
       );
       const people = await page.locator(".sidebar-online__person").all();
       expect(people).toHaveLength(2);
       for (const person of people) {
         // Ancestor decorations propagate visually without inheriting the computed value.
+        expect(await style(person, "textDecorationLine")).toBe("none");
         expect(
-          await person.evaluate((element) => getComputedStyle(element).textDecorationLine),
-        ).toBe("none");
-        expect(
-          await person
-            .locator(".sidebar-online__person-name")
-            .evaluate((element) => getComputedStyle(element).textDecorationLine),
+          await style(person.locator(".sidebar-online__person-name"), "textDecorationLine"),
         ).toBe("none");
       }
       for (const [expected, selectors] of [
@@ -311,49 +310,34 @@ describeCursorPolicy("Control UI cursor policy", () => {
           const links = await page.locator(selector).all();
           expect(links.length, selector).toBeGreaterThan(0);
           for (const link of links) {
-            expect(
-              await link.evaluate((element) => getComputedStyle(element).textDecorationLine),
-              selector,
-            ).toBe(expected);
+            expect(await style(link, "textDecorationLine"), selector).toBe(expected);
           }
         }
       }
       const personLink = page.locator("#person-link");
       for (const link of await page.locator(".chat-position-rail__preview-copy a").all()) {
-        expect(await link.evaluate((element) => getComputedStyle(element).color)).toBe(
-          await page
-            .locator(".chat-position-rail__preview-copy")
-            .evaluate((element) => getComputedStyle(element).color),
+        expect(await style(link, "color")).toBe(
+          await style(page.locator(".chat-position-rail__preview-copy"), "color"),
         );
       }
       if (!hasTouch) {
         await personLink.hover();
-        expect(
-          await personLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
-        ).toBe("underline");
-        expect(
-          await personLink.evaluate((element) => getComputedStyle(element).textDecorationThickness),
-        ).toBe("2px");
+        expect(await style(personLink, "textDecorationLine")).toBe("underline");
+        expect(await style(personLink, "textDecorationThickness")).toBe("2px");
       }
       await page.mouse.move(0, 0);
       await page.keyboard.press("Tab");
       await personLink.focus();
-      expect(
-        await personLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
-      ).toBe("underline");
+      expect(await style(personLink, "textDecorationLine")).toBe("underline");
       const participantLink = page.locator("#participant-link");
       if (!hasTouch) {
         await participantLink.hover();
-        expect(
-          await participantLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
-        ).toBe("none");
+        expect(await style(participantLink, "textDecorationLine")).toBe("none");
       }
       await page.mouse.move(0, 0);
       await page.keyboard.press("Tab");
       await participantLink.focus();
-      expect(
-        await participantLink.evaluate((element) => getComputedStyle(element).textDecorationLine),
-      ).toBe("none");
+      expect(await style(participantLink, "textDecorationLine")).toBe("none");
     });
   });
 

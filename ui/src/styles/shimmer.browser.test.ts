@@ -12,6 +12,24 @@ const describeShimmer = canRunPlaywrightChromium(chromiumExecutablePath) ? descr
 
 let browser: Browser;
 
+const skeletons = [
+  ["skeleton-line", "1.5s"],
+  ["usage-skeleton-block", "1.35s"],
+  ["memory-import__skeleton", "1.4s"],
+  ["chat-controls__model-trigger-skeleton", "1.45s"],
+] as const;
+const skeletonFixture = `<!doctype html><html><head><style>${[
+  "base",
+  "chat/layout",
+  "chat/composer",
+  "memory-import",
+  "usage",
+]
+  .map((name) => readStyleSheet(`ui/src/styles/${name}.css`))
+  .join("\n")}</style></head><body>
+  ${skeletons.map(([name]) => `<div class="skeleton ${name}"></div>`).join("")}
+</body></html>`;
+
 beforeAll(async () => {
   if (!canRunPlaywrightChromium(chromiumExecutablePath)) {
     return;
@@ -26,26 +44,9 @@ afterAll(async () => {
 describeShimmer("Control UI shimmer", () => {
   it("moves loading highlights on compositor-safe pseudo-elements", async () => {
     await withBrowserPage(browser.newPage(), async (page) => {
-      await page.setContent(`<!doctype html><html><head><style>
-        ${readStyleSheet("ui/src/styles/base.css")}
-        ${readStyleSheet("ui/src/styles/chat/layout.css")}
-        ${readStyleSheet("ui/src/styles/chat/composer.css")}
-        ${readStyleSheet("ui/src/styles/memory-import.css")}
-        ${readStyleSheet("ui/src/styles/usage.css")}
-      </style></head><body>
-        <div class="skeleton skeleton-line"></div>
-        <div class="skeleton usage-skeleton-block"></div>
-        <div class="skeleton memory-import__skeleton"></div>
-        <div class="skeleton chat-controls__model-trigger-skeleton"></div>
-      </body></html>`);
-
-      for (const [selector, duration] of [
-        [".skeleton-line", "1.5s"],
-        [".usage-skeleton-block", "1.35s"],
-        [".memory-import__skeleton", "1.4s"],
-        [".chat-controls__model-trigger-skeleton", "1.45s"],
-      ] as const) {
-        const styles = await page.locator(selector).evaluate((element) => {
+      await page.setContent(skeletonFixture);
+      for (const [name, duration] of skeletons) {
+        const styles = await page.locator(`.${name}`).evaluate((element) => {
           const host = getComputedStyle(element);
           const highlight = getComputedStyle(element, "::after");
           const animation = element.getAnimations({ subtree: true })[0];
@@ -88,26 +89,9 @@ describeShimmer("Control UI shimmer", () => {
 
   it("never starts loading animations with reduced motion", async () => {
     await withBrowserPage(browser.newPage({ reducedMotion: "reduce" }), async (page) => {
-      await page.setContent(`<!doctype html><html><head><style>
-        ${readStyleSheet("ui/src/styles/base.css")}
-        ${readStyleSheet("ui/src/styles/chat/layout.css")}
-        ${readStyleSheet("ui/src/styles/chat/composer.css")}
-        ${readStyleSheet("ui/src/styles/memory-import.css")}
-        ${readStyleSheet("ui/src/styles/usage.css")}
-      </style></head><body>
-        <div class="skeleton skeleton-line"></div>
-        <div class="skeleton usage-skeleton-block"></div>
-        <div class="skeleton memory-import__skeleton"></div>
-        <div class="skeleton chat-controls__model-trigger-skeleton"></div>
-      </body></html>`);
-
-      for (const selector of [
-        ".skeleton-line",
-        ".usage-skeleton-block",
-        ".memory-import__skeleton",
-        ".chat-controls__model-trigger-skeleton",
-      ]) {
-        const animation = await page.locator(selector).evaluate((element) => {
+      await page.setContent(skeletonFixture);
+      for (const [name] of skeletons) {
+        const animation = await page.locator(`.${name}`).evaluate((element) => {
           const highlight = getComputedStyle(element, "::after");
           return {
             name: highlight.animationName,
@@ -121,10 +105,8 @@ describeShimmer("Control UI shimmer", () => {
           };
         });
 
-        expect(animation.name).toBe("none");
-        expect(animation.iterations).toBe("1");
+        expect(animation).toMatchObject({ name: "none", iterations: "1", running: false });
         expect(Number.parseFloat(animation.duration)).toBeLessThanOrEqual(0.00001);
-        expect(animation.running).toBe(false);
         // Without an animation, the highlight must stay parked offscreen.
         const settledX = Number.parseFloat(animation.settledTransform.split(",")[4] ?? "NaN");
         expect(Math.abs(settledX + animation.width)).toBeLessThanOrEqual(1);
@@ -135,16 +117,7 @@ describeShimmer("Control UI shimmer", () => {
     await withBrowserPage(browser.newPage({ reducedMotion: "no-preference" }), async (page) => {
       for (const count of [1, 2, 5]) {
         await page.setContent(
-          "<style>" +
-            readStyleSheet("ui/src/styles/base.css") +
-            readStyleSheet("ui/src/styles/chat/grouped.css") +
-            '</style><div style="padding:16px;width:360px"><span id="preview">A</span>' +
-            '<span class="agent-chat__typing-state agent-chat__typing-text" data-typing>is typing…</span>' +
-            '<span id="draft" class="agent-chat__typing-state agent-chat__typing-text">Draft</span>' +
-            '<div class="agent-chat__typing-overflow"><span class="agent-chat__typing-identities">' +
-            '<span class="agent-chat__typing-person">C</span>'.repeat(count) +
-            '</span><span class="agent-chat__typing-summary"><span class="agent-chat__typing-text" data-typing><bdi class="agent-chat__typing-name">Camila</bdi> is typing…</span></span></div>' +
-            '<span class="agent-chat__typing-text" data-typing>Several people are typing…</span></div>',
+          `<style>${readStyleSheet("ui/src/styles/base.css")}${readStyleSheet("ui/src/styles/chat/grouped.css")}</style><div style="padding:16px;width:360px"><span id="preview">A</span><span class="agent-chat__typing-state agent-chat__typing-text" data-typing>is typing…</span><span id="draft" class="agent-chat__typing-state agent-chat__typing-text">Draft</span><div class="agent-chat__typing-overflow"><span class="agent-chat__typing-identities">${'<span class="agent-chat__typing-person">C</span>'.repeat(count)}</span><span class="agent-chat__typing-summary"><span class="agent-chat__typing-text" data-typing><bdi class="agent-chat__typing-name">Camila</bdi> is typing…</span></span></div><span class="agent-chat__typing-text" data-typing>Several people are typing…</span></div>`,
         );
         const result = await page.evaluate(() => {
           const first = document.querySelector(".agent-chat__typing-person");
@@ -186,8 +159,7 @@ describeShimmer("Control UI shimmer", () => {
         })),
       );
       for (const text of staticText) {
-        expect(text.animation).toBe("none");
-        expect(text.background).toBe("none");
+        expect(text).toMatchObject({ animation: "none", background: "none" });
         expect(text.fill).not.toBe("rgba(0, 0, 0, 0)");
       }
       await page.emulateMedia({ reducedMotion: "no-preference", forcedColors: "active" });
