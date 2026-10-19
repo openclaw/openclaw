@@ -28,7 +28,15 @@ Token totals are observational, not a hard token or dollar budget. The feature n
 its configured eligible auth profiles; use an authorized `model@profile` override
 to pin one credential owner. Retrieved source text is untrusted.
 
-## Retained job views
+## Control UI
+
+The session header's **Deep research** action opens the native research pane. It
+lists only this conversation incarnation's retained jobs; reopening a job never
+starts another run. The pane shows real recorded phases and observed counts,
+sources as they are retained, and the available completed or partial report.
+Cancel remains **requested** until the execution owner observes a terminal state.
+Paused jobs offer Resume only when the existing accepted-source recovery owner can
+reauthorize them. Unknown submissions are indeterminate and never blindly retried.
 
 The plugin owns `deep-research.view.v1.{list,read,start,cancel,resume}`. All methods
 use authenticated Gateway session access with the `deep_research` tool policy;
@@ -47,9 +55,23 @@ must support recoverable work. A repeated key with different input is rejected.
 The read model is version 1, with a content revision, timestamps and explicit
 allowed actions. Unknown counts are absent, not invented zeros.
 
+The empty `plugin.deep-research.changed` broadcast is a coalesced invalidation,
+never a private job/event payload. Views reauthorize on invalidation, session
+change and reconnect. A still-mounted offline client labels retained data stale and disables writes.
+The native host retires plugin activation on disconnect, clears the pane body, and shows its
+unavailable-panel state. Reconnect remounts and reauthorizes retained jobs without resubmission;
+access failures clear the view. Pending starts retain their exact key and question
+in tab-scoped session storage until acknowledgement or incarnation/access change,
+so an uncertain response can be reconciled without duplicate work. Transient read
+failures quarantine the pending request until the same admitted incarnation is
+confirmed; only proven pre-acceptance rejections unlock a fresh start.
+
 Portable citations are emitted by the report composer as `reportCitations`;
 `startByte` is inclusive and `endByte` exclusive in the exact report's UTF-8 bytes,
 not UTF-16 character indices. The view maps each to a stable source ID. Managed
 citations without valid ranges appear as provider-cited source entries, not
 invented inline citations. Provider attribution remains distinct from fetched or
 supplied text. Quote matching is mechanical; model-supported evidence is fallible.
+The pane renders report/source content as text (no raw HTML, remote images or
+previews). Only credential-free HTTP(S) source links can open externally. Citation
+buttons focus the matching source detail and return focus to the report citation.

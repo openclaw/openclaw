@@ -1,0 +1,164 @@
+.deep-research-pane {
+  color: var(--text);
+  font: inherit;
+  padding: 16px;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.deep-research-pane h2,
+.deep-research-pane h3 {
+  margin: 0 0 8px;
+}
+.deep-research-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.deep-research-heading p,
+.deep-research-muted {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.deep-research-pane button,
+.deep-research-pane select,
+.deep-research-pane textarea,
+.deep-research-accessory {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  max-width: 100%;
+}
+.deep-research-pane button:disabled {
+  opacity: 0.5;
+}
+.deep-research-pane button:focus-visible,
+.deep-research-pane summary:focus-visible,
+.deep-research-pane a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.deep-research-pane form {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.deep-research-field {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.deep-research-field textarea {
+  resize: vertical;
+  width: 100%;
+  box-sizing: border-box;
+}
+.deep-research-field select {
+  width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+.deep-research-status {
+  display: grid;
+  gap: 4px;
+  padding: 12px 0;
+}
+.deep-research-status strong {
+  color: var(--accent);
+  text-transform: capitalize;
+}
+.deep-research-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+}
+.deep-research-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 16px 0;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+.deep-research-tabs button {
+  flex: 1;
+  padding: 8px 4px;
+}
+.deep-research-tabs button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.deep-research-notice {
+  border-inline-start: 3px solid var(--accent);
+  background: var(--bg-elevated);
+  padding: 10px;
+}
+.deep-research-counts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.deep-research-counts dt {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.deep-research-counts dd {
+  margin: 4px 0 0;
+  font-size: 1.25rem;
+}
+.deep-research-source {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 10px 0;
+}
+.deep-research-source summary {
+  display: list-item;
+  cursor: pointer;
+}
+.deep-research-source summary span {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.8rem;
+}
+.deep-research-source a {
+  color: var(--accent);
+  cursor: pointer;
+}
+.deep-research-badge {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-inline-end: 8px;
+}
+.deep-research-source blockquote {
+  margin: 8px 0;
+  padding-inline-start: 12px;
+  border-inline-start: 2px solid var(--border);
+  white-space: pre-wrap;
+  max-height: 16rem;
+  overflow: auto;
+}
+.deep-research-report {
+  white-space: pre-wrap;
+  line-height: 1.65;
+}
+.deep-research-report .deep-research-citation {
+  padding: 0 4px;
+  color: var(--accent);
+  display: inline;
+  font-size: inherit;
+}
+.deep-research-accessory {
+  font-size: 0.8rem;
+  white-space: normal;
+}
+.deep-research-pane [hidden] {
+  display: none;
+}

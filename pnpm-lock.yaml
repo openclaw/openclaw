@@ -1544,6 +1544,12 @@ importers:
 
   extensions/deep-research:
     dependencies:
+      '@solidjs/web':
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14(solid-js@2.0.0-rc.14)
+      solid-js:
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
       typebox:
         specifier: 1.3.36
         version: 1.3.36
@@ -1551,6 +1557,12 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@solidjs/compiler':
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
 
   extensions/llm-task:
     dependencies:
