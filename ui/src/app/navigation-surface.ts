@@ -19,6 +19,7 @@ export type ShellNavigationElements = {
 };
 
 export type ShellNavigationSurfaces = {
+  readonly element: HTMLElement;
   readonly navigationSidebar: HTMLElement &
     Partial<Pick<AppSidebarElement, "dismissTransientMenus">>;
   readonly queryRenderedElements: RouteElements["renderedElements"];
@@ -34,7 +35,7 @@ export function dismissNavigationTransientSurfaces(host: ShellNavigationSurfaces
     .map((attention) => attention.dismissPanel())
     .some((dismissed) => dismissed);
   const sidebar = host.navigationSidebar;
-  const dismissedMenu = sidebar.isConnected && sidebar.dismissTransientMenus?.();
+  const dismissedMenu = host.element.contains(sidebar) && sidebar.dismissTransientMenus?.();
   return dismissedMenu === true || dismissedPanel;
 }
 

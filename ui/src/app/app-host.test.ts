@@ -789,13 +789,15 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       expect(updateNavigation).toHaveBeenCalledExactlyOnceWith({ navCollapsed: true });
       expect(shell.desktopNavigationExpanded).toBe(false);
 
-      sidebar.remove();
+      document.body.append(sidebar);
       shell.navDrawerOpen = true;
       shell.closeNavDrawer();
       expect(dismissTransientMenus).toHaveBeenCalledTimes(2);
+      expect(shell.navDrawerOpen).toBe(false);
     } finally {
       shell.disconnect();
       shell.element.remove();
+      sidebar.remove();
       trigger.remove();
       runtime.stop();
     }
