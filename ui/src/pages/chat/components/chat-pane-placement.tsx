@@ -104,15 +104,15 @@ export function createChatMachinePresentation(props: ChatPanePlacementProps) {
       : dispatchRequired || placementState === "active" || hasFacts
         ? undefined
         : `${placementState}${age ? ` · ${age}` : ""}`;
+    const machineIcon: IconName =
+      runner?.kind === "device" || placementState === "local" ? "monitor" : "cloud";
     return {
       showPlacementMenu: isCloudWorkerPlacementState(placementState) || dispatchRequired,
       machineName:
         props.machineName ||
         environmentId ||
         (placementState === "local" ? t("sessionsView.moveSessionGatewayTarget") : worker.label),
-      machineIcon: (runner?.kind === "device" || placementState === "local"
-        ? "monitor"
-        : "cloud") as IconName,
+      machineIcon,
       label,
       exceptionState,
       hasFacts,
