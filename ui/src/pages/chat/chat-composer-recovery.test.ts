@@ -20,15 +20,14 @@ import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 
 const disposals: Array<() => void> = [];
 const attachments: ChatAttachment[] = [];
+const payloadUrl = "data:application/pdf;base64,JVBERi0xLjQK";
 
 function mount(
   transport: ReturnType<typeof makeChatHost>,
   context = { ...createInitializationContext(), sessions: transport.sessions },
   sessionKey = "agent:main:source",
 ) {
-  const controller = createChatState<ChatPageHost>({
-    awaitDomCommit: async () => true,
-  });
+  const controller = createChatState<ChatPageHost>({ awaitDomCommit: async () => true });
   const dispose = controller.dispose;
   const state = createPageState(
     context,
@@ -60,7 +59,7 @@ function stageCommand(state: ChatPageHost) {
       fileName: file.name,
       sizeBytes: file.size,
     },
-    dataUrl: "data:application/pdf;base64,JVBERi0xLjQK",
+    dataUrl: payloadUrl,
     file,
   });
   attachments.push(attachment);
@@ -102,7 +101,7 @@ describe("pending send composer ownership", () => {
       },
     });
     const source = mount(transport, undefined, lifecycle === "handoff" ? "global" : undefined);
-    const document = stageCommand(source.state);
+    const attachment = stageCommand(source.state);
     let presented = true;
     const present = (pane: typeof source, region: "page" | "dock", visible: () => boolean) => {
       const handoff = new ChatPaneComposerHandoff(source.context, {
@@ -153,23 +152,22 @@ describe("pending send composer ownership", () => {
     }
     await send;
     if (lifecycle === "retained") {
-      expect(source.state.chatMessage).toBe("/status");
-      expect(source.state.chatAttachments).toMatchObject([{ id: document.id }]);
-      expect(getChatAttachmentDataUrl(source.state.chatAttachments[0]!)).toBe(
-        "data:application/pdf;base64,JVBERi0xLjQK",
-      );
-      expect(source.state.chatQueue).toEqual([]);
+      expect(source.state).toMatchObject({
+        chatMessage: "/status",
+        chatAttachments: [{ id: attachment.id }],
+        chatQueue: [],
+      });
+      expect(getChatAttachmentDataUrl(source.state.chatAttachments[0]!)).toBe(payloadUrl);
       return;
     }
     const recovered = replacement ?? reopen();
-    expect(recovered.state.chatMessage).toBe("");
-    expect(recovered.state.chatAttachments).toEqual([]);
+    expect(recovered.state).toMatchObject({ chatMessage: "", chatAttachments: [] });
     await vi.waitFor(() => {
       expect(recovered.state.chatQueue).toMatchObject([
         { id: pending.id, text: "/status", sendRunId: pending.sendRunId, sendState: "failed" },
       ]);
       expect(getChatAttachmentDataUrl(recovered.state.chatQueue[0]!.attachments![0]!)).toBe(
-        "data:application/pdf;base64,JVBERi0xLjQK",
+        payloadUrl,
       );
     });
     await retryQueuedChatMessage(recovered.state, pending.id);
@@ -196,8 +194,6 @@ describe("pending send composer ownership", () => {
     acknowledgment.resolve({ status: "ok" });
     await send;
     const reopened = mount(transport, source.context);
-    expect(reopened.state.chatQueue).toEqual([]);
-    expect(reopened.state.chatMessage).toBe("");
-    expect(reopened.state.chatAttachments).toEqual([]);
+    expect(reopened.state).toMatchObject({ chatQueue: [], chatMessage: "", chatAttachments: [] });
   });
 });

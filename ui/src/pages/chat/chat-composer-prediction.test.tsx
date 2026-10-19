@@ -60,7 +60,6 @@ function fixture(
     props,
     container,
     input,
-    request,
     paint,
     finish,
     prediction,
@@ -76,6 +75,20 @@ function fixture(
     },
     draft: () => draft,
     predictions: () => request.mock.calls.filter(([method]) => method === "chat.predict"),
+  };
+}
+
+function pendingPrediction() {
+  const response = createDeferred<{ text: string | null }>();
+  const view = fixture(response.promise);
+  view.finish();
+  return {
+    ...view,
+    settle: async () => {
+      response.resolve({ text: suggestion });
+      await Promise.resolve();
+      flush();
+    },
   };
 }
 
@@ -110,17 +123,23 @@ it("shows a prediction without changing the draft; Tab accepts but never sends",
   expect(f.predictions()).toHaveLength(1);
 });
 
-it.each(["Escape", "typing"])("dismisses with %s without accepting", async (action) => {
+it.each(["Escape", "typing", "new run"])("dismisses with %s without accepting", async (action) => {
   const f = fixture();
   await f.show();
   if (action === "Escape") {
     f.key("Escape");
-  } else {
+  } else if (action === "typing") {
     f.edit("My own question");
+  } else {
+    changes.run(f);
+    f.paint();
+    expect(f.prediction()).toBeNull();
+    f.key("Tab");
   }
   flush();
   expect(f.prediction()).toBeNull();
   expect(f.input.value).toBe(action === "typing" ? "My own question" : "");
+  expect(f.draft()).toBe(action === "typing" ? "My own question" : "");
   expect(f.props.onSend).not.toHaveBeenCalled();
 });
 
@@ -139,15 +158,11 @@ it.each(["disabled", "hidden", "read-only", "draft", "attachment"] as const)(
 it.each(["session", "client", "draft", "disabled", "run"] as const)(
   "drops an in-flight result after %s changes",
   async (kind) => {
-    const response = createDeferred<{ text: string | null }>();
-    const f = fixture(response.promise);
-    f.finish();
+    const f = pendingPrediction();
     expect(f.predictions()).toHaveLength(1);
     changes[kind](f);
     f.paint();
-    response.resolve({ text: suggestion });
-    await Promise.resolve();
-    flush();
+    await f.settle();
     expect(f.prediction()).toBeNull();
   },
 );
@@ -169,29 +184,14 @@ it("waits for completion to become idle and accepts using the touch control", as
   expect(f.props.onSend).not.toHaveBeenCalled();
 });
 
-it("discards a displayed suggestion when another run starts before its first delta", async () => {
-  const f = fixture();
-  await f.show();
-  f.props.runActive = true;
-  f.paint();
-  expect(f.prediction()).toBeNull();
-  f.key("Tab");
-  expect(f.draft()).toBe("");
-  expect(f.props.onSend).not.toHaveBeenCalled();
-});
-
 it("retires the event subscription and pending prediction when the composer unmounts", async () => {
-  const response = createDeferred<{ text: string | null }>();
-  const f = fixture(response.promise);
-  f.finish();
+  const f = pendingPrediction();
   const signal = f.predictions()[0]?.[2]?.signal;
   expect(signal?.aborted).toBe(false);
   disposeComposer(f.container);
   expect(signal?.aborted).toBe(true);
   f.finish("run-b");
   expect(f.predictions()).toHaveLength(1);
-  response.resolve({ text: suggestion });
-  await Promise.resolve();
-  flush();
+  await f.settle();
   expect(f.prediction()).toBeNull();
 });

@@ -6,6 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient, GatewayRequestError } from "../../api/gateway.ts";
 import {
   composerFixture,
+  mention,
   people,
   resetMentionComposerFixture,
 } from "./chat-composer-mentions.test-support.ts";
@@ -61,9 +62,7 @@ describe("mention query cache", () => {
     response.resolve({ users: people.users.toReversed(), truncated: false });
     await vi.advanceTimersByTimeAsync(0);
     view.key("Enter");
-    expect(view.value().mentions).toEqual([
-      { profileId: "profile-alex-offline", start: 7, end: 12 },
-    ]);
+    expect(view.value().mentions).toEqual([mention("profile-alex-offline", 7, 12)]);
     expect(view.send).not.toHaveBeenCalled();
   });
 

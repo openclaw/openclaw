@@ -31,6 +31,11 @@ export const people: UsersMentionableResult = {
   ],
   truncated: false,
 };
+export const mention = (profileId: string, start = 0, end = 5): HumanMention => ({
+  profileId,
+  start,
+  end,
+});
 const composerTextareas: NewSessionComposerTextarea[] = [];
 
 export async function resetMentionComposerFixture() {
