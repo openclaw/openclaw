@@ -186,9 +186,9 @@ describe("echo cache — reply_to_guid reflections", () => {
       text: "Reflected reply",
       messageId: outboundGuid,
     });
-    const echoCache = createSentMessageCache();
+    const reflectionEchoCache = createSentMessageCache();
 
-    const decision = await resolveDecision({ message, echoCache });
+    const decision = await resolveDecision({ message, echoCache: reflectionEchoCache });
 
     if (expectedKind === "drop") {
       expect(decision).toEqual({ kind: "drop", reason: "self-chat echo" });
