@@ -1,8 +1,8 @@
 // Register shared mocks before importing the production CLI graph.
 import "./update-repair.test-support.js";
-import fs from "node:fs/promises";
 import os from "node:os";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   createManagedHandoffLeaseDatabase,
@@ -39,20 +39,43 @@ function repair(flags = ["--yes", "--json", "--timeout", "15"]) {
   );
 }
 
-function insertChild(root: string, owner: string, payload: string, updatedAt: number) {
-  createManagedHandoffLeaseDatabase(state.path("handoff-control/managed-update-handoffs.sqlite"))(
-    true,
-    (db) =>
-      executeSqliteQuerySync(
-        db,
-        leaseQueries(db).insertInto("managed_update_handoffs").values({
-          install_root: root,
-          owner,
-          payload_json: payload,
-          updated_at: updatedAt,
-        }),
-      ),
+function handoffDatabase() {
+  return createManagedHandoffLeaseDatabase(
+    state.path("handoff-control/managed-update-handoffs.sqlite"),
   );
+}
+
+function insertChild(root: string, owner: string, payload: string, updatedAt: number) {
+  handoffDatabase()(true, (db) =>
+    executeSqliteQuerySync(
+      db,
+      leaseQueries(db).insertInto("managed_update_handoffs").values({
+        install_root: root,
+        owner,
+        payload_json: payload,
+        updated_at: updatedAt,
+      }),
+    ),
+  );
+}
+
+function legacyPayload(helper: typeof fixture.helper, executor = helper) {
+  return JSON.stringify({ version: 2, executor, helper, action: { kind: "update" } });
+}
+
+function expectAbsent(...roots: string[]) {
+  for (const root of roots) {
+    expect(fixture.store.read(root)).toEqual({ kind: "absent" });
+  }
+}
+
+function expectSettlement(detail: string) {
+  const run = listUpdateRuns()[0]!;
+  expect(run.status).toBe("succeeded");
+  expect(run.steps.find(({ step }) => step === "finalize:handoff-settlement")).toMatchObject({
+    status: "completed",
+    detail: expect.stringContaining(detail),
+  });
 }
 
 async function expectAdmitted(owner: string) {
@@ -71,10 +94,7 @@ beforeEach(async () => {
     OPENCLAW_UPDATE_POST_CORE: undefined,
   });
   fixture = createManagedHandoffRecoveryFixture(state.root);
-  await fs.writeFile(
-    state.path("package.json"),
-    JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-  );
+  writeJsonFile(state.path("package.json"), { name: "openclaw", version: "1.0.0" });
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -99,19 +119,9 @@ it("registered update repair settles a dead uncertain lease and admits the next 
 
   expect(mocks.doctor).toHaveBeenCalledOnce();
   expect(mocks.plugins).toHaveBeenCalledOnce();
-  expect(fixture.store.read(state.root)).toEqual({ kind: "absent" });
-  const runs = listUpdateRuns();
-  expect(runs).toHaveLength(1);
-  expect(runs[0]).toMatchObject({
-    status: "succeeded",
-    steps: expect.arrayContaining([
-      expect.objectContaining({
-        step: "finalize:handoff-settlement",
-        status: "completed",
-        detail: expect.stringContaining("legacy handoff lease reclaimed"),
-      }),
-    ]),
-  });
+  expectAbsent(state.root);
+  expect(listUpdateRuns()).toHaveLength(1);
+  expectSettlement("legacy handoff lease reclaimed");
   expect(defaultRuntime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ status: "ok" }));
   await expectAdmitted("next-update");
 });
@@ -144,24 +154,17 @@ it("registered update repair leaves a live current root owner alone", async () =
 function seedLegacyLineage(nested = false, bound = false) {
   const previous = fixture.seed({ ageMs: 13 * 60 * 60_000 });
   const key = `${state.root}/.openclaw-update-child-01234567-89ab-cdef-0123-456789abcdef-lineage-${"a".repeat(64)}`;
-  createManagedHandoffLeaseDatabase(state.path("handoff-control/managed-update-handoffs.sqlite"))(
-    true,
-    (db) =>
-      executeSqliteQuerySync(
-        db,
-        leaseQueries(db)
-          .updateTable("managed_update_handoffs")
-          .set({
-            install_root: key,
-            payload_json: JSON.stringify({
-              version: 2,
-              executor: bound ? previous.executor : previous.helper,
-              helper: previous.helper,
-              action: { kind: "update" },
-            }),
-          })
-          .where("install_root", "=", state.root),
-      ),
+  handoffDatabase()(true, (db) =>
+    executeSqliteQuerySync(
+      db,
+      leaseQueries(db)
+        .updateTable("managed_update_handoffs")
+        .set({
+          install_root: key,
+          payload_json: legacyPayload(previous.helper, bound ? previous.executor : previous.helper),
+        })
+        .where("install_root", "=", state.root),
+    ),
   );
   if (nested) {
     const retained = fixture.store.read(key);
@@ -196,18 +199,8 @@ it.each(["dead", "reused", "nested"] as const)(
       fixture.births.set(fixture.helper.pid, 99);
     }
     await repair();
-    expect(fixture.store.read(key)).toEqual({ kind: "absent" });
-    expect(fixture.store.read(`${key}/.openclaw-update-child-nested`)).toEqual({ kind: "absent" });
-    expect(listUpdateRuns()[0]).toMatchObject({
-      status: "succeeded",
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          step: "finalize:handoff-settlement",
-          status: "completed",
-          detail: expect.stringContaining(key),
-        }),
-      ]),
-    });
+    expectAbsent(key, `${key}/.openclaw-update-child-nested`);
+    expectSettlement(key);
     await expectAdmitted("after-lineage-repair");
   },
 );
@@ -267,17 +260,7 @@ it.each([false, true])(
       recordUpdateRunStep(run.runId, { step: "package rollback", status: "in_progress" });
     }
     finishUpdateRun(run.runId, { status: "failed", reason: "update-failed" });
-    insertChild(
-      second,
-      run.runId,
-      JSON.stringify({
-        version: 2,
-        executor: identity,
-        helper: identity,
-        action: { kind: "update" },
-      }),
-      Date.now() - 13 * 60 * 60_000,
-    );
+    insertChild(second, run.runId, legacyPayload(identity), Date.now() - 13 * 60 * 60_000);
     const retained = [fixture.store.read(first), fixture.store.read(second)];
     if (!pendingRollback) {
       mocks.doctor.mockImplementation(async () => {
@@ -293,11 +276,10 @@ it.each([false, true])(
       );
       expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
       expect([fixture.store.read(first), fixture.store.read(second)]).toEqual(retained);
-      expect(fixture.store.read(state.root)).toEqual({ kind: "absent" });
+      expectAbsent(state.root);
       expect(mocks.doctor).not.toHaveBeenCalled();
     } else {
-      expect(fixture.store.read(first)).toEqual({ kind: "absent" });
-      expect(fixture.store.read(second)).toEqual({ kind: "absent" });
+      expectAbsent(first, second);
       expect(listUpdateRuns()[0]?.status).toBe("succeeded");
     }
   },

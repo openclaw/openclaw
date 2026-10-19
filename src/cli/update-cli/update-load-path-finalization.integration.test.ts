@@ -1,6 +1,6 @@
-// Plugin discovery, convergence, CLI dispatch, config IO, and the ledger stay real.
 import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import * as interruption from "../../infra/update-run-interruption.js";
@@ -30,7 +30,6 @@ vi.mock("./shared.js", async (importOriginal) => ({
   resolveUpdateRoot: async () => controls.root,
   tryWriteCompletionCache: async () => "skipped",
 }));
-// Native maintenance and the fresh Doctor process have their own process proofs.
 vi.mock("../../commands/doctor-maintenance.js", () => ({
   beginDoctorMaintenance: async () => undefined,
 }));
@@ -45,20 +44,18 @@ vi.mock("./update-command-fresh-doctor.js", async (importOriginal) => ({
 
 afterEach(() => vi.restoreAllMocks());
 
+function completedStep(step: string, detail: unknown) {
+  return expect.objectContaining({ step, status: "completed", detail });
+}
+
 it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure"])(
   "completes %s with an operator-managed warning and preserves earlier failure evidence",
   async (command) => {
     await withOpenClawTestState({ label: `load-path-${command}` }, async (state) => {
       controls.root = state.root;
-      await fs.writeFile(
-        state.path("package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
-      );
-      await fs.mkdir(state.path("dist"));
-      await fs.writeFile(
-        state.path("dist/build-info.json"),
-        JSON.stringify({ buildId: "installed-candidate-build" }),
-      );
+      const installed = { version: "2026.9.4", buildId: "installed-candidate-build" };
+      writeJsonFile(state.path("package.json"), { name: "openclaw", version: installed.version });
+      writeJsonFile(state.path("dist/build-info.json"), { buildId: installed.buildId });
       const pluginId = "local-provider";
       const localDir = state.statePath("plugins-local", pluginId);
       const managedRelative = `managed/${"shadow-".repeat(34)}${pluginId}`;
@@ -116,11 +113,10 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
           source: localDir,
           message: expect.stringContaining("2026.9.4"),
         });
-        const expectedStep = expect.objectContaining({
-          step: "warning:finalize:plugins:0",
-          status: "completed",
-          detail: expect.stringContaining("plugins.load.paths"),
-        });
+        const expectedStep = completedStep(
+          "warning:finalize:plugins:0",
+          expect.stringContaining("plugins.load.paths"),
+        );
         const recordsWarning = command !== "resume-unowned" && command !== "resume-write-failure";
         if (command.startsWith("resume")) {
           const parent = createUpdateRun({ trigger: "cli" });
@@ -139,18 +135,15 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
             async (file, result) => {
               // A published parent can terminate its child as soon as this file appears.
               if (recordsWarning) {
-                expect(getUpdateRun(parent.runId)?.steps).toContainEqual(expectedStep);
-                expect(getUpdateRun(parent.runId)?.steps).toContainEqual(
+                expect(getUpdateRun(parent.runId)).toEqual(
                   expect.objectContaining({
-                    step: "finalize:installed-candidate",
-                    status: "completed",
-                    detail: JSON.stringify({
-                      version: "2026.9.4",
-                      buildId: "installed-candidate-build",
-                    }),
+                    after: {},
+                    steps: expect.arrayContaining([
+                      expectedStep,
+                      completedStep("finalize:installed-candidate", JSON.stringify(installed)),
+                    ]),
                   }),
                 );
-                expect(getUpdateRun(parent.runId)?.after).toEqual({});
               } else {
                 expect(getUpdateRun(parent.runId)).toEqual(initialParent);
               }
@@ -193,14 +186,12 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
             register: registerUpdateCli,
             argv: ["update", command, "--yes", "--json"],
           });
-          expect(output).toHaveBeenCalledWith(
-            expect.objectContaining({
+          expect(output.mock.lastCall).toMatchObject([
+            {
               status: "warning",
-              postUpdate: expect.objectContaining({
-                plugins: expect.objectContaining({ warnings: [expectedWarning] }),
-              }),
-            }),
-          );
+              postUpdate: { plugins: { warnings: [expectedWarning] } },
+            },
+          ]);
         }
         const latest = listUpdateRuns()[0]!;
         expect(latest).toMatchObject({ status: "succeeded" });
@@ -211,9 +202,7 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
           expect(latest.steps).not.toContainEqual(expectedStep);
         }
         const runStatus = await readUpdateRunStatus();
-        if (runStatus.runStatusError !== undefined) {
-          throw new Error(runStatus.runStatusError);
-        }
+        expect(runStatus.runStatusError).toBeUndefined();
         expect(runStatus.lastRun?.runId).toBe(latest.runId);
         if (recordsWarning) {
           expect(renderUpdateRunReport(latest).markdown).toContain("plugins.load.paths");

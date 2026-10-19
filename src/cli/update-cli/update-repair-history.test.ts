@@ -2,8 +2,9 @@
 import "./update-repair.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { note } from "../../../packages/terminal-core/src/note.js";
+import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 import { noteStaleUpdateRuns } from "../../commands/doctor-update-run.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
@@ -34,7 +35,7 @@ let state: OpenClawTestState;
 
 beforeEach(async () => {
   state = await createRepairState("repair-history");
-  await fs.writeFile(state.path("package.json"), JSON.stringify({ version: "1.0.0" }));
+  writeJsonFile(state.path("package.json"), { version: "1.0.0" });
   const control = state.path("control");
   await fs.mkdir(control, { mode: 0o700 });
   vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
@@ -46,163 +47,150 @@ afterEach(async () => {
 });
 
 function seedHistory(ageMs: number, reason = "abandoned") {
-  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() - ageMs);
-  try {
-    const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
-    recordUpdateRunStep(run.runId, {
-      step: "preflight",
-      status: "failed",
-      detail: "Original failure",
-    });
-    return finishUpdateRun(run.runId, { status: "failed", reason });
-  } finally {
-    clock.mockRestore();
-  }
+  using _ = vi.spyOn(Date, "now").mockReturnValue(Date.now() - ageMs);
+  const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
+  recordUpdateRunStep(run.runId, {
+    step: "preflight",
+    status: "failed",
+    detail: "Original failure",
+  });
+  return finishUpdateRun(run.runId, { status: "failed", reason });
+}
+const seedPair = () => [seedHistory(4 * ABANDONED_UPDATE_RUN_MS), seedHistory(60_000)] as const;
+function jsonResult() {
+  return vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0];
 }
 async function repair() {
   await updateRepairCommand({ json: true, yes: true, timeout: "15", deferCompletionCache: true });
 }
 async function abandonedWarnings() {
-  vi.mocked(note).mockClear();
+  const notes = vi.mocked(note);
+  notes.mockClear();
   await noteStaleUpdateRuns({ migrateState: false });
-  return vi
-    .mocked(note)
-    .mock.calls.flatMap(([message]) =>
-      typeof message === "string" && message.includes("remains abandoned") ? [message] : [],
-    );
+  return notes.mock.calls.flatMap(([message]) =>
+    typeof message === "string" && message.includes("remains abandoned") ? [message] : [],
+  );
 }
 
-// Existing selector tests replace finalization; finalizer tests pass hand-selected IDs.
-// These cases must fail if the public command drops historical terminal candidates.
-describe("public repair historical acknowledgment", () => {
-  it("clears older Doctor warnings after full repair despite a newer successful update", async () => {
-    const previous = seedHistory(2 * ABANDONED_UPDATE_RUN_MS);
-    const latest = createUpdateRun({ trigger: "cli" });
-    finishUpdateRun(latest.runId, { status: "succeeded" });
-    expect(await abandonedWarnings()).toHaveLength(1);
-    await repair();
-    expect(mocks.doctor).toHaveBeenCalledOnce();
-    expect(mocks.plugins).toHaveBeenCalledOnce();
-    const repaired = getUpdateRun(previous.runId)!;
-    expect(isAcknowledgedAbandonedUpdateRun(repaired)).toBe(true);
-    expect(repaired).toMatchObject({
-      ...previous,
-      updatedAtMs: expect.any(Number),
-      steps: expect.arrayContaining(previous.steps),
-    });
-    expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-      expect.objectContaining({ status: "ok", reconciledRuns: [previous.runId] }),
-    );
-    expect(await abandonedWarnings()).toEqual([]);
-    await repair();
-    expect(getUpdateRun(previous.runId)).toEqual(repaired);
-    expect(mocks.doctor).toHaveBeenCalledTimes(2);
+it("clears older Doctor warnings after full repair despite a newer successful update", async () => {
+  const previous = seedHistory(2 * ABANDONED_UPDATE_RUN_MS);
+  finishUpdateRun(createUpdateRun({ trigger: "cli" }).runId, { status: "succeeded" });
+  expect(await abandonedWarnings()).toHaveLength(1);
+  await repair();
+  expect(mocks.doctor).toHaveBeenCalledOnce();
+  expect(mocks.plugins).toHaveBeenCalledOnce();
+  const repaired = getUpdateRun(previous.runId)!;
+  expect(isAcknowledgedAbandonedUpdateRun(repaired)).toBe(true);
+  expect(repaired).toMatchObject({
+    ...previous,
+    updatedAtMs: expect.any(Number),
+    steps: expect.arrayContaining(previous.steps),
   });
+  expect(jsonResult()).toMatchObject({ status: "ok", reconciledRuns: [previous.runId] });
+  expect(await abandonedWarnings()).toEqual([]);
+  await repair();
+  expect(getUpdateRun(previous.runId)).toEqual(repaired);
+  expect(mocks.doctor).toHaveBeenCalledTimes(2);
+});
 
-  it.each(["ok", "warning"] as const)(
-    "acknowledges multiple rows only after %s convergence, excluding a newly admitted row",
-    async (status) => {
-      const old = seedHistory(4 * ABANDONED_UPDATE_RUN_MS);
-      const recent = seedHistory(60_000);
-      const unrelated = seedHistory(30_000, "doctor-failed");
-      let admitted: ReturnType<typeof seedHistory> | undefined;
-      mocks.plugins.mockImplementationOnce(async () => {
-        expect(getUpdateRun(old.runId)).toEqual(old);
-        expect(getUpdateRun(recent.runId)).toEqual(recent);
-        admitted = seedHistory(0);
-        return { ...pluginResult, status };
-      });
-      await repair();
-      for (const run of [old, recent]) {
-        expect(isAcknowledgedAbandonedUpdateRun(getUpdateRun(run.runId)!)).toBe(true);
-      }
-      expect(getUpdateRun(unrelated.runId)).toEqual(unrelated);
-      expect(getUpdateRun(admitted!.runId)).toEqual(admitted);
-      const result = vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0];
-      expect(result).toMatchObject({ status, reconciledRuns: [recent.runId, old.runId] });
-      expect(await abandonedWarnings()).toEqual([expect.stringContaining(admitted!.runId)]);
-    },
-  );
-
-  it.each(["doctor", "convergence", "error", "retained recovery"])(
-    "preserves history when repair fails in %s",
-    async (phase) => {
-      const old = seedHistory(4 * ABANDONED_UPDATE_RUN_MS);
-      const recent = seedHistory(60_000);
-      if (phase === "doctor") {
-        mocks.doctor.mockRejectedValueOnce(new Error("Doctor failed"));
-      } else if (phase === "convergence") {
-        mocks.convergence.mockRejectedValueOnce(new Error("Convergence failed"));
-      } else if (phase === "error") {
-        mocks.plugins.mockResolvedValueOnce({ ...pluginResult, status: "error" });
-      } else {
-        await fs.mkdir(path.join(resolveOpenClawStateSqliteDir(), ".openclaw-restore-retained"));
-      }
-      await expect(repair()).rejects.toThrow(
-        phase === "retained recovery" ? "full-state recovery is deferred" : undefined,
-      );
-      if (phase === "retained recovery") {
-        expect(mocks.doctor).not.toHaveBeenCalled();
-      }
+it.each(["ok", "warning"] as const)(
+  "acknowledges multiple rows only after %s convergence, excluding a newly admitted row",
+  async (status) => {
+    const [old, recent] = seedPair();
+    const unrelated = seedHistory(30_000, "doctor-failed");
+    let admitted: ReturnType<typeof seedHistory> | undefined;
+    mocks.plugins.mockImplementationOnce(async () => {
       expect(getUpdateRun(old.runId)).toEqual(old);
       expect(getUpdateRun(recent.runId)).toEqual(recent);
-      if (phase !== "retained recovery") {
-        expect(await abandonedWarnings()).toHaveLength(2);
-      }
-    },
-  );
-
-  it("retains the hundredth captured row when finalization creates a newer run", async () => {
-    const outside = seedHistory(10 * ABANDONED_UPDATE_RUN_MS);
-    const boundary = seedHistory(9 * ABANDONED_UPDATE_RUN_MS);
-    for (let index = 0; index < 99; index++) {
-      const run = createUpdateRun({ trigger: "cli" });
-      finishUpdateRun(run.runId, { status: "succeeded" });
-    }
-    expect(listUpdateRuns({ limit: 100 }).at(-1)?.runId).toBe(boundary.runId);
-    expect(await abandonedWarnings()).toEqual([expect.stringContaining(boundary.runId)]);
-    await repair();
-    expect(isAcknowledgedAbandonedUpdateRun(getUpdateRun(boundary.runId)!)).toBe(true);
-    expect(getUpdateRun(outside.runId)).toEqual(outside);
-    expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-      expect.objectContaining({ reconciledRuns: [boundary.runId] }),
-    );
-  });
-
-  it("acknowledges historical rows while continuing its live owning update", async () => {
-    const old = seedHistory(4 * ABANDONED_UPDATE_RUN_MS);
-    const driver = readUpdateRunDriver();
-    expect(driver).toBeDefined();
-    const owner = createUpdateRun({ trigger: "cli", origin: { driver } });
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", owner.runId);
-
-    await repair();
-
-    expect(isAcknowledgedAbandonedUpdateRun(getUpdateRun(old.runId)!)).toBe(true);
-    expect(getUpdateRun(owner.runId)?.status).toBe("running");
-    expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-      expect.objectContaining({ status: "ok", reconciledRuns: [old.runId] }),
-    );
-    expect(await abandonedWarnings()).toEqual([]);
-  });
-
-  it("does not acknowledge terminal history if a captured active run remains unresolved", async () => {
-    const old = seedHistory(4 * ABANDONED_UPDATE_RUN_MS);
-    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() - 2 * ABANDONED_UPDATE_RUN_MS);
-    const active = createUpdateRun({ trigger: "cli" });
-    recordUpdateRunPhase(active.runId, "verifying");
-    clock.mockRestore();
-    mocks.plugins.mockImplementationOnce(async () => {
-      recordUpdateRunStep(active.runId, {
-        step: "build",
-        status: "in_progress",
-        startedAtMs: Date.now(),
-      });
-      return pluginResult;
+      admitted = seedHistory(0);
+      return { ...pluginResult, status };
     });
-    await expect(repair()).rejects.toThrow("did not assume the update resumed");
-    expect(getUpdateRun(old.runId)).toEqual(old);
-    expect(getUpdateRun(active.runId)?.status).toBe("running");
-    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    await repair();
+    for (const run of [old, recent]) {
+      expect(isAcknowledgedAbandonedUpdateRun(getUpdateRun(run.runId)!)).toBe(true);
+    }
+    expect(getUpdateRun(unrelated.runId)).toEqual(unrelated);
+    expect(getUpdateRun(admitted!.runId)).toEqual(admitted);
+    expect(jsonResult()).toMatchObject({ status, reconciledRuns: [recent.runId, old.runId] });
+    expect(await abandonedWarnings()).toEqual([expect.stringContaining(admitted!.runId)]);
+  },
+);
+
+it.each([
+  { phase: "doctor", setup: () => mocks.doctor.mockRejectedValueOnce(new Error("failed")) },
+  {
+    phase: "convergence",
+    setup: () => mocks.convergence.mockRejectedValueOnce(new Error("failed")),
+  },
+  {
+    phase: "error",
+    setup: () => mocks.plugins.mockResolvedValueOnce({ ...pluginResult, status: "error" }),
+  },
+  {
+    phase: "retained recovery",
+    setup: () => fs.mkdir(path.join(resolveOpenClawStateSqliteDir(), ".openclaw-restore-retained")),
+  },
+])("preserves history when repair fails in $phase", async ({ phase, setup }) => {
+  const [old, recent] = seedPair();
+  await setup();
+  await expect(repair()).rejects.toThrow(
+    phase === "retained recovery" ? "full-state recovery is deferred" : undefined,
+  );
+  if (phase === "retained recovery") {
+    expect(mocks.doctor).not.toHaveBeenCalled();
+  }
+  expect(getUpdateRun(old.runId)).toEqual(old);
+  expect(getUpdateRun(recent.runId)).toEqual(recent);
+  if (phase !== "retained recovery") {
+    expect(await abandonedWarnings()).toHaveLength(2);
+  }
+});
+
+it("retains the hundredth captured row when finalization creates a newer run", async () => {
+  const outside = seedHistory(10 * ABANDONED_UPDATE_RUN_MS);
+  const boundary = seedHistory(9 * ABANDONED_UPDATE_RUN_MS);
+  for (let index = 0; index < 99; index++) {
+    finishUpdateRun(createUpdateRun({ trigger: "cli" }).runId, { status: "succeeded" });
+  }
+  expect(listUpdateRuns({ limit: 100 }).at(-1)?.runId).toBe(boundary.runId);
+  expect(await abandonedWarnings()).toEqual([expect.stringContaining(boundary.runId)]);
+  await repair();
+  expect(isAcknowledgedAbandonedUpdateRun(getUpdateRun(boundary.runId)!)).toBe(true);
+  expect(getUpdateRun(outside.runId)).toEqual(outside);
+  expect(jsonResult()).toMatchObject({ reconciledRuns: [boundary.runId] });
+});
+
+it("acknowledges historical rows while continuing its live owning update", async () => {
+  const old = seedHistory(4 * ABANDONED_UPDATE_RUN_MS);
+  const driver = readUpdateRunDriver();
+  expect(driver).toBeDefined();
+  const owner = createUpdateRun({ trigger: "cli", origin: { driver } });
+  vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", owner.runId);
+
+  await repair();
+
+  expect(isAcknowledgedAbandonedUpdateRun(getUpdateRun(old.runId)!)).toBe(true);
+  expect(getUpdateRun(owner.runId)?.status).toBe("running");
+  expect(jsonResult()).toMatchObject({ status: "ok", reconciledRuns: [old.runId] });
+  expect(await abandonedWarnings()).toEqual([]);
+});
+
+it("does not acknowledge terminal history if a captured active run remains unresolved", async () => {
+  const old = seedHistory(4 * ABANDONED_UPDATE_RUN_MS);
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() - 2 * ABANDONED_UPDATE_RUN_MS);
+  const active = createUpdateRun({ trigger: "cli" });
+  recordUpdateRunPhase(active.runId, "verifying");
+  clock.mockRestore();
+  mocks.plugins.mockImplementationOnce(async () => {
+    recordUpdateRunStep(active.runId, {
+      step: "build",
+      status: "in_progress",
+      startedAtMs: Date.now(),
+    });
+    return pluginResult;
   });
+  await expect(repair()).rejects.toThrow("did not assume the update resumed");
+  expect(getUpdateRun(old.runId)).toEqual(old);
+  expect(getUpdateRun(active.runId)?.status).toBe("running");
+  expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
 });
