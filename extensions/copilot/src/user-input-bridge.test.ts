@@ -1,39 +1,25 @@
-// Copilot tests cover SDK ask_user gateway behavior.
 import {
   claimPendingAgentQuestionAnswer,
   type AgentHarnessQuestionGatewayCall,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 import { createCopilotUserInputBridge } from "./user-input-bridge.js";
 
 type GatewayCallRecord = { method: string; opts: unknown; params: unknown };
 
-function createParams(): EmbeddedRunAttemptParams {
-  return {
-    sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
-    agentId: "main",
-    hostCapabilities: createCopilotTestHostCapabilities(),
-    timeoutMs: 75_000,
-    onBlockReply: vi.fn(),
-  } as unknown as EmbeddedRunAttemptParams;
-}
-
 function createGatewayStub() {
   const calls: GatewayCallRecord[] = [];
-  let settleWait: ((value: unknown) => void) | undefined;
-  const wait = new Promise<unknown>((resolve) => {
-    settleWait = resolve;
-  });
+  const wait = createDeferred<unknown>();
   const call: AgentHarnessQuestionGatewayCall = async (method, opts, params) => {
     calls.push({ method, opts, params });
     if (method === "question.request") {
       return { id: (params as { id: string }).id, expiresAtMs: Date.now() + 75_000 };
     }
     if (method === "question.waitAnswer") {
-      return await wait;
+      return await wait.promise;
     }
     if (method === "question.resolve") {
       const resolved = params as {
@@ -43,7 +29,7 @@ function createGatewayStub() {
       const result = resolved.cancel
         ? { status: "cancelled" as const }
         : { status: "answered" as const, answers: resolved.answers! };
-      settleWait?.(result);
+      wait.resolve(result);
       return result;
     }
     throw new Error(`unexpected gateway method: ${method}`);
@@ -51,19 +37,43 @@ function createGatewayStub() {
   return { call, calls };
 }
 
+function createHarness(signal?: AbortSignal) {
+  const params = {
+    sessionId: "session-1",
+    sessionKey: "agent:main:session-1",
+    agentId: "main",
+    hostCapabilities: createCopilotTestHostCapabilities(),
+    timeoutMs: 75_000,
+    onBlockReply: vi.fn(),
+  } as unknown as EmbeddedRunAttemptParams;
+  const gateway = createGatewayStub();
+  const bridge = createCopilotUserInputBridge({
+    paramsForRun: params,
+    gatewayCall: gateway.call,
+    signal,
+  });
+  return {
+    params,
+    gateway,
+    bridge,
+    ask: (request: Parameters<typeof bridge.onUserInputRequest>[0]) =>
+      bridge.onUserInputRequest(request, { sessionId: "sdk-session-1" }),
+    prompt: async () => {
+      await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+      return vi.mocked(params.onBlockReply!).mock.calls[0]![0];
+    },
+  };
+}
+
 describe("Copilot user input bridge", () => {
   it("registers, presents, claims, and returns a selected option", async () => {
-    const params = createParams();
-    const gateway = createGatewayStub();
-    const bridge = createCopilotUserInputBridge({
-      paramsForRun: params,
-      gatewayCall: gateway.call,
+    const { params, gateway, ask, prompt } = createHarness();
+    const response = ask({
+      question: "Pick a mode",
+      choices: ["Fast", "Deep"],
+      allowFreeform: false,
     });
-    const response = bridge.onUserInputRequest(
-      { question: "Pick a mode", choices: ["Fast", "Deep"], allowFreeform: false },
-      { sessionId: "sdk-session-1" },
-    );
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    const payload = await prompt();
     const request = gateway.calls[0];
     if (!request) {
       throw new Error("expected question.request");
@@ -80,7 +90,6 @@ describe("Copilot user input bridge", () => {
         }),
       ],
     });
-    const payload = vi.mocked(params.onBlockReply!).mock.calls[0]![0];
     expect(payload.channelData).toEqual({
       askUser: {
         questionId: (request.params as { id: string }).id,
@@ -98,21 +107,12 @@ describe("Copilot user input bridge", () => {
   });
 
   it("supports option-less free-form questions", async () => {
-    const params = createParams();
-    const gateway = createGatewayStub();
-    const bridge = createCopilotUserInputBridge({
-      paramsForRun: params,
-      gatewayCall: gateway.call,
-    });
-    const response = bridge.onUserInputRequest(
-      { question: "Which branch?", allowFreeform: true },
-      { sessionId: "sdk-session-1" },
-    );
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    const { params, gateway, ask, prompt } = createHarness();
+    const response = ask({ question: "Which branch?", allowFreeform: true });
+    expect((await prompt()).presentation).toBeUndefined();
     expect(gateway.calls[0]?.params).toMatchObject({
       questions: [expect.objectContaining({ options: [] })],
     });
-    expect(vi.mocked(params.onBlockReply!).mock.calls[0]![0].presentation).toBeUndefined();
 
     await claimPendingAgentQuestionAnswer({
       sessionKey: params.sessionKey,
@@ -122,30 +122,16 @@ describe("Copilot user input bridge", () => {
   });
 
   it("escapes SDK-controlled prompt text before delivery", async () => {
-    const params = createParams();
-    const gateway = createGatewayStub();
-    const bridge = createCopilotUserInputBridge({
-      paramsForRun: params,
-      gatewayCall: gateway.call,
+    const { bridge, ask, prompt } = createHarness();
+    const response = ask({
+      question: "Pick [trusted](https://evil) <@U123> @here\u202e",
+      choices: ["One @everyone", "Two `code`"],
+      allowFreeform: false,
     });
-    const response = bridge.onUserInputRequest(
-      {
-        question: "Pick [trusted](https://evil) <@U123> @here\u202e",
-        choices: ["One @everyone", "Two `code`"],
-        allowFreeform: false,
-      },
-      { sessionId: "sdk-session-1" },
-    );
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
-    const text = vi.mocked(params.onBlockReply!).mock.calls[0]![0].text ?? "";
-    expect(text).not.toContain("@here");
-    expect(text).not.toContain("@everyone");
-    expect(text).not.toContain("<@U123>");
-    expect(text).not.toContain("[trusted](https://evil)");
+    const { text = "", presentation } = await prompt();
     expect(text).not.toContain("`code`");
     expect(text).toContain("\uff20here");
     expect(text).toContain("\uff3btrusted\uff3d");
-    const presentation = vi.mocked(params.onBlockReply!).mock.calls[0]![0].presentation;
     const visiblePresentation = presentation?.blocks.map((block) =>
       block.type === "text"
         ? block.text
@@ -153,28 +139,19 @@ describe("Copilot user input bridge", () => {
           ? block.buttons.map((button) => button.label).join(" ")
           : "",
     );
-    expect(JSON.stringify(visiblePresentation)).not.toContain("@here");
-    expect(JSON.stringify(visiblePresentation)).not.toContain("@everyone");
-    expect(JSON.stringify(visiblePresentation)).not.toContain("<@U123>");
-    expect(JSON.stringify(visiblePresentation)).not.toContain("[trusted](https://evil)");
+    for (const unsafe of ["@here", "@everyone", "<@U123>", "[trusted](https://evil)"]) {
+      expect(text).not.toContain(unsafe);
+      expect(JSON.stringify(visiblePresentation)).not.toContain(unsafe);
+    }
     bridge.cancelPending();
     await response;
   });
 
   it("cancels the gateway record and returns an empty answer on abort", async () => {
-    const params = createParams();
     const controller = new AbortController();
-    const gateway = createGatewayStub();
-    const bridge = createCopilotUserInputBridge({
-      paramsForRun: params,
-      signal: controller.signal,
-      gatewayCall: gateway.call,
-    });
-    const response = bridge.onUserInputRequest(
-      { question: "Continue?", choices: ["Yes", "No"], allowFreeform: false },
-      { sessionId: "sdk-session-1" },
-    );
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    const { gateway, ask, prompt } = createHarness(controller.signal);
+    const response = ask({ question: "Continue?", choices: ["Yes", "No"], allowFreeform: false });
+    await prompt();
     controller.abort();
 
     await expect(response).resolves.toEqual({ answer: "", wasFreeform: true });
@@ -189,19 +166,10 @@ describe("Copilot user input bridge", () => {
   it("does not register a gateway question after the run already aborted", async () => {
     const controller = new AbortController();
     controller.abort();
-    const params = createParams();
-    const gateway = createGatewayStub();
-    const bridge = createCopilotUserInputBridge({
-      paramsForRun: params,
-      signal: controller.signal,
-      gatewayCall: gateway.call,
-    });
+    const { params, gateway, ask } = createHarness(controller.signal);
 
     await expect(
-      bridge.onUserInputRequest(
-        { question: "Continue?", choices: ["Yes", "No"], allowFreeform: false },
-        { sessionId: "sdk-session-1" },
-      ),
+      ask({ question: "Continue?", choices: ["Yes", "No"], allowFreeform: false }),
     ).resolves.toEqual({ answer: "", wasFreeform: true });
     expect(gateway.calls).toEqual([]);
     expect(params.onBlockReply).not.toHaveBeenCalled();

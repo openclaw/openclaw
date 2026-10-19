@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createOpenClawCodingTools as createRealOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
@@ -59,6 +58,15 @@ function makeTool(
 
 function makeTools(...names: string[]) {
   return names.map((name) => makeTool({ name }));
+}
+
+async function captureOptions(
+  input: Parameters<typeof createCopilotToolBridge>[0],
+  tools = [makeTool()],
+) {
+  const createOpenClawCodingTools = vi.fn((_options?: CopilotCodingToolsOptions) => tools);
+  await createCopilotToolBridge({ ...input, createOpenClawCodingTools });
+  return expectDefined(createOpenClawCodingTools.mock.calls[0]?.[0], "tool options");
 }
 
 function sdkToolNamed(bridge: Awaited<ReturnType<typeof createCopilotToolBridge>>, name: string) {
@@ -196,20 +204,9 @@ describe("createCopilotToolBridge", () => {
   });
 
   describe("PI-parity attempt context (F6)", () => {
-    function captureCall() {
-      const createOpenClawCodingTools = vi.fn((_options?: CopilotCodingToolsOptions) => [
-        makeTool(),
-      ]);
-      return {
-        createOpenClawCodingTools,
-        getOpts: () => expectDefined(createOpenClawCodingTools.mock.calls[0]?.[0], "tool options"),
-      };
-    }
-
     it("quarantines owner memory writes, edits, and patches after a network tool", async () => {
-      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-copilot-memory-"));
-      await fs.mkdir(path.join(workspaceDir, "memory"));
-      try {
+      await withTempDir("openclaw-copilot-memory-", async (workspaceDir) => {
+        await fs.mkdir(path.join(workspaceDir, "memory"));
         let turnTainted = false;
         const onToolOutcome = vi.fn<
           NonNullable<NonNullable<CopilotToolBridgeInput["attemptParams"]>["onToolOutcome"]>
@@ -252,67 +249,42 @@ describe("createCopilotToolBridge", () => {
             createOpenClawCodingTools: createTools,
           });
         const bridge = await createMemoryBridge("copilot-memory-session", () => turnTainted);
-        const tool = (name: string, source = bridge) => sdkToolNamed(source, name);
-        await runSdkTool(tool("write"), {
-          path: "memory/trusted.md",
-          content: "owner note\n",
-        });
-        await runSdkTool(tool("web_fetch"), {});
+        const run = (name: string, args: unknown, source = bridge) =>
+          runSdkTool(sdkToolNamed(source, name), args);
+        await run("write", { path: "memory/trusted.md", content: "owner note\n" });
+        await run("web_fetch", {});
         expect(onToolOutcome).toHaveBeenCalledWith(
           expect.objectContaining({ toolName: "web_fetch", resultContentSource: "network" }),
         );
         expect(turnTainted).toBe(true);
 
-        await runSdkTool(tool("write"), {
-          path: "memory/network.md",
-          content: "network note\n",
-        });
-        await runSdkTool(tool("edit"), {
+        await run("write", { path: "memory/network.md", content: "network note\n" });
+        await run("edit", {
           path: "memory/trusted.md",
           edits: [{ oldText: "owner note", newText: "network edit" }],
         });
-        await runSdkTool(tool("apply_patch"), {
-          input: [
-            "*** Begin Patch",
-            "*** Add File: memory/patched.md",
-            "+network patch",
-            "*** End Patch",
-          ].join("\n"),
+        await run("apply_patch", {
+          input: "*** Begin Patch\n*** Add File: memory/patched.md\n+network patch\n*** End Patch",
         });
 
         const freshBridge = await createMemoryBridge("copilot-fresh-session", () => false);
-        await runSdkTool(tool("write", freshBridge), {
-          path: "memory/fresh.md",
-          content: "fresh owner note\n",
-        });
+        await run("write", { path: "memory/fresh.md", content: "fresh owner note\n" }, freshBridge);
 
-        await expect(
-          Promise.all(
-            ["memory/trusted.md", "memory/network.md", "memory/patched.md", "memory/fresh.md"].map(
-              (relativePath) => readMemoryArtifactProvenance({ workspaceDir, relativePath }),
-            ),
-          ),
-        ).resolves.toEqual([
-          expect.objectContaining({ originClass: "untrusted" }),
-          expect.objectContaining({ originClass: "untrusted" }),
-          expect.objectContaining({ originClass: "untrusted" }),
-          expect.objectContaining({ originClass: "agent" }),
-        ]);
-        await expect(
-          fs.readFile(path.join(workspaceDir, "memory/trusted.md"), "utf8"),
-        ).resolves.toBe("network edit\n");
-        await expect(
-          fs.readFile(path.join(workspaceDir, "memory/patched.md"), "utf8"),
-        ).resolves.toBe("network patch\n");
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
+        const provenance = (relativePath: string) =>
+          readMemoryArtifactProvenance({ workspaceDir, relativePath: `memory/${relativePath}.md` });
+        for (const name of ["trusted", "network", "patched"]) {
+          await expect(provenance(name)).resolves.toMatchObject({ originClass: "untrusted" });
+        }
+        await expect(provenance("fresh")).resolves.toMatchObject({ originClass: "agent" });
+        const read = (name: string) =>
+          fs.readFile(path.join(workspaceDir, `memory/${name}.md`), "utf8");
+        await expect(read("trusted")).resolves.toBe("network edit\n");
+        await expect(read("patched")).resolves.toBe("network patch\n");
+      });
     });
 
     it("uses the model read context with prepared model capabilities", async () => {
-      const { createOpenClawCodingTools, getOpts } = captureCall();
-
-      await createCopilotToolBridge({
+      const opts = await captureOptions({
         attemptParams: {
           modelId: "configured-alias",
           model: {
@@ -324,10 +296,7 @@ describe("createCopilotToolBridge", () => {
             compat: { some: "shape" },
           },
         } as never,
-        createOpenClawCodingTools,
       });
-
-      const opts = getOpts();
       expect(opts.modelApi).toBe("openai-responses");
       expect(opts.modelContextWindowTokens).toBe(200_000);
       expect(opts.modelHasVision).toBe(true);
@@ -336,22 +305,20 @@ describe("createCopilotToolBridge", () => {
     });
 
     it("onYield still aborts the live session when onYieldDetected throws (defense in depth)", async () => {
-      const { createOpenClawCodingTools, getOpts } = captureCall();
       const abort = vi.fn();
       const sessionRef: { current: { abort?: () => unknown } | undefined } = {
         current: { abort },
       };
       const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-      await createCopilotToolBridge({
-        createOpenClawCodingTools,
+      const opts = await captureOptions({
         onYieldDetected: () => {
           throw new Error("handler boom");
         },
         sessionRef,
       });
 
-      const onYield = getOpts().onYield as (message?: string, acknowledgment?: string) => void;
+      const onYield = expectDefined(opts.onYield, "yield callback");
       expect(() => onYield("handler-fails-but-abort-must-fire")).not.toThrow();
       expect(abort).toHaveBeenCalledTimes(1);
       warn.mockRestore();
@@ -359,8 +326,8 @@ describe("createCopilotToolBridge", () => {
   });
 
   describe("sandbox forwarding (PR #86155 [P1])", () => {
-    function makeSandboxStub(overrides: Partial<SandboxContext> = {}): SandboxContext {
-      return {
+    it("forwards an explicit sandbox and spawnWorkspaceDir verbatim to createOpenClawCodingTools", async () => {
+      const sandbox = {
         enabled: true,
         workspaceAccess: "ro",
         workspaceDir: "/sandbox/copy",
@@ -369,28 +336,18 @@ describe("createCopilotToolBridge", () => {
         sessionKey: "session-1",
         backend: { kind: "local" } as never,
         cfg: {} as never,
-        ...overrides,
       } as unknown as SandboxContext;
-    }
-
-    it("forwards an explicit sandbox and spawnWorkspaceDir verbatim to createOpenClawCodingTools", async () => {
-      const sandbox = makeSandboxStub();
-      const createOpenClawCodingTools = vi.fn(() => [makeTool()]);
-      await createCopilotToolBridge({
-        createOpenClawCodingTools,
+      const opts = await captureOptions({
         sandbox,
         sessionKey: "session-1",
         spawnWorkspaceDir: "/original-workspace",
         workspaceDir: "/sandbox/copy",
       });
-      const opts = (createOpenClawCodingTools.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        sandbox?: unknown;
-        spawnWorkspaceDir?: unknown;
-        workspaceDir?: unknown;
-      };
       expect(opts.sandbox).toBe(sandbox);
-      expect(opts.workspaceDir).toBe("/sandbox/copy");
-      expect(opts.spawnWorkspaceDir).toBe("/original-workspace");
+      expect(opts).toMatchObject({
+        workspaceDir: "/sandbox/copy",
+        spawnWorkspaceDir: "/original-workspace",
+      });
     });
   });
 
@@ -414,28 +371,20 @@ describe("createCopilotToolBridge", () => {
         });
         const names = result.promptToolPolicy.apply().tools.map((tool) => tool.name);
 
-        expect(names).toContain("read");
-        expect(names).toContain("apply_patch");
-        expect(names).not.toContain("exec");
-        expect(names).not.toContain("process");
-        expect(names).not.toContain("write");
-        expect(names).not.toContain("edit");
-        expect(names).not.toContain("ask_user");
+        expect(names).toEqual(expect.arrayContaining(["read", "apply_patch"]));
+        for (const denied of ["exec", "process", "write", "edit", "ask_user"]) {
+          expect(names).not.toContain(denied);
+        }
       });
     });
 
     it("hands question tools this run's prompt delivery callback", async () => {
       const onToolResult = vi.fn();
-      const createOpenClawCodingTools = vi.fn((_options?: CopilotCodingToolsOptions) => []);
-      await createCopilotToolBridge({
-        attemptParams: { messageChannel: "telegram", onToolResult },
-        createOpenClawCodingTools,
-      });
-      expect(createOpenClawCodingTools).toHaveBeenCalledWith(
-        expect.objectContaining({
-          questionPrompt: { send: onToolResult, messageChannel: "telegram" },
-        }),
+      const opts = await captureOptions(
+        { attemptParams: { messageChannel: "telegram", onToolResult } },
+        [],
       );
+      expect(opts.questionPrompt).toEqual({ send: onToolResult, messageChannel: "telegram" });
     });
 
     it("enforces the retained sandbox owner's write deny before SDK tool execution", async () => {
@@ -511,8 +460,8 @@ describe("createCopilotToolBridge tool conversion", () => {
     expect(result).toMatchObject({
       resultType: "failure",
       textResultForLlm: "[copilot-tool-bridge] prepareArguments failed for tool 'tool-a': bad args",
+      error: error.message,
     });
-    expect(result).toMatchObject({ error: error.message });
   });
 
   it("reports owner-backed failures and clears them after recovery", async () => {
@@ -623,20 +572,16 @@ describe("createCopilotToolBridge tool conversion", () => {
     target.execute = vi.fn(async () => {
       throw error;
     });
-    const args = { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" };
-
+    const executeCatalog = expectDefined(catalogExecutor, "Copilot catalog executor");
     await expect(
-      expectDefined(
-        catalogExecutor,
-        "Copilot catalog executor",
-      )({
+      executeCatalog({
         tool: target,
         toolName: "memory_forget",
         source: "openclaw",
         sourceName: "memory-lancedb",
         toolCallId: "catalog-forget-1",
         parentToolCallId: "tool-search-1",
-        input: args,
+        input: memoryArgs,
         acceptResultBeforeProjection: async (result) => result,
       }),
     ).rejects.toThrow("catalog delete failed");
@@ -645,7 +590,7 @@ describe("createCopilotToolBridge tool conversion", () => {
       toolCallId: "catalog-forget-1",
       toolName: "memory_forget",
       result: error,
-      arguments: args,
+      arguments: memoryArgs,
       executionStarted: true,
       outcome: "failure",
       failure: { error: "catalog delete failed" },
