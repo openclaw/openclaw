@@ -374,6 +374,7 @@ Allowed group messages that do not mention the bot stay silent and are kept only
 - Outbound text is chunked to `channels.signal.textChunkLimit` (default 4000).
 - Optional newline chunking: set `channels.signal.streaming.chunkMode="newline"` to split on blank lines (paragraph boundaries) before length chunking.
 - Attachments are supported (base64 fetched from `signal-cli`).
+- TTS audio is sent as a native voice note (`signal-cli --voice-note`, 0.14.2+) when the reply asks for voice delivery and the audio is MP3. Other audio, such as generated music, stays a normal attachment. Container mode does not forward the voice-note flag and sends a normal attachment.
 - Voice-note attachments use the `signal-cli` filename as a MIME fallback when `contentType` is missing, so audio transcription can still classify AAC voice memos.
 - Default media cap: `channels.signal.mediaMaxMb` (default 8).
 - Use `channels.signal.ignoreAttachments` to skip downloading media for any transport.
