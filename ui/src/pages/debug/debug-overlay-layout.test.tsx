@@ -1,5 +1,4 @@
-import type { JSX } from "@solidjs/web";
-import { createSignal } from "solid-js";
+import { createSignal, type Setter } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
@@ -10,27 +9,26 @@ import { DebugOverlayFrame } from "./debug-overlay-frame-view.tsx";
 const key = "openclaw.debug-overlay.position";
 let container: HTMLDivElement;
 let dispose: (() => void) | undefined;
-let updateFrame:
-  | ((value: { mode: "expanded" | "minimized"; body: JSX.Element }) => void)
-  | undefined;
+type Mode = "expanded" | "minimized";
+let updateFrame: Setter<Mode> | undefined;
+const position = (value: string, fallback: number) => Number.parseFloat(value) || fallback;
 
 function disposeFrame() {
   dispose?.();
   dispose = updateFrame = undefined;
 }
 
-function renderFrame(mode: "expanded" | "minimized", body: JSX.Element) {
-  const next = { mode, body };
+async function mount(mode: Mode = "minimized", settleFrame = true) {
   if (updateFrame) {
-    updateFrame(next);
+    updateFrame(mode);
   } else {
-    const [state, setState] = createSignal(next);
+    const [state, setState] = createSignal(mode);
     updateFrame = setState;
     dispose = mountSolid(
       () => (
         <DebugOverlayFrame
-          mode={state().mode}
-          body={state().body}
+          mode={state()}
+          body="Diagnostics"
           onClose={vi.fn()}
           onToggleMode={vi.fn()}
         />
@@ -39,44 +37,28 @@ function renderFrame(mode: "expanded" | "minimized", body: JSX.Element) {
     ).unmount;
   }
   flush();
-  return container.querySelector<HTMLElement>("aside")!;
-}
-let frames: Map<number, FrameRequestCallback>;
-let nextFrame = 0;
-let reducedMotion = false;
-const animate = vi.fn(() => ({ cancel: vi.fn(), onfinish: null }));
-const capturePointer = vi.fn();
-const storage = createStorageMock();
-
-function flushFrame() {
-  const callbacks = [...frames.values()];
-  frames.clear();
-  callbacks.forEach((callback) => callback(0));
-}
-async function mount(mode: "expanded" | "minimized" = "minimized", settleFrame = true) {
-  renderFrame(mode, <div>Diagnostics</div>);
   const panel = container.querySelector<HTMLElement>("aside")!;
   Object.defineProperties(panel, {
     offsetWidth: { configurable: true, get: () => 210 },
     offsetHeight: { configurable: true, get: () => 90 },
   });
   panel.getBoundingClientRect = () =>
-    new DOMRect(
-      Number.parseFloat(panel.style.left) || 800,
-      Number.parseFloat(panel.style.top) || 600,
-      210,
-      90,
-    );
+    new DOMRect(position(panel.style.left, 800), position(panel.style.top, 600), 210, 90);
   panel.setPointerCapture = capturePointer;
   panel.hasPointerCapture = () => false;
   panel.releasePointerCapture = vi.fn();
   Object.defineProperty(panel, "animate", { configurable: true, value: animate });
   await vi.dynamicImportSettled();
   if (settleFrame) {
-    flushFrame();
+    vi.advanceTimersToNextFrame();
   }
   return panel;
 }
+let reducedMotion = false;
+const animate = vi.fn(() => ({ cancel: vi.fn(), onfinish: null }));
+const capturePointer = vi.fn();
+const storage = createStorageMock();
+
 function pointer(target: EventTarget, type: string, options: PointerEventInit = {}) {
   target.dispatchEvent(
     new PointerEvent(type, {
@@ -94,16 +76,11 @@ function pointer(target: EventTarget, type: string, options: PointerEventInit = 
 
 beforeEach(() => {
   storage.clear();
-  frames = new Map();
+  vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
   reducedMotion = false;
   animate.mockClear();
   capturePointer.mockClear();
   vi.stubGlobal("localStorage", storage);
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    frames.set(++nextFrame, callback);
-    return nextFrame;
-  });
-  vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -119,15 +96,16 @@ afterEach(() => {
   disposeFrame();
   container.remove();
   vi.restoreAllMocks();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe("System busyness frame layout", () => {
   it("does not initialize controls after their frame closes during import", async () => {
-    renderFrame("minimized", "Loading");
+    const pending = mount("minimized", false);
     disposeFrame();
-    await vi.dynamicImportSettled();
-    expect(frames.size).toBe(0);
+    await pending;
+    expect(vi.getTimerCount()).toBe(0);
   });
   it("rolls back pointercancel and ignores unrelated pointers", async () => {
     storage.setItem(key, JSON.stringify({ x: 200, y: 150 }));
@@ -137,8 +115,7 @@ describe("System busyness frame layout", () => {
     expect(panel.style.left).toBe("200px");
     pointer(panel, "pointermove", { clientX: 900, clientY: 700 });
     pointer(panel, "pointercancel");
-    expect(panel.style.left).toBe("200px");
-    expect(panel.style.top).toBe("150px");
+    expect(panel.style).toMatchObject({ left: "200px", top: "150px" });
     expect(JSON.parse(storage.getItem(key)!)).toEqual({ x: 200, y: 150 });
     expect(panel.classList.contains("debug-overlay--dragging")).toBe(false);
   });
@@ -148,9 +125,8 @@ describe("System busyness frame layout", () => {
     let composerTop = 500;
     composer.getBoundingClientRect = () => new DOMRect(0, composerTop, 100, 40);
     const anchor = replaceComposerPopoverAnchor(null, composer);
-    const initialComposerHeight = composer.style.getPropertyValue(
-      "--chat-composer-popover-max-height",
-    );
+    const height = () => composer.style.getPropertyValue("--chat-composer-popover-max-height");
+    const initialComposerHeight = height();
     try {
       const panel = await mount();
       pointer(panel.querySelector("button")!, "pointerdown");
@@ -158,31 +134,28 @@ describe("System busyness frame layout", () => {
       expect(capturePointer).not.toHaveBeenCalled();
       pointer(panel.querySelector("header")!, "pointerdown");
       await mount("expanded", false);
-      expect(frames.size).toBe(1);
+      expect(vi.getTimerCount()).toBe(1);
       disposeFrame();
-      expect(frames.size).toBe(0);
-      panel.style.left = "320px";
-      panel.style.top = "240px";
+      expect(vi.getTimerCount()).toBe(0);
+      Object.assign(panel.style, { left: "320px", top: "240px" });
       const detachedStyle = panel.style.cssText;
       pointer(panel, "pointermove", { clientX: 200 });
       composerTop = 300;
       window.dispatchEvent(new Event("resize"));
       expect(storage.getItem(key)).toBeNull();
       expect(panel.style.cssText).toBe(detachedStyle);
-      flushFrame();
+      vi.advanceTimersToNextFrame();
       expect(panel.style.cssText).toBe(detachedStyle);
     } finally {
       // Other resize owners must settle while this fixture still owns the frame queue.
       try {
-        flushFrame();
+        vi.advanceTimersToNextFrame();
       } finally {
         replaceComposerPopoverAnchor(anchor);
         composer.remove();
       }
     }
-    expect(composer.style.getPropertyValue("--chat-composer-popover-max-height")).not.toBe(
-      initialComposerHeight,
-    );
+    expect(height()).not.toBe(initialComposerHeight);
   });
 
   it("keeps dragging usable when storage fails and rejects malformed stored coordinates", async () => {
@@ -202,8 +175,8 @@ describe("System busyness frame layout", () => {
     expect(animate).not.toHaveBeenCalled();
     await mount("expanded", false);
     await mount("expanded", false);
-    expect(frames.size).toBe(1);
-    flushFrame();
+    expect(vi.getTimerCount()).toBe(1);
+    vi.advanceTimersToNextFrame();
     expect(animate).toHaveBeenCalledTimes(1);
     expect(animate).toHaveBeenCalledWith(
       expect.any(Array),
