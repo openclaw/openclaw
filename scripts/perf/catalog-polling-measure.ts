@@ -159,7 +159,7 @@ async function measureLoads(runs: number) {
       // Preserve the native receiver explicitly when forwarding from the diagnostic wrapper.
       // oxlint-disable-next-line typescript/unbound-method
       const send = WebSocket.prototype.send;
-      const observed = new WeakSet<WebSocket>();
+      const NativeWebSocket = WebSocket;
       const pending = new Map<string, (typeof requests)[number]>();
       const catalogStatus = (
         payload:
@@ -182,9 +182,9 @@ async function measureLoads(runs: number) {
           ...list.getEntries().map(({ startTime, duration }) => ({ startTime, duration })),
         );
       }).observe({ type: "longtask", buffered: true });
-      WebSocket.prototype.send = function (data) {
-        if (!observed.has(this)) {
-          observed.add(this);
+      class ObservedWebSocket extends NativeWebSocket {
+        constructor(socketUrl: string | URL, protocols?: string | string[]) {
+          super(socketUrl, protocols);
           this.addEventListener(
             "message",
             ({ data: message }) => {
@@ -253,6 +253,9 @@ async function measureLoads(runs: number) {
             { capture: true },
           );
         }
+      }
+      window.WebSocket = ObservedWebSocket;
+      NativeWebSocket.prototype.send = function (data) {
         if (typeof data === "string") {
           const frame = JSON.parse(data);
           if (
