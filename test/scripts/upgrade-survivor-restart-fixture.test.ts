@@ -15,7 +15,7 @@ const sourceSha = "a".repeat(40);
 const hash = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 const source = fs.readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
 const prepare = source.slice(
-  source.indexOf("prepare_restart_fixture() {"),
+  source.indexOf("prepare_restart_plugin_release_selectors() {"),
   source.indexOf("repair_update_restart_auth() {"),
 );
 
@@ -86,6 +86,7 @@ function fixture() {
           id,
           {
             source: "npm",
+            spec: `@openclaw/${id}@${version}`,
             resolvedName: "@openclaw/" + id,
             resolvedVersion: version,
           },
@@ -137,12 +138,15 @@ source scripts/e2e/lib/prepublish-plugin-registry.sh
 source scripts/lib/openclaw-e2e-instance.sh
 phase() { shift; "$@"; }
 prepare_candidate_tarball() { :; }
+openclaw_e2e_fixture_plugin_command() { printf '%s\n' "$*" >>"$ARTIFACT_ROOT/restart-plugin-selectors.log"; }
 COMMAND_TIMEOUT=10s
 candidate_version=${version}
 candidate_tarball="$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR/openclaw.tgz"
 restart_registry_pid=""
 trap 'kill "$restart_registry_pid" 2>/dev/null || true; wait 2>/dev/null || true' EXIT
 ${prepare}
+OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL=beta
+prepare_restart_plugin_release_selectors
 prepare_restart_fixture
 node --input-type=module - "$NPM_CONFIG_REGISTRY" "$ARTIFACT_ROOT" <<'NODE'
 import assert from "node:assert/strict";
@@ -201,6 +205,12 @@ NODE
         },
       });
       expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(
+        fs.readFileSync(path.join(root, "restart-plugin-selectors.log"), "utf8").trim().split("\n"),
+      ).toEqual([
+        "openclaw -- plugins update @openclaw/discord@beta",
+        "openclaw -- plugins update @openclaw/whatsapp@beta",
+      ]);
       for (const [file, digest] of sealed) {
         expect(hash(file)).toBe(digest);
       }
