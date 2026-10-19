@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { waitForGatewayHttpReadiness } from "../cli/daemon-cli/restart-health-probe.js";
 import { startProxy } from "../infra/net/proxy/proxy-lifecycle.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "../test-helpers/proxy-tls-fixture.js";
 import { createSuiteTempRootTracker, withTestDir } from "../test-helpers/temp-dir.js";
 import {

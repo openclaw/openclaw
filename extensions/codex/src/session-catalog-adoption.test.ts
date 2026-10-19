@@ -135,7 +135,6 @@ function pauseHistoryImport() {
   importHistory.mockImplementationOnce(async () => {
     entered.resolve();
     await gate.promise;
-    return { importedMessages: 0, omittedMessages: 0 };
   });
   return {
     gate,
