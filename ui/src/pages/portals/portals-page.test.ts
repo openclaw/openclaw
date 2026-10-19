@@ -14,7 +14,7 @@ import type { PortalPanelToggleDetail } from "../../components/panel-toggle-cont
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { cleanupSolid as cleanup, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   createApplicationGateway,
   createSolidApplicationContextProvider,
@@ -27,7 +27,7 @@ const probePortalReachable = vi.hoisted(() =>
 
 vi.mock("./portal-reachability.ts", () => ({ probePortalReachable }));
 
-import { PortalsPage } from "./portals-page.tsx";
+import { PortalsPage, type PortalsPageProps } from "./portals-page.tsx";
 
 const portal = {
   id: "p3000",
@@ -37,7 +37,6 @@ const portal = {
   tokenQuery: "openclaw_portal=secret-token",
   url: "https://preview.example.test:8443/context/app?view=one%2Ftwo&openclaw_portal=secret-token#section",
   publicUrl: "https://preview.example.test:8443/context/app?view=one%2Ftwo#section",
-  path: "/app",
   description: "Use the seeded test account.",
   createdAtMs: 1_000,
 } satisfies PortalSummary;
@@ -49,20 +48,15 @@ function createContext(
 ) {
   const requestMock = vi.fn(request);
   const client = { request: requestMock } as unknown as GatewayBrowserClient;
-  const snapshot: ApplicationGatewaySnapshot = {
+  const { gateway, publish, publishEvent } = createApplicationGateway();
+  const snapshot = Object.assign(gateway.snapshot, {
     client,
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: methods
       ? gatewayHelloForMethods(methods, scopes)
       : { ...gatewayHelloForMethods([], scopes), features: undefined },
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const { gateway, publish, publishEvent } = createApplicationGateway(snapshot);
+  } satisfies Partial<ApplicationGatewaySnapshot>);
   gateway.connection.gatewayUrl = "wss://gateway.example.test:18789/control";
   return {
     context: { gateway } as unknown as ApplicationContext,
@@ -77,6 +71,7 @@ function createContext(
   };
 }
 
+type Source = ReturnType<typeof createContext>;
 type Page = HTMLElementTagNameMap["openclaw-portals-page"];
 const frameOf = (page: Page) => page.querySelector("iframe");
 const waitForText = (page: Page, text: string) =>
@@ -94,6 +89,29 @@ const machine = (
   status: EnvironmentSummary["status"] = "starting",
 ): EnvironmentSummary => ({ id, type: "worker", status });
 const portalResponse = (value = portal) => ({ portals: [value] });
+const callsTo = (source: Source, method: string) =>
+  source.request.mock.calls.filter(([name]) => name === method);
+const waitForRequest = (source: Source, method: string, params: unknown) =>
+  waitForSolid(() => expect(source.request).toHaveBeenCalledWith(method, params));
+const expectReceipt = (source: Source, requestId: string, status: string, reason: string) =>
+  expect(source.request).toHaveBeenCalledWith("ui.command.result", {
+    requestId,
+    presentation: { portalId: portal.id, status, reason },
+  });
+async function updatePage(page: Page, props: Partial<PortalsPageProps>) {
+  Object.assign(page, props);
+  await page.updateComplete;
+}
+async function expectNoPolling(source: Source) {
+  const reads = source.request.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(6_000);
+  expect(source.request).toHaveBeenCalledTimes(reads);
+}
+function actionContext(method: string, result: Promise<unknown> | { closed: boolean }) {
+  return createContext(["portal.list", method], async (name) =>
+    name === "portal.list" ? portalResponse() : result,
+  );
+}
 
 async function mountPage(context: ApplicationContext, portalId?: string, environmentId?: string) {
   const provider = createSolidApplicationContextProvider(context);
@@ -113,11 +131,8 @@ async function mountPage(context: ApplicationContext, portalId?: string, environ
 }
 
 afterEach(() => {
-  cleanup();
-  document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();
-  vi.unstubAllGlobals();
 });
 
 beforeEach(() => {
@@ -137,70 +152,65 @@ describe("PortalsPage", () => {
     expect(source.request).toHaveBeenCalledOnce();
   });
 
-  it("retains the selected portal document across reconnect and retires it for another client", async () => {
-    const selected = { ...portal, id: "p4000", title: "Selected app", port: 4000 };
-    const refreshed = createDeferred<PortalListResult>();
-    const replacement = createDeferred<PortalListResult>();
-    const methods = ["portal.list", "portal.close"];
-    let reads = 0;
-    const source = createContext(methods, async () =>
-      ++reads === 1 ? { portals: [portal, selected] } : refreshed.promise,
-    );
-    const page = await mountPage(source.context);
-    await waitForFrame(page);
-    const selectedButton = [
-      ...page.querySelectorAll<HTMLButtonElement>(".portals-rail__item"),
-    ].find((button) => button.textContent?.includes("Selected app"))!;
-    selectedButton.click();
-    await waitForTitle(page, "Selected app");
-    const frame = frameOf(page)!;
-    source.updateSnapshot({ phase: "reconnecting", hello: null });
-    await page.updateComplete;
-    expect(page.querySelector("iframe")).toBe(frame);
-    expect(selectedButton.getAttribute("aria-current")).toBe("true");
-    expect(page.querySelector<HTMLButtonElement>(".portals-preview__close")?.disabled).toBe(true);
-    expect(source.request).toHaveBeenCalledOnce();
-
-    source.updateSnapshot({ phase: "connected", hello: gatewayHelloForMethods(methods) });
-    await waitForSolid(() => expect(source.request).toHaveBeenCalledTimes(2));
-    expect(page.querySelector("iframe")).toBe(frame);
-    refreshed.resolve({ portals: [portal, { ...selected, title: "Refreshed selection" }] });
-    await waitForSolid(() => expect(frame.title).toBe("Refreshed selection portal preview"));
-    expect(page.querySelector("iframe")).toBe(frame);
-
-    const nextClient = createTestGatewayClient(() => replacement.promise);
-    source.updateSnapshot({ client: nextClient });
-    await page.updateComplete;
-    expect(page.querySelector("iframe")).toBeNull();
-    replacement.resolve({ portals: [portal, selected] });
-    await waitForTitle(page, "Seeded app");
-    expect(page.querySelector("iframe")).not.toBe(frame);
-  });
-
-  it.each(["account", "recovery"] as const)(
-    "retires the portal document when the same client's %s identity changes",
+  it.each(["client", "account", "recovery"] as const)(
+    "retains selection across reconnect, then retires the frame for a new %s",
     async (identity) => {
+      const selected = { ...portal, id: "p4000", title: "Selected app", port: 4000 };
+      const initial = identity === "client" ? [portal, selected] : [portal];
+      const selection = initial.at(-1)!;
+      const refreshed = createDeferred<PortalListResult>();
       const replacement = createDeferred<PortalListResult>();
-      const hello = gatewayHelloForMethods(["portal.list"]);
+      const methods = identity === "client" ? ["portal.list", "portal.close"] : ["portal.list"];
+      const hello = gatewayHelloForMethods(methods);
       hello.auth = { ...hello.auth, recoveryScope: "first-scope" };
       let reads = 0;
-      const source = createContext(["portal.list"], async () =>
-        ++reads === 1 ? portalResponse() : replacement.promise,
+      const source = createContext(methods, async () =>
+        ++reads === 1
+          ? { portals: initial }
+          : reads === 2
+            ? refreshed.promise
+            : replacement.promise,
       );
       source.updateSnapshot({ hello, selfUser: { id: "first-user", name: "First user" } });
       const page = await mountPage(source.context);
       await waitForFrame(page);
+      const selectedButton = [
+        ...page.querySelectorAll<HTMLButtonElement>(".portals-rail__item"),
+      ].find((button) => button.textContent?.includes(selection.title))!;
+      selectedButton.click();
+      await waitForTitle(page, selection.title);
       const frame = frameOf(page)!;
+      source.updateSnapshot({ phase: "reconnecting", hello: null });
+      await page.updateComplete;
+      expect(page.querySelector("iframe")).toBe(frame);
+      expect(selectedButton.getAttribute("aria-current")).toBe("true");
+      expect(page.querySelector<HTMLButtonElement>(".portals-preview__close")?.disabled).toBe(true);
+      expect(source.request).toHaveBeenCalledOnce();
+
+      source.updateSnapshot({ phase: "connected", hello });
+      await waitForSolid(() => expect(source.request).toHaveBeenCalledTimes(2));
+      expect(page.querySelector("iframe")).toBe(frame);
+      refreshed.resolve({
+        portals: initial.map((entry) =>
+          entry.id === selection.id ? { ...entry, title: "Refreshed selection" } : entry,
+        ),
+      });
+      await waitForSolid(() => expect(frame.title).toBe("Refreshed selection portal preview"));
+      expect(page.querySelector("iframe")).toBe(frame);
 
       source.updateSnapshot(
-        identity === "account"
-          ? { selfUser: { id: "second-user", name: "Second user" } }
-          : { hello: { ...hello, auth: { ...hello.auth, recoveryScope: "second-scope" } } },
+        identity === "client"
+          ? { client: createTestGatewayClient(() => replacement.promise) }
+          : identity === "account"
+            ? { selfUser: { id: "second-user", name: "Second user" } }
+            : { hello: { ...hello, auth: { ...hello.auth, recoveryScope: "second-scope" } } },
       );
       await page.updateComplete;
       expect(page.querySelector("iframe")).toBeNull();
-      replacement.resolve({ portals: [{ ...portal, title: "Replacement app" }] });
-      await waitForTitle(page, "Replacement app");
+      replacement.resolve({
+        portals: identity === "client" ? initial : [{ ...portal, title: "Replacement app" }],
+      });
+      await waitForTitle(page, identity === "client" ? "Seeded app" : "Replacement app");
       expect(page.querySelector("iframe")).not.toBe(frame);
     },
   );
@@ -208,7 +218,7 @@ describe("PortalsPage", () => {
   it("retains read access without a method catalog", async () => {
     const source = createContext(null, async () => ({ portals: [] }), ["operator.read"]);
     await mountPage(source.context);
-    await waitForSolid(() => expect(source.request).toHaveBeenCalledWith("portal.list", {}));
+    await waitForRequest(source, "portal.list", {});
   });
 
   it.each([undefined, "pending-machine"])(
@@ -245,22 +255,16 @@ describe("PortalsPage", () => {
       method === "environments.status" ? environment : portalResponse(),
     );
     const page = await mountPage(source.context, undefined, environment.id);
-    await waitForSolid(() =>
-      expect(source.request).toHaveBeenCalledWith("environments.status", {
-        environmentId: environment.id,
-      }),
-    );
+    await waitForRequest(source, "environments.status", { environmentId: environment.id });
     expect(page.textContent).toContain("Starting your machine");
     expect(page.querySelector("iframe")).toBeNull();
-    expect(source.request.mock.calls.some(([method]) => method === "portal.list")).toBe(false);
+    expect(callsTo(source, "portal.list")).toHaveLength(0);
 
     environment = { ...environment, status: "available" };
     await vi.advanceTimersByTimeAsync(2_000);
     await page.updateComplete;
     expect(page.textContent).toContain("Waiting for your application");
-    const reads = source.request.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(6_000);
-    expect(source.request).toHaveBeenCalledTimes(reads);
+    await expectNoPolling(source);
     expect(page.querySelector("iframe")).toBeNull();
 
     toggle(page, { portalId: portal.id });
@@ -290,67 +294,54 @@ describe("PortalsPage", () => {
     });
   });
 
-  it("ignores retired startup targets and stops reading while hidden or disposed", async () => {
-    usePollingTimers();
-    const retired = createDeferred<EnvironmentSummary>();
-    let replacement = machine("new-machine");
-    const source = createContext(["environments.status", "portal.list"], async (method, params) =>
-      method === "environments.status"
-        ? params.environmentId === "old-machine"
-          ? retired.promise
-          : replacement
-        : portalResponse(),
-    );
-    const page = await mountPage(source.context, undefined, "old-machine");
-    page.requestedEnvironmentId = replacement.id;
-    await page.updateComplete;
-    await waitForSolid(() =>
-      expect(source.request).toHaveBeenLastCalledWith("environments.status", {
-        environmentId: replacement.id,
-      }),
-    );
-    page.presented = false;
-    await page.updateComplete;
-    const reads = source.request.mock.calls.length;
-    retired.resolve(machine("old-machine", "available"));
-    await vi.advanceTimersByTimeAsync(6_000);
-    expect(source.request).toHaveBeenCalledTimes(reads);
-    expect(page.textContent).toContain("Starting your machine");
-    replacement = { ...replacement, status: "error" };
-    page.presented = true;
-    await page.updateComplete;
-    await waitForText(page, "The machine could not start");
-    expect(page.querySelector("iframe")).toBeNull();
-    page.remove();
-    const finalReads = source.request.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(6_000);
-    expect(source.request).toHaveBeenCalledTimes(finalReads);
-  });
-
-  it("keeps polling the selected environment after a previous target fails", async () => {
-    usePollingTimers();
-    const retired = createDeferred<EnvironmentSummary>();
-    let replacement = machine("new-machine");
-    const source = createContext(["environments.status"], async (_method, params) =>
-      params.environmentId === "old-machine" ? retired.promise : replacement,
-    );
-    const page = await mountPage(source.context, undefined, "old-machine");
-    page.requestedEnvironmentId = replacement.id;
-    await page.updateComplete;
-    await waitForSolid(() => expect(source.request).toHaveBeenCalledTimes(2));
-    await source.request.mock.results[1]?.value;
-    await waitForText(page, "Starting your machine");
-
-    retired.reject(new Error("Previous machine failed"));
-    await retired.promise.catch(() => undefined);
-    await page.updateComplete;
-    expect(page.textContent).not.toContain("Previous machine failed");
-
-    replacement = { ...replacement, status: "available" };
-    await vi.advanceTimersByTimeAsync(2_000);
-    await page.updateComplete;
-    expect(page.textContent).toContain("Waiting for your application");
-  });
+  it.each(["success", "failure"] as const)(
+    "ignores retired startup %s and preserves current polling",
+    async (outcome) => {
+      usePollingTimers();
+      const retired = createDeferred<EnvironmentSummary>();
+      let replacement = machine("new-machine");
+      const source = createContext(
+        outcome === "success" ? ["environments.status", "portal.list"] : ["environments.status"],
+        async (method, params) =>
+          method === "portal.list"
+            ? portalResponse()
+            : params.environmentId === "old-machine"
+              ? retired.promise
+              : replacement,
+      );
+      const page = await mountPage(source.context, undefined, "old-machine");
+      await updatePage(page, { requestedEnvironmentId: replacement.id });
+      await waitForSolid(() => expect(source.request).toHaveBeenCalledTimes(2));
+      await source.request.mock.results[1]?.value;
+      await waitForSolid(() =>
+        expect(source.request).toHaveBeenLastCalledWith("environments.status", {
+          environmentId: replacement.id,
+        }),
+      );
+      await waitForText(page, "Starting your machine");
+      if (outcome === "success") {
+        await updatePage(page, { presented: false });
+        retired.resolve(machine("old-machine", "available"));
+        await expectNoPolling(source);
+        expect(page.textContent).toContain("Starting your machine");
+        replacement = { ...replacement, status: "error" };
+        await updatePage(page, { presented: true });
+        await waitForText(page, "The machine could not start");
+      } else {
+        retired.reject(new Error("Previous machine failed"));
+        await retired.promise.catch(() => undefined);
+        await page.updateComplete;
+        expect(page.textContent).not.toContain("Previous machine failed");
+        replacement = { ...replacement, status: "available" };
+        await vi.advanceTimersByTimeAsync(2_000);
+        await page.updateComplete;
+        expect(page.textContent).toContain("Waiting for your application");
+      }
+      expect(page.querySelector("iframe")).toBeNull();
+      page.remove();
+      await expectNoPolling(source);
+    },
+  );
 
   it("retains the embedded iframe document through custom element presentation changes", async () => {
     let title = portal.title;
@@ -374,27 +365,18 @@ describe("PortalsPage", () => {
     const writes = vi.spyOn(frame, "setAttribute");
     const sourceWrites = vi.spyOn(frame, "src", "set");
 
-    page.presented = false;
-    await page.updateComplete;
+    await updatePage(page, { presented: false });
     expect(page.querySelector("iframe"), "frame after hiding").toBe(frame);
     title = "Refreshed app";
     toggle(page, { portalId: portal.id, requestId: "show-again" });
-    page.presented = true;
-    await page.updateComplete;
+    await updatePage(page, { presented: true });
     await waitForTitle(page, "Refreshed app");
 
     expect(page.querySelector("iframe")).toBe(frame);
     expect(writes.mock.calls.filter(([name]) => name === "src")).toEqual([]);
     expect(sourceWrites).not.toHaveBeenCalled();
     expect(probePortalReachable).toHaveBeenCalledTimes(1);
-    expect(source.request).toHaveBeenCalledWith("ui.command.result", {
-      requestId: "show-again",
-      presentation: {
-        portalId: portal.id,
-        status: "unverified",
-        reason: "network-reachable",
-      },
-    });
+    expectReceipt(source, "show-again", "unverified", "network-reachable");
   });
 
   it.each(["success", "failure"] as const)(
@@ -402,12 +384,8 @@ describe("PortalsPage", () => {
     async (outcome) => {
       const retired = createDeferred<{ closed: boolean }>();
       const current = createDeferred<{ closed: boolean }>();
-      const source = createContext(["portal.list", "portal.close"], async (method) =>
-        method === "portal.list" ? portalResponse() : retired.promise,
-      );
-      const replacement = createContext(["portal.list", "portal.close"], async (method) =>
-        method === "portal.list" ? portalResponse() : current.promise,
-      );
+      const source = actionContext("portal.close", retired.promise);
+      const replacement = actionContext("portal.close", current.promise);
       const page = await mountPage(source.context);
       const closeButton = () => page.querySelector<HTMLButtonElement>(".portals-preview__close")!;
       await waitForSolid(() => expect(closeButton()).not.toBeNull());
@@ -428,9 +406,7 @@ describe("PortalsPage", () => {
         expect(closeButton().disabled).toBe(true);
         expect(page.textContent).not.toContain("Retired close failed");
         closeButton().click();
-        expect(
-          replacement.request.mock.calls.filter(([method]) => method === "portal.close"),
-        ).toHaveLength(1);
+        expect(callsTo(replacement, "portal.close")).toHaveLength(1);
       } finally {
         current.resolve({ closed: true });
         await current.promise;
@@ -456,18 +432,14 @@ describe("PortalsPage", () => {
 
   it("shows an unreachable notice without mounting the iframe and retries", async () => {
     probePortalReachable.mockResolvedValueOnce("unreachable").mockResolvedValueOnce("reachable");
-    const source = createContext(["portal.list", "portal.close"], async (method) =>
-      method === "portal.list" ? portalResponse() : { closed: true },
-    );
+    const source = actionContext("portal.close", { closed: true });
     const page = await mountPage(source.context);
 
     await waitForText(page, "Portal not reachable from this browser");
     expect(page.querySelector("iframe")).toBeNull();
 
     page.querySelector<HTMLButtonElement>(".portals-preview__close")?.click();
-    await waitForSolid(() =>
-      expect(source.request).toHaveBeenCalledWith("portal.close", { id: portal.id }),
-    );
+    await waitForRequest(source, "portal.close", { id: portal.id });
 
     const retry = [...page.querySelectorAll("button")].find(
       (button) => button.textContent?.trim() === "Retry",
@@ -536,15 +508,8 @@ describe("portal presentation receipts", () => {
       );
       const page = await mountPage(source.context, portal.id);
       toggle(page, { portalId: portal.id, requestId: "request-one" });
-      await waitForSolid(() =>
-        expect(source.request).toHaveBeenCalledWith("ui.command.result", {
-          requestId: "request-one",
-          presentation: { portalId: portal.id, status, reason },
-        }),
-      );
-      expect(
-        source.request.mock.calls.filter(([method]) => method === "ui.command.result"),
-      ).toHaveLength(1);
+      await waitForSolid(() => expectReceipt(source, "request-one", status, reason));
+      expect(callsTo(source, "ui.command.result")).toHaveLength(1);
     },
   );
 });
