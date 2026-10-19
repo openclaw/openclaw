@@ -45,7 +45,7 @@ nativeTest(
     const methods: string[] = [];
     const effects: unknown[] = [];
     let responses = 0;
-    const server = http.createServer(async (req, res) => {
+    const handleRequest = async (req: http.IncomingMessage, res: http.ServerResponse) => {
       const chunks: Buffer[] = [];
       for await (const chunk of req) {
         chunks.push(Buffer.from(chunk));
@@ -162,6 +162,11 @@ nativeTest(
         return;
       }
       json({ error: `Unexpected fixture route ${url}` }, 404);
+    };
+    const server = http.createServer((req, res) => {
+      void handleRequest(req, res).catch((error: unknown) => {
+        res.destroy(error instanceof Error ? error : new Error(String(error)));
+      });
     });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
