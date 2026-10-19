@@ -1,4 +1,3 @@
-// Diffs tests cover browser plugin behavior.
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
@@ -11,7 +10,6 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   PluginBlobEntry,
-  PluginBlobEntryInfo,
   PluginBlobStoreWithReceipts,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
@@ -24,6 +22,12 @@ import { createTempDiffRoot } from "./test-helpers.js";
 const { launchMock } = vi.hoisted(() => ({
   launchMock: vi.fn(),
 }));
+const toolContext = {
+  agentId: "main",
+  sessionId: "session-123",
+  messageChannel: "discord",
+  agentAccountId: "default",
+};
 
 let PlaywrightDiffScreenshotter: typeof import("./browser.runtime.js").PlaywrightDiffScreenshotter;
 type ScreenshotParams = Parameters<
@@ -40,11 +44,7 @@ function firstMockCall(
   mock: { mock: { calls: Array<readonly unknown[]> } },
   label: string,
 ): readonly unknown[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
+  return expectDefined(mock.mock.calls[0], `expected ${label} call`);
 }
 
 afterAll(() => {
@@ -61,11 +61,10 @@ describe("PlaywrightDiffScreenshotter", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.resetModules();
-    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-    if (!platformDescriptor) {
-      throw new Error("process.platform descriptor is unavailable");
-    }
-    originalPlatform = platformDescriptor;
+    originalPlatform = expectDefined(
+      Object.getOwnPropertyDescriptor(process, "platform"),
+      "process.platform descriptor",
+    );
     ({ PlaywrightDiffScreenshotter } = await import("./browser.runtime.js"));
     ({ rootDir, cleanup: cleanupRootDir } = await createTempDiffRoot("openclaw-diffs-browser-"));
     outputPath = path.join(rootDir, "preview.png");
@@ -109,30 +108,19 @@ describe("PlaywrightDiffScreenshotter", () => {
     return firstMockCall(launchMock, "browser launch")[0] as { executablePath?: string };
   }
 
-  function stubWindowsBrowserDiscoveryEnv(params: {
-    localAppData: string;
-    programFiles: string;
-    programFilesX86: string;
-  }): void {
-    Object.defineProperty(process, "platform", {
-      ...originalPlatform,
-      value: "win32",
-    });
-    vi.stubEnv("PATH", "");
-    vi.stubEnv("OPENCLAW_BROWSER_EXECUTABLE_PATH", "");
-    vi.stubEnv("BROWSER_EXECUTABLE_PATH", "");
-    vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "");
-    vi.stubEnv("LOCALAPPDATA", params.localAppData);
-    vi.stubEnv("ProgramFiles", params.programFiles);
-    vi.stubEnv("ProgramFiles(x86)", params.programFilesX86);
-  }
-
   it("uses standard Windows system roots when install-root overrides are blank", async () => {
-    stubWindowsBrowserDiscoveryEnv({
-      localAppData: " ",
-      programFiles: " \t ",
-      programFilesX86: "",
-    });
+    Object.defineProperty(process, "platform", { ...originalPlatform, value: "win32" });
+    for (const [key, value] of Object.entries({
+      PATH: "",
+      OPENCLAW_BROWSER_EXECUTABLE_PATH: "",
+      BROWSER_EXECUTABLE_PATH: "",
+      PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: "",
+      LOCALAPPDATA: " ",
+      ProgramFiles: " \t ",
+      "ProgramFiles(x86)": "",
+    })) {
+      vi.stubEnv(key, value);
+    }
     vi.spyOn(os, "homedir").mockReturnValue("C:\\Users\\test");
     const accessMock = vi.spyOn(fs, "access").mockRejectedValue(new Error("ENOENT"));
 
@@ -218,10 +206,7 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(pages).toHaveLength(1);
     const page = expectDefined(pages[0], "diffs browser page");
     expect(page.pdf).toHaveBeenCalledTimes(1);
-    const pdfCall = firstMockCall(page.pdf, "PDF render")[0] as Record<string, unknown> | undefined;
-    if (!pdfCall) {
-      throw new Error("expected PDF render call");
-    }
+    const pdfCall = expectDefined(firstMockCall(page.pdf, "PDF render")[0], "PDF render call");
     expect(pdfCall).not.toHaveProperty("pageRanges");
     expect(page.screenshot).toHaveBeenCalledTimes(0);
     await expect(fs.readFile(pdfPath, "utf8")).resolves.toContain("%PDF-1.7");
@@ -292,9 +277,6 @@ function createRegistrationHarness(params: {
   const blobStore = createMemoryBlobStore();
   const api = createTestPluginApi({
     id: "diffs",
-    name: "Diffs",
-    description: "Diffs",
-    source: "test",
     config: { gateway: { port: 18789, bind: "loopback" } },
     pluginConfig: params.pluginConfig,
     runtime: {
@@ -318,8 +300,14 @@ function createRegistrationHarness(params: {
 
   return {
     on,
-    handleRequest,
-    render: async (context: OpenClawPluginToolContext) => {
+    get: async (viewerPath: string, headers?: IncomingMessage["headers"]) => {
+      const res = createMockServerResponse();
+      expect(await handleRequest(localReq({ method: "GET", url: viewerPath, headers }), res)).toBe(
+        true,
+      );
+      return res;
+    },
+    render: async (context: OpenClawPluginToolContext = toolContext) => {
       const tool = expectDefined(
         typeof registration === "function" ? registration(context) : registration,
         "diffs tool for context",
@@ -362,7 +350,7 @@ describe("diffs plugin registration", () => {
       defaults: STARTUP_DIFFS_DEFAULTS,
     };
     let configFile = createRuntimeConfig(startupConfig);
-    const { render, handleRequest } = createRegistrationHarness({
+    const { render, get } = createRegistrationHarness({
       pluginConfig: startupConfig,
       currentConfig: () => configFile,
     });
@@ -380,22 +368,8 @@ describe("diffs plugin registration", () => {
       },
     });
 
-    const { details, viewerPath } = await render({
-      agentId: "main",
-      sessionId: "session-456",
-      messageChannel: "discord",
-      agentAccountId: "default",
-    });
-    const res = createMockServerResponse();
-    const handled = await handleRequest(
-      localReq({
-        method: "GET",
-        url: viewerPath,
-      }),
-      res,
-    );
-
-    expect(handled).toBe(true);
+    const { details, viewerPath } = await render({ ...toolContext, sessionId: "session-456" });
+    const res = await get(viewerPath);
     expect(String(details.viewerUrl)).toContain("https://live.example.com/gateway");
     expect(res.statusCode).toBe(200);
     expect(String(res.body)).toContain('body data-theme="dark"');
@@ -408,12 +382,10 @@ describe("diffs plugin registration", () => {
 
   it("uses live runtime viewer-access config through the registered HTTP handler", async () => {
     let configFile = createRuntimeConfig({ security: { allowRemoteViewer: true } });
-    const { on, render, handleRequest } = createRegistrationHarness({
+    const { on, render, get } = createRegistrationHarness({
       pluginConfig: {
         defaults: STARTUP_DIFFS_DEFAULTS,
-        security: {
-          allowRemoteViewer: true,
-        },
+        security: { allowRemoteViewer: true },
       },
       currentConfig: () => configFile,
     });
@@ -441,100 +413,38 @@ describe("diffs plugin registration", () => {
     expect(promptResult?.prependSystemContext).not.toMatch(/\bmessage\b|\bcanvas\b/i);
     expect(promptResult?.prependContext).toBeUndefined();
 
-    const { details, viewerPath } = await render({
-      agentId: "main",
-      sessionId: "session-123",
-      messageChannel: "discord",
-      agentAccountId: "default",
-    });
-    const res = createMockServerResponse();
-    const handled = await handleRequest(
-      localReq({
-        method: "GET",
-        url: viewerPath,
-      }),
-      res,
-    );
-
-    expect(handled).toBe(true);
+    const { details, viewerPath } = await render();
+    const res = await get(viewerPath);
     expect(res.statusCode).toBe(200);
-    expect(details.context).toEqual({
-      agentId: "main",
-      sessionId: "session-123",
-      messageChannel: "discord",
-      agentAccountId: "default",
-    });
+    expect(details.context).toEqual(toolContext);
 
     configFile = createRuntimeConfig({ security: { allowRemoteViewer: false } });
 
-    const proxiedRes = createMockServerResponse();
-    const proxiedHandled = await handleRequest(
-      localReq({
-        method: "GET",
-        url: viewerPath,
-        headers: {
-          "x-forwarded-for": "203.0.113.10",
-        },
-      }),
-      proxiedRes,
-    );
-
-    expect(proxiedHandled).toBe(true);
+    const proxiedRes = await get(viewerPath, { "x-forwarded-for": "203.0.113.10" });
     expect(proxiedRes.statusCode).toBe(404);
   });
 
   it("fails closed for remote viewer access when the live diffs plugin entry is removed", async () => {
     let configFile = createRuntimeConfig({ security: { allowRemoteViewer: true } });
-    const { render, handleRequest } = createRegistrationHarness({
-      pluginConfig: {
-        security: {
-          allowRemoteViewer: true,
-        },
-      },
+    const { render, get } = createRegistrationHarness({
+      pluginConfig: { security: { allowRemoteViewer: true } },
       currentConfig: () => configFile,
     });
 
-    const { viewerPath } = await render({
-      agentId: "main",
-      sessionId: "session-789",
-      messageChannel: "discord",
-      agentAccountId: "default",
-    });
+    const { viewerPath } = await render({ ...toolContext, sessionId: "session-789" });
 
     configFile = {
       ...configFile,
-      plugins: {
-        entries: {},
-      },
+      plugins: { entries: {} },
     };
 
-    const proxiedRes = createMockServerResponse();
-    const proxiedHandled = await handleRequest(
-      localReq({
-        method: "GET",
-        url: viewerPath,
-        headers: {
-          "x-forwarded-for": "203.0.113.10",
-        },
-      }),
-      proxiedRes,
-    );
-
-    expect(proxiedHandled).toBe(true);
+    const proxiedRes = await get(viewerPath, { "x-forwarded-for": "203.0.113.10" });
     expect(proxiedRes.statusCode).toBe(404);
   });
 });
 
 function createMemoryBlobStore<TMetadata>(): PluginBlobStoreWithReceipts<TMetadata> {
-  const entries = new Map<
-    string,
-    {
-      bytes: Uint8Array;
-      metadata: TMetadata;
-      createdAt: number;
-      expiresAt?: number;
-    }
-  >();
+  const entries = new Map<string, PluginBlobEntry<TMetadata>>();
   const read = (key: string): PluginBlobEntry<TMetadata> | undefined => {
     const entry = entries.get(key);
     if (!entry) {
@@ -544,14 +454,7 @@ function createMemoryBlobStore<TMetadata>(): PluginBlobStoreWithReceipts<TMetada
       entries.delete(key);
       return undefined;
     }
-    return {
-      key,
-      bytes: entry.bytes.slice(),
-      metadata: entry.metadata,
-      sizeBytes: entry.bytes.byteLength,
-      createdAt: entry.createdAt,
-      ...(entry.expiresAt !== undefined ? { expiresAt: entry.expiresAt } : {}),
-    };
+    return { ...entry, bytes: entry.bytes.slice() };
   };
   const register = (
     key: string,
@@ -562,11 +465,22 @@ function createMemoryBlobStore<TMetadata>(): PluginBlobStoreWithReceipts<TMetada
     const createdAt = Date.now();
     const receipt = { createdAt, ...(opts?.ttlMs ? { expiresAt: createdAt + opts.ttlMs } : {}) };
     entries.set(key, {
+      key,
+      sizeBytes: bytes.byteLength,
       bytes: bytes.slice(),
       metadata,
       ...receipt,
     });
     return receipt;
+  };
+  const info = ({ bytes: _bytes, ...entry }: PluginBlobEntry<TMetadata>) => entry;
+  const deleteExpiredKey = async (key: string) => {
+    const entry = entries.get(key);
+    if (!entry || entry.expiresAt === undefined || entry.expiresAt > Date.now()) {
+      return undefined;
+    }
+    entries.delete(key);
+    return info(entry);
   };
   return {
     async register(key, bytes, metadata, opts) {
@@ -588,44 +502,20 @@ function createMemoryBlobStore<TMetadata>(): PluginBlobStoreWithReceipts<TMetada
     async entries() {
       return [...entries.keys()].flatMap((key) => {
         const entry = read(key);
-        if (!entry) {
-          return [];
-        }
-        const { bytes: _bytes, ...info } = entry;
-        return [info];
+        return entry ? [info(entry)] : [];
       });
     },
     async delete(key) {
       return entries.delete(key);
     },
-    async deleteExpiredKey(key) {
-      const entry = entries.get(key);
-      if (!entry || entry.expiresAt === undefined || entry.expiresAt > Date.now()) {
-        return undefined;
-      }
-      entries.delete(key);
-      return {
-        key,
-        metadata: entry.metadata,
-        sizeBytes: entry.bytes.byteLength,
-        createdAt: entry.createdAt,
-        expiresAt: entry.expiresAt,
-      };
-    },
+    deleteExpiredKey,
     async deleteExpired() {
-      const expired: PluginBlobEntryInfo<TMetadata>[] = [];
-      for (const [key, entry] of entries) {
-        if (entry.expiresAt === undefined || entry.expiresAt > Date.now()) {
-          continue;
+      const expired = [];
+      for (const key of entries.keys()) {
+        const entry = await deleteExpiredKey(key);
+        if (entry) {
+          expired.push(entry);
         }
-        entries.delete(key);
-        expired.push({
-          key,
-          metadata: entry.metadata,
-          sizeBytes: entry.bytes.byteLength,
-          createdAt: entry.createdAt,
-          expiresAt: entry.expiresAt,
-        });
       }
       return expired;
     },
@@ -636,11 +526,7 @@ function createMemoryBlobStore<TMetadata>(): PluginBlobStoreWithReceipts<TMetada
 }
 
 function createConfig(): OpenClawConfig {
-  return {
-    browser: {
-      executablePath: process.execPath,
-    },
-  } as OpenClawConfig;
+  return { browser: { executablePath: process.execPath } };
 }
 
 function localReq(input: {
@@ -655,14 +541,8 @@ function localReq(input: {
   } as unknown as IncomingMessage;
 }
 
-async function createScreenshotterHarness(options?: {
-  boundingBox?: { x: number; y: number; width: number; height: number };
-}) {
-  const pages: Array<{
-    close: ReturnType<typeof vi.fn>;
-    screenshot: ReturnType<typeof vi.fn>;
-    pdf: ReturnType<typeof vi.fn>;
-  }> = [];
+async function createScreenshotterHarness(options?: Parameters<typeof createMockPage>[0]) {
+  const pages: Array<ReturnType<typeof createMockPage>> = [];
   const browser = createMockBrowser(pages, options);
   launchMock.mockResolvedValue(browser);
   const screenshotter = new PlaywrightDiffScreenshotter({
@@ -672,14 +552,10 @@ async function createScreenshotterHarness(options?: {
 }
 
 function createMockBrowser(
-  pages: Array<{
-    close: ReturnType<typeof vi.fn>;
-    screenshot: ReturnType<typeof vi.fn>;
-    pdf: ReturnType<typeof vi.fn>;
-  }>,
-  options?: { boundingBox?: { x: number; y: number; width: number; height: number } },
+  pages: Array<ReturnType<typeof createMockPage>>,
+  options?: Parameters<typeof createMockPage>[0],
 ) {
-  const browser = {
+  return {
     newPage: vi.fn(async (_options?: unknown) => {
       const page = createMockPage(options);
       pages.push(page);
@@ -688,7 +564,6 @@ function createMockBrowser(
     close: vi.fn(async () => {}),
     on: vi.fn(),
   };
-  return browser;
 }
 
 function createMockPage(options?: {

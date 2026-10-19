@@ -1,4 +1,3 @@
-// Diffs tests cover render plugin behavior.
 import { disposeHighlighter } from "@pierre/diffs";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveDiffImageRenderOptions, resolveDiffsPluginDefaults } from "./config.js";
@@ -12,6 +11,10 @@ const renderOptions: DiffRenderOptions = {
   image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
   expandUnchanged: false,
 };
+
+function patchFile(name: string, lines = "-const x = 1;\n+const x = 2;", hunk = "@@ -1 +1 @@") {
+  return `diff --git a/${name} b/${name}\n--- a/${name}\n+++ b/${name}\n${hunk}\n${lines}`;
+}
 
 describe("renderDiffDocument", () => {
   afterEach(async () => {
@@ -29,24 +32,26 @@ describe("renderDiffDocument", () => {
       renderOptions,
     );
 
-    expect(rendered.title).toBe("src/example.ts");
-    expect(rendered.fileCount).toBe(1);
-    expect(rendered.viewerRuntime).toBe("base");
+    expect(rendered).toMatchObject({
+      title: "src/example.ts",
+      fileCount: 1,
+      viewerRuntime: "base",
+    });
     expect(rendered.html).toContain("data-openclaw-diff-root");
     expect(rendered.html).toContain("src/example.ts");
     expect(rendered.html).toContain("../../assets/viewer.js");
-    expect(rendered.imageHtml).toContain("../../assets/viewer.js");
-    expect(rendered.imageHtml).toContain("max-width: 960px;");
-    expect(rendered.imageHtml).toContain("--diffs-font-size: 16px;");
     expect(rendered.html).toContain("min-height: 100vh;");
     expect(rendered.html).toContain('"diffIndicators":"bars"');
     expect(rendered.html).toContain('"disableLineNumbers":false');
     expect(rendered.html).toContain("--diffs-line-height: 24px;");
     expect(rendered.html).toContain("--diffs-font-size: 15px;");
-    expect(rendered.html).not.toContain("fonts.googleapis.com");
-    expect(rendered.html).not.toContain('<nav class="oc-diff-card oc-diff-nav"');
     expect(rendered.html).toContain("@media (prefers-reduced-motion: reduce)");
     expect(rendered.html).toContain("scroll-behavior: auto;");
+    expect(rendered.imageHtml).toContain("../../assets/viewer.js");
+    expect(rendered.imageHtml).toContain("max-width: 960px;");
+    expect(rendered.imageHtml).toContain("--diffs-font-size: 16px;");
+    expect(rendered.html).not.toContain("fonts.googleapis.com");
+    expect(rendered.html).not.toContain('<nav class="oc-diff-card oc-diff-nav"');
   });
 
   it("uses the language-pack viewer runtime for uncommon languages when available", async () => {
@@ -73,28 +78,16 @@ describe("renderDiffDocument", () => {
 
   it("renders multi-file patch input with a changed-files summary nav", async () => {
     const patch = [
-      "diff --git a/a.ts b/a.ts",
-      "--- a/a.ts",
-      "+++ b/a.ts",
-      "@@ -1,2 +1,3 @@",
-      "-const a = 1;",
-      "+const a = 2;",
-      "+const extra = true;",
-      " const keep = 0;",
-      "diff --git a/b.ts b/b.ts",
-      "--- a/b.ts",
-      "+++ b/b.ts",
-      "@@ -1 +1 @@",
-      "-const b = 1;",
-      "+const b = 2;",
+      patchFile(
+        "a.ts",
+        "-const a = 1;\n+const a = 2;\n+const extra = true;\n const keep = 0;",
+        "@@ -1,2 +1,3 @@",
+      ),
+      patchFile("b.ts", "-const b = 1;\n+const b = 2;"),
     ].join("\n");
 
     const rendered = await renderDiffDocument(
-      {
-        kind: "patch",
-        patch,
-        title: "Workspace patch",
-      },
+      { kind: "patch", patch, title: "Workspace patch" },
       {
         presentation: {
           ...DEFAULT_DIFFS_TOOL_DEFAULTS,
@@ -110,8 +103,7 @@ describe("renderDiffDocument", () => {
       },
     );
 
-    expect(rendered.title).toBe("Workspace patch");
-    expect(rendered.fileCount).toBe(2);
+    expect(rendered).toMatchObject({ title: "Workspace patch", fileCount: 2 });
     expect(rendered.html).toContain("Workspace patch");
     expect(rendered.imageHtml).toContain("max-width: 1180px;");
 
@@ -154,22 +146,10 @@ describe("renderDiffDocument", () => {
       "@@ -1 +1 @@",
       "-const v = 1;",
       "+const v = 2;",
-      "diff --git a/a&b.ts b/a&b.ts",
-      "--- a/a&b.ts",
-      "+++ b/a&b.ts",
-      "@@ -1 +1 @@",
-      "-x",
-      "+y",
+      patchFile("a&b.ts", "-x\n+y"),
     ].join("\n");
 
-    const rendered = await renderDiffDocument(
-      {
-        kind: "patch",
-        patch,
-      },
-      renderOptions,
-      "viewer",
-    );
+    const rendered = await renderDiffDocument({ kind: "patch", patch }, renderOptions, "viewer");
 
     const html = rendered.html ?? "";
     expect(html).toContain("4 changed files");
@@ -181,20 +161,8 @@ describe("renderDiffDocument", () => {
   });
 
   it("omits the summary nav for single-file patches", async () => {
-    const patch = [
-      "diff --git a/solo.ts b/solo.ts",
-      "--- a/solo.ts",
-      "+++ b/solo.ts",
-      "@@ -1 +1 @@",
-      "-const solo = 1;",
-      "+const solo = 2;",
-    ].join("\n");
-
     const rendered = await renderDiffDocument(
-      {
-        kind: "patch",
-        patch,
-      },
+      { kind: "patch", patch: patchFile("solo.ts", "-const solo = 1;\n+const solo = 2;") },
       renderOptions,
       "viewer",
     );
@@ -204,25 +172,10 @@ describe("renderDiffDocument", () => {
   });
 
   it("rejects patches that exceed file-count limits", async () => {
-    const patch = Array.from({ length: 129 }, (_, i) => {
-      return [
-        `diff --git a/f${i}.ts b/f${i}.ts`,
-        `--- a/f${i}.ts`,
-        `+++ b/f${i}.ts`,
-        "@@ -1 +1 @@",
-        "-const x = 1;",
-        "+const x = 2;",
-      ].join("\n");
-    }).join("\n");
+    const patch = Array.from({ length: 129 }, (_, i) => patchFile(`f${i}.ts`)).join("\n");
 
-    await expect(
-      renderDiffDocument(
-        {
-          kind: "patch",
-          patch,
-        },
-        renderOptions,
-      ),
-    ).rejects.toThrow("too many files");
+    await expect(renderDiffDocument({ kind: "patch", patch }, renderOptions)).rejects.toThrow(
+      "too many files",
+    );
   });
 });

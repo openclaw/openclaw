@@ -15,6 +15,14 @@ import {
 } from "./test-helpers.js";
 import type { DiffArtifactBlobMetadata } from "./types.js";
 
+const context = {
+  agentId: "main",
+  sessionId: "session-123",
+  messageChannel: "discord",
+  agentAccountId: "default",
+};
+const fileMetadata = { version: 1, kind: "rendered_file", format: "png" } as const;
+
 beforeAll(async () => {
   await ensureCuratedViewerRuntimeForTests();
 });
@@ -87,12 +95,7 @@ describe("DiffArtifactStore", () => {
     const registrationLookup = vi.spyOn(blobStore, "lookup");
     const artifact = await createViewerArtifact(store, {
       html: "<html>demo é 🦀</html>",
-      context: {
-        agentId: "main",
-        sessionId: "session-123",
-        messageChannel: "discord",
-        agentAccountId: "default",
-      },
+      context,
     });
     expect(registrationLookup).not.toHaveBeenCalled();
     registrationLookup.mockRestore();
@@ -112,12 +115,7 @@ describe("DiffArtifactStore", () => {
     const lookup = vi.spyOn(blobStore, "lookup");
     const loaded = await store.readAuthorizedViewer(artifact.id, artifact.token);
     expect(loaded?.artifact.id).toBe(artifact.id);
-    expect(loaded?.artifact.context).toEqual({
-      agentId: "main",
-      sessionId: "session-123",
-      messageChannel: "discord",
-      agentAccountId: "default",
-    });
+    expect(loaded?.artifact.context).toEqual(context);
     expect(Buffer.from(loaded!.html).toString("utf8")).toBe("<html>demo é 🦀</html>");
     expect(lookup).toHaveBeenCalledTimes(1);
     await expect(store.readAuthorizedViewer(artifact.id, "0".repeat(48))).resolves.toBeNull();
@@ -159,22 +157,16 @@ describe("DiffArtifactStore", () => {
 
   it("creates standalone file artifacts with SQLite metadata and derived temp paths", async () => {
     const standalone = await store.createStandaloneFileArtifact({
-      context: {
-        agentId: "main",
-        sessionId: "session-123",
-      },
+      context: { agentId: "main", sessionId: "session-123" },
     });
     expect(standalone.filePath).toMatch(/preview\.png$/);
     expect(standalone.filePath).toContain(rootDir);
     expect(Date.parse(standalone.expiresAt)).toBeGreaterThan(Date.now());
-    expect(standalone.context).toEqual({
-      agentId: "main",
-      sessionId: "session-123",
-    });
+    expect(standalone.context).toEqual({ agentId: "main", sessionId: "session-123" });
     await expect(blobStore.lookup(standalone.id)).resolves.toMatchObject({
       key: standalone.id,
       sizeBytes: 0,
-      metadata: { version: 1, kind: "rendered_file", format: "png" },
+      metadata: fileMetadata,
     });
     await store.completeFileArtifact(standalone.id);
   });
@@ -246,11 +238,7 @@ describe("DiffArtifactStore", () => {
       const time = new Date(now.getTime() - directory.age);
       await fs.utimes(dir, time, time);
       if (directory.live) {
-        await blobStore.register(directory.id, new Uint8Array(), {
-          version: 1,
-          kind: "rendered_file",
-          format: "png",
-        });
+        await blobStore.register(directory.id, new Uint8Array(), fileMetadata);
       }
     }
     const lookup = vi.spyOn(blobStore, "lookup");
@@ -277,11 +265,7 @@ describe("DiffArtifactStore", () => {
     const oldTime = new Date(Date.now() - 25 * 60 * 60 * 1_000);
     await fs.utimes(dir, oldTime, oldTime);
     const stat = vi.spyOn(fs, "stat").mockImplementationOnce(async () => {
-      await blobStore.register(id, new Uint8Array(), {
-        version: 1,
-        kind: "rendered_file",
-        format: "png",
-      });
+      await blobStore.register(id, new Uint8Array(), fileMetadata);
       return await fs.lstat(dir);
     });
     try {
@@ -324,10 +308,7 @@ describe("DiffArtifactStore", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const now = new Date("2026-02-27T16:00:00Z");
     vi.setSystemTime(now);
-    store = new DiffArtifactStore({
-      rootDir,
-      blobStore,
-    });
+    store = new DiffArtifactStore({ rootDir, blobStore });
     const cleanupSpy = vi.spyOn(store, "cleanupExpired").mockResolvedValue();
 
     await createViewerArtifact(store, { html: "<html>one</html>", title: "One" });
@@ -349,15 +330,7 @@ describe("createDiffsHttpHandler", () => {
 
   async function handleLocalGet(url: string) {
     const handler = createDiffsHttpHandler({ store, resolveAccessConfig: () => ({}) });
-    const res = createMockServerResponse();
-    const handled = await handler(
-      localReq({
-        method: "GET",
-        url,
-      }),
-      res,
-    );
-    return { handled, res };
+    return get(handler, localReq({ method: "GET", url }));
   }
 
   beforeEach(async () => {
@@ -371,9 +344,8 @@ describe("createDiffsHttpHandler", () => {
 
   it("serves a stored diff document", async () => {
     const artifact = await createViewerArtifact(store);
-    const { handled, res } = await handleLocalGet(artifact.viewerPath);
+    const res = await handleLocalGet(artifact.viewerPath);
 
-    expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
     expect(Buffer.from(res.body as unknown as Uint8Array).toString("utf8")).toBe(
       "<html>viewer</html>",
@@ -384,80 +356,46 @@ describe("createDiffsHttpHandler", () => {
 
   it("rejects invalid tokens", async () => {
     const artifact = await createViewerArtifact(store);
-    const { handled, res } = await handleLocalGet(
-      artifact.viewerPath.replace(artifact.token, "bad-token"),
-    );
+    const res = await handleLocalGet(artifact.viewerPath.replace(artifact.token, "bad-token"));
 
-    expect(handled).toBe(true);
     expect(res.statusCode).toBe(404);
   });
 
   it("serves the shared viewer asset", async () => {
-    const { handled, res } = await handleLocalGet("/plugins/diffs/assets/viewer.js");
+    const res = await handleLocalGet("/plugins/diffs/assets/viewer.js");
 
-    expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
     expect(String(res.body)).toContain("./viewer-runtime.js?v=");
     expect(res.getHeader("cache-control")).toBe("no-store, max-age=0");
   });
 
   it.each([
-    {
-      name: "blocks non-loopback viewer access by default",
-      request: remoteReq,
-      allowRemoteViewer: false,
-      expectedStatusCode: 404,
-    },
-    {
-      name: "blocks loopback requests that carry proxy forwarding headers by default",
-      request: localReq,
-      headers: { "x-forwarded-for": "203.0.113.10" },
-      allowRemoteViewer: false,
-      expectedStatusCode: 404,
-    },
-    {
-      name: "blocks trusted-proxy loopback requests without client-origin headers by default",
-      request: localReq,
-      trustedProxies: ["127.0.0.1"],
-      allowRemoteViewer: false,
-      expectedStatusCode: 404,
-    },
-    {
-      name: "blocks proxied loopback requests when trusted proxies are configured",
-      request: localReq,
-      headers: { "x-forwarded-for": "203.0.113.10" },
-      trustedProxies: ["127.0.0.1"],
-      allowRemoteViewer: false,
-      expectedStatusCode: 404,
-    },
-    {
-      name: "allows proxied loopback requests when allowRemoteViewer is enabled",
-      request: localReq,
-      headers: { "x-forwarded-for": "203.0.113.10" },
-      trustedProxies: ["127.0.0.1"],
-      allowRemoteViewer: true,
-      expectedStatusCode: 200,
-    },
-  ])(
-    "$name",
-    async ({ request, headers, trustedProxies, allowRemoteViewer, expectedStatusCode }) => {
+    ["blocks non-loopback viewer access by default", remoteReq, false, false, false, 404],
+    ["blocks loopback with proxy headers by default", localReq, true, false, false, 404],
+    ["blocks trusted proxy without client-origin headers", localReq, false, true, false, 404],
+    ["blocks proxied loopback with trusted proxies", localReq, true, true, false, 404],
+    ["allows proxied loopback with allowRemoteViewer", localReq, true, true, true, 200],
+  ] as const)(
+    "%s",
+    async (_name, request, forwarded, trusted, allowRemoteViewer, expectedStatusCode) => {
       const artifact = await createViewerArtifact(store);
 
       const handler = createDiffsHttpHandler({
         store,
-        resolveAccessConfig: () => ({ allowRemoteViewer, trustedProxies }),
+        resolveAccessConfig: () => ({
+          allowRemoteViewer,
+          trustedProxies: trusted ? ["127.0.0.1"] : undefined,
+        }),
       });
-      const res = createMockServerResponse();
-      const handled = await handler(
+      const res = await get(
+        handler,
         request({
           method: "GET",
           url: artifact.viewerPath,
-          headers,
+          headers: forwarded ? { "x-forwarded-for": "203.0.113.10" } : undefined,
         }),
-        res,
       );
 
-      expect(handled).toBe(true);
       expect(res.statusCode).toBe(expectedStatusCode);
       if (expectedStatusCode === 200) {
         expect(Buffer.from(res.body as unknown as Uint8Array).toString("utf8")).toBe(
@@ -477,15 +415,9 @@ describe("createDiffsHttpHandler", () => {
       store,
       resolveAccessConfig: () => ({ allowRemoteViewer: false }),
     });
-    const res = createMockServerResponse();
-
-    await handler(
-      localReq({
-        method: "GET",
-        url: artifact.viewerPath,
-        remoteAddress,
-      }),
-      res,
+    const res = await get(
+      handler,
+      localReq({ method: "GET", url: artifact.viewerPath, remoteAddress }),
     );
 
     expect(res.statusCode).toBe(expectedStatusCode);
@@ -502,8 +434,7 @@ describe("createDiffsHttpHandler", () => {
 
     const recordMisses = async (count: number) => {
       for (let i = 0; i < count; i++) {
-        const miss = createMockServerResponse();
-        await handler(remoteReq({ method: "GET", url: missingViewerPath }), miss);
+        const miss = await get(handler, remoteReq({ method: "GET", url: missingViewerPath }));
         expect(miss.statusCode).toBe(404);
       }
     };
@@ -516,8 +447,7 @@ describe("createDiffsHttpHandler", () => {
     vi.setSystemTime(startedAt + 118_000);
     await recordMisses(20);
 
-    const limited = createMockServerResponse();
-    await handler(remoteReq({ method: "GET", url: missingViewerPath }), limited);
+    const limited = await get(handler, remoteReq({ method: "GET", url: missingViewerPath }));
     expect(limited.statusCode).toBe(429);
   });
 
@@ -528,12 +458,17 @@ describe("createDiffsHttpHandler", () => {
     });
 
     for (let i = 0; i < 41; i++) {
-      const miss = createMockServerResponse();
-      await handler(localReq({ method: "GET", url: missingViewerPath }), miss);
+      const miss = await get(handler, localReq({ method: "GET", url: missingViewerPath }));
       expect(miss.statusCode).toBe(404);
     }
   });
 });
+
+async function get(handler: ReturnType<typeof createDiffsHttpHandler>, request: IncomingMessage) {
+  const res = createMockServerResponse();
+  expect(await handler(request, res)).toBe(true);
+  return res;
+}
 
 async function createViewerArtifact(
   store: DiffArtifactStore,
