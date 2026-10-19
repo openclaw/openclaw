@@ -474,6 +474,27 @@ try {
             "operator.pairing",
           ]
         : ["operator.admin"];
+    if (nativeIdentity) {
+      // Synthetic native fixtures still pass the normal signed-device admission boundary.
+      const { requestDevicePairing } = await import("../../src/infra/device-pairing.js");
+      const { approveDevicePairing } = await import("../../src/infra/device-pairing-approval.js");
+      const pairing = await requestDevicePairing({
+        deviceId,
+        publicKey,
+        role: "operator",
+        scopes,
+        clientId: identity.id,
+        clientMode: identity.mode,
+        browserOrigin: `http://127.0.0.1:${port}`,
+        platform: identity.platform,
+        deviceFamily: identity.deviceFamily,
+        silent: false,
+      });
+      const approved = await approveDevicePairing(pairing.request.requestId, {
+        callerScopes: scopes,
+      });
+      assert.equal(approved?.status, "approved", "synthetic device pairing must be approved");
+    }
     const signed = buildDeviceAuthPayloadV3({
       deviceId,
       clientId: identity.id,
