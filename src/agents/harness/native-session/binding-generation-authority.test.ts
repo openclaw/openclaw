@@ -1,6 +1,5 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
@@ -16,9 +15,23 @@ import {
   resolvePreparedNativeSessionBinding,
   type NativeSessionGenerationOperationsV2,
 } from "./binding-generation-authority.js";
+import { bindingGate } from "./binding-interleaving.test-support.js";
 
 const createSupersededError = (sessionId: string) =>
   new Error(`Session generation is no longer current: ${sessionId}`);
+
+function expectAuthority(
+  authority: { assertCurrent(): void; assertLegacyCurrent(): void },
+  error?: string,
+) {
+  for (const check of [authority.assertCurrent, authority.assertLegacyCurrent]) {
+    if (error) {
+      expect(check).toThrow(error);
+    } else {
+      expect(check).not.toThrow();
+    }
+  }
+}
 
 it("warns once for legacy generation preparation and leaves retained authority quiet", async () => {
   using warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
@@ -114,21 +127,18 @@ describe("native session binding generation authority", () => {
 
   it("rechecks host generation after an awaited binding read", async () => {
     await seed();
-    const reading = createDeferred();
-    const release = createDeferred();
-    const pending = resolve({
-      readBinding: async () => {
-        reading.resolve();
-        await release.promise;
-        return binding;
-      },
-    }).catch((error: unknown) => error);
-    await reading.promise;
-    try {
-      await patchSessionEntryCore(scope(), () => ({ sessionId: "session-successor" }));
-    } finally {
-      release.resolve();
-    }
+    await using gate = bindingGate();
+    const pending = gate.observe(
+      resolve({
+        readBinding: async () => {
+          await gate.pause();
+          return binding;
+        },
+      }),
+    );
+    await gate.reached;
+    await patchSessionEntryCore(scope(), () => ({ sessionId: "session-successor" }));
+    gate.resume();
     expect(await pending).toMatchObject({
       message: `Session generation is no longer current: ${target.sessionId}`,
     });
@@ -144,29 +154,22 @@ describe("native session binding generation authority", () => {
     const cleanup = retained.authority.withLiveness(() => {});
     const calls = observeMainThreadSql();
     try {
-      retained.authority.assertCurrent();
-      retained.authority.assertLegacyCurrent();
+      expectAuthority(retained.authority);
       await retained.authority.withCurrent(() => undefined);
       await cleanup.prepareMutation();
       calls.expectIdle();
 
       controller.abort(new Error("foreground stopped"));
-      expect(() => retained.authority.assertCurrent()).toThrow("foreground stopped");
-      expect(() => retained.authority.assertLegacyCurrent()).toThrow("foreground stopped");
-      expect(() => cleanup.assertCurrent()).not.toThrow();
-      expect(() => cleanup.assertLegacyCurrent()).not.toThrow();
+      expectAuthority(retained.authority, "foreground stopped");
+      expectAuthority(cleanup);
       await patchSessionEntryCore(scope(), () => ({ label: "renamed" }));
       calls.clear();
-      expect(() => cleanup.assertCurrent()).not.toThrow();
-      expect(() => cleanup.assertLegacyCurrent()).not.toThrow();
+      expectAuthority(cleanup);
       calls.expectIdle();
 
       await patchSessionEntryCore(scope(), () => ({ previousSessionId: "changed-predecessor" }));
       calls.clear();
-      expect(() => cleanup.assertCurrent()).toThrow("Session generation is no longer current");
-      expect(() => cleanup.assertLegacyCurrent()).toThrow(
-        "Session generation is no longer current",
-      );
+      expectAuthority(cleanup, superseded);
       calls.expectIdle();
     } finally {
       calls.restore();
@@ -205,20 +208,17 @@ describe("native session binding generation authority", () => {
     const previous = { ...target, sessionId: "previous" };
     const next = { ...previous, sessionId: "next" };
     let bindingSessionId = previous.sessionId;
-    const { promise: preparationStarted, resolve: markPreparationStarted } = createDeferred();
-    const { promise: preparationReleased, resolve: finishPreparation } = createDeferred();
+    await using gate = bindingGate();
     const generation: NativeSessionGenerationOperationsV2 = {
       prepareReclaim: async () => {
-        markPreparationStarted();
-        await preparationReleased;
+        await gate.pause();
         return { kind: "verify", expectedPreviousSessionId: bindingSessionId };
       },
       adopt: async (_expectedPreviousSessionId, authority) => {
-        const adopt = () => {
+        return authority.withCurrent(() => {
           bindingSessionId = target.sessionId;
           return "adopted" as const;
-        };
-        return authority.withCurrent(adopt);
+        });
       },
       reclaim: async (_expectedPreviousSessionId, authority) => {
         return authority.withCurrent(() => {
@@ -235,10 +235,10 @@ describe("native session binding generation authority", () => {
         generation,
         reclaimStale: false,
       });
-    const outcome = reclaim().catch((error: unknown) => error);
-    await preparationStarted;
+    const outcome = gate.observe(reclaim());
+    await gate.reached;
     await patchSessionEntryCore(scope(), () => ({ sessionId: next.sessionId }));
-    finishPreparation();
+    gate.resume();
 
     expect(await outcome).toMatchObject({
       message: `Session generation is no longer current: ${target.sessionId}`,

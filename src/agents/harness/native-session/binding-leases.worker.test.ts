@@ -1,6 +1,5 @@
 import { setImmediate as immediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
@@ -17,6 +16,11 @@ import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../../../test-utils/state-database-contention.js";
 import { retainNativeSessionGenerationAuthority } from "./binding-generation-authority.js";
+import {
+  bindingGate,
+  bindingMutation,
+  interceptBindingStore,
+} from "./binding-interleaving.test-support.js";
 import { createNativeSessionBindingLeasesV2 } from "./binding-leases.js";
 import {
   bindingTestOptions,
@@ -79,40 +83,29 @@ describe("native binding worker admission", () => {
         await owner.withLease(
           "binding",
           async () => {
-            const entered = createDeferred();
-            const resume = createDeferred();
-            const withCurrent = state.withCurrent.bind(state);
-            state.withCurrent = (authority) => {
-              const store = withCurrent(authority);
-              return {
-                ...store,
-                async observe(key) {
-                  const observed = await store.observe(key);
-                  entered.resolve();
-                  await resume.promise;
-                  return observed;
-                },
-              };
-            };
-            const pending = owner
-              .transact(
+            await using gate = bindingGate();
+            const restore = interceptBindingStore(state, (store) => ({
+              async observe(key) {
+                const observed = await store.observe(key);
+                await gate.pause();
+                return observed;
+              },
+            }));
+            const pending = gate.observe(
+              owner.transact(
                 "binding",
-                (record) => ({ next: { ...record, value: "unauthorized" }, result: true }),
+                (record) => bindingMutation("unauthorized", record),
                 undefined,
                 undefined,
                 action.authority,
-              )
-              .catch((error: unknown) => error);
+              ),
+            );
             try {
-              await awaitGateBeforeSettlement(
-                entered.promise,
-                pending,
-                "Binding observation was not reached",
-              );
+              await gate.wait(pending, "Binding observation was not reached");
               await patchSessionEntryCore(scope(changed), () => ({ sessionId: "replacement" }));
             } finally {
-              state.withCurrent = withCurrent;
-              resume.resolve();
+              restore();
+              gate.resume();
             }
             expect(await pending).toMatchObject({ message: `${changed} lineage superseded` });
             expect(await asyncState.lookup("binding")).toMatchObject({ value: "before" });
@@ -239,7 +232,7 @@ describe("native binding worker admission", () => {
               "binding",
               (record) => {
                 prepared = true;
-                return { next: { ...record, value: "unauthorized" }, result: true };
+                return bindingMutation("unauthorized", record);
               },
               undefined,
               assertCurrent,
@@ -248,8 +241,7 @@ describe("native binding worker admission", () => {
           { ...leaseOptions, assertCurrent },
         ),
       ).rejects.toThrow();
-      expect(refusedCommit).toBe(true);
-      expect(entered).toBe(true);
+      expect({ refusedCommit, entered }).toEqual({ refusedCommit: true, entered: true });
       expect(await asyncState.lookup("binding")).toMatchObject({ value: "before" });
     });
   });
