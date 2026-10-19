@@ -1,5 +1,9 @@
 import { ChildProcess } from "node:child_process";
-import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
+import { setImmediate, setTimeout } from "node:timers/promises";
+import type {
+  ChannelAccountSnapshot,
+  ChannelGatewayContext,
+} from "openclaw/plugin-sdk/channel-contract";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -36,19 +40,8 @@ class FakeBridge extends ChildProcess {
   readonly started = createDeferred<{ endpoint: string; token: string }>();
 }
 
-function installBridge(bridge: FakeBridge) {
-  vi.mocked(spawn).mockImplementationOnce((_command, args, options) => {
-    const endpoint = args?.at(-1);
-    const token = options?.env?.RAFT_CHANNEL_TOKEN;
-    if (!endpoint || !token) {
-      throw new Error("Raft bridge spawn omitted its endpoint or token");
-    }
-    bridge.started.resolve({ endpoint, token });
-    return bridge;
-  });
-}
-
 const tempWorkspaces: TempWorkspaceSync[] = [];
+type WakeEvent = { accountId: string; key: string };
 
 type WakeInput = {
   id: string;
@@ -58,15 +51,9 @@ type WakeInput = {
   textForCommands: string;
 };
 
-function createContext(accountId = "default") {
+function createContext(accountId = "default", stateDir?: string) {
   const controller = new AbortController();
-  const status = {
-    accountId,
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-  };
+  const status: ChannelAccountSnapshot = { accountId, running: false };
   const run = vi.fn(
     async (params: {
       raw: unknown;
@@ -88,18 +75,13 @@ function createContext(accountId = "default") {
     accountId,
     account: {
       accountId,
-      name: null,
       enabled: true,
-      configured: true,
       profile: "openclaw",
     },
-    runtime: {},
     abortSignal: controller.signal,
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     getStatus: () => status,
-    setStatus: (next: typeof status & Record<string, unknown>) => {
-      Object.assign(status, next);
-    },
+    setStatus: (next: ChannelAccountSnapshot) => Object.assign(status, next),
     channelRuntime: {
       routing: {
         resolveAgentRoute: vi.fn(() => ({
@@ -115,40 +97,45 @@ function createContext(accountId = "default") {
     controller,
     run,
     buildContext,
-    wakeDedupe: createChannelReplayGuard<{ accountId: string; key: string }>({
-      dedupe: { ttlMs: 0, memoryMaxSize: 10_000 },
+    wakeDedupe: createChannelReplayGuard<WakeEvent>({
+      dedupe: stateDir
+        ? {
+            ttlMs: 24 * 60 * 60 * 1000,
+            memoryMaxSize: 1_000,
+            pluginId: "raft",
+            namespacePrefix: "raft-wake-dedupe",
+            stateMaxEntries: 10_000,
+            env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+          }
+        : { ttlMs: 0, memoryMaxSize: 10_000 },
       buildReplayKey: (event) => event.key,
       namespace: (event) => event.accountId,
     }),
   };
 }
 
-function startGateway({ ctx, wakeDedupe }: ReturnType<typeof createContext>) {
-  const bridge = new FakeBridge();
-  installBridge(bridge);
-  vi.mocked(createChannelReplayGuard<{ accountId: string; key: string }>).mockReturnValueOnce(
-    wakeDedupe,
-  );
-  const start = startRaftGatewayAccount(ctx);
-  void start.catch(bridge.started.reject);
-  return { bridge, start };
-}
-
-async function expectStatus(response: Promise<Response>, status: number) {
-  const result = await response;
-  expect(result.status).toBe(status);
-  return result;
-}
-
 async function withGateway(
-  fixture: ReturnType<typeof createContext>,
+  { ctx, controller, wakeDedupe }: ReturnType<typeof createContext>,
   test: (connection: {
     endpoint: string;
     token: string;
     post: (body?: unknown, authToken?: string) => Promise<Response>;
+    start: Promise<void>;
   }) => Promise<void>,
 ) {
-  const { bridge, start } = startGateway(fixture);
+  const bridge = new FakeBridge();
+  vi.mocked(spawn).mockImplementationOnce((_command, args, options) => {
+    const endpoint = args?.at(-1);
+    const token = options?.env?.RAFT_CHANNEL_TOKEN;
+    if (!endpoint || !token) {
+      throw new Error("Raft bridge spawn omitted its endpoint or token");
+    }
+    bridge.started.resolve({ endpoint, token });
+    return bridge;
+  });
+  vi.mocked(createChannelReplayGuard<WakeEvent>).mockReturnValueOnce(wakeDedupe);
+  const start = startRaftGatewayAccount(ctx);
+  void start.catch(bridge.started.reject);
   try {
     const { endpoint, token } = await withTimeout(
       bridge.started.promise,
@@ -158,6 +145,7 @@ async function withGateway(
     await test({
       endpoint,
       token,
+      start,
       post: (body, authToken = token) =>
         fetch(endpoint, {
           method: "POST",
@@ -166,25 +154,16 @@ async function withGateway(
         }),
     });
   } finally {
-    fixture.controller.abort();
+    controller.abort();
     await start;
   }
   return bridge;
 }
 
-function createPersistentWakeDedupe(stateDir: string) {
-  return createChannelReplayGuard<{ accountId: string; key: string }>({
-    dedupe: {
-      ttlMs: 24 * 60 * 60 * 1000,
-      memoryMaxSize: 1_000,
-      pluginId: "raft",
-      namespacePrefix: "raft-wake-dedupe",
-      stateMaxEntries: 10_000,
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    },
-    buildReplayKey: (event) => event.key,
-    namespace: (event) => event.accountId,
-  });
+async function expectStatus(response: Promise<Response>, status: number) {
+  const result = await response;
+  expect(result.status).toBe(status);
+  return result;
 }
 
 afterEach(() => {
@@ -206,6 +185,10 @@ describe("Raft wake gateway", () => {
       const { controller, run, wakeDedupe } = fixture;
       const pending = createDeferred<void>();
       const reached = createDeferred<void>();
+      const pause = async () => {
+        reached.resolve();
+        await pending.promise;
+      };
       let processing: Promise<unknown> | undefined;
       const processGuarded = wakeDedupe.processGuarded.bind(wakeDedupe);
       wakeDedupe.processGuarded = (event, process, options) => {
@@ -213,13 +196,11 @@ describe("Raft wake gateway", () => {
           event,
           async () => {
             if (phase === "claim") {
-              reached.resolve();
-              await pending.promise;
+              await pause();
             }
             const result = await process();
             if (phase === "commit") {
-              reached.resolve();
-              await pending.promise;
+              await pause();
             }
             return result;
           },
@@ -228,34 +209,26 @@ describe("Raft wake gateway", () => {
         processing = operation;
         return operation;
       };
-      let stopped = false;
-      const gateway = startGateway(fixture);
-      const start = gateway.start.finally(() => {
-        stopped = true;
+      await withGateway(fixture, async ({ post, start }) => {
+        const stopped = vi.fn();
+        const settled = start.finally(stopped);
+        try {
+          const request = post({ eventId: "wake-settlement" }).catch(() => undefined);
+          await reached.promise;
+          controller.abort();
+          await request;
+          await setImmediate();
+          expect(stopped).not.toHaveBeenCalled();
+          pending.resolve();
+          await settled;
+          expect(run).toHaveBeenCalledTimes(phase === "commit" ? 1 : 0);
+        } finally {
+          pending.resolve();
+          controller.abort();
+          await settled;
+          await processing?.catch(() => undefined);
+        }
       });
-      try {
-        const { endpoint, token } = await gateway.bridge.started.promise;
-        const request = fetch(endpoint, {
-          method: "POST",
-          headers: { "x-raft-bridge-token": token },
-          body: JSON.stringify({ eventId: "wake-settlement" }),
-        }).catch(() => undefined);
-        await reached.promise;
-        controller.abort();
-        await request;
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(stopped).toBe(false);
-        pending.resolve();
-        await start;
-        expect(run).toHaveBeenCalledTimes(phase === "commit" ? 1 : 0);
-      } finally {
-        pending.resolve();
-        controller.abort();
-        await start;
-        await processing?.catch(() => undefined);
-      }
     },
   );
 
@@ -268,9 +241,7 @@ describe("Raft wake gateway", () => {
     });
 
     try {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
+      await setTimeout(0);
       expect(settled).toBe(false);
       expect(spawn).not.toHaveBeenCalled();
     } finally {
@@ -386,8 +357,7 @@ describe("Raft wake gateway", () => {
       ["default", 0],
       ["other", 1],
     ] as const) {
-      const fixture = createContext(accountId);
-      fixture.wakeDedupe = createPersistentWakeDedupe(workspace.dir);
+      const fixture = createContext(accountId, workspace.dir);
       await withGateway(fixture, async ({ post }) => {
         await expectStatus(post({ eventId: "wake-persisted" }), 202);
         expect(fixture.run).toHaveBeenCalledTimes(expectedCalls);
