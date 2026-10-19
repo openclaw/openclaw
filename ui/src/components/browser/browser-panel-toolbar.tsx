@@ -1,5 +1,5 @@
 import { createMemo } from "@solidjs/signals";
-import { createEffect, createSignal, onSettled } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
@@ -49,9 +49,14 @@ export function BrowserToolbar(
       nativeTab()?.favicon ||
       props.controller.tabs.find((tab) => tab.id === props.controller.activeTargetId)?.favicon,
   );
-  createEffect(
-    () => [activeUrl(), suppliedFavicon(), props.fetchFavicon] as const,
-    ([url, supplied, fetcher]) => {
+  const faviconSource = createMemo(() => ({
+    url: activeUrl(),
+    supplied: suppliedFavicon(),
+    fetcher: props.fetchFavicon,
+  }));
+  function FaviconLifetime(faviconProps: { source: ReturnType<typeof faviconSource> }) {
+    onSettled(() => {
+      const { url, supplied, fetcher } = faviconProps.source;
       setFavicon(supplied);
       if (supplied || !fetcher || !url) {
         return undefined;
@@ -75,8 +80,9 @@ export function BrowserToolbar(
       return () => {
         disposed = true;
       };
-    },
-  );
+    });
+    return null;
+  }
   const measureAddress = createLayoutMeasurement(
     () => props.controller.urlDraft,
     () => {
@@ -246,6 +252,9 @@ export function BrowserToolbar(
       </div>
       <div class="bp-toolbar-location" data-editing={editing() ? "true" : "false"}>
         <span class="bp-toolbar-favicon" aria-hidden="true">
+          <Show when={faviconSource()} keyed>
+            {(source) => <FaviconLifetime source={source} />}
+          </Show>
           {!props.mobilePresentation && favicon() ? (
             <img src={favicon()} alt="" onError={() => setFavicon(undefined)} />
           ) : (
