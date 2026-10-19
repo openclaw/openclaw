@@ -3,6 +3,7 @@ import { createReplyOperation, type ReplyOperation } from "../../sessions/sessio
 import {
   acquireReplyOperationSessionActor,
   getReplyOperationSessionTarget,
+  type ReplyOperationAdmission,
 } from "../../sessions/session-controller.state.js";
 import { bindReplyOperationDatabaseAdmission } from "./reply-turn-database-admission.js";
 
@@ -14,7 +15,13 @@ export function createReplyRecoveryActorFixture(params: {
   getSessionId: () => string;
   operation?: ReplyOperation;
 }) {
-  let bound: Promise<{ operation: ReplyOperation; release: () => Promise<void> }> | undefined;
+  let bound:
+    | Promise<{
+        operation: ReplyOperation;
+        operationAdmission: ReplyOperationAdmission;
+        release: () => Promise<void>;
+      }>
+    | undefined;
   const admission = () =>
     (bound ??= (async () => {
       const { databaseClaim } = await loadSessionEntryForAdmission({
@@ -30,16 +37,12 @@ export function createReplyRecoveryActorFixture(params: {
           sessionId: params.getSessionId(),
           resetTriggered: false,
         });
-        const { releaseWorkerDatabaseClaim } = bindReplyOperationDatabaseAdmission(
-          operation,
-          params,
-          undefined,
-          databaseClaim,
-        );
+        const { operationAdmission, releaseWorkerDatabaseClaim } =
+          bindReplyOperationDatabaseAdmission(operation, params, undefined, databaseClaim);
         if (!releaseWorkerDatabaseClaim) {
           throw new Error("Recovery fixture requires an actor-capable database claim");
         }
-        return { operation, release: releaseWorkerDatabaseClaim };
+        return { operation, operationAdmission, release: releaseWorkerDatabaseClaim };
       } catch (error) {
         try {
           operation?.complete();
@@ -50,9 +53,7 @@ export function createReplyRecoveryActorFixture(params: {
       }
     })());
   return {
-    async bind() {
-      await admission();
-    },
+    bind: admission,
     async acquireSessionActor() {
       const { operation } = await admission();
       const actor = await acquireReplyOperationSessionActor(operation);

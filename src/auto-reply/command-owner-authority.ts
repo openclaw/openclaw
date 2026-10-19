@@ -1,5 +1,5 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import type { CommandOwnerReference } from "../state/user-channel-identities.js";
+import type { CommandOwnerReference } from "../state/user-channel-authorization-reference.js";
 
 const COMMAND_OWNER_AUTHORITY = Symbol("openclaw.commandOwnerAuthority");
 type CommandOwnerAuthority = Readonly<{

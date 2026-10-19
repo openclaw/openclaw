@@ -1,8 +1,8 @@
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import type { Snapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentEffectiveModelPrimary } from "../../agents/agent-scope.js";
-import { createConfigIO, getRuntimeConfig } from "../../config/io.js";
-import { STATE_DIR } from "../../config/paths.js";
+import { getRuntimeConfig } from "../../config/io.js";
+import { CONFIG_PATH, STATE_DIR } from "../../config/paths.js";
 import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
@@ -88,7 +88,7 @@ export function buildGatewaySnapshot(opts: {
   if (opts.includeSensitive === true) {
     const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
     // Surface resolved paths only to admin callers that already have broader gateway access.
-    snapshot.configPath = createConfigIO().configPath;
+    snapshot.configPath = CONFIG_PATH;
     snapshot.stateDir = STATE_DIR;
     snapshot.authMode = auth.mode;
   }

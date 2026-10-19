@@ -473,7 +473,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
               replaceParams.gatewayContextResolver ?? getGatewayContextResolver(value.source),
             );
             if (preserveCompletedRun) {
-              if (authority?.operatorAuthority) {
+              if (authority) {
                 subagentRuns.bindCompletionAuthority(next, authority);
                 custodyTransferred = true;
               }

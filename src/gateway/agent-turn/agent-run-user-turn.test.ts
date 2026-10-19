@@ -261,9 +261,16 @@ describe("prepareAgentRunUserTurn", () => {
     expect(mocks.persistedMessages).toEqual([]);
   });
 
-  it.each(["committed", "unknown", "unretained"] as const)(
-    "transfers failed preparation cleanup exactly once for %s input custody",
-    async (custody) => {
+  it.each([
+    ["committed", undefined],
+    ["unknown", undefined],
+    ["unretained", undefined],
+    ["settlement-failed", undefined],
+    ["committed", "restart"],
+    ["committed", "rpc"],
+  ] as const)(
+    "transfers failed preparation cleanup exactly once for %s input custody (stop=%s)",
+    async (custody, stopReason) => {
       const sessionKey = "agent:main:worker-child";
       const sessionEntry: SessionEntry = { sessionId: "media-custody-session", updatedAt: 1 };
       mocks.loadSessionEntry.mockResolvedValue({
@@ -280,19 +287,30 @@ describe("prepareAgentRunUserTurn", () => {
         custody === "unknown"
           ? new SqliteWorkerError("input settlement unavailable", "outcome-unknown")
           : new Error("input preparation failed");
+      const settlementFailure = new Error("input settlement failed");
+      const finish = vi.fn();
+      const abort = new AbortController();
       mocks.stageSessionPendingInput.mockImplementationOnce(
         async (
           _scope: Parameters<typeof stageSessionPendingInput>[0],
           options: Parameters<typeof stageSessionPendingInput>[1],
         ) => {
-          if (custody === "committed") {
+          if (custody === "committed" || custody === "settlement-failed") {
             options.onCommitted?.({
               state: "queued",
               inputId: "committed-media-input",
               message: options.message,
               run: (operation) => operation(),
-              finish: vi.fn(),
+              finish,
+              settled: async () => {
+                if (custody === "settlement-failed") {
+                  throw settlementFailure;
+                }
+              },
             });
+          }
+          if (stopReason) {
+            abort.abort();
           }
           throw failure;
         },
@@ -306,28 +324,38 @@ describe("prepareAgentRunUserTurn", () => {
           return release(params);
         });
       try {
-        await expect(
-          prepareAgentRunUserTurn({
-            onUserTurnMediaPersisted,
-            assertCurrent: () => {},
-            request: { message: "retained input", idempotencyKey: "media-custody-run" },
-            cfg: {},
-            sessionEntry,
-            resolvedSessionKey: sessionKey,
-            admittedSessionId: sessionEntry.sessionId,
-            activeSessionAgentId: "main",
-            suppressVisibleSessionEffects: false,
-            requestedPromptPersistenceSuppression: false,
-            canUseInternalRuntimeHandoff: false,
-            message: "retained input",
-            effectiveTranscriptInputText: "retained input",
-            images: [],
-            offloadedRefs: [],
-            runId: "media-custody-run",
-            client: null,
-            context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
-          }),
-        ).rejects.toBe(failure);
+        const preparation = prepareAgentRunUserTurn({
+          onUserTurnMediaPersisted,
+          abortSignal: abort.signal,
+          getAbortStopReason: () => stopReason ?? "rpc",
+          assertCurrent: () => {},
+          request: { message: "retained input", idempotencyKey: "media-custody-run" },
+          cfg: {},
+          sessionEntry,
+          resolvedSessionKey: sessionKey,
+          admittedSessionId: sessionEntry.sessionId,
+          activeSessionAgentId: "main",
+          suppressVisibleSessionEffects: false,
+          requestedPromptPersistenceSuppression: false,
+          canUseInternalRuntimeHandoff: false,
+          message: "retained input",
+          effectiveTranscriptInputText: "retained input",
+          images: [],
+          offloadedRefs: [],
+          runId: "media-custody-run",
+          client: null,
+          context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
+        });
+        if (custody === "settlement-failed") {
+          await expect(preparation).rejects.toMatchObject({ errors: [failure, settlementFailure] });
+        } else {
+          await expect(preparation).rejects.toBe(failure);
+        }
+        if (custody === "committed" || custody === "settlement-failed") {
+          expect(finish).toHaveBeenCalledExactlyOnceWith(
+            stopReason === "rpc" ? "cancelled" : "interrupted",
+          );
+        }
         expect(cleanup).toHaveBeenCalledTimes(1);
         expect(mocks.stageSessionPendingInput).toHaveBeenCalledTimes(1);
         expect(onUserTurnMediaPersisted).toHaveBeenCalledTimes(custody === "unretained" ? 0 : 1);

@@ -79,6 +79,11 @@ describe("execution identity admission envelope", () => {
           rawPrincipalRef: "raw-principal",
           displayLabel: "Operator OPENAI_API_KEY=sk-1234567890abcdef",
         },
+        representedSubject: {
+          state: "present",
+          kind: "person",
+          rawPrincipalRef: "selected-person",
+        },
         applicableGrants: [
           { rawGrantRef: "é", state: "present" },
           { rawGrantRef: "z", state: "present" },
@@ -125,6 +130,12 @@ describe("execution identity admission envelope", () => {
     expect(envelope.invoker.displayLabel).not.toContain("sk-1234567890abcdef");
     expect(Object.isFrozen(envelope)).toBe(true);
     expect(Object.isFrozen(envelope.ingress)).toBe(true);
+    expect(envelope.representedSubject).toEqual({
+      state: "present",
+      kind: "person",
+      rawPrincipalRef: "selected-person",
+    });
+    expect(Object.isFrozen(envelope.representedSubject)).toBe(true);
     expect(Object.isFrozen(envelope.assurance)).toBe(true);
     expect(
       parseExecutionIdentityAdmissionWork({ kind: "capture", envelope: structuredClone(envelope) }),

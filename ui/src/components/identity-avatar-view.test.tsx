@@ -9,7 +9,10 @@ import { resolveAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
 import { resolveIdentityAvatarView, type AgentIdentity } from "../lib/identity-avatar-view.ts";
 import type { IdentityAvatarInput } from "../lib/identity-avatar.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
-import { IdentityAvatarImage, identityAvatarState } from "./solid/identity-avatar-image.tsx";
+import {
+  IdentityAvatarImage,
+  createIdentityAvatarPresentation,
+} from "./solid/identity-avatar-image.tsx";
 import { useIdentityAvatarView } from "./solid/identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 
@@ -41,11 +44,12 @@ function mountImage(identity: IdentityAvatarInput) {
 
 function ProfileImage(props: { identity: IdentityAvatarInput }) {
   const view = useIdentityAvatarView(() => props.identity);
+  const presentation = createIdentityAvatarPresentation(view);
   return (
-    <span ref={identityAvatarState(view)} class="test-avatar">
+    <span class={["test-avatar", presentation.classes()]} data-avatar-state={presentation.state()}>
       <IdentityAvatarImage
         view={view()}
-        fallbackSelector=".test-avatar"
+        onStateChange={presentation.onStateChange}
         class="test-avatar__image"
         alt="Ada Lovelace"
         ariaHidden
@@ -156,8 +160,10 @@ describe("shared identity avatar view", () => {
     expect(view.image()).toBe(image);
     expect(view.frame()?.getAttribute("data-avatar-state")).toBe("loaded");
     image.dispatchEvent(new Event("error"));
+    flush();
     expect(view.frame()?.classList.contains("is-fallback")).toBe(true);
     image.dispatchEvent(new Event("load"));
+    flush();
     expect(view.frame()?.classList.contains("is-fallback")).toBe(false);
   });
 
@@ -318,6 +324,7 @@ describe("shared agent avatar view", () => {
     view.present(false);
     view.present(true);
     await Promise.resolve();
+    flush();
     expect(view.frame()?.classList.contains("is-pending")).toBe(false);
     expect(view.frame()?.getAttribute("data-avatar-state")).toBe("loaded");
   });

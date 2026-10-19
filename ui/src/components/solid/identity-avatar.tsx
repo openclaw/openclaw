@@ -18,7 +18,7 @@ import { resolveAvatarHat } from "../agent-avatar-hat.ts";
 import { PluginThemeArtwork } from "../plugin-theme-artwork.tsx";
 import { ThemeBrandIcon } from "../theme-brand-icon.tsx";
 import { AVATAR_HAT_ARTWORK } from "../theme-flair-artwork.tsx";
-import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-image.tsx";
+import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
 import { useAvatarGatewayContext, useIdentityAvatarView } from "./identity-avatar-view.ts";
 import "../../styles/identity-avatar.css";
 
@@ -41,6 +41,7 @@ export function AgentIdentityAvatar(props: {
     gateway();
     return resolveAgentIdentityAvatarView(props.agent);
   });
+  const presentation = createIdentityAvatarPresentation(view);
   return (
     <Show
       when={!isReservedSystemAgentId(props.agent.id)}
@@ -49,8 +50,8 @@ export function AgentIdentityAvatar(props: {
       }
     >
       <span
-        ref={identityAvatarState(view)}
-        class={["identity-avatar--agent", props.class]}
+        data-avatar-state={presentation.state()}
+        class={["identity-avatar--agent", props.class, presentation.classes()]}
         role={props.agent.name ? "img" : undefined}
         aria-label={props.agent.name}
         aria-hidden={props.agent.name ? undefined : "true"}
@@ -58,7 +59,7 @@ export function AgentIdentityAvatar(props: {
         <Show when={Boolean(view().imageUrl)}>
           <IdentityAvatarImage
             view={view()}
-            fallbackSelector=".identity-avatar--agent"
+            onStateChange={presentation.onStateChange}
             class="identity-avatar__image"
             onImageError={props.onImageError}
           />

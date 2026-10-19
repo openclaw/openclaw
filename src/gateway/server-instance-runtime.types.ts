@@ -1,4 +1,5 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,12 +11,18 @@ import type {
   InternalAgentTurnFacadeFactory,
 } from "./agent-turn/internal-facade.types.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
+import type { GatewayClient } from "./server-methods/client-types.js";
 
 export type GatewayInstanceAgentDispatchOptions = {
+  /** Host-issued source authority for independently accepted native work. */
+  operatorRunAuthority?: AdmittedRunOperatorAuthority;
+  agentToolCaller?: NonNullable<GatewayClient["internal"]>["agentToolCaller"];
   /** Exact source custody to re-admit; the instance reads its private durable record itself. */
   restartRecoveryOperatorTarget?: import("./operator-run-recovery.js").OperatorRecoveryTarget;
   /** Exact process-local source reserved by a durable lifecycle owner. */
   controllerInput?: SessionControllerInput;
+
+  restartRecoveryRequesterTarget?: import("./operator-run-recovery.js").OperatorRecoveryTarget;
   assertAdmissionCurrent?: () => void;
   /** Refresh source facts immediately before dispatch; the accepted turn owns execution. */
   prepareDispatchCurrent?: () => Promise<void>;

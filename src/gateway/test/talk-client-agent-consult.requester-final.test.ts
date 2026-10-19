@@ -136,9 +136,11 @@ describe("Talk requester-final consult ownership", () => {
           sessionKey: "agent:researcher:talk",
           operationalRunInstance,
           embeddedRunToolAuthorityBinding: () => ({
+            acceptsRequesterOrigin: () => false,
             source: "attempt",
             project,
             projectAsync: async (overlay) => project(overlay),
+            assertRegistrationActive: () => {},
             assertActive: () => {},
           }),
         },

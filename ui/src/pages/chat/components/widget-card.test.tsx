@@ -4,10 +4,18 @@ import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { mcpAppWidgetNameForViewId, type BoardProvider } from "../../../lib/board/provider.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
+import { createTestSessionCapability } from "../../../lib/sessions/session-capability.test-support.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
+import { createContext } from "../../../test-helpers/app-sidebar.ts";
+import {
+  createApplicationContextProvider,
+  createApplicationGateway,
+} from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ToolPreview } from "./widget-card-view.tsx";
+import * as widgetExport from "./widget-export.ts";
 
 const canvasPreview = {
   kind: "canvas",
@@ -74,6 +82,14 @@ function initializeWidgetFrame(frame: HTMLIFrameElement) {
   frame.dispatchEvent(new Event("load"));
 }
 
+async function downloadWidget(host: HTMLElement) {
+  host.querySelector<HTMLButtonElement>('button[aria-label="Widget actions"]')!.click();
+  await waitForSolid(() =>
+    expect(host.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
+  );
+  host.querySelector<HTMLButtonElement>('[role="menuitem"][value="download"]')!.click();
+}
+
 afterEach(async () => {
   // Rendering starts lazy element imports that must finish before this environment retires.
   await vi.dynamicImportSettled();
@@ -88,6 +104,83 @@ afterEach(async () => {
 });
 
 describe("widget-card", () => {
+  it("exports the current raw frame after replacing its URL", async () => {
+    const exportImage = vi.spyOn(widgetExport, "exportWidget").mockResolvedValue("png");
+    onTestFinished(() => exportImage.mockRestore());
+    const host = document.createElement("div");
+    document.body.append(host);
+    const preview = {
+      ...canvasPreview,
+      title: "Raw widget",
+      url: "/__openclaw__/canvas/documents/cv_export_one/index.html",
+      sandbox: "scripts",
+    } as const;
+    mountWidget(preview, undefined, host);
+    const first = host.querySelector("iframe")!;
+    await downloadWidget(host);
+    expect(exportImage).toHaveBeenLastCalledWith("download", first, "Raw widget", {
+      documentHtml: undefined,
+    });
+
+    mountWidget(
+      { ...preview, url: "/__openclaw__/canvas/documents/cv_export_two/index.html" },
+      undefined,
+      host,
+    );
+    const current = host.querySelector("iframe")!;
+    expect(current).not.toBe(first);
+    expect(first.isConnected).toBe(false);
+    await downloadWidget(host);
+    expect(exportImage).toHaveBeenLastCalledWith("download", current, "Raw widget", {
+      documentHtml: undefined,
+    });
+    expect(exportImage).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads the managed export frame and document when the action is selected", async () => {
+    const exportImage = vi.spyOn(widgetExport, "exportWidget").mockResolvedValue("png");
+    onTestFinished(() => exportImage.mockRestore());
+    const { gateway } = createApplicationGateway();
+    const sessions = createTestSessionCapability(gateway);
+    const provider = createApplicationContextProvider(createContext(gateway, sessions));
+    const host = document.createElement("div");
+    provider.append(host);
+    document.body.append(provider);
+    onTestFinished(() => {
+      unmountWidget(host);
+      sessions.dispose();
+      disposeSidebarContextLifecycles();
+    });
+    mountWidget(
+      {
+        ...canvasPreview,
+        title: "Managed widget",
+        viewId: "cv_export_managed",
+        url: "/__openclaw__/canvas/documents/cv_export_managed/index.html",
+        sandbox: "scripts",
+      },
+      undefined,
+      host,
+    );
+    await vi.dynamicImportSettled();
+    const widget = host.querySelector("openclaw-canvas-widget-view")!;
+    const previewFrame = document.createElement("iframe");
+    const documentHtml = "<!doctype html><title>Managed export</title>";
+    Object.defineProperties(widget, {
+      previewFrame: { configurable: true, get: () => previewFrame },
+      documentHtml: { configurable: true, get: () => documentHtml },
+    });
+    // The owner can expose a frame after adoption without placing it beneath the menu.
+    document.body.append(previewFrame);
+    await downloadWidget(host);
+    expect(exportImage).toHaveBeenCalledExactlyOnceWith(
+      "download",
+      previewFrame,
+      "Managed widget",
+      { documentHtml },
+    );
+  });
+
   it("keeps theme delivery attached to a retained mounted frame", async () => {
     const host = document.createElement("div");
     document.body.append(host);

@@ -152,12 +152,16 @@ session visibility, or waive manual approval for X replies.
 
 ## Reply outcomes and failures
 
-Automatic replies to mentions are posted only when the agent declares success.
+Model replies to mentions are posted only when the agent declares success.
 The channel's delivery rules ask the agent to start each reply with
-`[[x_success]]` or `[[x_failure]]`; the tag is removed before posting. Replies
-tagged `[[x_failure]]`, untagged replies, and host error replies are withheld
+`[[x_success]]` or `[[x_failure]]`; the tag is removed before posting. Model replies
+tagged `[[x_failure]]`, untagged model replies, and host error replies are withheld
 from X. `NO_REPLY` and empty replies are dropped. If a model omits the tag on a
 successful answer, that answer is withheld rather than posted.
+
+Runtime queue acknowledgments and steering refusal notices are posted without a
+model success tag. These notices report the actual admission decision; they do
+not declare that the agent's work succeeded.
 
 Without a failure route, withheld replies are discarded and logged as
 `reply withheld post=<id> reason=<failure|error|unclassified> route=none`. With

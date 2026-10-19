@@ -12,6 +12,7 @@ import { appendAssistantMessageToSessionTranscript } from "../../config/sessions
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
+import { readRestartRecoveryRequesterSource } from "../requester-run-recovery-source.js";
 import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import type { MainSessionRecoveryObservation } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
@@ -48,7 +49,9 @@ export async function prepareRequesterRestartRecovery(params: {
     lifecycleRevision: entry.lifecycleRevision,
     storePath: params.storePath,
     gatewayRuntime: params.gatewayRuntime,
-    requesterOperatorSourceMissing: !entry.restartRecoveryOperatorSource || undefined,
+    requesterOperatorSourceMissing:
+      (!entry.restartRecoveryOperatorSource && !readRestartRecoveryRequesterSource(params)) ||
+      undefined,
   });
   params.assertCurrent();
   if (recovered?.status === "ready") {

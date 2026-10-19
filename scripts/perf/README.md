@@ -204,6 +204,19 @@ concurrency on both revisions, and report the actual database size. For a roughl
 stops its Gateway and model fixture on completion or interruption and retains
 synthetic state for inspection. Never target a running Gateway's state.
 
+For completed-attempt retention, use `--scenario attempt-retention --clients 1
+--runs 10 --rounds 10 --chunks 1 --prompt-kib 128 --heap-snapshot`. Each round
+resets the ten child session generations, submits deterministic synthetic prompt
+text and a 256×128 synthetic noise PNG, executes three real `read` tools with
+16 KiB text results, receives one synthetic output-limit stop,
+and completes the resulting transcript continuation. The driver requires one
+completed tool batch, output-limit response, and recovered response per child,
+and verifies inline images reach all three provider requests. These are
+direct child-session `agent` calls, not model-driven `sessions_spawn` calls.
+Post-GC Gateway heap samples follow every completed cohort, and the optional
+final `settled.heapsnapshot` permits retainer inspection. Session resets exclude
+intentionally retained live histories from the trend.
+
 To start an existing fixture without regenerating it, set `HOME` and
 `OPENCLAW_HOME` to `<state-dir>/home`, `OPENCLAW_STATE_DIR` to `<state-dir>`,
 `OPENCLAW_CONFIG_PATH` to `<state-dir>/openclaw.json`, and `TMPDIR` to
@@ -274,6 +287,41 @@ Synthetic state and logs remain for
 inspection. This reproduces recovery and reconnect/list pressure, rather than
 production provider latency or arbitrary plugin load. Never point it at live
 state, and apply the sandbox rules below to every Team command.
+
+For warm reconnect pressure without agent turns or a Gateway crash, use:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/post-restart-burst-measure.ts \
+  --state-dir /path/to/team-shape --reconnect-waves --clients 40 --waves 10
+```
+
+This mode pairs devices locally, warms all 40 connections with trusted loopback
+proxy attribution (`203.0.113.50`, a documentation address), and verifies negotiated
+permessage-deflate. Each of ten waves reconnects 30 clients while the remaining
+10 issue bounded `sessions.list`, `sessions.catalog.list`, and `projects.list`
+batches, producing 300 measured connection attempts. The reconnect selection
+rotates by 30 clients each wave so all 40 participate. `--reconnect-count` defaults
+to the smaller of 30 or one fewer than `--clients`; it must leave at least one
+client polling. Each wave lasts at least `--poll-ms` (default 5,000 ms); a client
+waits for its batch before polling again. The default client count is 40 in this
+mode and the default wave count is 10. Setup pairs and warms devices in batches
+of at most 32. Restart workload flags cannot be combined with this mode.
+For simultaneous baseline/candidate measurements, pass the same future Unix
+millisecond timestamp as `--start-at`; missing that setup deadline fails the run.
+Keep each side's state and ports separate, including during device pairing.
+
+`result.json` retains every measured connection attempt, wall-clock start,
+socket-open/challenge timing, connect RPC timing, connection ID, negotiated
+extensions, presence row count, errors, list timings, and main-thread samples.
+Warm reconnect samples exclude intervals that begin before measurement starts.
+Connect RPC latency ends at hello and excludes the subsequent `users.self` read.
+Verbose compact Gateway logs in `gateway-reconnect.log` retain existing auth,
+device, profile, registration, hello, and send phase timings; correlate them with
+each attempt's connection ID. Hello is intentionally uncompressed because it
+contains device tokens. This workload measures the connect response and concurrent
+list traffic; it does not request the detached Control UI model catalog snapshot.
+Use the same fixture seed and shape for both revisions; `--transcript-mib 1` keeps
+5,000-session fixtures small when transcript volume is irrelevant to the flow.
 
 Add `--writer-reads --clients 150` to measure read traffic competing with startup
 writes. This enables the Prometheus plugin, makes each synthetic catalog request

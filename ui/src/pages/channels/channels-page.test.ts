@@ -1,4 +1,4 @@
-import { createComponent, createSignal } from "solid-js";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ControlUiChannelSettingsContext,
@@ -9,6 +9,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import type { ControlUiPluginDistribution } from "../../plugins/control-ui-distribution.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
@@ -21,38 +22,30 @@ vi.mock("../../plugins/control-ui-distribution.ts", async (importOriginal) => ({
   controlUiPluginDistributions: packaged,
 }));
 
-const mountedPages = new Map<
-  HTMLElement,
-  { dispose: () => void; replace: (context: ApplicationContext) => void }
->();
+const mountedPages = new Map<HTMLElement, () => void>();
 
 function mountPage(context: ApplicationContext): HTMLElement {
   const page = document.createElement("div");
   document.body.append(page);
-  const [current, setCurrent] = createSignal(context);
   const mounted = mountSolid(
     () =>
-      createComponent(ChannelsPage, {
-        get context() {
-          return current();
+      createComponent(ApplicationProvider, {
+        value: context,
+        get children() {
+          return createComponent(ChannelsPage, {});
         },
       }),
     { container: page },
   );
-  mountedPages.set(page, { dispose: mounted.unmount, replace: setCurrent });
+  mountedPages.set(page, mounted.unmount);
   flush();
   return page;
 }
 
 function disposePage(page: HTMLElement) {
-  mountedPages.get(page)?.dispose();
+  mountedPages.get(page)?.();
   mountedPages.delete(page);
   page.remove();
-}
-
-function replacePageContext(page: HTMLElement, context: ApplicationContext) {
-  mountedPages.get(page)!.replace(context);
-  flush();
 }
 
 async function settle() {
@@ -938,7 +931,7 @@ it("retains the editor across same-client reconnects and synchronously publishes
   f.source.channels.dispose();
 });
 
-it.each(["disconnect", "client", "admin", "source", "unmount", "caller"] as const)(
+it.each(["disconnect", "client", "admin", "unmount", "caller"] as const)(
   "rejects retained HTTP callbacks and pending responses after %s retirement before another credential dispatch",
   async (retirement) => {
     const pending = createDeferred<Response>();
@@ -949,7 +942,6 @@ it.each(["disconnect", "client", "admin", "source", "unmount", "caller"] as cons
     const request = f.context.request(profileRequest(caller.signal));
     const rejection = expect(request).rejects.toThrow();
     const signal = fetchMock.mock.calls[0]![1]!.signal!;
-    let second: ReturnType<typeof createContext> | undefined;
     if (retirement === "disconnect") {
       f.gateway.emit({ phase: "stopped" });
     } else if (retirement === "client") {
@@ -957,10 +949,6 @@ it.each(["disconnect", "client", "admin", "source", "unmount", "caller"] as cons
       f.gateway.emit({ client: createGateway().snapshot.client });
     } else if (retirement === "admin") {
       setGatewayScopes(f.gateway, ["operator.read"]);
-    } else if (retirement === "source") {
-      second = createContext(f.gateway);
-      Object.assign(second.context, { plugins: f.source.context.plugins });
-      replacePageContext(f.page, second.context);
     } else if (retirement === "unmount") {
       disposePage(f.page);
     } else {
@@ -978,8 +966,6 @@ it.each(["disconnect", "client", "admin", "source", "unmount", "caller"] as cons
     }
     f.source.runtimeConfig.dispose();
     f.source.channels.dispose();
-    second?.runtimeConfig.dispose();
-    second?.channels.dispose();
   },
 );
 

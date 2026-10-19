@@ -562,7 +562,6 @@ export async function loadPinnedRuntimeConfigAsync(
     if (runtimeConfigSnapshot) {
       return result(runtimeConfigSnapshot);
     }
-    assertCurrent();
     const commit = await prepareRuntimeConfigSnapshot(
       config,
       { env: runtimeEnv?.env },
@@ -572,7 +571,6 @@ export async function loadPinnedRuntimeConfigAsync(
     if (runtimeConfigSnapshot) {
       return result(runtimeConfigSnapshot);
     }
-    assertCurrent();
     const publication = runtimeEnv?.publish();
     try {
       assertCurrent();
