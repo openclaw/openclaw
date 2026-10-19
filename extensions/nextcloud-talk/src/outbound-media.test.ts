@@ -66,7 +66,7 @@ it.each(["The report", ""])("delivers a real file share with caption %j", async 
     expect(share.get("shareType")).toBe("10");
     expect(share.get("shareWith")).toBe("allowed");
     expect(JSON.parse(share.get("talkMetaData") ?? "{}")).toEqual({ caption: text, replyTo: 41 });
-    expect(share.get("referenceId")).toBeTruthy();
+    expect(share.get("permissions")).toBe("1");
     expect(requests.some(({ url }) => url.pathname.includes("/bot/"))).toBe(false);
     expect(result).toMatchObject({
       messageId: "42",
@@ -245,7 +245,7 @@ it.each([
       expect((error as Error).message).toMatch(recovery);
       expect((error as Error).message).not.toContain("private server diagnostics");
       expect(fixture.requests.some(({ url }) => url.pathname.endsWith("/shares"))).toBe(false);
-      expect(fixture.requests.some(({ method }) => method === "DELETE")).toBe(false);
+      expect(fixture.requests.filter(({ method }) => method === "DELETE")).toHaveLength(1);
     });
   },
 );
@@ -360,6 +360,11 @@ it("recognizes exact own echoes before acknowledgment and after the cache expire
     };
     await send(fixture.ctx);
     expect(await earlyEcho).toBe(true);
+    const controller = new AbortController();
+    controller.abort(new Error("echo lookup cancelled"));
+    await expect(
+      isNextcloudTalkOutboundFileEcho({ account, message: echo!, signal: controller.signal }),
+    ).rejects.toThrow("echo lookup cancelled");
     const before = fixture.requests.length;
     clock += 31_000;
     await expect(isNextcloudTalkOutboundFileEcho({ account, message: echo! })).resolves.toBe(true);
@@ -375,7 +380,7 @@ it("recognizes exact own echoes before acknowledgment and after the cache expire
     ).resolves.toBe(false);
     await expect(
       isNextcloudTalkOutboundFileEcho({ account, message: { ...echo!, roomToken: "other-room" } }),
-    ).rejects.toThrow();
+    ).resolves.toBe(false);
     await expect(
       isNextcloudTalkOutboundFileEcho({
         account,

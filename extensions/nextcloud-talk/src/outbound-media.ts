@@ -1,4 +1,5 @@
 import { createHmac, randomUUID } from "node:crypto";
+import path from "node:path";
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import {
   createMessageReceiptFromOutboundResults,
@@ -13,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkApiCredentialsResult } from "./api-credentials.js";
@@ -186,6 +188,7 @@ export async function isNextcloudTalkOutboundFileEcho(params: {
   message: NextcloudTalkInboundMessage;
   signal?: AbortSignal;
 }): Promise<boolean> {
+  params.signal?.throwIfAborted();
   const { account, message } = params;
   const file = message.attachment;
   if (!file?.fileId) {
@@ -208,28 +211,34 @@ export async function isNextcloudTalkOutboundFileEcho(params: {
   ) {
     return false;
   }
-  const client = createFileClient(account);
-  const uid = await client.user({ signal: params.signal });
-  if (message.senderId !== `users/${uid}`) {
+  try {
+    const client = createFileClient(account);
+    const uid = await client.user({ signal: params.signal });
+    if (message.senderId !== `users/${uid}`) {
+      return false;
+    }
+    const referenceId = fileReference(account, message.roomToken, uid, file.fileId);
+    const history = await client.history(message.roomToken, message.messageId, {
+      signal: params.signal,
+    });
+    params.signal?.throwIfAborted();
+    return history.some(
+      (entry) =>
+        isRecord(entry) &&
+        String(entry.id) === message.messageId &&
+        entry.token === message.roomToken &&
+        entry.actorType === "users" &&
+        entry.actorId === uid &&
+        entry.referenceId === referenceId &&
+        isRecord(entry.messageParameters) &&
+        isRecord(entry.messageParameters.file) &&
+        String(entry.messageParameters.file.id) === file.fileId,
+    );
+  } catch {
+    params.signal?.throwIfAborted();
+    // A failed proof of authorship must not drop a human re-share.
     return false;
   }
-  const referenceId = fileReference(account, message.roomToken, uid, file.fileId);
-  const history = await client.history(message.roomToken, message.messageId, {
-    signal: params.signal,
-  });
-  params.signal?.throwIfAborted();
-  return history.some(
-    (entry) =>
-      isRecord(entry) &&
-      String(entry.id) === message.messageId &&
-      entry.token === message.roomToken &&
-      entry.actorType === "users" &&
-      entry.actorId === uid &&
-      entry.referenceId === referenceId &&
-      isRecord(entry.messageParameters) &&
-      isRecord(entry.messageParameters.file) &&
-      String(entry.messageParameters.file.id) === file.fileId,
-  );
 }
 
 export async function sendMediaNextcloudTalk(
@@ -272,10 +281,21 @@ export async function sendMediaNextcloudTalk(
   assertCurrent();
   const uid = await client.user(options);
   const uploadId = randomUUID();
-  const filePath = `/OpenClaw/openclaw-${uploadId}-${sanitizeUntrustedFileName(media.fileName ?? "attachment.bin", "attachment.bin")}`;
+  const prefix = `openclaw-${uploadId}-`;
+  const filename = sanitizeUntrustedFileName(media.fileName ?? "attachment.bin", "attachment.bin");
+  const nameBudget = 250 - Buffer.byteLength(prefix);
+  // Reserve room for a complete stem code point even for an oversized extension.
+  const extension = truncateUtf8Prefix(path.extname(filename), nameBudget - 4);
+  const stem = truncateUtf8Prefix(
+    filename.slice(0, filename.length - path.extname(filename).length),
+    nameBudget - Buffer.byteLength(extension),
+  );
+  const uploadFolderPath = `/OpenClaw/openclaw-${uploadId}`;
+  const filePath = `${uploadFolderPath}/${prefix}${stem}${extension}`;
   const davRoot = `/remote.php/dav/files/${encodeURIComponent(uid)}`;
+  const uploadFolder = `${davRoot}${uploadFolderPath}`;
   const davPath = `${davRoot}${filePath.split("/").map(encodeURIComponent).join("/")}`;
-  let uploaded = false;
+  let uploadFolderOwned = false;
   let publicationAttempted = false;
   try {
     await client.request(
@@ -285,6 +305,20 @@ export async function sendMediaNextcloudTalk(
         if (response.status !== 201 && response.status !== 405) {
           throw new Error(`Nextcloud Talk attachment folder creation failed (${response.status}).`);
         }
+      },
+      options,
+    );
+    // Only a positively created private collection proves ownership after a lost PUT ack.
+    await client.request(
+      uploadFolder,
+      { method: "MKCOL" },
+      async (response) => {
+        if (response.status !== 201) {
+          throw new Error(
+            `Nextcloud Talk private upload folder creation failed (${response.status}).`,
+          );
+        }
+        uploadFolderOwned = true;
       },
       options,
     );
@@ -300,6 +334,10 @@ export async function sendMediaNextcloudTalk(
       },
       async (response) => {
         if (response.status !== 201) {
+          // A concurrent pre-existing file is not ours, even inside the private collection.
+          if (response.status === 412) {
+            uploadFolderOwned = false;
+          }
           const recovery =
             response.status === 401
               ? "Check apiUser and update its app password (apiPassword/apiPasswordFile) before retrying."
@@ -310,7 +348,6 @@ export async function sendMediaNextcloudTalk(
             `Nextcloud Talk attachment upload failed (${response.status}). ${recovery}`,
           );
         }
-        uploaded = true;
       },
       options,
     );
@@ -436,9 +473,9 @@ export async function sendMediaNextcloudTalk(
       }),
     };
   } catch (error) {
-    if (uploaded && !publicationAttempted) {
+    if (uploadFolderOwned && !publicationAttempted) {
       try {
-        await client.request(davPath, { method: "DELETE" }, async (response) => {
+        await client.request(uploadFolder, { method: "DELETE" }, async (response) => {
           if (!response.ok && response.status !== 404) {
             throw new Error("cleanup rejected", { cause: error });
           }

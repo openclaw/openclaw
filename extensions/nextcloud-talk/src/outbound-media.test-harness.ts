@@ -9,6 +9,7 @@ export type NextcloudTalkOutboundRequest = {
   url: URL;
   body: Buffer;
   authorization?: string;
+  ifNoneMatch?: string;
 };
 export type NextcloudTalkOutboundFixture = {
   directory: string;
@@ -51,6 +52,10 @@ export async function withNextcloudTalkOutboundFixture(
         url: new URL(request.url ?? "/", "http://fixture.invalid"),
         body: Buffer.concat(chunks),
         authorization: request.headers.authorization,
+        ifNoneMatch:
+          typeof request.headers["if-none-match"] === "string"
+            ? request.headers["if-none-match"]
+            : undefined,
       };
       fixture.requests.push(recorded);
       if (fixture.respond?.(recorded, response)) {
