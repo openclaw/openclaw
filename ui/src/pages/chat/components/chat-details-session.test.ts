@@ -537,7 +537,7 @@ it.each([
   const openProject = vi.fn();
   const view = mountSolid(() =>
     createComponent(ChatDetailsEnvironmentMobile, {
-      details: { detailsWorkspace: { root, label: null } },
+      details: { selectedSession: undefined, detailsWorkspace: { root, label: null } },
       presented: true,
       onOpenProject: openProject,
     }),
@@ -566,7 +566,7 @@ it("demands mobile changes only while presented and retires native navigation ca
         get selectedSession() {
           return session();
         },
-        detailsWorkspace: { root: "/workspace/project", branch: "feature/details" },
+        detailsWorkspace: { root: "/workspace/project", label: null, branch: "feature/details" },
       },
       get presented() {
         return presented();

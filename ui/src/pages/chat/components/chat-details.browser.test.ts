@@ -217,7 +217,11 @@ describe("chat Details presentation", () => {
           get children() {
             return createComponent(ChatDetailsEnvironment, {
               details: props({
-                detailsWorkspace: { root: "/workspace/details", branch: "feature/details" },
+                detailsWorkspace: {
+                  root: "/workspace/details",
+                  label: null,
+                  branch: "feature/details",
+                },
               }),
               presented: true,
               onOpenUncommitted: openChanges,
