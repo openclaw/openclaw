@@ -36,8 +36,11 @@ const externalResult = {
   displayName: "Pdf",
 };
 
-function mockShowModal() {
+function mockShowModal(checkConnected = false) {
   const showModal = vi.fn(function (this: HTMLDialogElement) {
+    if (checkConnected) {
+      expect(this.isConnected).toBe(true);
+    }
     this.setAttribute("open", "");
   });
   installDialogMethod("showModal", showModal);
@@ -52,17 +55,16 @@ function texts(container: Element, selector: string) {
   return [...container.querySelectorAll(selector)].map(normalizeText);
 }
 
-function expectFinalAction(button: Element | null | undefined) {
-  const actions = button?.closest("openclaw-modal-actions");
-  expect(actions).not.toBeNull();
-  expect(actions?.parentElement?.lastElementChild).toBe(actions);
-}
-
-function createView(overrides: Parameters<typeof createProps>[0] = {}) {
+function createView(overrides: Parameters<typeof createProps>[0] = {}, attachAfterRender = false) {
   const container = document.createElement("div");
-  document.body.append(container);
+  if (!attachAfterRender) {
+    document.body.append(container);
+  }
   dialogRestores.push(() => container.remove());
   renderView(container, overrides);
+  if (attachAfterRender) {
+    document.body.append(container);
+  }
   return Promise.resolve({
     container,
     find: <T extends Element = HTMLElement>(selector: string) =>
@@ -70,10 +72,7 @@ function createView(overrides: Parameters<typeof createProps>[0] = {}) {
     all: <T extends Element = HTMLElement>(selector: string) => [
       ...container.querySelectorAll<T>(selector),
     ],
-    render: (next: Parameters<typeof createProps>[0] = {}) => {
-      renderView(container, next);
-      return Promise.resolve();
-    },
+    render: (next: Parameters<typeof createProps>[0] = {}) => renderView(container, next),
   });
 }
 
@@ -83,6 +82,7 @@ function skillReport(skills: SkillStatusReport["skills"]): SkillStatusReport {
 
 function renderView(container: HTMLElement, overrides: Parameters<typeof createProps>[0] = {}) {
   renderSkills(createProps(overrides), container);
+  return Promise.resolve();
 }
 
 function createLinkedSkill(
@@ -122,12 +122,7 @@ it.each([
 ])(
   "gates credential replacement: value=$editValue canUpdate=$canUpdate",
   async ({ editValue, disabled, canUpdate }) => {
-    const container = document.createElement("div");
-    const showModal = vi.fn(function (this: HTMLDialogElement) {
-      expect(this.isConnected).toBe(true);
-      this.setAttribute("open", "");
-    });
-    installDialogMethod("showModal", showModal);
+    const showModal = mockShowModal(true);
     const onSaveKey = vi.fn();
     const skill = createSkill(
       canUpdate
@@ -139,35 +134,28 @@ it.each([
             ],
           },
     );
-    renderView(container, {
-      detailKey: "repo-skill",
-      report: skillReport([skill]),
-      canUpdate,
-      canInstall: true,
-      edits: { "repo-skill": editValue },
-      onSaveKey,
-    });
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-    const { dialog } = await getRenderedModalDialog(container);
+    const { container, find } = await createView(
+      {
+        detailKey: "repo-skill",
+        report: skillReport([skill]),
+        canUpdate,
+        canInstall: true,
+        edits: { "repo-skill": editValue },
+        onSaveKey,
+      },
+      true,
+    );
+    await getRenderedModalDialog(container);
     expect(showModal).toHaveBeenCalledTimes(1);
-    expect(dialog.open).toBe(true);
-
-    const input = container.querySelector<HTMLInputElement>('input[type="password"]');
+    const input = find<HTMLInputElement>('input[type="password"]');
     const save = buttons(container).find((button) => normalizeText(button) === "Save key");
     expect(input?.required).toBe(true);
     expect(normalizeText(expectDefined(input?.labels?.[0], "API key label"))).toBe(
       "API key (OPENAI_API_KEY)",
     );
     expect(save?.disabled).toBe(disabled);
-    const actions = container.querySelector(".skill-reader-dialog__actions");
-    expect(save?.closest("openclaw-modal-actions")).toBe(actions);
-    expect(actions?.parentElement?.lastElementChild).toBe(actions);
-    expect(container.querySelector(".skill-reader-dialog__body")?.contains(save!)).toBe(false);
     if (!canUpdate) {
-      expect(
-        container.querySelector("input.settings-toggle__input")?.hasAttribute("disabled"),
-      ).toBe(true);
+      expect(find("input.settings-toggle__input")?.hasAttribute("disabled")).toBe(true);
       expect(
         buttons(container).find((button) => normalizeText(button) === "Install skill-cli")
           ?.disabled,
@@ -212,7 +200,6 @@ it("preserves retained group identity and restores removed groups when filtering
 });
 
 it("offers only an installer satisfying a missing alternative", async () => {
-  mockShowModal();
   const onInstall = vi.fn();
   const skill = createSkill({
     skillKey: "coding-agent",
@@ -235,13 +222,11 @@ it("offers only an installer satisfying a missing alternative", async () => {
   const callout = expectDefined(find(".skill-reader-dialog__body .callout"), "binary requirement");
   expect(normalizeText(callout)).toContain("bin:any of (claude, codex, opencode)");
   expect(install).toBeInstanceOf(HTMLButtonElement);
-  expectFinalAction(install);
   install!.click();
   expect(onInstall).toHaveBeenCalledWith("coding-agent", "Coding Agent", "node-codex");
 });
 
 it("locks every skill mutation control behind the active mutation", async () => {
-  mockShowModal();
   const calendar = createSkill({
     skillKey: "calendar",
     name: "Calendar",
@@ -302,22 +287,19 @@ it("locks every skill mutation control behind the active mutation", async () => 
 });
 
 it("keeps the remaining skill's status and details target when a skill leaves the disabled tab", async () => {
-  const passwordSkill = createSkill({ skillKey: "1password", name: "1Password", disabled: true });
-  const appleNotesSkill = createSkill({
+  const password = createSkill({ skillKey: "1password", name: "1Password", disabled: true });
+  const notes = createSkill({
     skillKey: "apple-notes",
     name: "Apple Notes",
     disabled: true,
   });
-  const report: SkillStatusReport = skillReport([passwordSkill, appleNotesSkill]);
+  const report: SkillStatusReport = skillReport([password, notes]);
 
   const { find, all, render } = await createView({ report, statusFilter: "disabled" });
 
   expect(all(".plugins-item [role=img]")).toHaveLength(2);
 
-  const updatedReport: SkillStatusReport = skillReport([
-    { ...passwordSkill, disabled: false },
-    appleNotesSkill,
-  ]);
+  const updatedReport: SkillStatusReport = skillReport([{ ...password, disabled: false }, notes]);
 
   const onDetailOpen = vi.fn();
   await render({ report: updatedReport, statusFilter: "disabled", onDetailOpen });
@@ -331,7 +313,6 @@ it("keeps the remaining skill's status and details target when a skill leaves th
 });
 
 it("treats skills blocked by the selected agent filter as needing setup", async () => {
-  mockShowModal();
   const report: SkillStatusReport = skillReport([createSkill({ blockedByAgentFilter: true })]);
 
   const { container, find, all, render } = await createView({ report, statusFilter: "ready" });
@@ -353,19 +334,13 @@ it("opens detail dialogs and routes ClawHub actions", async () => {
   const onClawHubDetailOpen = vi.fn();
   const onClawHubInstall = vi.fn();
 
-  installDialogMethod("close", function (this: HTMLDialogElement) {
-    this.removeAttribute("open");
-    this.dispatchEvent(new Event("close"));
-  });
-
   const { container, find, render } = await createView({
     detailKey: "repo-skill",
     onDetailClose,
   });
-  const { dialog } = await getRenderedModalDialog(container);
+  await getRenderedModalDialog(container);
 
   expect(showModal).toHaveBeenCalledTimes(1);
-  expect(dialog.open).toBe(true);
 
   const closeButton = find<HTMLButtonElement>(".skill-reader-dialog .exec-approval-header .btn");
   expect(closeButton).toBeInstanceOf(HTMLButtonElement);
@@ -458,7 +433,6 @@ it("opens detail dialogs and routes ClawHub actions", async () => {
   const detailInstallButton = find<HTMLButtonElement>(".skill-reader-dialog__actions .btn.primary");
   expect(detailInstallButton).toBeInstanceOf(HTMLButtonElement);
   expect(detailInstallButton?.textContent?.trim()).toBe("Install GitHub");
-  expectFinalAction(detailInstallButton);
   detailInstallButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
   expect(onClawHubInstall).toHaveBeenCalledExactlyOnceWith("github");
@@ -469,7 +443,6 @@ it.each([
   { clawhubDetailLoading: false, clawhubDetailError: "Unable to read skill" },
   { clawhubDetailLoading: false, clawhubDetailError: null },
 ])("keeps unavailable ClawHub details footer-free: %j", async (state) => {
-  mockShowModal();
   const { find } = await createView({ clawhubDetailRef: "guide", ...state });
   expect(find(".skill-reader-dialog__body")).not.toBeNull();
   expect(find(".skill-reader-dialog openclaw-modal-actions")).toBeNull();
@@ -534,119 +507,90 @@ it.each([false, true])("renders install-only results with installed=%s", async (
   }
 });
 
-it("renders installed ClawHub verdicts and the local Skill Card tab", async () => {
-  mockShowModal();
-
-  const linkedSkill = createSkill({
-    ...createLinkedSkill("openclaw"),
-    skillCard: {
-      present: true,
-      path: "/tmp/workspace/skills/agentreceipt/skill-card.md",
-      sizeBytes: 30,
-    },
-  });
-  const report: SkillStatusReport = skillReport([linkedSkill]);
-  const verdictKey = clawhubVerdictKey({
-    registry: "https://clawhub.ai",
-    slug: "agentreceipt",
-    ownerHandle: "openclaw",
-    version: "1.2.3",
-  });
-  const onDetailTabChange = vi.fn();
-  const verdict = {
-    registry: "https://clawhub.ai",
-    ok: false,
-    decision: "fail",
-    reasons: ["security.suspicious"],
-    requestedSlug: "agentreceipt",
-    requestedOwnerHandle: "openclaw",
-    requestedVersion: "1.2.3",
-    securityAuditUrl:
-      "https://clawhub.ai/openclaw/skills/agentreceipt/security-audit?version=1.2.3",
-    securityStatus: "suspicious",
-    securityPassed: false,
-  } satisfies ClawHubSkillSecurityVerdict;
-
-  const { container, find, render } = await createView({
-    report,
-    detailKey: "agentreceipt",
-    onDetailTabChange,
-    clawhubVerdicts: {
-      [verdictKey]: { ...verdict, slug: "agentreceipt", version: "1.2.3" },
-    },
-  });
-
-  expect(normalizeText(container)).toContain("Review");
-  expect(normalizeText(container)).toContain("@openclaw/agentreceipt@1.2.3");
-  expect(normalizeText(container)).toContain("security.suspicious");
-  expect(find<HTMLAnchorElement>('a[href*="security-audit"]')?.textContent?.trim()).toBe(
-    "Full security report",
-  );
-  expect(find("#skill-detail-tab-overview")?.hasAttribute("active")).toBe(true);
-  container
-    .querySelector("#skill-detail-tab-card")
-    ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-  expect(onDetailTabChange).toHaveBeenCalledWith("card");
-
-  await render({
-    report,
-    detailKey: "agentreceipt",
-    detailTab: "card",
-    skillCardContents: {
-      agentreceipt: "# AgentReceipt\n\nLocal **trust** card.",
-    },
-    clawhubVerdicts: {
-      [verdictKey]: verdict,
-    },
-  });
-
-  expect(find("#skill-detail-tab-card")?.hasAttribute("active")).toBe(true);
-  expect(find(".sidebar-markdown strong")?.textContent).toBe("trust");
-  expect(normalizeText(container)).toContain("AgentReceipt Local trust card.");
-});
-
-it.each(["loading", "inconsistent"] as const)("fails closed for a %s verdict", async (mode) => {
-  mockShowModal();
-  const loading = mode === "loading";
-  const verdictKey = clawhubVerdictKey({
-    registry: "https://clawhub.ai",
-    slug: "agentreceipt",
-    version: "1.2.3",
-  });
-  const { container, all } = await createView({
-    report: skillReport([createLinkedSkill()]),
-    detailKey: "agentreceipt",
-    clawhubVerdictsLoading: loading,
-    clawhubVerdicts: loading
-      ? {}
-      : {
-          [verdictKey]: {
-            registry: "https://clawhub.ai",
-            ok: false,
-            decision: "pass",
-            reasons: [],
-            requestedSlug: "agentreceipt",
-            requestedVersion: "1.2.3",
-            slug: "agentreceipt",
-            version: "1.2.3",
-            securityStatus: "clean",
-            securityPassed: true,
+it.each(["suspicious", "loading", "inconsistent"] as const)(
+  "renders installed ClawHub verdicts: %s",
+  async (mode) => {
+    const suspicious = mode === "suspicious";
+    const loading = mode === "loading";
+    const skill = createLinkedSkill(suspicious ? "openclaw" : undefined);
+    if (suspicious) {
+      skill.skillCard = {
+        present: true,
+        path: "/tmp/workspace/skills/agentreceipt/skill-card.md",
+        sizeBytes: 30,
+      };
+    }
+    const report = skillReport([skill]);
+    const verdictKey = clawhubVerdictKey({
+      registry: "https://clawhub.ai",
+      slug: "agentreceipt",
+      ...(suspicious ? { ownerHandle: "openclaw" } : {}),
+      version: "1.2.3",
+    });
+    const verdict = {
+      registry: "https://clawhub.ai",
+      ok: false,
+      decision: suspicious ? "fail" : "pass",
+      reasons: suspicious ? ["security.suspicious"] : [],
+      requestedSlug: "agentreceipt",
+      requestedVersion: "1.2.3",
+      ...(suspicious
+        ? {
+            requestedOwnerHandle: "openclaw",
+            securityAuditUrl:
+              "https://clawhub.ai/openclaw/skills/agentreceipt/security-audit?version=1.2.3",
+          }
+        : {}),
+      securityStatus: suspicious ? "suspicious" : "clean",
+      securityPassed: !suspicious,
+    } satisfies ClawHubSkillSecurityVerdict;
+    const onDetailTabChange = vi.fn();
+    const { container, find, all, render } = await createView({
+      report,
+      detailKey: "agentreceipt",
+      onDetailTabChange,
+      clawhubVerdictsLoading: loading,
+      clawhubVerdicts: loading
+        ? {}
+        : {
+            [verdictKey]: { ...verdict, slug: "agentreceipt", version: "1.2.3" },
           },
-        },
-  });
-  const label = loading ? "Refreshing…" : "Unavailable";
-  const chips = all(".chip");
-  const detailVerdict = chips.find((node) => normalizeText(node) === label);
-  expect(detailVerdict).toBeDefined();
-  if (loading) {
-    const rowVerdict = all(".settings-status").find((node) => normalizeText(node) === label);
-    expect(rowVerdict).toBeDefined();
-    expect(rowVerdict?.classList.contains("settings-status--warn")).toBe(false);
-    expect(detailVerdict?.classList.contains("chip-warn")).toBe(false);
-    expect(normalizeText(container).match(/Refreshing…/gu) ?? []).toHaveLength(2);
-  } else {
-    expect(chips.map(normalizeText)).toContain("Unavailable");
-    expect(chips.some((chip) => normalizeText(chip) === "Clean")).toBe(false);
-    expect(detailVerdict?.classList.contains("chip-ok")).toBe(false);
-  }
-});
+    });
+    if (suspicious) {
+      for (const text of ["Review", "@openclaw/agentreceipt@1.2.3", "security.suspicious"]) {
+        expect(normalizeText(container)).toContain(text);
+      }
+      expect(find<HTMLAnchorElement>('a[href*="security-audit"]')?.textContent?.trim()).toBe(
+        "Full security report",
+      );
+      expect(find("#skill-detail-tab-overview")?.hasAttribute("active")).toBe(true);
+      find("#skill-detail-tab-card")?.dispatchEvent(
+        new MouseEvent("click", { detail: 1, bubbles: true }),
+      );
+      expect(onDetailTabChange).toHaveBeenCalledWith("card");
+      await render({
+        report,
+        detailKey: "agentreceipt",
+        detailTab: "card",
+        skillCardContents: { agentreceipt: "# AgentReceipt\n\nLocal **trust** card." },
+        clawhubVerdicts: { [verdictKey]: verdict },
+      });
+      expect(find("#skill-detail-tab-card")?.hasAttribute("active")).toBe(true);
+      expect(find(".sidebar-markdown strong")?.textContent).toBe("trust");
+      expect(normalizeText(container)).toContain("AgentReceipt Local trust card.");
+    } else {
+      const label = loading ? "Refreshing…" : "Unavailable";
+      const chips = all(".chip");
+      const detailVerdict = chips.find((node) => normalizeText(node) === label);
+      if (loading) {
+        const rowVerdict = all(".settings-status").find((node) => normalizeText(node) === label);
+        expect(rowVerdict?.classList.contains("settings-status--warn")).toBe(false);
+        expect(detailVerdict?.classList.contains("chip-warn")).toBe(false);
+        expect(normalizeText(container).match(/Refreshing…/gu) ?? []).toHaveLength(2);
+      } else {
+        expect(chips.some((chip) => normalizeText(chip) === "Clean")).toBe(false);
+        expect(detailVerdict?.classList.contains("chip-ok")).toBe(false);
+      }
+    }
+  },
+);

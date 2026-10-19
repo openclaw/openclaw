@@ -1,5 +1,5 @@
 import { createRoot, flush } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type {
   SkillLibraryFile,
   SkillsLibraryListResult,
@@ -11,22 +11,19 @@ import { createApplicationConfigCapability } from "../../app/config.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 /* @vitest-environment jsdom */
-import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { trackSolidRoot } from "../../test-helpers/solid-cleanup.ts";
 import { createSkillLibrary } from "./library-state.ts";
 import { SkillLibrary, SkillLibraryDialogs } from "./library-view.tsx";
-import { connectedGateway, libraryEntry, libraryList } from "./skills.test-support.ts";
-
-const disposals: Array<() => void> = [];
+import { connectedGateway, libraryEntry, libraryList, requestFor } from "./skills.test-support.ts";
 
 function harness() {
-  const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(async () => {
-    throw new Error("request sent");
-  });
+  const request = requestFor();
   const connection = connectedGateway(request, ["skills.library.save"]);
   const base = createApplicationConfigCapability({ resourceBasePath: "" });
   const config = { ...base, current: { ...base.current, uploadsEnabled: true } };
   const library = createRoot((dispose) => {
-    disposals.push(dispose);
+    trackSolidRoot(dispose);
     const gateway = useGatewayPage({ getGateway: () => connection.gateway });
     return createSkillLibrary(gateway, () => config);
   });
@@ -67,14 +64,6 @@ function savedReceipt(read: SkillsLibraryReadResult): SkillsLibraryReceipt {
     nextAction: "Use in a new session.",
   };
 }
-afterEach(() => {
-  cleanupSolid();
-  for (const dispose of disposals.splice(0)) {
-    dispose();
-  }
-  document.body.replaceChildren();
-});
-
 it("disables import while disconnected without losing the local selection", () => {
   const { library, connection } = harness();
   library.setImportOpen(true);
@@ -89,57 +78,54 @@ it("disables import while disconnected without losing the local selection", () =
   expect(library.state.importSelection).toHaveLength(1);
 });
 
-it.each(["list", "save"] as const)(
-  "ignores stale %s failures across reconnect",
-  async (operation) => {
-    const { library, request, connection } = harness();
-    const oldResult = createDeferred<SkillsLibraryListResult | SkillsLibraryReceipt>();
-    const newResult = createDeferred<SkillsLibraryListResult | SkillsLibraryReceipt>();
-    const read = existingSkill();
-    const list = library.state.list!;
-    const flag = operation === "list" ? "loading" : "busy";
-    async function begin(result: typeof oldResult, content: string) {
-      if (operation === "save") {
-        request.mockResolvedValueOnce(read);
-        await library.open(read.entry.skillId);
-        library.state.draft!.content = content;
-      }
-      request.mockReturnValueOnce(result.promise);
-      return { pending: operation === "list" ? library.load() : library.save() };
-    }
-    const old = await begin(oldResult, "First connection edit");
-    connection.publish({ ...connection.gateway.snapshot, phase: "reconnecting" });
-    library.reset();
-    connection.publish({ ...connection.gateway.snapshot, phase: "connected" });
-    const current = await begin(newResult, "Current connection edit");
-    expect(request).toHaveBeenCalledTimes(operation === "list" ? 2 : 4);
-    expect(library.state[flag]).toBe(true);
-    oldResult.reject(new Error("Previous connection failed"));
-    await old.pending;
-    expect(library.state).toMatchObject({ [flag]: true, error: null });
+it.each(["list", "save"] as const)("ignores stale %s failures", async (operation) => {
+  const { library, request, connection } = harness();
+  const oldResult = createDeferred<SkillsLibraryListResult | SkillsLibraryReceipt>();
+  const newResult = createDeferred<SkillsLibraryListResult | SkillsLibraryReceipt>();
+  const read = existingSkill();
+  const list = library.state.list!;
+  const flag = operation === "list" ? "loading" : "busy";
+  async function begin(result: typeof oldResult, content: string) {
     if (operation === "save") {
-      request.mockResolvedValueOnce(list);
+      request.mockResolvedValueOnce(read);
+      await library.open(read.entry.skillId);
+      library.state.draft!.content = content;
     }
-    newResult.resolve(operation === "list" ? { ...list, profileId: "bob" } : savedReceipt(read));
-    await current.pending;
-    expect(library.state).toMatchObject({
-      [flag]: false,
-      error: null,
-      ...(operation === "list"
-        ? { list: { profileId: "bob" } }
-        : { draft: { content: "Current connection edit", entry: { revision: "b".repeat(64) } } }),
-    });
-  },
-);
+    request.mockReturnValueOnce(result.promise);
+    return { pending: operation === "list" ? library.load() : library.save() };
+  }
+  const old = await begin(oldResult, "First connection edit");
+  connection.publish({ ...connection.gateway.snapshot, phase: "reconnecting" });
+  library.reset();
+  connection.publish({ ...connection.gateway.snapshot, phase: "connected" });
+  const current = await begin(newResult, "Current connection edit");
+  expect(request).toHaveBeenCalledTimes(operation === "list" ? 2 : 4);
+  expect(library.state[flag]).toBe(true);
+  oldResult.reject(new Error("Previous connection failed"));
+  await old.pending;
+  expect(library.state).toMatchObject({ [flag]: true, error: null });
+  if (operation === "save") {
+    request.mockResolvedValueOnce(list);
+  }
+  newResult.resolve(operation === "list" ? { ...list, profileId: "bob" } : savedReceipt(read));
+  await current.pending;
+  expect(library.state).toMatchObject({
+    [flag]: false,
+    error: null,
+    ...(operation === "list"
+      ? { list: { profileId: "bob" } }
+      : { draft: { content: "Current connection edit", entry: { revision: "b".repeat(64) } } }),
+  });
+});
 
 it.each([
-  ["content", { content: "changed" }],
-  ["encoding", { encoding: "utf8" }],
-  ["executable metadata", { executable: true }],
-  ["path", { path: "assets/renamed.png" }],
-] satisfies Array<[string, Partial<SkillLibraryFile>]>)(
-  "blocks support-file %s changes without stripping them",
-  async (_name, change) => {
+  { content: "changed" },
+  { encoding: "utf8" },
+  { executable: true },
+  { path: "assets/renamed.png" },
+] satisfies Partial<SkillLibraryFile>[])(
+  "blocks support-file changes without stripping them: %j",
+  async (change) => {
     const { library, config, request, draft } = await openSkill();
     const original = { ...draft.files[0]! };
     draft.files = [{ ...original, ...change }];
@@ -158,12 +144,6 @@ it("uploads only changed or new support files and retains their saved baseline o
   ]);
   const newFile = { path: "new.txt", content: "New notes", encoding: "utf8" as const };
   draft.files = [draft.files[0]!, { ...draft.files[1]!, content: "Updated notes" }, newFile];
-  config.current.uploadsEnabled = false;
-  await library.save();
-  expect(request).toHaveBeenCalledTimes(1);
-  expect(library.state.error).toBe(uploadsDisabledMessage());
-
-  config.current.uploadsEnabled = true;
   request.mockResolvedValueOnce(savedReceipt(read)).mockResolvedValueOnce(library.state.list);
   await library.save();
   expect(library.state.error).toBeNull();

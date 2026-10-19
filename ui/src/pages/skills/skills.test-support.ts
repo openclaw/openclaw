@@ -1,7 +1,17 @@
 import type { SkillLibraryEntry, SkillsLibraryListResult } from "@openclaw/gateway-protocol";
+import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+
+export function requestFor(handlers: Record<string, (params?: unknown) => unknown> = {}) {
+  return vi.fn(async (method: string, params?: unknown) => {
+    if (!Object.hasOwn(handlers, method)) {
+      throw new Error(`Unexpected method: ${method}`);
+    }
+    return handlers[method]!(params);
+  });
+}
 
 export function libraryList(canManageWorkspace = true): SkillsLibraryListResult {
   return {

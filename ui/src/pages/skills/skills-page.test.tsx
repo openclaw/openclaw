@@ -11,7 +11,7 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { SkillsPage, type SkillsRouteData } from "./skills-page.tsx";
-import { connectedGateway, libraryEntry, libraryList } from "./skills.test-support.ts";
+import { connectedGateway, libraryEntry, libraryList, requestFor } from "./skills.test-support.ts";
 import { createSkill } from "./view.test-support.ts";
 
 const personalLibrary = libraryList();
@@ -23,13 +23,24 @@ const remoteSkill = {
   installRef: "@alice/calendar",
   displayName: "Calendar",
 };
+const emptySearch = async (method: string) =>
+  method === "skills.library.list" ? personalLibrary : { results: [] };
 
-function requestFor(handlers: Record<string, (params?: unknown) => unknown>) {
-  return vi.fn(async (method: string, params?: unknown) => {
-    if (!Object.hasOwn(handlers, method)) {
-      throw new Error(`Unexpected method: ${method}`);
-    }
-    return handlers[method]!(params);
+function agentReport(agentId?: string, disabled = false) {
+  return {
+    workspaceDir: "/workspace",
+    managedSkillsDir: "/managed",
+    skills: agentId
+      ? [createSkill({ name: `${agentId}-only`, skillKey: `${agentId}-only`, disabled })]
+      : [],
+  };
+}
+
+function scopeRequest(overrides: Parameters<typeof requestFor>[0] = {}) {
+  return requestFor({
+    "skills.library.list": () => ({ ...personalLibrary, defaultTarget: "workspace" }),
+    "skills.status": (params) => agentReport((params as { agentId: string }).agentId),
+    ...overrides,
   });
 }
 
@@ -83,7 +94,7 @@ function mountSkills(
     agents,
     selectedAgentId: "main",
     selectionIntentRevision: selection.intentRevision,
-    report: { workspaceDir: "/workspace", managedSkillsDir: "/managed", skills: [] },
+    report: agentReport(),
     error: null,
   };
   const [routeData, setRouteData] = createSignal(initialRouteData, { ownedWrite: true });
@@ -119,22 +130,15 @@ function mountSkills(
 afterEach(() => vi.restoreAllMocks());
 
 it("retains a library draft across reconnect and retires it on client replacement", async () => {
-  const request = vi.fn(async (method: string) => {
-    if (method === "skills.library.save") {
+  const request = requestFor({
+    "skills.library.save": () => {
       throw new Error("Synthetic save rejection");
-    }
-    return method === "skills.library.list"
-      ? {
-          ...personalLibrary,
-          entries: [
-            libraryEntry({
-              slug: "retained-library-skill",
-              name: "retained-library-skill",
-              description: "Retained library entry",
-            }),
-          ],
-        }
-      : { skills: [] };
+    },
+    "skills.library.list": () => ({
+      ...personalLibrary,
+      entries: [libraryEntry({ slug: "retained-library-skill" })],
+    }),
+    "skills.status": () => ({ skills: [] }),
   });
   const { page, connection, find, button, waitForText } = mountSkills(request, "settings");
   await waitForFast(() => expect(button("Create skill").disabled).toBe(false));
@@ -185,22 +189,16 @@ it("shows a settings heading with its four actions in one row below it", async (
     async (method) => (method === "skills.library.list" ? personalLibrary : { skills: [] }),
     "settings",
   );
-  await waitForFast(() =>
-    expect(findAll(".plugins-toolbar button").length).toBeGreaterThanOrEqual(4),
-  );
-
-  expect(find(".content-header h1")?.textContent).toBe("Skills");
-  const actions = find(".plugins-toolbar");
-  expect(
-    Array.from(actions?.querySelectorAll("button") ?? [], (button) => button.textContent?.trim()),
-  ).toEqual(["Search skills", "Workshop", "Create skill", "Import skill"]);
+  await waitForFast(() => {
+    expect(find(".content-header h1")).toMatchObject({ textContent: "Skills" });
+    expect(
+      [...findAll(".plugins-toolbar button")].map((button) => button.textContent?.trim()),
+    ).toEqual(["Search skills", "Workshop", "Create skill", "Import skill"]);
+  });
 });
 
 it("opens Plugins and Skill workshop from the shared tabs", async () => {
-  const { page, context } = mountSkills(async (method) =>
-    method === "skills.library.list" ? personalLibrary : { results: [] },
-  );
-  flush();
+  const { page, context } = mountSkills(emptySearch);
   for (const tab of ["plugins", "skill-workshop"]) {
     page
       .querySelector(`#plugins-tab-${tab}`)
@@ -210,9 +208,7 @@ it("opens Plugins and Skill workshop from the shared tabs", async () => {
 });
 
 it("keeps the discovery input and focus when a query publishes a new view revision", () => {
-  const { find } = mountSkills(async (method) =>
-    method === "skills.library.list" ? personalLibrary : { results: [] },
-  );
+  const { find } = mountSkills(emptySearch);
   const input = find<HTMLInputElement>('input[name="skills-search"]')!;
   input.focus();
   enter(input, "calendar");
@@ -223,14 +219,13 @@ it("keeps the discovery input and focus when a query publishes a new view revisi
 
 it("follows sidebar selection and rejects old scope results before installing", async () => {
   const oldReport = deferred<unknown>();
-  const request = requestFor({
+  const request = scopeRequest({
     "skills.search": () => ({ results: [remoteSkill] }),
-    "skills.library.list": () => ({ ...personalLibrary, defaultTarget: "workspace" }),
     "skills.status": (params) => {
       if ((params as { agentId: string }).agentId === "research") {
         return oldReport.promise;
       }
-      return { skills: [createSkill({ name: "main-only", skillKey: "main-only" })] };
+      return agentReport("main");
     },
     "skills.install": () => ({ message: "Installed" }),
   });
@@ -242,9 +237,7 @@ it("follows sidebar selection and rejects old scope results before installing", 
   );
   context.agentSelection.set("main");
   await waitForText("main-only");
-  oldReport.resolve({
-    skills: [createSkill({ name: "research-only", skillKey: "research-only", disabled: true })],
-  });
+  oldReport.resolve(agentReport("research", true));
   await oldReport.promise;
   flush();
   expect(page.textContent).not.toContain("research-only");
@@ -257,7 +250,6 @@ it("follows sidebar selection and rejects old scope results before installing", 
       ?.getAttribute("title"),
   ).toContain("Disabled");
   publishRouteData();
-  flush();
   expect(context.agentSelection.state.selectedId).toBe("research");
   expect(page.textContent).toContain("research-only");
   find<HTMLButtonElement>(".plugin-catalog-card__install")!.click();
@@ -272,22 +264,14 @@ it("follows sidebar selection and rejects old scope results before installing", 
   expect(context.navigate).toHaveBeenCalledWith("skill-settings", { search: "?agent=research" });
 });
 it("keeps Settings scope independent of discovery and rejects an older route snapshot", async () => {
-  const request = requestFor({
-    "skills.library.list": () => ({ ...personalLibrary, defaultTarget: "workspace" }),
-    "skills.status": (params) => {
-      const agentId = (params as { agentId: string }).agentId;
-      return { skills: [createSkill({ name: `${agentId}-only`, skillKey: `${agentId}-only` })] };
-    },
-  });
+  const request = scopeRequest();
   const { page, context, publishRouteData, waitForText } = mountSkills(request, "settings");
-  flush();
   context.settingsAgentSelection.set("research");
   await waitForText("research-only");
   expect(page.querySelector("openclaw-agent-select")).toBeNull();
   context.agentSelection.set("research");
   context.agentSelection.set("main");
   publishRouteData();
-  flush();
   expect(page.textContent).toContain("research-only");
   expect(context.settingsAgentSelection.state.selectedId).toBe("research");
   expect(request.mock.calls.filter(([method]) => method === "skills.status")).toEqual([
@@ -297,18 +281,8 @@ it("keeps Settings scope independent of discovery and rejects an older route sna
 
 it("keeps each selection owner when a retained page changes surface", async () => {
   const warnings = vi.spyOn(console, "warn");
-  const report = (agentId: string) => ({
-    workspaceDir: "/workspace",
-    managedSkillsDir: "/managed",
-    skills: [createSkill({ name: `${agentId}-only`, skillKey: `${agentId}-only` })],
-  });
-  const request = requestFor({
-    "skills.library.list": () => ({ ...personalLibrary, defaultTarget: "workspace" }),
+  const request = scopeRequest({
     "skills.search": () => ({ results: [] }),
-    "skills.status": (params) => {
-      // SAFETY: This fixture only reads the typed skills.status request payload.
-      return report((params as { agentId: string }).agentId);
-    },
   });
   const { context, publishRouteData, changeSurface, waitForText } = mountSkills(request);
   context.agentSelection.set("research");
@@ -316,7 +290,7 @@ it("keeps each selection owner when a retained page changes surface", async () =
   publishRouteData({
     selectedAgentId: "research",
     selectionIntentRevision: context.agentSelection.intentRevision,
-    report: report("research"),
+    report: agentReport("research"),
   });
   // Independent owners can have equal intent revisions while selecting different agents.
   context.settingsAgentSelection.set("main");
