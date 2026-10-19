@@ -4964,8 +4964,11 @@ discard the cache. A concurrent write may finish while a snapshot is being
 delivered; its receipt makes the next lookup refresh. Workers also adopt the host's
 live database validation receipt before session admission, preserving pending-row
 checks without repeating whole-store validation. Branch reads share the existing
-maintenance reader's prewarming, five-minute idle window, database custody, and
-memory-pressure retirement. They no longer start a dedicated worker after short
+maintenance reader's retained connection, prewarming, five-minute idle window,
+database custody, and memory-pressure retirement. Each branch read refreshes the
+connection's idle deadline and finishes its snapshot before returning; an expired
+reader reopens in that same scope without rotating the worker for queued viewers.
+They no longer start a dedicated worker after short
 idle gaps, and foreground history retains its separate reader. Branch identity and lifecycle
 reads use metadata without loading saved prompts or diff snapshots. After a complete scan
 verifies unique indexed identities and backward ancestry, linear stored
