@@ -59,6 +59,8 @@ async function repairContainerState() {
 }
 
 const startup = () => runStartupConfigPreflight({ gateway: true });
+const withInspectedAgents = (run: () => Promise<void>) =>
+  withAgentDatabaseStartupAdmission(run, { deferInspections: false });
 async function expectStartupRefusal(file: string, bytes: Buffer, admit = false) {
   const run = () => expect(startup()).rejects.toMatchObject({ code: 78 });
   await (admit ? withAgentDatabaseStartupAdmission(run) : run());
@@ -134,11 +136,9 @@ function seedSchema19Agent(stateDir: string, unsafe = false): string {
       INSERT INTO schema_meta
         (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
         VALUES ('primary', 'agent', 19, 'main', '2026.9.4', 1, 1);
+      INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+        VALUES ('agent:main:upgrade', 'upgrade', '{"sessionId":"upgrade","updatedAt":1}', 1);
     `);
-    database
-      .prepare(`INSERT INTO session_nodes
-        (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)`)
-      .run("agent:main:upgrade", "upgrade", JSON.stringify({ sessionId: "upgrade", updatedAt: 1 }));
     if (unsafe) {
       database.exec("UPDATE schema_meta SET schema_version = 18 WHERE meta_key = 'primary'");
     }
@@ -152,15 +152,12 @@ it("preserves schema 19 at startup, then backs it up and repairs it through Doct
   await withContainerState(async (stateDir) => {
     const databasePath = seedSchema19Agent(stateDir);
     const original = fs.readFileSync(databasePath);
-    await withAgentDatabaseStartupAdmission(
-      async () => {
-        await expectStartupRefusal(databasePath, original);
-        await repairContainerState();
-        await startup();
-        expect(listAgentDatabaseAdmissionRefusals()).toEqual([]);
-      },
-      { deferInspections: false },
-    );
+    await withInspectedAgents(async () => {
+      await expectStartupRefusal(databasePath, original);
+      await repairContainerState();
+      await startup();
+      expect(listAgentDatabaseAdmissionRefusals()).toEqual([]);
+    });
     expectBackup(databasePath, 19, "session_nodes", 1);
     readDatabase(databasePath, (db) => {
       expectSchema(db, OPENCLAW_AGENT_SCHEMA_VERSION);
@@ -278,25 +275,22 @@ it("isolates a divergent auxiliary database while migrating and admitting the de
       const retiredPath = path.join(stateDir, "settings", "voicewake.json");
       const retiredBytes = '{"triggers":["leave-for-doctor"]}\n';
       writeArtifact(retiredPath, retiredBytes);
-      await withAgentDatabaseStartupAdmission(
-        async () => {
-          await startup();
-          expect(listAgentDatabaseAdmissionRefusals()).toEqual([
-            expect.objectContaining({
-              agentId: "auxiliary",
-              paths: [auxiliaryPath],
-              embeddedOwnerId: "main",
-              code: "agent-database-ownership-mismatch",
-            }),
-          ]);
-          expect(readStartupMigrationWarning()).toContain("belongs to agent main");
-          expect(readStartupMigrationWarning()).toContain(
-            "Preserve and inspect this database before accepting a fresh agent.",
-          );
-          expect(readStartupMigrationWarning()).toContain(retiredPath);
-        },
-        { deferInspections: false },
-      );
+      await withInspectedAgents(async () => {
+        await startup();
+        expect(listAgentDatabaseAdmissionRefusals()).toEqual([
+          expect.objectContaining({
+            agentId: "auxiliary",
+            paths: [auxiliaryPath],
+            embeddedOwnerId: "main",
+            code: "agent-database-ownership-mismatch",
+          }),
+        ]);
+        expect(readStartupMigrationWarning()).toContain("belongs to agent main");
+        expect(readStartupMigrationWarning()).toContain(
+          "Preserve and inspect this database before accepting a fresh agent.",
+        );
+        expect(readStartupMigrationWarning()).toContain(retiredPath);
+      });
 
       expect(fs.readFileSync(auxiliaryPath)).toEqual(preservedBytes);
       expect(fs.readFileSync(retiredPath, "utf8")).toBe(retiredBytes);

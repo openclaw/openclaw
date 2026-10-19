@@ -43,7 +43,8 @@ function childEnv(values: NodeJS.ProcessEnv, omitted: string[] = []) {
   }
   return env;
 }
-function readResult(result: Awaited<ReturnType<typeof runIsolatedModuleScript>>) {
+async function run(runtimeRoot: string, env: NodeJS.ProcessEnv, script: string) {
+  const result = await runIsolatedModuleScript(env, script, { runtimeRoot, timeoutMs: 60_000 });
   const lines = result.stdout.split("\n").filter((line) => line.startsWith("__RESULT__"));
   expect(lines, `${result.stderr}\n${result.stdout}`).toHaveLength(1);
   return JSON.parse(lines[0]!.slice("__RESULT__".length));
@@ -81,13 +82,8 @@ it("leaves config and state absent on repeated readiness checks", async () => {
         configExists: result.snapshot.exists,
       }));
     `;
-  const run = () =>
-    runIsolatedModuleScript(env, script, {
-      runtimeRoot,
-      timeoutMs: 60_000,
-    });
-  const first = readResult(await run());
-  const second = readResult(await run());
+  const first = await run(runtimeRoot, env, script);
+  const second = await run(runtimeRoot, env, script);
 
   expect(first).toEqual({ activeLease: false, configExists: false });
   expect(second).toEqual({ activeLease: false, configExists: false });
@@ -105,24 +101,20 @@ describe("CLI readiness after early config observation", () => {
     fs.mkdirSync(runtimeTempDir);
   });
 
-  it.each([
-    { name: "explicit Gateway target", existingState: false },
-    { name: "existing shared state", existingState: true },
-  ])(
-    "preserves current config and its observed health for $name",
-    async ({ existingState }) => {
+  it.each([false, true])(
+    "preserves current config and observed health (state already exists: %s)",
+    async (existingState) => {
       const { runtimeRoot, sourceUrl, processEntrypointsUrl } = runtime;
       const root = fs.realpathSync(tempDirs.make("openclaw-cli-pristine-observation-"));
       const stateDir = path.join(root, "state");
       const configPath = path.join(root, "openclaw.json");
       const timelinePath = path.join(root, "timeline.jsonl");
-      const config = {
+      const configRaw = JSON.stringify({
         gateway: { mode: "local", port: 19876, auth: { mode: "token", token: "test-token" } },
         agents: { defaults: { workspace: path.join(root, "workspace") } },
         logging: { file: path.join(root, "openclaw.log") },
         plugins: { enabled: false },
-      } satisfies OpenClawConfig;
-      const configRaw = JSON.stringify(config);
+      } satisfies OpenClawConfig);
       fs.writeFileSync(configPath, configRaw);
       const env = childEnv(
         {
@@ -196,9 +188,8 @@ describe("CLI readiness after early config observation", () => {
       const { runCli } = await import(${JSON.stringify(sourceUrl("cli/run-main.ts"))});
       process.argv = [process.execPath, "openclaw", "attach", "movies-a1166b81",
         "--url", "ws://127.0.0.1:19877", "--token", "test-token"];
-      let message;
-      try { await runCli(process.argv); }
-      catch (error) { message = error instanceof Error ? error.message : String(error); }
+      const message = await runCli(process.argv).catch(error =>
+        error instanceof Error ? error.message : String(error));
       const { flushDiagnosticsTimeline } =
         await import(${JSON.stringify(sourceUrl("infra/diagnostics-timeline.ts"))});
       flushDiagnosticsTimeline();
@@ -216,8 +207,7 @@ describe("CLI readiness after early config observation", () => {
         observedConfigMode: health ? JSON.parse(health.last_known_good_json).gatewayMode : null,
       }) + "\\n");
     `;
-      const result = await runIsolatedModuleScript(env, script, { runtimeRoot, timeoutMs: 60_000 });
-      const observed = readResult(result);
+      const observed = await run(runtimeRoot, env, script);
       expect(observed.message).toContain("Session reference is ambiguous:");
       expect(observed.message).toContain("first");
       expect(observed.message).toContain("second");
