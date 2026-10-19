@@ -10,6 +10,7 @@ import {
   resolveMaxActiveTranscriptBytes,
 } from "../../context-engine/transcript-byte-limit.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { requireCompactionWriterEntry } from "../embedded-agent-runner/compaction-successor.js";
 import { attachCompactionAccountingRecorder } from "../embedded-agent-runner/run/compaction-accounting-bridge.js";
@@ -27,6 +28,8 @@ import type {
 } from "./host-capability-types.js";
 
 type SeedSourceScope = <T>(run: () => Promise<T>, signal?: AbortSignal) => Promise<T>;
+
+const log = createSubsystemLogger("agents/harness");
 
 function combineSignals(first?: AbortSignal, second?: AbortSignal) {
   return first && second ? AbortSignal.any([first, second]) : (first ?? second);
@@ -276,7 +279,11 @@ export function bindBoundedSeed(
     }
     assert();
     if (cut) {
-      await attempt.onAgentEvent?.({ stream: "compaction", data: { phase: "context_bounded" } });
+      try {
+        await attempt.onAgentEvent?.({ stream: "compaction", data: { phase: "context_bounded" } });
+      } catch (error) {
+        log.warn(`bounded seed context notification failed: ${String(error)}`);
+      }
       assert();
     }
     return bounded;

@@ -53,6 +53,7 @@ type SeedCase = Partial<typeof allowance> & {
   revoke?: boolean;
   replaceWriter?: boolean;
   decline?: boolean;
+  eventObserver?: "throw" | "reject";
   oversizedSummary?: boolean;
   oversizedTail?: boolean;
 };
@@ -66,6 +67,18 @@ it.each<SeedCase>([
   { ...allowance, name: "larger allowance cannot widen host", requestTokens: 1024 },
   { ...allowance, name: "invalid allowance is ignored", requestTokens: Infinity },
   { ...allowance, name: "oversized summary is bounded again", oversizedSummary: true },
+  {
+    ...allowance,
+    name: "synchronous observer failure is contained",
+    oversizedSummary: true,
+    eventObserver: "throw",
+  },
+  {
+    ...allowance,
+    name: "rejected observer failure is contained",
+    oversizedSummary: true,
+    eventObserver: "reject",
+  },
   {
     name: "omitted existing summary",
     summary: "summary ".repeat(1024),
@@ -87,6 +100,7 @@ it.each<SeedCase>([
     revoke,
     replaceWriter,
     decline,
+    eventObserver,
     maxBytes = 1024,
     contextTokens,
     requestTokens,
@@ -185,6 +199,17 @@ it.each<SeedCase>([
         );
         return { ok: true, compacted: true };
       });
+      const onAgentEvent = eventObserver
+        ? vi.fn(
+            eventObserver === "throw"
+              ? () => {
+                  throw new Error("observer failed");
+                }
+              : async () => {
+                  throw new Error("observer failed");
+                },
+          )
+        : undefined;
       const maybePrepare = bindBoundedSeed(
         {
           sessionTarget: { ...target, expectedWriterRunId: "seed-writer" },
@@ -192,6 +217,7 @@ it.each<SeedCase>([
           contextTokenBudget: contextTokens,
           config: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: maxBytes } } } },
           userTurnTranscriptRecorder: recorder,
+          ...(onAgentEvent ? { onAgentEvent } : {}),
         },
         () => {},
         async (run) => run(),
@@ -205,6 +231,12 @@ it.each<SeedCase>([
         expect(loadTranscriptEventsSync(target)).toEqual(originalEvents);
       } else {
         const seed = await result;
+        if (onAgentEvent) {
+          expect(onAgentEvent).toHaveBeenCalledWith({
+            stream: "compaction",
+            data: { phase: "context_bounded" },
+          });
+        }
         expect(Buffer.byteLength(JSON.stringify(seed))).toBeLessThanOrEqual(expectedBytes);
         if (!expected && !oversizedTail) {
           expect(seed).toContainEqual(makeUserMessage("recent request", 2));
