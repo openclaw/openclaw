@@ -50,15 +50,15 @@ export function ReviewDisclosure(props: {
     () => ({ open: props.open, active: props.active, instant: props.instant }),
     (next) => {
       if (!next) {
-        return;
+        return undefined;
       }
       if (next === applied) {
         if (!current.open || !current.active) {
-          return;
+          return undefined;
         }
         const to = content.getBoundingClientRect().height;
         if (to === height) {
-          return;
+          return undefined;
         }
         const from = animation ? shell.getBoundingClientRect().height : height;
         return () => move(from, to);
