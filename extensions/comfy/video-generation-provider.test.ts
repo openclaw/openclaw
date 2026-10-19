@@ -18,11 +18,10 @@ const videoOutput = (filename = "generated.mp4") => ({ filename, subfolder: "", 
 function mockLocalVideoResponses(
   outputs: Record<string, unknown>,
   download?: { body: string; contentType: string },
-  promptId = "local-video",
 ) {
   fetchWithSsrFGuardMock
-    .mockResolvedValueOnce(fetchGuardJson({ prompt_id: promptId }))
-    .mockResolvedValueOnce(fetchGuardJson({ [promptId]: { outputs } }));
+    .mockResolvedValueOnce(fetchGuardJson({ prompt_id: "local-video" }))
+    .mockResolvedValueOnce(fetchGuardJson({ "local-video": { outputs } }));
 
   if (download) {
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
@@ -98,13 +97,11 @@ describe("comfy video-generation provider", () => {
     expect(fetchWithSsrFGuardMock.mock.calls[2]?.[0]).toMatchObject({
       url: "http://127.0.0.1:8188/view?filename=generated.WEBM&subfolder=&type=output",
     });
-    expect(result.videos[0]).toEqual(
-      expect.objectContaining({
-        buffer: Buffer.from("webm-data"),
-        mimeType: "video/webm",
-        fileName: "generated.WEBM",
-      }),
-    );
+    expect(result.videos[0]).toMatchObject({
+      buffer: Buffer.from("webm-data"),
+      mimeType: "video/webm",
+      fileName: "generated.WEBM",
+    });
   });
 
   it.each([

@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspect } from "node:util";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { buildComfyConfig, registerComfyProviders } from "./test-helpers.js";
 
 const comfyProviders = registerComfyProviders();
@@ -13,15 +13,14 @@ const TINY_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
 );
+const imageOutput = { images: [{ filename: "proof.png", subfolder: "", type: "output" }] };
 
 type ImageRequest = Parameters<typeof comfyProviders.image.generateImage>[0];
 function generate(
   headers: Record<string, unknown>,
   config: Record<string, unknown> = {},
-  options: {
-    inputImages?: ImageRequest["inputImages"];
-    secrets?: NonNullable<ImageRequest["cfg"]>["secrets"];
-  } = {},
+  options: Pick<ImageRequest, "inputImages"> &
+    Pick<NonNullable<ImageRequest["cfg"]>, "secrets"> = {},
 ) {
   const cfg = buildComfyConfig({
     workflow: { "6": { inputs: { text: "" } }, "9": { inputs: {} } },
@@ -41,17 +40,10 @@ function generate(
   });
 }
 
-function expectAuthorizedImage(result: Awaited<ReturnType<typeof generate>>, auth: string) {
-  expect(receivedAuthHeaders).toHaveLength(3);
-  expect(receivedAuthHeaders.every((header) => header === auth)).toBe(true);
-  expect(result.images[0]?.buffer).toEqual(TINY_PNG);
-}
-
 let server: http.Server;
 let baseUrl: string;
 const receivedAuthHeaders: (string | undefined)[] = [];
 let failurePath: string | undefined;
-let terminalFailure = false;
 
 beforeAll(async () => {
   server = http.createServer((req, res) => {
@@ -63,8 +55,8 @@ beforeAll(async () => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     req.resume();
     if (url.pathname === failurePath) {
-      const credential = req.headers.authorization?.split(" ")[1];
-      const detail = `proxy rejected ${credential} ${String(req.headers["x-proxy-auth"])}`;
+      const terminalFailure = failurePath.startsWith("/api/");
+      const detail = `proxy rejected ${req.headers.authorization?.split(" ")[1]} ${String(req.headers["x-proxy-auth"])}`;
       json(
         terminalFailure ? { status: "failed", error: detail } : { error: detail },
         terminalFailure ? 200 : 403,
@@ -78,21 +70,13 @@ beforeAll(async () => {
       return json({ prompt_id: "proof-1" });
     }
     if (req.method === "GET" && url.pathname === "/history/proof-1") {
-      return json({
-        "proof-1": {
-          outputs: {
-            "9": { images: [{ filename: "proof.png", subfolder: "", type: "output" }] },
-          },
-        },
-      });
+      return json({ "proof-1": { outputs: { "9": imageOutput } } });
     }
     if (req.method === "GET" && url.pathname === "/view") {
-      res.writeHead(200, { "content-type": "image/png" });
-      res.end(TINY_PNG);
+      res.writeHead(200, { "content-type": "image/png" }).end(TINY_PNG);
       return;
     }
-    res.writeHead(404);
-    res.end();
+    res.writeHead(404).end();
   });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
@@ -109,80 +93,73 @@ afterAll(async () => {
 beforeEach(() => {
   receivedAuthHeaders.length = 0;
   failurePath = undefined;
-  terminalFailure = false;
 });
 
 afterEach(() => vi.unstubAllEnvs());
 
-describe("comfy headers: real sockets, real SecretRef resolution (no mocks)", () => {
-  it.each([
-    ["upload", "/upload/image", false],
-    ["submit", "/prompt", false],
-    ["history", "/history/proof-1", false],
-    ["download", "/view", false],
-    ["cloud status", "/api/job/proof-1/status", true],
-  ])("redacts reflected headers from %s errors", async (_label, endpoint, cloud) => {
-    failurePath = endpoint;
-    terminalFailure = cloud;
-    const credential = "comfy-fixture-credential";
-    const customHeader = "comfy-fixture-proxy-value";
-    const result = await generate(
-      { Authorization: `Basic ${credential}`, "X-Proxy-Auth": customHeader },
-      {
-        mode: cloud ? "cloud" : "local",
-        apiKey: cloud ? "comfy-fixture-cloud-key" : undefined,
-        allowPrivateNetwork: cloud,
-        inputImageNodeId: "6",
-      },
-      endpoint === "/upload/image"
-        ? { inputImages: [{ buffer: TINY_PNG, mimeType: "image/png" }] }
-        : {},
-    ).catch((error: unknown) => error);
-    expect(result).toBeInstanceOf(Error);
-    expect(inspect(result)).toContain("proxy rejected");
-    expect(inspect(result)).not.toContain(credential);
-    expect(inspect(result)).not.toContain(customHeader);
-    expect(receivedAuthHeaders.length).toBeGreaterThan(0);
-  });
+it.each([
+  ["upload", "/upload/image", false],
+  ["submit", "/prompt", false],
+  ["history", "/history/proof-1", false],
+  ["download", "/view", false],
+  ["cloud status", "/api/job/proof-1/status", true],
+])("redacts reflected headers from %s errors", async (_label, endpoint, cloud) => {
+  failurePath = endpoint;
+  const credential = "comfy-fixture-credential";
+  const customHeader = "comfy-fixture-proxy-value";
+  const result = await generate(
+    { Authorization: `Basic ${credential}`, "X-Proxy-Auth": customHeader },
+    {
+      mode: cloud ? "cloud" : "local",
+      apiKey: cloud ? "comfy-fixture-cloud-key" : undefined,
+      allowPrivateNetwork: cloud,
+      inputImageNodeId: "6",
+    },
+    endpoint === "/upload/image"
+      ? { inputImages: [{ buffer: TINY_PNG, mimeType: "image/png" }] }
+      : {},
+  ).catch((error: unknown) => error);
+  expect(result).toBeInstanceOf(Error);
+  expect(inspect(result)).toContain("proxy rejected");
+  expect(inspect(result)).not.toContain(credential);
+  expect(inspect(result)).not.toContain(customHeader);
+  expect(receivedAuthHeaders.length).toBeGreaterThan(0);
+});
 
-  it("resolves an env-backed SecretRef Authorization header across all three real requests and completes generation", async () => {
-    const expectedAuth = `Basic ${Buffer.from(`env:${Math.random().toString(36).slice(2)}`).toString("base64")}`;
-    vi.stubEnv("COMFY_HEADER_PROOF_ENV", expectedAuth);
-    const result = await generate({
-      Authorization: { source: "env", provider: "default", id: "COMFY_HEADER_PROOF_ENV" },
-    });
-    expectAuthorizedImage(result, expectedAuth);
-  });
-
-  it("resolves a non-env (file-backed) SecretRef Authorization header across all three real requests", async () => {
-    const tmpDir = await fs.mkdtemp(join(tmpdir(), "comfy-header-secret-"));
-    const tmpFile = join(tmpDir, "token.txt");
-    const expectedAuth = `Basic ${Buffer.from(`file:${Math.random().toString(36).slice(2)}`).toString("base64")}`;
-    await fs.writeFile(tmpFile, expectedAuth);
-    await fs.chmod(tmpFile, 0o600);
-    try {
-      const result = await generate(
-        { Authorization: { source: "file", provider: "comfyheaderfile", id: "value" } },
-        {},
-        {
-          secrets: {
-            providers: { comfyheaderfile: { source: "file", path: tmpFile, mode: "singleValue" } },
-          },
-        },
-      );
-      expectAuthorizedImage(result, expectedAuth);
-    } finally {
+it.each(["env", "file"] as const)("resolves %s headers over real sockets", async (source) => {
+  const expectedAuth = `Basic ${Buffer.from(`${source}:${Math.random().toString(36).slice(2)}`).toString("base64")}`;
+  const tmpDir =
+    source === "file" ? await fs.mkdtemp(join(tmpdir(), "comfy-header-secret-")) : undefined;
+  try {
+    const options: Parameters<typeof generate>[2] = {};
+    const ref = { source, provider: "default", id: "COMFY_HEADER_PROOF_ENV" };
+    if (tmpDir) {
+      const path = join(tmpDir, "token.txt");
+      await fs.writeFile(path, expectedAuth, { mode: 0o600 });
+      ref.provider = "comfyheaderfile";
+      ref.id = "value";
+      options.secrets = {
+        providers: { comfyheaderfile: { source: "file", path, mode: "singleValue" } },
+      };
+    } else {
+      vi.stubEnv(ref.id, expectedAuth);
+    }
+    const result = await generate({ Authorization: ref }, {}, options);
+    expect(receivedAuthHeaders).toEqual([expectedAuth, expectedAuth, expectedAuth]);
+    expect(result.images[0]?.buffer).toEqual(TINY_PNG);
+  } finally {
+    if (tmpDir) {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
-  });
+  }
+});
 
-  it("stops before any real request when the SecretRef is unresolvable (fail-closed)", async () => {
-    vi.stubEnv("COMFY_HEADER_PROOF_MISSING", undefined);
-    await expect(
-      generate({
-        Authorization: { source: "env", provider: "default", id: "COMFY_HEADER_PROOF_MISSING" },
-      }),
-    ).rejects.toThrow(/unavailable secret/);
-    expect(receivedAuthHeaders).toHaveLength(0);
-  });
+it("stops before any real request when the SecretRef is unresolvable (fail-closed)", async () => {
+  vi.stubEnv("COMFY_HEADER_PROOF_MISSING", undefined);
+  await expect(
+    generate({
+      Authorization: { source: "env", provider: "default", id: "COMFY_HEADER_PROOF_MISSING" },
+    }),
+  ).rejects.toThrow(/unavailable secret/);
+  expect(receivedAuthHeaders).toHaveLength(0);
 });
