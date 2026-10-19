@@ -150,15 +150,11 @@ it.each<[string, string, MarkdownIR["styles"]]>([
 
 it("records whether a fenced block owns an explicit closing fence", () => {
   const unclosed = { codeOrigin: "fenced", codeClosed: false };
-  for (const source of ["```ts\nunclosed", "```\n    ```", "```\n\t```", "```\n> ```"]) {
-    expect(markdownToIR(source).blocks?.[0]).toMatchObject(unclosed);
-  }
-  expect(markdownToIR("```ts").blocks?.[0]).toMatchObject({
-    start: 0,
-    end: 1,
-    ...unclosed,
-  });
-  for (const [source, expected] of [
+  for (const [source, expected, firstBlock] of [
+    ...["```ts\nunclosed", "```\n    ```", "```\n\t```", "```\n> ```"].map(
+      (candidate) => [candidate, unclosed, true] as const,
+    ),
+    ["```ts", { ...unclosed, start: 0, end: 1 }, true],
     ["- ```\n  code\n  ```", { codeClosed: true, depth: 2 }],
     ["> ```\n> code\n> ```", { codeClosed: true, depth: 2 }],
     ["10. >   ```\n    >   code\n    >   ```", { codeClosed: true, depth: 3 }],
@@ -167,25 +163,20 @@ it("records whether a fenced block owns an explicit closing fence", () => {
     [">\t```\n>\tcode\n>\t```", { codeClosed: true, blockquoteDepth: 1 }],
     ["   - ```\n     code", { codeClosed: false }],
   ] as const) {
-    expect(markdownToIR(source).blocks?.find((block) => block.kind === "code_block")).toMatchObject(
-      expected,
-    );
+    const blocks = markdownToIR(source).blocks;
+    expect(
+      firstBlock ? blocks?.[0] : blocks?.find((block) => block.kind === "code_block"),
+    ).toMatchObject(expected);
   }
 });
 
 it("records setext headings and thematic breaks without changing rendered bytes", () => {
   const ir = markdownToIR("setext\n---\n\n***", { horizontalRuleText: "" });
 
-  expect(ir.blocks).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ kind: "heading", headingOrigin: "setext", headingLevel: 2 }),
-      expect.objectContaining({
-        kind: "thematic_break",
-        start: ir.text.length,
-        end: ir.text.length,
-      }),
-    ]),
-  );
+  expect(ir.blocks).toMatchObject([
+    { kind: "heading", headingOrigin: "setext", headingLevel: 2 },
+    { kind: "thematic_break", start: ir.text.length, end: ir.text.length },
+  ]);
 });
 
 it("retains zero-length blockquote ownership", () => {
