@@ -58,6 +58,7 @@ export function createChatPaneRails(params: {
   gatewaySnapshot: Parameters<typeof isDesktopPanelAvailable>[0];
   setObserverVisibility: (visible: boolean) => void;
   updateSidebarLayout: ChatPageHost["updateSidebarLayout"];
+  onOpenPanel?: (slot: SidebarSlotId) => void;
 }) {
   const { state, sidebarLayout } = params;
   const isPanelVisible = (slot: SidebarSlotId) =>
@@ -67,6 +68,7 @@ export function createChatPaneRails(params: {
     if (slot === "companion") {
       params.setObserverVisibility(true);
     }
+    params.onOpenPanel?.(slot);
   };
   const closePanelSlot = (slot: SidebarSlotId) => {
     if (slot === "companion") {

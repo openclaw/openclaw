@@ -212,6 +212,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       gatewaySnapshot,
       setObserverVisibility: this.setSessionObserverVisibility,
       updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
+      onOpenPanel: this.onSidebarPanelOpened,
     });
     const selfUser = resolveCurrentSelfUser({
       snapshotUser: gatewaySnapshot.selfUser,
