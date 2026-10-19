@@ -1,4 +1,3 @@
-// Exercise document RPCs through the registered workspace service and node wire.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
@@ -6,7 +5,6 @@ import path from "node:path";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
-import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../../../src/gateway/client.js";
 import {
   connectGatewayClient,
@@ -21,28 +19,22 @@ const ATTACHMENT_FIXTURE = "workspace-attachment-fixture";
 const digest = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
 const expectFile = async (file: string, content: string) =>
   expect(await fs.readFile(file, "utf8")).toBe(content);
+const expectMissing = (file: string) =>
+  expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
 
-// Invoke the public preparation caller inside the built Gateway. Only the turn
-// trigger is synthetic; workspace service, policy, pairing and binary wire are real.
+// Only the trigger is synthetic; workspace service, policy, pairing and binary wire are real.
 async function writeAttachmentFixture(root: string): Promise<string> {
   const directory = path.join(root, ATTACHMENT_FIXTURE);
   await fs.mkdir(directory);
-  const writeJson = (name: string, value: unknown) =>
-    fs.writeFile(path.join(directory, name), JSON.stringify(value));
-  await writeJson("package.json", {
-    name: ATTACHMENT_FIXTURE,
-    version: "0.0.0",
-    type: "module",
-    openclaw: { extensions: ["./index.js"] },
-  });
-  await writeJson("openclaw.plugin.json", {
-    id: ATTACHMENT_FIXTURE,
-    activation: { onStartup: true },
-    configSchema: { type: "object", additionalProperties: false, properties: {} },
-  });
   await fs.writeFile(
-    path.join(directory, "index.js"),
-    `
+    path.join(directory, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: ATTACHMENT_FIXTURE,
+      activation: { onStartup: true },
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    }),
+  );
+  const source = `
     import path from "node:path";
     import { getAgentWorkspaceAccess, prepareAgentWorkspaceAttachments } from "openclaw/plugin-sdk/agent-workspace-runtime";
     import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
@@ -50,44 +42,36 @@ async function writeAttachmentFixture(root: string): Promise<string> {
     export default {
       id: "${ATTACHMENT_FIXTURE}",
       register(api) {
-        api.registerGatewayMethod("workspace-attachment-fixture.readOutput", async ({ params, respond }) => {
+        api.registerGatewayMethod("workspace-attachment-fixture.run", async ({ params: { size, large, outside }, respond }) => {
           try {
             const workspace = api.runtime.agent.resolveAgentWorkspaceDir(api.config, "qa");
+            if (size !== undefined) {
+              if (size !== 17 && size !== 50) throw new Error("Unknown fixture size");
+              if (!saved.has(size)) {
+                const bytes = Buffer.alloc(size * 1024 * 1024, 0x6d);
+                saved.set(size, await saveMediaBuffer(bytes, "application/octet-stream", "inbound", bytes.length, "report.bin"));
+              }
+              const source = saved.get(size).path;
+              const turn = { media: [{ path: source }], timeoutMs: 60000 };
+              const original = JSON.stringify(turn);
+              const note = await prepareAgentWorkspaceAttachments({ workspaceDir: workspace, turn, assertCurrent: () => {} });
+              return respond(true, { note, source, unchanged: JSON.stringify(turn) === original });
+            }
             const reader = getAgentWorkspaceAccess(workspace)?.outboundMedia;
             if (!reader) throw new Error("Output reader unavailable");
-            const name = params.large ? "large.bin" : "report.txt";
-            const source = path.join(workspace, params.outside ? "private.txt" : "media/outbound/" + name);
-            const bytes = await reader.readFile(source, params.large ? 32 * 1024 * 1024 : 1024 * 1024);
+            const name = large ? "large.bin" : "report.txt";
+            const source = path.join(workspace, outside ? "private.txt" : "media/outbound/" + name);
+            const bytes = await reader.readFile(source, large ? 32 * 1024 * 1024 : 1024 * 1024);
             const attachment = await saveMediaBuffer(bytes, "text/plain", "outbound", bytes.length, name);
             respond(true, { path: attachment.path });
           } catch (error) {
             respond(false, undefined, { code: "UNAVAILABLE", message: String(error) });
           }
         }, { scope: "operator.admin" });
-        api.registerGatewayMethod("workspace-attachment-fixture.prepare", async ({ params, respond }) => {
-          try {
-            const size = params.size;
-            if (size !== 17 && size !== 50) throw new Error("Unknown fixture size");
-            if (!saved.has(size)) {
-              const bytes = Buffer.alloc(size * 1024 * 1024, 0x6d);
-              saved.set(size, await saveMediaBuffer(bytes, "application/octet-stream", "inbound", bytes.length, "report.bin"));
-            }
-            const source = saved.get(size).path;
-            const turn = { media: [{ path: source }], timeoutMs: 60000 };
-            const original = JSON.stringify(turn);
-            const note = await prepareAgentWorkspaceAttachments({
-              workspaceDir: api.runtime.agent.resolveAgentWorkspaceDir(api.config, "qa"),
-              turn, assertCurrent: () => {},
-            });
-            respond(true, { note, source, unchanged: JSON.stringify(turn) === original });
-          } catch (error) {
-            respond(false, undefined, { code: "UNAVAILABLE", message: String(error) });
-          }
-        }, { scope: "operator.admin" });
       },
     };
-  `,
-  );
+  `;
+  await fs.writeFile(path.join(directory, "index.mjs"), source);
   return directory;
 }
 
@@ -97,7 +81,6 @@ it(
   async () => {
     const state = await createOpenClawTestState({
       label: "workspace-node-files",
-      layout: "home",
       applyEnv: false,
       env: {
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
@@ -116,9 +99,16 @@ it(
     await fs.mkdir(state.workspaceDir, { recursive: true });
     const document = path.join(remote, "AGENTS.md");
     const localDocument = path.join(state.workspaceDir, "AGENTS.md");
+    const staged = `${remote}/media/inbound/openclaw-staged-*`;
+    const nodePolicy = {
+      ask: "off",
+      allowReadPaths: [document, staged, `${staged}/**`, `${remote}/media/outbound/**`],
+      allowWritePaths: [document, `${staged}/**`],
+      followSymlinks: false,
+    };
     await fs.writeFile(document, "Harness instructions");
     await fs.writeFile(localDocument, "Stale Gateway copy");
-    const nodeIdentity = loadOrCreateDeviceIdentity({ env: state.env });
+    const nodeId = loadOrCreateDeviceIdentity({ env: state.env }).deviceId;
     await state.writeConfig({
       plugins: {
         allow: ["file-transfer"],
@@ -126,65 +116,14 @@ it(
         entries: { "file-transfer": { enabled: true } },
       },
     });
-    const nodeId = nodeIdentity.deviceId;
     const attachmentFixture = await writeAttachmentFixture(state.root);
-    const config: OpenClawConfig = {
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        controlUi: { enabled: false },
-        nodes: { commands: { allow: COMMANDS } },
-      },
-      agents: {
-        ownership: "explicit",
-        entries: {
-          qa: { workspace: state.workspaceDir },
-          local: { workspace: state.path("local-workspace") },
-        },
-        defaults: {
-          workspace: state.workspaceDir,
-          systemAgent: { agentId: "qa" },
-          skipBootstrap: true,
-          heartbeat: { every: "0m" },
-        },
-      },
-      plugins: {
-        allow: ["file-transfer", ATTACHMENT_FIXTURE],
-        load: { paths: [attachmentFixture] },
-        slots: { memory: "none" },
-        entries: {
-          [ATTACHMENT_FIXTURE]: { enabled: true },
-          "file-transfer": {
-            enabled: true,
-            config: {
-              policyVersion: 2,
-              workspaces: { qa: { nodeId, remoteRoot: remote } },
-              nodes: {
-                [nodeId]: {
-                  ask: "off",
-                  allowReadPaths: [
-                    document,
-                    `${remote}/media/inbound/openclaw-staged-*`,
-                    `${remote}/media/inbound/openclaw-staged-*/**`,
-                    `${remote}/media/outbound/**`,
-                  ],
-                  allowWritePaths: [document, `${remote}/media/inbound/openclaw-staged-*/**`],
-                  followSymlinks: false,
-                },
-              },
-            },
-          },
-        },
-      },
-    };
     const gatewayOwner = createQaGatewayChild();
     let owner: GatewayClient | undefined;
     let reader: GatewayClient | undefined;
     let node: ChildProcess | undefined;
     let nodeOutput = "";
     try {
-      // Run the built host and built plugin together. Mixing a source Gateway
-      // with a packaged plugin creates two separate workspace registries.
+      // A source host and packaged plugin would have separate workspace registries.
       const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
         command: {
@@ -198,29 +137,61 @@ it(
         controlUiEnabled: false,
         mutateConfig: (cfg) => ({
           ...cfg,
-          gateway: { ...cfg.gateway, nodes: config.gateway!.nodes },
-          agents: config.agents,
-          plugins: config.plugins,
+          gateway: { ...cfg.gateway, nodes: { commands: { allow: COMMANDS } } },
+          agents: {
+            ownership: "explicit",
+            entries: {
+              qa: { workspace: state.workspaceDir },
+              local: { workspace: state.path("local-workspace") },
+            },
+            defaults: {
+              workspace: state.workspaceDir,
+              systemAgent: { agentId: "qa" },
+              skipBootstrap: true,
+              heartbeat: { every: "0m" },
+            },
+          },
+          plugins: {
+            allow: ["file-transfer", ATTACHMENT_FIXTURE],
+            load: { paths: [attachmentFixture] },
+            slots: { memory: "none" },
+            entries: {
+              [ATTACHMENT_FIXTURE]: { enabled: true },
+              "file-transfer": {
+                enabled: true,
+                config: {
+                  policyVersion: 2,
+                  workspaces: { qa: { nodeId, remoteRoot: remote } },
+                  nodes: { [nodeId]: nodePolicy },
+                },
+              },
+            },
+          },
         }),
       });
-      const connection = { url: gateway.wsUrl, token: gateway.token, timeoutMs: 60_000 };
-      owner = await connectGatewayClient({
-        ...connection,
-        scopes: ["operator.admin", "operator.read", "operator.write", "operator.pairing"],
-        deviceIdentity: loadOrCreateDeviceIdentity({ path: state.path("owner.sqlite") }),
-      });
-      reader = await connectGatewayClient({
-        ...connection,
-        scopes: ["operator.read"],
-        deviceIdentity: loadOrCreateDeviceIdentity({ path: state.path("reader.sqlite") }),
-      });
+      const connect = (name: string, ...scopes: string[]) =>
+        connectGatewayClient({
+          url: gateway.wsUrl,
+          token: gateway.token,
+          timeoutMs: 60_000,
+          scopes,
+          deviceIdentity: loadOrCreateDeviceIdentity({ path: state.path(`${name}.sqlite`) }),
+        });
+      owner = await connect(
+        "owner",
+        "operator.admin",
+        "operator.read",
+        "operator.write",
+        "operator.pairing",
+      );
+      reader = await connect("reader", "operator.read");
+      const fixture = <T>(params: object = {}) =>
+        owner!.request<T>(`${ATTACHMENT_FIXTURE}.run`, params);
       const setup = await owner.request<{ setupCode: string; setupId: string }>(
         "device.pair.setupCode",
         { bootstrapProfile: "node", includeQr: false, publicUrl: gateway.wsUrl },
       );
-      // Exercise the shipped node launcher and plugin dispatch. The node gets
-      // only its setup code; setupStatus below verifies that code was redeemed.
-      const startNode = (setupCode?: string) => {
+      const startNode = async (setupCode?: string) => {
         nodeOutput = "";
         node = spawn(
           process.execPath,
@@ -238,6 +209,7 @@ it(
         node.stderr?.on("data", (chunk: Buffer) => {
           nodeOutput = (nodeOutput + chunk.toString("utf8")).slice(-8192);
         });
+        await waitForNode(true);
       };
       const waitForNode = (connected: boolean) =>
         vi.waitFor(
@@ -259,35 +231,24 @@ it(
         node = undefined;
         await waitForNode(false);
       };
-      startNode(setup.setupCode);
-      await waitForNode(true);
-
+      await startNode(setup.setupCode);
       await vi.waitFor(async () => {
         expect(
           await owner!.request("device.pair.setupStatus", { setupId: setup.setupId }),
         ).toMatchObject({ completion: { deviceId: nodeId } });
       });
-
+      const fileParams = { agentId: "qa", name: "AGENTS.md" };
       const get = () =>
-        reader!.request<{ file: { content: string; hash: string } }>("agents.files.get", {
-          agentId: "qa",
-          name: "AGENTS.md",
-        });
-      const set = (content: string, agentId = "qa", expectedHash?: string) =>
-        owner!.request("agents.files.set", {
-          agentId,
-          name: "AGENTS.md",
-          content,
-          ...(expectedHash === undefined ? {} : { expectedHash }),
-        });
+        reader!.request<{ file: { content: string; hash: string } }>(
+          "agents.files.get",
+          fileParams,
+        );
+      const set = (content: string, overrides: { agentId?: string; expectedHash?: string } = {}) =>
+        owner!.request("agents.files.set", { ...fileParams, content, ...overrides });
       const opened = await get();
       expect(opened.file.content).toBe("Harness instructions");
       await expect(
-        reader.request("agents.files.set", {
-          agentId: "qa",
-          name: "AGENTS.md",
-          content: "denied",
-        }),
+        reader.request("agents.files.set", { ...fileParams, content: "denied" }),
       ).rejects.toThrow(/scope|permission/i);
       await expect(
         reader.request("node.invoke", {
@@ -297,7 +258,7 @@ it(
           idempotencyKey: "reader-direct-fetch",
         }),
       ).rejects.toThrow(/scope|permission/i);
-      await set("Owner edit", "qa", opened.file.hash);
+      await set("Owner edit", { expectedHash: opened.file.hash });
       await expectFile(document, "Owner edit");
       await fs.writeFile(document, "Harness edit");
       expect((await get()).file.content).toBe("Harness edit");
@@ -305,28 +266,21 @@ it(
 
       for (const size of [17, 50]) {
         const prepare = () =>
-          owner!.request<{ note: string; source: string; unchanged: boolean }>(
-            "workspace-attachment-fixture.prepare",
-            { size },
-          );
+          fixture<{ note: string; source: string; unchanged: boolean }>({ size });
         const prepared = await prepare();
         // Inbound media resolution canonicalizes the store path (e.g. /tmp on macOS).
         const source = await fs.realpath(prepared.source);
         const directory = `media/inbound/openclaw-staged-${digest(source)}`;
         const target = path.join(remote, directory, `input-${path.basename(prepared.source)}`);
-        expect(prepared.note).toBe(`[media attached: ${target}]`);
-        expect(prepared.unchanged).toBe(true);
+        expect(prepared).toMatchObject({ note: `[media attached: ${target}]`, unchanged: true });
         expect(digest(await fs.readFile(target))).toBe(
           digest(Buffer.alloc(size * 1024 * 1024, 0x6d)),
         );
-        await expect(fs.stat(path.join(state.workspaceDir, "media"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
+        await expectMissing(path.join(state.workspaceDir, "media"));
         await fs.writeFile(target, "Harness edited the attachment");
         expect((await prepare()).note).toBe(prepared.note);
         await expectFile(target, "Harness edited the attachment");
       }
-      // An attachment grant must not make unrelated owner documents writable.
       await expect(
         owner.request("node.invoke", {
           nodeId,
@@ -340,39 +294,29 @@ it(
           idempotencyKey: "ungranted-workspace-write",
         }),
       ).rejects.toThrow(/allow|denied|permission/i);
-      await expect(fs.stat(path.join(remote, "private.txt"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectMissing(path.join(remote, "private.txt"));
 
-      // Exercise the public output reader through the built service and node,
-      // with only the permitted output folder readable and a stale local decoy.
       const remoteOutput = path.join(remote, "media/outbound/report.txt");
       const localOutput = path.join(state.workspaceDir, "media/outbound/report.txt");
       await fs.mkdir(path.dirname(remoteOutput), { recursive: true });
       await fs.mkdir(path.dirname(localOutput), { recursive: true });
       await fs.writeFile(remoteOutput, "Harness output");
       await fs.writeFile(localOutput, "Stale Gateway output");
-      const outputAttachment = (params: { large?: boolean; outside?: boolean } = {}) =>
-        owner!.request<{ path: string }>("workspace-attachment-fixture.readOutput", params);
-      const readOutput = async () => fs.readFile((await outputAttachment()).path, "utf8");
+      const readOutput = async () => fs.readFile((await fixture<{ path: string }>()).path, "utf8");
       expect(await readOutput()).toBe("Harness output");
       await expectFile(localOutput, "Stale Gateway output");
       const largeOutput = Buffer.alloc(32 * 1024 * 1024, 0x71);
       await fs.writeFile(path.join(remote, "media/outbound/large.bin"), largeOutput);
-      const largeResult = await outputAttachment({ large: true });
-      const receivedOutput = await fs.readFile(largeResult.path);
-      expect(receivedOutput.length).toBe(largeOutput.length);
-      expect(digest(receivedOutput)).toBe(digest(largeOutput));
+      const largeResult = await fixture<{ path: string }>({ large: true });
+      expect(largeOutput.equals(await fs.readFile(largeResult.path))).toBe(true);
 
       await fs.writeFile(path.join(remote, "private.txt"), "Not an output attachment");
-      await expect(outputAttachment({ outside: true })).rejects.toThrow(/allow|denied|permission/i);
+      await expect(fixture({ outside: true })).rejects.toThrow(/allow|denied|permission/i);
 
-      // Saving a document also creates a missing workspace in the local path.
-      // Remote ownership must preserve that behavior without using the decoy.
       await fs.rm(state.path("local-workspace"), { recursive: true, force: true });
       await fs.rm(remote, { recursive: true });
       for (const agentId of ["local", "qa"]) {
-        await set("Recreated workspace", agentId);
+        await set("Recreated workspace", { agentId });
       }
       await expectFile(state.path("local-workspace", "AGENTS.md"), "Recreated workspace");
       expect((await get()).file.content).toBe("Recreated workspace");
@@ -385,20 +329,16 @@ it(
       await expect(readOutput()).rejects.toThrow(/node|connected|unavailable/i);
       await expectFile(localDocument, "Stale Gateway copy");
 
-      // A setup code is single-use. Normal restarts reuse the node's saved
-      // endpoint, device identity and token, without provisioning new credentials.
-      startNode();
-      await waitForNode(true);
+      // Normal restarts reuse the saved endpoint, identity and token, not the single-use setup code.
+      await startNode();
       expect((await get()).file.content).toBe("Recreated workspace");
       expect(await readOutput()).toBe("Harness output after workspace recreation");
       await set("Owner edit after node restart");
       await expectFile(document, "Owner edit after node restart");
 
-      // A supervisor may restart the same command, still carrying the consumed
-      // setup code. The native client must prefer its persisted device token.
+      // A supervisor may replay the consumed setup code; the saved device token must take precedence.
       await stopNode();
-      startNode(setup.setupCode);
-      await waitForNode(true);
+      await startNode(setup.setupCode);
       expect((await get()).file.content).toBe("Owner edit after node restart");
       await expectFile(localDocument, "Stale Gateway copy");
     } finally {
