@@ -1,4 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  createSubagentRunRecord,
+  taskCompletionEvents,
+} from "../agents/subagent-test-fixtures.test-helpers.js";
 import { deliverSubagentAnnouncement } from "../agents/subagents/announce/subagent-announce-delivery.js";
 import { seedSubagentCompletionDelivery } from "../agents/subagents/completion/subagent-completion-admission.test-helpers.js";
 import { admitCorrelatedSubagentSessionDelivery } from "../agents/subagents/completion/subagent-completion-delivery.js";
@@ -17,20 +21,20 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { removeCronRunContinuationSessionIfIdle } from "./run-continuation-cleanup.js";
+import { removeCronRunContinuationSessionIfIdle as removeIdle } from "./run-continuation-cleanup.js";
 
 const base = { agentId: "main", sessionKey: "agent:main:cron:queue-race" };
 const exact = { ...base, sessionKey: `${base.sessionKey}:run:run-123` };
 const payload = { kind: "systemEvent" as const, sessionKey: exact.sessionKey, text: "resume" };
+type QueueContext = ReturnType<typeof captureOpenClawStateWorkerContext>;
 const writers = [
   {
     name: "ordinary",
-    enqueue: async (context: ReturnType<typeof captureOpenClawStateWorkerContext>) =>
-      queue.enqueueSessionDelivery(payload, context),
+    enqueue: async (context: QueueContext) => queue.enqueueSessionDelivery(payload, context),
   },
   {
     name: "claimed",
-    enqueue: async (context: ReturnType<typeof captureOpenClawStateWorkerContext>) =>
+    enqueue: async (context: QueueContext) =>
       (await queue.enqueueClaimedSessionDelivery(payload, 1_000, context)).id,
   },
 ];
@@ -46,26 +50,37 @@ async function seedContinuation() {
   return captureOpenClawStateWorkerContext();
 }
 
+const withContinuation = (run: (context: QueueContext) => Promise<void>) =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => run(await seedContinuation()));
+
+function pauseAdmission() {
+  const entered = createDeferredCore();
+  const resume = createDeferredCore();
+  const begin = lifecycle.beginSessionEffect;
+  vi.spyOn(lifecycle, "beginSessionEffect").mockImplementationOnce(async (params) => {
+    const lease = await begin(params);
+    entered.resolve();
+    await resume.promise;
+    return lease;
+  });
+  return { entered: entered.promise, resume: () => resume.resolve() };
+}
+
 function createCorrelatedRun() {
   const now = Date.now();
-  return {
+  return createSubagentRunRecord({
     runId: "correlated-completion",
-    childSessionKey: "agent:main:subagent:child",
     requesterSessionKey: exact.sessionKey,
     requesterDisplayKey: exact.sessionKey,
     task: "complete",
     requesterAgentId: "main",
     expectsCompletionMessage: true,
     completion: { required: true, resultText: "done", capturedAt: now },
-    delivery: { status: "pending" as const, disposition: "retryable" as const },
-    cleanup: "keep" as const,
+    delivery: { status: "pending", disposition: "retryable" },
     createdAt: now - 1,
-    execution: {
-      status: "terminal" as const,
-      endedAt: now,
-      outcome: { status: "ok" as const },
-    },
-  };
+    endedAt: now,
+    outcome: { status: "ok" },
+  });
 }
 
 afterEach(() => {
@@ -74,24 +89,15 @@ afterEach(() => {
 });
 
 it.each(writers)("retains the alias while a $name enqueue owns admission", async ({ enqueue }) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const context = await seedContinuation();
-    const admitted = createDeferredCore();
-    const resume = createDeferredCore();
-    const begin = lifecycle.beginSessionEffect;
-    vi.spyOn(lifecycle, "beginSessionEffect").mockImplementationOnce(async (params) => {
-      const lease = await begin(params);
-      admitted.resolve();
-      await resume.promise;
-      return lease;
-    });
+  await withContinuation(async (context) => {
+    const admission = pauseAdmission();
     const enqueueing = enqueue(context);
     try {
-      await admitted.promise;
-      await removeCronRunContinuationSessionIfIdle(exact.sessionKey, undefined, context);
+      await admission.entered;
+      await removeIdle(exact.sessionKey, undefined, context);
       expect(loadSessionEntry(exact)?.sessionId).toBe("run-123");
     } finally {
-      resume.resolve();
+      admission.resume();
       await enqueueing;
     }
     expect(await queue.loadPendingSessionDeliveries(context)).toMatchObject([
@@ -104,8 +110,7 @@ it.each(writers)("retains the alias while a $name enqueue owns admission", async
 it.each(writers)(
   "refuses a $name enqueue that loses to continuation cleanup",
   async ({ enqueue }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const context = await seedContinuation();
+    await withContinuation(async (context) => {
       const snapshotRead = createDeferredCore();
       const resumeCleanup = createDeferredCore();
       const reserved = createDeferredCore();
@@ -116,7 +121,7 @@ it.each(writers)(
         await resumeCleanup.promise;
         return pending;
       });
-      const cleaning = removeCronRunContinuationSessionIfIdle(exact.sessionKey, undefined, context);
+      const cleaning = removeIdle(exact.sessionKey, undefined, context);
       await snapshotRead.promise;
       const begin = lifecycle.beginSessionEffect;
       vi.spyOn(lifecycle, "beginSessionEffect").mockImplementationOnce((params) => {
@@ -140,12 +145,11 @@ it.each(writers)(
 );
 
 it("removes an eligible alias after its own settled delivery, preserving the base", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const context = await seedContinuation();
+  await withContinuation(async (context) => {
     const id = await queue.enqueueSessionDelivery(payload, context);
-    await removeCronRunContinuationSessionIfIdle(exact.sessionKey, undefined, context);
+    await removeIdle(exact.sessionKey, undefined, context);
     expect(loadSessionEntry(exact)?.sessionId).toBe("run-123");
-    await removeCronRunContinuationSessionIfIdle(exact.sessionKey, id, context);
+    await removeIdle(exact.sessionKey, id, context);
     expect(loadSessionEntry(exact)).toBeUndefined();
     expect(loadSessionEntry(base)?.sessionId).toBe("run-123");
   });
@@ -154,10 +158,9 @@ it("removes an eligible alias after its own settled delivery, preserving the bas
 it.each(["live", "removed"] as const)(
   "admits or refuses correlated completion for a %s requester",
   async (requester) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const context = await seedContinuation();
+    await withContinuation(async (context) => {
       if (requester === "removed") {
-        await removeCronRunContinuationSessionIfIdle(exact.sessionKey, undefined, context);
+        await removeIdle(exact.sessionKey, undefined, context);
       }
       const run = createCorrelatedRun();
       seedSubagentCompletionDelivery({ subagent: run });
@@ -196,7 +199,7 @@ it.each(["live", "removed"] as const)(
           expect(subagentRuns.get(run.runId)?.delivery).toMatchObject(delivery);
           const database = openOpenClawStateDatabase({ path: context.admission.databasePath });
           expect(readSubagentRun(database, run.runId)?.delivery).toMatchObject(delivery);
-          await removeCronRunContinuationSessionIfIdle(exact.sessionKey, undefined, context);
+          await removeIdle(exact.sessionKey, undefined, context);
           expect(loadSessionEntry(exact)?.sessionId).toBe("run-123");
         }
         expect(loadSessionEntry(base)?.sessionId).toBe("run-123");
@@ -208,23 +211,14 @@ it.each(["live", "removed"] as const)(
 );
 
 it("refuses correlated announcement publication when its source retires during session admission", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const context = await seedContinuation();
+  await withContinuation(async (context) => {
     const run = createCorrelatedRun();
     subagentRuns.set(run.runId, run);
     saveSubagentRegistryChangesToSqlite(subagentRuns, [run.runId]);
     const database = openOpenClawStateDatabase({ path: context.admission.databasePath });
     const persistedBefore = readSubagentRun(database, run.runId);
     const sourceBefore = structuredClone(run);
-    const admitted = createDeferredCore();
-    const resume = createDeferredCore();
-    const begin = lifecycle.beginSessionEffect;
-    vi.spyOn(lifecycle, "beginSessionEffect").mockImplementationOnce(async (params) => {
-      const lease = await begin(params);
-      admitted.resolve();
-      await resume.promise;
-      return lease;
-    });
+    const admission = pauseAdmission();
     let sourceCurrent = true;
     const publication = deliverSubagentAnnouncement({
       requesterSessionKey: exact.sessionKey,
@@ -240,33 +234,25 @@ it("refuses correlated announcement publication when its source retires during s
       requesterSessionOrigin: { channel: "discord", to: "channel:media-binding" },
       isSourceSessionAdmissionAllowed: () => sourceCurrent,
       isSourceSessionEffectsAllowed: () => sourceCurrent,
-      internalEvents: [
-        {
-          type: "task_completion",
-          source: "image_generation",
-          childSessionKey: run.childSessionKey,
-          announceType: "image generation",
-          taskLabel: "lighthouse",
-          status: "ok",
-          statusLabel: "completed",
-          result: "generated lighthouse",
-          mediaUrls: ["/tmp/synthetic-lighthouse.png"],
-          replyInstruction: "Deliver the generated image.",
-        },
-      ],
+      internalEvents: taskCompletionEvents({
+        source: "image_generation",
+        childSessionKey: run.childSessionKey,
+        result: "generated lighthouse",
+        mediaUrls: ["/tmp/synthetic-lighthouse.png"],
+      }),
     });
     try {
-      await admitted.promise;
+      await admission.entered;
       expect(await queue.loadPendingSessionDeliveries(context)).toEqual([]);
       sourceCurrent = false;
-      resume.resolve();
+      admission.resume();
       const outcome = await publication;
       expect.soft(await queue.loadPendingSessionDeliveries(context)).toEqual([]);
       expect.soft(subagentRuns.get(run.runId)).toEqual(sourceBefore);
       expect.soft(readSubagentRun(database, run.runId)).toEqual(persistedBefore);
       expect(outcome).toMatchObject({ delivered: false, disposition: "permanent_failure" });
     } finally {
-      resume.resolve();
+      admission.resume();
       await publication;
       subagentRuns.delete(run.runId);
     }
