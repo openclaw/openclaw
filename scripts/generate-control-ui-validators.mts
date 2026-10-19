@@ -3,8 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { format } from "oxfmt";
-import { ObjectOptions, Type, type TSchema } from "typebox";
-import { Build, Intern } from "typebox/schema";
+import { IsLiteralString, ObjectOptions, Type, type TSchema } from "typebox";
+import * as Compiler from "typebox/schema";
 import { AgentRuntimeRestrictionErrorDetailsSchema } from "../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
 import {
   SessionApprovalEventSchema,
@@ -58,19 +58,7 @@ const compilerLintRules = [
 ];
 const additionalLintRules: Partial<Record<Group, string[]>> = {
   activity: ["eslint/curly"],
-  approvals: [
-    "eslint/no-underscore-dangle",
-    "eslint/curly",
-    "eslint/no-param-reassign",
-    "eslint/prefer-object-has-own",
-    "unicorn/no-instanceof-builtins",
-    "unicorn/no-array-sort",
-    "unicorn/no-useless-length-check",
-    "typescript/prefer-for-of",
-    "typescript/no-unnecessary-type-conversion",
-    "typescript/prefer-includes",
-    "typescript/require-array-sort-compare",
-  ],
+  approvals: ["unicorn/no-useless-length-check"],
 };
 const validators: Array<[name: string, schema: TSchema, type: string, group: Group]> = [
   [
@@ -187,29 +175,86 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
   ],
 ];
 
-function compile(name: string, schema: TSchema): string {
-  const compiled = Build(schema);
-  if (compiled.UseUnevaluated()) {
-    throw new Error(`${name}: unevaluated schemas need an explicit standalone implementation`);
-  }
-  const functions = compiled.Functions().join(";\n");
+function emitStandalone(
+  binding: string,
+  functions: string,
+  variables: unknown[],
+  entry: string,
+): string {
   const supportedHelpers = new Set(["Guard.CodePointCount", "Hashing.Hash"]);
   for (const helper of functions.match(/(?:Guard|Hashing)\.\w+/g) ?? []) {
     if (!supportedHelpers.has(helper)) {
-      throw new Error(`${name}: unsupported standalone helper ${helper}`);
+      throw new Error(`${binding}: unsupported standalone helper ${helper}`);
     }
   }
-  const external = compiled.External().variables.map((value) => {
+  const external = variables.map((value) => {
     if (!(value instanceof RegExp)) {
-      throw new Error(`${name}: unsupported external value`);
+      throw new Error(`${binding}: unsupported external value`);
     }
     return `new RegExp(${JSON.stringify(value.source)}, ${JSON.stringify(value.flags)})`;
   });
-  return `export const is${name} = /* @__PURE__ */ (() => {
+  return `export const ${binding} = /* @__PURE__ */ (() => {
     const External = [${external.join(",")}];
     ${functions};
-    return value => ${compiled.Entry()};
+    return ${entry};
   })();`;
+}
+
+function compile(name: string, schema: TSchema): string {
+  const compiled = Compiler.Build(schema);
+  if (compiled.UseUnevaluated()) {
+    throw new Error(`${name}: unevaluated schemas need an explicit standalone implementation`);
+  }
+  return emitStandalone(
+    `is${name}`,
+    compiled.Functions().join(";\n"),
+    compiled.External().variables,
+    `value => ${compiled.Entry()}`,
+  );
+}
+
+function onlyStringUniqueItems(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return true;
+  }
+  if (
+    "uniqueItems" in value &&
+    value.uniqueItems === true &&
+    !(Type.IsArray(value) && Type.IsUnion(value.items) && value.items.anyOf.every(IsLiteralString))
+  ) {
+    return false;
+  }
+  return Object.values(value).every(onlyStringUniqueItems);
+}
+
+function compileApprovals(entries: typeof validators): string {
+  const sharedSchema = Compiler.Intern(
+    Type.Object(Object.fromEntries(entries.map(([name, schema]) => [name, schema]))),
+  );
+  const root = sharedSchema.$defs[sharedSchema.$ref.slice("#/$defs/".length)];
+  if (!root || !Compiler.IsProperties(root) || Compiler.HasUnevaluated({}, sharedSchema)) {
+    throw new Error("Approvals need a standalone object schema without unevaluated checks");
+  }
+  // Match Build's reset boundary while sharing one scope across the approval entry points.
+  Compiler.ResetExternal();
+  Compiler.ResetFunctions();
+  const context = new Compiler.BuildContext(false);
+  const stack = Compiler.Stack({}, sharedSchema);
+  const entriesSource = Object.entries(root.properties).map(
+    ([name, entry]) =>
+      `is${name}: value => ${Compiler.CreateFunction(stack, context, entry, "value")}`,
+  );
+  let functions = Compiler.GetFunctions().join(";\n");
+  if (entries.every(([, schema]) => onlyStringUniqueItems(schema))) {
+    // These finite string enums have the same equality under Set and TypeBox hashing.
+    functions = functions.replaceAll(".map(Hashing.Hash)", "");
+  }
+  return emitStandalone(
+    `{ ${entries.map(([name]) => `is${name}`).join(", ")} }`,
+    functions,
+    Compiler.GetExternal().variables,
+    `{ ${entriesSource.join(", ")} }`,
+  );
 }
 
 async function main() {
@@ -254,22 +299,25 @@ async function main() {
     "sender-identity",
   ] as const) {
     const selected = validators.filter((entry) => entry[3] === group);
-    // Approval and snapshot schemas repeat shapes; other validators stay inlined.
-    const compiled = selected
-      .map(([name, schema]) =>
-        compile(
-          name,
-          group === "approvals" || name === "ChatHistoryState" || name === "ChatTranscriptMetadata"
-            ? Intern(schema)
-            : schema,
-        ),
-      )
-      .join("\n");
+    // Approval entry points share shapes; snapshots intern within their existing lazy boundary.
+    const compiled =
+      group === "approvals"
+        ? compileApprovals(selected)
+        : selected
+            .map(([name, schema]) =>
+              compile(
+                name,
+                name === "ChatHistoryState" || name === "ChatTranscriptMetadata"
+                  ? Compiler.Intern(schema)
+                  : schema,
+              ),
+            )
+            .join("\n");
     // Import the compiler's exact helpers by name so one scalar check does not bundle every guard.
     const source = [
       ...(compiled.includes("Guard.")
         ? [
-            `import { CodePointCount } from ${JSON.stringify(path.join(typeboxBuildRoot, "guard/guard.mjs"))};`,
+            `import { CodePointCount } from ${JSON.stringify(path.join(typeboxBuildRoot, "guard/unicode/unicode.mjs"))};`,
           ]
         : []),
       ...(compiled.includes("Hashing.")
@@ -319,7 +367,7 @@ async function main() {
       const generatedHeader =
         extension === "js"
           ? header +
-            `/* oxlint-disable ${[...compilerLintRules, ...(additionalLintRules[group] ?? [])].join(", ")} -- Unmodified TypeBox compiler/helper output; canonical schema parity is tested. */\n`
+            `/* oxlint-disable ${[...compilerLintRules, ...(additionalLintRules[group] ?? [])].join(", ")} -- Generated TypeBox validators; canonical schema parity is tested. */\n`
           : header;
       const formatted = await format(outputPath, generatedHeader + contents);
       if (formatted.errors.length) {
