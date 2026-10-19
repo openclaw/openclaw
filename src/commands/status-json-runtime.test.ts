@@ -1,4 +1,3 @@
-// Status JSON runtime tests cover runtime status payload construction and command dependencies.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -11,16 +10,33 @@ import type { resolveStatusRuntimeSnapshot } from "./status-runtime-shared.ts";
 import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import { createStatusScanResultFixture } from "./status.test-support.ts";
 
+const backup = {
+  latest: {
+    id: "backup-1",
+    createdAt: 123,
+    archivePath: "/backups/git",
+    status: "ok",
+    kind: "git",
+  },
+} as const;
+const compatibilityWarning = {
+  pluginId: "legacy",
+  code: "hook-only",
+  compatCode: "hook-only-plugin-shape",
+  severity: "info" as const,
+  message: "warn",
+};
+const runtimeSnapshot = {
+  securityAudit: { summary: { critical: 1 } },
+  usage: { providers: [] },
+  health: { ok: true },
+  lastHeartbeat: { status: "ok" },
+  gatewayService: { label: "LaunchAgent" },
+  nodeService: { label: "node" },
+};
+
 const mocks = vi.hoisted(() => ({
-  readBackupRunFreshness: vi.fn(async () => ({
-    latest: {
-      id: "backup-1",
-      createdAt: 123,
-      archivePath: "/backups/git",
-      status: "ok" as const,
-      kind: "git" as const,
-    },
-  })),
+  readBackupRunFreshness: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   resolveStatusRuntimeSnapshot: vi.fn(),
   resolveStatusUsageSummary: vi.fn(),
@@ -75,16 +91,25 @@ function createScan() {
     gatewayProbeAuthWarning: undefined,
     agentStatus: { agents: [{ id: "main" }], defaultId: "main" } as never,
     secretDiagnostics: [],
-    pluginCompatibility: [
-      {
-        pluginId: "legacy",
-        code: "hook-only",
-        compatCode: "hook-only-plugin-shape",
-        severity: "info",
-        message: "warn",
-      },
-    ],
+    pluginCompatibility: [{ ...compatibilityWarning }],
   });
+}
+
+function runtimeInput(
+  timeoutMs: number,
+  overrides: Partial<Parameters<typeof resolveStatusRuntimeSnapshot>[0]>,
+) {
+  return {
+    config: { update: { channel: "stable" }, gateway: {} },
+    sourceConfig: { gateway: {} },
+    timeoutMs,
+    gatewayProbeDeadlineMs: timeoutMs,
+    gatewayReachable: true,
+    usage: undefined,
+    includeSecurityAudit: false,
+    suppressHealthErrors: undefined,
+    ...overrides,
+  };
 }
 
 describe("status-json-runtime", () => {
@@ -92,14 +117,8 @@ describe("status-json-runtime", () => {
     vi.clearAllMocks();
     clearRuntimeConfigSnapshot();
     vi.spyOn(performance, "now").mockReturnValue(0);
-    mocks.resolveStatusRuntimeSnapshot.mockResolvedValue({
-      securityAudit: { summary: { critical: 1 } },
-      usage: { providers: [] },
-      health: { ok: true },
-      lastHeartbeat: { status: "ok" },
-      gatewayService: { label: "LaunchAgent" },
-      nodeService: { label: "node" },
-    });
+    mocks.readBackupRunFreshness.mockResolvedValue(structuredClone(backup));
+    mocks.resolveStatusRuntimeSnapshot.mockResolvedValue(structuredClone(runtimeSnapshot));
   });
 
   afterEach(() => {
@@ -109,7 +128,7 @@ describe("status-json-runtime", () => {
 
   it("preserves the complete status JSON schema with optional sections", async () => {
     const scan = createScan();
-    scan.update = {
+    const update = {
       root: "/tmp/openclaw",
       installKind: "git",
       packageManager: "npm",
@@ -126,13 +145,14 @@ describe("status-json-runtime", () => {
         behind: 0,
         countsCached: true,
         stale: {
-          reason: "fetch-failed",
+          reason: "fetch-failed" as const,
           failedAtMs: 1000,
           detail: "network error",
           runId: "run-1",
         },
       },
-    };
+    } satisfies typeof scan.update;
+    scan.update = structuredClone(update);
     scan.tailscaleMode = "serve";
     scan.gatewayMode = "remote";
     scan.gatewayConnection = {
@@ -147,48 +167,27 @@ describe("status-json-runtime", () => {
     };
     scan.secretDiagnostics = ["diag"];
     mocks.resolveStatusRuntimeSnapshot.mockResolvedValueOnce({
-      securityAudit: { summary: { critical: 1 } },
-      health: { ok: true },
-      usage: { providers: [] },
-      lastHeartbeat: { status: "ok" },
+      ...structuredClone(runtimeSnapshot),
       gatewayService: { label: "LaunchAgent", installed: true, loadedText: "loaded" },
       nodeService: { label: "node", installed: true, loadedText: "loaded" },
     });
 
     const result = await resolveStatusJsonOutput({
       scan,
-      opts: { ...createStatusGatewayProbeBudget(), deep: true, usage: true },
+      opts: { ...createStatusGatewayProbeBudget(1234), deep: true, usage: true, agent: "beta" },
       includeSecurityAudit: true,
       includePluginCompatibility: true,
     });
 
+    expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith(
+      runtimeInput(1234, { agentId: "beta", usage: true, deep: true, includeSecurityAudit: true }),
+    );
+    expect(mocks.readBackupRunFreshness).toHaveBeenCalledWith(scan.env);
     expect(result).toEqual({
+      ...runtimeSnapshot,
       ok: true,
       os: { platform: "linux" },
-      update: {
-        root: "/tmp/openclaw",
-        installKind: "git",
-        packageManager: "npm",
-        registry: { latestVersion: "1.2.3" },
-        git: {
-          root: "/tmp/openclaw",
-          sha: null,
-          tag: null,
-          branch: null,
-          upstream: null,
-          dirty: null,
-          fetchOk: false,
-          ahead: 0,
-          behind: 0,
-          countsCached: true,
-          stale: {
-            reason: "fetch-failed",
-            failedAtMs: 1000,
-            detail: "network error",
-            runId: "run-1",
-          },
-        },
-      },
+      update,
       updateChannel: "stable",
       updateChannelSource: "config",
       memory: null,
@@ -199,71 +198,22 @@ describe("status-json-runtime", () => {
         reason: "Physical store inspection unavailable in fixture.",
         experimental: false,
         families: [
-          {
-            id: "state",
-            label: "Shared state",
-            default: "sqlite",
-            override: null,
-            fixedLocal: false,
-            effective: "sqlite",
-          },
-          {
-            id: "agent",
-            label: "Agent data",
-            default: "sqlite",
-            override: null,
-            fixedLocal: false,
-            effective: "sqlite",
-          },
-          {
-            id: "workboard",
-            label: "Workboard",
-            default: "sqlite",
-            override: null,
-            fixedLocal: false,
-            effective: "sqlite",
-          },
-          {
-            id: "logbook",
-            label: "Logbook",
-            default: "sqlite",
-            override: null,
-            fixedLocal: false,
-            effective: "sqlite",
-          },
-          {
-            id: "team-reports",
-            label: "Team Reports",
-            default: "sqlite",
-            override: null,
-            fixedLocal: false,
-            effective: "sqlite",
-          },
-          {
-            id: "quarantine",
-            label: "Database quarantine",
-            default: "sqlite",
-            override: null,
-            fixedLocal: true,
-            effective: "sqlite",
-          },
-          {
-            id: "managed-update",
-            label: "Managed update handoffs",
-            default: "sqlite",
-            override: null,
-            fixedLocal: true,
-            effective: "sqlite",
-          },
-          {
-            id: "package-activation",
-            label: "Package activation journal",
-            default: "sqlite",
-            override: null,
-            fixedLocal: true,
-            effective: "sqlite",
-          },
-        ],
+          ["state", "Shared state", false],
+          ["agent", "Agent data", false],
+          ["workboard", "Workboard", false],
+          ["logbook", "Logbook", false],
+          ["team-reports", "Team Reports", false],
+          ["quarantine", "Database quarantine", true],
+          ["managed-update", "Managed update handoffs", true],
+          ["package-activation", "Package activation journal", true],
+        ].map(([id, label, fixedLocal]) => ({
+          id,
+          label,
+          fixedLocal,
+          default: "sqlite",
+          override: null,
+          effective: "sqlite",
+        })),
       },
       gateway: {
         mode: "remote",
@@ -284,31 +234,11 @@ describe("status-json-runtime", () => {
         issues: [{ path: "gateway.port", message: "invalid" }],
       },
       secretDiagnostics: ["diag"],
-      securityAudit: { summary: { critical: 1 } },
-      health: { ok: true },
-      usage: { providers: [] },
-      lastHeartbeat: { status: "ok" },
       pluginCompatibility: {
         count: 1,
-        warnings: [
-          {
-            pluginId: "legacy",
-            code: "hook-only",
-            compatCode: "hook-only-plugin-shape",
-            severity: "info",
-            message: "warn",
-          },
-        ],
+        warnings: [compatibilityWarning],
       },
-      backups: {
-        latest: {
-          id: "backup-1",
-          createdAt: 123,
-          archivePath: "/backups/git",
-          status: "ok",
-          kind: "git",
-        },
-      },
+      backups: backup,
     });
   });
 
@@ -381,71 +311,13 @@ describe("status-json-runtime", () => {
     expect(result.usage).toEqual({ updatedAt: 123, providers: [] });
   });
 
-  it("builds the full json output for status --json", async () => {
-    const scan = createScan();
-    const result = await resolveStatusJsonOutput({
-      scan,
-      opts: { ...createStatusGatewayProbeBudget(1234), deep: true, usage: true, agent: "beta" },
-      includeSecurityAudit: true,
-      includePluginCompatibility: true,
-    });
-
-    expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith({
-      config: { update: { channel: "stable" }, gateway: {} },
-      sourceConfig: { gateway: {} },
-      timeoutMs: 1234,
-      gatewayProbeDeadlineMs: 1234,
-      agentId: "beta",
-      usage: true,
-      deep: true,
-      gatewayReachable: true,
-      includeSecurityAudit: true,
-      suppressHealthErrors: undefined,
-    });
-    expect(mocks.readBackupRunFreshness).toHaveBeenCalledWith(scan.env);
-    expect(result.gateway).toMatchObject({
-      url: "ws://127.0.0.1:18789",
-      urlSource: "config",
-    });
-    expect(result.gatewayService).toStrictEqual({ label: "LaunchAgent" });
-    expect(result.nodeService).toStrictEqual({ label: "node" });
-    expect(result.securityAudit).toStrictEqual({ summary: { critical: 1 } });
-    expect(result.usage).toStrictEqual({ providers: [] });
-    expect(result.health).toStrictEqual({ ok: true });
-    expect(result.lastHeartbeat).toStrictEqual({ status: "ok" });
-    expect(result.pluginCompatibility).toStrictEqual({
-      count: 1,
-      warnings: [
-        {
-          pluginId: "legacy",
-          code: "hook-only",
-          compatCode: "hook-only-plugin-shape",
-          severity: "info",
-          message: "warn",
-        },
-      ],
-    });
-    expect(result).toMatchObject({
-      backups: {
-        latest: {
-          id: "backup-1",
-          createdAt: 123,
-          archivePath: "/backups/git",
-          status: "ok",
-          kind: "git",
-        },
-      },
-    });
-  });
-
   it("skips optional sections when flags are off", async () => {
     mocks.resolveStatusRuntimeSnapshot.mockResolvedValueOnce({
+      ...runtimeSnapshot,
       securityAudit: undefined,
       usage: undefined,
       health: undefined,
       lastHeartbeat: null,
-      gatewayService: { label: "LaunchAgent" },
-      nodeService: { label: "node" },
     });
 
     const { env: _env, ...scanWithoutEnv } = createScan();
@@ -456,18 +328,16 @@ describe("status-json-runtime", () => {
       includePluginCompatibility: false,
     });
 
-    expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith({
-      config: { update: { channel: "stable" }, gateway: {} },
-      sourceConfig: { gateway: {} },
-      timeoutMs: 500,
-      gatewayProbeDeadlineMs: 500,
-      usage: false,
-      deep: false,
-      gatewayReachable: true,
-      includeSecurityAudit: false,
-      suppressHealthErrors: undefined,
-    });
+    expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith(
+      runtimeInput(500, {
+        usage: false,
+        deep: false,
+      }),
+    );
     expect(mocks.readBackupRunFreshness).toHaveBeenCalledWith({});
+    expect(result.gateway).toMatchObject({ url: "ws://127.0.0.1:18789", urlSource: "config" });
+    expect(result.gatewayService).toStrictEqual({ label: "LaunchAgent" });
+    expect(result.nodeService).toStrictEqual({ label: "node" });
     for (const field of [
       "securityAudit",
       "usage",
@@ -481,12 +351,10 @@ describe("status-json-runtime", () => {
 
   it("preserves failed deep health probes in nonthrowing JSON output", async () => {
     mocks.resolveStatusRuntimeSnapshot.mockResolvedValueOnce({
+      ...runtimeSnapshot,
       securityAudit: undefined,
       usage: undefined,
       health: { error: "gateway health probe timed out" },
-      lastHeartbeat: { status: "ok" },
-      gatewayService: { label: "LaunchAgent" },
-      nodeService: { label: "node" },
     });
 
     const result = await resolveStatusJsonOutput({
@@ -497,16 +365,11 @@ describe("status-json-runtime", () => {
     });
 
     expect(result.health).toEqual({ error: "gateway health probe timed out" });
-    expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith({
-      config: { update: { channel: "stable" }, gateway: {} },
-      sourceConfig: { gateway: {} },
-      timeoutMs: 500,
-      gatewayProbeDeadlineMs: 500,
-      usage: undefined,
-      deep: true,
-      gatewayReachable: true,
-      includeSecurityAudit: false,
-      suppressHealthErrors: true,
-    });
+    expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith(
+      runtimeInput(500, {
+        deep: true,
+        suppressHealthErrors: true,
+      }),
+    );
   });
 });

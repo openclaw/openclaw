@@ -102,6 +102,15 @@ function coldStartEnv(token?: string) {
   };
 }
 
+const runtimeDiagnostics = {
+  degradedSecretOwners: [],
+  degradedPlugins: [],
+  sqliteWal: createSqliteWalHealth(),
+  startupMigrationWarning: "Retained legacy state; run openclaw doctor --fix.",
+  installationReplacementWarning: "Installation replaced; draining before handoff.",
+  secretEgressProxy: { state: "degraded", message: "Check OpenSSL, then retry." },
+};
+
 describe("status scans", () => {
   it.each([true, false])(
     "uses Gateway heartbeat when its runtime snapshot is available=%s",
@@ -134,18 +143,9 @@ describe("status scans", () => {
   );
 
   it("collects live channel and runtime diagnostics for deep text status", async () => {
-    const sqliteWal = createSqliteWalHealth();
     const runtime = {
-      degradedSecretOwners: [],
-      degradedPlugins: [],
-      sqliteWal,
-      startupMigrationWarning: "Retained legacy state; run openclaw doctor --fix.",
-      installationReplacementWarning: "Installation replaced; draining before handoff.",
-      secretEgressProxy: { state: "degraded", message: "Check OpenSSL, then retry." },
-      pluginReload: {
-        phase: "reloading",
-        pluginIds: ["composio"],
-      },
+      ...runtimeDiagnostics,
+      pluginReload: { phase: "reloading", pluginIds: ["composio"] },
     };
     const liveChannelStatus = { ok: true, accounts: [] };
     mocks.callGateway.mockImplementation(async ({ method }: { method: string }) =>
@@ -259,25 +259,17 @@ describe("status scans", () => {
     );
   });
 
-  it.each(["token"])(
-    "uses manifest environment credentials for cold-start JSON (%s)",
-    async (token) => {
-      await withTemporaryEnv(coldStartEnv(token), async () => {
-        await scanStatusJsonFast(createStatusGatewayProbeBudget(), {} as never);
-      });
-      expect(mocks.probeGateway).toHaveBeenCalledTimes(token ? 1 : 0);
-      if (token) {
-        expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith(
-          expect.objectContaining({ fetchGit: false, includeRegistry: false }),
-        );
-      } else {
-        expect(mocks.getUpdateCheckResult).not.toHaveBeenCalled();
-      }
-    },
-  );
+  it("uses manifest environment credentials for cold-start JSON", async () => {
+    await withTemporaryEnv(coldStartEnv("token"), async () => {
+      await scanStatusJsonFast(createStatusGatewayProbeBudget(), {} as never);
+    });
+    expect(mocks.probeGateway).toHaveBeenCalledOnce();
+    expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith(
+      expect.objectContaining({ fetchGit: false, includeRegistry: false }),
+    );
+  });
 
   describe("collectStatusScanOverview", () => {
-    const sqliteWal = createSqliteWalHealth();
     const gatewaySnapshot: NonNullable<
       Parameters<typeof collectStatusScanOverview>[0]["gatewaySnapshot"]
     > = {
@@ -309,21 +301,16 @@ describe("status scans", () => {
       mocks.callGateway.mockImplementation(async ({ method }: { method: string }) =>
         method === "status"
           ? {
+              ...runtimeDiagnostics,
               secretEgressProxy: {
-                state: "degraded",
+                ...runtimeDiagnostics.secretEgressProxy,
                 caExpiresAt: "2036-09-01T00:00:00.000Z",
                 failedCertificates: 1,
-                message: "Check OpenSSL, then retry.",
               },
-              degradedSecretOwners: [],
-              degradedPlugins: [],
-              startupMigrationWarning: "Retained legacy state; run openclaw doctor --fix.",
-              installationReplacementWarning: "Installation replaced; draining before handoff.",
               childRuntime: {
                 execPath: "/opt/homebrew/Cellar/node@24/24.20.0/bin/node",
                 available: false,
               },
-              sqliteWal,
             }
           : { channelAccounts: {} },
       );
@@ -342,7 +329,7 @@ describe("status scans", () => {
       expect(result.runtimeDegradation?.secretEgressProxy?.message).toBe(
         "Check OpenSSL, then retry.",
       );
-      expect(result.runtimeDegradation?.sqliteWal).toEqual(sqliteWal);
+      expect(result.runtimeDegradation?.sqliteWal).toEqual(runtimeDiagnostics.sqliteWal);
       expect(commandConfigSnapshot.readCommandConfigSnapshot).toHaveBeenCalledOnce();
       expect(mocks.callGateway).toHaveBeenCalledTimes(2);
       expect(mocks.callGateway).toHaveBeenCalledWith(

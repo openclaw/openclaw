@@ -188,7 +188,6 @@ it.each(["populated", "empty", "unrelated", "missing", "unavailable"] as const)(
       vi.spyOn(StatementSync.prototype, "run"),
     ];
     try {
-      const samples = [];
       for (let attempt = 0; attempt < (kind === "populated" ? 4 : 1); attempt++) {
         writeJson.mockClear();
         mocks.getMemorySearchManager.mockClear();
@@ -196,9 +195,7 @@ it.each(["populated", "empty", "unrelated", "missing", "unavailable"] as const)(
         for (const call of nativeCalls) {
           call.mockClear();
         }
-        const started = performance.now();
         await statusJsonCommand({ all: true }, runtime);
-        const durationMs = performance.now() - started;
         if (kind === "missing") {
           expect(observer.run).not.toHaveBeenCalled();
         } else {
@@ -215,18 +212,8 @@ it.each(["populated", "empty", "unrelated", "missing", "unavailable"] as const)(
           2,
         );
         expect(mocks.getMemorySearchManager).toHaveBeenCalledTimes(kind === "populated" ? 1 : 0);
-        const parentSqlCalls = nativeCalls.map((call) => call.mock.calls.length);
-        expect(parentSqlCalls).toEqual([0, 0, 0, 0, 0, 0, 0]);
-        samples.push({ attempt, durationMs, parentSqlCalls });
+        expect(nativeCalls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0, 0]);
       }
-      console.info(
-        JSON.stringify({
-          fixture: kind,
-          timingScope: "handler after same-loader SDK observer setup",
-          samples,
-          json: writeJson.mock.calls[0]?.[0],
-        }),
-      );
       if (before) {
         expect(fs.readFileSync(databasePath)).toEqual(before);
       } else {

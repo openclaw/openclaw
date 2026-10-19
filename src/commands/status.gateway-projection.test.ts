@@ -79,6 +79,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const scan = () =>
+  scanStatusJsonFast(createStatusGatewayProbeBudget(), {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  });
+
 it.each([
   { withProjection: false, remote: false, readinessElapsedMs: 0, withChannelSummary: false },
   { withProjection: true, remote: false, readinessElapsedMs: 0, withChannelSummary: false },
@@ -136,22 +143,6 @@ it.each([
           },
         };
         mocks.callGateway.mockResolvedValue(summary);
-        mocks.localAgents.mockResolvedValue({
-          defaultId: null,
-          publish: () => ({
-            defaultId: null,
-            ownership: "explicit",
-            selectionRequired: true,
-            agents: [],
-            totalSessions: 99,
-            bootstrapPendingCount: 0,
-          }),
-          sessionStores: undefined,
-        });
-        mocks.localSummary.mockResolvedValue({
-          ...summary,
-          sessions: { ...summary.sessions, count: 99 },
-        });
 
         const clock = vi.spyOn(performance, "now");
         if (readinessElapsedMs) {
@@ -164,11 +155,7 @@ it.each([
             return { ok: true, connectLatencyMs: 1, error: null, status: null, presence: [] };
           });
         }
-        const result = await scanStatusJsonFast(createStatusGatewayProbeBudget(), {
-          log: vi.fn(),
-          error: vi.fn(),
-          exit: vi.fn(),
-        });
+        const result = await scan();
 
         expect(mocks.fullConfigReads).toBe(0);
         expect(mocks.localAgents).not.toHaveBeenCalled();
@@ -210,11 +197,7 @@ it("marks channelSummary uncollected when Gateway status projection fails", asyn
       });
       mocks.callGateway.mockRejectedValue(new Error("status rpc failed"));
 
-      const result = await scanStatusJsonFast(createStatusGatewayProbeBudget(), {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      });
+      const result = await scan();
 
       expect(result.gatewayReachable).toBe(true);
       expect(result.summary.channelSummary).toEqual([]);
@@ -260,11 +243,7 @@ it("keeps offline config diagnostics and local collection", async () => {
       });
       mocks.localSummary.mockResolvedValue({ sessions: { count: 4 }, heartbeat: { agents: [] } });
 
-      const result = await scanStatusJsonFast(createStatusGatewayProbeBudget(), {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      });
+      const result = await scan();
 
       expect(mocks.fullConfigReads).toBe(1);
       expect(mocks.localAgents).toHaveBeenCalledOnce();

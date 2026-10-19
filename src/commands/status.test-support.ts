@@ -1,4 +1,3 @@
-// Status test support builds reusable gateway, update, heartbeat, and service fixtures for command tests.
 import os from "node:os";
 import path from "node:path";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
@@ -60,38 +59,30 @@ export const baseStatusGatewaySnapshot = {
   gatewaySelf: { host: "gateway", version: "1.2.3" },
 } as const;
 
-const baseStatusOverviewScanFields = {
+export const baseStatusServices = {
+  gatewayService: {
+    label: "LaunchAgent",
+    installed: true,
+    managedByOpenClaw: true,
+    loadedText: "loaded",
+    runtimeShort: "running",
+  },
+  nodeService: {
+    label: "node",
+    installed: true,
+    loadedText: "loaded",
+    runtime: { status: "running", pid: 42 },
+  },
+  nodeOnlyGateway: null,
+};
+
+export const baseStatusOverviewSurface = {
   cfg: baseStatusCfg,
   update: baseStatusUpdate,
   tailscaleMode: "serve",
   tailscaleDns: "box.tail.ts.net",
   tailscaleHttpsUrl: "https://box.tail.ts.net",
   ...baseStatusGatewaySnapshot,
-};
-
-const baseStatusGatewayService = {
-  label: "LaunchAgent",
-  installed: true,
-  managedByOpenClaw: true,
-  loadedText: "loaded",
-  runtimeShort: "running",
-};
-
-const baseStatusNodeService = {
-  label: "node",
-  installed: true,
-  loadedText: "loaded",
-  runtime: { status: "running", pid: 42 },
-};
-
-export const baseStatusServices = {
-  gatewayService: baseStatusGatewayService,
-  nodeService: baseStatusNodeService,
-  nodeOnlyGateway: null,
-};
-
-export const baseStatusOverviewSurface = {
-  ...baseStatusOverviewScanFields,
   ...baseStatusServices,
 } as unknown as StatusOverviewSurface;
 
@@ -226,15 +217,10 @@ function createStatusHealth() {
   };
 }
 
-export function createStatusCommandOverviewRowsParams(
-  overrides: Partial<StatusCommandOverviewRowsParams> = {},
-): StatusCommandOverviewRowsParams {
+function createStatusCommandFields() {
   return {
-    backupFreshness: {},
     env: { OPENCLAW_STATE_DIR: STATUS_TEST_STATE_DIR },
-    opts: { deep: true },
     surface: baseStatusOverviewSurface,
-    osLabel: "macOS",
     summary: baseStatusSummary,
     health: createStatusHealth(),
     lastHeartbeat: createStatusLastHeartbeat(),
@@ -243,6 +229,17 @@ export function createStatusCommandOverviewRowsParams(
     memoryPlugin: baseStatusMemoryPlugin,
     pluginCompatibility: baseStatusPluginCompatibility,
     updateValue: "available · custom update",
+  };
+}
+
+export function createStatusCommandOverviewRowsParams(
+  overrides: Partial<StatusCommandOverviewRowsParams> = {},
+): StatusCommandOverviewRowsParams {
+  return {
+    ...createStatusCommandFields(),
+    backupFreshness: {},
+    opts: { deep: true },
+    osLabel: "macOS",
     ...overrides,
   };
 }
@@ -251,11 +248,9 @@ export function createStatusCommandReportDataParams(
   overrides: Partial<StatusCommandReportDataParams> = {},
 ): StatusCommandReportDataParams {
   return {
-    env: { OPENCLAW_STATE_DIR: STATUS_TEST_STATE_DIR },
+    ...createStatusCommandFields(),
     opts: { deep: true, verbose: true },
-    surface: baseStatusOverviewSurface,
     osSummary: { label: "macOS" } as never,
-    summary: baseStatusSummary,
     securityAudit: {
       ts: Date.now(),
       summary: { critical: 0, warn: 1, info: 0 },
@@ -268,20 +263,13 @@ export function createStatusCommandReportDataParams(
         },
       ],
     },
-    health: createStatusHealth(),
     usageLines: ["usage line"],
-    lastHeartbeat: createStatusLastHeartbeat(),
-    agentStatus: baseStatusAgentStatus,
     channels: {
       rows: [{ id: "quietchat", label: "QuietChat", enabled: true, state: "ok", detail: "ready" }],
     },
     channelIssues: [{ channel: "quietchat", message: "warn msg" }],
-    memory: baseStatusMemory,
-    memoryPlugin: baseStatusMemoryPlugin,
-    pluginCompatibility: baseStatusPluginCompatibility,
     pairingRecovery: { requestId: "req-1", reason: null, remediationHint: null },
     tableWidth: 120,
-    updateValue: "available · custom update",
     ...overrides,
   };
 }
