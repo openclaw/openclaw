@@ -600,7 +600,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       echoCache: sentMessageCache,
       selfChatCache,
       reactionNotifications: imessageCfg.reactionNotifications,
-      logVerbose,
     });
 
     const chatId = message.chat_id ?? undefined;

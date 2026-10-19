@@ -31,6 +31,7 @@ import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context
 import type { ConfiguredBindingRouteResult } from "openclaw/plugin-sdk/conversation-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveIMessageDirectChatService } from "../chat-context.js";
@@ -330,7 +331,6 @@ export async function resolveIMessageInboundDecision(params: {
   isKnownFromMeMessageId?: (
     ...args: Parameters<typeof isKnownFromMeIMessageMessageId>
   ) => boolean | Promise<boolean>;
-  logVerbose?: (msg: string) => void;
 }): Promise<IMessageInboundDecision> {
   const senderRaw = params.message.sender ?? "";
   const sender = senderRaw.trim();
@@ -500,20 +500,18 @@ export async function resolveIMessageInboundDecision(params: {
   if (senderAccess.decision !== "allow") {
     if (isGroup) {
       if (senderAccess.reasonCode === "group_policy_disabled") {
-        params.logVerbose?.("Blocked iMessage group message (groupPolicy: disabled)");
+        logVerbose("Blocked iMessage group message (groupPolicy: disabled)");
         return { kind: "drop", reason: "groupPolicy disabled" };
       }
       if (senderAccess.reasonCode === "group_policy_empty_allowlist") {
-        params.logVerbose?.(
-          "Blocked iMessage group message (groupPolicy: allowlist, no groupAllowFrom)",
-        );
+        logVerbose("Blocked iMessage group message (groupPolicy: allowlist, no groupAllowFrom)");
         return { kind: "drop", reason: "groupPolicy allowlist (empty groupAllowFrom)" };
       }
       if (senderAccess.reasonCode === "group_policy_not_allowlisted") {
-        params.logVerbose?.(`Blocked iMessage sender ${sender} (not in groupAllowFrom)`);
+        logVerbose(`Blocked iMessage sender ${sender} (not in groupAllowFrom)`);
         return { kind: "drop", reason: "not in groupAllowFrom" };
       }
-      params.logVerbose?.(`Blocked iMessage group message (${senderAccess.reasonCode})`);
+      logVerbose(`Blocked iMessage group message (${senderAccess.reasonCode})`);
       return { kind: "drop", reason: senderAccess.reasonCode };
     }
     if (senderAccess.reasonCode === "dm_policy_disabled") {
@@ -522,14 +520,12 @@ export async function resolveIMessageInboundDecision(params: {
     if (senderAccess.decision === "pairing") {
       return { kind: "pairing", senderId: senderNormalized };
     }
-    params.logVerbose?.(`Blocked iMessage sender ${sender} (dmPolicy=${params.dmPolicy})`);
+    logVerbose(`Blocked iMessage sender ${sender} (dmPolicy=${params.dmPolicy})`);
     return { kind: "drop", reason: "dmPolicy blocked" };
   }
 
   if (isGroup && groupListPolicy.allowlistEnabled && !groupListPolicy.allowed) {
-    params.logVerbose?.(
-      `imessage: skipping group message (${groupId ?? "unknown"}) not in allowlist`,
-    );
+    logVerbose(`imessage: skipping group message (${groupId ?? "unknown"}) not in allowlist`);
     return { kind: "drop", reason: "group id not in allowlist" };
   }
 
@@ -601,7 +597,7 @@ export async function resolveIMessageInboundDecision(params: {
         text: bodyText,
       });
   if (selfChatHit) {
-    params.logVerbose?.("imessage: dropping self-chat reflected duplicate");
+    logVerbose("imessage: dropping self-chat reflected duplicate");
     return { kind: "drop", reason: "self-chat echo" };
   }
 
@@ -617,7 +613,7 @@ export async function resolveIMessageInboundDecision(params: {
         includePendingText: isSelfChat,
       })
     ) {
-      params.logVerbose?.(
+      logVerbose(
         `imessage: skipping echo message${inboundMessageId ? ` id=${inboundMessageId}` : ""}`,
       );
       return { kind: "drop", reason: "echo" };
@@ -629,7 +625,7 @@ export async function resolveIMessageInboundDecision(params: {
   // inbound, which causes recursive echo amplification.
   const reflection = detectReflectedContent(messageText);
   if (reflection.isReflection) {
-    params.logVerbose?.(
+    logVerbose(
       `imessage: dropping reflected assistant content (markers: ${reflection.matchedLabels.join(", ")})`,
     );
     return { kind: "drop", reason: "reflected assistant content" };
@@ -688,7 +684,7 @@ export async function resolveIMessageInboundDecision(params: {
       }
     : null;
   if (replyContext && !filteredReplyContext && isGroup) {
-    params.logVerbose?.(
+    logVerbose(
       `imessage: drop reply context (mode=${contextVisibilityMode}, sender_allowed=${replySenderAllowed ? "yes" : "no"})`,
     );
   }
@@ -712,14 +708,12 @@ export async function resolveIMessageInboundDecision(params: {
 
   const commandAuthorized = commandAccess.authorized;
   if (commandAccess.shouldBlockControlCommand) {
-    if (params.logVerbose) {
-      logInboundDrop({
-        log: params.logVerbose,
-        channel: "imessage",
-        reason: "control command (unauthorized)",
-        target: sender,
-      });
-    }
+    logInboundDrop({
+      log: logVerbose,
+      channel: "imessage",
+      reason: "control command (unauthorized)",
+      target: sender,
+    });
     return { kind: "drop", reason: "control command (unauthorized)" };
   }
 
@@ -740,7 +734,7 @@ export async function resolveIMessageInboundDecision(params: {
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
   if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
-    params.logVerbose?.(`imessage: skipping group message (no mention)`);
+    logVerbose(`imessage: skipping group message (no mention)`);
     createChannelHistoryWindow({ historyMap: params.groupHistories }).record({
       historyKey: historyKey ?? "",
       limit: params.historyLimit,

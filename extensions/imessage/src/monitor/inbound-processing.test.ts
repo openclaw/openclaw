@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { loadFreshIMessageReplyCacheForTest } from "../test-support/runtime.js";
 import {
   createInboundDecisionParams,
@@ -61,12 +61,13 @@ const directMessage = (id: number, text: string, guid?: string) => ({
 describe("resolveIMessageInboundDecision echo detection", () => {
   it("drops inbound messages when outbound message id matches echo cache", async () => {
     const echoHas = vi.fn<EchoHas>((_scope, lookup) => lookup.messageId === "42");
-    const logVerbose = vi.fn();
+    const runtimeEnv = await import("openclaw/plugin-sdk/runtime-env");
+    const logVerbose = vi.spyOn(runtimeEnv, "logVerbose").mockImplementation(() => {});
+    onTestFinished(() => logVerbose.mockRestore());
 
     const decision = await resolveDecision({
       message: { text: "Reasoning:\n_step_" },
       echoCache: { has: echoHas },
-      logVerbose,
     });
 
     expect(decision).toEqual({ kind: "drop", reason: "echo" });
@@ -154,12 +155,13 @@ describe("resolveIMessageInboundDecision echo detection", () => {
 
   it("logs reflected duplicate drops without message content", async () => {
     const selfChatCache = new SelfChatCache();
-    const logVerbose = vi.fn();
+    const runtimeEnv = await import("openclaw/plugin-sdk/runtime-env");
+    const logVerbose = vi.spyOn(runtimeEnv, "logVerbose").mockImplementation(() => {});
+    onTestFinished(() => logVerbose.mockRestore());
     const bodyText = "line-1\nline-2\t\u001b[31mred";
     const resolveReflection = (message: Partial<InboundDecisionParams["message"]>) =>
       resolveDecision({
         selfChatCache,
-        logVerbose,
         message: {
           chat_identifier: "+15555550123",
           text: bodyText,
