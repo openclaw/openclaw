@@ -157,6 +157,49 @@ then swap halves for the next pair. Record the exact revision, fixture counts
 and physical database bytes; a 64 MiB text fixture preserves roster/run shape
 but does not reproduce multi-GB transcript page-cache pressure.
 
+## Measure history pages and checkout diffs
+
+Prepare a team-shape fixture offline, then add this workload's small synthetic
+transcript and Git worktree. Run generation and measurements on the authorized
+benchmark host:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/history-diff-measure.ts \
+  --state-dir /path/to/team-shape --seed
+node --import ./scripts/tsx.mjs scripts/perf/history-diff-measure.ts \
+  --state-dir /path/to/team-shape --port 41072 --clients 4 \
+  --operations 25 --rounds 5 --revision <commit-sha>
+```
+
+`--seed` requires exclusive offline custody and refuses a second seed. It adds
+one session with 64 completed tool turns (8 KiB, 64 KiB, and 256 KiB tool results),
+captures a clean checkout baseline, then changes 32 tracked files and creates 32
+untracked files. All repositories, worktrees and data remain inside the fixture.
+Measurement never writes the database directly. The driver owns and stops its
+loopback Gateway; `--entry` defaults to `dist/entry.js` and also accepts a prepared
+source entry. It issues small, default, and large `chat.history` requests, plus
+full and summary `sessions.diff` requests for both `all` and `uncommitted` scopes.
+Each operation is one concurrent cohort with one request per client. Empty
+history, missing tracked/untracked changes, missing full patches, or RPC failures
+reject the run.
+
+The first request for each variant is recorded separately as warmup. Measured
+rounds include raw latency samples, p50/p95/p99, payload bytes, returned row
+counts, main-thread/process CPU, CPU profiles and existing worker queue, run,
+and transfer diagnostics. Payload bytes measure re-encoded JSON in the driver,
+not WebSocket frame overhead. Profiles sample the main isolate; worker task
+diagnostics provide worker timings. They do not count Git subprocesses.
+`--output` names a new artifact directory (by default below the fixture).
+`--scenario` defaults to `all`; individual choices are `history-small`,
+`history-default`, `history-large`, `diff-all-full`, `diff-all-summary`,
+`diff-uncommitted-full`, and `diff-uncommitted-summary`. For a concurrent A/B
+comparison, select one matching scenario on both sides so faster completion does
+not move one side into a different workload. Generate independent, identical
+fixtures for each side, with matching client/operation/round counts and the same
+`--start-at <epoch-ms>`. The barrier waits after readiness and warmup, and fails
+if the deadline has passed. Hold the shared measurement lock around the pair,
+and swap the two CPU halves for the next pair.
+
 ## Measure transcript broadcast fanout
 
 With runtime artifacts built on the authorized benchmark host, seed a fixture
