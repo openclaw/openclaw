@@ -1,13 +1,16 @@
 /* @vitest-environment jsdom */
 import { createSignal, flush } from "solid-js";
 import { expect, it, vi } from "vitest";
+import "../chat-details-mobile-host-content.tsx";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import type { ChatMobileHost, MobileHostDestination } from "../chat-mobile-host.ts";
 import {
   ChatDetailsMobileContent,
   type ChatDetailsMobilePage,
 } from "./chat-details-mobile-content.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
+import { publication, pullRequest, sessionBranch } from "./chat-pull-requests.test-support.ts";
 
 function details(overrides: Partial<ChatDetailsProps> = {}): ChatDetailsProps {
   return {
@@ -162,4 +165,168 @@ it("retains Outputs demand across publications and returns navigation origins wi
   view.unmount();
   expect(release).toHaveBeenCalledTimes(3);
   expect(releaseReplacement).toHaveBeenCalledOnce();
+});
+
+async function mountMobileHost(value: ChatDetailsProps) {
+  const navigate = vi.fn<(destination: MobileHostDestination) => void>();
+  const host: ChatMobileHost = {
+    scopeKey: "mobile-pr-session",
+    open: true,
+    suspended: false,
+    mode: "dock",
+    height: 280,
+    reservedHeight: 280,
+    destination: { area: "details" },
+    detailsMount: null,
+    setDetailsMount() {},
+    navigate,
+    reveal() {},
+    close() {},
+    back() {},
+    toggleExpanded() {},
+    resize() {},
+    keyboardVisible: false,
+    onComposerEditingChange() {},
+    onViewportChange() {},
+  };
+  const element = document.createElement("openclaw-chat-details-mobile-host-content");
+  element.details = value;
+  element.host = host;
+  element.presented = true;
+  element.bindings = {
+    goal: { connected: false, canAct: false },
+    pullRequests: {
+      snapshot: {
+        pullRequests: value.pullRequests ?? [],
+        rateLimited: false,
+        status: "ready",
+      },
+      requestRefresh: () => false,
+    },
+  };
+  const view = mountSolid(() => element);
+  await element.updateComplete;
+  flush();
+  const show = async (destination: MobileHostDestination) => {
+    element.host = { ...element.host!, destination };
+    await element.updateComplete;
+    flush();
+  };
+  return { view, element, navigate, show };
+}
+
+it("routes current mobile PRs to Checks and rejects hidden or superseded navigation", async () => {
+  const request = pullRequest({ title: "Current PR", headSha: "a".repeat(40) });
+  const value = details({ pullRequests: [request], pullRequestsSessionId: "session-current" });
+  const { view, element, navigate, show } = await mountMobileHost(value);
+  try {
+    const rootRow = view.container.querySelector<HTMLButtonElement>(
+      '[data-details-page="root"] .chat-pr-mobile__row',
+    )!;
+    rootRow.click();
+    expect(navigate).toHaveBeenCalledOnce();
+    const destination = navigate.mock.calls[0]![0];
+    expect(destination.page?.details).toEqual({
+      kind: "pull-request",
+      id: "openclaw/openclaw#103469",
+    });
+    expect(destination.backTo).toEqual({ area: "details" });
+    await show(destination);
+
+    rootRow.click();
+    expect(navigate).toHaveBeenCalledOnce();
+    view.getByRole("button", { name: "Checks" }).click();
+    expect(navigate).toHaveBeenCalledTimes(2);
+    const checks = navigate.mock.calls[1]![0];
+    expect(checks.page?.details).toEqual({
+      kind: "pull-request-checks",
+      id: "openclaw/openclaw#103469",
+    });
+    expect(checks.backTo).toBe(destination);
+    await show(checks);
+    const checksPage = view.container.querySelector<HTMLElement>(
+      '[data-details-page="pull-request-checks"]',
+    )!;
+    expect(checksPage.hidden).toBe(false);
+    expect(checksPage.querySelector("openclaw-chat-ci-details")).not.toBeNull();
+    rootRow.click();
+    expect(navigate).toHaveBeenCalledTimes(2);
+
+    await show(destination);
+    const staleChecks = view.getByRole("button", { name: "Checks" });
+    // Native receipts change synchronously; the previous rendered handler must retire before flush.
+    element.details = details({ pullRequests: [pullRequest({ title: "Replacement PR" })] });
+    staleChecks.click();
+    expect(navigate).toHaveBeenCalledTimes(2);
+    await element.updateComplete;
+    flush();
+    const previousHostChecks = view.getByRole("button", { name: "Checks" });
+    element.host = { ...element.host!, scopeKey: "replacement-session" };
+    previousHostChecks.click();
+    expect(navigate).toHaveBeenCalledTimes(2);
+  } finally {
+    view.unmount();
+  }
+});
+
+it("dismisses only the current mobile branch after explicit activation", async () => {
+  const branch = sessionBranch({ branch: "feature/current" });
+  const dismiss = vi.fn();
+  const value = details({
+    pullRequestsBranch: branch,
+    githubPublication: publication(),
+    onDismissPullRequestsBranch: dismiss,
+  });
+  const { view, element, navigate, show } = await mountMobileHost(value);
+  try {
+    view.container
+      .querySelector<HTMLButtonElement>(
+        '[data-details-page="root"] [data-details-destination="publication"]',
+      )!
+      .click();
+    expect(navigate).toHaveBeenCalledOnce();
+    const destination = navigate.mock.calls[0]![0];
+    await show(destination);
+    const staleHide = view.getByRole("button", {
+      name: "Hide feature/current for this session",
+    });
+    expect(dismiss).not.toHaveBeenCalled();
+    const replacement = sessionBranch({ branch: "feature/replacement" });
+    element.details = { ...value, pullRequestsBranch: replacement };
+    staleHide.click();
+    expect(dismiss).not.toHaveBeenCalled();
+    await element.updateComplete;
+    flush();
+
+    const previousHostHide = view.getByRole("button", {
+      name: "Hide feature/replacement for this session",
+    });
+    element.host = { ...element.host! };
+    previousHostHide.click();
+    expect(dismiss).not.toHaveBeenCalled();
+    await element.updateComplete;
+    flush();
+
+    view
+      .getByRole("button", {
+        name: "Hide feature/replacement for this session",
+      })
+      .click();
+    expect(dismiss).toHaveBeenCalledExactlyOnceWith(replacement);
+    expect(navigate).toHaveBeenCalledTimes(2);
+    expect(navigate).toHaveBeenLastCalledWith(destination.backTo);
+    element.details = { ...element.details!, pullRequestsBranchDismissed: true };
+    await show(destination.backTo!);
+    expect(view.container.querySelector('[data-details-destination="publication"]')).toBeNull();
+    expect(view.container.querySelector('[data-details-page="publication"]')).toBeNull();
+
+    element.details = { ...element.details!, githubPublication: publication({ locked: true }) };
+    await element.updateComplete;
+    flush();
+    expect(view.container.querySelector('[data-details-destination="publication"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-details-page="publication"]')).not.toBeNull();
+    expect(view.container.querySelector(".chat-pr-mobile__hide")).toBeNull();
+  } finally {
+    view.unmount();
+  }
 });

@@ -381,6 +381,8 @@
     [data-details-page="task-progress"],
     [data-details-page="pull-requests"],
     [data-details-page="pull-request"],
+    [data-details-page="pull-request-checks"],
+    [data-details-page="pull-request-monitoring"],
     [data-details-page="outputs"],
     [data-details-page="versions"],
     [data-details-page="publication"]

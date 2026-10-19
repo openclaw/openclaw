@@ -3,6 +3,7 @@ import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
 } from "../../../../../src/gateway/control-ui-contract.js";
+import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
@@ -12,6 +13,8 @@ import { showToast } from "../../../lib/toast.ts";
 import { ChecksRow } from "./chat-pull-request-shared.tsx";
 import { chatPullRequestId } from "./chat-pull-requests.ts";
 import "./chat-pull-request-presenters.css";
+import "./chat-ci-details.ts";
+import "./chat-ci-automation-control.ts";
 
 registerGitHubEnglish();
 
@@ -162,6 +165,8 @@ export function ChatPullRequestMobileCollection(props: ChatPullRequestMobileColl
 export type ChatPullRequestMobileDetailProps = ChatPullRequestMobileRecoveryProps & {
   pullRequest?: ControlUiSessionPullRequest;
   dismissDisabled?: boolean;
+  onOpenChecks?: () => void;
+  onOpenMonitoring?: () => void;
   /** The host decides the destination after the native session dismissal succeeds. */
   onDismiss: (pullRequest: ControlUiSessionPullRequest) => void;
 };
@@ -310,6 +315,20 @@ export function ChatPullRequestMobileDetail(props: ChatPullRequestMobileDetailPr
               </section>
             </Show>
             <div class="chat-pr-mobile__group chat-pr-mobile__actions">
+              <Show when={props.onOpenChecks}>
+                <button type="button" onClick={() => props.onOpenChecks?.()}>
+                  <Icon name="listChecks" />
+                  <span>{t("chat.pullRequests.checksTitle")}</span>
+                  <Icon name="chevronRight" />
+                </button>
+              </Show>
+              <Show when={props.onOpenMonitoring}>
+                <button type="button" onClick={() => props.onOpenMonitoring?.()}>
+                  <Icon name="listChecks" />
+                  <span>{t("chat.pullRequests.ciMonitoring")}</span>
+                  <Icon name="chevronRight" />
+                </button>
+              </Show>
               <a href={pullRequest().url} target="_blank" rel="noopener noreferrer">
                 <Icon name="github" />
                 <span>{t("chat.pullRequests.openGitHub")}</span>
@@ -335,6 +354,70 @@ export function ChatPullRequestMobileDetail(props: ChatPullRequestMobileDetailPr
               </button>
             </div>
           </>
+        )}
+      </Show>
+    </div>
+  );
+}
+
+export type ChatPullRequestMobileCiProps = ChatPullRequestMobileRecoveryProps & {
+  pullRequest?: ControlUiSessionPullRequest;
+  gateway?: ApplicationGateway;
+  sessionKey: string;
+  sessionId?: string;
+  presented: boolean;
+};
+
+/** Native CI owners retain requests and mutations across the host's nested pages. */
+export function ChatPullRequestMobileChecks(props: ChatPullRequestMobileCiProps) {
+  return (
+    <div class="chat-pr-mobile">
+      <ChatPullRequestMobileRecovery {...props} />
+      <Show when={props.pullRequest}>
+        {(pullRequest) => (
+          <>
+            <openclaw-chat-ci-details
+              prop:pullRequest={pullRequest()}
+              prop:gateway={props.gateway}
+              prop:sessionKey={props.sessionKey}
+              prop:presented={props.presented}
+              prop:inline={true}
+            />
+            <Show when={pullRequest().checksUrl}>
+              {(url) => (
+                <a
+                  class="chat-pr-mobile__checks-link"
+                  href={url()}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <Icon name="externalLink" />
+                  <span>{t("chat.pullRequests.openChecks")}</span>
+                </a>
+              )}
+            </Show>
+          </>
+        )}
+      </Show>
+    </div>
+  );
+}
+
+export function ChatPullRequestMobileMonitoring(props: ChatPullRequestMobileCiProps) {
+  return (
+    <div class="chat-pr-mobile">
+      <ChatPullRequestMobileRecovery {...props} />
+      <Show when={props.pullRequest}>
+        {(pullRequest) => (
+          <openclaw-chat-ci-automation
+            prop:pullRequest={pullRequest()}
+            prop:gateway={props.gateway}
+            prop:sessionKey={props.sessionKey}
+            prop:sessionId={props.sessionId ?? ""}
+            prop:presented={props.presented}
+            prop:inline={true}
+            prop:menuPresentation={true}
+          />
         )}
       </Show>
     </div>

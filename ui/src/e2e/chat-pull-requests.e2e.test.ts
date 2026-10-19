@@ -21,6 +21,7 @@ import {
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 import {
+  closeChatDetails,
   openChatDetails,
   openChatPublication,
   openDetailsPullRequests,
@@ -287,8 +288,13 @@ suite.define(() => {
       await expect
         .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
         .toBe(theme);
-      const stack = page.locator(".chat-prs");
-      const chips = stack.locator(".chat-pr");
+      const mobile = width < 768;
+      const stack = mobile
+        ? page.locator(
+            '.chat-mobile-details-page[data-details-page="root"]:visible [data-details-group="pull-requests"] .chat-details-mobile-root__group',
+          )
+        : page.locator(".chat-prs");
+      const chips = stack.locator(mobile ? ".chat-pr-mobile__row" : ".chat-pr");
       for (const count of [1, 2, 3]) {
         await emitPullRequests(gateway, watchedKey, {
           pullRequests: Array.from({ length: count }, (_, index) => pullRequest(index + 1)),
@@ -304,7 +310,9 @@ suite.define(() => {
         }
         await page.locator(".chat").evaluate(finishElementAnimations);
         const bounds = await stack.evaluate((element) => {
-          const detailsBounds = element.closest(".chat-details")!.getBoundingClientRect();
+          const detailsBounds = element
+            .closest(".chat-mobile-host, .chat-details")!
+            .getBoundingClientRect();
           const stackBounds = element.getBoundingClientRect();
           return {
             detailsBottom: detailsBounds.bottom,
@@ -335,21 +343,50 @@ suite.define(() => {
         for (let index = 0; index < count; index++) {
           const chip = chips.nth(index);
           const expectedUrl = `https://github.com/openclaw/openclaw/pull/${index + 1}`;
-          await pollAttr(chip.locator(".chat-pr__link"), "href").toBe(expectedUrl);
-          await chip.locator(".chat-pr__link").click({ trial: true });
-          await chip
-            .getByRole("button", {
-              name: `Actions for pull request openclaw/openclaw#${index + 1}`,
-              exact: true,
-            })
-            .click();
-          const menu = chip.getByRole("menu");
-          await menu
-            .getByRole("menuitem", { name: "Hide from this session", exact: true })
-            .click({ trial: true });
-          await page.keyboard.press("Escape");
-          await menu.waitFor({ state: "hidden" });
+          if (mobile) {
+            await chip.click();
+            const detail = page.locator(
+              '.chat-mobile-details-page[data-details-page="pull-request"]:visible',
+            );
+            const link = detail.getByRole("link", { name: "Open on GitHub", exact: true });
+            await pollAttr(link, "href").toBe(expectedUrl);
+            await link.click({ trial: true });
+            await detail
+              .getByRole("button", { name: "Hide from this session", exact: true })
+              .click({ trial: true });
+            await openDetailsPullRequests(page);
+          } else {
+            await pollAttr(chip.locator(".chat-pr__link"), "href").toBe(expectedUrl);
+            await chip.locator(".chat-pr__link").click({ trial: true });
+            await chip
+              .getByRole("button", {
+                name: `Actions for pull request openclaw/openclaw#${index + 1}`,
+                exact: true,
+              })
+              .click();
+            const menu = chip.getByRole("menu");
+            await menu
+              .getByRole("menuitem", { name: "Hide from this session", exact: true })
+              .click({ trial: true });
+            await page.keyboard.press("Escape");
+            await menu.waitFor({ state: "hidden" });
+          }
         }
+      }
+      if (mobile) {
+        await closeChatDetails(page);
+        await page.locator('.activity-pill[data-family="pull-request"]').first().click();
+        await page
+          .locator('.chat-mobile-details-page[data-details-page="pull-request"]:visible')
+          .waitFor();
+        expect(
+          await page
+            .locator(".chat-mobile-host__header")
+            .getByRole("button", { name: "Back", exact: true })
+            .count(),
+        ).toBe(0);
+        await openDetailsPullRequests(page);
+        await pollCount(chips).toBe(3);
       }
     },
   );
@@ -389,12 +426,24 @@ suite.define(() => {
         await page.setViewportSize(viewport);
       }
       const publication = await openChatPublication(page);
-      const row = publication.locator('.chat-pr[data-state="branch"]');
+      const row = publication.locator(
+        mobile ? ".github-publication-mobile" : '.chat-pr[data-state="branch"]',
+      );
       await pollCount(row).toBe(1);
-      await pollText(row.locator(".chat-pr__branch")).toBe("claude/cloud-workers-live-events");
+      await pollText(
+        row.locator(mobile ? ".github-publication-mobile__branch" : ".chat-pr__branch"),
+      ).toBe("claude/cloud-workers-live-events");
       await pollText(row.locator(".chat-pr__additions")).toBe("+2,819");
       await pollText(row.locator(".chat-pr__deletions")).toBe("−205");
-      await pollCount(row.locator(".chat-pr__warning")).toBe(1);
+      if (mobile) {
+        const group = await openDetailsPullRequests(page);
+        await expect
+          .poll(() => group.locator(".chat-pr-mobile__recovery").textContent())
+          .toContain("Couldn’t update");
+        await openChatPublication(page);
+      } else {
+        await pollCount(row.locator(".chat-pr__warning")).toBe(1);
+      }
       const create = row.getByRole("button", { name: "Publish PR", exact: true });
       await pollText(create).toContain("Publish PR");
       await pollAttr(create, "href").toBeNull();
@@ -414,7 +463,7 @@ suite.define(() => {
         .poll(async () => {
           const rowBox = await row.boundingBox();
           const detailsBox = await page
-            .locator('.chat-details[role="dialog"]')
+            .locator(mobile ? ".chat-mobile-host" : '.chat-details[role="dialog"]')
             .filter({ visible: true })
             .boundingBox();
           return Boolean(

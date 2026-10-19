@@ -133,9 +133,9 @@ suite.define(() => {
     expect(
       await action.getByLabel("Some changes could not be displayed.", { exact: true }).count(),
     ).toBe(1);
-    expect(await review.locator(".session-diff__section-title span").textContent()).toBe(
-      "Uncommitted",
-    );
+    expect(
+      await review.getByRole("button", { name: "Choose change scope", exact: true }).textContent(),
+    ).toBe("Uncommitted");
     expect(await review.locator(".session-diff__filename").allTextContents()).toEqual(["app.ts"]);
     expect(await gateway.getRequests("sessions.diff")).toHaveLength(3);
     expect(await gateway.getRequests("sessions.diff", { scope: "all" })).toHaveLength(0);

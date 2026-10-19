@@ -133,6 +133,11 @@ suite.define(() => {
         expect(
           await launcher.evaluate((element) => element.scrollHeight > element.clientHeight),
         ).toBe(true);
+        await expect
+          .poll(() =>
+            host.locator(".chat-mobile-host__scroll-edge--top").filter({ visible: true }).count(),
+          )
+          .toBe(1);
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
           const frame = await takeControlUiScreenshotFrame(
             page,
@@ -169,6 +174,9 @@ suite.define(() => {
           .waitFor();
         await page.setViewportSize({ width: 390, height: 844 });
         const reopened = await openMobilePanelLauncher(page);
+        await expect
+          .poll(() => reopened.host.locator(".chat-mobile-host__scroll-fades").count())
+          .toBe(1);
         await reopened.launcher.getByRole("button", { name: "Subagents", exact: true }).click();
         await page.locator('[data-panel-slot="subagents"]:visible').waitFor();
         await reopened.launcher.waitFor({ state: "hidden" });
@@ -397,8 +405,12 @@ suite.define(() => {
         });
         await sharing.getByRole("button", { name: /^Shared / }).waitFor();
         expect(await gateway.getRequests("session.visibility.set")).toHaveLength(1);
-        if (colorScheme === "light") expect(peopleModule.requests()).toBe(documentRequests);
-        if (sharingModule) expect(sharingModule.requests()).toBe(1);
+        if (colorScheme === "light") {
+          expect(peopleModule.requests()).toBe(documentRequests);
+        }
+        if (sharingModule) {
+          expect(sharingModule.requests()).toBe(1);
+        }
         expect(errors).toEqual([]);
         await host
           .locator(".chat-mobile-host__header")

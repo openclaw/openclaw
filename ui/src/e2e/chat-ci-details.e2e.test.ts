@@ -12,7 +12,11 @@ import { ciAutomationJobSpec, type CiAutomationOption } from "../lib/session-pr-
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
-import { openChatDetails, openDesktopPullRequestPage } from "./chat-details.test-support.ts";
+import {
+  openChatDetails,
+  openDetailsPullRequests,
+  openDesktopPullRequestPage,
+} from "./chat-details.test-support.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -219,7 +223,7 @@ async function setup(
     await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
       sessions: { [sessionKey]: { pullRequests: [next], rateLimited: false, status: "ready" } },
     });
-    await page.locator(".chat-pr__actions-trigger").first().waitFor();
+    await page.locator(".chat-pr__actions-trigger, .chat-pr-mobile__row").first().waitFor();
   }
   await publish(
     options.mode === "failed"
@@ -401,11 +405,30 @@ suite.define(() => {
     { label: "mobile", width: 393, height: 960, mode: "failed" as const },
     { label: "landscape", width: 844, height: 390, mode: "failed" as const },
   ])("keeps expanded steps usable on $label", async ({ width, height, mode }) => {
-    const { page } = await setup({ width, height, mode });
-    const menu: Locator = await openDesktopPullRequestPage(
-      page.locator(".chat-pr").first(),
-      "checks",
-    );
+    const { page, gateway } = await setup({
+      width,
+      height,
+      mode,
+      automationJobs: [automationJob("autoFix"), automationJob("autoMerge")],
+    });
+    const mobile = width < 900;
+    let menu: Locator;
+    if (mobile) {
+      const collection = await openDetailsPullRequests(page);
+      await collection.locator(".chat-pr-mobile__row").click();
+      await page.locator(".chat-pr-mobile__metadata").waitFor();
+      expect(await gateway.getRequests(DETAILS_METHOD)).toHaveLength(0);
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({
+          path: path.join(suite.artifactDir, `${width}-pr-detail.png`),
+          animations: "disabled",
+        });
+      }
+      await page.getByRole("button", { name: "Checks", exact: true }).click();
+      menu = page.locator('.chat-mobile-details-page[data-details-page="pull-request-checks"]');
+    } else {
+      menu = await openDesktopPullRequestPage(page.locator(".chat-pr").first(), "checks");
+    }
     await expandLinuxJob(page);
     // Step text can appear before Floating UI finishes positioning the expanded popup.
     await expect
@@ -438,11 +461,76 @@ suite.define(() => {
     // Focus inside the active page so Escape exercises the nested menu owner.
     await jobLink.focus();
     await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
-    await page.keyboard.press("Escape");
-    await expect.poll(() => menu.locator(".chat-pr-menu__page:visible").count()).toBe(0);
-    expect(await menu.isVisible()).toBe(true);
-    await page.keyboard.press("Escape");
-    await expect.poll(() => menu.isVisible()).toBe(false);
-    expect(await page.locator('.chat-details[role="dialog"]').isVisible()).toBe(true);
+    if (mobile) {
+      await page
+        .locator(".chat-mobile-host__header")
+        .getByRole("button", { name: "Back", exact: true })
+        .click();
+      await page.locator(".chat-pr-mobile__metadata").waitFor();
+      expect(await menu.isVisible()).toBe(false);
+      await page.getByRole("button", { name: "CI monitoring", exact: true }).click();
+      const monitoring = page.locator(
+        '.chat-mobile-details-page[data-details-page="pull-request-monitoring"]',
+      );
+      await monitoring
+        .getByRole("switch", { name: "Auto-fix CI & address comments", exact: true })
+        .waitFor();
+      const rows = monitoring.locator(".chat-ci__automation-option--menu");
+      const aligned = await rows.evaluateAll((elements) =>
+        elements.every((element) => {
+          const row = element.getBoundingClientRect();
+          const label = element
+            .querySelector(".chat-ci__automation-label")!
+            .getBoundingClientRect();
+          const toggle = element.querySelector(".settings-toggle")!.getBoundingClientRect();
+          return (
+            toggle.left >= label.right &&
+            toggle.right <= row.right &&
+            toggle.top >= row.top &&
+            toggle.bottom <= row.bottom
+          );
+        }),
+      );
+      expect(aligned).toBe(true);
+      const autoFix = monitoring.getByRole("switch", {
+        name: "Auto-fix CI & address comments",
+        exact: true,
+      });
+      expect(await autoFix.isChecked()).toBe(true);
+      await gateway.deferNext("cron.update");
+      await autoFix.click();
+      expect((await gateway.waitForRequest("cron.update")).params).toEqual({
+        id: "autoFix",
+        expectedConfigRevision: "automation-v1",
+        patch: { enabled: false },
+      });
+      const disabledFix = automationJob("autoFix", false);
+      await gateway.setMethodResponse(
+        "cron.list",
+        automationInventory([disabledFix, automationJob("autoMerge")]),
+      );
+      await gateway.resolveDeferred("cron.update", disabledFix);
+      await expect.poll(() => autoFix.isEnabled()).toBe(true);
+      expect(await autoFix.isChecked()).toBe(false);
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({
+          path: path.join(suite.artifactDir, `${width}-ci-monitoring.png`),
+          animations: "disabled",
+        });
+      }
+      await page
+        .locator(".chat-mobile-host__header")
+        .getByRole("button", { name: "Back", exact: true })
+        .click();
+      await page.locator(".chat-pr-mobile__metadata").waitFor();
+      expect(await monitoring.isVisible()).toBe(false);
+    } else {
+      await page.keyboard.press("Escape");
+      await expect.poll(() => menu.locator(".chat-pr-menu__page:visible").count()).toBe(0);
+      expect(await menu.isVisible()).toBe(true);
+      await page.keyboard.press("Escape");
+      await expect.poll(() => menu.isVisible()).toBe(false);
+      expect(await page.locator('.chat-details[role="dialog"]').isVisible()).toBe(true);
+    }
   });
 });

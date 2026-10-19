@@ -21,11 +21,11 @@ const compactPage = (viewport: { width: number; height: number }) =>
 suite.define(() => {
   for (const colorScheme of ["light", "dark"] as const) {
     for (const viewport of [
-      { label: "desktop", width: 800 },
+      { label: "desktop", width: 1000 },
       { label: "mobile", width: 760 },
       { label: "phone", width: 390 },
     ] as const) {
-      it(`lays out and navigates the ${viewport.label} project-parent-child trail in ${colorScheme} mode`, async () => {
+      it(`lays out the ${viewport.label} session identity in ${colorScheme} mode`, async () => {
         const { page } = await newChatPage(suite, {
           colorScheme,
           viewport: { height: 520, width: viewport.width },
@@ -48,20 +48,61 @@ suite.define(() => {
         });
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const header = page.locator(
-          "openclaw-chat-pane.chat-pane-cache__pane--active .chat-pane__header",
-        );
-        const title = header.locator(".chat-pane__session-title-text");
+        const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+        const desktop = viewport.label === "desktop";
+        const header = pane.locator(desktop ? ".chat-pane__header" : ".agent-chat__header--mobile");
+        const titleSelector = desktop
+          ? ".chat-pane__session-title-text"
+          : ".mobile-header__title-text";
+        const title = header.locator(titleSelector);
         await header.waitFor();
-        await header.locator(".workspace-icon").waitFor();
+        const projectSurface = header.locator(
+          desktop ? ".workspace-icon" : ".mobile-header__project",
+        );
+        await projectSurface.waitFor();
 
         if (captureUiProofEnabled) {
           await captureFrame(
             suite.artifactDir,
             `project-icon-${viewport.label}-${colorScheme}.png`,
             header,
-            [header.locator(".workspace-icon"), title],
+            [projectSurface, title],
           );
+        }
+
+        if (!desktop) {
+          const geometry = await header.evaluate((root) => {
+            const rect = (selector: string) =>
+              root.querySelector(selector)!.getBoundingClientRect();
+            const titleRect = rect(".mobile-header__title-text");
+            const identity = rect(".mobile-header__identity");
+            const navigation = rect(".mobile-header__navigation");
+            const capsule = rect(".mobile-header__capsule");
+            const project = rect(".mobile-header__project");
+            return {
+              overflow: root.scrollWidth - root.clientWidth,
+              titleWidth: titleRect.width,
+              title: root.querySelector(".mobile-header__title-text")!.textContent,
+              navigationRight: navigation.right,
+              identityLeft: identity.left,
+              identityRight: identity.right,
+              capsuleLeft: capsule.left,
+              projectBottom: project.bottom,
+              titleTop: titleRect.top,
+            };
+          });
+          expect(geometry.overflow).toBeLessThanOrEqual(1);
+          expect(geometry.titleWidth).toBeGreaterThan(0);
+          expect(geometry.title).toBe(
+            "Implement parent breadcrumb navigation and polish overflow behavior",
+          );
+          expect(geometry.navigationRight).toBeLessThanOrEqual(geometry.identityLeft);
+          expect(geometry.identityRight).toBeLessThanOrEqual(geometry.capsuleLeft);
+          expect(geometry.projectBottom).toBeLessThanOrEqual(geometry.titleTop);
+          await header.getByRole("button", { name: "Panels", exact: true }).click({ trial: true });
+          await header.locator(".mobile-header__title").click();
+          await pane.locator(".chat-mobile-host__details:not([hidden])").waitFor();
+          return;
         }
 
         const geometry = await header.evaluate((root) => {
@@ -88,7 +129,7 @@ suite.define(() => {
             return node.scrollWidth > node.clientWidth;
           };
           return {
-            nav: centerY(".chat-pane__nav-toggle svg"),
+            nav: centerY(".chat-details-toggle svg"),
             projectIcon: centerY(".workspace-icon"),
             projectText: centerY(".chat-pane__workspace-chip > .oc-menu-item__label > span"),
             menu: centerY(".chat-header-session-menu__trigger svg"),
@@ -116,22 +157,16 @@ suite.define(() => {
         expect(geometry.headerOverflow).toBeLessThanOrEqual(1);
         expect(geometry.titleWidth).toBeGreaterThan(0);
         expect(geometry.projectIcon, JSON.stringify(geometry)).toBeCloseTo(geometry.projectText, 1);
-        if (viewport.label === "desktop") {
-          for (const center of [
-            geometry.projectIcon,
-            geometry.projectText,
-            geometry.parentText,
-            geometry.sessionText,
-          ]) {
-            // The identity trail needs a 1px optical lift relative to Lucide actions.
-            expect(geometry.nav - center, JSON.stringify(geometry)).toBeCloseTo(1, 1);
-          }
-          expect(geometry.separatorDisplays).toEqual(["block", "block"]);
-        } else {
-          expect(geometry.projectBottom - geometry.sessionTop).toBeLessThanOrEqual(0.1);
-          expect(geometry.parentText).toBeCloseTo(geometry.sessionText, 1);
-          expect(geometry.separatorDisplays).toEqual(["none", "none"]);
+        for (const center of [
+          geometry.projectIcon,
+          geometry.projectText,
+          geometry.parentText,
+          geometry.sessionText,
+        ]) {
+          expect(geometry.nav - center, JSON.stringify(geometry)).toBeCloseTo(0, 1);
         }
+        expect(geometry.separatorDisplays).toEqual(["block", "block"]);
+        expect(await header.locator(".chat-pane__crumb-sep").count()).toBe(2);
         const parent = header.locator(".chat-pane__parent-session");
         expect(geometry).toMatchObject({ parentEllipses: true, childEllipses: true });
         expect(geometry.trailWidth).toBeLessThanOrEqual(geometry.headerWidth / 2 + 1);
@@ -155,9 +190,11 @@ suite.define(() => {
       const search = page.locator(".agent-chat__search-bar input");
       await search.waitFor();
       const [headerBox, searchBox] = await Promise.all([
-        page.locator(".chat-pane__header").first().boundingBox(),
+        page.locator(".agent-chat__header--mobile").filter({ visible: true }).boundingBox(),
         search.boundingBox(),
       ]);
+      expect(headerBox).not.toBeNull();
+      expect(searchBox).not.toBeNull();
       expect(searchBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height);
       await search.click();
       await search.fill("reachable");
@@ -195,7 +232,7 @@ suite.define(() => {
 
   it("repaints a mounted project icon after the Gateway advertises a retry", async () => {
     const { page } = await newChatPage(suite, {
-      viewport: { height: 520, width: 800 },
+      viewport: { height: 520, width: 1000 },
     });
     const favicon = await readFile(path.resolve(process.cwd(), "ui/public/favicon.svg"));
     let requests = 0;
@@ -217,7 +254,11 @@ suite.define(() => {
     });
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-    const icon = page.locator(".chat-pane__header openclaw-workspace-icon").first();
+    const icon = page
+      .locator(
+        "openclaw-chat-pane.chat-pane-cache__pane--active .chat-pane__header openclaw-workspace-icon",
+      )
+      .filter({ visible: true });
     await icon.waitFor();
     await icon.locator("svg").waitFor();
     await icon.evaluate((element) => element.setAttribute("data-recovery-host", "mounted"));

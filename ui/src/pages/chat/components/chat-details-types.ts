@@ -86,8 +86,8 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     | "subagentSessionsRead"
     | "onOpenSubagent"
     | "onOpenSubagents"
-    | "onScrollPortRef"
     | "personActivity"
+    | "onScrollPortRef"
   > & {
     desktopPresentation?: ChatDetailsDesktopPresentation;
     desktopDisclosures?: ChatDetailsDesktopDisclosures;

@@ -447,7 +447,7 @@ suite.define(() => {
         await pollCount(card).toBe(0);
       },
     ));
-  it("keeps colliding people, watches, owner exclusion and open cards separate through updates", () =>
+  it("keeps colliding people, watches, owner presence and open cards separate through updates", () =>
     withPage({ colorScheme: "light", serviceWorkers: "block" }, async ({ page }) => {
       const actor = {
         type: "human" as const,
@@ -488,7 +488,15 @@ suite.define(() => {
       await expectCount(link(rawCard, /^Profile watch(?:\s|$)/), 0);
       await expectCount(link(rawCard, "View activity"), 0);
       const headerFaces = page.locator(".chat-pane__presence [data-viewer-id]");
-      await expect.poll(() => headerFaces.getAttribute("aria-label")).toBe(raw.name);
+      await expect
+        .poll(() =>
+          headerFaces.evaluateAll((faces) =>
+            faces
+              .map((face) => face.getAttribute("aria-label") ?? "")
+              .toSorted((a, b) => a.localeCompare(b)),
+          ),
+        )
+        .toEqual([profile.name, raw.name].toSorted((a, b) => a.localeCompare(b)));
       const rawLink = link(rawCard, /^Raw watch(?:\s|$)/);
       await rawLink.focus();
       await emitPresence(gateway, [

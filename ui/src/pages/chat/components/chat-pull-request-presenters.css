@@ -652,12 +652,12 @@
   padding-top: 8px;
 }
 
-.chat-pr-menu--drill .chat-ci__automation {
+:is(.chat-pr-menu--drill, .chat-pr-mobile) .chat-ci__automation {
   padding: 0;
   border: 0;
 }
 
-.chat-pr-menu--drill .chat-ci__automation-option--menu {
+:is(.chat-pr-menu--drill, .chat-pr-mobile) .chat-ci__automation-option--menu {
   grid-template-columns: 16px minmax(0, 1fr) auto;
   gap: 10px;
   min-height: 60px;
@@ -666,7 +666,7 @@
   font: inherit;
 }
 
-.chat-pr-menu--drill .chat-ci__automation-option--menu > svg {
+:is(.chat-pr-menu--drill, .chat-pr-mobile) .chat-ci__automation-option--menu > svg {
   width: 16px;
   height: 16px;
   color: var(--muted);

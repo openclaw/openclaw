@@ -4,7 +4,7 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
+import { closeChatDetails, openChatTaskProgress } from "./chat-details.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -144,7 +144,7 @@ async function settleStartup(page: Page, gateway: Gateway) {
 }
 
 async function expectProgress(page: Page, text: string) {
-  const details = await openChatDetails(page.locator(".chat-pane-cache__pane--active"));
+  const details = await openChatTaskProgress(page.locator(".chat-pane-cache__pane--active"));
   await details
     .locator(".session-progress-card__markdown")
     .getByText(text, { exact: true })

@@ -16,12 +16,12 @@ const suite = createChatFlowE2eSuite();
 function observeDetailsSubmit(page: Page, expectCard: boolean) {
   return page
     .locator(".agent-chat__composer-combobox textarea")
-    .evaluateHandle((textarea, expectCard) => {
+    .evaluateHandle((textarea, cardExpected) => {
       const pane = textarea.closest("openclaw-chat-pane")!;
       const cardSelector =
         '[data-progress-card-placement="details"], .task-progress-details--mobile';
       const card = pane.querySelector<HTMLElement>(cardSelector);
-      if (Boolean(card) !== expectCard) {
+      if (Boolean(card) !== cardExpected) {
         throw new Error("Progress content must match the opened state before editing.");
       }
       const details = pane.querySelector<HTMLElement>(".chat-details")!;

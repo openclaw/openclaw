@@ -1,4 +1,5 @@
 import type { Locator, Page } from "playwright";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 
 export async function openChatDashboardMenu(scope: Page | Locator): Promise<Locator> {
   const menu = nativePane(scope).locator(".chat-dashboard-menu").filter({ visible: true });
@@ -25,7 +26,7 @@ export async function selectChatLayoutAction(
   await selectNativeLayoutAction(nativePane(scope), name);
 }
 
-function nativePane(scope: Page | Locator): Locator {
+export function nativePane(scope: Page | Locator): Locator {
   if ("mainFrame" in scope) {
     return scope
       .locator(
@@ -53,6 +54,21 @@ async function openSessionActions(pane: Locator): Promise<Locator> {
   return menu;
 }
 
+/** Desktop choices are menu checkboxes; mobile choices are pressed buttons in Advanced. */
+export async function openChatConversationOptions(scope: Page | Locator): Promise<Locator> {
+  const pane = nativePane(scope);
+  const menu = await openSessionActions(pane);
+  if (await pane.locator(".agent-chat__header--mobile").isVisible()) {
+    await menu.getByRole("menuitem", { name: "Advanced", exact: true }).click();
+    const options = pane.locator('.chat-mobile-host__page[data-mobile-page="session-advanced"]');
+    await options.waitFor();
+    return options;
+  }
+  await menu.getByRole("menuitem", { name: "View", exact: true }).click();
+  await menu.getByRole("menuitemcheckbox", { name: "Reasoning", exact: true }).waitFor();
+  return menu;
+}
+
 async function selectMenuItem(menu: Locator, name: string | RegExp): Promise<void> {
   await menu
     .getByRole("menuitem", { name, exact: true })
@@ -62,6 +78,9 @@ async function selectMenuItem(menu: Locator, name: string | RegExp): Promise<voi
 }
 
 async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): Promise<void> {
+  const headers = ".agent-chat__header--mobile, .sidebar-region__header, [data-region-header]";
+  await pane.locator(headers).filter({ visible: true }).first().waitFor();
+  await waitForLayoutSettled(pane.page(), "openclaw-chat-pane :is(" + headers + ")");
   const matches = (label: string) => (typeof name === "string" ? name === label : name.test(label));
   const mobile = await pane.locator(".agent-chat__header--mobile").isVisible();
   const host = pane.locator(".chat-mobile-host");

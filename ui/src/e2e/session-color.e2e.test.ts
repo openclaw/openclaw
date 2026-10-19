@@ -80,10 +80,14 @@ suite.define(() => {
           await expect
             .poll(() => headerPanel(page).locator('[role^="menuitem"]:focus').count())
             .toBe(1);
-          for (const name of ["Advanced", "Icon & color"]) {
-            await focusSessionMenuItem(page, name);
-            await page.keyboard.press("Enter");
-          }
+          await focusSessionMenuItem(page, "Advanced");
+          await page.keyboard.press("Enter");
+          const appearance = page.locator(".session-actions-page").getByRole("button", {
+            name: "Icon & color",
+            exact: true,
+          });
+          await appearance.focus();
+          await page.keyboard.press("Enter");
         } else {
           await openAppearance(page);
         }
@@ -97,12 +101,20 @@ suite.define(() => {
               ].map((child) => (child ? getComputedStyle(child).marginTop : null)),
             ),
           )
-          .toEqual(["4px", "4px"]);
+          .toEqual(["4px", surface === "compact" ? "0px" : "4px"]);
         const focused = () =>
           picker.evaluate(
             (element) => element.querySelector(":focus")?.getAttribute("aria-label") ?? null,
           );
         await expect.poll(focused).toBe("No color");
+        if (surface === "compact" && process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const directory = createControlUiE2eArtifactDir("native-appearance-focus");
+          await writeFile(
+            path.join(directory, "focused.png"),
+            await takeControlUiViewportScreenshot(page, picker, [button(picker, "No color")]),
+          );
+          console.info("[native-appearance-focus] capture", directory);
+        }
         await page.keyboard.press("Tab");
         await expect.poll(focused).toBe("Red");
         await page.keyboard.press("Enter");
@@ -117,28 +129,39 @@ suite.define(() => {
         await patched({ icon: "🚀" });
         await page.keyboard.press("Tab");
         const reset = button(picker, "Reset to default");
-        await expectFocused(reset);
-        await page.keyboard.press("Shift+Tab");
-        const iconCount = await picker.locator(".session-menu__icon-choice").count();
-        for (let index = 0; index < iconCount && (await focused()) !== "Custom icon…"; index += 1) {
-          await page.keyboard.press("ArrowRight");
-        }
-        await page.keyboard.press("Enter");
         const custom = picker.getByRole("textbox", { name: "Custom icon", exact: true });
+        if (surface !== "compact") {
+          await expectFocused(reset);
+          await page.keyboard.press("Shift+Tab");
+          const iconCount = await picker.locator(".session-menu__icon-choice").count();
+          for (
+            let index = 0;
+            index < iconCount && (await focused()) !== "Custom icon…";
+            index += 1
+          ) {
+            await page.keyboard.press("ArrowRight");
+          }
+          await page.keyboard.press("Enter");
+        }
         await expect
           .poll(() => custom.evaluate((element) => element === document.activeElement))
           .toBe(true);
         await page.keyboard.insertText("✨");
         await press(page, "Tab", "Enter");
         await patched({ icon: "✨" });
-        await press(page, "Shift+Tab", "Escape");
-        await expect.poll(focused).toBe("Custom icon…");
+        if (surface !== "compact") {
+          await press(page, "Shift+Tab", "Escape");
+          await expect.poll(focused).toBe("Custom icon…");
+        }
         await page.keyboard.press("Tab");
         await expectFocused(reset);
         await page.keyboard.press("Enter");
         await patched({ color: null, icon: null });
-        await page.keyboard.press("Tab");
+        await page.keyboard.press(surface === "compact" ? "Escape" : "Tab");
         await expect.poll(() => picker.count()).toBe(0);
+        if (surface === "compact") {
+          await expectFocused(trigger);
+        }
       } finally {
         await context.close();
       }
@@ -259,11 +282,13 @@ suite.define(() => {
       await page.setViewportSize({ width: 560, height: 900 });
       await page.locator(".chat-header-session-menu__trigger").click();
       await menuItem(page, "Advanced").click();
-      await menuItem(page, "Icon & color").click();
+      await button(page.locator(".session-actions-page"), "Icon & color").click();
       await button(page, "Blue").click();
       await patched({ color: "blue" });
       await expectAttribute(dot, "aria-label", "Session color: Blue");
-      await shot("after-compact-menu.png", headerPanel(page), [button(page, "Blue")]);
+      await shot("after-compact-menu.png", page.locator(".session-actions-page--appearance"), [
+        button(page, "Blue"),
+      ]);
       await button(page, "Reset to default").click();
       await patched({ color: null, icon: null });
       await expect.poll(() => dot.count()).toBe(0);

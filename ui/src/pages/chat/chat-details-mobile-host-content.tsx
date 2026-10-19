@@ -2,6 +2,7 @@ import { For, Show, createMemo, createSignal, createEffect, untrack } from "soli
 import type { ControlUiSessionPullRequestSnapshot } from "../../../../src/gateway/control-ui-contract.js";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
+import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -19,7 +20,7 @@ import {
   type ChatDetailsMobilePage,
 } from "./components/chat-details-mobile-content.tsx";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
-import { chatPullRequestId } from "./components/chat-pull-requests.ts";
+import { chatPullRequestId, retainedPublication } from "./components/chat-pull-requests.ts";
 import { syncSessionPanelInputs, useSessionPanel } from "./components/chat-session-panel.tsx";
 import { createChatSessionSharingMobileAdapter } from "./components/chat-session-sharing-mobile-adapter.tsx";
 import type { PreparedChatSessionSharing } from "./components/chat-session-sharing-shared.tsx";
@@ -114,10 +115,10 @@ function MobileHostContent(props: {
     return { rows, error, loading, refresh: () => data.refresh() };
   });
   const route = () => props.host.destination.page?.details;
-  const peopleActive = createMemo(() => props.host.open && route()?.kind === "people");
-  createEffect(peopleActive, (active) =>
-    active ? untrack(() => props.bindings?.peopleMentions?.activate()) : undefined,
+  const activePeople = createMemo(() =>
+    props.host.open && route()?.kind === "people" ? props.bindings?.peopleMentions : undefined,
   );
+  createEffect(activePeople, (mentions) => mentions?.activate());
   // Subpage navigation keeps the host's external close-return target.
   const open = (value: MobileDetailsRoute, title: string) => {
     props.host.navigate({
@@ -219,12 +220,51 @@ function MobileHostContent(props: {
       }
     },
   });
-  const requests = () => ({
-    ...recovery(),
-    pullRequests: props.details.pullRequests ?? [],
-    onOpen: (request: NonNullable<ChatDetailsProps["pullRequests"]>[number]) =>
-      open({ kind: "pull-request", id: chatPullRequestId(request) }, request.title),
-  });
+  // Native bridge inputs revoke old callbacks before Solid commits the next frame.
+  const capturePresentation = () => {
+    const details = props.details;
+    const host = props.host;
+    const destination = host.destination;
+    const scopeKey = host.scopeKey;
+    return {
+      details,
+      host,
+      destination,
+      current: () =>
+        nativeHost.isConnected &&
+        nativeHost.presented &&
+        props.presented &&
+        nativeHost.details === details &&
+        nativeHost.host === host &&
+        props.host === host &&
+        host.scopeKey === scopeKey &&
+        host.open &&
+        !host.suspended &&
+        host.destination === destination,
+    };
+  };
+  const requests = (origin: "root" | "pull-requests") => {
+    const owner = capturePresentation();
+    return {
+      ...recovery(),
+      pullRequests: owner.details.pullRequests ?? [],
+      onOpen: (request: NonNullable<ChatDetailsProps["pullRequests"]>[number]) => {
+        if (
+          owner.current() &&
+          (owner.destination.page?.details?.kind ?? "root") === origin &&
+          owner.details.pullRequests?.includes(request)
+        ) {
+          open({ kind: "pull-request", id: chatPullRequestId(request) }, request.title);
+        }
+      },
+    };
+  };
+  const publicationVisible = () =>
+    Boolean(
+      props.details.githubPublication &&
+      (!props.details.pullRequestsBranchDismissed ||
+        retainedPublication(props.details.githubPublication)),
+    );
   const peoplePreview = createMemo(() => {
     const people = props.bindings?.people;
     // The native projection already deduplicates creator, owner and participants.
@@ -281,7 +321,7 @@ function MobileHostContent(props: {
             }
           : undefined,
         pullRequests: props.bindings?.pullRequests
-          ? { ...requests(), summary: { label: t("sessionHovercard.pullRequests") } }
+          ? { ...requests("root"), summary: { label: t("sessionHovercard.pullRequests") } }
           : undefined,
         versions: props.bindings?.versions
           ? {
@@ -326,7 +366,7 @@ function MobileHostContent(props: {
               open(destination, t("sessionHovercard.pullRequests"));
               break;
             case "pull-request":
-              requests().onOpen(destination.pullRequest);
+              requests("root").onOpen(destination.pullRequest);
               break;
             case "subagents":
               props.details.onOpenSubagents?.();
@@ -353,7 +393,7 @@ function MobileHostContent(props: {
         },
         onOpenSubagents: () => props.details.onOpenSubagents?.(),
       },
-      publicationEntry: props.details.githubPublication
+      publicationEntry: publicationVisible()
         ? { label: t("chat.activityPills.publication.review") }
         : undefined,
     },
@@ -424,35 +464,101 @@ function MobileHostContent(props: {
     if (props.bindings?.versions) {
       result.push({ kind: "versions", content: props.bindings.versions });
     }
-    if (props.details.githubPublication) {
+    const owner = capturePresentation();
+    const details = owner.details;
+    const publication = details.githubPublication;
+    if (publication && publicationVisible()) {
+      const branch = details.pullRequestsBranch;
+      const canDismissBranch = () =>
+        branch !== undefined &&
+        details.pullRequestsBranch === branch &&
+        !details.pullRequestsBranchDismissed &&
+        !retainedPublication(details.githubPublication) &&
+        details.githubPublication?.activity === null &&
+        Boolean(details.onDismissPullRequestsBranch);
       result.push({
         kind: "publication",
-        content: { publication: props.details.githubPublication },
+        content: {
+          publication,
+          onDismissBranch: canDismissBranch()
+            ? (request) => {
+                if (
+                  !owner.current() ||
+                  owner.destination.page?.details?.kind !== "publication" ||
+                  request !== branch ||
+                  !canDismissBranch()
+                ) {
+                  return;
+                }
+                details.onDismissPullRequestsBranch?.(request);
+                if (props.host === owner.host && owner.host.destination === owner.destination) {
+                  owner.host.navigate(owner.destination.backTo ?? { area: "details" });
+                }
+              }
+            : undefined,
+        },
       });
     }
     if (props.bindings?.pullRequests) {
-      result.push({ kind: "pull-requests", content: requests() });
-      const selected = route();
-      if (selected?.kind === "pull-request") {
+      result.push({ kind: "pull-requests", content: requests("pull-requests") });
+      const selected = owner.destination.page?.details;
+      if (
+        selected?.kind === "pull-request" ||
+        selected?.kind === "pull-request-checks" ||
+        selected?.kind === "pull-request-monitoring"
+      ) {
+        const pullRequest = details.pullRequests?.find(
+          (request) => chatPullRequestId(request) === selected.id,
+        );
+        const currentRequest = () =>
+          owner.current() &&
+          pullRequest !== undefined &&
+          details.pullRequests?.includes(pullRequest);
+        const openCi = (kind: "pull-request-checks" | "pull-request-monitoring", title: string) => {
+          if (currentRequest() && selected.kind === "pull-request") {
+            open({ kind, id: selected.id }, title);
+          }
+        };
         result.push({
           kind: "pull-request",
           content: {
             ...recovery(),
-            pullRequest: props.details.pullRequests?.find(
-              (request) => chatPullRequestId(request) === selected.id,
-            ),
+            pullRequest,
+            onOpenChecks: () => openCi("pull-request-checks", t("chat.pullRequests.checksTitle")),
+            onOpenMonitoring: () =>
+              openCi("pull-request-monitoring", t("chat.pullRequests.ciMonitoring")),
             onDismiss: (request) => {
-              const dismiss = props.details.onDismissPullRequest;
-              if (!dismiss) {
+              if (
+                !currentRequest() ||
+                selected.kind !== "pull-request" ||
+                request !== pullRequest ||
+                !details.onDismissPullRequest
+              ) {
                 return;
               }
-              const host = props.host;
-              dismiss(request);
-              host.navigate(host.destination.backTo ?? { area: "details" });
+              details.onDismissPullRequest(request);
+              if (props.host === owner.host && owner.host.destination === owner.destination) {
+                owner.host.navigate(owner.destination.backTo ?? { area: "details" });
+              }
             },
-            dismissDisabled: !props.details.onDismissPullRequest,
+            dismissDisabled: !details.onDismissPullRequest,
           },
         });
+        const ci = {
+          ...recovery(),
+          pullRequest,
+          gateway: details.pullRequestsGateway,
+          sessionKey: scopedSessionArtifactKey(
+            details.sessionKey,
+            details.currentAgentId ?? undefined,
+          ),
+          sessionId: details.pullRequestsSessionId,
+        };
+        // Page navigation changes presentation, not the lifetime of either CI owner.
+        result.push(
+          { kind: "pull-request-checks", content: ci },
+          { kind: "pull-request-monitoring", content: ci },
+        );
       }
     }
     return result;
@@ -489,7 +595,10 @@ function MobileHostContent(props: {
                 inert={!visible()}
                 data-details-page={page().kind}
               >
-                <div class="chat-mobile-details-page__body">
+                <div
+                  class="chat-mobile-details-page__body"
+                  ref={[elementRef(props.details.onScrollPortRef)]}
+                >
                   <Show when={page().kind === "people"}>
                     <Show when={props.bindings?.peopleMentions?.status === "loading"}>
                       <p role="status">{t("common.loading")}</p>

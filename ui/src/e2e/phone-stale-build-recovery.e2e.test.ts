@@ -499,17 +499,17 @@ suite.define(() => {
         const actions = page.getByRole("button", { name: "Actions for Main" });
         await capture(`02-${serviceWorker}-recovered`, actions);
         await actions.tap();
-        const assignment = page.getByRole("menuitem", { name: "Assign to…", exact: true });
+        const assignment = page.getByRole("menuitem", { name: "Assign to", exact: true });
         await assignment.waitFor();
         await assignment.tap();
-        const selectedOwner = page.getByRole("menuitemradio", {
+        const selectedOwner = page.getByRole("radio", {
           checked: true,
           exact: true,
           name: "Bob",
         });
         await selectedOwner.waitFor();
         const selectedOwners = await page
-          .getByRole("menuitemradio", { checked: true })
+          .getByRole("radio", { checked: true })
           .evaluateAll((owners) =>
             owners.map(
               (owner) => owner.querySelector(".session-menu__text")?.textContent?.trim() ?? "",

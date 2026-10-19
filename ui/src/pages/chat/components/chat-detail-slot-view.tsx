@@ -105,6 +105,7 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
         <openclaw-chat-detail-panel
           class="chat-sidebar"
           prop:content={content()}
+          prop:onScrollPortRef={props.chat.onScrollPortRef}
           prop:panelPresentation={props.presentation}
           prop:filePresentation={props.filePresentation ?? props.presentation}
           prop:panelActive={props.active ?? true}
@@ -113,7 +114,6 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
           prop:fileWorkspace={props.fileWorkspace}
           prop:onFileInteraction={props.onFileInteraction}
           prop:onFileDraftChange={props.onFileDraftChange}
-          prop:onScrollPortRef={props.chat.onScrollPortRef}
           prop:fileNavigation={
             props.content.kind === "file" ? (props.content.navigation ?? null) : null
           }

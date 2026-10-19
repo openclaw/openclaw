@@ -21,6 +21,7 @@ export type GitHubPublicationMobileProps = {
   presented: PresentationValue;
   branch?: ControlUiSessionBranch | null;
   repository?: ControlUiSessionPullRequests["repository"];
+  onDismissBranch?: (branch: ControlUiSessionBranch) => void;
   /** The pull-request host resolves this exact receipt; omission retains the native GitHub link. */
   onOpenPublished?: (
     result: Extract<NonNullable<GitHubPublicationView["result"]>, { status: "published" }>,
@@ -127,6 +128,40 @@ export function GitHubPublicationMobile(props: GitHubPublicationMobileProps) {
           </div>
         </Show>
       </section>
+      <Show
+        when={
+          props.branch &&
+          props.onDismissBranch &&
+          !props.publication.locked &&
+          !props.publication.result
+        }
+      >
+        <div class="chat-pr-mobile__group chat-pr-mobile__actions">
+          <button
+            type="button"
+            class="chat-pr-mobile__hide"
+            aria-label={t("chat.pullRequests.dismissBranch", {
+              branch: props.branch?.branch ?? "",
+            })}
+            disabled={props.publication.activity !== null}
+            onClick={() => {
+              const presented = props.presented;
+              if (
+                props.branch &&
+                !props.publication.locked &&
+                !props.publication.result &&
+                props.publication.activity === null &&
+                (typeof presented === "object" ? presented.isPresented() : presented)
+              ) {
+                props.onDismissBranch?.(props.branch);
+              }
+            }}
+          >
+            <Icon name="eyeOff" />
+            <span>{t("chat.pullRequests.hide")}</span>
+          </button>
+        </div>
+      </Show>
     </div>
   );
 }

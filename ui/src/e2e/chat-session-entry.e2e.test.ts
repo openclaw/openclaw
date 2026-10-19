@@ -80,7 +80,9 @@ function recordEntryFrames({ target, enabled, lastEntryId }: RecorderOptions) {
     const viewport = thread?.getBoundingClientRect();
     const elements = [
       document.querySelector(".shell"),
-      ...(pane?.querySelectorAll(".chat-pane__header, .chat, .chat-bubble[data-entry-id]") ?? []),
+      ...(pane?.querySelectorAll(
+        ".chat-pane__header, .agent-chat__header--mobile, .chat, .chat-bubble[data-entry-id]",
+      ) ?? []),
     ];
     const samples: EntrySample[] = [];
     for (const element of elements) {
@@ -101,7 +103,11 @@ function recordEntryFrames({ target, enabled, lastEntryId }: RecorderOptions) {
         id = ++nextId;
         ids.set(element, id);
       }
-      const kind = entryId ?? element.className;
+      const kind =
+        entryId ??
+        (element.matches(".chat-pane__header, .agent-chat__header--mobile")
+          ? "session-header"
+          : element.className);
       samples.push({ id, kind, y: rect.y, height: rect.height });
       if (entryId === lastEntryId) {
         lastEntryPaintedAt ??= time;
@@ -138,7 +144,7 @@ function assertEntryFrames(frames: EntryFrame[], lastEntryId: string) {
     }
   }
   const observed = Array.from(samplesById.values());
-  for (const kind of ["chat-pane__header", "chat", "shell", lastEntryId]) {
+  for (const kind of ["session-header", "chat", "shell", lastEntryId]) {
     const samples = observed.find((rows) => rows[0].kind.split(" ").includes(kind));
     expect(samples?.length, `${kind} painted frame coverage`).toBeGreaterThanOrEqual(10);
     const duration = samples!.at(-1)!.time - samples![0].time;

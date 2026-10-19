@@ -26,6 +26,7 @@ import type { SessionPlacementPresentation } from "../../../components/session-p
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { closeMenusWithin } from "../../../components/solid/menu.tsx";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { isSessionTitlePending } from "../../../lib/session-display.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
@@ -161,9 +162,16 @@ export function ChatPaneMobileComposition(props: {
     props.details(placement, () => untrack(() => host()?.navigate(machinePage))),
   );
   const machine = createChatMachinePresentation(placement);
-  let actionsRoot: HTMLSpanElement | undefined;
-  const actionSource = () =>
-    actionsRoot?.querySelector<HTMLElement>(".chat-header-session-menu__trigger") ?? undefined;
+  let actionsMenu: HTMLElementTagNameMap["openclaw-chat-header-session-menu"] | undefined;
+  const registerActionsMenu = (element: NonNullable<typeof actionsMenu>) => {
+    actionsMenu = element;
+    return () => {
+      if (actionsMenu === element) {
+        actionsMenu = undefined;
+      }
+    };
+  };
+  const actionSource = () => actionsMenu?.readTrigger();
   const peopleId = () => `${props.header.paneId}-mobile-people`;
   const labels = {
     get people() {
@@ -452,6 +460,12 @@ export function ChatPaneMobileComposition(props: {
     open: (page: HeaderSessionMenuPage, source: HTMLElement) =>
       host()?.navigate(adaptMenuPage(page), source),
     close: () => host()?.close(),
+    isCurrent: (page: HeaderSessionMenuPage) => {
+      const current = host();
+      return Boolean(
+        presented() && current?.open && !current.suspended && current.destination.page === page,
+      );
+    },
   };
   const actionsPageOpen = createMemo(() =>
     Boolean(presented() && host()?.open && host()?.destination.page?.key.startsWith("session-")),
@@ -471,15 +485,12 @@ export function ChatPaneMobileComposition(props: {
             (desktopSessionActions().length > 0 || desktopViewActions().length > 0)))
       }
     >
-      <span
-        ref={(element) => {
-          actionsRoot = element;
-        }}
-      >
+      <span>
         <Show
           when={props.header.sessionMenuAction}
           fallback={
             <openclaw-chat-header-session-menu
+              ref={[elementRef(registerActionsMenu)]}
               prop:paneTitle={props.header.title}
               prop:mobile={false}
               prop:sessionActions={desktopSessionActions()}
@@ -489,6 +500,7 @@ export function ChatPaneMobileComposition(props: {
         >
           {(menu) => (
             <ChatHeaderSessionMenu
+              ref={elementRef(registerActionsMenu)}
               {...menu()}
               sessionActions={mobile() ? nativeActions() : desktopSessionActions()}
               viewActions={mobile() ? layoutActions() : desktopViewActions()}

@@ -6,6 +6,7 @@ import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import {
   closeChatDetails,
   openChatDetails,
+  openChatTaskProgress,
   openDetailsPullRequests,
 } from "./chat-details.test-support.ts";
 import {
@@ -244,10 +245,13 @@ suite.define(() => {
 
     const watchedKey = await waitForWatchedSessionKey(gateway);
     await publishPr(gateway, watchedKey, true);
-    await openDetailsPullRequests(page);
-    await page.locator(".chat-pr").first().waitFor();
+    const pullRequests = await openDetailsPullRequests(page);
+    await pullRequests.getByText("fix: publish ClawHub metadata", { exact: true }).waitFor();
     await waitForChatScrollIdle(page);
     report.afterPr = await dockGeometry(page);
+    if (width <= 900) {
+      await closeChatDetails(page);
+    }
 
     // A late media/markdown layout can grow the mounted reply in the same
     // task as the final wheel event, before ResizeObserver publishes its size.
@@ -276,6 +280,46 @@ suite.define(() => {
       revision: 1,
       sessionKey: watchedKey,
     });
+    if (width <= 900) {
+      const progress = await openChatTaskProgress(page);
+      await progress.getByText("Verify the findings", { exact: true }).waitFor();
+      await waitForChatScrollIdle(page);
+      report.afterCard = await dockGeometry(page);
+      await closeChatDetails(page);
+      await scrollChatThreadToTop(page);
+      await openChatTaskProgress(page);
+      await progress.getByText("Verify the findings", { exact: true }).waitFor();
+      expect(await page.locator(".chat-thread").evaluate((thread) => thread.scrollTop)).toBe(0);
+      await closeChatDetails(page);
+      const button = page.getByRole("button", { name: "Scroll to latest", exact: true });
+      await button.click();
+      await waitForChatScrollIdle(page);
+      report.afterButton = await dockGeometry(page);
+      expect(await page.locator(".chat-mobile-host").isVisible()).toBe(false);
+      await openChatTaskProgress(page);
+      await progress.getByText("Verify the findings", { exact: true }).waitFor();
+      await waitForChatScrollIdle(page);
+      report.afterManualOpen = await dockGeometry(page);
+      expectDockClear(report);
+
+      // The mobile sheet owns dismissal; Latest must not reopen it.
+      await closeChatDetails(page);
+      const thread = page.locator(".chat-thread");
+      await thread.press("Home");
+      await waitForChatScrollIdle(page);
+      await button.press("Enter");
+      await openChatTaskProgress(page);
+      await page
+        .locator(".chat-mobile-host__header")
+        .getByRole("button", { name: "Close", exact: true })
+        .press("Escape");
+      await page.locator(".chat-mobile-host").waitFor({ state: "hidden" });
+      await thread.press("Home");
+      await button.press("Enter");
+      await waitForChatScrollIdle(page);
+      expect(await page.locator(".chat-mobile-host").isVisible()).toBe(false);
+      return;
+    }
     await expect.poll(() => card.count()).toBe(1);
     await openChatDetails(page);
     await waitForChatScrollIdle(page);

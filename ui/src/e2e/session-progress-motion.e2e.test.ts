@@ -114,19 +114,22 @@ suite.define(() => {
           expect(await height(card)).toBe(closed);
           const point = await headerPoint(card);
           if (touch) {
-            const touch = await page.context().newCDPSession(page);
+            const touchSession = await page.context().newCDPSession(page);
             try {
-              await touch.send("Input.dispatchTouchEvent", {
+              await touchSession.send("Input.dispatchTouchEvent", {
                 type: "touchStart",
                 touchPoints: [point],
               });
-              await touch.send("Input.dispatchTouchEvent", {
+              await touchSession.send("Input.dispatchTouchEvent", {
                 type: "touchMove",
                 touchPoints: [{ x: point.x, y: point.y - 36 }],
               });
-              await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+              await touchSession.send("Input.dispatchTouchEvent", {
+                type: "touchEnd",
+                touchPoints: [],
+              });
             } finally {
-              await touch.detach();
+              await touchSession.detach();
             }
           } else {
             await page.mouse.move(point.x, point.y);

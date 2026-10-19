@@ -25,9 +25,12 @@ describe("mobile publication review", () => {
   it("opens a review without publishing and keeps an unknown base absent", () => {
     const onPublish = vi.fn();
     const onRefresh = vi.fn();
+    const onDismissBranch = vi.fn();
+    const branch = sessionBranch({ owner: "example", repo: "project", branch: "feature/review" });
     const container = render({
       publication: publication({ onPublish, onRefresh }),
-      branch: sessionBranch({ owner: "example", repo: "project", branch: "feature/review" }),
+      branch,
+      onDismissBranch,
     });
     expect(container.textContent).toContain("example/project");
     expect(container.textContent).toContain("feature/review");
@@ -35,13 +38,19 @@ describe("mobile publication review", () => {
     expect(container.textContent).not.toContain("Unpublished");
     expect(onPublish).not.toHaveBeenCalled();
     expect(onRefresh).not.toHaveBeenCalled();
+    expect(onDismissBranch).not.toHaveBeenCalled();
+    container.querySelector<HTMLButtonElement>(".chat-pr-mobile__hide")!.click();
+    expect(onDismissBranch).toHaveBeenCalledExactlyOnceWith(branch);
+    expect(onPublish).not.toHaveBeenCalled();
     container.querySelector<HTMLButtonElement>(".chat-pr__create")!.click();
     expect(onPublish).toHaveBeenCalledOnce();
   });
 
   it("reviews the accepted personal snapshot rather than today's branch and diff", () => {
     const onConfirm = vi.fn();
+    const onDismissBranch = vi.fn();
     const container = render({
+      onDismissBranch,
       branch: sessionBranch({
         owner: "different",
         repo: "checkout",
@@ -79,13 +88,25 @@ describe("mobile publication review", () => {
     expect(container.textContent).not.toContain("999");
     expect(container.querySelector('[aria-haspopup="menu"]')).toBeNull();
     expect(onConfirm).not.toHaveBeenCalled();
+    expect(container.querySelector(".chat-pr-mobile__hide")).toBeNull();
+    expect(onDismissBranch).not.toHaveBeenCalled();
     container.querySelector<HTMLButtonElement>(".chat-pr__create")!.click();
     expect(onConfirm).toHaveBeenCalledOnce();
   });
 
-  it("keeps recovery available without a branch or a known result", () => {
+  it.each([
+    { label: "without a branch", branch: undefined },
+    { label: "with a current branch", branch: sessionBranch() },
+  ])("keeps recovery available $label and no known result", ({ branch }) => {
     const onPublish = vi.fn();
-    const container = render({ publication: publication({ locked: true, onPublish }) });
+    const onDismissBranch = vi.fn();
+    const container = render({
+      publication: publication({ locked: true, onPublish }),
+      branch,
+      onDismissBranch,
+    });
+    expect(container.querySelector(".chat-pr-mobile__hide")).toBeNull();
+    expect(onDismissBranch).not.toHaveBeenCalled();
     expect(container.textContent).toContain("The outcome is unknown.");
     expect(container.querySelector('[aria-haspopup="menu"]')).toBeNull();
     expect(onPublish).not.toHaveBeenCalled();
@@ -95,7 +116,10 @@ describe("mobile publication review", () => {
   it("checks an accepted receipt through the primary action without republishing", () => {
     const onRefresh = vi.fn();
     const onPublish = vi.fn();
+    const onDismissBranch = vi.fn();
     const container = render({
+      branch: sessionBranch(),
+      onDismissBranch,
       publication: publication({
         locked: true,
         result: { status: "requested", requestId: "accepted-request", message: "Accepted." },
@@ -104,6 +128,8 @@ describe("mobile publication review", () => {
       }),
     });
     const button = container.querySelector<HTMLButtonElement>(".chat-pr__create")!;
+    expect(container.querySelector(".chat-pr-mobile__hide")).toBeNull();
+    expect(onDismissBranch).not.toHaveBeenCalled();
     expect(button.textContent).toBe("Check publication");
     expect(button.disabled).toBe(false);
     button.click();
@@ -157,7 +183,15 @@ describe("mobile publication review", () => {
       url: "https://github.com/example/original/pull/317",
     };
     const onOpenPublished = vi.fn();
-    const container = render({ publication: publication({ result }), onOpenPublished });
+    const onDismissBranch = vi.fn();
+    const container = render({
+      publication: publication({ result }),
+      branch: sessionBranch(),
+      onOpenPublished,
+      onDismissBranch,
+    });
+    expect(container.querySelector(".chat-pr-mobile__hide")).toBeNull();
+    expect(onDismissBranch).not.toHaveBeenCalled();
     const link = container.querySelector<HTMLAnchorElement>("a.chat-pr__create")!;
     expect(link.href).toBe(result.url);
     expect(onOpenPublished).not.toHaveBeenCalled();

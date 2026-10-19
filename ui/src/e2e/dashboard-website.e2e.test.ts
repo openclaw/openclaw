@@ -182,7 +182,7 @@ suite.define(() => {
         await page.locator('.chat-mobile-host[data-mode="dock"]').waitFor();
         await page.locator('.sidebar-region__primary[data-region="main"] .chat-thread').waitFor();
         const dockHeight = (await host.boundingBox())!.height;
-        await selectChatLayoutAction(page, "Expand Side panel");
+        await selectChatLayoutAction(page, "Focus");
         await page.locator('.chat-mobile-host[data-mode="expanded"]').waitFor();
         await expect
           .poll(async () => (await host.boundingBox())!.height)
@@ -220,9 +220,9 @@ suite.define(() => {
         expect((await files.boundingBox())!.width).toBeGreaterThanOrEqual(390 - 24);
         expect(await frame.isVisible()).toBe(false);
         await page.getByRole("button", { name: "Close Files", exact: true }).click();
-        await openChatSidePanelType(page, "Dashboard");
+        await selectChatLayoutAction(page, "Dashboard");
         await frame.waitFor();
-        await selectChatLayoutAction(page, "Expand Side panel");
+        await selectChatLayoutAction(page, "Focus");
         await page.locator('.chat-mobile-host[data-mode="expanded"]').waitFor();
         expect(
           await frame.evaluate((element, previous) => element === previous, originalFrame),

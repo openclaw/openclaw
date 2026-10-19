@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { navigationDevice } from "./new-session-page.navigation-fixtures.test-support.ts";
 import {
@@ -82,7 +83,8 @@ suite.define(() => {
       expect(dispatch.params).toEqual({ key, agentId: "main", deviceId: "paired-runner" });
       await waitForCommittedChatRoute(page);
 
-      await page.locator(".chat-pane__placement-chip").click();
+      const details = await openChatDetails(page);
+      await details.locator(".chat-environment__machine-trigger").click();
       const stop = page.locator(".chat-pane__placement-reclaim");
       await stop.waitFor({ state: "visible" });
       const menuText = (await stop.textContent())?.trim();
@@ -101,18 +103,20 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
 
-      await page.locator(".chat-pane__placement-chip").click();
+      await openChatDetails(page);
+      await details.locator(".chat-environment__machine-trigger").click();
       await stop.click();
-      const confirmation = await waitForConfirmModal(page);
-      await confirmation.getByRole("button", { name: "Stop worker", exact: true }).click();
+      await (
+        await waitForConfirmModal(page)
+      )
+        .getByRole("button", { name: "Stop worker", exact: true })
+        .click();
       const reclaim = await gateway.waitForRequest("sessions.reclaim");
       expect(reclaim.params).toEqual({ key, agentId: "main" });
       const stopNotice = page.getByRole("alert").filter({ hasText: "Worker stop requested." });
-      const stopped = () =>
-        pollText(stopNotice).toContain(
-          "Worker stop requested. Review the initial message before retrying.",
-        );
-      await stopped();
+      await pollText(stopNotice).toContain(
+        "Worker stop requested. Review the initial message before retrying.",
+      );
       await gateway.resolveDeferred("sessions.dispatch", {
         placement: {
           ...placement,
@@ -126,7 +130,9 @@ suite.define(() => {
           runner: { kind: "device", status: "available", deviceId: "paired-runner" },
         },
       });
-      await stopped();
+      await pollText(stopNotice).toContain(
+        "Worker stop requested. Review the initial message before retrying.",
+      );
       expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(1);
       expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);

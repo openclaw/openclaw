@@ -633,7 +633,14 @@ suite.define(() => {
       await attr(retainedHost, "data-toast-placement", "shell");
       const retainedToast = retainedHost.locator(".app-toast");
       await expect.poll(() => retainedToast.textContent()).toContain("Codex hidden");
-      await expectBelow(retainedToast, page.locator(".chat-pane__header:visible").first(), true);
+      const header = page
+        .locator(
+          finalLayout === "compact"
+            ? ".agent-chat__header--mobile:visible"
+            : ".chat-pane__header:visible",
+        )
+        .first();
+      await expectBelow(retainedToast, header, true);
       await expectBelow(page.locator(".agent-chat__composer-shell"), retainedToast, false);
       await capture(page, TOAST_PROOF_DIR, `handed-off-toast-${finalLayout}-${colorScheme}.png`);
       await retainedToast.getByRole("button", { name: "Dismiss" }).click();

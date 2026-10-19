@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatSessionListResponse,
   controlUiSessionPath,
@@ -111,7 +112,8 @@ async function startPlacementReclaim(
   gateway: Awaited<ReturnType<typeof installMockGateway>>,
 ): Promise<void> {
   await gateway.deferNext("sessions.reclaim");
-  await page.getByRole("button", { name: "Runs on Cloud" }).click();
+  const details = await openChatDetails(page);
+  await details.locator(".chat-environment__machine-trigger").click();
   await page.getByText("Stop cloud worker…", { exact: true }).click();
   await page.getByRole("button", { name: "Stop worker" }).click();
   await gateway.waitForRequest("sessions.reclaim");
@@ -153,7 +155,8 @@ suite.define(() => {
       );
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await page.getByRole("button", { name: "Runs on worker", exact: true }).click();
+      const details = await openChatDetails(page);
+      await details.locator(".chat-environment__machine-trigger").click();
       const headerMenu = page.locator(".chat-pane__placement-menu");
       await headerMenu
         .getByText(restartable ? "Restart session…" : "Stop worker…", { exact: true })
@@ -267,7 +270,8 @@ suite.define(() => {
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     await dialog.waitFor({ state: "hidden" });
 
-    await page.getByRole("button", { name: "Runs on Cloud" }).click();
+    const details = await openChatDetails(page);
+    await details.locator(".chat-environment__machine-trigger").click();
     await page.getByText("Stop cloud worker…", { exact: true }).waitFor();
   });
 
