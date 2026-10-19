@@ -25,20 +25,37 @@ export function readCacheTtlProjectionPrefix(
   const entryType =
     /* kysely-allow-raw: exact-row identities carry the parsed kind; legacy rows retain native navigation. */
     sql`coalesce(identity.event_type, event.navigation_last_type)`;
+  const db = getActiveTranscriptKysely(projection.database);
+  const indexed = db
+    .selectFrom("transcript_event_identities")
+    .select(["session_id", "seq", "event_type"])
+    .where("session_id", "=", projection.resolved.sessionId);
+  const candidates = projection.hasUnindexedPrefix
+    ? db
+        .selectFrom("session_transcript_active_events as active")
+        .leftJoin("transcript_event_identities as identity", (join) =>
+          join
+            .onRef("identity.session_id", "=", "active.session_id")
+            .onRef("identity.seq", "=", "active.event_seq"),
+        )
+    : db
+        .selectFrom(
+          indexed
+            .where("event_type", "in", ["custom", "reset"])
+            // Keep null-kind malformed rows selectable without turning the type seek into a scan.
+            .unionAll(indexed.where("event_type", "is", null))
+            .as("identity"),
+        )
+        // Start with marker types; active-position order must not drive a full message scan.
+        .crossJoin("session_transcript_active_events as active")
+        .whereRef("identity.session_id", "=", "active.session_id")
+        .whereRef("identity.seq", "=", "active.event_seq");
   const rows = iterateSqliteQuerySync(
     projection.database.db,
-    getActiveTranscriptKysely(projection.database)
-      .selectFrom("session_transcript_active_events as active")
-      .innerJoin("transcript_events as event", (join) =>
-        join
-          .onRef("event.session_id", "=", "active.session_id")
-          .onRef("event.seq", "=", "active.event_seq"),
-      )
-      .leftJoin("transcript_event_identities as identity", (join) =>
-        join
-          .onRef("identity.session_id", "=", "active.session_id")
-          .onRef("identity.seq", "=", "active.event_seq"),
-      )
+    candidates
+      .crossJoin("transcript_events as event")
+      .whereRef("event.session_id", "=", "active.session_id")
+      .whereRef("event.seq", "=", "active.event_seq")
       .select((eb) =>
         eb
           .case()
