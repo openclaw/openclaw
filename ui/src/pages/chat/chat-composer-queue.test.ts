@@ -16,7 +16,14 @@ const find = <T extends Element = HTMLElement>(root: ParentNode | null | undefin
   root?.querySelector<T>(`.chat-queue__${part}`);
 const text = (root: ParentNode | null | undefined, part: string) =>
   find(root, part)?.textContent?.trim();
+const all = <T extends Element = HTMLElement>(root: ParentNode, part: string) =>
+  Array.from(root.querySelectorAll<T>(`.chat-queue__${part}`));
 const waitingPath = 'path[d="M21 5v12a2 2 0 0 1-2 2h-6"]';
+function drag(target: Element, type: string, properties: object) {
+  target.dispatchEvent(
+    Object.assign(new Event(type, { bubbles: true, cancelable: type === "drop" }), properties),
+  );
+}
 
 afterEach(async () => {
   document.body.replaceChildren();
@@ -31,10 +38,7 @@ describe("chat composer steering queue", () => {
     const onQueueRemove = vi.fn();
     const container = renderQueue({
       queue: [
-        waiting("message", 1, {
-          sendState: "unconfirmed",
-          sendAttempts: 1,
-        }),
+        waiting("message", 1, { sendState: "unconfirmed", sendAttempts: 1 }),
         waiting("reset", 2, {
           text: "/reset",
           localCommandName: "reset",
@@ -47,7 +51,7 @@ describe("chat composer steering queue", () => {
       onQueueRemove,
     });
 
-    const rows = container.querySelectorAll(".chat-queue__item");
+    const rows = all(container, "item");
     expect(rows).toHaveLength(1);
     expect(text(container, "global-state")).toBe(
       "Queue paused. Retry or discard the earlier unconfirmed message in the conversation.",
@@ -84,25 +88,20 @@ describe("chat composer steering queue", () => {
   it("keeps the queue identifier on failed and unconfirmed rows", () => {
     const container = renderQueue({
       queue: [
-        waiting("failed-steer", 1, {
-          queueMode: "steer",
-          sendState: "failed",
-          sendError: "steer rejected",
-        }),
+        waiting("failed", 1, { queueMode: "steer", sendState: "failed", sendError: "rejected" }),
         waiting("unconfirmed", 2, { sendState: "unconfirmed" }),
       ],
     });
 
-    const rows = [...container.querySelectorAll(".chat-queue__item")];
+    const rows = all(container, "item");
     expect(rows).toHaveLength(2);
     for (const terminalRow of rows) {
       const terminalIcon = find(terminalRow, "icon");
       expect(terminalIcon?.querySelector(waitingPath)).not.toBeNull();
       expect(terminalIcon?.querySelector('path[d^="m21.73 18"]')).toBeNull();
     }
-    const row = rows[0];
-    expect(row?.classList.contains("chat-queue__item--failed")).toBe(true);
-    expect(text(row, "error .chat-queue__badge")).toBe(t("common.failed"));
+    expect(rows[0]?.classList.contains("chat-queue__item--failed")).toBe(true);
+    expect(text(rows[0], "error .chat-queue__badge")).toBe(t("common.failed"));
   });
 });
 
@@ -135,27 +134,19 @@ function queueEdit(overrides: Partial<NonNullable<QueueProps["queuedEdit"]>>) {
   return { editingId: null, onCancel: vi.fn(), ...overrides };
 }
 function editFixture(editingText?: string) {
-  const change = vi.fn(),
-    submit = vi.fn(),
-    cancel = vi.fn();
+  const callbacks = { onEditChange: vi.fn(), onEditSubmit: vi.fn(), onCancel: vi.fn() };
   const props = {
     queue: [waiting("a", 1)],
-    queuedEdit: queueEdit({
-      editingId: "a",
-      editingText,
-      onEditChange: change,
-      onEditSubmit: submit,
-      onCancel: cancel,
-    }),
+    queuedEdit: queueEdit({ editingId: "a", editingText, ...callbacks }),
   };
   const container = renderQueue(props);
   return {
     props,
     container,
     editor: find<HTMLTextAreaElement>(container, "edit-input")!,
-    change,
-    submit,
-    cancel,
+    change: callbacks.onEditChange,
+    submit: callbacks.onEditSubmit,
+    cancel: callbacks.onCancel,
   };
 }
 
@@ -163,13 +154,7 @@ const waiting = (
   id: string,
   createdAt: number,
   overrides: Partial<QueueProps["queue"][number]> = {},
-) => ({
-  id,
-  text: id,
-  createdAt,
-  sendState: "waiting-reconnect" as const,
-  ...overrides,
-});
+) => ({ id, text: id, createdAt, sendState: "waiting-reconnect" as const, ...overrides });
 const items = (
   ids: string,
   sendState: QueueProps["queue"][number]["sendState"] = "waiting-reconnect",
@@ -177,9 +162,7 @@ const items = (
 
 describe("chat composer queue reordering", () => {
   it("caps long queues and records both scroll boundaries", () => {
-    const container = renderQueue({
-      queue: items("abcd"),
-    });
+    const container = renderQueue({ queue: items("abcd") });
     const scroll = find<HTMLElement>(container, "scroll")!;
     Object.defineProperties(scroll, {
       clientHeight: { configurable: true, value: 149 },
@@ -204,26 +187,19 @@ describe("chat composer queue reordering", () => {
     const cancelFrame = vi.fn();
     vi.stubGlobal("requestAnimationFrame", requestFrame);
     vi.stubGlobal("cancelAnimationFrame", cancelFrame);
-    const container = renderQueue({
-      queue: items("abcd"),
-      onQueueMove: vi.fn(),
-    });
+    const container = renderQueue({ queue: items("abcd"), onQueueMove: vi.fn() });
     const scroll = find<HTMLElement>(container, "scroll")!;
     vi.spyOn(scroll, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
     scroll.scrollTop = 10;
-    const dragOver = new Event("dragover", { bubbles: true });
-    Object.defineProperties(dragOver, {
-      clientY: { value: 99 },
-      dataTransfer: { value: { types: ["application/x-openclaw-queued-message"] } },
+    drag(scroll, "dragover", {
+      clientY: 99,
+      dataTransfer: { types: ["application/x-openclaw-queued-message"] },
     });
-    scroll.dispatchEvent(dragOver);
     expect(requestFrame).toHaveBeenCalledOnce();
     frames.shift()?.(0);
     expect(scroll.scrollTop).toBeGreaterThan(10);
 
-    const dragLeave = new Event("dragleave", { bubbles: true });
-    Object.defineProperty(dragLeave, "relatedTarget", { value: null });
-    scroll.dispatchEvent(dragLeave);
+    drag(scroll, "dragleave", { relatedTarget: null });
     expect(cancelFrame).toHaveBeenCalled();
   });
 
@@ -235,11 +211,10 @@ describe("chat composer queue reordering", () => {
       onQueueMove,
     });
 
-    const rows = [...container.querySelectorAll(".chat-queue__item")];
+    const rows = all(container, "item");
     const grips = rows.map((row) => find(row, "grip"));
     if (editing) {
       expect(grips.every((grip) => grip !== null)).toBe(true);
-      // The edited row splits the queue; neither neighbor has anywhere to go.
       expect(grips.map((grip) => grip!.hasAttribute("disabled"))).toEqual([true, true, true]);
       expect(rows[1]?.classList.contains("chat-queue__item--editing")).toBe(true);
     }
@@ -252,30 +227,27 @@ describe("chat composer queue reordering", () => {
   });
 
   it("renders the inline editor while keeping other rows actionable", () => {
-    const onQueueEdit = vi.fn();
-    const onQueueSteer = vi.fn();
     const onQueueRemove = vi.fn();
     const container = renderQueue({
       canAbort: true,
       queue: items("abc", "waiting-idle"),
-      queuedEdit: queueEdit({ editingId: "b", onEdit: onQueueEdit }),
-      onQueueSteer,
+      queuedEdit: queueEdit({ editingId: "b", onEdit: vi.fn() }),
+      onQueueSteer: vi.fn(),
       onQueueMove: vi.fn(),
       onQueueRemove,
     });
 
-    const rows = [...container.querySelectorAll(".chat-queue__item")];
-    const has = (selector: string) => rows.map((row) => row.querySelector(selector) !== null);
-    expect(has(".chat-queue__overflow")).toEqual([true, false, true]);
-    expect(find(rows[1], "edit-input")).not.toBeNull();
-    expect(find(rows[1], "edit-submit")).not.toBeNull();
-    expect(find(rows[1], "edit-cancel")).not.toBeNull();
-    expect(has(".chat-queue__action")).toEqual([true, false, true]);
-
-    const disabled = (selector: string) =>
-      rows.map((row) => row.querySelector(selector)?.hasAttribute("disabled") ?? false);
-    expect(disabled(".chat-queue__more")).toEqual([true, false, true]);
-    expect(disabled(".chat-queue__remove")).toEqual([false, false, false]);
+    const rows = all(container, "item");
+    const has = (part: string) => rows.map((row) => find(row, part) !== null);
+    expect(has("overflow")).toEqual([true, false, true]);
+    expect(has("action")).toEqual([true, false, true]);
+    const disabled = (part: string) =>
+      rows.map((row) => find(row, part)?.hasAttribute("disabled") ?? false);
+    expect(disabled("more")).toEqual([true, false, true]);
+    expect(disabled("remove")).toEqual([false, false, false]);
+    for (const part of ["edit-input", "edit-submit", "edit-cancel"]) {
+      expect(find(rows[1], part)).not.toBeNull();
+    }
 
     find<HTMLButtonElement>(rows[2], "remove")?.click();
     expect(onQueueRemove).toHaveBeenCalledWith("c");
@@ -316,9 +288,7 @@ describe("chat composer queue reordering", () => {
     const compositionEnd = new CompositionEvent("compositionend", { bubbles: true });
     editor.dispatchEvent(compositionEnd);
     const confirmingEnter = keydown("Enter", { keyCode: 13, cancelable: true });
-    Object.defineProperty(confirmingEnter, "timeStamp", {
-      value: compositionEnd.timeStamp - 1,
-    });
+    Object.defineProperty(confirmingEnter, "timeStamp", { value: compositionEnd.timeStamp - 1 });
     editor.dispatchEvent(confirmingEnter);
 
     expect(
@@ -337,8 +307,7 @@ describe("chat composer queue reordering", () => {
       { profileId: "first-alex", start: 0, end: 5 },
       { profileId: "second-alex", start: 6, end: 11 },
     ];
-    const container = document.createElement("div");
-    document.body.append(container);
+    const container = document.body.appendChild(document.createElement("div"));
     const draw = () =>
       renderQueue(
         {
@@ -382,10 +351,10 @@ describe("chat composer queue reordering", () => {
 
     const row = find(container, "item");
     expect(row?.classList.contains("chat-queue__item--reconnect")).toBe(true);
-    expect(row?.querySelectorAll(".chat-queue__badge")).toHaveLength(1);
+    expect(all(row!, "badge")).toHaveLength(1);
     expect(text(row, "badge--reconnect")).toBe(t("chat.queue.states.waitingForReconnect"));
     expect(find(row, "state")).toBeNull();
-    expect(container.querySelectorAll(".chat-queue__global-state")).toHaveLength(0);
+    expect(all(container, "global-state")).toHaveLength(0);
   });
 
   it("projects applying settings once and preserves the steer affordance", () => {
@@ -398,33 +367,26 @@ describe("chat composer queue reordering", () => {
       onQueueSteer: vi.fn(),
     });
 
-    expect(container.querySelectorAll(".chat-queue__global-state")).toHaveLength(1);
+    expect(all(container, "global-state")).toHaveLength(1);
     expect(text(container, "global-state")).toBe(t("chat.queue.states.applyingSettings"));
-    expect(container.querySelectorAll(".chat-queue__state")).toHaveLength(0);
-    const steerButtons = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__steer")];
+    expect(all(container, "state")).toHaveLength(0);
+    const steerButtons = all<HTMLButtonElement>(container, "steer");
     expect(steerButtons).toHaveLength(2);
     expect(steerButtons.every((button) => button.disabled)).toBe(true);
-    expect(container.querySelectorAll(".chat-queue__badge--steered")).toHaveLength(1);
+    expect(all(container, "badge--steered")).toHaveLength(1);
   });
 
   it("reports the drop position of the row the message was dropped on", () => {
     const onQueueMove = vi.fn();
-    const container = renderQueue({
-      queue: items("abc"),
-      onQueueMove,
+    const container = renderQueue({ queue: items("abc"), onQueueMove });
+    const rows = all(container, "item");
+    drag(rows[0]!, "drop", {
+      dataTransfer: {
+        types: ["application/x-openclaw-queued-message"],
+        getData: () => "c",
+        dropEffect: "none",
+      },
     });
-    const rows = [...container.querySelectorAll(".chat-queue__item")];
-    const dataTransfer = {
-      types: ["application/x-openclaw-queued-message"],
-      getData: () => "c",
-      setData: vi.fn(),
-      dropEffect: "none",
-      effectAllowed: "none",
-    };
-
-    const drop = new Event("drop", { bubbles: true, cancelable: true });
-    Object.defineProperty(drop, "dataTransfer", { value: dataTransfer });
-    rows[0]!.dispatchEvent(drop);
 
     expect(onQueueMove.mock.calls).toEqual([["c", "a"]]);
   });

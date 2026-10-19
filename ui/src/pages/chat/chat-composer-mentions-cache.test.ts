@@ -14,15 +14,13 @@ import { createHumanMentionMenu } from "./components/chat-composer-mention-menu.
 
 afterEach(resetMentionComposerFixture);
 
-const freshMs = 5 * 60_000;
-
 const fixture = () => composerFixture("chat");
 
 async function staleFixture() {
   const view = fixture();
   await view.search("@Al");
   view.key("Escape");
-  await vi.advanceTimersByTimeAsync(freshMs);
+  await vi.advanceTimersByTimeAsync(5 * 60_000);
   return view;
 }
 
@@ -31,15 +29,13 @@ describe("mention query cache", () => {
     "keeps an in-flight result when reopened %s it settles",
     async (reopen) => {
       const view = fixture();
-      const response = createDeferred<UsersMentionableResult>();
-      view.request.mockReturnValueOnce(response.promise);
+      const response = view.defer();
       await view.search("@Al");
       view.key("Escape");
       if (reopen === "before") {
         await view.search("Review @Al");
       }
-      response.resolve(people);
-      await vi.advanceTimersByTimeAsync(0);
+      await response(people);
       if (reopen === "after") {
         expect(view.query('[role="listbox"]')).toBeNull();
         view.edit("Review @Al");
@@ -51,16 +47,14 @@ describe("mention query cache", () => {
 
   it("refreshes stale results in the background without losing keyboard selection", async () => {
     const view = await staleFixture();
-    const response = createDeferred<UsersMentionableResult>();
-    view.request.mockReturnValueOnce(response.promise);
+    const response = view.defer();
     view.edit("Review @Al");
     expect(view.options()).toHaveLength(2);
     expect(view.query(".mention-menu__loading")).toBeNull();
     view.key("ArrowDown");
     await vi.advanceTimersByTimeAsync(150);
     expect(view.request).toHaveBeenCalledTimes(2);
-    response.resolve({ users: people.users.toReversed(), truncated: false });
-    await vi.advanceTimersByTimeAsync(0);
+    await response({ users: people.users.toReversed(), truncated: false });
     view.key("Enter");
     expect(view.value().mentions).toEqual([mention("profile-alex-offline", 7, 12)]);
     expect(view.send).not.toHaveBeenCalled();
@@ -92,8 +86,7 @@ describe("mention query cache", () => {
     "does not publish an old refresh after %s",
     async (action) => {
       const view = await staleFixture();
-      const response = createDeferred<UsersMentionableResult>();
-      view.request.mockReturnValueOnce(response.promise);
+      const response = view.defer();
       await view.search("Review @Al");
       if (action === "switch query") {
         view.request.mockResolvedValueOnce({ users: [], truncated: false });
@@ -103,8 +96,7 @@ describe("mention query cache", () => {
       } else {
         view.replaceOwner();
       }
-      response.resolve(people);
-      await vi.advanceTimersByTimeAsync(0);
+      await response(people);
       expect(view.options()).toHaveLength(0);
       if (action === "replace owner") {
         view.edit("Again @Al");

@@ -1,5 +1,6 @@
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
-import { onTestFinished, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
@@ -184,6 +185,14 @@ export function composerFixture(
   return {
     container,
     request,
+    defer: () => {
+      const response = createDeferred<UsersMentionableResult>();
+      request.mockReturnValueOnce(response.promise);
+      return async (result = people) => {
+        response.resolve(result);
+        await vi.advanceTimersByTimeAsync(0);
+      };
+    },
     edit,
     query: <T extends Element = HTMLElement>(selector: string) =>
       container.querySelector<T>(selector),
@@ -197,6 +206,8 @@ export function composerFixture(
     abort,
     slashCommand,
     value: () => ({ draft, mentions }),
+    expectValue: (expectedDraft: string, expectedMentions: readonly HumanMention[] = []) =>
+      expect({ draft, mentions }).toEqual({ draft: expectedDraft, mentions: expectedMentions }),
     replaceOwner: () => {
       ownerKey = "sender-two";
       renderCurrent();

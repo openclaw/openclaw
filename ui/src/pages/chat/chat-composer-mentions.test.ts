@@ -13,10 +13,6 @@ import { findPrimaryButton } from "./chat-composer.test-support.ts";
 afterEach(resetMentionComposerFixture);
 
 const peter = { profileId: "profile-peter", displayName: "Peter Steinberger", online: true };
-const peterSelection = {
-  draft: "@Peter Steinberger ",
-  mentions: [mention(peter.profileId, 0, 18)],
-};
 function expectSearch(view: ReturnType<typeof composerFixture>, query: string) {
   expect(view.request).toHaveBeenLastCalledWith(
     "users.mentionable",
@@ -56,10 +52,7 @@ it.each([
   expect(view.send.mock.calls).toEqual(
     action === "message" || action === "ordinary" ? [[{ draft, mentions: [recipient] }]] : [],
   );
-  expect(view.value()).toEqual({
-    draft: action === "command" ? "Review @Alex " : draft,
-    mentions: [recipient],
-  });
+  view.expectValue(action === "command" ? "Review @Alex " : draft, [recipient]);
 });
 
 describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
@@ -87,10 +80,7 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
     expect(view.container.textContent).not.toContain("Offline");
     view.key("ArrowDown");
     expect(view.key("Tab").defaultPrevented).toBe(true);
-    expect(view.value()).toEqual({
-      draft: "@Alex ",
-      mentions: [mention("profile-alex-offline")],
-    });
+    view.expectValue("@Alex ", [mention("profile-alex-offline")]);
     expect(view.send).not.toHaveBeenCalled();
     expect(view.query('[role="status"]')?.textContent).toContain("Will notify");
     expect(view.query('[role="status"]')?.textContent).not.toContain("@Alex");
@@ -112,17 +102,15 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
       view.request.mockResolvedValueOnce(roster);
       await view.search("@");
       view.key("ArrowDown");
-      const response = createDeferred<UsersMentionableResult>();
-      view.request.mockReturnValueOnce(response.promise);
+      const response = view.defer();
       view.edit("@a");
       await vi.advanceTimersByTimeAsync(50);
       await view.search("@an");
       expect(view.query('[role="option"]')).toBeNull();
-      response.resolve({
+      await response({
         users: [roster.users[2]!, roster.users[0]!, roster.users[1]!],
         truncated: false,
       });
-      await vi.advanceTimersByTimeAsync(0);
       const selectedName = () => view.query('[role="option"][aria-selected="true"]')?.textContent;
       expect(selectedName()).toContain("Annie");
       view.edit("@");
@@ -132,10 +120,7 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
       await view.search("@anne");
       expect(selectedName()).toContain("Anne");
       view.key("Enter");
-      expect(view.value()).toEqual({
-        draft: "@Anne ",
-        mentions: [mention("anne")],
-      });
+      view.expectValue("@Anne ", [mention("anne")]);
       expect(view.send).not.toHaveBeenCalled();
     });
     it("retries a failed query without sending and handles selection before its result", async () => {
@@ -148,14 +133,12 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
         (button) => button.textContent?.trim() === "Retry",
       );
       expect(retry).toBeDefined();
-      const response = createDeferred<UsersMentionableResult>();
-      view.request.mockReturnValueOnce(response.promise);
+      const response = view.defer();
       retry!.click();
       await vi.advanceTimersByTimeAsync(150);
       expect(view.request).toHaveBeenCalledTimes(2);
       expectSearch(view, "Al");
-      response.resolve(people);
-      await vi.advanceTimersByTimeAsync(0);
+      await response(people);
       expect(view.options()).toHaveLength(2);
       view.key("Enter");
       expect(view.value().mentions).toEqual([mention("profile-alex-online")]);
@@ -203,9 +186,7 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
     view.edit(draft, { start: prefix.length, caret: prefix.length + 1, data: "@" });
     const textarea = view.query<HTMLTextAreaElement>("textarea")!;
     textarea.setSelectionRange(draft.length, draft.length, "forward");
-    textarea.dispatchEvent(
-      new KeyboardEvent("keyup", { bubbles: true, key: "End", shiftKey: false }),
-    );
+    textarea.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "End" }));
     await vi.advanceTimersByTimeAsync(150);
     expect(view.query(".mention-menu")).toBeNull();
     expect(view.request).not.toHaveBeenCalled();
@@ -244,7 +225,7 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
         }
       }
       expect(view.key(position === "typed name" ? "Tab" : "Enter").defaultPrevented).toBe(true);
-      expect(view.value()).toEqual(peterSelection);
+      view.expectValue("@Peter Steinberger ", [mention(peter.profileId, 0, 18)]);
       expect(view.send).not.toHaveBeenCalled();
       if (position !== "typed name") {
         return;
@@ -258,7 +239,7 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
       expect(status.querySelector('[title="@Peter Steinberger"]')).not.toBeNull();
       status.querySelector<HTMLButtonElement>('button[aria-label="Remove mention"]')!.click();
       expect(view.container.textContent).not.toContain("Will notify");
-      expect(view.value()).toEqual({ draft: "@Peter Steinberger ", mentions: [] });
+      view.expectValue("@Peter Steinberger ");
       view.key("Enter");
       expect(view.send).toHaveBeenCalledWith(view.value());
     },
@@ -289,22 +270,19 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
       expectSearch(view, queries[1]!);
       view.key("Enter");
       const person = results[1]!.users[0]!;
-      expect(view.value()).toEqual({
-        draft: `@${person.displayName} `,
-        mentions: [mention(person.profileId, 0, person.displayName.length + 1)],
-      });
+      view.expectValue(`@${person.displayName} `, [
+        mention(person.profileId, 0, person.displayName.length + 1),
+      ]);
       expect(view.send).not.toHaveBeenCalled();
     });
 
     it("fences late searches when restoring a cached query and clears snapshots on owner change", async () => {
       const view = composerFixture(kind);
       await view.search("@A");
-      const response = createDeferred<UsersMentionableResult>();
-      view.request.mockReturnValueOnce(response.promise);
+      const response = view.defer();
       await view.search("@B");
       view.edit("@A");
-      response.resolve({ users: [], truncated: false });
-      await vi.advanceTimersByTimeAsync(0);
+      await response({ users: [], truncated: false });
       expect(view.options()).toHaveLength(2);
       expect(view.request).toHaveBeenCalledTimes(2);
       view.replaceOwner();
@@ -313,37 +291,32 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
     });
   }
 
-  it.each(
-    [
-      {
-        name: "first of two identical labels",
-        draft: "@Alex @Alex",
-        mentions: [mention("first-alex"), mention("second-alex", 6, 11)],
-        next: "@Alex",
-        edit: { start: 0, end: 6, inputType: "deleteContentBackward" },
-        expected: [mention("second-alex")],
-      },
-      {
-        name: "edited token",
-        draft: "@Alex",
-        mentions: [mention("alex")],
-        next: "@Alx",
-        edit: { start: 3, end: 4, inputType: "deleteContentForward" },
-        expected: [],
-      },
-    ].filter((entry) => kind === "new-session" || entry.name === "edited token"),
-  )("reconciles recipients after deleting $name", ({ draft, mentions, next, edit, expected }) => {
-    const view = composerFixture(kind, draft, mentions);
-    view.edit(next, { ...edit, data: null });
-    expect(view.value().mentions).toEqual(expected);
-    if (expected.length === 0) {
-      expect(view.container.textContent).not.toContain("Will notify");
-      view.edit("@Alex", { start: 0, end: 4, inputType: "insertFromPaste" });
-      expect(view.request).not.toHaveBeenCalled();
-    }
-    view.key("Enter");
-    expect(view.send).toHaveBeenCalledWith({ draft: "@Alex", mentions: expected });
-  });
+  it.each(kind === "new-session" ? ["first identical label", "edited token"] : ["edited token"])(
+    "reconciles recipients after deleting %s",
+    (target) => {
+      const first = target === "first identical label";
+      const view = composerFixture(
+        kind,
+        first ? "@Alex @Alex" : "@Alex",
+        first ? [mention("first-alex"), mention("second-alex", 6, 11)] : [mention("alex")],
+      );
+      const expected = first ? [mention("second-alex")] : [];
+      view.edit(first ? "@Alex" : "@Alx", {
+        start: first ? 0 : 3,
+        end: first ? 6 : 4,
+        inputType: first ? "deleteContentBackward" : "deleteContentForward",
+        data: null,
+      });
+      expect(view.value().mentions).toEqual(expected);
+      if (expected.length === 0) {
+        expect(view.container.textContent).not.toContain("Will notify");
+        view.edit("@Alex", { start: 0, end: 4, inputType: "insertFromPaste" });
+        expect(view.request).not.toHaveBeenCalled();
+      }
+      view.key("Enter");
+      expect(view.send).toHaveBeenCalledWith({ draft: "@Alex", mentions: expected });
+    },
+  );
 
   if (kind === "new-session") {
     it.each(["`@Peter Steinberger", "```\n@Peter Steinberger", "/command @Peter Steinberger"])(

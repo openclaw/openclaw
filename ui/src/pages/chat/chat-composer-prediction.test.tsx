@@ -14,35 +14,32 @@ import {
 afterEach(() => resetComposerFixture());
 const suggestion = "Show me the smaller implementation first.";
 
-function fixture(
-  response: Promise<{ text: string | null }> = Promise.resolve({ text: suggestion }),
-) {
+function fixture({ pending = false, runActive = false } = {}) {
+  const response = createDeferred<{ text: string | null }>();
   let listener: ((event: GatewayEventFrame) => void) | undefined;
+  const subscribeEvents = (next: (event: GatewayEventFrame) => void) => {
+    listener = next;
+    return () => {
+      listener = undefined;
+    };
+  };
   let draft = "";
   const request = vi.fn((method: string, _params?: unknown, _options?: { signal?: AbortSignal }) =>
-    method === "chat.predict" ? response : Promise.resolve({}),
+    method === "chat.predict"
+      ? pending
+        ? response.promise
+        : Promise.resolve({ text: suggestion })
+      : Promise.resolve({}),
   );
-  // SAFETY: This composer fixture exercises only the typed prediction request.
-  const client = { request } as unknown as GatewayBrowserClient;
   const props = createComposerProps({
+    runActive,
     currentSessionId: "session-a",
-    gatewayClient: client,
-    composerPredictions: {
-      enabled: true,
-      active: true,
-      gateway: {
-        subscribeEvents: (next) => {
-          listener = next;
-          return () => {
-            listener = undefined;
-          };
-        },
-      },
-    },
+    // SAFETY: This composer fixture exercises only the typed prediction request.
+    gatewayClient: { request } as unknown as GatewayBrowserClient,
+    composerPredictions: { enabled: true, active: true, gateway: { subscribeEvents } },
     getDraft: () => draft,
     onDraftChange: (next) => {
       draft = next;
-      props.draft = next;
     },
   });
   const container = document.body.appendChild(createComposerContainer());
@@ -56,10 +53,12 @@ function fixture(
       event: "chat",
       payload: { sessionKey: "main", runId, state: "final" },
     });
+  if (pending) {
+    finish();
+  }
   return {
     props,
     container,
-    input,
     paint,
     finish,
     prediction,
@@ -73,17 +72,11 @@ function fixture(
       input.value = text;
       input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     },
-    draft: () => draft,
+    expectDraft: (value: string) => {
+      expect({ input: input.value, draft }).toEqual({ input: value, draft: value });
+      expect(props.onSend).not.toHaveBeenCalled();
+    },
     predictions: () => request.mock.calls.filter(([method]) => method === "chat.predict"),
-  };
-}
-
-function pendingPrediction() {
-  const response = createDeferred<{ text: string | null }>();
-  const view = fixture(response.promise);
-  view.finish();
-  return {
-    ...view,
     settle: async () => {
       response.resolve({ text: suggestion });
       await Promise.resolve();
@@ -92,7 +85,6 @@ function pendingPrediction() {
   };
 }
 
-type Fixture = ReturnType<typeof fixture>;
 const changes = {
   disabled: (f) => Object.assign(f.props.composerPredictions!, { enabled: false }),
   hidden: (f) => Object.assign(f.props.composerPredictions!, { active: false }),
@@ -104,19 +96,26 @@ const changes = {
     f.props.gatewayClient = { request: vi.fn() } as unknown as GatewayBrowserClient;
   },
   run: (f) => Object.assign(f.props, { runActive: true }),
-} satisfies Record<string, (f: Fixture) => void>;
+} satisfies Record<string, (f: ReturnType<typeof fixture>) => void>;
 
-it("shows a prediction without changing the draft; Tab accepts but never sends", async () => {
-  const f = fixture();
-  await f.show();
-  expect(f.input.value).toBe("");
-  expect(f.draft()).toBe("");
+it.each(["Tab", "touch"])("accepts with %s only when idle, without sending", async (control) => {
+  const f = fixture({ runActive: control === "touch" });
+  f.finish();
+  if (control === "touch") {
+    expect(f.predictions()).toHaveLength(0);
+    f.props.runActive = false;
+    f.paint();
+  }
+  await waitForSolid(() => expect(f.prediction()?.textContent).toBe(suggestion));
+  f.expectDraft("");
   f.key("Enter");
   expect(f.props.onSend).not.toHaveBeenCalled();
-  f.key("Tab");
-  expect(f.input.value).toBe(suggestion);
-  expect(f.draft()).toBe(suggestion);
-  expect(f.props.onSend).not.toHaveBeenCalled();
+  if (control === "Tab") {
+    f.key("Tab");
+  } else {
+    f.container.querySelector<HTMLButtonElement>('[aria-label="Use suggestion"]')!.click();
+  }
+  f.expectDraft(suggestion);
   flush();
   expect(f.prediction()).toBeNull();
   f.finish();
@@ -138,9 +137,7 @@ it.each(["Escape", "typing", "new run"])("dismisses with %s without accepting", 
   }
   flush();
   expect(f.prediction()).toBeNull();
-  expect(f.input.value).toBe(action === "typing" ? "My own question" : "");
-  expect(f.draft()).toBe(action === "typing" ? "My own question" : "");
-  expect(f.props.onSend).not.toHaveBeenCalled();
+  f.expectDraft(action === "typing" ? "My own question" : "");
 });
 
 it.each(["disabled", "hidden", "read-only", "draft", "attachment"] as const)(
@@ -158,7 +155,7 @@ it.each(["disabled", "hidden", "read-only", "draft", "attachment"] as const)(
 it.each(["session", "client", "draft", "disabled", "run"] as const)(
   "drops an in-flight result after %s changes",
   async (kind) => {
-    const f = pendingPrediction();
+    const f = fixture({ pending: true });
     expect(f.predictions()).toHaveLength(1);
     changes[kind](f);
     f.paint();
@@ -167,25 +164,8 @@ it.each(["session", "client", "draft", "disabled", "run"] as const)(
   },
 );
 
-it("waits for completion to become idle and accepts using the touch control", async () => {
-  const f = fixture();
-  f.props.runActive = true;
-  f.paint();
-  f.finish();
-  expect(f.predictions()).toHaveLength(0);
-  f.props.runActive = false;
-  f.paint();
-  await waitForSolid(() => expect(f.prediction()).not.toBeNull());
-  const button = [...f.container.querySelectorAll("button")].find((node) =>
-    node.textContent?.includes("Use suggestion"),
-  )!;
-  button.click();
-  expect(f.draft()).toBe(suggestion);
-  expect(f.props.onSend).not.toHaveBeenCalled();
-});
-
 it("retires the event subscription and pending prediction when the composer unmounts", async () => {
-  const f = pendingPrediction();
+  const f = fixture({ pending: true });
   const signal = f.predictions()[0]?.[2]?.signal;
   expect(signal?.aborted).toBe(false);
   disposeComposer(f.container);

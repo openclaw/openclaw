@@ -170,7 +170,6 @@ it("publishes a restored persisted draft and queue after adopting their revision
   const queue = mountSolid(() => (
     <output>{state.chatQueue.map((item) => item.text).join(";")}</output>
   ));
-  onTestFinished(queue.unmount);
   flush();
   expect(queue.container.textContent).toBe("");
   expect(view.textarea().value).toBe("");
@@ -271,13 +270,12 @@ it("updates composer text on a live locale change without disturbing an IME draf
   onTestFinished(captureI18nStateForTesting());
   await i18n.setLocale("en");
   const onDraftChange = vi.fn();
-  const props = createComposerProps({
+  const view = mountComposer({
     assistantName: "Locale fixture",
     draft: "Unfinished draft",
     permissionPicker: { canSelectFull: true, onSelect: vi.fn() },
     onDraftChange,
   });
-  const view = mountComposer(props);
   view.query<HTMLButtonElement>("[data-chat-permission-select]")!.click();
   await waitForSolid(() =>
     expect(view.query(".chat-controls__permission-menu")?.matches(":popover-open")).toBe(true),
@@ -459,22 +457,15 @@ it("keeps a pending dictation send bound to the action that started it", async (
   vi.spyOn(controller, "finishActive").mockReturnValue(finish.promise);
   const firstSend = vi.fn();
   const laterSend = vi.fn();
-  const [props, setProps] = createSignal({
-    readDictation: () => controller,
-    onSend: firstSend,
-  });
+  const [props, setProps] = createSignal({ readDictation: () => controller, onSend: firstSend });
   const actionProps = merge(props);
   const view = mountSolid(() => <ComposerDictationSendAction {...actionProps} />);
-  try {
-    view.container.querySelector<HTMLButtonElement>("button")!.click();
-    setProps({ readDictation: () => controller, onSend: laterSend });
-    flush();
-    finish.resolve(true);
-    await Promise.resolve();
-    expect(firstSend).toHaveBeenCalledOnce();
-    expect(laterSend).not.toHaveBeenCalled();
-  } finally {
-    view.unmount();
-    controller.dispose();
-  }
+  onTestFinished(() => controller.dispose());
+  view.container.querySelector<HTMLButtonElement>("button")!.click();
+  setProps({ readDictation: () => controller, onSend: laterSend });
+  flush();
+  finish.resolve(true);
+  await Promise.resolve();
+  expect(firstSend).toHaveBeenCalledOnce();
+  expect(laterSend).not.toHaveBeenCalled();
 });
