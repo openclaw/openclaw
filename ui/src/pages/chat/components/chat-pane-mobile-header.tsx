@@ -1,4 +1,4 @@
-import { children, createEffect, Show, type Element } from "solid-js";
+import { children, onSettled, Show, type Element } from "solid-js";
 import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
 import { createRouteElementRef } from "../../../app/route-element-ref.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -108,11 +108,6 @@ function MobileHeaderNotice(props: { notice: ChatPaneMobileHeaderNotice }) {
 export function ChatPaneMobileHeader(props: ChatPaneMobileHeaderProps) {
   let header!: HTMLDivElement;
   const drawerRef = createRouteElementRef(NAV_DRAWER_TOGGLE_REGISTRATION);
-  // Parked mobile chrome keeps its DOM; only the active layout publishes the pane's header.
-  createEffect(
-    () => (props.active !== false ? props.onHeaderRef : undefined),
-    (register) => register?.(header),
-  );
   const project = children(() => props.project);
   const titleOverflow = useScrollState(true, false);
   const drawerLabel = () => (props.navDrawerOpen ? t("nav.collapse") : t("nav.expand"));
@@ -124,6 +119,13 @@ export function ChatPaneMobileHeader(props: ChatPaneMobileHeaderProps) {
       aria-label={props.title}
       tabindex={-1}
     >
+      {/* Header registration follows the active layout without remounting its DOM. */}
+      <Show when={props.active !== false ? props.onHeaderRef : undefined} keyed>
+        {(register) => {
+          onSettled(() => register(header));
+          return undefined;
+        }}
+      </Show>
       <button
         ref={drawerRef}
         type="button"

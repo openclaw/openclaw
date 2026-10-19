@@ -8,7 +8,6 @@ import {
   onCleanup,
   onSettled,
   Show,
-  untrack,
 } from "solid-js";
 import type { UiSettings } from "../../../app/settings.ts";
 import { BoardGrantedCapabilities } from "../../../components/board/board-widget-capabilities.solid.tsx";
@@ -155,6 +154,7 @@ function ChatHeaderSessionMenuContent(
   const close = () => {
     menu?.close();
   };
+  const onAction = (action: HeaderMenuAction) => props.onAction(action);
   const actions = new SessionMenuActions(
     {
       get updateComplete() {
@@ -169,7 +169,7 @@ function ChatHeaderSessionMenuContent(
       },
     },
     readState,
-    (action) => untrack(() => props.onAction(action)),
+    onAction,
     close,
     createSessionOwnerMenu(presented, preparation),
   );

@@ -215,6 +215,50 @@ async function mountMobileHost(value: ChatDetailsProps) {
   return { view, element, navigate, show };
 }
 
+it("replaces the People activation owner while retaining the mobile host content", async () => {
+  const { view, element, show } = await mountMobileHost(details());
+  const release = vi.fn();
+  const activate = vi.fn(() => release);
+  const releaseReplacement = vi.fn();
+  const activateReplacement = vi.fn(() => releaseReplacement);
+  const mentions = {
+    status: "idle" as const,
+    error: undefined,
+    truncated: false,
+    read: () => null,
+    request: async () => {},
+    insert: () => false,
+    activate,
+  };
+  try {
+    const root = view.container.querySelector(".chat-details-mobile-root");
+    element.bindings = { ...element.bindings!, peopleMentions: mentions };
+    await element.updateComplete;
+    expect(activate).not.toHaveBeenCalled();
+    await show({
+      area: "details",
+      page: { key: "people", title: "People", details: { kind: "people" } },
+    });
+    expect(activate).toHaveBeenCalledOnce();
+    element.bindings = {
+      ...element.bindings!,
+      peopleMentions: { ...mentions, activate: activateReplacement },
+    };
+    await element.updateComplete;
+    flush();
+    expect(release).toHaveBeenCalledOnce();
+    expect(activateReplacement).toHaveBeenCalledOnce();
+    expect(view.container.querySelector(".chat-details-mobile-root")).toBe(root);
+    await show({ area: "details" });
+    expect(releaseReplacement).toHaveBeenCalledOnce();
+    expect(view.container.querySelector(".chat-details-mobile-root")).toBe(root);
+  } finally {
+    view.unmount();
+  }
+  expect(release).toHaveBeenCalledOnce();
+  expect(releaseReplacement).toHaveBeenCalledOnce();
+});
+
 it("routes current mobile PRs to Checks and rejects hidden or superseded navigation", async () => {
   const request = pullRequest({ title: "Current PR", headSha: "a".repeat(40) });
   const value = details({ pullRequests: [request], pullRequestsSessionId: "session-current" });

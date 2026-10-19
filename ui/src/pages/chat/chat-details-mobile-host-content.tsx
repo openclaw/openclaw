@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, createEffect, untrack } from "solid-js";
+import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import type { ControlUiSessionPullRequestSnapshot } from "../../../../src/gateway/control-ui-contract.js";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
@@ -53,14 +53,15 @@ export const ChatDetailsMobileHostContent = defineSolidBridge<MobileHostContentP
   "openclaw-chat-details-mobile-host-content",
   (props, nativeHost) => {
     nativeHost.style.display = "contents";
+    const Content = (contentProps: Parameters<typeof MobileHostContent>[0]) =>
+      MobileHostContent(contentProps, nativeHost);
     return (
       <Show when={props.details && props.host}>
-        <MobileHostContent
+        <Content
           details={props.details!}
           host={props.host!}
           bindings={props.bindings}
           presented={props.presented}
-          nativeHost={nativeHost}
         />
       </Show>
     );
@@ -77,16 +78,16 @@ export const ChatDetailsMobileHostContent = defineSolidBridge<MobileHostContentP
 );
 
 /** A retained presenter under the existing host. Routes and Back remain pane-owned. */
-function MobileHostContent(props: {
-  details: ChatDetailsProps;
-  host: ChatMobileHost;
-  bindings?: MobileDetailsBindings;
-  presented: boolean;
-  nativeHost: ChatDetailsMobileHostContent;
-}) {
+function MobileHostContent(
+  props: {
+    details: ChatDetailsProps;
+    host: ChatMobileHost;
+    bindings?: MobileDetailsBindings;
+    presented: boolean;
+  },
+  nativeHost: ChatDetailsMobileHostContent,
+) {
   const context = useOptionalApplication();
-  // This renderer lives inside one native bridge; its input properties remain synchronous.
-  const nativeHost = untrack(() => props.nativeHost);
   const [requested, setRequested] = createSignal<{
     snapshot: ControlUiSessionPullRequestSnapshot | undefined;
   }>();
@@ -118,7 +119,6 @@ function MobileHostContent(props: {
   const activePeople = createMemo(() =>
     props.host.open && route()?.kind === "people" ? props.bindings?.peopleMentions : undefined,
   );
-  createEffect(activePeople, (mentions) => mentions?.activate());
   // Subpage navigation keeps the host's external close-return target.
   const open = (value: MobileDetailsRoute, title: string) => {
     props.host.navigate({
@@ -151,11 +151,6 @@ function MobileHostContent(props: {
       ? props.host.destination
       : undefined,
   );
-  createEffect(sharingTarget, (destination) => {
-    if (destination) {
-      sharing.prepare();
-    }
-  });
   const inventory = createSessionAutomationInventory(
     {
       get gateway() {
@@ -199,15 +194,15 @@ function MobileHostContent(props: {
       })
     : undefined;
   let wasTranscript = false;
-  createEffect(
-    () => route()?.kind === "automation-transcript",
-    (visible) => {
-      if (!visible && wasTranscript) {
+  function TranscriptExit() {
+    onSettled(() => {
+      if (wasTranscript) {
+        wasTranscript = false;
         automation?.closeTranscript();
       }
-      wasTranscript = visible;
-    },
-  );
+    });
+    return null;
+  }
   const snapshot = () => props.bindings?.pullRequests?.snapshot;
   const recovery = () => ({
     status: snapshot()?.status ?? ("ready" as const),
@@ -565,6 +560,28 @@ function MobileHostContent(props: {
   });
   return (
     <>
+      {inventory.lifecycle}
+      {automation?.lifecycle}
+      <Show when={activePeople()} keyed>
+        {(mentions) => {
+          onSettled(() => mentions.activate());
+          return null;
+        }}
+      </Show>
+      <Show when={sharingTarget()} keyed>
+        {(_destination) => {
+          onSettled(() => sharing.prepare());
+          return null;
+        }}
+      </Show>
+      <Show when={route()?.kind === "automation-transcript"} fallback={<TranscriptExit />}>
+        {(_visible) => {
+          onSettled(() => {
+            wasTranscript = true;
+          });
+          return null;
+        }}
+      </Show>
       <Show
         when={
           props.presented &&

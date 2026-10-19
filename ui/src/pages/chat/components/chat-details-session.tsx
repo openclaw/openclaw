@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { For, Show, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import type { SessionParticipant } from "../../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
@@ -112,8 +112,13 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
         ? props.props.retainOutputs
         : undefined,
     );
-    createEffect(outputsDemand, (retain) => retain?.());
-    return (
+    return [
+      <Show when={outputsDemand()} keyed>
+        {(retain) => {
+          onSettled(retain);
+          return null;
+        }}
+      </Show>,
       <Show when={identity()} keyed>
         {(_identity) => {
           const [pullRequestsOpen, setPullRequestsOpen] = createSignal(true);
@@ -309,7 +314,9 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                             <summary>
                               <Icon name="users" />
                               <span>
-                                {t("chat.sessionDetails.participants", { count: String(count()) })}
+                                {t("chat.sessionDetails.participants", {
+                                  count: String(count()),
+                                })}
                               </span>
                               <Icon name="chevronDown" />
                             </summary>
@@ -609,8 +616,8 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
             </Show>
           );
         }}
-      </Show>
-    );
+      </Show>,
+    ];
   },
   {
     propertyChanged: (host, key) => {

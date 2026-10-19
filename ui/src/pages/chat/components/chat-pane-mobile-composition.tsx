@@ -1,5 +1,5 @@
+import { dynamic } from "@solidjs/web";
 import {
-  createEffect,
   Errored,
   Loading,
   lazy,
@@ -9,9 +9,10 @@ import {
   createSignal,
   merge,
   onCleanup,
+  onSettled,
   Show,
-  untrack,
   type Element,
+  type Component,
 } from "solid-js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import {
@@ -52,7 +53,7 @@ import "./chat-pane-mobile-composition.css";
 export function ChatPaneMobileComposition(props: {
   header: ChatPaneHeaderProps;
   project?: Element;
-  details: (placement: ChatPanePlacementProps, onOpenMachine: () => void) => Element;
+  details: Component<{ placement: ChatPanePlacementProps; onOpenMachine: () => void }>;
   notice: Element;
   fallback: (
     sessionMenu: Element,
@@ -122,30 +123,22 @@ export function ChatPaneMobileComposition(props: {
   const panePresented = usePanePresentation(() => props.header.presented);
   const presented = () => mobile() && panePresented();
   let chromeRoot: HTMLDivElement | undefined;
-  createEffect(presented, (visible) => {
-    if (!visible && chromeRoot) {
-      closeMenusWithin(chromeRoot);
-    }
-  });
   const incognito = () =>
     (props.header.incognito ?? props.header.session?.incognito) ||
     isIncognitoSessionKey(props.header.session?.key);
   const sharing = () => props.header.mobileSharing;
   const emptyPlacement: ChatPanePlacementProps = { session: undefined };
-  const [machineName, setMachineName] = createSignal<string>();
   const readMachineName = createMemo(() => props.header.readMachineName);
-  createEffect(readMachineName, (read) => {
-    let retired = false;
-    setMachineName(undefined);
-    void read?.().then((name) => {
-      if (!retired) {
-        setMachineName(name);
-      }
-    });
-    return () => {
-      retired = true;
-    };
+  const machineNameRead = createMemo(() => {
+    const read = readMachineName();
+    // A new request identity starts empty while Solid retires the previous result.
+    if (!read) {
+      return undefined;
+    }
+    const name = createMemo(read, { loadingValue: undefined });
+    return name;
   });
+  const machineName = () => machineNameRead()?.();
   const placement = merge(
     () => props.header.placementControl ?? emptyPlacement,
     () => ({
@@ -157,9 +150,10 @@ export function ChatPaneMobileComposition(props: {
         : props.header.placementControl?.onPlacementReclaim,
     }),
   );
-  // The slot is retained for this mounted pane; its JSX reads live header props.
-  const details = untrack(() =>
-    props.details(placement, () => untrack(() => host()?.navigate(machinePage))),
+  const Details = dynamic(() => props.details);
+  // The component identity and its DOM stay retained across mobile and desktop placement.
+  const details = (
+    <Details placement={placement} onOpenMachine={() => host()?.navigate(machinePage)} />
   );
   const machine = createChatMachinePresentation(placement);
   let actionsMenu: HTMLElementTagNameMap["openclaw-chat-header-session-menu"] | undefined;
@@ -270,9 +264,6 @@ export function ChatPaneMobileComposition(props: {
     const current = host();
     return current ? current.open && current.destination === people : (previous ?? false);
   });
-  createEffect(peopleActive, (active) =>
-    active ? untrack(() => props.header.mobilePeopleMentions?.activate()) : undefined,
-  );
   const sharingPage: MobileHostDestination = {
     area: "details",
     backTo: people,
@@ -315,7 +306,6 @@ export function ChatPaneMobileComposition(props: {
   };
   const [moveRequest, setMoveRequest] = createSignal<Parameters<SessionPlacementPresentation>[0]>();
   let moveSessionKey: string | undefined;
-  let moveWasPresented = false;
   const movePage: MobileHostDestination = {
     area: "details",
     backTo: machinePage,
@@ -333,46 +323,49 @@ export function ChatPaneMobileComposition(props: {
   };
   function openMove() {
     const sessionKey = props.header.session?.key;
-    void props.header.onMobilePlacementMove?.((request) =>
-      untrack(() => {
-        if (!host() || props.header.session?.key !== sessionKey) {
-          request.cancel();
-          return () => {};
+    const onPresent: SessionPlacementPresentation = (request) => {
+      if (!host() || props.header.session?.key !== sessionKey) {
+        request.cancel();
+        return () => {};
+      }
+      moveSessionKey = sessionKey;
+      setMoveRequest(request);
+      host()?.navigate(movePage);
+      return () => {
+        setMoveRequest(undefined);
+        const current = host();
+        if (current?.open && current.destination === movePage) {
+          current.navigate(machinePage);
         }
-        moveSessionKey = sessionKey;
-        moveWasPresented = false;
-        setMoveRequest(request);
-        host()?.navigate(movePage);
-        return () =>
-          untrack(() => {
-            setMoveRequest(undefined);
-            const current = host();
-            if (current?.open && current.destination === movePage) {
-              current.navigate(machinePage);
-            }
-          });
-      }),
-    );
+      };
+    };
+    void props.header.onMobilePlacementMove?.(onPresent);
   }
-  createEffect(
-    () => [host(), props.header.session?.key, moveRequest()] as const,
-    ([current, key, request]) => {
-      if (!request) {
-        return;
-      }
-      if (key !== moveSessionKey) {
-        request.cancel();
-        return;
-      }
-      // Desktop parking retains navigation. Back/Close on the native host cancels
-      // the existing picker request; it is not transfer cancellation.
-      if (current?.destination === movePage && current.open) {
-        moveWasPresented = true;
-      } else if (current && moveWasPresented) {
-        request.cancel();
-      }
-    },
-  );
+  const movePresentation = createMemo<{
+    request: ReturnType<typeof moveRequest>;
+    visited: boolean;
+  }>((previous) => {
+    const request = moveRequest();
+    const current = host();
+    return {
+      request,
+      // Desktop parking retains navigation; only an observed native entry can exit it.
+      visited: Boolean(
+        request &&
+        ((current?.destination === movePage && current.open) ||
+          (previous?.request === request && previous.visited)),
+      ),
+    };
+  });
+  const cancelledMove = () => {
+    const { request, visited } = movePresentation();
+    const current = host();
+    return request &&
+      (props.header.session?.key !== moveSessionKey ||
+        (visited && current && (current.destination !== movePage || !current.open)))
+      ? request
+      : undefined;
+  };
   onCleanup(() => moveRequest()?.cancel());
   const layoutProps = merge(
     () => props.header,
@@ -631,6 +624,28 @@ export function ChatPaneMobileComposition(props: {
   );
   return (
     <>
+      <Show when={!presented()}>
+        {(_parked) => {
+          onSettled(() => {
+            if (chromeRoot) {
+              closeMenusWithin(chromeRoot);
+            }
+          });
+          return undefined;
+        }}
+      </Show>
+      <Show when={peopleActive() ? props.header.mobilePeopleMentions?.activate : undefined} keyed>
+        {(activate) => {
+          onSettled(activate);
+          return undefined;
+        }}
+      </Show>
+      <Show when={cancelledMove()} keyed>
+        {(request) => {
+          onSettled(() => request.cancel());
+          return undefined;
+        }}
+      </Show>
       {chrome}
       <Show when={!mobile()}>{props.fallback(sessionMenu, machineName, details)}</Show>
     </>
