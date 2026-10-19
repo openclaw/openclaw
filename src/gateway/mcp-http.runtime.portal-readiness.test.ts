@@ -12,12 +12,12 @@ import { prepareSessionPortalToolTarget } from "../agents/tools/session-portal-t
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGatewayContextResolver as withGatewayResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  McpLoopbackToolCache,
-  resolveMcpLoopbackPolicyTools,
-  resolveMcpLoopbackScopedTools,
+  McpLoopbackToolCache as ToolCache,
+  resolveMcpLoopbackPolicyTools as resolvePolicy,
+  resolveMcpLoopbackScopedTools as resolveExact,
 } from "./mcp-http.runtime.js";
 import * as mcp from "./mcp-http.test-request.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -84,7 +84,7 @@ it.for([
               }),
             })
           : undefined;
-      const cache = new McpLoopbackToolCache();
+      const cache = new ToolCache();
       const releaseAvailability = createDeferred();
       let pending: Promise<unknown> | undefined;
       let restore: (() => void) | undefined;
@@ -92,10 +92,10 @@ it.for([
       signal.addEventListener("abort", onAbort, { once: true });
       try {
         await projection.ensureMaterialized();
-        await withPluginRuntimeGatewayContextResolver(
+        await withGatewayResolver(
           () => context,
           async () => {
-            const params: Parameters<McpLoopbackToolCache["resolve"]>[0] = {
+            const params: Parameters<ToolCache["resolve"]>[0] = {
               cfg,
               grantToken: "synthetic-portal-grant",
               isGrantCurrent: () => true,
@@ -112,8 +112,8 @@ it.for([
               mode === "cached"
                 ? cache.resolve.bind(cache)
                 : mode === "exact"
-                  ? resolveMcpLoopbackScopedTools
-                  : resolveMcpLoopbackPolicyTools;
+                  ? resolveExact
+                  : resolvePolicy;
             const primed = await resolve(params);
             expect(primed.tools.map((tool) => tool.name)).toEqual(readiness ? [] : ["portal"]);
             const retained = prepareSessionPortalToolTarget(identity);
@@ -121,8 +121,22 @@ it.for([
               expect(retained).toBeDefined();
             }
 
-            if (boundary !== "availability") {
-              let published = false;
+            const availabilityReturned = createDeferred();
+            let published = false;
+            const update = (modelSelectionLocked: boolean) =>
+              replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, modelSelectionLocked });
+            if (boundary === "availability") {
+              const load = computerAvailability.loadPairedComputerUseAvailabilityForSurface;
+              const spy = vi
+                .spyOn(computerAvailability, "loadPairedComputerUseAvailabilityForSurface")
+                .mockImplementation(async (...args) => {
+                  const result = await load(...args);
+                  availabilityReturned.resolve();
+                  await releaseAvailability.promise;
+                  return result;
+                });
+              restore = () => spy.mockRestore();
+            } else {
               const prepare = projection.withPreparedExactRows.bind(projection);
               const spy = vi
                 .spyOn(projection, "withPreparedExactRows")
@@ -135,11 +149,7 @@ it.for([
                         authorityAbort.abort(new Error("Synthetic controller retirement"));
                       } else if (!published) {
                         published = true;
-                        replaceSessionEntrySync(scope, {
-                          ...entry,
-                          updatedAt: 2,
-                          modelSelectionLocked: !readiness,
-                        });
+                        update(!readiness);
                       }
                       return catalog;
                     },
@@ -147,51 +157,37 @@ it.for([
                   ),
                 );
               restore = () => spy.mockRestore();
-              const resolving = resolve(params);
-              pending = resolving;
-              if (boundary === "authority") {
-                await expect(resolving).rejects.toThrow(
-                  "admitted run operator authority is no longer active",
-                );
-                return;
-              }
-              expect((await withinTest(resolving, signal)).tools.map((tool) => tool.name)).toEqual(
-                readiness ? ["portal"] : [],
+            }
+            const resolving = resolve(params);
+            pending = resolving;
+            if (boundary === "authority") {
+              await expect(resolving).rejects.toThrow(
+                "admitted run operator authority is no longer active",
               );
+              return;
+            }
+            if (boundary === "availability") {
+              await withinTest(
+                awaitGateBeforeSettlement(
+                  availabilityReturned.promise,
+                  resolving,
+                  "catalog resolved before the availability barrier",
+                ),
+                signal,
+              );
+              update(true);
+              expect(() => retained?.assertCurrent()).toThrow();
+              releaseAvailability.resolve();
+            }
+            expect((await withinTest(resolving, signal)).tools.map((tool) => tool.name)).toEqual(
+              readiness ? ["portal"] : [],
+            );
+            if (publication) {
               expect(published).toBe(true);
               if (retained) {
                 expect(() => retained.assertCurrent()).toThrow();
               }
-              return;
             }
-
-            const availabilityReturned = createDeferred();
-            const load = computerAvailability.loadPairedComputerUseAvailabilityForSurface;
-            const spy = vi
-              .spyOn(computerAvailability, "loadPairedComputerUseAvailabilityForSurface")
-              .mockImplementation(async (...args) => {
-                const result = await load(...args);
-                availabilityReturned.resolve();
-                await releaseAvailability.promise;
-                return result;
-              });
-            restore = () => spy.mockRestore();
-            const resolving = resolve(params);
-            pending = resolving;
-            await withinTest(
-              awaitGateBeforeSettlement(
-                availabilityReturned.promise,
-                resolving,
-                "catalog resolved before the availability barrier",
-              ),
-              signal,
-            );
-            replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, modelSelectionLocked: true });
-            expect(() => retained?.assertCurrent()).toThrow();
-            releaseAvailability.resolve();
-            expect((await withinTest(resolving, signal)).tools.map((tool) => tool.name)).toEqual(
-              [],
-            );
           },
         );
       } finally {

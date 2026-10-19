@@ -81,7 +81,7 @@ it.each(["allowed", "assigned-noncreator", "reassigned", "profile-revoked", "rep
         });
         const releaseWriter = createDeferredCore();
         const atWriter = createDeferredCore();
-        let pending: Promise<object | null> | undefined;
+        let pending: Promise<unknown> | undefined;
         let grantToken: string | undefined;
         const realCall = inProcessGateway.callAgentToolGatewayRequest;
         const requestSpy = vi
@@ -114,8 +114,8 @@ it.each(["allowed", "assigned-noncreator", "reassigned", "profile-revoked", "rep
               grantToken = token;
             },
           );
-          pending = (async () => {
-            const response = await mcp.request(
+          pending = mcp
+            .request(
               runtime,
               mcp.toolCall("sessions", {
                 action: "patch",
@@ -124,11 +124,8 @@ it.each(["allowed", "assigned-noncreator", "reassigned", "profile-revoked", "rep
                 archived: true,
               }),
               grant,
-            );
-            const body = await response.text();
-            expect(response.status, body).toBe(200);
-            return JSON.parse(body);
-          })();
+            )
+            .then(mcp.json);
           const reachedWriter = await Promise.race([
             atWriter.promise.then(() => true),
             pending.then(() => false),

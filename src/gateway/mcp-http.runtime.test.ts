@@ -6,9 +6,9 @@ import {
 } from "../agents/admitted-run-context.js";
 import { createComputerTool } from "../agents/tools/computer-tool.js";
 import {
-  McpLoopbackToolCache,
-  resolveMcpLoopbackPolicyTools,
-  resolveMcpLoopbackScopedTools,
+  McpLoopbackToolCache as ToolCache,
+  resolveMcpLoopbackPolicyTools as resolvePolicy,
+  resolveMcpLoopbackScopedTools as resolveExact,
 } from "./mcp-http.runtime.js";
 import * as mcp from "./mcp-http.test-request.js";
 
@@ -38,10 +38,7 @@ vi.mock("./tool-resolution.js", () => ({
 }));
 
 function scopedToolFixture(names: string[]) {
-  return {
-    agentId: "main",
-    tools: names.map((name) => ({ name, description: `${name} tool` })),
-  };
+  return { agentId: "main", tools: names.map((name) => ({ name, description: `${name} tool` })) };
 }
 
 const toolNames = (resolved: { tools: { name?: string }[] }) =>
@@ -56,11 +53,7 @@ function computerNode(nodeId: string, actions: string[]) {
     commands: ["screen.snapshot", "computer.act"],
     computerUse: {
       contractVersion: 2,
-      provider: {
-        id: "cua-driver",
-        label: "CUA Driver",
-        generation: `${nodeId}-generation`,
-      },
+      provider: { id: "cua-driver", label: "CUA Driver", generation: `${nodeId}-generation` },
       actions,
       targets: ["screen", "window"],
       deliveryModes: ["foreground"],
@@ -71,7 +64,7 @@ function computerNode(nodeId: string, actions: string[]) {
 }
 
 function readComputerActions(
-  resolved: Awaited<ReturnType<McpLoopbackToolCache["resolve"]>>,
+  resolved: Awaited<ReturnType<ToolCache["resolve"]>>,
 ): string[] | undefined {
   const computer = resolved.toolSchema.find((tool) => tool.name === "computer");
   expect(computer).toBeDefined();
@@ -79,7 +72,7 @@ function readComputerActions(
     ?.enum;
 }
 
-type ScopeParams = Parameters<typeof resolveMcpLoopbackScopedTools>[0];
+type ScopeParams = Parameters<typeof resolveExact>[0];
 
 function scopeParams({
   cfg = {},
@@ -104,53 +97,50 @@ describe("resolveMcpLoopbackScopedTools", () => {
   it("mediates an explicit wildcard policy while an omitted cap keeps native coding ownership", async () => {
     resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["read", "exec", "message"]));
 
-    await resolveMcpLoopbackPolicyTools(scopeParams({ toolsAllow: ["*"] }));
+    await resolvePolicy(scopeParams({ toolsAllow: ["*"] }));
     const wildcard = resolveGatewayScopedTools.mock.calls.at(-1)?.[0];
     expect(new Set(wildcard?.mediatedToolNames)).toContain("read");
     expect(new Set(wildcard?.mediatedToolNames)).toContain("exec");
     expect(new Set(wildcard?.excludeToolNames)).not.toContain("read");
 
-    await resolveMcpLoopbackPolicyTools(scopeParams({}));
+    await resolvePolicy(scopeParams({}));
     const uncapped = resolveGatewayScopedTools.mock.calls.at(-1)?.[0];
     expect(new Set(uncapped?.mediatedToolNames)).toEqual(new Set());
     expect(new Set(uncapped?.excludeToolNames)).toContain("read");
   });
 
-  it("keeps exact grant names exact instead of reinterpreting policy shorthand", async () => {
-    resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["write", "apply_patch"]));
-
-    const scoped = await resolveMcpLoopbackScopedTools(
-      scopeParams({ toolsAllow: ["write"], nodeExecAllowed: true }),
-    );
-
-    expect(toolNames(scoped)).toEqual(["write"]);
-    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({
-      mediatedToolNames: new Set(["write"]),
-      includeNodeExecTool: false,
-    });
-  });
-
   it.each([
-    { allow: ["write"], expected: ["write", "apply_patch"] },
-    { allow: [] as string[], expected: [] },
+    { mode: "exact", allow: ["write"], expected: ["write"] },
+    { mode: "policy", allow: ["write"], expected: ["write", "apply_patch"] },
+    { mode: "policy", allow: [] as string[], expected: [] },
   ])(
-    "materializes policy expressions into concrete loopback tools: $allow",
-    async ({ allow, expected }) => {
+    "resolves $mode names without confusing grants and policy: $allow",
+    async ({ mode, allow, expected }) => {
+      const exact = mode === "exact";
       resolveGatewayScopedTools.mockReturnValue(
-        scopedToolFixture(["read", "write", "apply_patch", "message"]),
+        scopedToolFixture(
+          exact ? ["write", "apply_patch"] : ["read", "write", "apply_patch", "message"],
+        ),
       );
-
-      const scoped = await resolveMcpLoopbackPolicyTools(scopeParams({ toolsAllow: allow }));
-
+      const resolve = exact ? resolveExact : resolvePolicy;
+      const scoped = await resolve(
+        scopeParams({ toolsAllow: allow, nodeExecAllowed: exact || undefined }),
+      );
       expect(toolNames(scoped)).toEqual(expected);
+      if (exact) {
+        expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({
+          mediatedToolNames: new Set(["write"]),
+          includeNodeExecTool: false,
+        });
+      }
     },
   );
 });
 
 describe("McpLoopbackToolCache", () => {
-  let cache: McpLoopbackToolCache;
+  let cache: ToolCache;
   beforeEach(() => {
-    cache = new McpLoopbackToolCache();
+    cache = new ToolCache();
   });
   it("does not let a source-less cached list hide a later admitted writer", async () => {
     const params = scopeParams({ toolsAllow: ["sessions"] });
@@ -282,35 +272,31 @@ describe("McpLoopbackToolCache", () => {
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
   });
 
-  it("does not share loopback tools across prepared vision capabilities", async () => {
-    const cfg = {};
-
-    await cache.resolve(scopeParams({ cfg, modelHasVision: true }));
-    await cache.resolve(scopeParams({ cfg, modelHasVision: false }));
-    await cache.resolve(scopeParams({ cfg, modelHasVision: true }));
-
-    expect(resolveGatewayScopedTools.mock.calls.map(([options]) => options.modelHasVision)).toEqual(
-      [true, false],
-    );
-  });
-
-  it("keeps pinned widget authoring out of capless cached tool lists", async () => {
-    const params = scopeParams();
-    resolveGatewayScopedTools.mockImplementation(({ pinnedWidgetAuthoring }) =>
-      scopedToolFixture(pinnedWidgetAuthoring ? ["dashboard", "show_widget"] : ["dashboard"]),
-    );
-
-    for (const pinnedWidgetAuthoring of [true, undefined, true, false]) {
-      const result = await cache.resolve({
-        ...params,
-        context: { ...params.context, pinnedWidgetAuthoring },
-      });
-      expect(toolNames(result)).toEqual(
-        pinnedWidgetAuthoring ? ["dashboard", "show_widget"] : ["dashboard"],
-      );
-    }
-    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
-  });
+  it.each(["modelHasVision", "pinnedWidgetAuthoring"] as const)(
+    "keys cached tools by %s, normalizing only equivalent capabilities",
+    async (property) => {
+      const params = scopeParams();
+      const widget = property === "pinnedWidgetAuthoring";
+      if (widget) {
+        resolveGatewayScopedTools.mockImplementation(({ pinnedWidgetAuthoring }) =>
+          scopedToolFixture(pinnedWidgetAuthoring ? ["dashboard", "show_widget"] : ["dashboard"]),
+        );
+      }
+      for (const value of widget ? [true, undefined, true, false] : [true, false, true]) {
+        const result = await cache.resolve({
+          ...params,
+          context: { ...params.context, [property]: value },
+        });
+        if (widget) {
+          expect(toolNames(result)).toEqual(value ? ["dashboard", "show_widget"] : ["dashboard"]);
+        }
+      }
+      expect(resolveGatewayScopedTools.mock.calls.map(([options]) => options[property])).toEqual([
+        true,
+        widget ? undefined : false,
+      ]);
+    },
+  );
 
   it("evicts only the revoked grant's cached tool closures", async () => {
     const cfg = {};
@@ -350,7 +336,7 @@ describe("MCP loopback Computer Use schema", () => {
         throw new Error("node inventory must not be queried");
       });
 
-      const resolved = await new McpLoopbackToolCache().resolve(
+      const resolved = await new ToolCache().resolve(
         scopeParams({
           ...policy,
           sessionKey: "agent:main:main",
@@ -365,7 +351,7 @@ describe("MCP loopback Computer Use schema", () => {
   );
 
   it("unions approved actions across distinct paired node identities", async () => {
-    const cache = new McpLoopbackToolCache();
+    const cache = new ToolCache();
     const scope = scopeParams({
       cfg: { tools: { allow: ["computer"] } },
       sessionKey: "agent:main:main",

@@ -4,25 +4,13 @@ import type { PreparedAgentRunAdmission } from "../agents/admitted-run-context.j
 import { waitForExecScope } from "../agents/bash-process-registry.js";
 import type { dispatchInboundMessageWithRoutedChannelDispatcher } from "../auto-reply/dispatch.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
+import * as configSnapshot from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { drainSystemEvents, peekSystemEventEntries } from "../infra/system-events.js";
-import {
-  startSecretEgressProxyServer,
-  type SecretEgressProxyHandle,
-} from "../secrets/egress-proxy/proxy-server.js";
-import {
-  clearSecretEgressProxy,
-  publishSecretEgressProxy,
-} from "../secrets/egress-proxy/registry.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import * as proxyServer from "../secrets/egress-proxy/proxy-server.js";
+import * as proxyRegistry from "../secrets/egress-proxy/registry.js";
+import * as testState from "../test-utils/openclaw-test-state.js";
 import { revokeMcpLoopbackClientGrant, type McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import * as mcp from "./mcp-http.test-request.js";
@@ -54,16 +42,18 @@ vi.mock("../auto-reply/dispatch.js", () => ({
   }),
 }));
 
-let state: OpenClawTestState;
-let proxy: SecretEgressProxyHandle;
+let state: testState.OpenClawTestState;
+let proxy: proxyServer.SecretEgressProxyHandle;
 let config: OpenClawConfig;
 const admissions: PreparedAgentRunAdmission[] = [];
 const grants: string[] = [];
 const completionSessionKey = "agent:probe:telegram:group:-100155462274:topic:42";
-const completions: sessionEvents.SessionEventReceipt[] = [];
+const enqueue = vi.spyOn(sessionEvents, "enqueueSessionEventForHost");
+const completions = () =>
+  enqueue.mock.results.flatMap((entry) => (entry.type === "return" ? [entry.value] : []));
 
 beforeAll(async () => {
-  state = await createOpenClawTestState({
+  state = await testState.createOpenClawTestState({
     prefix: "openclaw-mcp-exec-egress-",
     layout: "state-only",
     env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_EXEC_SHELL_SNAPSHOT: "0" },
@@ -81,41 +71,31 @@ beforeAll(async () => {
     secrets: { egressProxy: { enabled: true } },
   };
   await state.writeConfig(config);
-  setRuntimeConfigSnapshot(config);
+  configSnapshot.setRuntimeConfigSnapshot(config);
   await replaceSessionEntry(
     { agentId: "probe", sessionKey: completionSessionKey },
     { sessionId: "mcp-origin", lifecycleRevision: "mcp-origin-revision", updatedAt: Date.now() },
   );
-  const enqueue = sessionEvents.enqueueSessionEventForHost;
-  vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((...args) => {
-    const receipt = enqueue(...args);
-    completions.push(receipt);
-    return receipt;
-  });
-  proxy = await startSecretEgressProxyServer({
+  proxy = await proxyServer.startSecretEgressProxyServer({
     caDir: state.path("proxy-ca"),
     allowedHosts: [],
     onAudit: () => {},
   });
-  publishSecretEgressProxy(proxy);
+  proxyRegistry.publishSecretEgressProxy(proxy);
   await ensureMcpLoopbackServer();
 });
 
 afterAll(async () => {
-  for (const token of grants) {
-    revokeMcpLoopbackClientGrant(token);
-  }
-  for (const admission of admissions) {
-    admission.close();
-  }
+  grants.forEach(revokeMcpLoopbackClientGrant);
+  admissions.forEach((admission) => admission.close());
   await waitForExecScope(completionSessionKey);
   drainSystemEvents(completionSessionKey);
-  await Promise.all(completions.splice(0).map((receipt) => receipt.settled));
+  await Promise.all(completions().map((receipt) => receipt.settled));
   await closeMcpLoopbackServer();
   vi.restoreAllMocks();
-  clearRuntimeConfigSnapshot();
+  configSnapshot.clearRuntimeConfigSnapshot();
   if (proxy) {
-    clearSecretEgressProxy(proxy);
+    proxyRegistry.clearSecretEgressProxy(proxy);
     await proxy.stop();
   }
   await state?.cleanup();
@@ -162,8 +142,7 @@ async function mintExecGrant(
 }
 
 async function expectExecResponse(response: Response, text: string) {
-  expect(response.status).toBe(200);
-  expect(await response.json()).toMatchObject({
+  expect(await mcp.json(response)).toMatchObject({
     result: {
       isError: false,
       content: [expect.objectContaining({ text: expect.stringContaining(text) })],
@@ -173,9 +152,9 @@ async function expectExecResponse(response: Response, text: string) {
 
 it("executes egress-enabled commands through cached CLI grants and rejects a retired grant", async () => {
   const first = await mintExecGrant("mcp-egress-first");
-  const listed = await first.request("tools/list");
-  expect(listed.status).toBe(200);
-  expect(await listed.json()).toMatchObject({ result: { tools: [{ name: "exec" }] } });
+  expect(await mcp.json(await first.request("tools/list"))).toMatchObject({
+    result: { tools: [{ name: "exec" }] },
+  });
   // tools/list constructed and cached the tool before this HTTP invocation.
   await expectExecResponse(await first.request("tools/call"), "mcp-egress-ok");
   first.admission.close();
@@ -206,9 +185,9 @@ it("routes a command started by a conversation's completion turn back to that co
   await expectExecResponse(await request("tools/call"), "Command still running");
 
   await waitForExecScope(sessionKey);
-  const receipt = expectDefined(completions[0], "conversation completion receipt");
+  const receipt = expectDefined(completions()[0], "conversation completion receipt");
   await expect(receipt.accepted).resolves.toEqual({ ok: true });
-  expect(sessionEvents.enqueueSessionEventForHost).toHaveBeenCalledExactlyOnceWith(
+  expect(enqueue).toHaveBeenCalledExactlyOnceWith(
     expect.stringContaining("mcp-chain-ok"),
     expect.objectContaining({
       agentId: "probe",
@@ -217,15 +196,15 @@ it("routes a command started by a conversation's completion turn back to that co
       expectedTarget: expect.objectContaining({ sessionId: "mcp-origin", sessionKey }),
     }),
   );
-  expect(peekSystemEventEntries(sessionKey)).toEqual([
-    expect.objectContaining({
+  expect(peekSystemEventEntries(sessionKey)).toMatchObject([
+    {
       id: receipt.id,
       text: expect.stringContaining("mcp-chain-ok"),
-      deliveryContext: expect.objectContaining({
+      deliveryContext: {
         channel: "telegram",
         to: "telegram:-100155462274:topic:42",
         threadId: "42",
-      }),
-    }),
+      },
+    },
   ]);
 });

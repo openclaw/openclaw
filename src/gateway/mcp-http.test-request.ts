@@ -13,6 +13,12 @@ import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
 
 export const runtime = () => expectDefined(getActiveMcpLoopbackRuntime(), "MCP runtime");
 
+export async function json(response: Response): Promise<unknown> {
+  const body = await response.text();
+  expect(response.status, body).toBe(200);
+  return JSON.parse(body);
+}
+
 export function probeTools(name: string, execute: AnyAgentTool["execute"]) {
   return {
     agentId: "main",

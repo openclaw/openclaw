@@ -137,8 +137,7 @@ it("leaves other methods and paths unclaimed", async () => {
   const wrongMethod = await dispatch(undefined, { method: "POST" });
   const wrongPath = await dispatch("/oauth/other?code=authorization-code&state=state-1234567890");
 
-  expect(wrongMethod.handled).toBe(false);
-  expect(wrongPath.handled).toBe(false);
+  expect([wrongMethod, wrongPath]).toMatchObject([{ handled: false }, { handled: false }]);
   expect(mocks.readPending).not.toHaveBeenCalled();
 });
 

@@ -17,10 +17,14 @@ vi.mock("./tool-resolution.js", () => ({
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import * as mcp from "./mcp-http.test-request.js";
 
-beforeEach(() => {
+let send: (method: "GET" | "POST", message?: unknown) => Promise<Response>;
+beforeEach(async () => {
   execute.mockReset();
   // Keep real network I/O and deadlines; only advance the heartbeat intervals.
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  await ensureMcpLoopbackServer(0);
+  const runtime = mcp.runtime();
+  send = (method, message) => mcp.request(runtime, message, { method });
 });
 afterEach(async () => {
   try {
@@ -31,21 +35,13 @@ afterEach(async () => {
   }
 });
 
-async function startClient() {
-  await ensureMcpLoopbackServer(0);
-  const runtime = mcp.runtime();
-  return (method: "GET" | "POST", message?: unknown) => mcp.request(runtime, message, { method });
-}
-
 async function within<T>(promise: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("HTTP idle timeout")), 500);
+  });
   try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("HTTP idle timeout")), 500);
-      }),
-    ]);
+    return await Promise.race([promise, timeout]);
   } finally {
     clearTimeout(timer);
   }
@@ -59,18 +55,14 @@ const readText = async (reader: ReadableStreamDefaultReader<Uint8Array>) =>
 
 async function drain(read: () => ReturnType<ReadableStreamDefaultReader<Uint8Array>["read"]>) {
   let body = "";
-  for (;;) {
-    const chunk = await read();
-    if (chunk.done) {
-      return body;
-    }
+  for (let chunk = await read(); !chunk.done; chunk = await read()) {
     body += decoder.decode(chunk.value);
   }
+  return body;
 }
 
 it("disables connection reuse for consecutive completed tool calls", async () => {
   execute.mockResolvedValue(completed);
-  const send = await startClient();
   for (let id = 1; id <= 2; id++) {
     const response = await send("POST", { ...toolCall, id });
     expect(response.status).toBe(200);
@@ -88,20 +80,15 @@ it.each(["success", "serialization-error", "notification"])(
   async (outcome) => {
     const entered = createDeferred();
     const release = createDeferred();
+    const block = {
+      ...completed.content[0],
+      ...(outcome === "serialization-error" ? { _meta: { invalid: 1n } } : {}),
+    };
     execute.mockImplementation(async () => {
       entered.resolve();
       await release.promise;
-      return {
-        content: [
-          {
-            type: "text",
-            text: "completed once",
-            ...(outcome === "serialization-error" ? { _meta: { invalid: 1n } } : {}),
-          },
-        ],
-      };
+      return { content: [block] };
     });
-    const send = await startClient();
     const serverTimers = vi.getTimerCount();
     const { id: _id, ...notification } = toolCall;
     const responsePromise = send("POST", outcome === "notification" ? notification : toolCall);
@@ -133,19 +120,13 @@ it.each(["success", "serialization-error", "notification"])(
       release.resolve();
       const activeReader = reader;
       body += await drain(() => within(activeReader.read()));
-      expect(JSON.parse(body)).toEqual(
-        outcome === "serialization-error"
-          ? {
-              jsonrpc: "2.0",
-              id: 1,
-              error: { code: -32603, message: "Internal error" },
-            }
-          : {
-              jsonrpc: "2.0",
-              id: 1,
-              result: { ...completed, isError: false },
-            },
-      );
+      expect(JSON.parse(body)).toEqual({
+        jsonrpc: "2.0",
+        id: 1,
+        ...(outcome === "serialization-error"
+          ? { error: { code: -32603, message: "Internal error" } }
+          : { result: { ...completed, isError: false } }),
+      });
       expect(execute).toHaveBeenCalledOnce();
       expect(vi.getTimerCount()).toBe(serverTimers);
     } finally {
@@ -160,7 +141,6 @@ it.each(["success", "serialization-error", "notification"])(
 );
 
 it("keeps a GET notification stream alive and releases it during shutdown", async () => {
-  const send = await startClient();
   const response = await send("GET");
   expect(response.headers.get("content-type")).toBe("text/event-stream");
   expect(response.headers.get("connection")).toBe("close");
