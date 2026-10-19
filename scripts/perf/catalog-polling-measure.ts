@@ -21,6 +21,12 @@ const { values } = parseArgs({
     "interval-ms": { type: "string", default: "2000" },
     "start-at": { type: "string" },
     screenshot: { type: "string" },
+    "load-runs": { type: "string" },
+    "load-path": { type: "string", default: "/dashboard" },
+    "phase-seed": { type: "string", default: "1458" },
+    "request-stacks": { type: "boolean", default: false },
+    "expect-session": { type: "string" },
+    "open-details": { type: "boolean", default: false },
   },
 });
 if (!values.url || !values.output) {
@@ -48,6 +54,233 @@ if (
   throw new Error(
     "Expected a loopback Gateway port >= 40000 and duration >= 1 second; use synthetic state/auth only.",
   );
+}
+
+if (values["load-runs"]) {
+  await measureLoads(integer(values["load-runs"], "--load-runs"));
+  process.exit(0);
+}
+
+async function measureLoads(runs: number) {
+  const destination = new URL(values["load-path"], url);
+  if (destination.origin !== url.origin) {
+    throw new Error("--load-path must remain on the isolated Gateway origin");
+  }
+  destination.hash = url.hash;
+  const browser = await chromium.launch({
+    executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
+    headless: true,
+    args: ["--no-sandbox"],
+  });
+  const results: unknown[] = [];
+  let random = integer(values["phase-seed"], "--phase-seed");
+  try {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const installProbe = (captureStacks: boolean) => {
+      const requests: Array<{
+        method: string;
+        params: unknown;
+        requestedAtMs: number;
+        stack: string | undefined;
+        responseAtMs?: number;
+        responseBytes?: number;
+        ok?: boolean;
+        catalog?: unknown;
+      }> = [];
+      const tasks: Array<{ startTime: number; duration: number }> = [];
+      const snapshots: Array<{ atMs: number; bytes: number; catalog: unknown }> = [];
+      const events: Array<{ atMs: number; event: string; payload: unknown }> = [];
+      // Preserve the native receiver explicitly when forwarding from the diagnostic wrapper.
+      // oxlint-disable-next-line typescript/unbound-method
+      const send = WebSocket.prototype.send;
+      const observed = new WeakSet<WebSocket>();
+      const pending = new Map<string, (typeof requests)[number]>();
+      const catalogStatus = (
+        payload:
+          | {
+              scope?: unknown;
+              pendingProviders?: unknown;
+              refreshFailed?: unknown;
+              sessionModelRevision?: unknown;
+            }
+          | undefined,
+      ) => ({
+        scope: payload?.scope,
+        pendingProviders: payload?.pendingProviders,
+        refreshFailed: payload?.refreshFailed,
+        sessionModelRevision: payload?.sessionModelRevision,
+      });
+      Reflect.set(Error, "stackTraceLimit", 30);
+      new PerformanceObserver((list) => {
+        tasks.push(
+          ...list.getEntries().map(({ startTime, duration }) => ({ startTime, duration })),
+        );
+      }).observe({ type: "longtask", buffered: true });
+      WebSocket.prototype.send = function (data) {
+        if (!observed.has(this)) {
+          observed.add(this);
+          this.addEventListener("message", ({ data: message }) => {
+            if (typeof message !== "string") {
+              return;
+            }
+            const frame = JSON.parse(message);
+            if (frame.type === "event" && frame.event === "models.snapshot") {
+              snapshots.push({
+                atMs: performance.now(),
+                bytes: new TextEncoder().encode(message).length,
+                catalog: { ...catalogStatus(frame.payload?.catalog), scope: frame.payload?.scope },
+              });
+            }
+            if (
+              frame.type === "event" &&
+              ["chat.metadata.changed", "config.changed", "sessions.changed"].includes(frame.event)
+            ) {
+              events.push({
+                atMs: performance.now(),
+                event: frame.event,
+                payload: {
+                  changed: frame.payload?.changed,
+                  revision: frame.payload?.revision,
+                  sessionKey: frame.payload?.sessionKey,
+                  reason: frame.payload?.reason,
+                  agentId: frame.payload?.agentId,
+                  modelCatalogChanged: frame.payload?.modelCatalogChanged,
+                  commandsChanged: frame.payload?.commandsChanged,
+                  authChanged: frame.payload?.authChanged,
+                },
+              });
+            }
+            const request = frame.type === "res" ? pending.get(frame.id) : undefined;
+            if (request) {
+              pending.delete(frame.id);
+              request.responseAtMs = performance.now();
+              request.responseBytes = new TextEncoder().encode(message).length;
+              request.ok = frame.ok === true;
+              if (request.method === "models.list") {
+                request.catalog = catalogStatus(frame.payload);
+              }
+            }
+          });
+        }
+        if (typeof data === "string") {
+          const frame = JSON.parse(data);
+          if (
+            frame.type === "req" &&
+            ["cron.list", "models.list", "users.self"].includes(frame.method)
+          ) {
+            const request = {
+              method: frame.method,
+              params: frame.params,
+              requestedAtMs: performance.now(),
+              stack: captureStacks ? new Error().stack : undefined,
+            };
+            requests.push(request);
+            pending.set(frame.id, request);
+          }
+        }
+        return send.call(this, data);
+      };
+      Reflect.set(window, "__catalogLoad", { requests, tasks, snapshots, events });
+    };
+    await context.addInitScript({
+      content: `;(() => { const __name = (target) => target; (${installProbe.toString()})(${values["request-stacks"]}); })();`,
+    });
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    const scheduleStartAt = startAt ?? Date.now();
+    if (startAt !== undefined) {
+      if (Date.now() > scheduleStartAt) {
+        throw new Error("--start-at elapsed before browser readiness");
+      }
+    }
+    for (let run = 0; run < runs; run += 1) {
+      random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
+      const phaseDelayMs = random % 3000;
+      const scheduledAt = scheduleStartAt + run * (durationMs + 5_000) + phaseDelayMs;
+      if (run > 0 && Date.now() > scheduledAt) {
+        throw new Error("Prior load exceeded the paired reload schedule");
+      }
+      await delay(Math.max(0, scheduledAt - Date.now()));
+      const actualWallStartAtMs = Date.now();
+      await page.goto(destination.href, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        ({ sessionKey, pathname }) => {
+          const snapshot = window.openclawControlUi?.snapshot();
+          return (
+            snapshot?.ready &&
+            snapshot.gatewayPhase === "connected" &&
+            (!sessionKey || snapshot.sessionKey === sessionKey) &&
+            snapshot.route?.resolvedLocation.pathname === pathname
+          );
+        },
+        { sessionKey: values["expect-session"], pathname: destination.pathname },
+        { timeout: 60_000 },
+      );
+      if (values["open-details"]) {
+        const details = page
+          .getByRole("complementary", { name: "Details", exact: true })
+          .or(page.getByRole("dialog", { name: "Details", exact: true }));
+        if (!(await details.isVisible())) {
+          await page
+            .getByRole("button", { name: "Details", exact: true })
+            .or(page.getByRole("button").and(page.locator(".chat-header-session-menu__trigger")))
+            .filter({ visible: true })
+            .first()
+            .click();
+          const menu = page.getByRole("menuitem", { name: "Session details", exact: true });
+          await details.or(menu).filter({ visible: true }).first().waitFor();
+          if (await menu.isVisible()) {
+            await menu.click();
+          }
+        }
+        await details.waitFor();
+      }
+      const readyAtMs = await page.evaluate(() => performance.now());
+      await page.waitForTimeout(Math.max(0, durationMs - readyAtMs));
+      const result = await page.evaluate(() => {
+        const probe = Reflect.get(window, "__catalogLoad");
+        return {
+          ...probe,
+          paints: performance
+            .getEntriesByType("paint")
+            .map(({ name, startTime }) => ({ name, startTime })),
+          blockingMs: probe.tasks.reduce(
+            (sum: number, task: { duration: number }) => sum + Math.max(0, task.duration - 50),
+            0,
+          ),
+          route: window.openclawControlUi?.snapshot().route,
+          sessionKey: window.openclawControlUi?.snapshot().sessionKey,
+          atMs: performance.now(),
+        };
+      });
+      results.push({
+        run,
+        phaseDelayMs,
+        scheduledAt,
+        actualWallStartAtMs,
+        readyAtMs,
+        errors: errors.splice(0),
+        ...result,
+      });
+      if (values.screenshot && run === runs - 1) {
+        await page.screenshot({ path: values.screenshot, fullPage: true });
+      }
+    }
+  } finally {
+    await browser.close();
+    const report = {
+      measurement:
+        "Real isolated Gateway browser loads. Native long-task blocking is sum(max(duration - 50 ms, 0)); request stack capture adds diagnostic overhead. First context is cold, subsequent documents retain browser cache and storage. Matching seeds randomize reload phase equally across paired sides. Synthetic request parameters and stacks are retained; auth and response payloads are not.",
+      durationMs,
+      requestStacks: values["request-stacks"],
+      path: values["load-path"],
+      results,
+    };
+    await mkdir(path.dirname(path.resolve(values.output!)), { recursive: true });
+    await writeFile(values.output!, `${JSON.stringify(report, null, 2)}\n`);
+    console.log(JSON.stringify(report, null, 2));
+  }
 }
 
 type Method = "models.list" | "cron.list";

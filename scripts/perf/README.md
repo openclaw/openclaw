@@ -205,6 +205,19 @@ A separate configuration-edit phase verifies that a changed job name becomes
 visible. Only browser list requests are counted; the controller socket is
 excluded, and the created jobs are removed on exit.
 
+For board/chat document loads, use `--load-runs 5 --load-path /dashboard --duration 12`.
+This mode retains synthetic `cron.list`, `models.list`, and `users.self` parameters,
+response bytes, `models.snapshot` event counts, paint entries, and native Long Task
+blocking (the sum of each task's duration above 50 ms). It records the first cold
+browser context separately from later documents that retain browser cache and
+storage. `--phase-seed` selects deterministic randomized reload delays; paired
+sides must use matching seeds, routes, and `--start-at` times. Reloads use fixed
+slots from that shared start time; a missed slot fails the run. Use
+`--expect-session <key>` to assert the committed session and `--open-details` for
+chat Details. Optional `--request-stacks` adds caller stacks for diagnosis;
+leave it off for paired timing. Use only synthetic requests:
+parameters and stacks are retained, while auth and response payloads are omitted.
+
 For paired activity measurements, use `--start-at <epoch-ms>` with the same future
 time on both sides; it gates the runtime window after browser readiness and
 rejects a missed deadline. Hold the host's shared measurement lock, use separate
