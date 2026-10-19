@@ -3,6 +3,7 @@ import { For, Show } from "solid-js";
 import { showConfirmDialog } from "../../../components/confirm-dialog.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { SubagentDesktopAvatar } from "./chat-subagents-panel-desktop.tsx";
 import "./chat-subagents-mobile.css";
@@ -54,7 +55,7 @@ export type ChatSubagentsMobileListProps = {
   empty?: JSX.Element;
   loading: boolean;
   /** The navigation owner retains/restores list scroll across child navigation. */
-  listRef?: (element: HTMLDivElement) => void;
+  listRef?: (element: HTMLDivElement, firstButton: () => HTMLButtonElement | undefined) => void;
 };
 
 export type ChatSubagentMobileHeaderProps = {
@@ -102,7 +103,11 @@ function MobileStop(props: { action: ChatSubagentMobileStop }) {
   );
 }
 
-function MobileRow(props: { item: ChatSubagentMobileItem; onOpen: (key: string) => void }) {
+function MobileRow(props: {
+  item: ChatSubagentMobileItem;
+  onOpen: (key: string) => void;
+  registerOpen: (key: string, button: HTMLButtonElement) => () => void;
+}) {
   const nameScrollState = useScrollState(true, false);
   const finished = () => ["finished", "failed", "stopped"].includes(props.item.status);
   return (
@@ -113,6 +118,7 @@ function MobileRow(props: { item: ChatSubagentMobileItem; onOpen: (key: string) 
     >
       <button
         class="chat-subagents-mobile__open"
+        ref={[elementRef(props.registerOpen.bind(undefined, props.item.key))]}
         type="button"
         onClick={() => props.onOpen(props.item.key)}
       >
@@ -152,10 +158,25 @@ function MobileRow(props: { item: ChatSubagentMobileItem; onOpen: (key: string) 
 }
 
 export function ChatSubagentsMobileList(props: ChatSubagentsMobileListProps) {
+  const openButtons = new Map<string, HTMLButtonElement>();
+  let finishedToggle: HTMLButtonElement | undefined;
+  const registerOpen = (key: string, button: HTMLButtonElement) => {
+    openButtons.set(key, button);
+    return () => {
+      if (openButtons.get(key) === button) {
+        openButtons.delete(key);
+      }
+    };
+  };
+  const firstButton = () => {
+    const first = props.running[0];
+    const button = first ? openButtons.get(first.key) : finishedToggle;
+    return button?.isConnected ? button : undefined;
+  };
   return (
     <div
       class="chat-subagents-mobile"
-      ref={(element) => props.listRef?.(element)}
+      ref={(element) => props.listRef?.(element, firstButton)}
       aria-busy={props.loading ? "true" : "false"}
     >
       {props.notice}
@@ -171,7 +192,13 @@ export function ChatSubagentsMobileList(props: ChatSubagentsMobileListProps) {
           >
             <div class="chat-subagents-mobile__list" role="list" aria-label={props.runningLabel}>
               <For each={props.running} keyed={(item) => item.key}>
-                {(item) => <MobileRow item={item()} onOpen={(key) => props.onOpen(key)} />}
+                {(item) => (
+                  <MobileRow
+                    item={item()}
+                    onOpen={(key) => props.onOpen(key)}
+                    registerOpen={registerOpen}
+                  />
+                )}
               </For>
             </div>
           </Show>
@@ -179,6 +206,9 @@ export function ChatSubagentsMobileList(props: ChatSubagentsMobileListProps) {
         <section class="chat-subagents-mobile__group">
           <button
             class="chat-subagents-mobile__disclosure"
+            ref={(button) => {
+              finishedToggle = button;
+            }}
             type="button"
             aria-expanded={props.finishedOpen ? "true" : "false"}
             aria-controls={props.finishedId}
@@ -199,7 +229,13 @@ export function ChatSubagentsMobileList(props: ChatSubagentsMobileListProps) {
           >
             <Show when={props.finishedOpen}>
               <For each={props.finished} keyed={(item) => item.key}>
-                {(item) => <MobileRow item={item()} onOpen={(key) => props.onOpen(key)} />}
+                {(item) => (
+                  <MobileRow
+                    item={item()}
+                    onOpen={(key) => props.onOpen(key)}
+                    registerOpen={registerOpen}
+                  />
+                )}
               </For>
             </Show>
           </div>
