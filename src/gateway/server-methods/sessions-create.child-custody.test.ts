@@ -2,7 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
@@ -372,22 +372,18 @@ async function createHostedChildFixture({
     provider,
     persistenceResult,
     renamePolicy,
-    providerDiagnostics: () =>
-      JSON.stringify({
-        persistenceResults: persistenceResult.mock.calls,
-        warnings: vi.mocked(context.logGateway.warn).mock.calls,
-        errors: vi.mocked(context.logGateway.error).mock.calls,
-      }),
     dispatchEntered: dispatchEntered.promise,
     closeParent: () => {
       participants?.close();
       parent.close();
     },
     closeInvocation: close("invocation"),
-    revokeSource: close("source"),
-    closeHost: close("host"),
-    closeGateway: close("gateway"),
-    abortSignal: () => signal.abort(new Error("explicit request signal closed")),
+    revoke: {
+      source: close("source"),
+      host: close("host"),
+      gateway: close("gateway"),
+      signal: () => signal.abort(new Error("explicit request signal closed")),
+    },
     finish,
     [Symbol.asyncDispose]: async () => {
       try {
@@ -434,7 +430,7 @@ async function expectQueued(
 
 async function expectCompleted(fixture: ChildFixture, runId: string) {
   await fixture.finish();
-  expect(fixture.provider, fixture.providerDiagnostics()).toHaveBeenCalledOnce();
+  expect(fixture.provider).toHaveBeenCalledOnce();
   expect(userMessages(fixture.scope())).toHaveLength(1);
   expect(await listSessionPendingInputs(fixture.scope())).toEqual({ items: [], total: 0 });
   expect(rpcSourceTesting.has(runId)).toBe(false);
@@ -484,12 +480,11 @@ describe("hosted creation transfers accepted child input", () => {
         async () => {
           const creating = fixture.send();
           try {
-            await Promise.race([
+            await awaitGateBeforeSettlement(
               reportEntered.promise,
-              fixture.dispatchEntered.then(() => {
-                throw new Error("Child dispatched before visible-session initialization");
-              }),
-            ]);
+              fixture.dispatchEntered,
+              "Child dispatched before visible-session initialization",
+            );
             expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
             expect(report).toHaveBeenCalledExactlyOnceWith(
               url
@@ -509,7 +504,7 @@ describe("hosted creation transfers accepted child input", () => {
           );
           expect(loadSessionEntry(fixture.parentScope)?.publicShare).toBeUndefined();
           await fixture.finish();
-          expect(fixture.provider, fixture.providerDiagnostics()).toHaveBeenCalledTimes(1);
+          expect(fixture.provider).toHaveBeenCalledTimes(1);
           const nested = await fixture.sendNested();
           expect(nested.publicRead).toBe(false);
           expect(nested.entry).not.toHaveProperty("publicShare");
@@ -529,51 +524,46 @@ describe("hosted creation transfers accepted child input", () => {
 
   it("retains delegated human Git credit without inventing child participation", async () => {
     await using fixture = await createHostedChildFixture();
-    syncGitHubIdentity({
-      identity: { accountId: 20, login: "ada" },
-      authenticationAlias: { kind: "email", email: "child-owner@example.test" },
-    });
-    await recordSessionParticipant(fixture.parentScope, {
-      identity: { type: "profile", id: fixture.profileId },
-      promptedAt: 1,
-    });
+    const addContributor = async (
+      email: string,
+      accountId: number,
+      login: string,
+      promptedAt: number,
+    ) => {
+      syncGitHubIdentity({
+        identity: { accountId, login },
+        authenticationAlias: { kind: "email", email },
+      });
+      await recordSessionParticipant(fixture.parentScope, {
+        identity: { type: "profile", id: ensureProfileForEmail(email).id },
+        promptedAt,
+      });
+    };
+    await addContributor("child-owner@example.test", 20, "ada", 1);
 
     const accepted = await fixture.send();
     expect(accepted.runStarted).toBe(true);
     expect(accepted.entry).not.toHaveProperty("inheritedGitContributorProfileIds");
     expect(fixture.provider).not.toHaveBeenCalled();
     const scope = fixture.scope();
-    const readCredit = () =>
-      resolveGitCoauthorAttribution({ ...scope, config: getRuntimeConfig() });
+    const readCredit = (key = scope.sessionKey) =>
+      resolveGitCoauthorAttribution({ ...fixture.scope(key), config: getRuntimeConfig() });
     const expectedCredit = {
       logins: ["ada"],
       trailers: ["Co-authored-by: ada <20+ada@users.noreply.github.com>"],
     };
     await expect(readCredit()).resolves.toEqual(expectedCredit);
 
-    const later = ensureProfileForEmail("later-contributor@example.test");
-    syncGitHubIdentity({
-      identity: { accountId: 21, login: "grace" },
-      authenticationAlias: { kind: "email", email: "later-contributor@example.test" },
-    });
-    await recordSessionParticipant(fixture.parentScope, {
-      identity: { type: "profile", id: later.id },
-      promptedAt: 2,
-    });
+    await addContributor("later-contributor@example.test", 21, "grace", 2);
     await expect(readCredit()).resolves.toEqual(expectedCredit);
     await fixture.finish();
-    expect(fixture.provider, fixture.providerDiagnostics()).toHaveBeenCalledOnce();
+    expect(fixture.provider).toHaveBeenCalledOnce();
     const nested = await fixture.sendNested();
     expect(nested.runStarted).toBe(true);
     expect(nested.entry).not.toHaveProperty("inheritedGitContributorProfileIds");
-    await expect(
-      resolveGitCoauthorAttribution({
-        ...fixture.scope(nested.key),
-        config: getRuntimeConfig(),
-      }),
-    ).resolves.toEqual(expectedCredit);
+    await expect(readCredit(nested.key)).resolves.toEqual(expectedCredit);
     await fixture.finish();
-    expect(fixture.provider, fixture.providerDiagnostics()).toHaveBeenCalledTimes(2);
+    expect(fixture.provider).toHaveBeenCalledTimes(2);
     for (const childScope of [scope, fixture.scope(nested.key)]) {
       expect(
         (listSessionParticipantsReadOnly(childScope).get(childScope.sessionKey) ?? []).filter(
@@ -633,17 +623,23 @@ describe("hosted creation transfers accepted child input", () => {
     });
   });
 
-  it.each([false, true])(
-    "continues after the inherited tool invocation completes (system=%s)",
-    async (system) => {
-      await using fixture = await createHostedChildFixture({ system, toolInvocation: true });
+  it.each([
+    { system: false, toolInvocation: false },
+    { system: true, toolInvocation: false },
+    { system: false, toolInvocation: true },
+    { system: true, toolInvocation: true },
+  ])(
+    "continues after parent closure (system=$system, inherited invocation=$toolInvocation)",
+    async (options) => {
+      await using fixture = await createHostedChildFixture(options);
       const accepted = await fixture.send();
       await expectQueued(fixture, accepted);
-      // Returning from send has already aborted the real invocation envelope's signal.
-      fixture.closeInvocation();
+      if (options.toolInvocation) {
+        fixture.closeInvocation();
+      }
       fixture.closeParent();
       await expectCompleted(fixture, accepted.runId);
-      if (!system) {
+      if (options.toolInvocation && !options.system) {
         expect(fixture.renamePolicy).toHaveBeenCalledWith(
           expect.objectContaining({ renameOnly: true }),
         );
@@ -651,31 +647,36 @@ describe("hosted creation transfers accepted child input", () => {
     },
   );
 
-  it.each([false, true])(
-    "retains inherited invocation authority through child input COMMIT (system=%s)",
-    async (system) => {
-      await using fixture = await createHostedChildFixture({ system, toolInvocation: true });
-      fixture.beforeInputCommit.mockImplementation(() => fixture.closeInvocation());
-      await expect(fixture.send()).resolves.toMatchObject({
-        ok: true,
-        runStarted: false,
-        runError: {
-          code: "UNAVAILABLE",
-          message: "Error: inherited tool invocation closed",
-        },
+  it.each([
+    ["invocation", false],
+    ["invocation", true],
+    ["parent", false],
+    ["parent", true],
+  ] as const)(
+    "retains %s authority through child input COMMIT (system=%s)",
+    async (boundary, system) => {
+      await using fixture = await createHostedChildFixture({
+        system,
+        toolInvocation: boundary === "invocation",
       });
+      fixture.beforeInputCommit.mockImplementation(
+        boundary === "invocation" ? fixture.closeInvocation : fixture.closeParent,
+      );
+      const creating = fixture.send();
+      if (boundary === "invocation") {
+        await expect(creating).resolves.toMatchObject({
+          ok: true,
+          runStarted: false,
+          runError: { code: "UNAVAILABLE", message: "Error: inherited tool invocation closed" },
+        });
+      } else {
+        await expect(creating).rejects.toThrow(
+          system
+            ? "agent tool caller authority is no longer active"
+            : "operator execution authority is no longer active",
+        );
+      }
       await expectNoInput(fixture);
-    },
-  );
-
-  it.each([false, true])(
-    "continues after the admitted parent closes (system=%s)",
-    async (system) => {
-      await using fixture = await createHostedChildFixture({ system });
-      const accepted = await fixture.send();
-      await expectQueued(fixture, accepted);
-      fixture.closeParent();
-      await expectCompleted(fixture, accepted.runId);
     },
   );
 
@@ -690,16 +691,10 @@ describe("hosted creation transfers accepted child input", () => {
       const pending = await listSessionPendingInputs(scope);
       expect(pending).toMatchObject({ total: 1, items: [{ state: "queued" }] });
       fixture.closeParent();
-      if (change === "source") {
-        fixture.revokeSource();
-      } else if (change === "host") {
-        fixture.closeHost();
-      } else if (change === "signal") {
-        fixture.abortSignal();
-      } else if (change === "gateway") {
-        fixture.closeGateway();
-      } else {
+      if (change === "replacement") {
         replaceSessionEntrySync(scope, { sessionId: "successor-child", updatedAt: Date.now() });
+      } else {
+        fixture.revoke[change]();
       }
       await fixture.finish();
       expect(fixture.provider).not.toHaveBeenCalled();
@@ -713,20 +708,6 @@ describe("hosted creation transfers accepted child input", () => {
         expect(loadSessionEntry(scope)?.sessionId).toBe("successor-child");
         expect(userMessages({ ...scope, sessionId: "successor-child" })).toEqual([]);
       }
-    },
-  );
-
-  it.each([false, true])(
-    "keeps the parent receipt through child input COMMIT (system=%s)",
-    async (system) => {
-      await using fixture = await createHostedChildFixture({ system });
-      fixture.beforeInputCommit.mockImplementation(() => fixture.closeParent());
-      await expect(fixture.send()).rejects.toThrow(
-        system
-          ? "agent tool caller authority is no longer active"
-          : "operator execution authority is no longer active",
-      );
-      await expectNoInput(fixture);
     },
   );
 });

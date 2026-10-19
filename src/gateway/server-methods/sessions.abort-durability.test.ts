@@ -23,15 +23,11 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
-import {
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "../server-chat-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { startGatewayEventSubscriptions } from "../server-runtime-subscriptions.js";
+import { createSubscriptionTestFixture } from "../server-runtime-subscriptions.test-support.js";
 import * as lifecycleState from "../session-lifecycle-state.js";
 import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
@@ -57,8 +53,6 @@ it.each([
         payload: {
           pid: process.pid,
           createdAt: new Date().toISOString(),
-          configPath: state.configPath,
-          stateDir: state.stateDir,
           role: "gateway",
         },
       });
@@ -140,21 +134,15 @@ it.each([
           });
         }
         const subscriptions = startGatewayEventSubscriptions({
-          scheduler: createTestGatewayScheduler(),
-          signal: new AbortController().signal,
+          ...createSubscriptionTestFixture().createParams(),
           log,
           broadcast: context.broadcast,
           broadcastToConnIds: context.broadcastToConnIds,
-          nodeHasSessionSubscribers: () => false,
           nodeSendToSession: context.nodeSendToSession,
           agentRunSeq: context.agentRunSeq,
           chatRunState: context.chatRunState,
           toolEventRecipients: context.chatRunState.toolEventRecipients,
-          sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-          sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-          restartRecoveryCandidates: new Map(),
           resolveGatewayContext: context.resolveGatewayContext,
-          refreshConnectedUserProfiles: vi.fn(),
         });
         const writerEntered = createDeferred();
         const releaseWriter = createDeferred();

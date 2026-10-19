@@ -12,18 +12,20 @@ import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
-const loadSessionEntryMock = vi.fn();
-const prepareDeletedAgentSessionCheckMock = vi.fn();
-const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
-const getLatestLiveSubagentRunByChildSessionKeyMock = vi.fn();
-const replaceSubagentRunAfterSteerMock = vi.fn();
-const terminateAcceptedCollectorRunMock = vi.fn();
-const chatSendMock = vi.fn();
+const mocks = vi.hoisted(() => ({
+  load: vi.fn(),
+  deletedAgent: vi.fn(),
+  latest: vi.fn(),
+  live: vi.fn(),
+  replace: vi.fn(),
+  terminate: vi.fn(),
+  send: vi.fn(),
+}));
+const started = { runId: "run-new", status: "started" };
 
 // mock-isolation: Follow-up routing uses synthetic entries instead of real session stores.
 vi.mock("../session-utils.js", () => ({
-  prepareDeletedAgentSessionCheck: (...args: unknown[]) =>
-    prepareDeletedAgentSessionCheckMock(...args),
+  prepareDeletedAgentSessionCheck: mocks.deletedAgent,
 }));
 // mock-isolation: Follow-up routing supplies synthetic entries without a database worker.
 vi.mock("../session-utils-store-worker.js", () => ({
@@ -31,7 +33,7 @@ vi.mock("../session-utils-store-worker.js", () => ({
     params: Parameters<
       typeof import("../session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
     >[0],
-  ) => loadSessionEntryMock(params.key, { agentId: params.agentId }),
+  ) => mocks.load(params.key, { agentId: params.agentId }),
 }));
 vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async () => {
   const actual = await vi.importActual<
@@ -39,12 +41,11 @@ vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async () =>
   >("../../agents/subagents/registry/subagent-registry-read.js");
   return {
     ...actual,
-    getLatestSubagentRunByChildSessionKey: (...args: unknown[]) =>
-      getLatestSubagentRunByChildSessionKeyMock(...args),
+    getLatestSubagentRunByChildSessionKey: mocks.latest,
     getLatestLiveSubagentRunByChildSessionKey: (
       ...args: Parameters<typeof actual.getLatestLiveSubagentRunByChildSessionKey>
     ) => {
-      const run = getLatestLiveSubagentRunByChildSessionKeyMock(...args);
+      const run = mocks.live(...args);
       return run && run.childSessionKey === args[0].trim() && (!args[1] || args[1](run))
         ? run
         : null;
@@ -53,14 +54,13 @@ vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async () =>
 });
 
 vi.mock("../../agents/subagents/registry/subagent-registry.js", () => ({
-  replaceSubagentRunAfterSteerCore: (...args: unknown[]) =>
-    replaceSubagentRunAfterSteerMock(...args),
+  replaceSubagentRunAfterSteerCore: mocks.replace,
 }));
 vi.mock("../../agents/subagents/spawn/subagent-spawn-cleanup.js", () => ({
-  terminateAcceptedCollectorRun: (...args: unknown[]) => terminateAcceptedCollectorRunMock(...args),
+  terminateAcceptedCollectorRun: mocks.terminate,
 }));
 vi.mock("./chat-send-external-entry.js", () => ({
-  handleDirectExternalChatSend: (...args: unknown[]) => chatSendMock(...args),
+  handleDirectExternalChatSend: mocks.send,
 }));
 
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
@@ -104,7 +104,7 @@ function loadSession(
   storePath = "/tmp/sessions.json",
   cfg: OpenClawConfig = {},
 ) {
-  loadSessionEntryMock.mockReturnValue({ cfg, canonicalKey, storePath, entry: { sessionId } });
+  mocks.load.mockReturnValue({ cfg, canonicalKey, storePath, entry: { sessionId } });
 }
 
 function completedRun(childSessionKey: string) {
@@ -124,29 +124,26 @@ function completedRun(childSessionKey: string) {
       outcome: { status: "ok" as const },
     },
   };
-  getLatestSubagentRunByChildSessionKeyMock.mockResolvedValue(run);
-  getLatestLiveSubagentRunByChildSessionKeyMock.mockReturnValue(run);
-  return run;
+  mocks.latest.mockResolvedValue(run);
+  mocks.live.mockReturnValue(run);
 }
 
 describe("sessions.send completed subagent follow-up status", () => {
   afterEach(() => flushPendingSessionsChangedEvents());
   beforeEach(() => {
-    loadSessionEntryMock.mockReset();
-    prepareDeletedAgentSessionCheckMock.mockReset().mockReturnValue(null);
-    getLatestSubagentRunByChildSessionKeyMock.mockReset();
-    getLatestLiveSubagentRunByChildSessionKeyMock.mockReset();
-    replaceSubagentRunAfterSteerMock.mockReset();
-    terminateAcceptedCollectorRunMock.mockReset();
-    chatSendMock.mockReset().mockImplementation(async ({ respond }: { respond: RespondFn }) => {
-      respond(true, { runId: "run-new", status: "started" }, undefined, undefined);
+    for (const mock of Object.values(mocks)) {
+      mock.mockReset();
+    }
+    mocks.deletedAgent.mockReturnValue(null);
+    mocks.send.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
+      respond(true, { ...started }, undefined, undefined);
     });
   });
 
   it("rejects keys belonging to a deleted agent", async () => {
     const key = "agent:deleted-agent:main";
     loadSession(key, "sess-orphan");
-    prepareDeletedAgentSessionCheckMock.mockReturnValue("deleted-agent");
+    mocks.deletedAgent.mockReturnValue("deleted-agent");
     const respond = await send({ key, message: "hi" });
     expect(respond).toHaveBeenCalledWith(false, undefined, {
       code: ErrorCodes.INVALID_REQUEST,
@@ -164,8 +161,8 @@ describe("sessions.send completed subagent follow-up status", () => {
     const childSessionKey = "agent:main:subagent:followup";
     loadSession(childSessionKey, "sess-followup", storePath);
     completedRun(childSessionKey);
-    replaceSubagentRunAfterSteerMock.mockReturnValue(true);
-    chatSendMock.mockImplementationOnce(async ({ respond }: { respond: RespondFn }) => {
+    mocks.replace.mockReturnValue(true);
+    mocks.send.mockImplementationOnce(async ({ respond }: { respond: RespondFn }) => {
       registerAgentRunContext("run-new", {
         agentId: "main",
         sessionKey: childSessionKey,
@@ -173,7 +170,7 @@ describe("sessions.send completed subagent follow-up status", () => {
         projectSessionActive: true,
       });
       projection.state.rowContext.projectedAgentRuns = buildProjectedAgentRunIndex();
-      respond(true, { runId: "run-new", status: "started" }, undefined, undefined);
+      respond(true, { ...started }, undefined, undefined);
     });
     onTestFinished(() => clearAgentRunContext("run-new"));
     const broadcastToConnIds = vi.fn();
@@ -202,15 +199,10 @@ describe("sessions.send completed subagent follow-up status", () => {
       context,
     );
     await flushPendingSessionsChangedEvents(context);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { runId: "run-new", status: "started" },
-      undefined,
-      undefined,
-    );
+    expect(respond).toHaveBeenCalledWith(true, started, undefined, undefined);
     expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("messageSeq");
     expectSubagentFollowupReactivation({
-      replaceSubagentRunAfterSteerMock,
+      replaceSubagentRunAfterSteerMock: mocks.replace,
       broadcastToConnIds,
       childSessionKey,
       status: "running",
@@ -222,14 +214,14 @@ describe("sessions.send completed subagent follow-up status", () => {
     const childSessionKey = "agent:main:subagent:followup-rejected";
     loadSession(childSessionKey, "sess-followup-rejected");
     completedRun(childSessionKey);
-    replaceSubagentRunAfterSteerMock.mockImplementationOnce(() => {
+    mocks.replace.mockImplementationOnce(() => {
       throw new Error("database unavailable");
     });
-    terminateAcceptedCollectorRunMock.mockResolvedValueOnce(undefined);
+    mocks.terminate.mockResolvedValueOnce(undefined);
     await expect(send({ key: childSessionKey, message: "follow-up" })).rejects.toThrow(
       "database unavailable",
     );
-    expect(terminateAcceptedCollectorRunMock).toHaveBeenCalledWith({
+    expect(mocks.terminate).toHaveBeenCalledWith({
       childSessionKey,
       gatewayRunId: "run-new",
       sessionCleanup: "preserve",
@@ -239,7 +231,7 @@ describe("sessions.send completed subagent follow-up status", () => {
   it("sessions.steer replaying a cached idempotency key leaves the active run alone", async () => {
     const sessionKey = "agent:main:main";
     loadSession(sessionKey, "sess-unrelated-run");
-    chatSendMock.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
+    mocks.send.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
       respond(true, { runId: "steer-retry", status: "completed" }, undefined, { cached: true });
     });
     const respond = await send(
@@ -264,29 +256,26 @@ describe("sessions.send completed subagent follow-up status", () => {
       messageSeq: 4,
       interruptedActiveRun: true,
     };
-    chatSendMock.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
+    mocks.send.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
       respond(true, payload);
     });
+    const params = {
+      agentId: "work",
+      message: "@Bob follow-up",
+      mentions: [{ profileId: "bob", start: 0, end: 4 }],
+      idempotencyKey: "run-work",
+    };
     const respond = await send(
-      {
-        key: "global",
-        agentId: "work",
-        message: "@Bob follow-up",
-        mentions: [{ profileId: "bob", start: 0, end: 4 }],
-        idempotencyKey: "run-work",
-      },
+      { key: "global", ...structuredClone(params) },
       "sessions.steer",
       createRequestContext({ getRuntimeConfig: () => cfg }),
     );
-    expect(loadSessionEntryMock).toHaveBeenCalledWith("global", { agentId: "work" });
-    expect(chatSendMock).toHaveBeenCalledExactlyOnceWith(
+    expect(mocks.load).toHaveBeenCalledWith("global", { agentId: "work" });
+    expect(mocks.send).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         params: expect.objectContaining({
           sessionKey: "global",
-          agentId: "work",
-          message: "@Bob follow-up",
-          mentions: [{ profileId: "bob", start: 0, end: 4 }],
-          idempotencyKey: "run-work",
+          ...params,
           queueMode: "interrupt",
         }),
       }),
