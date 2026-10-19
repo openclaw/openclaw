@@ -139,7 +139,6 @@ async function seedCompiledDigest(params: {
     publicationId,
     parentPublicationId,
     async () => {},
-    async () => {},
     () => loadMemoryWikiValidatedVaultIdentity(params.config.vault.path),
   );
 }
