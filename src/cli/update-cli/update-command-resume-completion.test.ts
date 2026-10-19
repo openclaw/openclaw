@@ -20,6 +20,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { registerUpdateCli } from "../update-cli.js";
+import { expectMissing } from "./update-boundary.test-support.js";
 import {
   entrypoint,
   events,
@@ -115,10 +116,9 @@ describe("update completion ownership", () => {
       expect(run).toMatchObject({ status: "succeeded" });
       const expectedWarnings = pendingAgain ? [finalPassWarning] : [];
       expect(updateRunWarningMessages(run?.steps ?? [])).toEqual(expectedWarnings);
-      const reportWarnings = renderUpdateRunReport(run!).lines.filter((line) =>
-        line.startsWith("Warning: "),
-      );
-      expect(reportWarnings).toEqual(expectedWarnings.map((warning) => `Warning: ${warning}`));
+      expect(
+        renderUpdateRunReport(run!).lines.filter((line) => line.startsWith("Warning: ")),
+      ).toEqual(expectedWarnings.map((warning) => `Warning: ${warning}`));
     },
   );
 
@@ -140,14 +140,13 @@ describe("update completion ownership", () => {
       doctorContract: { stateMigrations: [] },
       configSchema: { type: "object", additionalProperties: false },
     });
-    await state.writeText(
-      `${pluginRoot}/doctor-contract-api.js`,
-      "export const stateMigrations = [];\n",
-    );
-    await state.writeText(
-      `${pluginRoot}/index.js`,
-      `export default { id: "${pluginId}", register() {} };\n`,
-    );
+    const pluginSources = {
+      "doctor-contract-api.js": "export const stateMigrations = [];\n",
+      "index.js": `export default { id: "${pluginId}", register() {} };\n`,
+    };
+    for (const [name, source] of Object.entries(pluginSources)) {
+      await state.writeText(`${pluginRoot}/${name}`, source);
+    }
     await state.writeConfig({
       ...localConfig,
       plugins: {
@@ -289,10 +288,8 @@ describe("update completion ownership", () => {
     mocks.plugins.mockImplementation(async ({ configSnapshot }) => {
       expect(configSnapshot.valid).toBe(true);
       expect(await readConfig()).toBe(originalConfig);
-      await expect(fs.stat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.stat(`${sourcePath}.doctor-importing`)).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectMissing(sourcePath);
+      await expectMissing(`${sourcePath}.doctor-importing`);
       expect(await loadNodeHostConfig()).toStrictEqual({ ...node, installedAppsSharing: false });
       return unchangedPluginResult();
     });

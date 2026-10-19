@@ -19,6 +19,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { resultFixture } from "./update-command-fixtures.test-support.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
 import { assertUpdateCommandPackageFinalization } from "./update-command-recovery.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
@@ -49,24 +50,17 @@ describe("package finalization recovery targets", () => {
     };
     const params: Parameters<typeof assertUpdateCommandPackageFinalization>[0] & {
       root: string;
-    } = {
-      root,
-      opts: { run },
-      result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
-    };
+    } = { root, opts: { run }, result: resultFixture(undefined) };
     return { run, params, databasePath: resolveOpenClawStateSqlitePath(env) };
   }
 
   it.each(
-    (["entry", "settlement"] as const).flatMap((phase) =>
-      (["same-target", "distinct-target", "retargeted"] as const).map((kind) => ({
-        phase,
-        kind,
-      })),
+    ["entry", "settlement"].flatMap((phase) =>
+      ["same-target", "distinct-target", "retargeted"].map((kind) => ({ phase, kind })),
     ),
   )("inspects each selected recovery target once at $phase ($kind)", async ({ phase, kind }) => {
     const first = target();
-    const other = kind === "distinct-target" || kind === "retargeted" ? target() : undefined;
+    const other = kind === "same-target" ? undefined : target();
     if (kind === "same-target") {
       first.params.ownedManagedUpdateEnv = {
         ...first.run.env,
@@ -166,7 +160,7 @@ it("refuses to serialize live authority into a legacy migrated worker", async ()
         opts: f.opts,
         mutationStarted: true,
         root: f.live,
-        result: { status: "ok", mode: "npm", root: f.live, steps: [], durationMs: 0 },
+        result: resultFixture(f.live),
         configSnapshot: createTestConfigSnapshot({}, {}, path.join(f.root, "openclaw.json")),
         installKindChanged: false,
         requestedChannel: null,
@@ -206,17 +200,15 @@ describe("historical terminal completion diagnostics", () => {
       .prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?")
       .run(saved, "update.recovery." + f.run.runId);
     closeOpenClawStateDatabaseForTest();
+    const directory = path.dirname(source.path);
+    const basename = path.basename(source.path);
     const family = async () =>
       Promise.all(
-        (await fs.readdir(path.dirname(source.path)))
-          .filter(
-            (name) =>
-              name === path.basename(source.path) ||
-              name.startsWith(path.basename(source.path) + "-"),
-          )
+        (await fs.readdir(directory))
+          .filter((name) => name === basename || name.startsWith(basename + "-"))
           .toSorted()
           .map(async (name) => {
-            const file = path.join(path.dirname(source.path), name);
+            const file = path.join(directory, name);
             const { ino, size, mtimeMs, ctimeMs } = await fs.stat(file);
             return { name, bytes: await fs.readFile(file), ino, size, mtimeMs, ctimeMs };
           }),
@@ -232,14 +224,11 @@ describe("historical terminal completion diagnostics", () => {
       const f = await historical(rollback, terminal);
       const before = await f.family();
       const result = completeUpdateCommandRun(
-        {
+        resultFixture(f.live, {
           status: terminal && !rollback ? "error" : "ok",
           ...(terminal ? { reason: "stale-process-result" } : {}),
-          mode: "npm",
-          root: f.live,
-          steps: [],
           durationMs: 1,
-        },
+        }),
         f.opts.run,
       );
       expect(result).toMatchObject({
@@ -261,10 +250,10 @@ describe("historical terminal completion diagnostics", () => {
       const other = createUpdateRun({ trigger: "cli" }, f.options);
       closeOpenClawStateDatabaseForTest();
       const before = await f.family();
-      const result = completeUpdateCommandRun(
-        { status: "ok", mode: "npm", steps: [], durationMs: 1 },
-        { runId: other.runId, env: f.opts.run!.env },
-      );
+      const result = completeUpdateCommandRun(resultFixture(undefined, { durationMs: 1 }), {
+        runId: other.runId,
+        env: f.opts.run!.env,
+      });
       expect(result).toMatchObject(
         terminal ? { status: "ok" } : { status: "error", reason: "update-recovery-pending" },
       );

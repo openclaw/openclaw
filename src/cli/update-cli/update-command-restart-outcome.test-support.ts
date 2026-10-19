@@ -29,6 +29,22 @@ import {
   maybeStopManagedServiceBeforeMutableUpdate,
 } from "./update-command-service.js";
 
+function revocableAuthority() {
+  let current = true;
+  return {
+    assertCurrent() {
+      if (!current) {
+        throw new Error("Original update owner revoked");
+      }
+    },
+    revoke() {
+      current = false;
+    },
+  };
+}
+const installed = () => commandResult({ stdout: JSON.stringify({ action: "install", ok: true }) });
+const verifiedStep = expect.objectContaining({ name: "gateway verification", exitCode: 0 });
+
 export function registerRestartOutcomeTests(
   getFixture: () => {
     root: string;
@@ -92,16 +108,11 @@ export function registerRestartOutcomeTests(
       const result: UpdateRunResult = serviceUpdateResult(root);
       const prepared = await prepareRestart(root, result, before, run);
       expect(prepared.refreshGatewayServiceEnv).toBe(true);
-      let current = true;
-      const executorFence = {
-        assertCurrent() {
-          if (!current) {
-            throw new Error("Original update owner revoked");
-          }
-        },
-      };
+      const executorFence = revocableAuthority();
       mocks.configSnapshot.mockImplementationOnce(async () => {
-        current = !revoked;
+        if (revoked) {
+          executorFence.revoke();
+        }
       });
       mocks.child.mockImplementation(async (argv) => {
         if (argv.includes("restart")) {
@@ -111,11 +122,9 @@ export function registerRestartOutcomeTests(
         } else {
           expect(argv).toContain("install");
         }
-        return commandResult({
-          stdout: argv.includes("restart")
-            ? JSON.stringify(mocks.writeJson.mock.lastCall?.[0])
-            : JSON.stringify({ action: "install", ok: true }),
-        });
+        return argv.includes("restart")
+          ? commandResult({ stdout: JSON.stringify(mocks.writeJson.mock.lastCall?.[0]) })
+          : installed();
       });
       const onVerified = vi.fn();
       const activation = maybeRestartService({
@@ -133,9 +142,7 @@ export function registerRestartOutcomeTests(
         await expect(activation).resolves.toBe("ok");
         expect(mocks.restart).toHaveBeenCalledOnce();
         expect(onVerified).toHaveBeenCalledOnce();
-        expect(result.steps).toContainEqual(
-          expect.objectContaining({ name: "gateway verification", exitCode: 0 }),
-        );
+        expect(result.steps).toContainEqual(verifiedStep);
       }
       expect(unownedSpawn).not.toHaveBeenCalled();
       expect(mocks.child.mock.calls.map(([argv]) => argv[3])).toEqual(
@@ -166,20 +173,17 @@ export function registerRestartOutcomeTests(
         throw new Error("Missing managed service fixture command");
       }
       expect(before.stopped).toBe(true);
-      let current = true;
-      const assertCurrent = () => {
-        if (!current) {
-          throw new Error("Original update owner revoked");
-        }
-      };
-      run.executorFence = { assertCurrent };
+      const authority = revocableAuthority();
+      run.executorFence = authority;
       mocks.command.mockImplementation(async (_env, options) => {
         if (options?.requireLoaded && !mocks.running) {
           if (!options.loadForInspection) {
             throw new Error("Effective systemd service command could not be inspected.");
           }
           expect(options.loadForInspection.managerUid).toBe(before.serviceManagerUid);
-          current = scenario !== "revoked recovery";
+          if (scenario === "revoked recovery") {
+            authority.revoke();
+          }
           options.loadForInspection.assertCurrent();
         }
         return command;
@@ -213,9 +217,7 @@ export function registerRestartOutcomeTests(
             programArguments: [process.execPath, packageEntry, "gateway", "--port", "19305"],
           };
           mocks.running = true;
-          return commandResult({
-            stdout: JSON.stringify({ action: "install", ok: true }),
-          });
+          return installed();
         });
         const result: UpdateRunResult = serviceUpdateResult(packageRoot, {
           before: { version: VERSION },
@@ -377,9 +379,7 @@ export function registerRestartOutcomeTests(
         expect(mocks.restart).toHaveBeenCalledOnce();
         expect(mocks.configSnapshot).toHaveBeenCalledTimes(writable ? 1 : 0);
         expect(mocks.terminateStale).not.toHaveBeenCalled();
-        expect(result.steps).toContainEqual(
-          expect.objectContaining({ name: "gateway verification", exitCode: 0 }),
-        );
+        expect(result.steps).toContainEqual(verifiedStep);
         expect(mocks.writeJson).toHaveBeenCalledWith(
           expect.objectContaining({
             result: "restart-health-failed",
@@ -390,25 +390,19 @@ export function registerRestartOutcomeTests(
     },
   );
 
-  const healthFailure = {
+  const json = JSON.stringify({
     action: "restart",
     ok: false,
     result: "restart-health-failed",
     error: "Gateway is unhealthy",
-  };
-  const json = JSON.stringify(healthFailure);
-  it.each<{
-    scenario: string;
-    response?: Partial<
-      Awaited<ReturnType<typeof import("../../process/exec.js").runCommandWithTimeout>>
-    >;
-  }>([
-    { scenario: "missing", response: { stdout: "" } },
-    { scenario: "truncated", response: { stdoutTruncatedBytes: 1 } },
-    { scenario: "uncertain", response: { cleanup: "uncertain" } },
-  ])(
-    "classifies only the complete owned restart health response ($scenario)",
-    async ({ response }) => {
+  });
+  it.each([
+    ["missing", { stdout: "" }, "Error"],
+    ["truncated", { stdoutTruncatedBytes: 1 }, "Error"],
+    ["uncertain", { cleanup: "uncertain" }, "CommandProcessCleanupError"],
+  ] as const)(
+    "classifies only the complete owned restart health response (%s)",
+    async (_scenario, response, name) => {
       const { root, mocks } = getFixture();
       mocks.child.mockResolvedValueOnce(
         commandResult({
@@ -428,9 +422,7 @@ export function registerRestartOutcomeTests(
           },
           "restart",
         ),
-      ).rejects.toMatchObject({
-        name: response?.cleanup === "uncertain" ? "CommandProcessCleanupError" : "Error",
-      });
+      ).rejects.toMatchObject({ name });
       expect(mocks.child.mock.lastCall?.[0]).toContain("--json");
     },
   );

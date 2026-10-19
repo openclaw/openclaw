@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { waitForDead } from "../../../test/helpers/process-wait.js";
-import { createDeferred, withinTest, withTestTimeout } from "../../../test/helpers/promise.js";
+import { waitForDead, waitForFixtureFile } from "../../../test/helpers/process-wait.js";
+import { withinTest, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../../test/vitest/vitest.timeouts.js";
 import { execFileUtf8 } from "../../daemon/exec-file.js";
@@ -44,7 +44,6 @@ function parentScript() {
     await withUpdateCommandExecutor(run.runId,async executor=>{
       run.executorFence=await executor.enter(b,{serviceRoot:a});
       fs.writeFileSync(ready+".tmp","ready"); fs.renameSync(ready+".tmp",ready);
-      process.stdout.write("PARENT_READY\\n");
       while(!fs.existsSync(request))await sleep(10);
       const {argv,timeout,parallel}=JSON.parse(fs.readFileSync(request,"utf8"));
       const result=await withRetainedUpdateServiceAuthority(
@@ -63,19 +62,12 @@ function parentScript() {
 function setup() {
   const root = fs.realpathSync(dirs.make("retained-native-parent-"));
   const file = (name: string) => path.join(root, name);
-  const a = file("A");
-  const b = file("B");
-  const temp = file("control");
-  const controllers = file("controllers");
-  for (const dir of [a, b, temp, controllers]) {
-    fs.mkdirSync(dir);
-  }
-  return {
+  const fixture = {
     root,
-    a,
-    b,
-    temp,
-    controllers,
+    a: file("A"),
+    b: file("B"),
+    temp: file("control"),
+    controllers: file("controllers"),
     started: file("started.json"),
     request: file("request.json"),
     ready: file("parent-ready"),
@@ -83,6 +75,10 @@ function setup() {
     effect: file("effect"),
     outcome: file("outcome.json"),
   };
+  for (const dir of [fixture.a, fixture.b, fixture.temp, fixture.controllers]) {
+    fs.mkdirSync(dir);
+  }
+  return fixture;
 }
 
 /** Start imports and real executor admission before a test owns its behavior deadline. */
@@ -93,23 +89,12 @@ function startParent(killProcessTree: boolean) {
   let dispatched = false;
   let expectedControllers = 0;
   let behaviorTimer: ReturnType<typeof setTimeout> | undefined;
-  let cleaning: Promise<void> | undefined;
-  const admitted = createDeferred();
-  let startupOutput = "";
   const pending = runCommandWithTimeout(
     [process.execPath, "--input-type=module", "-e", parentScript(), "--", JSON.stringify(fixture)],
     {
       input: "",
       beforeInput: (pid) => {
         parentPid = pid;
-      },
-      onOutputChunk: (chunk, stream) => {
-        if (stream === "stdout") {
-          startupOutput += String(chunk);
-          if (startupOutput.includes("PARENT_READY\n")) {
-            admitted.resolve();
-          }
-        }
       },
       signal: abort.signal,
       timeoutMs: DEFAULT_VITEST_TEST_TIMEOUT_MS,
@@ -123,74 +108,68 @@ function startParent(killProcessTree: boolean) {
     fixture,
     pid: () => parentPid,
     ready: (signal: AbortSignal) =>
-      withinTest(
-        Promise.race([
-          admitted.promise,
-          pending.then(() => {
-            if (!fs.existsSync(fixture.ready)) {
-              throw new Error(`Child exited before writing ${fixture.ready}`);
-            }
-          }),
-        ]),
-        signal,
-      ),
-    run(command: { argv: string[]; timeout: number; parallel?: boolean }, timeoutMs: number) {
+      withinTest(waitForFixtureFile(fixture.ready, pending, "ready"), signal),
+    run(
+      script: string,
+      { timeout = 10000, deadline = 15000, parallel = false, missing = false } = {},
+    ) {
       if (dispatched) {
         throw new Error("Fixture command was already dispatched");
       }
       dispatched = true;
       // The missing executable has no controller; every Node command records its own receipt.
-      expectedControllers = command.argv[0] === process.execPath ? (command.parallel ? 2 : 1) : 0;
+      expectedControllers = missing ? 0 : parallel ? 2 : 1;
       behaviorTimer = setTimeout(
         () => abort.abort(new Error("Fixture behavior deadline expired")),
-        timeoutMs,
+        deadline,
       );
+      const argv = missing
+        ? [path.join(fixture.root, "missing-native")]
+        : [process.execPath, "-e", controllerScript(fixture, script)];
+      const command = { argv, timeout, parallel };
       fs.writeFileSync(`${fixture.request}.tmp`, JSON.stringify(command));
       fs.renameSync(`${fixture.request}.tmp`, fixture.request);
       return pending;
     },
-    cleanup() {
-      return (cleaning ??= (async () => {
-        clearBehaviorTimer();
-        fs.writeFileSync(fixture.finish, "");
-        if (!dispatched) {
-          abort.abort();
+    async cleanup() {
+      clearBehaviorTimer();
+      fs.writeFileSync(fixture.finish, "");
+      if (!dispatched) {
+        abort.abort();
+      }
+      try {
+        await withTestTimeout(pending, 5000, "Fixture parent did not settle during cleanup");
+      } catch {
+        abort.abort();
+        await withTestTimeout(
+          pending.catch(() => undefined),
+          5000,
+          `Fixture parent did not settle after abort; retaining ${fixture.root}`,
+        );
+      }
+      if (parentPid !== undefined) {
+        expect(isPidAlive(parentPid)).toBe(false);
+      }
+      const receipts = () =>
+        fs.readdirSync(fixture.controllers).filter((file) => file.endsWith(".json"));
+      // The real owner can settle a timeout or spawn failure before any controller starts.
+      if (dispatched && !fs.existsSync(fixture.outcome)) {
+        if (expectedControllers === 0) {
+          throw new Error(`Native launch did not report settlement; retaining ${fixture.root}`);
         }
-        try {
-          await withTestTimeout(pending, 5000, "Fixture parent did not settle during cleanup");
-        } catch {
-          abort.abort();
-          await withTestTimeout(
-            pending.catch(() => undefined),
-            5000,
-            `Fixture parent did not settle after abort; retaining ${fixture.root}`,
-          );
-        }
-        if (parentPid !== undefined) {
-          expect(isPidAlive(parentPid)).toBe(false);
-        }
-        const receipts = () =>
-          fs.readdirSync(fixture.controllers).filter((file) => file.endsWith(".json"));
-        // The real owner can settle a timeout or spawn failure before any controller starts.
-        if (dispatched && !fs.existsSync(fixture.outcome)) {
-          if (expectedControllers === 0) {
-            throw new Error(`Native launch did not report settlement; retaining ${fixture.root}`);
-          }
-          await expect.poll(() => receipts().length, { timeout: 5000 }).toBe(expectedControllers);
-        }
-        for (const receipt of receipts()) {
-          const native: { pid: number; gate: number } = JSON.parse(
-            fs.readFileSync(path.join(fixture.controllers, receipt), "utf8"),
-          );
-          await waitForDead(native.pid, AbortSignal.timeout(NATIVE_CLEANUP_GUARD_MS));
-          await waitForDead(native.gate, AbortSignal.timeout(NATIVE_CLEANUP_GUARD_MS));
-          await expect
-            .poll(() => isChildProcessTreeAlive({ pid: native.gate }), { timeout: 5000 })
-            .toBe(false);
-        }
-        // Do not release, rewrite, or reacquire retained leases here. In particular,
-        // a signal still leaves both rows current until this test's private directory is retired.
-      })());
+        await expect.poll(() => receipts().length, { timeout: 5000 }).toBe(expectedControllers);
+      }
+      for (const receipt of receipts()) {
+        const native: { pid: number; gate: number } = readJson(
+          path.join(fixture.controllers, receipt),
+        );
+        await waitForDead(native.pid, AbortSignal.timeout(NATIVE_CLEANUP_GUARD_MS));
+        await waitForDead(native.gate, AbortSignal.timeout(NATIVE_CLEANUP_GUARD_MS));
+        await expect
+          .poll(() => isChildProcessTreeAlive({ pid: native.gate }), { timeout: 5000 })
+          .toBe(false);
+      }
+      // Retire the private directory without releasing still-current signal leases.
     },
   };
 }
@@ -222,23 +201,6 @@ const readJson = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
 const expectEffect = (fixture: ReturnType<typeof setup>) =>
   expect.poll(() => fs.existsSync(fixture.effect), { timeout: 5000 }).toBe(true);
 
-function runNative(
-  prepared: ReturnType<typeof startParent>,
-  script: string,
-  { timeout = 10000, deadline = 15000, parallel = false, missing = false } = {},
-) {
-  return prepared.run(
-    {
-      argv: missing
-        ? [path.join(prepared.fixture.root, "missing-native")]
-        : [process.execPath, "-e", controllerScript(prepared.fixture, script)],
-      timeout,
-      parallel,
-    },
-    deadline,
-  );
-}
-
 function controllerScript(fixture: ReturnType<typeof setup>, script: string): string {
   return `
     const fs=require("node:fs");
@@ -267,7 +229,7 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
       async (loss) => {
         const prepared = parent();
         const { fixture } = prepared;
-        const pending = runNative(prepared, "setInterval(()=>{},10);", {
+        const pending = prepared.run("setInterval(()=>{},10);", {
           timeout: 15000,
           deadline: 20000,
         });
@@ -292,8 +254,7 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
           expect(fs.existsSync(fixture.effect)).toBe(false);
           fs.writeFileSync(fixture.finish, "");
           await expectEffect(fixture);
-          // Release is possible only after the recorded gate AND its actual native
-          // lineage disappear. No absent PID or killed parent alone certifies this.
+          // Release requires both the recorded gate and its native lineage to disappear.
           for (const root of [fixture.a, fixture.b]) {
             await expect
               .poll(
@@ -334,13 +295,12 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
       async (name, script, expected) => {
         const prepared = parent();
         const fixture = prepared.fixture;
-        const result = await runNative(prepared, script, {
+        const result = await prepared.run(script, {
           timeout: name === "timeout" ? 1000 : 10000,
           missing: name === "missing binary",
         });
         if (name === "signal") {
-          // The shared runner deliberately marks a child-requested signal uncertain.
-          // Do not convert it to a settled native failure or release retained roots.
+          // A child-requested signal stays uncertain and must retain both roots.
           expect(result).toMatchObject({
             code: 1,
             stderr: expect.stringContaining(
@@ -364,13 +324,9 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
     it("serializes real concurrent reads under one retained executor", async () => {
       const prepared = parent();
       const fixture = prepared.fixture;
-      const settled = await runNative(
-        prepared,
-        'setTimeout(()=>process.stdout.write("read"),30);',
-        {
-          parallel: true,
-        },
-      );
+      const settled = await prepared.run('setTimeout(()=>process.stdout.write("read"),30);', {
+        parallel: true,
+      });
       expect(settled.code, settled.stderr).toBe(0);
       expect(readJson(fixture.outcome)).toEqual([
         expect.objectContaining({ code: 0, stdout: "read" }),

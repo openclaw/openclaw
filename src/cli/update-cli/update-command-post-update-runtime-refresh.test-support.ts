@@ -25,23 +25,34 @@ export function registerCurrentCoreRuntimeRefreshTests(
   fixture: () => FinishUpdateParams,
   mocks: RuntimeRefreshMocks,
 ) {
-  function currentCore() {
+  function currentCore(changed = false, order: string[] = [], finalReadError?: string) {
     const params = fixture();
     params.coreAlreadyCurrent = true;
     params.preManagedServiceStop!.stopped = false;
     params.result.status = "skipped";
     params.result.reason = "already-current";
     params.result.before = params.result.after;
+    mocks.converge.mockImplementation(
+      async (input: {
+        result: FinishUpdateParams["result"];
+        beforeDoctor?: () => Promise<void>;
+      }) => {
+        order.push("converge");
+        if (finalReadError) {
+          await input.beforeDoctor?.();
+          mocks.readService.mockRejectedValueOnce(new Error(finalReadError));
+        }
+        return {
+          resultWithPostUpdate: {
+            ...input.result,
+            postUpdate: { plugins: { status: "ok", changed } },
+          },
+          postUpdateConfigSnapshot: params.configSnapshot,
+        };
+      },
+    );
     return params;
   }
-  const converged = (
-    params: FinishUpdateParams,
-    result: FinishUpdateParams["result"],
-    changed: boolean,
-  ) => ({
-    resultWithPostUpdate: { ...result, postUpdate: { plugins: { status: "ok", changed } } },
-    postUpdateConfigSnapshot: params.configSnapshot,
-  });
 
   it.each([
     { mode: "refresh", changed: false, activate: true },
@@ -54,7 +65,8 @@ export function registerCurrentCoreRuntimeRefreshTests(
   ] as const)(
     "activates current-core runtime refresh exactly once ($mode, changed=$changed)",
     async ({ mode, changed, activate }) => {
-      const params = currentCore();
+      const order: string[] = [];
+      const params = currentCore(changed, order);
       params.mutationStarted = false;
       params.serviceRuntimeRefreshRequired = mode !== "healthy" && mode !== "operator-restart";
       params.packageUpdateNodeRunner = "/supported-node/bin/node";
@@ -68,7 +80,6 @@ export function registerCurrentCoreRuntimeRefreshTests(
         params.preManagedServiceStop!.serviceMutationAllowed = false;
         params.preManagedServiceStop!.serviceMutationSkipMessage = `System-scope Gateway requires an operator restart. Run: ${restartCommand}`;
       }
-      const order: string[] = [];
       mocks.readService.mockResolvedValue({
         installed: true,
         loadState: { status: "loaded" },
@@ -93,10 +104,6 @@ export function registerCurrentCoreRuntimeRefreshTests(
           refreshDefinition: true,
         };
       });
-      mocks.converge.mockImplementation(async (input: { result: FinishUpdateParams["result"] }) => {
-        order.push("converge");
-        return converged(params, input.result, changed);
-      });
       mocks.restart.mockImplementation(async () => {
         order.push("restart");
         return "ok";
@@ -120,18 +127,8 @@ export function registerCurrentCoreRuntimeRefreshTests(
   );
 
   it("terminalizes a failed final native read after current-core plugin parking", async () => {
-    const params = currentCore();
+    const params = currentCore(true, [], "final native query failed");
     mocks.stop.mockResolvedValue({ ...params.preManagedServiceStop!, stopped: true });
-    mocks.converge.mockImplementation(
-      async (convergence: {
-        result: FinishUpdateParams["result"];
-        beforeDoctor?: () => Promise<void>;
-      }) => {
-        await convergence.beforeDoctor?.();
-        mocks.readService.mockRejectedValueOnce(new Error("final native query failed"));
-        return converged(params, convergence.result, true);
-      },
-    );
     await expect(finishUpdate(params)).rejects.toMatchObject({
       exitCode: 1,
       result: {

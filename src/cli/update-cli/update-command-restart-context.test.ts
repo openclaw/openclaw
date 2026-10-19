@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createConfigFileSnapshot } from "../../config/io.snapshot-shared.js";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
@@ -42,18 +42,7 @@ function prepare(input: Partial<Parameters<typeof prepareUpdateRestart>[0]>) {
       assertCurrent: () => {},
       ...input,
     },
-    createConfigFileSnapshot({
-      path: "/managed/state/openclaw.json",
-      exists: true,
-      raw: "{}",
-      parsed: {},
-      sourceConfig: {},
-      runtimeConfig: {},
-      valid: true,
-      issues: [],
-      warnings: [],
-      legacyIssues: [],
-    }),
+    createTestConfigSnapshot({}, {}, "/managed/state/openclaw.json"),
   );
 }
 

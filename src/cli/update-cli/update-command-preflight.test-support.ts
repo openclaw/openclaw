@@ -32,6 +32,8 @@ type UpdatePreflightFixture = {
 export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
   const latestRun = () => f.listUpdateRuns({ limit: 1 })[0];
   const containingStep = (step: object) => expect.arrayContaining([expect.objectContaining(step)]);
+  const expectLatestStep = (step: object) =>
+    expect(latestRun()?.steps).toEqual(containingStep(step));
   const diskSpace = (bavail: number) =>
     vi.spyOn(fsSync, "statfsSync").mockReturnValue(f.statfsFixture({ bavail, bsize: 1024 * 1024 }));
 
@@ -55,13 +57,11 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
       output: expect.stringContaining("Low disk space near"),
       history: historyBefore,
     });
-    expect(latestRun()?.steps).toEqual(
-      containingStep({
-        step: "warning:disk-space-preflight",
-        status: "completed",
-        detail: expect.stringContaining("256 MiB available"),
-      }),
-    );
+    expectLatestStep({
+      step: "warning:disk-space-preflight",
+      status: "completed",
+      detail: expect.stringContaining("256 MiB available"),
+    });
     f.expectPackageInstallSpec("openclaw@9999.0.0");
     const preflightParams = vi
       .mocked(f.fetchNpmPackageTargetStatus)
@@ -88,13 +88,11 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
     f.retainUpdateRuntime.mockImplementationOnce(async ({ assertCurrent, installTarget }) => {
       assertCurrent();
       expect(installTarget).toMatchObject({ manager: "npm", packageRoot });
-      expect(latestRun()?.steps).toEqual(
-        containingStep({
-          step: "updater-runtime-retention",
-          status: "in_progress",
-          startedAtMs: expect.any(Number),
-        }),
-      );
+      expectLatestStep({
+        step: "updater-runtime-retention",
+        status: "in_progress",
+        startedAtMs: expect.any(Number),
+      });
       return retention;
     });
 
@@ -187,9 +185,7 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
       exitCode: 1,
       snapshotCapacity: expect.objectContaining({
         pluginBytes: null,
-        candidates: expect.arrayContaining([
-          expect.objectContaining({ availableBytes: 32 * 1024 * 1024 }),
-        ]),
+        candidates: containingStep({ availableBytes: 32 * 1024 * 1024 }),
       }),
     });
     expect(f.lastWriteJsonCall()).toMatchObject({
