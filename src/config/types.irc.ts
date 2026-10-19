@@ -3,6 +3,7 @@ import type {
   CommonChannelMessagingConfig,
   MultiAccountChannelConfig,
 } from "./types.channel-messaging-common.js";
+import type { SecretInput } from "./types.secrets.js";
 
 export type IrcAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPatterns"> & {
   /** IRC server hostname (example: irc.example.com). */
@@ -18,7 +19,7 @@ export type IrcAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPatter
   /** IRC USER field realname (default: OpenClaw). */
   realname?: string;
   /** Optional IRC server password (sensitive). */
-  password?: string;
+  password?: SecretInput;
   /** Optional file path containing IRC server password. */
   passwordFile?: string;
   /** Optional NickServ identify/register settings. */
@@ -28,7 +29,7 @@ export type IrcAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPatter
     /** NickServ service nick (default: NickServ). */
     service?: string;
     /** NickServ password (sensitive). */
-    password?: string;
+    password?: SecretInput;
     /** Optional file path containing NickServ password. */
     passwordFile?: string;
     /** If true, send NickServ REGISTER on connect. */
