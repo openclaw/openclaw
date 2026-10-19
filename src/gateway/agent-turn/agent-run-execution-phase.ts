@@ -15,11 +15,6 @@ import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-p
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
-import {
-  resolveReplySourceTurnId,
-  setChannelSourceTurnId,
-  setChannelSourceTurnSameThreadRequired,
-} from "../../auto-reply/reply/source-turn-id.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { adoptExecRequestSession } from "../../infra/exec-request-context.js";
@@ -60,6 +55,7 @@ import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-exec
 import { prepareAgentRunExecutionIdentityFacts } from "./agent-run-execution-lineage.js";
 import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 import { dispatchAgentRunWithMedia } from "./agent-run-media.js";
+import { buildAgentRunSourceContext } from "./agent-run-source-context.js";
 import {
   resolveGatewayPluginSubagentToolPolicy,
   settleUnstartedGatewayFollowup,
@@ -362,35 +358,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           runId: params.runId,
           sessionEntry: params.sessionEntry,
         });
-        const restartRecoveryChannelContext = restartRecoveryContext?.channel;
-        const runContext = {
-          messageChannel:
-            restartRecoveryContext?.messageChannel ?? params.delivery.originMessageChannel,
-          accountId:
-            restartRecoveryChannelContext?.requesterAccountId ?? params.delivery.resolvedAccountId,
-          senderId: restartRecoveryChannelContext?.requesterSenderId,
-          groupId: params.groupId,
-          groupChannel: params.groupChannel,
-          groupSpace: params.groupSpace,
-          currentChannelId: restartRecoveryChannelContext?.currentChannelId,
-          currentThreadTs:
-            restartRecoveryChannelContext?.currentThreadTs ??
-            (prepared.resolvedThreadId != null ? String(prepared.resolvedThreadId) : undefined),
-        };
-        setChannelSourceTurnId(
-          runContext,
-          resolveReplySourceTurnId({
-            sourceTurnId: restartRecoveryChannelContext?.sourceTurnId,
-            admissionRunId: params.runId,
-            ingressProvider: runContext.messageChannel,
-            entry: params.sessionEntry,
-          }),
-        );
-        setChannelSourceTurnSameThreadRequired(
-          runContext,
-          restartRecoveryChannelContext?.sameChannelThreadRequired,
-        );
-
+        const runContext = buildAgentRunSourceContext(params, restartRecoveryContext);
         const executionIdentitySpawnFacts = prepareAgentRunExecutionIdentityFacts(
           params,
           runContext,
@@ -488,6 +456,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 lane: params.request.lane,
                 swarmExecutionLane: params.swarmExecutionLane,
                 modelRun: params.request.modelRun === true,
+                streamParams: params.request.modelRunRequestedOverrides,
                 promptMode: params.request.promptMode,
                 extraSystemPrompt: params.request.extraSystemPrompt,
                 bootstrapContextMode: params.request.bootstrapContextMode,

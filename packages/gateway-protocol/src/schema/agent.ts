@@ -318,6 +318,12 @@ export const AgentParamsSchema = closedObject({
   // bundle MCP resources after the run instead of keeping them warm.
   cleanupBundleMcpOnRunEnd: Type.Optional(Type.Boolean()),
   modelRun: Type.Optional(Type.Boolean()),
+  modelRunRequestedOverrides: Type.Optional(
+    closedObject({
+      maxTokens: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000_000 })),
+      temperature: Type.Optional(Type.Number({ minimum: 0, maximum: 2 })),
+    }),
+  ),
   promptMode: Type.Optional(stringLiteralUnion(["full", "minimal", "none"])),
   extraSystemPrompt: Type.Optional(Type.String()),
   bootstrapContextMode: Type.Optional(stringLiteralUnion(["full", "lightweight"])),
