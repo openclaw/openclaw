@@ -235,19 +235,6 @@ function tabCloseHasTransparentBackground(tab: Locator) {
   });
 }
 
-async function waitForPanelGeometry(page: Page) {
-  await page.locator(".sidebar-region").evaluate(async (element) => {
-    const animations = element
-      .getAnimations({ subtree: true })
-      .filter(
-        (animation) =>
-          animation.playState === "running" &&
-          Number.isFinite(animation.effect?.getComputedTiming().endTime),
-      );
-    await Promise.all(animations.map((animation) => animation.finished.catch(() => undefined)));
-  });
-}
-
 async function dragDivider(page: Page, divider: Locator, axis: "x" | "y", delta: number) {
   await waitForPanelGeometry(page);
   const box = await divider.boundingBox();
