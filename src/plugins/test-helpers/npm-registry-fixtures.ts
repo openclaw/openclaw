@@ -1,39 +1,39 @@
-// Real npm package and loopback registry fixtures for plugin install tests.
 import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { clean as cleanSemver } from "semver";
+import { clean } from "semver";
 import type { Deferred } from "../../shared/deferred.js";
 
-type PackedVersion = {
-  archive: Buffer;
+type PackageMetadata = {
   dependencies?: Record<string, string>;
-  integrity: string;
   openclaw?: Record<string, unknown>;
   optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+};
+
+type PackedVersion = PackageMetadata & {
+  archive: Buffer;
+  integrity: string;
   shasum: string;
   tarballName: string;
   version: string;
 };
 
-type PackPluginParams = {
-  dependencies?: Record<string, string>;
+type PackPluginParams = PackageMetadata & {
   hookName?: string;
   indexJs?: string;
   manifest?: Record<string, unknown>;
-  openclaw?: Record<string, unknown>;
-  optionalDependencies?: Record<string, string>;
   packageName: string;
-  peerDependencies?: Record<string, string>;
-  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
   pluginId?: string;
   version?: string;
 };
+
+type RegistryInput = PackPluginParams & { latest?: string; omitIntegrity?: boolean };
+type DownloadBarrier = { requested: Deferred; released: Deferred };
 
 export type RegistryPackage = {
   latest: string;
@@ -54,13 +54,14 @@ export async function packPlugins(
   for (const params of packages) {
     const version = params.version ?? "1.0.0";
     const packageDir = path.join(rootDir, `package-${params.packageName}-${version}`);
+    const distDir = path.join(packageDir, "dist");
     const peerDependenciesMeta = params.peerDependencies
       ? (params.peerDependenciesMeta ??
         Object.fromEntries(
           Object.keys(params.peerDependencies).map((name) => [name, { optional: true }]),
         ))
       : undefined;
-    await fs.mkdir(path.join(packageDir, "dist"), { recursive: true });
+    await fs.mkdir(distDir, { recursive: true });
     await writeJson(path.join(packageDir, "package.json"), {
       name: params.packageName,
       version,
@@ -91,35 +92,22 @@ export async function packPlugins(
         ...params.manifest,
       });
     }
-    await fs.writeFile(
-      path.join(packageDir, "dist", "index.js"),
-      params.indexJs ?? "export {};\n",
-      "utf8",
-    );
+    await fs.writeFile(path.join(distDir, "index.js"), params.indexJs ?? "export {};\n", "utf8");
     prepared.push({ params, packageDir, peerDependenciesMeta, version });
   }
 
-  execFileSync(
-    "npm",
-    [
-      "pack",
-      "--ignore-scripts",
-      "--pack-destination",
-      rootDir,
-      ...prepared.map(({ packageDir }) => packageDir),
-    ],
-    { cwd: rootDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
+  const packageDirs = prepared.map(({ packageDir }) => packageDir);
+  execFileSync("npm", ["pack", "--ignore-scripts", "--pack-destination", rootDir, ...packageDirs], {
+    cwd: rootDir,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   const versions: PackedVersion[] = [];
   const packedFiles = new Set(await fs.readdir(rootDir));
   for (const { params, peerDependenciesMeta, version } of prepared) {
-    // npm 12 keys JSON output by name, which collapses two versions of one package.
-    // Archive names can use the raw or normalized version depending on npm.
-    const packedVersion = expectDefined(
-      cleanSemver(version, { loose: true }),
-      "packed fixture version",
-    );
-    const tarballNames = [...new Set([version, packedVersion])]
+    // npm 12 collapses versions in JSON output; archive names may use raw or normalized versions.
+    const normalized = expectDefined(clean(version, { loose: true }), "packed fixture version");
+    const tarballNames = [...new Set([version, normalized])]
       .map((value) => `${params.packageName.replace(/^@/, "").replaceAll("/", "-")}-${value}.tgz`)
       .filter((name) => packedFiles.has(name));
     if (tarballNames.length !== 1) {
@@ -145,10 +133,7 @@ export async function packPlugins(
 
 export async function registryPackages(
   rootDir: string,
-  packages: [
-    PackPluginParams & { latest?: string; omitIntegrity?: boolean },
-    ...(PackPluginParams & { latest?: string; omitIntegrity?: boolean })[],
-  ],
+  packages: [RegistryInput, ...RegistryInput[]],
 ): Promise<RegistryPackage[]> {
   const versions = await packPlugins(rootDir, packages);
   return packages.map((params, index) => ({
@@ -162,7 +147,7 @@ export async function registryPackages(
 export async function startStaticRegistry(
   packages: RegistryPackage[],
   servers: http.Server[],
-  downloadBarrier?: { requested: Deferred; released: Deferred },
+  downloadBarrier?: DownloadBarrier,
 ): Promise<string> {
   return startRegistry(packages, servers, { downloadBarrier });
 }
@@ -170,14 +155,9 @@ export async function startStaticRegistry(
 async function startRegistry(
   packages: RegistryPackage[],
   servers: http.Server[],
-  {
-    downloadBarrier,
-    nextLatest,
-  }: {
-    downloadBarrier?: { requested: Deferred; released: Deferred };
-    nextLatest?: string;
-  },
+  options: { downloadBarrier?: DownloadBarrier; nextLatest?: string },
 ): Promise<string> {
+  const { downloadBarrier, nextLatest } = options;
   const packageEntries = packages.map((pkg) => ({
     ...pkg,
     encodedPackageName: encodeURIComponent(pkg.packageName).replace("%40", "@"),
