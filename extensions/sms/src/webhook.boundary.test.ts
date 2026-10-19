@@ -1,10 +1,5 @@
 import { createHmac } from "node:crypto";
-import {
-  request,
-  type ClientRequest,
-  type IncomingHttpHeaders,
-  type RequestListener,
-} from "node:http";
+import { request, type ClientRequest, type RequestListener } from "node:http";
 import { createConnection } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -14,7 +9,7 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { postRawWebhook, withServer } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { startSmsGatewayAccount } from "./gateway.js";
 import type { SmsChannelRuntime } from "./inbound.js";
 import type { ResolvedSmsAccount } from "./types.js";
@@ -28,15 +23,12 @@ import {
 const enqueueSmsIngress = vi.hoisted(() =>
   vi.fn(async (_form: Record<string, string>) => ({ kind: "accepted" as const, duplicate: false })),
 );
-const startSmsIngress = vi.hoisted(() => vi.fn());
-const pauseSmsIngress = vi.hoisted(() => vi.fn(async () => {}));
-const stopSmsIngress = vi.hoisted(() => vi.fn(async () => {}));
 const createSmsIngressSpool = vi.hoisted(() =>
   vi.fn(() => ({
     enqueue: enqueueSmsIngress,
-    start: startSmsIngress,
-    pause: pauseSmsIngress,
-    stop: stopSmsIngress,
+    start: vi.fn(),
+    pause: vi.fn(async () => {}),
+    stop: vi.fn(async () => {}),
   })),
 );
 
@@ -53,36 +45,17 @@ vi.mock("node:timers", async (importOriginal) => {
   };
 });
 
-type HttpResult = {
-  statusCode: number;
-  headers: IncomingHttpHeaders;
-  body: string;
-};
-
-type HeldRequest = {
-  request: ClientRequest;
-  finish: () => void;
-  result: Promise<HttpResult>;
-};
-
-function readResponse(req: ClientRequest): Promise<HttpResult> {
+function readResponse(req: ClientRequest): Promise<number> {
   return new Promise((resolve, reject) => {
     req.once("response", (res) => {
-      const chunks: Buffer[] = [];
-      res.on("data", (chunk: Buffer) => chunks.push(chunk));
-      res.once("end", () => {
-        resolve({
-          statusCode: res.statusCode ?? 0,
-          headers: res.headers,
-          body: Buffer.concat(chunks).toString("utf8"),
-        });
-      });
+      res.resume();
+      res.once("end", () => resolve(res.statusCode ?? 0));
     });
     req.once("error", reject);
   });
 }
 
-function holdIncompletePost(port: number, index: number): HeldRequest {
+function holdIncompletePost(port: number, index: number) {
   const body = new URLSearchParams({ incomplete: String(index) }).toString();
   const req = request({
     host: "127.0.0.1",
@@ -103,24 +76,6 @@ function holdIncompletePost(port: number, index: number): HeldRequest {
     finish: () => req.end(body.slice(1)),
     result,
   };
-}
-
-function postForm(params: { port: number; body: string; signature: string }): Promise<HttpResult> {
-  const req = request({
-    host: "127.0.0.1",
-    port: params.port,
-    path: "/webhooks/sms",
-    method: "POST",
-    agent: false,
-    headers: {
-      "content-type": "application/x-www-form-urlencoded",
-      "content-length": Buffer.byteLength(params.body),
-      "x-twilio-signature": params.signature,
-    },
-  });
-  const result = readResponse(req);
-  req.end(params.body);
-  return result;
 }
 
 function sendIncompleteRawPost(
@@ -164,16 +119,34 @@ function computeTwilioSignature(params: {
   return createHmac("sha1", params.account.authToken).update(input).digest("base64");
 }
 
-describe("SMS webhook real route boundary", () => {
-  afterEach(() => {
-    enqueueSmsIngress.mockReset();
-    enqueueSmsIngress.mockResolvedValue({ kind: "accepted", duplicate: false });
-    startSmsIngress.mockClear();
-    pauseSmsIngress.mockClear();
-    stopSmsIngress.mockClear();
-    createSmsIngressSpool.mockClear();
-  });
+beforeEach(() => {
+  enqueueSmsIngress.mockReset();
+  enqueueSmsIngress.mockResolvedValue({ kind: "accepted", duplicate: false });
+  advanceSmsTestAccountId();
+});
 
+function createHandler(delivery?: ReturnType<typeof createSmsTestDeliveryRecorder>) {
+  return createSmsWebhookHandler({
+    cfg: {},
+    account: createSmsTestAccount(),
+    ingress: { enqueue: enqueueSmsIngress },
+    ...(delivery ? { delivery } : {}),
+  });
+}
+
+function expectClosed(
+  result: Awaited<ReturnType<typeof postRawWebhook>>,
+  status: string,
+  body: string,
+) {
+  expect(result.statusLine).toBe(`HTTP/1.1 ${status}`);
+  expect(result.headers.connection).toBe("close");
+  expect(result.body).toBe(body);
+  expect(result.closedByServer).toBe(true);
+  expect(enqueueSmsIngress).not.toHaveBeenCalled();
+}
+
+describe("SMS webhook real route boundary", () => {
   it("closes overflow uploads and recovers capacity for a signed callback", async () => {
     const account = createSmsTestAccount({ accountId: "boundary" });
     const registry = createEmptyPluginRegistry();
@@ -209,7 +182,7 @@ describe("SMS webhook real route boundary", () => {
         }
       });
     };
-    const held: HeldRequest[] = [];
+    const held: ReturnType<typeof holdIncompletePost>[] = [];
 
     try {
       await withServer(handler, async (baseUrl) => {
@@ -238,7 +211,7 @@ describe("SMS webhook real route boundary", () => {
             pending.finish();
           }
           const released = await Promise.all(held.map((pending) => pending.result));
-          expect(released.every((result) => result.statusCode === 403)).toBe(true);
+          expect(released.every((statusCode) => statusCode === 403)).toBe(true);
 
           const form = {
             AccountSid: account.accountSid,
@@ -248,14 +221,18 @@ describe("SMS webhook real route boundary", () => {
             MessageSid: "SM00000000000000000000000000000985",
           };
           const body = new URLSearchParams(form).toString();
-          const admitted = await postForm({
-            port,
+          const admitted = await fetch(`${baseUrl}/webhooks/sms`, {
+            method: "POST",
             body,
-            signature: computeTwilioSignature({ account, form }),
+            headers: {
+              "content-type": "application/x-www-form-urlencoded",
+              "x-twilio-signature": computeTwilioSignature({ account, form }),
+            },
           });
 
-          expect(admitted.statusCode).toBe(200);
-          expect(admitted.headers["x-openclaw-delivery-accepted"]).toBe("durable");
+          expect(admitted.status).toBe(200);
+          expect(admitted.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
+          await admitted.text();
           expect(enqueueSmsIngress).toHaveBeenCalledOnce();
           expect(enqueueSmsIngress).toHaveBeenCalledWith(form);
         } finally {
@@ -278,20 +255,9 @@ describe("SMS webhook real route boundary", () => {
 });
 
 describe("createSmsWebhookHandler over a real connection", () => {
-  beforeEach(() => {
-    enqueueSmsIngress.mockReset();
-    enqueueSmsIngress.mockResolvedValue({ kind: "accepted", duplicate: false });
-    advanceSmsTestAccountId();
-  });
-
   it("delivers HTTP 413 over the wire and closes for an oversized callback body", async () => {
     const delivery = createSmsTestDeliveryRecorder();
-    const handler = createSmsWebhookHandler({
-      cfg: {},
-      account: createSmsTestAccount(),
-      ingress: { enqueue: enqueueSmsIngress },
-      delivery,
-    });
+    const handler = createHandler(delivery);
     await withServer(
       (req, res) => {
         void handler(req, res);
@@ -307,22 +273,14 @@ describe("createSmsWebhookHandler over a real connection", () => {
           },
         });
 
-        expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
-        expect(result.headers.connection).toBe("close");
-        expect(result.body).toBe("Payload too large");
-        expect(result.closedByServer).toBe(true);
+        expectClosed(result, "413 Payload Too Large", "Payload too large");
         expect(delivery.record).not.toHaveBeenCalled();
-        expect(enqueueSmsIngress).not.toHaveBeenCalled();
       },
     );
   });
 
   it("delivers a retryable 500 before closing a timed-out callback upload", async () => {
-    const handler = createSmsWebhookHandler({
-      cfg: {},
-      account: createSmsTestAccount(),
-      ingress: { enqueue: enqueueSmsIngress },
-    });
+    const handler = createHandler();
     let routeError: unknown;
     const requestReceived = createDeferred<void>();
     await withServer(
@@ -355,11 +313,7 @@ describe("createSmsWebhookHandler over a real connection", () => {
           const result = await resultPromise;
 
           expect(routeError).toBeUndefined();
-          expect(result.statusLine).toBe("HTTP/1.1 500 Internal Server Error");
-          expect(result.headers.connection).toBe("close");
-          expect(result.body).toBe("Internal Server Error");
-          expect(result.closedByServer).toBe(true);
-          expect(enqueueSmsIngress).not.toHaveBeenCalled();
+          expectClosed(result, "500 Internal Server Error", "Internal Server Error");
         } finally {
           vi.useRealTimers();
         }
