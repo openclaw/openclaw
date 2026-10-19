@@ -112,7 +112,7 @@ function mountSkills(
   };
   return {
     page,
-    find: <T extends Element = HTMLElement>(selector: string) => page.querySelector<T>(selector),
+    find: page.querySelector.bind(page),
     findAll: (selector: string) => page.querySelectorAll(selector),
     button: (label: string) => findButton(page, label),
     waitForText: (text: string) => waitForFast(() => expect(page.textContent).toContain(text)),

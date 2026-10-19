@@ -94,9 +94,11 @@ it("keeps root and include writers outside cleanup and closes captured source ad
 });
 
 it("releases partial source locks before waiting on an inverted include writer", async () => {
-  const [root, first, second] = await Promise.all(
-    ["root.json", "a.json", "b.json"].map((name) => createSourceFile(name)),
-  );
+  const [root, first, second] = await Promise.all([
+    createSourceFile("root.json"),
+    createSourceFile("a.json"),
+    createSourceFile("b.json"),
+  ]);
   // This peer participates through the sidecar, as another config process would.
   const peer = await fileLocks.acquireFileLock(second, lockOptions);
   const firstAcquired = createDeferred();
@@ -197,7 +199,9 @@ it("keeps caller revocation live while releasing its source locks", async () => 
 });
 
 it("refuses a parent alias redirected after config source ownership begins", async () => {
-  const [original, replacement, alias] = ["original", "replacement", "active"].map(sourcePath);
+  const original = sourcePath("original");
+  const replacement = sourcePath("replacement");
+  const alias = sourcePath("active");
   await Promise.all([original, replacement].map((directory) => fs.mkdir(directory)));
   await fs.writeFile(path.join(original, "config.json"), "original");
   await fs.writeFile(path.join(replacement, "config.json"), "replacement");

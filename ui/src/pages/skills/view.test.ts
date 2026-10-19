@@ -55,25 +55,28 @@ function texts(container: Element, selector: string) {
   return [...container.querySelectorAll(selector)].map(normalizeText);
 }
 
-function createView(overrides: Parameters<typeof createProps>[0] = {}, attachAfterRender = false) {
+async function createView(
+  overrides: Parameters<typeof createProps>[0] = {},
+  attachAfterRender = false,
+) {
   const container = document.createElement("div");
   if (!attachAfterRender) {
     document.body.append(container);
   }
   dialogRestores.push(() => container.remove());
-  renderView(container, overrides);
+  const rendered = renderView(container, overrides);
   if (attachAfterRender) {
     document.body.append(container);
   }
-  return Promise.resolve({
+  await rendered;
+  return {
     container,
-    find: <T extends Element = HTMLElement>(selector: string) =>
-      container.querySelector<T>(selector),
+    find: container.querySelector.bind(container),
     all: <T extends Element = HTMLElement>(selector: string) => [
       ...container.querySelectorAll<T>(selector),
     ],
     render: (next: Parameters<typeof createProps>[0] = {}) => renderView(container, next),
-  });
+  };
 }
 
 function skillReport(skills: SkillStatusReport["skills"]): SkillStatusReport {
@@ -359,7 +362,7 @@ it("opens detail dialogs and routes ClawHub actions", async () => {
     onClawHubInstall,
   });
 
-  const resultItem = find<HTMLElement>(".plugin-catalog-card");
+  const resultItem = find(".plugin-catalog-card");
   const detailButton = resultItem?.querySelector<HTMLButtonElement>(
     ".plugin-catalog-card__primary-link",
   );

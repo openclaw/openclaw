@@ -161,7 +161,7 @@ describe("googlechat setup", () => {
       },
       patch: {
         serviceAccountFile: "/tmp/googlechat.json",
-        audienceType: "app-url",
+        audienceType: "app-url" as const,
         audience: "https://example.com/googlechat",
         webhookPath: "/googlechat",
         webhookUrl: "https://example.com/googlechat/hook",

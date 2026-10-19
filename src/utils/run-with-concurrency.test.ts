@@ -131,7 +131,7 @@ it("retains the submitted factories when the caller changes its task array", asy
 });
 
 it("preserves task order with bounded worker count", async () => {
-  const jobs = [1, 2, 3, 4].map(heldTask);
+  const jobs = [heldTask(1), heldTask(2), heldTask(3), heldTask(4)] as const;
   const [first, second, third, fourth] = jobs;
   const resultPromise = runTasksWithConcurrency({ tasks: jobs.map((job) => job.run), limit: 2 });
   await wait(Promise.all([first.started, second.started]));

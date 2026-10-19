@@ -12,6 +12,7 @@ import {
   syncCachePayload,
 } from "./doctor-contract-api.test-support.js";
 import {
+  type MatrixSyncCacheRecord,
   openMatrixSyncCacheStoreOptions,
   writeMatrixSyncCacheStateToStore,
 } from "./src/matrix/client/sync-cache-state.js";
@@ -133,7 +134,9 @@ it.each([true, false])(
     await sealMatrixIdbSnapshotOwnerGeneration(root, generation, stateRuntime);
     const { openPluginStateKeyedStore } = createContext();
     const snapshotStore = openPluginStateKeyedStore(openMatrixIdbSnapshotStoreOptions(root));
-    const syncStore = openPluginStateKeyedStore(openMatrixSyncCacheStoreOptions(root));
+    const syncStore = openPluginStateKeyedStore<MatrixSyncCacheRecord>(
+      openMatrixSyncCacheStoreOptions(root),
+    );
     await writeMatrixSyncCacheStateToStore({
       storageRootDir: root,
       store: syncStore,

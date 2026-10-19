@@ -579,7 +579,9 @@ it.each`
     fixture.dispatchDone.resolve(outcome.input);
   }
   const result = await delivery;
-  expect(result).toMatchObject(outcome.expected);
+  const { disposition, ...expected } = outcome.expected;
+  expect(result).toMatchObject(expected);
+  expect(result.disposition).toBe(disposition);
   if (outcome.preserve) {
     expect(fixture.read).not.toHaveBeenCalled();
     if (outcome.input instanceof Error) {

@@ -131,7 +131,7 @@ describe("queue overflow protection", () => {
   });
 
   it("skips in-flight items when selecting drop victims", () => {
-    const [m1, m2, m3, m4] = ["m1", "m2", "m3", "m4"].map((id) => ({ id }));
+    const [m1, m2, m3, m4] = [{ id: "m1" }, { id: "m2" }, { id: "m3" }, { id: "m4" }] as const;
     const queue = createQueue([m1, m2, m3, m4], 2);
     expect(dropItems(queue, new Set([m1])).dropped).toEqual(["m2", "m3"]);
     expect(queue.items).toEqual([m1, m4]);
@@ -139,7 +139,7 @@ describe("queue overflow protection", () => {
 
   it("skips protected items when selecting drop victims", () => {
     const protectedItem: Item = { id: "priority", protected: true };
-    const [normalA, normalB, normalC] = ["a", "b", "c"].map((id) => ({ id }));
+    const [normalA, normalB, normalC] = [{ id: "a" }, { id: "b" }, { id: "c" }] as const;
     const queue = createQueue([protectedItem, normalA, normalB, normalC], 3);
     expect(dropItems(queue)).toEqual({ admitted: true, dropped: ["a", "b"] });
     expect(queue.items).toEqual([protectedItem, normalC]);
