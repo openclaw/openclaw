@@ -44,27 +44,20 @@ function captureProgressInsert() {
   vi.spyOn(database.db, "prepare").mockImplementation((sql: string) => {
     const statement = prepare(sql);
     if (sql.startsWith('insert into "outbound_message_progress"')) {
-      const capture = (parameters: SQLInputValue[]) => {
-        captured = { sql, parameters };
+      const handler = {
+        apply(
+          target: (...parameters: SQLInputValue[]) => unknown,
+          receiver: unknown,
+          parameters: SQLInputValue[],
+        ) {
+          captured = { sql, parameters };
+          return Reflect.apply(target, receiver, parameters);
+        },
       };
       const all = statement.all.bind(statement);
-      vi.spyOn(statement, "all").mockImplementation(
-        new Proxy(all, {
-          apply(target, receiver, parameters) {
-            capture(parameters);
-            return Reflect.apply(target, receiver, parameters);
-          },
-        }),
-      );
       const iterate = statement.iterate.bind(statement);
-      vi.spyOn(statement, "iterate").mockImplementation(
-        new Proxy(iterate, {
-          apply(target, receiver, parameters) {
-            capture(parameters);
-            return Reflect.apply(target, receiver, parameters);
-          },
-        }),
-      );
+      vi.spyOn(statement, "all").mockImplementation(new Proxy(all, handler));
+      vi.spyOn(statement, "iterate").mockImplementation(new Proxy(iterate, handler));
     }
     return statement;
   });
@@ -141,19 +134,16 @@ it.skipIf(!connection)(
         const configPath = "/synthetic/openclaw.json";
         const observedJson = '{ "hash": "observed" }';
         const promotedJson = '{"hash":"promoted"}';
+        const patchHealth = (
+          patch: Parameters<typeof patchConfigHealthEntryInDatabase>[2],
+          basis: Parameters<typeof patchConfigHealthEntryInDatabase>[3],
+          now: number,
+        ) => patchConfigHealthEntryInDatabase(remote, configPath, patch, basis, now);
         const readHealthBasis = () =>
           configHealthReadOperations["config.health.read"](undefined, remote).snapshot.basis[
             configPath
           ];
-        expect(
-          patchConfigHealthEntryInDatabase(
-            remote,
-            configPath,
-            { last_known_good_json: observedJson },
-            null,
-            100,
-          ),
-        ).toBe(true);
+        expect(patchHealth({ last_known_good_json: observedJson }, null, 100)).toBe(true);
         const observed = readHealthBasis();
         expect(observed).toEqual({
           lastKnownGoodJson: observedJson,
@@ -162,9 +152,7 @@ it.skipIf(!connection)(
           updatedAtMs: 100,
         });
         expect(
-          patchConfigHealthEntryInDatabase(
-            remote,
-            configPath,
+          patchHealth(
             {
               last_promoted_good_json: promotedJson,
               last_observed_suspicious_signature: "observed-signature",
@@ -191,14 +179,10 @@ it.skipIf(!connection)(
           { ...promoted, lastPromotedGoodJson: null },
           { ...promoted, suspiciousSignature: null },
         ]) {
-          expect(
-            patchConfigHealthEntryInDatabase(remote, configPath, clearHealth, stale, 200),
-          ).toBe(false);
+          expect(patchHealth(clearHealth, stale, 200)).toBe(false);
         }
         expect(readHealthBasis()).toEqual(promoted);
-        expect(
-          patchConfigHealthEntryInDatabase(remote, configPath, clearHealth, promoted, 200),
-        ).toBe(true);
+        expect(patchHealth(clearHealth, promoted, 200)).toBe(true);
         const cleared = readHealthBasis();
         expect(cleared).toEqual({
           lastKnownGoodJson: null,
@@ -206,15 +190,7 @@ it.skipIf(!connection)(
           suspiciousSignature: null,
           updatedAtMs: 200,
         });
-        expect(
-          patchConfigHealthEntryInDatabase(
-            remote,
-            configPath,
-            { last_known_good_json: observedJson },
-            cleared,
-            300,
-          ),
-        ).toBe(true);
+        expect(patchHealth({ last_known_good_json: observedJson }, cleared, 300)).toBe(true);
 
         const input = {
           sessionKey: "agent:main:conformance",
@@ -224,20 +200,18 @@ it.skipIf(!connection)(
           summary: "Created",
           dedupeKey: "conformance-event",
         };
-        const first = runSqliteImmediateTransactionSync(db, () =>
-          recordSessionStateEventInDatabase(db, input, 100),
-        );
+        const recordEvent = (summary: string, now: number) =>
+          runSqliteImmediateTransactionSync(db, () =>
+            recordSessionStateEventInDatabase(db, { ...input, summary }, now),
+          );
+        const heads = () =>
+          remote.query("SELECT last_sequence, updated_at FROM session_state_heads").rows;
+        const first = recordEvent("Created", 100);
         expect(first.row).toMatchObject({ sequence: 1, summary: "Created" });
-        expect(
-          remote.query("SELECT last_sequence, updated_at FROM session_state_heads").rows,
-        ).toEqual([{ last_sequence: 1, updated_at: 100 }]);
-        const duplicate = runSqliteImmediateTransactionSync(db, () =>
-          recordSessionStateEventInDatabase(db, { ...input, summary: "Ignored" }, 200),
-        );
+        expect(heads()).toEqual([{ last_sequence: 1, updated_at: 100 }]);
+        const duplicate = recordEvent("Ignored", 200);
         expect(duplicate).toEqual(first);
-        expect(
-          remote.query("SELECT last_sequence, updated_at FROM session_state_heads").rows,
-        ).toEqual([{ last_sequence: 1, updated_at: 100 }]);
+        expect(heads()).toEqual([{ last_sequence: 1, updated_at: 100 }]);
 
         for (const agentId of ["alpha", "beta"]) {
           recordAgentProvenanceInDatabase(db, {

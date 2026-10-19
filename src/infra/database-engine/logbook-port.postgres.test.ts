@@ -102,15 +102,16 @@ describe.skipIf(!connection)("Logbook PostgreSQL port and exact backup", () => {
     const frameBytes = await fs.readFile(framePath);
     const namespace = `logbook_port_${randomUUID().replaceAll("-", "")}`;
     namespaces.add(namespace);
+    const postgres = { engine: "postgres" as const, db: client, namespace };
+    const common = { descriptor, storeId, assertCurrent };
+    const query = async (sql: string) => (await client.query(sql)).rows;
     let forward;
     {
       using source = openNodeSqliteDatabase(sourcePath, { readOnly: true, readBigInts: true });
       forward = await materializeDatabasePort({
         source: { engine: "sqlite", db: source },
-        destination: { engine: "postgres", db: client, namespace },
-        descriptor,
-        storeId,
-        assertCurrent,
+        destination: postgres,
+        ...common,
       });
     }
     expect(forward.allocations).toEqual(allocations);
@@ -119,11 +120,9 @@ describe.skipIf(!connection)("Logbook PostgreSQL port and exact backup", () => {
       using reverse = openNodeSqliteDatabase(reversePath, { readBigInts: true });
       expect(
         await materializeDatabasePort({
-          source: { engine: "postgres", db: client, namespace },
+          source: postgres,
           destination: { engine: "sqlite", db: reverse },
-          descriptor,
-          storeId,
-          assertCurrent,
+          ...common,
         }),
       ).toEqual(forward);
       expect(reverse.prepare("SELECT name, seq FROM sqlite_sequence ORDER BY name").all()).toEqual([
@@ -145,35 +144,26 @@ describe.skipIf(!connection)("Logbook PostgreSQL port and exact backup", () => {
         .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
         .run(storeId, namespace);
     }
-    const admitted = await admitDatabasePortDescriptor(
-      { engine: "postgres", db: client, namespace },
-      descriptor,
-    );
+    const backup = { client, directory: backupDirectory, profile: "exact" as const, ...common };
+    const admitted = await admitDatabasePortDescriptor(postgres, descriptor);
     const manifest = await exportPostgresBackup({
-      client,
+      ...backup,
       descriptor: admitted,
       anchor: { engine: "postgres", storeId, namespace },
       sourcePath,
-      directory: backupDirectory,
-      profile: "exact",
-      assertCurrent,
     });
     expect(manifest.source).toMatchObject({ owner: "logbook", schemaVersion: 1, storeId });
     expect(manifest.verification).toEqual(forward);
     expect(rows(path.join(backupDirectory, "database.sqlite"), descriptor)).toEqual(snapshot);
     const anchorPath = path.join(directory, "restored-anchor.sqlite");
     const restored = await restorePostgresBackup({
-      client,
-      descriptor,
+      ...backup,
       manifest,
-      directory: backupDirectory,
       anchorPath,
-      profile: "exact",
-      assertCurrent,
     });
     namespaces.add(restored.namespace);
     const { tables, allocations: restoredAllocations } = await inspectDatabasePort(
-      { engine: "postgres", db: client, namespace: restored.namespace },
+      { ...postgres, namespace: restored.namespace },
       descriptor,
       storeId,
       true,
@@ -185,7 +175,7 @@ describe.skipIf(!connection)("Logbook PostgreSQL port and exact backup", () => {
       store_id: storeId,
       schema: restored.namespace,
     });
-    expect((await client.query(`SELECT path FROM "${restored.namespace}".frames`)).rows).toEqual([
+    expect(await query(`SELECT path FROM "${restored.namespace}".frames`)).toEqual([
       { path: framePath },
     ]);
     expect(await fs.readFile(framePath)).toEqual(frameBytes);
@@ -210,7 +200,7 @@ describe.skipIf(!connection)("Logbook PostgreSQL port and exact backup", () => {
         "171",
       ],
     ] as const) {
-      expect((await client.query(sql)).rows).toEqual([{ id }]);
+      expect(await query(sql)).toEqual([{ id }]);
     }
   });
 

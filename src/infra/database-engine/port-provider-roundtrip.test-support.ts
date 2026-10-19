@@ -25,19 +25,14 @@ export async function runProviderRoundtrip(client: Client, directory: string) {
   const namespace = `synthetic_${randomUUID().replaceAll("-", "")}`;
   const namespaces = new Set([namespace]);
   const storeId = randomUUID();
-  const timings: Record<string, number> = {};
+  const common = { descriptor, storeId, ...scope };
+  const postgres = { engine: "postgres" as const, db: client, namespace };
+  const query = async (sql: string) => (await client.query(sql)).rows;
+  const started = performance.now();
   const hash = async (file: string) =>
     createHash("sha256")
       .update(await fs.readFile(file))
       .digest("hex");
-  async function timed<T>(phase: string, run: () => Promise<T>) {
-    const start = performance.now();
-    try {
-      return await run();
-    } finally {
-      timings[phase] = Math.round(performance.now() - start);
-    }
-  }
 
   // The one source exercises the owner migration on its private copy.
   {
@@ -57,9 +52,7 @@ export async function runProviderRoundtrip(client: Client, directory: string) {
   }
   const original = await hash(sourcePath);
   await fs.copyFile(sourcePath, privatePath);
-  const migrated = await timed("private migration", () =>
-    migrateDatabasePortSource(privatePath, descriptor, 1, scope.assertCurrent),
-  );
+  const migrated = await migrateDatabasePortSource(privatePath, descriptor, 1, scope.assertCurrent);
   assert.equal(await hash(sourcePath), original);
   {
     using db = openNodeSqliteDatabase(privatePath);
@@ -68,50 +61,46 @@ export async function runProviderRoundtrip(client: Client, directory: string) {
   }
 
   try {
-    const staged = await timed("SQLite to PostgreSQL", async () => {
+    const staged = await (async () => {
       using source = openNodeSqliteDatabase(privatePath, { readOnly: true, readBigInts: true });
       return await materializeDatabasePort({
         source: { engine: "sqlite", db: source },
-        destination: { engine: "postgres", db: client, namespace },
-        descriptor,
-        storeId,
-        ...scope,
+        destination: postgres,
+        ...common,
       });
-    });
+    })();
     assert.deepEqual(staged, migrated);
     assert.equal(staged.tables.port_items?.rows, 1);
     assert.equal(staged.tables.port_notes?.rows, 1);
     assert.equal(staged.tables.port_projection, undefined);
-    assert.deepEqual((await client.query(`SELECT * FROM "${namespace}".port_projection`)).rows, [
+    assert.deepEqual(await query(`SELECT * FROM "${namespace}".port_projection`), [
       { id: "first", value: "RETAINED" },
     ]);
 
-    await timed("PostgreSQL catalog refusals", async () => {
-      for (const [create, drop] of [
-        [
-          `CREATE VIEW "${namespace}".surprise AS SELECT id FROM "${namespace}".port_items`,
-          `DROP VIEW "${namespace}".surprise`,
-        ],
-        [
-          `CREATE TRIGGER surprise BEFORE INSERT ON "${namespace}".port_items FOR EACH ROW EXECUTE FUNCTION "${namespace}".port_item_edits_fn()`,
-          `DROP TRIGGER surprise ON "${namespace}".port_items`,
-        ],
-        [
-          `CREATE TRIGGER port_item_edits BEFORE INSERT ON "${namespace}".port_projection FOR EACH ROW EXECUTE FUNCTION "${namespace}".port_item_edits_fn()`,
-          `DROP TRIGGER port_item_edits ON "${namespace}".port_projection`,
-        ],
-      ] as const) {
-        await client.query(create);
-        try {
-          await assert.rejects(
-            inspectDatabasePort({ engine: "postgres", db: client, namespace }, descriptor, storeId),
-            /Unknown PostgreSQL trigger or view/,
-          );
-        } finally {
-          await client.query(drop);
-        }
+    for (const [create, drop] of [
+      [
+        `CREATE VIEW "${namespace}".surprise AS SELECT id FROM "${namespace}".port_items`,
+        `DROP VIEW "${namespace}".surprise`,
+      ],
+      [
+        `CREATE TRIGGER surprise BEFORE INSERT ON "${namespace}".port_items FOR EACH ROW EXECUTE FUNCTION "${namespace}".port_item_edits_fn()`,
+        `DROP TRIGGER surprise ON "${namespace}".port_items`,
+      ],
+      [
+        `CREATE TRIGGER port_item_edits BEFORE INSERT ON "${namespace}".port_projection FOR EACH ROW EXECUTE FUNCTION "${namespace}".port_item_edits_fn()`,
+        `DROP TRIGGER port_item_edits ON "${namespace}".port_projection`,
+      ],
+    ] as const) {
+      await client.query(create);
+      try {
+        await assert.rejects(
+          inspectDatabasePort(postgres, descriptor, storeId),
+          /Unknown PostgreSQL trigger or view/,
+        );
+      } finally {
+        await client.query(drop);
       }
-    });
+    }
 
     const backupDirectory = path.join(directory, "backup");
     await fs.mkdir(backupDirectory);
@@ -125,21 +114,14 @@ export async function runProviderRoundtrip(client: Client, directory: string) {
         .run(storeId, namespace);
     }
     const anchor = { engine: "postgres" as const, storeId, namespace };
-    const admitted = await admitDatabasePortDescriptor(
-      { engine: "postgres", db: client, namespace },
-      descriptor,
-    );
-    const manifest = await timed("backup and PostgreSQL to SQLite", () =>
-      exportPostgresBackup({
-        client,
-        descriptor: admitted,
-        anchor,
-        sourcePath: privatePath,
-        directory: backupDirectory,
-        profile: "exact",
-        ...scope,
-      }),
-    );
+    const admitted = await admitDatabasePortDescriptor(postgres, descriptor);
+    const backup = { client, directory: backupDirectory, profile: "exact" as const, ...scope };
+    const manifest = await exportPostgresBackup({
+      ...backup,
+      descriptor: admitted,
+      anchor,
+      sourcePath: privatePath,
+    });
     assert.equal(manifest.source.owner, "synthetic");
     assert.deepEqual(manifest.activeFragments, ["labels", "notes"]);
     assert.deepEqual(manifest.verification, staged);
@@ -163,19 +145,16 @@ export async function runProviderRoundtrip(client: Client, directory: string) {
 
     const restoredPath = path.join(directory, "restored-anchor.sqlite");
     const restore = {
-      client,
+      ...backup,
       descriptor,
       manifest,
-      directory: backupDirectory,
       anchorPath: restoredPath,
-      profile: "exact" as const,
-      ...scope,
     };
     await assert.rejects(
       restorePostgresBackup({ ...restore, manifest: { ...manifest, activeFragments: ["labels"] } }),
       /Port source fragments differ from the recorded backup/,
     );
-    const restored = await timed("restore", () => restorePostgresBackup(restore));
+    const restored = await restorePostgresBackup(restore);
     namespaces.add(restored.namespace);
     {
       using db = openNodeSqliteDatabase(restoredPath);
@@ -184,39 +163,28 @@ export async function runProviderRoundtrip(client: Client, directory: string) {
         { engine: "postgres", store_id: storeId, schema: restored.namespace },
       );
     }
-    assert.deepEqual(
-      (await client.query(`SELECT * FROM "${restored.namespace}".port_notes`)).rows,
-      [{ id: "note", value: "note value" }],
-    );
-    assert.deepEqual(
-      (await client.query(`SELECT * FROM "${restored.namespace}".port_projection`)).rows,
-      [{ id: "first", value: "RETAINED" }],
-    );
+    assert.deepEqual(await query(`SELECT * FROM "${restored.namespace}".port_notes`), [
+      { id: "note", value: "note value" },
+    ]);
+    assert.deepEqual(await query(`SELECT * FROM "${restored.namespace}".port_projection`), [
+      { id: "first", value: "RETAINED" },
+    ]);
     const fingerprintInput = {
       client,
       descriptor,
       anchor: { ...anchor, namespace: restored.namespace },
     };
-    const fingerprint = await timed("fingerprint before write", () =>
-      fingerprintPostgresDatabase(fingerprintInput),
-    );
+    const fingerprint = await fingerprintPostgresDatabase(fingerprintInput);
     await client.query(
       `INSERT INTO "${restored.namespace}".port_items VALUES ('probe', 'probe', 0)`,
     );
     assert.deepEqual(
-      (
-        await client.query(
-          `SELECT edits FROM "${restored.namespace}".port_items WHERE id = 'probe'`,
-        )
-      ).rows,
+      await query(`SELECT edits FROM "${restored.namespace}".port_items WHERE id = 'probe'`),
       [{ edits: "1" }],
     );
-    assert.notEqual(
-      await timed("fingerprint after write", () => fingerprintPostgresDatabase(fingerprintInput)),
-      fingerprint,
-    );
+    assert.notEqual(await fingerprintPostgresDatabase(fingerprintInput), fingerprint);
     assert.equal(await hash(sourcePath), original);
-    return timings;
+    return { total: Math.round(performance.now() - started) };
   } finally {
     for (const owned of namespaces) {
       await client.query(`DROP SCHEMA IF EXISTS "${owned}" CASCADE`);

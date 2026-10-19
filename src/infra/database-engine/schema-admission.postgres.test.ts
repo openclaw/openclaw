@@ -26,6 +26,29 @@ CREATE FUNCTION bump() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN NEW.value := 
 CREATE TRIGGER bump BEFORE INSERT ON items FOR EACH ROW EXECUTE FUNCTION bump();`;
 const schema: StoreSchema = { id: "fixture", version: 1, sqlite: "", postgres: ddl };
 
+function openPostgres(
+  anchor: Parameters<typeof openEngineStore>[0]["anchor"],
+  selected = schema,
+  existingOnly = false,
+) {
+  return openEngineStore({
+    anchor,
+    schema: selected,
+    input: { connection: connection!, schemaPrefix: "r2" },
+    existingOnly,
+    openSqlite() {
+      throw new Error("Unexpected SQLite bootstrap");
+    },
+    prepareAnchor() {},
+    inspectSqlite() {
+      admitSqliteSchema(anchor);
+      return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
+    },
+  });
+}
+
+const row = (db: PostgresSyncConnection, sql: string) => db.prepare(sql).get();
+
 function fixture(
   test: (input: {
     open: (schema?: StoreSchema) => PostgresSyncConnection;
@@ -37,19 +60,7 @@ function fixture(
     const anchor = openNodeSqliteDatabase(path.join(dirs.make("pg-schema-"), "anchor.sqlite"));
     const connections: PostgresSyncConnection[] = [];
     const open = (selected = schema) => {
-      const db = openEngineStore({
-        anchor,
-        schema: selected,
-        input: { connection: connection!, schemaPrefix: "r2" },
-        openSqlite: () => {
-          throw new Error("Unexpected SQLite bootstrap");
-        },
-        prepareAnchor: () => {},
-        inspectSqlite: () => {
-          admitSqliteSchema(anchor);
-          return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
-        },
-      });
+      const db = openPostgres(anchor, selected);
       if (!(db instanceof PostgresSyncConnection)) {
         throw new Error("Expected PostgreSQL connection");
       }
@@ -85,20 +96,7 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
       revokeSqliteDatabaseAdmissions(db.anchor);
       db.anchor.exec("BEGIN IMMEDIATE");
       try {
-        const opened = openEngineStore({
-          anchor: reader,
-          schema,
-          input: { connection: connection!, schemaPrefix: "r2" },
-          existingOnly: true,
-          openSqlite: () => {
-            throw new Error("Unexpected SQLite bootstrap");
-          },
-          prepareAnchor: () => {},
-          inspectSqlite: () => {
-            admitSqliteSchema(reader);
-            return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(reader)) };
-          },
-        });
+        const opened = openPostgres(reader, schema, true);
         try {
           expect(opened.prepare("SELECT value FROM items").all()).toEqual([{ value: 1 }]);
         } finally {
@@ -135,9 +133,9 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
   it("admits unchanged stores with one catalog read and rechecks a changed server major", () => {
     fixture(({ db, open, invalidate }) => {
       invalidate();
-      const queries: { sql: string; durationMs: number }[] = [];
+      const queries: { sql: string }[] = [];
       const listener = (message: unknown) => {
-        const event = message as { engine: string; sql: string; durationMs: number };
+        const event = message as { engine: string; sql: string };
         if (event.engine === "postgres") {
           queries.push(event);
         }
@@ -149,19 +147,15 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
         const catalog = queries.filter((event) => event.sql.startsWith("WITH captured"));
         expect(catalog).toHaveLength(1);
         expect(queries.some((event) => event.sql.startsWith("CREATE SCHEMA"))).toBe(false);
-        const catalogMs = catalog[0]!.durationMs;
         db.exec("UPDATE openclaw_schema_meta SET server_major = 0");
         invalidate();
         queries.length = 0;
-        const started = performance.now();
         open();
-        const scratchMs = performance.now() - started;
         expect(queries.filter((event) => event.sql.startsWith("CREATE SCHEMA"))).toHaveLength(1);
-        expect(
-          db.prepare("SELECT server_major FROM openclaw_schema_meta").get()?.server_major,
-        ).toBe(getPostgresPhysicalFacts(db)?.capabilities.serverMajor);
+        expect(row(db, "SELECT server_major FROM openclaw_schema_meta")?.server_major).toBe(
+          getPostgresPhysicalFacts(db)?.capabilities.serverMajor,
+        );
         expect(queries.filter((event) => event.sql.startsWith("DROP SCHEMA"))).toHaveLength(1);
-        console.info(JSON.stringify({ catalogMs, scratchMs }));
       } finally {
         observations.unsubscribe(listener);
       }
@@ -175,27 +169,17 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
       );
       invalidate();
       open();
-      expect(db.prepare("SELECT length(fingerprint) AS n FROM openclaw_schema_meta").get()?.n).toBe(
-        64,
-      );
+      expect(row(db, "SELECT length(fingerprint) AS n FROM openclaw_schema_meta")?.n).toBe(64);
       db.exec(
         "ALTER TABLE items ALTER COLUMN value SET DEFAULT 2; UPDATE openclaw_schema_meta SET server_major = 0",
       );
       invalidate();
-      const exec = Reflect.get(
-        PostgresSyncConnection.prototype,
-        "exec",
-      ) as PostgresSyncConnection["exec"];
       const scratches: string[] = [];
-      vi.spyOn(PostgresSyncConnection.prototype, "exec").mockImplementation(function (
-        this: PostgresSyncConnection,
-        sql,
-      ) {
+      observeExec((sql) => {
         const match = /^CREATE SCHEMA "(openclaw_check_[^"]+)"$/.exec(sql);
         if (match) {
           scratches.push(match[1]!);
         }
-        exec.call(this, sql);
       });
       expect(() => open()).toThrow("schema drift detected against generated DDL");
       expect(scratches).toHaveLength(1);
@@ -210,13 +194,13 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
   it("re-admits equivalent DDL text after exact catalog comparison", () => {
     fixture(({ db, open, invalidate }) => {
       db.runTransaction(() => db.exec("INSERT INTO items VALUES (1, 5)"));
-      const previous = db.prepare("SELECT ddl_hash FROM openclaw_schema_meta").get()?.ddl_hash;
+      const previous = row(db, "SELECT ddl_hash FROM openclaw_schema_meta")?.ddl_hash;
       invalidate();
       const reopened = open({ ...schema, postgres: `-- Equivalent fragment grouping\n${ddl}` });
-      expect(reopened.prepare("SELECT value FROM items WHERE id = 1").get()?.value).toBe(6);
-      expect(
-        reopened.prepare("SELECT ddl_hash FROM openclaw_schema_meta").get()?.ddl_hash,
-      ).not.toBe(previous);
+      expect(row(reopened, "SELECT value FROM items WHERE id = 1")?.value).toBe(6);
+      expect(row(reopened, "SELECT ddl_hash FROM openclaw_schema_meta")?.ddl_hash).not.toBe(
+        previous,
+      );
     });
   });
 
@@ -253,34 +237,26 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
           },
         ],
       };
-      const before = db.prepare("SELECT * FROM openclaw_schema_meta").get();
+      const before = row(db, "SELECT * FROM openclaw_schema_meta");
+      const expectRollback = () => {
+        expect(row(db, "SELECT * FROM openclaw_schema_meta")).toEqual(before);
+        expect(db.prepare("SELECT * FROM items").all()).toEqual([{ id: 1, value: 6 }]);
+      };
       expect(() => open(target)).toThrow("missing_column");
-      expect(db.prepare("SELECT * FROM openclaw_schema_meta").get()).toEqual(before);
-      expect(db.prepare("SELECT * FROM items").all()).toEqual([{ id: 1, value: 6 }]);
+      expectRollback();
       expect(getPostgresPhysicalFacts(db)?.version).toBe(1);
-      target.postgresMigrations = target.postgresMigrations!.map((step) => ({
-        version: step.version,
-        fromSchema: step.fromSchema,
-        schema: step.schema,
-        sql: step.sql.split("; SELECT")[0]!,
-      }));
+      for (const step of target.postgresMigrations!) {
+        step.sql = step.sql.split("; SELECT")[0]!;
+      }
       const secondStep = target.postgresMigrations![1]!;
       secondStep.sql = secondStep.sql.replace("DEFAULT 1", "DEFAULT 2");
       expect(() => open(target)).toThrow("generated DDL");
-      expect(db.prepare("SELECT * FROM openclaw_schema_meta").get()).toEqual(before);
-      expect(db.prepare("SELECT * FROM items").all()).toEqual([{ id: 1, value: 6 }]);
+      expectRollback();
       secondStep.sql = secondStep.sql.replace("DEFAULT 2", "DEFAULT 1");
       db.exec("UPDATE openclaw_schema_meta SET server_major = 0");
       const storeId = getPostgresPhysicalFacts(db)?.storeId;
-      const exec = Reflect.get(
-        PostgresSyncConnection.prototype,
-        "exec",
-      ) as PostgresSyncConnection["exec"];
       let commitObserved = false;
-      vi.spyOn(PostgresSyncConnection.prototype, "exec").mockImplementation(function (
-        this: PostgresSyncConnection,
-        sql,
-      ) {
+      observeExec((sql) => {
         if (sql === "COMMIT") {
           commitObserved = true;
           const published = captureSqliteDatabaseAdmissions().flatMap((record) => [
@@ -290,7 +266,6 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
             expect(published).not.toContainEqual(expect.objectContaining({ storeId, version }));
           }
         }
-        exec.call(this, sql);
       });
       const migrated = open(target);
       expect(commitObserved).toBe(true);
@@ -309,10 +284,7 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
   ])(
     "refuses unsupported capabilities at admission (%s, %s, %s)",
     (version, serverEncoding, clientEncoding) => {
-      const prepare = Reflect.get(
-        PostgresSyncConnection.prototype,
-        "prepare",
-      ) as PostgresSyncConnection["prepare"];
+      const prepare = PostgresSyncConnection.prototype.prepare;
       vi.spyOn(PostgresSyncConnection.prototype, "prepare").mockImplementation(function (
         this: PostgresSyncConnection,
         sql,
@@ -331,3 +303,14 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
     },
   );
 });
+
+function observeExec(observe: (sql: string) => void) {
+  const exec = PostgresSyncConnection.prototype.exec;
+  vi.spyOn(PostgresSyncConnection.prototype, "exec").mockImplementation(function (
+    this: PostgresSyncConnection,
+    sql,
+  ) {
+    observe(sql);
+    exec.call(this, sql);
+  });
+}
