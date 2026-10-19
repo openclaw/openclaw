@@ -17,7 +17,10 @@ import { pathDisplayName } from "../../../lib/path-display.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
-import { unsupportedFileSidebarContent } from "./chat-session-workspace-file-content.ts";
+import {
+  hasUniformLineEndings,
+  unsupportedFileSidebarContent,
+} from "./chat-session-workspace-file-content.ts";
 import { openWorkspaceItem } from "./chat-session-workspace-preview.ts";
 import {
   captureSessionWorkspaceNavigation,
@@ -40,7 +43,6 @@ import type {
   SidebarContent,
   TranscriptAttachments,
 } from "./chat-sidebar-content-types.ts";
-import { hasUniformLineEndings } from "./chat-sidebar-file-view.tsx";
 
 registerFilePreviewEnglish();
 

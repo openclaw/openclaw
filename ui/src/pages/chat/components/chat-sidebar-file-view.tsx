@@ -37,10 +37,6 @@ export function saveFileWrapPreference(wrap: boolean): void {
   }
 }
 
-export function hasUniformLineEndings(content: string): boolean {
-  return new Set(content.match(/\r\n?|\n/g)).size <= 1;
-}
-
 export function computeFileMatches(content: string, query: string): number[] {
   const normalizedQuery = query.toLocaleLowerCase();
   if (!normalizedQuery) {
