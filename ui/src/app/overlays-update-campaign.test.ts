@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import { flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
 import { AUTO_UPDATE_SCHEDULE } from "./overlays-update-campaign.test-support.ts";
 import {
@@ -30,7 +31,7 @@ describe("application update campaign overlays", () => {
       origin: { campaignId: AUTO_UPDATE_SCHEDULE.campaign.id },
     });
     const { harness, overlays } = automaticTest(async () => ({ lastRun: run }));
-    await flushMicrotasks();
+    await waitForFast(() => expect(overlays.snapshot.updateRun).toEqual(run));
     harness.emitEvent("update.available", { schedule: automaticSchedule({ state: "applying" }) });
     expect(overlays.snapshot.updateRun).toEqual(run);
     expect(overlays.snapshot.updateRunning).toBe(false);

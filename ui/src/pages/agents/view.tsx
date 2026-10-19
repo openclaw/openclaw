@@ -10,6 +10,7 @@ import {
   SettingsNavRow,
   LearnMoreLink,
 } from "../../components/solid/settings-ui.tsx";
+import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { buildAgentContext } from "../../lib/agents/display.ts";
 import "../../styles/agents.css";
@@ -30,6 +31,7 @@ import { AgentChannels, AgentCron } from "./panels-status-files.tsx";
 import { AgentTools } from "./panels-tools-skills.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
+registerEnglishCatalog(registerPluginManagementEnglish);
 
 const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
 

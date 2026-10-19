@@ -42,7 +42,7 @@ const enPluginManagement = {
       using: "Using {label} ({modelRef}) on {gateway}",
       sharedCodexLogin: "Using your existing Codex login · sessions shared with Codex",
       separateLogin: "Use a separate login",
-      thisComputer: "This computer",
+      thisComputer: en.custodian.autoSetup.thisComputer,
       thisGateway: "this Gateway",
       alternatives: "Or use another AI",
       signInTitle: "Connect ChatGPT to get started",

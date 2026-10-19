@@ -58,7 +58,7 @@ export const en: TranslationMap & {
   channels: TranslationMap;
   agents: TranslationMap & { overview: TranslationMap };
   configView: TranslationMap;
-  custodian: TranslationMap;
+  custodian: TranslationMap & { autoSetup: TranslationMap & { thisComputer: string } };
   debug: TranslationMap & {
     lanes: TranslationMap & Record<"lane" | "active" | "queued" | "blocked", string>;
     overlay: TranslationMap &
@@ -1669,7 +1669,7 @@ export const en: TranslationMap & {
     sessionRestarted: {},
     unsupportedGateway: {},
     accessRequired: {},
-    autoSetup: {},
+    autoSetup: { thisComputer: "This computer" },
     panel: {},
     history: {},
     nudge: {},
