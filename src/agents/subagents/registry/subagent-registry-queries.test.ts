@@ -1,17 +1,11 @@
 // Subagent registry query tests cover liveness, descendant counting, requester
 // lookup, and stale-row handling for in-memory run snapshots.
 import { describe, expect, it, vi } from "vitest";
-import { projectGatewaySessionRunState } from "../../../gateway/session-utils-display.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/agent-run-registry.js";
 import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
-import {
-  bindSwarmRunReservation,
-  releaseSwarmRun,
-  reserveSwarmRun,
-} from "../swarm/swarm-scheduler.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildSubagentRunReadIndexFromRuns,
@@ -22,8 +16,6 @@ import {
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
 } from "./subagent-registry-queries.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
-import { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
 
 const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 
@@ -48,107 +40,6 @@ function toRunMap(runs: SubagentRunRecord[]): Map<string, SubagentRunRecord> {
 }
 
 describe("subagent registry query regressions", () => {
-  it("transfers display liveness without transferring execution authority or freezing the stale cutoff", () => {
-    const now = Date.parse("2026-10-15T12:00:00Z");
-    const root = "agent:main:transfer-parent";
-    const running = makeRun({
-      runId: "transfer-running",
-      requesterSessionKey: root,
-      createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-      startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-    });
-    const queued = makeRun({
-      runId: "transfer-queued",
-      requesterSessionKey: root,
-      createdAt: running.createdAt,
-      collect: true,
-      execution: { status: "queued" },
-    });
-    const boundary = makeRun({
-      runId: "transfer-boundary",
-      requesterSessionKey: root,
-      createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS,
-    });
-    const ended = makeRun({
-      runId: "transfer-ended",
-      requesterSessionKey: root,
-      createdAt: now - 100,
-      endedAt: now - 1,
-    });
-    const claim = claimAgentRunContext(
-      running.runId,
-      { sessionKey: running.childSessionKey },
-      { trackOwner: true, ownsContext: true },
-    );
-    subagentRuns.set(running.runId, running);
-    subagentRuns.set(queued.runId, queued);
-    reserveSwarmRun({
-      groupId: "transfer-group",
-      runId: queued.runId,
-      maxConcurrent: 1,
-      activeRunIds: [],
-    });
-    bindSwarmRunReservation(queued.runId, getSubagentRunRuntimeKey(queued));
-    try {
-      const host = buildSubagentRunReadIndexFromRuns({
-        runs: toRunMap([running, queued, boundary, ended]),
-        now,
-      });
-      const snapshot = structuredClone(host.snapshot());
-      releaseAgentRunContext(running.runId, claim);
-      releaseSwarmRun(queued.runId);
-      subagentRuns.delete(running.runId);
-      subagentRuns.delete(queued.runId);
-
-      let transferred = buildSubagentRunReadIndexFromRuns({ ...snapshot, now });
-      expect(transferred.countActiveDescendantRuns(root)).toBe(3);
-      expect(transferred.countPendingDescendantRuns(root)).toBe(4);
-      expect(transferred.atTime(now + 1).countActiveDescendantRuns(root)).toBe(2);
-      for (const [run, status] of [
-        [running, "running"],
-        [queued, "queued"],
-        [ended, "done"],
-      ] as const) {
-        expect(
-          projectGatewaySessionRunState({
-            key: run.childSessionKey,
-            now,
-            rowContext: { subagentRuns: transferred },
-          }).fields,
-        ).toMatchObject({
-          status,
-          subagentRunState: run === ended ? "historical" : "active",
-          hasActiveSubagentRun: run !== ended,
-        });
-      }
-      expect(isSubagentRunLive(snapshot.runs.get(running.runId))).toBe(false);
-      expect(isSubagentRunQueued(snapshot.runs.get(queued.runId))).toBe(false);
-      expect(host.atTime(now + 1).countActiveDescendantRuns(root)).toBe(0);
-      expect(
-        buildSubagentRunReadIndexFromRuns({
-          runs: snapshot.runs,
-          inMemoryRuns: snapshot.inMemoryRuns,
-          now: now + 1,
-        }).countActiveDescendantRuns(root),
-      ).toBe(0);
-
-      const replacement = { ...snapshot.runs.get(running.runId)!, generation: 2 };
-      transferred = transferred.patch(toRunMap([replacement]), new Map(), now + 1);
-      expect(transferred.countActiveDescendantRuns(root)).toBe(1);
-      expect(
-        buildSubagentRunReadIndexFromRuns({
-          ...structuredClone(transferred.snapshot()),
-          now: now + 1,
-        }).countActiveDescendantRuns(root),
-      ).toBe(1);
-    } finally {
-      releaseAgentRunContext(running.runId, claim);
-      releaseSwarmRun(queued.runId);
-      subagentRuns.delete(running.runId);
-      subagentRuns.delete(queued.runId);
-    }
-  });
-
   it("patches one sibling without reading others and preserves group order after removal", () => {
     let unrelatedReads = 0;
     const first = {

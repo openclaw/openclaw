@@ -1,4 +1,3 @@
-// Whatsapp tests cover media plugin behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -44,14 +43,8 @@ async function createLargeTestJpeg(): Promise<{ buffer: Buffer; file: string }> 
 }
 
 async function expectLocalMediaAccessCode(promise: Promise<unknown>, code: string) {
-  try {
-    await promise;
-  } catch (error) {
-    expect(error).toBeInstanceOf(LocalMediaAccessError);
-    expect((error as { code?: unknown }).code).toBe(code);
-    return;
-  }
-  throw new Error(`expected local media access error ${code}`);
+  await expect(promise).rejects.toBeInstanceOf(LocalMediaAccessError);
+  await expect(promise).rejects.toHaveProperty("code", code);
 }
 
 beforeAll(async () => {
@@ -158,23 +151,11 @@ describe("web media loading", () => {
 
   it("blocks SSRF URLs before fetch", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
-    const cases = [
-      {
-        name: "private network host",
-        url: "http://127.0.0.1:8080/internal-api",
-        expectedMessage: /blocked|private|internal/i,
-      },
-      {
-        name: "cloud metadata hostname",
-        url: "http://metadata.google.internal/computeMetadata/v1/",
-        expectedMessage: /blocked|private|internal|metadata/i,
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      await expect(loadWebMedia(testCase.url, 1024 * 1024), testCase.name).rejects.toThrow(
-        testCase.expectedMessage,
-      );
+    for (const [url, expectedMessage] of [
+      ["http://127.0.0.1:8080/internal-api", /blocked|private|internal/i],
+      ["http://metadata.google.internal/computeMetadata/v1/", /blocked|private|internal|metadata/i],
+    ] as const) {
+      await expect(loadWebMedia(url, 1024 * 1024), url).rejects.toThrow(expectedMessage);
     }
     expect(fetchMock).not.toHaveBeenCalled();
     fetchMock.mockRestore();

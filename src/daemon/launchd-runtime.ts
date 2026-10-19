@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -254,7 +255,12 @@ export async function readLaunchAgentProgramArguments(
       options.timeoutMs && options.timeoutMs > 0 ? Math.min(options.timeoutMs, 5_000) : 5_000;
     const [probe, system] = await Promise.all([
       probeLaunchAgentState(`${resolveLaunchAgentGuiDomain()}/${label}`, timeoutMs).catch(
-        () => null,
+        (error: unknown) => {
+          if (hasCommandProcessCleanupError(error)) {
+            throw error;
+          }
+          return null;
+        },
       ),
       inspectSystemLaunchDaemonOwnership(label, { timeoutMs, scanInstalledPlists: false }),
     ]);
@@ -287,7 +293,12 @@ export async function resolveLaunchAgentGatewayContext(env: GatewayServiceEnv): 
   if (serviceKind && serviceKind !== GATEWAY_SERVICE_KIND) {
     return { env, port: null, probeHosts: [] };
   }
-  const command = await readLaunchAgentProgramArguments(env).catch(() => null);
+  const command = await readLaunchAgentProgramArguments(env).catch((error: unknown) => {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    return null;
+  });
   return {
     env: mergeGatewayServiceEnv(env, command),
     port:
@@ -374,15 +385,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
         failures.push(error);
       }
     }
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length > 1) {
-      throw new AggregateError(
-        failures,
-        "LaunchAgent bootstrap and disabled-policy restoration failed.",
-      );
-    }
+    throwCollectedErrors(failures, "LaunchAgent bootstrap and disabled-policy restoration failed.");
     if (boot.status === "rejected") {
       throw boot.reason;
     }

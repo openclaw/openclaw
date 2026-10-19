@@ -24,6 +24,7 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.worker.js";
+import * as sessionMessageRewrite from "../../config/sessions/session-message-rewrite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
@@ -81,6 +82,7 @@ async function withAdmission(
   options: Partial<Pick<CreateUserTurnTranscriptRecorderParams, "input" | "beforeMessageWrite">> & {
     config?: OpenClawConfig;
     persist?: boolean;
+    cronBaseKey?: string;
   } = {},
 ) {
   await withOpenClawTestState({ label: "admission-annotation" }, async (state) => {
@@ -106,9 +108,21 @@ async function prepareAdmission(
   const target = {
     agentId: "main",
     sessionId: "admitted",
-    sessionKey: "agent:main:admitted",
+    sessionKey: options.cronBaseKey ? `${options.cronBaseKey}:run:admitted` : "agent:main:admitted",
     storePath,
+    expectedLifecycleRevision: "initial",
+    expectedWriterRunId: runId,
   };
+  if (options.cronBaseKey) {
+    await upsertSessionEntryCore(
+      { ...target, sessionKey: options.cronBaseKey },
+      {
+        sessionId: target.sessionId,
+        updatedAt: 1,
+        lifecycleRevision: "initial",
+      },
+    );
+  }
   await upsertSessionEntryCore(target, {
     sessionId: target.sessionId,
     updatedAt: 1,
@@ -158,6 +172,11 @@ async function prepareAdmission(
     abortSignal: controller.signal,
   };
   const host = await createAdmittedHostCapabilityTestFixture(attempt);
+  const annotate = (annotation = nativeAnnotation()) =>
+    expectDefined(
+      host.hostCapabilities.annotateCurrentUserTurn,
+      "annotation capability",
+    )(annotation);
   return {
     ...host,
     attempt,
@@ -167,11 +186,12 @@ async function prepareAdmission(
     onPersisted,
     controller,
     patchSession,
-    annotate: (annotation = nativeAnnotation()) =>
-      expectDefined(
-        host.hostCapabilities.annotateCurrentUserTurn,
-        "annotation capability",
-      )(annotation),
+    annotate,
+    async expectRefused(annotation = nativeAnnotation(), message?: string) {
+      const before = await loadTranscriptEvents(target);
+      await expect(annotate(annotation)).rejects.toThrow(message);
+      expect(await loadTranscriptEvents(target)).toEqual(before);
+    },
     receipt: () => expectDefined(recorder.getAdmissionReceipt(), "admission"),
   };
 }
@@ -195,6 +215,73 @@ async function holdTranscriptWriter(target: Parameters<typeof resolveSqliteTrans
 }
 
 describe("host-owned current admission annotation", () => {
+  it("annotates the exact cron run while its same-ID base row changes", async () => {
+    const cronBaseKey = "agent:main:cron:annotation";
+    await withAdmission(
+      async (f) => {
+        const before = await loadTranscriptEvents(f.target);
+        const original = structuredClone(f.receipt());
+        const writer = loadSessionEntry(f.target);
+        const base = { ...f.target, sessionKey: cronBaseKey };
+        expect(loadSessionEntry(base)?.activeWriterRunId).toBeUndefined();
+        const entered = createDeferred();
+        const release = createDeferred();
+        const rewrite = sessionMessageRewrite.rewritePreparedTranscriptMessageAtAnchor;
+        const rewriteCall = vi
+          .spyOn(sessionMessageRewrite, "rewritePreparedTranscriptMessageAtAnchor")
+          .mockImplementationOnce(async (...args) => {
+            entered.resolve();
+            await release.promise;
+            return rewrite(...args);
+          });
+        const updates = vi.fn();
+        const unsubscribe = onInternalSessionTranscriptUpdate(updates);
+        const pending = f.annotate();
+        try {
+          // Publish only after the real selector captured authority, before the real SQLite rewrite.
+          await Promise.race([entered.promise, pending]);
+          expect(rewriteCall).toHaveBeenCalledOnce();
+          await upsertSessionEntryCore(base, {
+            sessionId: f.target.sessionId,
+            updatedAt: 2,
+            lifecycleRevision: "base-successor",
+          });
+          release.resolve();
+          await pending;
+          const refreshed = f.receipt();
+          expect(refreshed).toEqual({ ...original, generation: expect.any(String) });
+          expect(refreshed.generation).not.toBe(original.generation);
+          expect(f.recorder.getPersistedMessage?.()).toMatchObject({
+            content: "prompt",
+            __openclaw: { ...nativeAnnotation(), runId: f.attempt.runId },
+          });
+          const after = await loadTranscriptEvents(f.target);
+          expect(after).toHaveLength(before.length);
+          expect(after.slice(0, -1)).toEqual(before.slice(0, -1));
+          expect(loadSessionEntry(f.target)).toMatchObject({
+            lifecycleRevision: writer?.lifecycleRevision,
+            activeWriterRunId: f.attempt.runId,
+          });
+          await f.annotate();
+          expect(await loadTranscriptEvents(f.target)).toEqual(after);
+          expect(f.receipt()).toEqual(refreshed);
+          expect(updates).toHaveBeenCalledOnce();
+          expect(updates).toHaveBeenCalledWith(
+            expect.objectContaining({
+              messageId: original.entryId,
+              messageSeq: original.activeMessagePosition + 1,
+            }),
+          );
+        } finally {
+          release.resolve();
+          await pending.catch(() => {});
+          unsubscribe();
+        }
+      },
+      { cronBaseKey },
+    );
+  });
+
   it("refreshes only the admitted collected input while preserving source custody", async () => {
     const hook = vi.fn<NonNullable<CreateUserTurnTranscriptRecorderParams["beforeMessageWrite"]>>(
       ({ message }) => message,
@@ -298,7 +385,6 @@ describe("host-owned current admission annotation", () => {
   it("refuses retargeting a refreshed recorder through its returned receipt and message", async () => {
     await withAdmission(async (f) => {
       await f.annotate();
-      const before = await loadTranscriptEvents(f.target);
       const other = expectDefined(
         readActiveTranscriptEntryAnchor({ ...f.target, entryId: f.prior.messageId }),
         "other active row",
@@ -314,8 +400,7 @@ describe("host-owned current admission annotation", () => {
         Reflect.deleteProperty(exposed, key);
       }
       Object.assign(exposed, f.prior.message);
-      await expect(f.annotate(nativeAnnotation("prior"))).rejects.toThrow();
-      expect(await loadTranscriptEvents(f.target)).toEqual(before);
+      await f.expectRefused(nativeAnnotation("prior"));
     });
   });
 
@@ -676,20 +761,14 @@ describe("host-owned current admission annotation", () => {
       const event = expectDefined(asOptionalRecord(events.at(-1)), "transcript event");
       event.message = { ...f.recorder.getPersistedMessage?.(), content: "edited" };
       await replaceTranscriptEvents(f.target, events);
-      const before = await loadTranscriptEvents(f.target);
-      await expect(f.annotate()).rejects.toThrow();
-      expect(await loadTranscriptEvents(f.target)).toEqual(before);
+      await f.expectRefused();
     });
   });
 
   it("refuses conflicting native provenance without rewriting again", async () => {
     await withAdmission(async (f) => {
       await f.annotate();
-      const before = await loadTranscriptEvents(f.target);
-      await expect(
-        f.annotate({ ...nativeAnnotation(), mirrorIdentity: "conflict" }),
-      ).rejects.toThrow();
-      expect(await loadTranscriptEvents(f.target)).toEqual(before);
+      await f.expectRefused({ ...nativeAnnotation(), mirrorIdentity: "conflict" });
     });
   });
 
@@ -699,9 +778,7 @@ describe("host-owned current admission annotation", () => {
     );
     await withAdmission(
       async (f) => {
-        const before = await loadTranscriptEvents(f.target);
-        await expect(f.annotate()).rejects.toThrow("admitted content");
-        expect(await loadTranscriptEvents(f.target)).toEqual(before);
+        await f.expectRefused(undefined, "admitted content");
         expect(hook).toHaveBeenCalledOnce();
       },
       { beforeMessageWrite: hook },

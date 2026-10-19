@@ -10,35 +10,33 @@ import {
 } from "../app/lazy-custom-element.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import {
   prepareSessionNavigationHandoff,
   runSessionNavigationIntent,
 } from "../lib/sessions/navigation-handoff.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
-  areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   normalizeAgentId,
   resolveUiConfiguredMainKey,
   resolveUiConversationIdentity,
   resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
-import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
-import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
-import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
+import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import {
   CHAT_ROUTE_READY_EVENT,
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
 } from "../pages/chat/chat-history-events.ts";
-import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
 import type { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
 import {
   consumePluginHelpAutoOpen,
   dismissPluginHelpAutoOpen,
   subscribePluginHelp,
 } from "../pages/custodian/plugin-help-state.ts";
-import { DockLayoutController } from "./dock-layout-controller.ts";
+import { createDockLayout } from "./dock-layout.ts";
 import { assistantPanelLayout } from "./dock-panel-layout.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "../styles/rail-header.css";
@@ -66,269 +64,264 @@ export type AssistantPanelProps = {
   homeAvailable: boolean;
   custodianSuppressed: boolean;
   pageSessionKey: string;
+  getPrimaryChatPane?: (sessionKey: string) => ChatPaneElement | undefined;
   pageAgentId: string;
   pageRouteId: RouteId;
   pageRouteFailed: boolean;
   minimizeRequestId: number;
   store?: CustodianSessionStore;
 };
-export class AssistantPanelController {
-  get context() {
-    return this.props.context ?? this.application;
-  }
-  get isConnected() {
-    return this.element.isConnected;
-  }
-  get updateComplete() {
-    return this.element.updateComplete;
-  }
-  requestUpdate() {
-    this.controllerHost.requestUpdate();
-  }
-  addController(controller: SolidController) {
-    this.controllerHost.addController(controller);
-  }
-  removeController(controller: SolidController) {
-    this.controllerHost.removeController(controller);
-  }
-  private startedHome = false;
-  get homeStarted() {
-    return this.startedHome;
-  }
-  set homeStarted(value: boolean) {
-    if (this.startedHome !== value) {
-      this.startedHome = value;
-      this.requestUpdate();
-    }
-  }
-  private pendingPrimaryPane: ChatPaneElement | null = null;
-  private currentDestination: AssistantDestination = "custodian";
-  get destination() {
-    return this.currentDestination;
-  }
-  set destination(value: AssistantDestination) {
-    if (this.currentDestination !== value) {
-      this.currentDestination = value;
-      this.requestUpdate();
-    }
-  }
-  /** Built-in target a plugin dock replaced; restored when that dock closes. */
-  private builtInDestination: "home" | "custodian" = "custodian";
-  private publishedSessionKey: string | null = null;
-  readonly contentLoader = createLazyCustomElementRequests(this);
-
-  readonly dockLayout: DockLayoutController<"bottom" | "right">;
-  private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
-  private handledMinimizeRequestId = 0;
-  private targetScope = "";
-  private homeDefaults: {
+export function createAssistantPanel(
+  element: SolidBridgeElement<AssistantPanelProps>,
+  scheduleAfterRender: (callback: () => void | (() => void)) => void,
+) {
+  const props = element;
+  let application: ApplicationContext | undefined;
+  let mounted = false;
+  let initialized = false;
+  let pendingRefresh: (() => void) | undefined;
+  let stops: (() => void)[] = [];
+  let sourceStops: ((() => void) | undefined)[] = [];
+  let sources:
+    | { context: ApplicationContext | undefined; store: CustodianSessionStore | undefined }
+    | undefined;
+  // Navigation and plugin actions read their own writes before Solid commits.
+  let homeStarted = false;
+  let destination: AssistantDestination = "custodian";
+  let builtInDestination: "home" | "custodian" = "custodian";
+  let pendingPrimaryPane: { pane: ChatPaneElement } | null = null;
+  let publishedSessionKey: string | null = null;
+  let handledMinimizeRequestId = 0;
+  let targetScope = "";
+  let refreshing = false;
+  let homeDefaults: {
     agentsList?: ApplicationContext["agents"]["state"]["agentsList"];
     hello?: ApplicationContext["gateway"]["snapshot"]["hello"];
   } = {};
-
-  constructor(
-    public props: AssistantPanelProps,
-    private readonly element: SolidBridgeElement<AssistantPanelProps>,
-    private controllerHost: SolidControllerHost,
-    private application?: ApplicationContext,
-  ) {
-    this.contentLoader.subscribe(() => this.requestUpdate());
-    this.dockLayout = new DockLayoutController(this, {
-      layout: assistantPanelLayout,
-      reservationPrefix: "assistant",
-      isAvailable: () => this.available,
-    });
-    this.attach(props, controllerHost, application);
-  }
-
-  attach(
-    props: AssistantPanelProps,
-    controllerHost: SolidControllerHost,
-    application?: ApplicationContext,
-  ) {
-    this.props = props;
-    this.controllerHost = controllerHost;
-    this.application = application;
-    controllerHost.addController(this.dockLayout);
-    void new SubscriptionsController(this)
-      .effect(
-        () => this.context?.assistantDock,
-        (dock) => dock.attach(this),
-      )
-      .watch(
-        () => this.context,
-        (context, notify) => subscribePluginHelp(context, notify),
-      )
-      .watchStore(() => this.props.store)
-      .watchStore(() => this.context?.agentSelection)
-      .watchStore(() => this.context?.agents)
-      .watchStore(() => this.context?.theme)
-      .watchStore(() => this.context?.gateway);
-  }
-
-  connected(): void {
-    document.addEventListener(CHAT_ROUTE_READY_EVENT, this.startHomeAfterPrimaryChat);
-    document.addEventListener(
-      CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
-      this.startHomeAfterPrimaryChat,
-    );
-    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.onToggleRequest);
-    window.addEventListener(HOME_PANEL_TOGGLE_EVENT, this.onToggleRequest);
-    this.dockLayout.setSuppressed(this.restoreSuppressed);
-  }
-
-  disconnected(): void {
-    document.removeEventListener(CHAT_ROUTE_READY_EVENT, this.startHomeAfterPrimaryChat);
-    document.removeEventListener(
-      CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
-      this.startHomeAfterPrimaryChat,
-    );
-    this.pendingPrimaryPane = null;
-    window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.onToggleRequest);
-    window.removeEventListener(HOME_PANEL_TOGGLE_EVENT, this.onToggleRequest);
-    if (typeof this.destination !== "string") {
-      this.closeSession();
+  let publish: (() => void) | undefined;
+  const notify = () => publish?.();
+  const getContext = () => props.context ?? application;
+  const contentLoader = createLazyCustomElementRequests(element);
+  const dockLayout = createDockLayout({
+    layout: assistantPanelLayout,
+    reservationPrefix: "assistant",
+    isAvailable: available,
+    notify,
+  });
+  function refresh(): void {
+    if (refreshing) {
+      return;
     }
-    this.claimInput("page");
-  }
-
-  update(): void {
-    const wasOpen = this.dockLayout.open;
-    const scope = this.context?.gateway.connection.gatewayUrl ?? "";
-    if (scope !== this.targetScope) {
-      this.targetScope = scope;
-      this.homeStarted = false;
-      this.pendingPrimaryPane = null;
-      this.homeDefaults = {};
-      let saved: Record<string, unknown> | null = null;
-      try {
-        saved = asNullableRecord(
-          JSON.parse(getSafeLocalStorage()?.getItem(this.targetStorageKey) ?? "null"),
-        );
-      } catch {}
-      this.destination = saved?.destination === "home" ? "home" : "custodian";
-      this.builtInDestination = this.destination;
-    }
-    if (this.context?.gateway.snapshot.phase === "connected") {
-      // Roster/hello disappear during reconnect; keep the captured Home identity with its outbox.
-      this.homeDefaults = {
-        agentsList: this.context.agents.state.agentsList ?? this.homeDefaults.agentsList,
-        hello: this.context.gateway.snapshot.hello,
-      };
-    }
-    this.dockLayout.setSuppressed(this.restoreSuppressed);
-    if (
-      this.props.minimizeRequestId > 0 &&
-      this.props.minimizeRequestId !== this.handledMinimizeRequestId &&
-      this.props.custodianAvailable &&
-      this.props.store
-    ) {
-      this.handledMinimizeRequestId = this.props.minimizeRequestId;
-      if (typeof this.destination === "string" && this.props.store.hasRealUserTurn()) {
-        this.openDestination("custodian");
+    refreshing = true;
+    try {
+      const wasOpen = dockLayout.open;
+      const scope = getContext()?.gateway.connection.gatewayUrl ?? "";
+      if (scope !== targetScope) {
+        targetScope = scope;
+        homeStarted = false;
+        pendingPrimaryPane = null;
+        homeDefaults = {};
+        let saved: Record<string, unknown> | null = null;
+        try {
+          saved = asNullableRecord(
+            JSON.parse(getSafeLocalStorage()?.getItem(targetStorageKey()) ?? "null"),
+          );
+        } catch {
+          // Missing or invalid saved presentation preferences use the default destination.
+        }
+        destination = saved?.destination === "home" ? "home" : "custodian";
+        builtInDestination = destination;
       }
+      const context = getContext();
+      if (sources?.context !== context) {
+        pendingPrimaryPane = null;
+      }
+      if (context?.gateway.snapshot.phase === "connected") {
+        // Roster/hello disappear during reconnect; keep the captured Home identity with its outbox.
+        homeDefaults = {
+          agentsList: context.agents.state.agentsList ?? homeDefaults.agentsList,
+          hello: context.gateway.snapshot.hello,
+        };
+      }
+      dockLayout.setSuppressed(restoreSuppressed());
+      if (
+        props.minimizeRequestId > 0 &&
+        props.minimizeRequestId !== handledMinimizeRequestId &&
+        props.custodianAvailable &&
+        props.store
+      ) {
+        handledMinimizeRequestId = props.minimizeRequestId;
+        if (typeof destination === "string" && props.store.hasRealUserTurn()) {
+          openDestination("custodian");
+        }
+      }
+      if (!available()) {
+        dockLayout.hideWithoutPersisting();
+      } else {
+        dockLayout.restoreOpenState();
+      }
+      if (wasOpen && !dockLayout.open) {
+        claimInput("page");
+      }
+      if (
+        typeof destination === "string" &&
+        context &&
+        props.custodianAvailable &&
+        !props.custodianSuppressed &&
+        window.innerWidth > 1100 &&
+        consumePluginHelpAutoOpen(context)
+      ) {
+        openDestination("custodian");
+      }
+      startHomeAfterPrimaryChat();
+      contentLoader.requestWhileActive(
+        ASSISTANT_CONTENT_ELEMENT,
+        (dockLayout.open && (destination !== "home" || homeStarted)) ||
+          (props.custodianAvailable && props.minimizeRequestId > handledMinimizeRequestId),
+      );
+      dockLayout.syncReservation();
+      if (mounted) {
+        subscribeSources();
+      }
+      publishSessionKey();
+    } finally {
+      refreshing = false;
     }
-    if (!this.available) {
-      this.dockLayout.hideWithoutPersisting();
-    } else {
-      this.dockLayout.restoreOpenState();
-    }
-    if (wasOpen && !this.dockLayout.open) {
-      this.claimInput("page");
-    }
-    if (
-      typeof this.destination === "string" &&
-      this.context &&
-      this.props.custodianAvailable &&
-      !this.props.custodianSuppressed &&
-      window.innerWidth > 1100 &&
-      consumePluginHelpAutoOpen(this.context)
-    ) {
-      this.openDestination("custodian");
-    }
-    this.startHomeAfterPrimaryChat();
-    this.contentLoader.requestWhileActive(
-      ASSISTANT_CONTENT_ELEMENT,
-      (this.dockLayout.open && (this.destination !== "home" || this.homeStarted)) ||
-        (this.props.custodianAvailable &&
-          this.props.minimizeRequestId > this.handledMinimizeRequestId),
-    );
-    this.dockLayout.syncReservation();
-    this.publishSessionKey();
+    notify();
   }
 
-  private primaryChatPane(): ChatPaneElement | undefined {
-    const root = this.element.closest("openclaw-app-shell") ?? this.element.parentElement;
-    return [
-      ...(root?.querySelectorAll<ChatPaneElement>(
-        "openclaw-chat-pane.chat-pane-cache__pane--active",
-      ) ?? []),
-    ].find(
-      (pane) =>
-        pane.presented !== false &&
-        pane.sessionKey &&
-        areUiSessionKeysEquivalent(pane.sessionKey, this.props.pageSessionKey),
-    );
+  function subscribeSources(): void {
+    const context = getContext();
+    const store = props.store;
+    if (sources && sources.context === context && sources.store === store) {
+      return;
+    }
+    sourceStops.forEach((stop) => stop?.());
+    sources = { context, store };
+    // Source receipts synchronously retire target scopes and reconcile dock reservations.
+    sourceStops = [
+      context?.assistantDock?.attach(owner),
+      context ? subscribePluginHelp(context, refresh) : undefined,
+      ...[store, context?.agentSelection, context?.agents, context?.theme, context?.gateway].map(
+        (source) => source?.subscribe(refresh),
+      ),
+    ];
   }
 
-  private readonly startHomeAfterPrimaryChat = (): void => {
-    if (this.homeStarted || !this.dockLayout.open || this.destination !== "home") {
+  function inputsChanged(): void {
+    if (!mounted || pendingRefresh) {
       return;
     }
-    if (this.props.pageRouteId !== "chat" || this.props.pageRouteFailed) {
-      this.homeStarted = true;
+    const pending = () => {
+      if (pendingRefresh !== pending) {
+        return;
+      }
+      pendingRefresh = undefined;
+      refresh();
+    };
+    pendingRefresh = pending;
+    scheduleAfterRender(pending);
+  }
+
+  function attach(nextApplication?: ApplicationContext): void {
+    application = nextApplication;
+    scheduleAfterRender(() => {
+      // Restore geometry before route suppression; remounts retain explicit dock intent.
+      const open = dockLayout.open;
+      dockLayout.connect();
+      if (initialized) {
+        dockLayout.setOpen(open, false);
+      }
+      initialized = mounted = true;
+      stops = [
+        listen(document, CHAT_ROUTE_READY_EVENT, refresh),
+        listen(document, CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, refresh),
+        listen(window, CUSTODIAN_PANEL_TOGGLE_EVENT, handleToggleRequest),
+        listen(window, HOME_PANEL_TOGGLE_EVENT, handleToggleRequest),
+      ];
+      refresh();
+      return detach;
+    });
+  }
+
+  function detach(): void {
+    mounted = false;
+    pendingRefresh = undefined;
+    pendingPrimaryPane = null;
+    sourceStops.forEach((stop) => stop?.());
+    sourceStops = [];
+    sources = undefined;
+    stops.forEach((stop) => stop());
+    stops = [];
+    dockLayout.dispose();
+    // A context-only remount retains activation-owned targets and input custody.
+    if (!element.isConnected) {
+      if (typeof destination !== "string") {
+        closeSession();
+      }
+      claimInput("page");
+    }
+  }
+
+  function startHomeAfterPrimaryChat(): void {
+    if (homeStarted || !dockLayout.open || destination !== "home") {
       return;
     }
-    const pane = this.primaryChatPane();
-    if (!pane?.transcriptReady || this.pendingPrimaryPane === pane) {
+    if (props.pageRouteId !== "chat" || props.pageRouteFailed) {
+      homeStarted = true;
       return;
     }
-    this.pendingPrimaryPane = pane;
-    const context = this.context;
+    const pane = props.getPrimaryChatPane?.(props.pageSessionKey);
+    if (!pane?.transcriptReady || pendingPrimaryPane?.pane === pane) {
+      return;
+    }
+    const pending = { pane };
+    pendingPrimaryPane = pending;
+    const currentContext = getContext();
     // The loading edge precedes the pane's render invalidation. Wait for that
     // commit before a restored Home starts its competing transcript request.
     void Promise.resolve()
       .then(() => pane.updateComplete)
       .then(() => {
-        if (this.pendingPrimaryPane !== pane) {
+        if (pendingPrimaryPane !== pending) {
           return;
         }
-        this.pendingPrimaryPane = null;
+        pendingPrimaryPane = null;
         if (
-          this.isConnected &&
-          this.context === context &&
-          this.primaryChatPane() === pane &&
+          element.isConnected &&
+          getContext() === currentContext &&
+          props.getPrimaryChatPane?.(props.pageSessionKey) === pane &&
           pane.transcriptReady
         ) {
-          this.homeStarted = true;
+          homeStarted = true;
+          refresh();
         }
       });
-  };
-
-  private get targetStorageKey(): string {
-    return `openclaw.assistant.panel.target.v1:${this.targetScope}`;
   }
 
-  private persistTarget(): void {
+  function targetStorageKey(): string {
+    return `openclaw.assistant.panel.target.v1:${targetScope}`;
+  }
+
+  function persistTarget(): void {
     // Plugin targets belong to their activation, never to browser persistence.
-    if (typeof this.destination !== "string") {
+    if (typeof destination !== "string") {
       return;
     }
     try {
-      getSafeLocalStorage()?.setItem(
-        this.targetStorageKey,
-        JSON.stringify({ destination: this.destination }),
-      );
-    } catch {}
+      getSafeLocalStorage()?.setItem(targetStorageKey(), JSON.stringify({ destination }));
+    } catch {
+      // Storage can be unavailable; the current panel selection still takes effect.
+    }
   }
 
-  get homeTarget() {
-    const defaults = this.homeDefaults;
+  function homeTarget() {
+    const defaults = homeDefaults;
     const agents = listSelectableAgents(defaults.agentsList?.agents ?? []);
     const defaultId = resolveUiDefaultAgentId(defaults);
     // The sidebar switcher (agentSelection) is the only agent chooser; the dock
     // shows the selected agent's Home and never grows a second switcher.
-    const rawSelectedId = this.context?.agentSelection.state.selectedId;
+    const rawSelectedId = getContext()?.agentSelection.state.selectedId;
     const selectedId = rawSelectedId ? normalizeAgentId(rawSelectedId) : "";
     const agentId =
       agents.find((agent) => agent.id === selectedId)?.id ??
@@ -345,43 +338,41 @@ export class AssistantPanelController {
     };
   }
 
-  availableFor(destination: AssistantDestination): boolean {
+  function availableFor(target: AssistantDestination): boolean {
     // The chat pane owns access errors and read-only composition. Always show
     // explicitly requested sessions so a denied read has its normal visible outcome.
     return (
-      typeof destination !== "string" ||
-      (destination === "home" ? this.props.homeAvailable : this.props.custodianAvailable)
+      typeof target !== "string" ||
+      (target === "home" ? props.homeAvailable : props.custodianAvailable)
     );
   }
 
-  get available(): boolean {
-    return this.availableFor(this.destination);
+  function available(): boolean {
+    return availableFor(destination);
   }
 
-  private get suppressed(): boolean {
-    if (this.destination === "custodian") {
-      return this.props.custodianSuppressed;
+  function suppressed(): boolean {
+    if (destination === "custodian") {
+      return props.custodianSuppressed;
     }
-    const context = this.context;
+    const context = getContext();
     const sessionPage =
-      this.destination === "home"
-        ? this.props.pageRouteId === "chat"
-        : isSessionRouteId(this.props.pageRouteId);
+      destination === "home" ? props.pageRouteId === "chat" : isSessionRouteId(props.pageRouteId);
     if (!context || !sessionPage) {
       return false;
     }
     const page = resolveUiConversationIdentity(
-      this.homeDefaults,
-      this.props.pageSessionKey,
-      this.props.pageAgentId,
+      homeDefaults,
+      props.pageSessionKey,
+      props.pageAgentId,
     );
     const target =
-      typeof this.destination === "string"
-        ? this.homeTarget
+      typeof destination === "string"
+        ? homeTarget()
         : resolveUiConversationIdentity(
-            this.homeDefaults,
-            this.destination.params.sessionKey,
-            this.destination.params.agentId,
+            homeDefaults,
+            destination.params.sessionKey,
+            destination.params.agentId,
           );
     return (
       page.sessionKey === target.sessionKey &&
@@ -389,75 +380,74 @@ export class AssistantPanelController {
     );
   }
 
-  claimInput(region: "page" | "dock"): void {
-    if (this.context) {
-      chatInputOwnerForContext(this.context).claim(region);
+  function claimInput(region: "page" | "dock"): void {
+    const context = getContext();
+    if (context) {
+      chatInputOwnerForContext(context).claim(region);
     }
   }
 
-  private get restoreSuppressed(): boolean {
+  function restoreSuppressed(): boolean {
     // Home follows the visible Settings context; automatic diagnostic restores yield to it.
-    return (
-      this.suppressed ||
-      (this.destination === "custodian" && isSettingsTakeover(this.props.pageRouteId))
-    );
+    return suppressed() || (destination === "custodian" && isSettingsTakeover(props.pageRouteId));
   }
 
-  openSession(params: Parameters<AssistantDockOwner["openSession"]>[0], activation: object): void {
-    if (typeof this.destination === "string") {
-      this.builtInDestination = this.destination;
+  function openSession(
+    params: Parameters<AssistantDockOwner["openSession"]>[0],
+    activation: object,
+  ): void {
+    if (typeof destination === "string") {
+      builtInDestination = destination;
     }
-    this.openDestination({ params: structuredClone(params), activation });
+    openDestination({ params: structuredClone(params), activation });
   }
 
-  closeSession(activation?: object): void {
-    if (
-      activation &&
-      (typeof this.destination === "string" || this.destination.activation !== activation)
-    ) {
+  function closeSession(activation?: object): void {
+    if (activation && (typeof destination === "string" || destination.activation !== activation)) {
       return;
     }
-    this.setOpen(false);
+    setOpen(false);
   }
 
-  get openSessionKey(): string | null {
-    return this.dockLayout.open && !this.suppressed && typeof this.destination !== "string"
-      ? this.destination.params.sessionKey
+  function openSessionKey(): string | null {
+    return dockLayout.open && !suppressed() && typeof destination !== "string"
+      ? destination.params.sessionKey
       : null;
   }
 
-  private publishSessionKey(): void {
-    const key = this.openSessionKey;
-    if (key !== this.publishedSessionKey) {
-      this.publishedSessionKey = key;
-      this.context?.assistantDock?.notify();
+  function publishSessionKey(): void {
+    const key = openSessionKey();
+    if (key !== publishedSessionKey) {
+      publishedSessionKey = key;
+      getContext()?.assistantDock?.notify();
     }
   }
 
-  openDestination(destination: AssistantDestination): void {
-    this.destination = destination;
-    this.dockLayout.setSuppressed(this.restoreSuppressed);
-    if (this.available) {
+  function openDestination(nextDestination: AssistantDestination): void {
+    destination = nextDestination;
+    dockLayout.setSuppressed(restoreSuppressed());
+    if (available()) {
       // Keep explicit open intent even when the same Home conversation owns the page.
-      this.setOpen(true);
-      if (this.suppressed) {
-        this.dockLayout.hideWithoutPersisting();
-        this.claimInput("page");
+      setOpen(true);
+      if (suppressed()) {
+        dockLayout.hideWithoutPersisting();
+        claimInput("page");
         if (destination === "home") {
-          this.openHomePage();
+          openHomePage();
         }
       }
     }
-    this.publishSessionKey();
+    publishSessionKey();
+    refresh();
   }
 
-  openHomePage(): void {
-    const context = this.context;
+  function openHomePage(): void {
+    const context = getContext();
     if (!context) {
       return;
     }
-    const { sessionKey, agentId } = this.homeTarget;
-    const { pageRouteId, pageSessionKey } = this.props;
+    const { sessionKey, agentId } = homeTarget();
+    const { pageRouteId, pageSessionKey } = props;
     const { client, hello } = context.gateway.snapshot;
     const target = sessionNavigationTarget({
       context,
@@ -467,19 +457,19 @@ export class AssistantPanelController {
       focusComposer: true,
     });
     // Full-page Home is explicit selection, even when its URL already owns an unbound split.
-    runSessionNavigationIntent(this, {
+    runSessionNavigationIntent(element, {
       face: "chat",
       sessionKey,
       agentId,
       commit: () => {
         if (
-          this.context !== context ||
-          this.props.pageRouteId !== pageRouteId ||
-          this.props.pageSessionKey !== pageSessionKey ||
+          getContext() !== context ||
+          props.pageRouteId !== pageRouteId ||
+          props.pageSessionKey !== pageSessionKey ||
           context.gateway.snapshot.client !== client ||
           context.gateway.snapshot.hello !== hello ||
-          this.homeTarget.sessionKey !== sessionKey ||
-          this.homeTarget.agentId !== agentId
+          homeTarget().sessionKey !== sessionKey ||
+          homeTarget().agentId !== agentId
         ) {
           return false;
         }
@@ -490,66 +480,100 @@ export class AssistantPanelController {
     });
   }
 
-  setOpen(open: boolean): void {
-    if (!open && this.destination !== "home" && this.context) {
-      dismissPluginHelpAutoOpen(this.context);
+  function setOpen(open: boolean): void {
+    const context = getContext();
+    if (!open && destination !== "home" && context) {
+      dismissPluginHelpAutoOpen(context);
     }
-    if (open && this.destination === "home") {
-      this.homeStarted = true;
+    if (open && destination === "home") {
+      homeStarted = true;
     }
-    this.persistTarget();
-    this.dockLayout.setOpen(open);
-    this.claimInput(open ? "dock" : "page");
-    if (!open && typeof this.destination !== "string") {
+    persistTarget();
+    dockLayout.setOpen(open);
+    claimInput(open ? "dock" : "page");
+    if (!open && typeof destination !== "string") {
       // Closing discards the activation-owned target without reopening a dock; the
       // operator's built-in Home/Ask choice and its persisted value stay untouched.
-      this.destination = this.builtInDestination;
+      destination = builtInDestination;
     }
-    this.publishSessionKey();
+    publishSessionKey();
+    refresh();
   }
 
-  get contentDefined() {
-    return isOptionalElementDefined(ASSISTANT_CONTENT_ELEMENT);
-  }
-  acceptStore(store: CustodianSessionStore) {
-    this.element.store = store;
-  }
-
-  toggle(): void {
-    if (!this.available) {
+  function toggle(): void {
+    if (!available()) {
       return;
     }
-    if (this.suppressed) {
-      if (this.destination === "home") {
-        this.openHomePage();
+    if (suppressed()) {
+      if (destination === "home") {
+        openHomePage();
       }
       return;
     }
-    this.setOpen(!this.dockLayout.open);
+    setOpen(!dockLayout.open);
   }
 
-  handleToggleRequest(event: Event): void {
-    const destination = event.type === HOME_PANEL_TOGGLE_EVENT ? "home" : "custodian";
-    if (!this.availableFor(destination)) {
+  function handleToggleRequest(event: Event): void {
+    const requestedDestination = event.type === HOME_PANEL_TOGGLE_EVENT ? "home" : "custodian";
+    if (!availableFor(requestedDestination)) {
       return;
     }
     const detail = asNullableRecord(event instanceof CustomEvent ? event.detail : null);
     const dock = detail?.dock;
     if (dock === "right" || dock === "bottom") {
-      this.dockLayout.setDock(dock, false);
+      dockLayout.setDock(dock, false);
     }
     if (detail?.open === false) {
-      if (this.destination === destination) {
-        this.setOpen(false);
+      if (destination === requestedDestination) {
+        setOpen(false);
       }
-    } else if (this.destination !== destination || detail?.open === true) {
-      this.openDestination(destination);
+    } else if (destination !== requestedDestination || detail?.open === true) {
+      openDestination(requestedDestination);
     } else {
-      this.toggle();
+      toggle();
     }
   }
 
-  get assistantPanelOpen(): boolean {
-    return this.dockLayout.open;
-  }
+  const owner = {
+    props,
+    context: getContext,
+    destination: () => destination,
+    homeStarted: () => homeStarted,
+    homeTarget,
+    available,
+    contentDefined: () => isOptionalElementDefined(ASSISTANT_CONTENT_ELEMENT),
+    get openSessionKey() {
+      return openSessionKey();
+    },
+    contentLoader,
+    dockLayout,
+    availableFor,
+    claimInput,
+    openSession,
+    closeSession,
+    openDestination,
+    openHomePage,
+    setOpen,
+    toggle,
+    handleToggleRequest,
+    acceptStore(store: CustodianSessionStore) {
+      element.store = store;
+    },
+    refresh,
+    notify,
+    attach,
+    detach,
+    inputsChanged,
+    subscribe(listener: () => void) {
+      publish = listener;
+      const stopLoader = contentLoader.subscribe(listener);
+      return () => {
+        publish = undefined;
+        stopLoader();
+      };
+    },
+  };
+  return owner;
 }
+
+export type AssistantPanelOwner = ReturnType<typeof createAssistantPanel>;

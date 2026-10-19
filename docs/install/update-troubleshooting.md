@@ -111,7 +111,13 @@ the CLI fallback on the Gateway host.
 `finalize:doctor` can report `Doctor could not enter maintenance` when a Gateway
 still owns the selected state directory. A starting Gateway and a healthy serving
 Gateway retain that ownership for their entire process lifetime; waiting for
-readiness does not release the lock.
+readiness does not release the lock. A non-Gateway holder, such as a CLI
+command or embedded agent run, gets time to finish first (up to 20 minutes by
+default, less on a host whose Doctor runs slowly); Doctor prints its PID and
+progress while it waits. The same applies to a process that only has an agent
+database open ("An agent database is in use"). An idle CLI process
+closes an unused agent database about 30 seconds after its last use; one started
+from an older release can keep it open for up to 30 minutes, so stop it first.
 
 Maintenance admission refusals finish the update with a recorded warning when
 no data is at risk, including contention from an unknown or non-serving holder.
@@ -258,6 +264,31 @@ that admission decision. Use the [manual package-manager
 procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
 once, then restart the named system unit; subsequent updates can use the fixed
 updater.
+
+## Debug logging blocks the update handoff
+
+With console logging at `debug`, a foreground update can fail with
+`managed-service-handoff-failed`; the old Gateway keeps serving, with no data loss.
+The installed updater's handoff helper writes a debug log line to its readiness
+channel before `READY`, so the handoff is rejected before the new version runs.
+
+Affected **installed** versions:
+
+- Stable: **2026.9.6–2026.9.9** and **2026.10.1–2026.10.5**.
+- Extended-stable: **2026.9.33**.
+- Prereleases: **2026.10.1-beta.1–2**, **2026.10.5-beta.1–4**, and
+  **2026.10.10-beta.1–2**.
+
+For this update, set `logging.consoleLevel` to `"info"` and remove any
+`OPENCLAW_LOG_LEVEL=debug` override from the Gateway and update command's
+environment. File logging can stay at `logging.level: "debug"`. Run
+`openclaw update`, then restore your logging settings. See
+[logging configuration](/logging#configuring-logging).
+
+Version **2026.9.5** and versions containing
+[#177563](https://github.com/openclaw/openclaw/pull/177563) are not affected.
+Updating to a fixed version still needs this workaround when the installed
+updater is affected.
 
 ## Candidate migration rehearsal timeouts
 

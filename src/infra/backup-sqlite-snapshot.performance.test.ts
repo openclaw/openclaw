@@ -126,10 +126,19 @@ describe.skipIf(process.platform === "win32")("backup SQLite discovery performan
           ),
         ).toBe(true);
 
+        let fileProbes = 0;
+        const originalLstatSync = fsSync.lstatSync.bind(fsSync);
+        const archiveSpy = vi.spyOn(fsSync, "lstatSync").mockImplementation((target, options) => {
+          if (String(target) === durableFile) {
+            fileProbes += 1;
+          }
+          return originalLstatSync(target, options);
+        });
         const archive = await createBackupArchive({
           output: state.path("backup.tar.gz"),
           includeWorkspace: false,
-        });
+        }).finally(() => archiveSpy.mockRestore());
+        expect(fileProbes).toBe(1);
         const entries = await listArchiveEntries(archive.archivePath);
         expect(
           entries.some((entry) =>

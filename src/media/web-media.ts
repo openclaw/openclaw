@@ -14,7 +14,6 @@ import {
 } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
-import type { EncodedImage } from "rastermill";
 import { resolveCanvasHttpPathToLocalPath } from "../canvas/documents.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -516,8 +515,6 @@ function toImageFileName(fileName: string | undefined, mimeType: string): string
     : path.format({ dir: parsed.dir, name: parsed.name || trimmed, ext });
 }
 
-const DEFAULT_JPEG_SIDES = [2048, 1536, 1280, 1024, 800] as const;
-const DEFAULT_JPEG_QUALITIES = [80, 70, 60, 50, 40] as const;
 const DEFAULT_VISION_MAX_SIDE = 2048;
 const LOW_IMAGE_SIDE_FALLBACKS = [640, 512, 384, 256, 192, 128] as const;
 
@@ -691,45 +688,25 @@ function buildDescendingLadder(maxSide: number, values: readonly number[]): numb
   return uniqueValues(fallbackLadder.filter((value) => value > 0)).toSorted((a, b) => b - a);
 }
 
+const IMAGE_COMPRESSION_GRIDS = {
+  efficient: { sides: [1024, 800], qualities: [70, 60, 50, 40] },
+  high: {
+    sides: [3072, 2576, 2048, 1800, 1536, 1280, 1024, 800],
+    qualities: [92, 85, 78, 70, 62, 52, 42],
+  },
+  balanced: { sides: [2048, 1536, 1280, 1024, 800], qualities: [80, 70, 60, 50, 40] },
+} as const;
+
 function resolveImageCompressionGrid(policy?: ImageCompressionPolicy): {
   sides: number[];
   qualities: number[];
 } {
   const preference = effectiveImageQualityPreference(policy);
-  const side = sideForPreference(preference, policy);
-  switch (preference) {
-    case "efficient":
-      return {
-        sides: buildDescendingLadder(side, [1024, 800]),
-        qualities: [70, 60, 50, 40],
-      };
-    case "high":
-      return {
-        sides: buildDescendingLadder(side, [3072, 2576, 2048, 1800, 1536, 1280, 1024, 800]),
-        qualities: [92, 85, 78, 70, 62, 52, 42],
-      };
-    default:
-      return {
-        sides: buildDescendingLadder(side, [...DEFAULT_JPEG_SIDES]),
-        qualities: [...DEFAULT_JPEG_QUALITIES],
-      };
-  }
-}
-
-function logOptimizedImage(originalSize: number, optimized: EncodedImage): void {
-  if (!shouldLogVerbose() || optimized.bytes >= originalSize) {
-    return;
-  }
-  const resizeSide = optimized.chosen.maxSide ?? Math.max(optimized.width, optimized.height);
-  if (optimized.format === "png") {
-    logVerbose(
-      `Optimized PNG (preserving alpha) from ${formatMediaSize(originalSize)} to ${formatMediaSize(optimized.bytes)} (side<=${resizeSide}px)`,
-    );
-    return;
-  }
-  logVerbose(
-    `Optimized media from ${formatMediaSize(originalSize)} to ${formatMediaSize(optimized.bytes)} (side<=${resizeSide}px, q=${optimized.chosen.quality})`,
-  );
+  const grid = IMAGE_COMPRESSION_GRIDS[preference];
+  return {
+    sides: buildDescendingLadder(sideForPreference(preference, policy), grid.sides),
+    qualities: [...grid.qualities],
+  };
 }
 
 /** Optimizes image bytes for web-media delivery while preserving accepted original formats when possible. */
@@ -782,10 +759,6 @@ export async function optimizeImageBufferForWebMedia(params: {
     search: { maxSide: grid.sides, quality: grid.qualities },
     transparency: "auto",
   });
-  if (optimized.chosen.transparency === "flattened" && shouldLogVerbose()) {
-    logVerbose(`Image transparency flattened to fit ${formatMediaSize(cap)} optimization budget`);
-  }
-  logOptimizedImage(params.buffer.length, optimized);
   if (optimized.data.length > cap) {
     throw new ImageOptimizationLimitError(
       formatCapReduce("Media", cap, optimized.data.length),

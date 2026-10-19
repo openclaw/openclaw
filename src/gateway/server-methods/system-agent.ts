@@ -155,7 +155,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     validateSystemAgentSetupDetectParams,
     async ({ params, respond }) => {
       const { detectSetupInference } = await import("../../system-agent/setup-inference.js");
-      respond(true, await detectSetupInference({}, params.agentId), undefined);
+      respond(true, await detectSetupInference(params.agentId), undefined);
     },
   ),
   "openclaw.setup.auto": defineValidatedGatewayHandler(
@@ -203,46 +203,34 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "Client required"));
         return;
       }
-      const authority = retainGatewayRequestMutationAuthority(options);
-      let created = false;
-      try {
-        await startWizardLogin({
-          client,
-          context,
-          sessionId: params.sessionId,
-          respond,
-          assertCurrent: authority.assertCurrent,
-          createSession: () => {
-            created = true;
-            return new WizardSession(
-              async (prompter, signal, runnerSession) => {
-                try {
-                  // Keep installed plugin runtime loading off Gateway startup.
-                  const { setupNativeRuntime } =
-                    await import("../../system-agent/setup-native-runtime.js");
-                  await setupNativeRuntime({
-                    ...params,
-                    prompter,
-                    signal,
-                    assertCurrent: authority.assertCurrent,
-                    onCommitStarted: () => runnerSession.lockCancellation(),
-                  });
-                } finally {
-                  authority.release();
-                }
-              },
-              { timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS },
-            );
-          },
-        });
-      } catch (error) {
-        authority.release();
-        throw error;
-      } finally {
-        if (!created) {
-          authority.release();
-        }
-      }
+      await startWizardLogin({
+        client,
+        context,
+        sessionId: params.sessionId,
+        respond,
+        assertCurrent: readGatewayRequestMutationAuthority(options).assertCurrent,
+        createSession: () =>
+          new WizardSession(
+            async (prompter, signal, runnerSession) => {
+              const authority = retainGatewayRequestMutationAuthority(options);
+              try {
+                // Keep installed plugin runtime loading off Gateway startup.
+                const { setupNativeRuntime } =
+                  await import("../../system-agent/setup-native-runtime.js");
+                await setupNativeRuntime({
+                  ...params,
+                  prompter,
+                  signal,
+                  assertCurrent: authority.assertCurrent,
+                  onCommitStarted: () => runnerSession.lockCancellation(),
+                });
+              } finally {
+                authority.release();
+              }
+            },
+            { timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS },
+          ),
+      });
     },
   ),
   "openclaw.setup.auth.start": defineValidatedGatewayHandler(

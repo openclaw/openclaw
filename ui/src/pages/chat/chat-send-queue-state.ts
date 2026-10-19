@@ -55,7 +55,6 @@ import {
   prepareOutboxPayload,
   retireOutboxPayload,
 } from "./outbox-payloads.ts";
-import { controlUiNowMs } from "./performance.ts";
 import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
 import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
@@ -67,7 +66,7 @@ export function createPendingSendMessage(
   text: string,
   attachments?: ChatAttachment[],
   refreshSessions?: boolean,
-  submittedAtMs = controlUiNowMs(),
+  submittedAtMs = performance.now(),
   sendState?: ChatQueueItem["sendState"],
   replyToId?: string,
   resumedOrderKey?: number,
@@ -472,8 +471,6 @@ export async function settleDeliverySettings(
         setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
       }
     }
-    host.requestUpdate?.();
-
     const ready = await pendingSettings;
     consumed.add(pendingSettings);
     current = readQueuedMessageById(host, item.id);
@@ -492,7 +489,6 @@ export async function settleDeliverySettings(
       if (!restored && !setState("failed", INTERRUPTED_SETTINGS_WAIT_ERROR)) {
         setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
       }
-      host.requestUpdate?.();
       return "failed";
     }
     pendingSettings = getPendingChatPickerPatch(host, route, current.agentId);
@@ -505,9 +501,6 @@ export async function settleDeliverySettings(
   if (!current) {
     setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
     return "failed";
-  }
-  if (consumed.size) {
-    host.requestUpdate?.();
   }
   return deliver(current);
 }

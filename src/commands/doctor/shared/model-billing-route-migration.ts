@@ -92,6 +92,7 @@ function collectModelConsumers(cfg: OpenClawConfig): ModelConsumer[] {
     if (entry) {
       for (const ref of collectConfiguredModelRefs({ agents: { entries: { [agentId]: entry } } })) {
         if (
+          ref.capability !== "decision" &&
           !ref.path.endsWith(`.models.${ref.value}`) &&
           !ref.path.startsWith(`${prefix}.model`) &&
           ref.path !== `${prefix}.heartbeat.model` &&

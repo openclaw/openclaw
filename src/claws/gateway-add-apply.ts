@@ -98,7 +98,6 @@ export async function applyClawAddForGateway(
       ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
       ...(input.token ? { token: input.token } : {}),
       ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
-      ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
       ...(input.stateDir ? { stateDir: input.stateDir } : {}),
       run: async (source, trust, persistSource) =>
         await withOpenClawStateLease(
@@ -438,27 +437,17 @@ export async function applyClawAddForGateway(
                           applyOptions,
                         );
                         abortableStage = { stage, runtimeBatch, readiness };
-                        let prepareFailure: { error: unknown } | undefined;
-                        let installOwners: ReadonlyMap<string, string> | undefined;
-                        try {
-                          await runtimeBatch.prepare(pluginLease);
-                          if (stage.kind === "ready") {
-                            installOwners = await snapshotClawPluginInstallOwners(
-                              pluginIds,
-                              pluginLease,
-                            );
-                          }
-                        } catch (error) {
-                          prepareFailure = { error };
-                          runtimeBatch.close();
-                        }
+                        await runtimeBatch.prepare(pluginLease);
+                        const installOwners =
+                          stage.kind === "ready"
+                            ? await snapshotClawPluginInstallOwners(pluginIds, pluginLease)
+                            : undefined;
                         return {
                           kind: "staged" as const,
                           stage,
                           runtimeBatch,
                           applyOptions,
                           readiness,
-                          prepareFailure,
                           installOwners,
                         };
                       },
@@ -476,17 +465,7 @@ export async function applyClawAddForGateway(
                 if (prepared.kind === "settled" || prepared.kind === "aborted") {
                   return prepared.result;
                 }
-                const {
-                  stage,
-                  runtimeBatch,
-                  applyOptions,
-                  readiness,
-                  prepareFailure,
-                  installOwners,
-                } = prepared;
-                if (prepareFailure) {
-                  return await failBatch(prepared, prepareFailure.error, "package_runtime_failed");
-                }
+                const { stage, runtimeBatch, applyOptions, readiness, installOwners } = prepared;
                 try {
                   await runtimeBatch.finish((message) => defaultRuntime.log(message));
                 } catch (error) {

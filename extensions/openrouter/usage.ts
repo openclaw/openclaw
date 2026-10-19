@@ -100,9 +100,7 @@ async function fetchEndpoint(params: {
       const root = asOptionalRecord(
         await readProviderJsonResponse(response, "OpenRouter usage", {
           maxBytes: OPENROUTER_USAGE_RESPONSE_MAX_BYTES,
-          chunkTimeoutMs: params.timeoutMs,
-          onIdleTimeout: ({ chunkTimeoutMs }) =>
-            new Error(`OpenRouter usage response stalled for ${chunkTimeoutMs}ms`),
+          chunkTimeoutMs: 0,
         }),
       );
       const data = asOptionalRecord(root?.data);

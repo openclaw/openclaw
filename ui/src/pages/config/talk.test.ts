@@ -74,6 +74,17 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
           activeVoices: ["cove", "spruce"],
           activeVoiceSelectionPolicy: options.activeVoiceSelectionPolicy,
           voicesByModel: options.voicesByModel,
+          modelFamilySettings: {
+            family: "gpt-live",
+            unlistedModelVoices: "active",
+            unsupportedTransports: ["provider-websocket"],
+            gatewayRelayHandlesAgentConsult: true,
+            hint: {
+              titleKey: "talkPage.gptLive.title",
+              descriptionKey: "talkPage.gptLive.hint",
+              readyKey: "talkPage.gptLive.ready",
+            },
+          },
           transports: options.transports ?? ["gateway-relay"],
           defaultModel: options.defaultModel ?? "gpt-live-test-canary",
         },
@@ -828,6 +839,72 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     expect(removeFormValue).toHaveBeenCalledTimes(1);
     expect(removeFormValue).toHaveBeenCalledWith(["talk", "realtime", "consultRouting"]);
     expect(removeFormValue).not.toHaveBeenCalledWith(["talk", "realtime", "transport"]);
+  });
+
+  it.each([
+    ["provider-websocket", ["provider-websocket", "gateway-relay"]],
+    ["gateway-relay", ["webrtc"]],
+  ] as const)(
+    "removes rejected %s before relay consult cleanup on a model switch",
+    async (transport, transports) => {
+      const removeFormValue = await selectModel(" GPT-LIVE-test-canary ", {
+        model: "gpt-realtime-2.1",
+        transport,
+        transports: [...transports],
+        consultRouting: "force-agent-consult",
+        aliases: ["openai-voice"],
+        provider: "openai-voice",
+      });
+
+      expect(removeFormValue).toHaveBeenCalledExactlyOnceWith(["talk", "realtime", "transport"]);
+    },
+  );
+
+  it("does not apply OpenAI family cleanup to another provider's model", async () => {
+    const removeFormValue = await selectModel("gpt-live-test-canary", {
+      provider: "xai",
+      transport: "provider-websocket",
+      consultRouting: "force-agent-consult",
+    });
+
+    expect(removeFormValue).not.toHaveBeenCalled();
+
+    const providerRemovals = await selectProvider("xai", {
+      transport: "provider-websocket",
+      catalogRequest: (_index, catalog) => ({
+        ...catalog,
+        realtime: {
+          ...catalog.realtime,
+          providers: catalog.realtime.providers.map((provider) =>
+            provider.id === "xai"
+              ? { ...provider, defaultModel: "gpt-live-other", transports: ["provider-websocket"] }
+              : provider,
+          ),
+        },
+      }),
+    });
+    expect(providerRemovals).not.toHaveBeenCalledWith(["talk", "realtime", "transport"]);
+  });
+
+  it("keeps generic transport handling when a catalog has no family facts", async () => {
+    const removeFormValue = await selectProvider("openai", {
+      provider: "xai",
+      transport: "provider-websocket",
+      transports: ["provider-websocket", "gateway-relay"],
+      catalogRequest: (_index, catalog) => ({
+        ...catalog,
+        realtime: {
+          ...catalog.realtime,
+          providers: catalog.realtime.providers.map((provider) => ({
+            ...provider,
+            modelFamilySettings: undefined,
+          })),
+        },
+      }),
+    });
+
+    expect(removeFormValue).not.toHaveBeenCalledWith(["talk", "realtime", "transport"]);
+    expect(removeFormValue).not.toHaveBeenCalledWith(["talk", "realtime", "consultRouting"]);
   });
 
   it.each([["provider fallback", "gpt-realtime-2.1", "gpt-live-test-canary"]])(

@@ -72,7 +72,7 @@ function userTexts(body: ProviderRequest): string[] {
 
 async function connectOperator(gateway: OpenClawTestInstance, email: string, signal: AbortSignal) {
   const identity = loadOrCreateDeviceIdentity({
-    path: gateway.state.statePath("proof-identities", `${email}.sqlite`),
+    path: gateway.state.statePath("proof-identities", email, "client", "credentials.sqlite"),
   });
   const socket = new WebSocket(gateway.url, {
     headers: {

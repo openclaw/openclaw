@@ -117,6 +117,33 @@ it("prepares a raw phased prefix once across nontext content", () => {
   expect(source).toEqual(before);
 });
 
+it("prepares a trailing control line once across phased text and media", () => {
+  const source = assistant({
+    phase: "final_answer",
+    content: [
+      phased("First part.", "final_answer"),
+      image,
+      phased("Second part.\n\nNO_", "final_answer"),
+      phased("REPLY\n", "final_answer"),
+    ],
+  });
+  const expected = {
+    ...source,
+    display: true,
+    content: [
+      phased("First part.", "final_answer"),
+      image,
+      phased("Second part.", "final_answer"),
+      phased("", "final_answer"),
+    ],
+  };
+  const projected = project([source]);
+  expect(projected).toEqual([expected]);
+  expect(project(projected)).toEqual([expected]);
+  expect(source.content).toContainEqual(phased("REPLY\n", "final_answer"));
+  expect(payloadFor(source)?.message).toMatchObject({ content: expected.content });
+});
+
 it("prepares raw prefixes before the display cap and preserves prepared or forwarded text", () => {
   const source = assistant({ content: [text("NO_REPLY\nREADY")] });
   expect(project([source], { maxChars: 5 })).toEqual([

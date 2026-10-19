@@ -187,6 +187,24 @@ describe("protectNetworkToolExecutionError", () => {
 });
 
 describe("resolveToolResultFailureKind", () => {
+  it.each([
+    [{ status: "denied", timedOut: true }, "blocked"],
+    [{ status: "cancelled", timedOut: true }, "timed_out"],
+    [{ status: "cancelled" }, "cancelled"],
+    [{ status: "timeout" }, "timed_out"],
+    [{ status: "failed", ok: true }, undefined],
+    [{ status: "failed", success: true }, undefined],
+    [{ status: "failed", success: true, ok: false }, "failed"],
+    [{ status: "completed", error: "failed" }, "failed"],
+    [{ status: "completed", exitCode: 1 }, undefined],
+    [{ exitCode: 1 }, "failed"],
+    [{ exitCode: Number.NaN }, undefined],
+  ] as const)("classifies structured outcome %j as %s", (details, expected) => {
+    const result = { details };
+    expect(resolveToolResultFailureKind(result)).toBe(expected);
+    expect(isToolResultError(result)).toBe(expected !== undefined);
+  });
+
   it("contains hostile structured result fields", () => {
     const hostileDetails = new Proxy(
       {},

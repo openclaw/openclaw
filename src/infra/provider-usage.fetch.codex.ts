@@ -1,5 +1,4 @@
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-// Fetches Codex provider usage windows.
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 import { fetchUsageJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";

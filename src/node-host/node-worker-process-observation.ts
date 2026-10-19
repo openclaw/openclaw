@@ -54,9 +54,7 @@ export class NodeWorkerProcessObservations {
     };
     const timeout = AbortSignal.timeout(10_000);
     const lifetime = signal ? AbortSignal.any([signal, timeout]) : timeout;
-    assertCurrent();
     await racePromiseWithAbortSignal(owner.journalReady, lifetime);
-    assertCurrent();
     if (this.pending.size >= 64) {
       throw new Error("Worker process observation is busy; retry shortly.");
     }

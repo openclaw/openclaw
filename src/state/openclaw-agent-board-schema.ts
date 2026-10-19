@@ -2,7 +2,9 @@ import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-con
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { OPENCLAW_AGENT_BOARD_SCHEMA_SQL } from "./openclaw-agent-schema-history.js";
+
+export { AGENT_V14_BOARD_SCHEMA_SQL } from "./openclaw-agent-schema-history.js";
 
 const BOARD_WIDGETS_SCHEMA_START = "CREATE TABLE IF NOT EXISTS board_widgets (";
 const BOARD_WIDGETS_MIGRATION_TABLE = "board_widgets_plugin_kind_migration_new";
@@ -10,21 +12,6 @@ const PLUGIN_CONTENT_KIND_CLAUSE_PATTERN =
   /content_kind\s+IN\s*\(\s*'html'\s*,\s*'mcp-app'\s*,\s*'plugin'\s*\)/iu;
 const PLUGIN_PAYLOAD_BRANCH_PATTERN =
   /\s+OR\s+\(content_kind\s*=\s*'plugin'\s+AND\s+html\s+IS\s+NULL\s+AND\s+descriptor_json\s+IS\s+NOT\s+NULL\s+AND\s+view_generation\s+IS\s+NULL\)/iu;
-
-const OPENCLAW_AGENT_BOARD_SCHEMA_SQL = extractSqliteTableSchema(
-  OPENCLAW_AGENT_SCHEMA_SQL,
-  "board_tabs",
-  {
-    endMarker: "CREATE TABLE IF NOT EXISTS session_progress_cards (",
-    includeEndMarker: false,
-    errorMessage: "OpenClaw agent board schema markers are missing from the canonical schema.",
-  },
-);
-export const AGENT_V14_BOARD_SCHEMA_SQL = OPENCLAW_AGENT_BOARD_SCHEMA_SQL;
-export const OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL = OPENCLAW_AGENT_SCHEMA_SQL.replace(
-  OPENCLAW_AGENT_BOARD_SCHEMA_SQL,
-  "",
-);
 
 const ensureBoardTables = createSqliteSchemaEnsurer(() => OPENCLAW_AGENT_BOARD_SCHEMA_SQL, {
   tables: ["board_tabs", "board_widgets"],

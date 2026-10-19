@@ -32,21 +32,12 @@ const lifecycleSource: string = runInNewContext(
   { MANAGED_HANDOFF_LEASE_SOURCE },
 );
 const finalizerSource = sourceBetween(
-  "  } finally {\n    clearTimeout(parentExitDeadline);",
+  "  } finally {\n    try { await finishManagedUpdateRun(); }",
   "\n})().catch((err) =>",
 ).replace(
   "${JSON.stringify(SYSTEM_SERVICE_UPDATE_SETTLED_MARKER)}",
   JSON.stringify("system-update-settled\n"),
 );
-const commandResultSource = sourceBetween(
-  "    const exit = await runOwnedUpdateCommand(params.action,",
-  "    if (updateCancelled || activationRejected)",
-);
-const diagnosticSource = sourceBetween(
-  "async function collectUpdateFailureTriage()",
-  "\n(async () => {",
-);
-
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
@@ -57,13 +48,12 @@ function createBoundary(action: "update" | "triage" = "update") {
   const diagnosticFinished = createDeferred();
   const commandAdmitted = createDeferred();
   const order: string[] = [];
-  const stdin = Object.assign(new EventEmitter(), { destroy: vi.fn() });
   const processFixture = Object.assign(new EventEmitter(), {
     pid: 100,
     platform: "linux",
     execPath: "/fixture/node",
     env: {},
-    stdin,
+    stdin: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
     exitCode: undefined as number | undefined,
     execve: vi.fn(),
   });
@@ -154,13 +144,7 @@ function createBoundary(action: "update" | "triage" = "update") {
         });
       },
     });
-    child.stdio = [
-      new EventEmitter(),
-      new EventEmitter(),
-      new EventEmitter(),
-      new EventEmitter(),
-      gate,
-    ];
+    child.stdio = [...Array.from({ length: 4 }, () => new EventEmitter()), gate];
     return child;
   }
   const spawn = vi.fn((_executable: string, args: string[]) => {
@@ -174,13 +158,13 @@ function createBoundary(action: "update" | "triage" = "update") {
     let restorationArmed = true;
     let foregroundParked = false, foregroundClosed = false, foregroundRespawn = false;
     let updaterStarted = true;
-    let finishBeforeParkNotice, parentExitDeadline;
+    let finishBeforeParkNotice;
     ${lifecycleSource}
     ${MANAGED_HANDOFF_RESULT_SOURCE}
     ${MANAGED_HANDOFF_NATIVE_SCOPE_SOURCE}
     ${HANDOFF_OWNED_COMMAND_SCRIPT}
-    ${diagnosticSource}
-    ${sourceBetween("function cleanupSensitiveFiles()", "function assertStateDatabaseWriteAllowed")}
+    ${sourceBetween("async function collectUpdateFailureTriage()", "\n(async () => {")}
+    ${sourceBetween("function cleanupSensitiveFiles()", "${MANAGED_HANDOFF_SQLITE_SOURCE}")}
     managedUpdateLease = initialLease;
     if (params.action === "update") {
       runLedger = {};
@@ -193,7 +177,7 @@ function createBoundary(action: "update" | "triage" = "update") {
       ${finalizerSource}
     }
     ({ settle: () => complete(async () => {}),
-      command: () => complete(async () => { ${commandResultSource} }), });
+      command: () => complete(async () => { ${sourceBetween("    const exit = await runOwnedUpdateCommand(params.action,", "    if (updateCancelled || activationRejected)")} }), });
     `,
     {
       params,
@@ -232,16 +216,25 @@ function createBoundary(action: "update" | "triage" = "update") {
   };
 }
 
+async function startSettlement(fixture = createBoundary()) {
+  const completed = fixture.settle();
+  await awaitGateBeforeSettlement(
+    fixture.terminalStarted.promise,
+    completed,
+    "finalization not reached",
+  );
+  return { fixture, completed };
+}
+
+function expectNoReplacement(fixture: ReturnType<typeof createBoundary>) {
+  expect(fixture.leaseStore.retarget).not.toHaveBeenCalled();
+  expect(fixture.process.execve).not.toHaveBeenCalled();
+}
+
 it.each(["finalization", "diagnostics"] as const)(
   "joins settlement before cleanup after SIGTERM during %s",
   async (stage) => {
-    const fixture = createBoundary();
-    const completed = fixture.settle();
-    await awaitGateBeforeSettlement(
-      fixture.terminalStarted.promise,
-      completed,
-      "finalization not reached",
-    );
+    const { fixture, completed } = await startSettlement();
     if (stage === "diagnostics") {
       fixture.terminalFinished.resolve();
       await awaitGateBeforeSettlement(
@@ -258,22 +251,16 @@ it.each(["finalization", "diagnostics"] as const)(
     fixture.terminalFinished.resolve();
     fixture.diagnosticFinished.resolve();
     await completed;
-    expect(fixture.leaseStore.retarget).not.toHaveBeenCalled();
-    expect(fixture.process.execve).not.toHaveBeenCalled();
+    expectNoReplacement(fixture);
     expect(fixture.leaseStore.release).toHaveBeenCalledExactlyOnceWith(fixture.lease);
-    expect(fixture.order).toEqual(
-      stage === "finalization"
-        ? ["terminal:start", "terminal:done", "release", "cleanup", "cleanup"]
-        : [
-            "terminal:start",
-            "terminal:done",
-            "diagnostic:start",
-            "diagnostic:done",
-            "release",
-            "cleanup",
-            "cleanup",
-          ],
-    );
+    expect(fixture.order).toEqual([
+      "terminal:start",
+      "terminal:done",
+      ...(stage === "diagnostics" ? ["diagnostic:start", "diagnostic:done"] : []),
+      "release",
+      "cleanup",
+      "cleanup",
+    ]);
     expect(fixture.logs).toContain("managed update helper completed code=143");
     expect(fixture.process.exitCode).toBe(143);
     expect(fixture.process.stdin.destroy).toHaveBeenCalledOnce();
@@ -281,16 +268,20 @@ it.each(["finalization", "diagnostics"] as const)(
   },
 );
 
-it.each([true, false])(
-  "revalidates lease authority before diagnostics (current=%s)",
-  async (current) => {
+it.each(["current", "lost-before-diagnostics", "lost-before-admission"] as const)(
+  "revalidates diagnostic lease authority: %s",
+  async (authority) => {
     const fixture = createBoundary();
-    const completed = fixture.settle();
-    await awaitGateBeforeSettlement(
-      fixture.terminalStarted.promise,
-      completed,
-      "finalization not reached",
-    );
+    const lateRevocation = authority === "lost-before-admission";
+    if (lateRevocation) {
+      fixture.fs.writeFileSync.mockImplementation((filePath) => {
+        if (filePath === "/fixture/diagnostics.json") {
+          fixture.authority.current = false;
+        }
+      });
+    }
+    const { completed } = await startSettlement(fixture);
+    const current = authority !== "lost-before-diagnostics";
     fixture.authority.current = current;
     fixture.terminalFinished.resolve();
     fixture.diagnosticFinished.resolve();
@@ -299,7 +290,11 @@ it.each([true, false])(
     expect(
       fixture.fs.writeFileSync.mock.calls.some(([file]) => file === "/fixture/diagnostics.json"),
     ).toBe(current);
-    if (current) {
+    if (lateRevocation) {
+      expect(fixture.children[1]?.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+      expect(fixture.order).not.toContain("diagnostic:start");
+      expect(fixture.process.stdin.destroy).toHaveBeenCalledOnce();
+    } else if (current) {
       expect(fixture.spawn.mock.calls[1]?.[1]).toEqual(
         expect.arrayContaining([
           "triage",
@@ -312,35 +307,10 @@ it.each([true, false])(
         "Reuse this diagnostic context on the Gateway host: openclaw triage --run --update-result /fixture/failure.json",
       );
     }
-    expect(fixture.leaseStore.retarget).not.toHaveBeenCalled();
-    expect(fixture.process.execve).not.toHaveBeenCalled();
+    expectNoReplacement(fixture);
     expect(fixture.process.exitCode).toBe(1);
   },
 );
-
-it("revalidates the lease before admitting the diagnostic child", async () => {
-  const fixture = createBoundary();
-  fixture.fs.writeFileSync.mockImplementation((filePath) => {
-    if (filePath === "/fixture/diagnostics.json") {
-      fixture.authority.current = false;
-    }
-  });
-  const completed = fixture.settle();
-  await awaitGateBeforeSettlement(
-    fixture.terminalStarted.promise,
-    completed,
-    "finalization not reached",
-  );
-  fixture.terminalFinished.resolve();
-  await completed;
-  expect(fixture.spawn).toHaveBeenCalledTimes(2);
-  expect(fixture.children[1]?.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-  expect(fixture.order).not.toContain("diagnostic:start");
-  expect(fixture.leaseStore.retarget).not.toHaveBeenCalled();
-  expect(fixture.process.execve).not.toHaveBeenCalled();
-  expect(fixture.process.stdin.destroy).toHaveBeenCalledOnce();
-  expect(fixture.process.exitCode).toBe(1);
-});
 
 it.each([0, 7])(
   "preserves failed admission through outer finalization when triage exits %s",

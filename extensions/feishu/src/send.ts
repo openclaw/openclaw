@@ -43,7 +43,6 @@ function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }
   return msg.includes("withdrawn") || msg.includes("not found");
 }
 
-/** Check whether a thrown error indicates a withdrawn/not-found reply target. */
 function isWithdrawnReplyError(err: unknown): boolean {
   if (typeof err !== "object" || err === null) {
     return false;
@@ -278,7 +277,7 @@ export async function getMessageFeishu(params: {
         ...parsedItem,
         content: await parseMergeForwardContent(
           responseItems,
-          (account.config.resolveSenderNames ?? true)
+          account.config.resolveSenderNames
             ? async (senderId) =>
                 (
                   await resolveFeishuSenderName({
@@ -460,7 +459,7 @@ export async function editMessageFeishu(params: {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
 
-  const hasText = typeof text === "string" && text.trim().length > 0;
+  const hasText = Boolean(text?.trim());
   const hasCard = Boolean(card);
   if (hasText === hasCard) {
     throw new Error("Feishu edit requires exactly one of text or card.");

@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { isTranscriptArtifactProvider } from "../../packages/agent-core/src/harness/session/transcript-model.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
@@ -102,14 +103,15 @@ export function resolvePersistedSelectedModelRef(
   const runtimeModel = normalizeOptionalString(params.runtimeModel);
   if (runtimeModel) {
     if (runtimeProvider) {
-      return { provider: runtimeProvider, model: runtimeModel };
+      return isTranscriptArtifactProvider(runtimeProvider)
+        ? null
+        : { provider: runtimeProvider, model: runtimeModel };
     }
-    return (
-      parseModelRef(runtimeModel, defaultProvider, params) ?? {
-        provider: defaultProvider,
-        model: runtimeModel,
-      }
-    );
+    const ref = parseModelRef(runtimeModel, defaultProvider, params) ?? {
+      provider: defaultProvider,
+      model: runtimeModel,
+    };
+    return isTranscriptArtifactProvider(ref.provider) ? null : ref;
   }
   return null;
 }

@@ -29,6 +29,7 @@ import { isUserModelAuthProfileId, parseUserModelAuthProfileId } from "./user-mo
 import {
   invalidUserModelAccounts as invalidAccounts,
   readSelectedUserModelAccountRecords,
+  readUserModelAccountLinksRecord,
   readUserModelAccountRecord as readRecord,
   userModelAccountRecordValue as accountRecordValue,
   type UserModelAccountRecordName as AccountRecordName,
@@ -516,8 +517,8 @@ export function listUserProfileAuthLinksInDatabase(
   db: EngineConnection,
   profileId: string,
 ): UserProfileAuthLink[] {
-  const owner = resolveOwner(db, profileId);
-  return owner ? accountLinks(readLinks(db, owner)) : [];
+  const raw = readUserModelAccountLinksRecord(db, profileId);
+  return raw === undefined ? [] : accountLinks(parseRecord(raw, linksSchema));
 }
 
 const userProfileAuthLinks = new Map<

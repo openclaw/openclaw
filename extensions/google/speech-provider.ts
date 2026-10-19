@@ -57,7 +57,7 @@ function resolveGoogleTtsApiKey(params: {
 
 function normalizeGoogleTtsProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const raw = asOptionalRecord(providers?.google) ?? asOptionalRecord(rawConfig.google);
+  const raw = asOptionalRecord(providers?.google);
   return {
     ...readGoogleTtsProviderConfig(raw ?? {}),
     apiKey: normalizeResolvedSecretInputString({
@@ -120,6 +120,7 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
   }
   const { sanitizeConfiguredModelProviderRequest } =
     await import("openclaw/plugin-sdk/provider-http");
+  const { isTransientNetworkError } = await import("openclaw/plugin-sdk/retry-runtime");
   const params = {
     text: req.text,
     apiKey,
@@ -136,7 +137,7 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
   return retryAsync(() => synthesizeGoogleTtsPcmOnce(params), {
     attempts: 2,
     minDelayMs: 0,
-    shouldRetry: isGoogleTtsRetryableError,
+    shouldRetry: (err) => isGoogleTtsRetryableError(err) || isTransientNetworkError(err),
   });
 }
 
@@ -162,6 +163,7 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeGoogleTtsProviderConfig(baseTtsConfig);
+      const baseUrl = normalizeOptionalString(talkProviderConfig.baseUrl);
       return {
         ...base,
         ...(talkProviderConfig.apiKey === undefined
@@ -172,9 +174,7 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
                 path: "talk.providers.google.apiKey",
               }),
             }),
-        ...(normalizeOptionalString(talkProviderConfig.baseUrl) == null
-          ? {}
-          : { baseUrl: normalizeOptionalString(talkProviderConfig.baseUrl) }),
+        ...(baseUrl ? { baseUrl } : {}),
         ...(normalizeOptionalString(talkProviderConfig.modelId) == null
           ? {}
           : { model: normalizeGoogleTtsModel(talkProviderConfig.modelId) }),

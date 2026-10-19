@@ -85,16 +85,7 @@ export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
   };
 }
 
-export type SensitiveRenderState = {
-  isSensitive: boolean;
-  /** The path or hint marks the field sensitive, whether or not it holds a value yet. */
-  isSensitiveField: boolean;
-  isMasked: boolean;
-  isRedacted: boolean;
-  isRevealed: boolean;
-  canReveal: boolean;
-  sentinelRedacted: boolean;
-};
+export type SensitiveRenderState = ReturnType<typeof getSensitiveRenderState>;
 
 export function isAnySchema(schema: JsonSchema): boolean {
   return Object.keys(schema).every((key) => META_KEYS.has(key));
@@ -136,7 +127,7 @@ export function getSensitiveRenderState(params: {
   revealSensitive?: boolean;
   maskSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
-}): SensitiveRenderState {
+}) {
   const isSensitive = hasSensitiveConfigData(params.value, params.path, params.hints);
   // The server never sends plaintext secrets: a stored secret arrives as the
   // redaction sentinel. Revealing it would display the sentinel as an editable
@@ -146,6 +137,7 @@ export function getSensitiveRenderState(params: {
     isSensitive &&
     !sentinel &&
     (params.revealSensitive || (params.isSensitivePathRevealed?.(params.path) ?? false));
+  // The path or hint is sensitive even when it does not hold a value yet.
   const isSensitiveField =
     hintForPath(params.path, params.hints)?.sensitive ||
     isSensitiveConfigPath(configPathKey(params.path));

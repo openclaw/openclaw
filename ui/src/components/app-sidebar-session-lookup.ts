@@ -11,11 +11,11 @@ import type {
   SidebarRecentSession,
   SidebarSessionHovercardRow,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
-import { sessionLineageIdentityHost } from "./session-lineage-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
+import { sessionLineageIdentityHost } from "./session-lineage.ts";
 
 type SidebarSessionLookupData = Pick<
-  SessionDataController,
+  SessionDataOwner,
   | "context"
   | "activeSessionLineageRoot"
   | "activeSessionLineageSelectedRow"

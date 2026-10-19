@@ -10,11 +10,7 @@ import path from "node:path";
 import { tryReadJson } from "@openclaw/fs-safe/json";
 import { isRecord as isConfigRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import {
-  parse as parseToml,
-  stringify as stringifyToml,
-  type TomlTableWithoutBigInt,
-} from "smol-toml";
+import { parse as parseToml } from "smol-toml";
 import {
   buildAdapterWrapperScript,
   RUN_CONFIGURED_COMMAND_SENTINEL,
@@ -225,7 +221,8 @@ async function readSourceCodexConfig(codexHome: string): Promise<string | undefi
 async function prepareIsolatedCodexHome(params: {
   baseDir: string;
   workspaceDir: string;
-}): Promise<string> {
+  migratedConfig?: Record<string, unknown>;
+}): Promise<void> {
   const sourceCodexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
   const sourceConfig = await readSourceCodexConfig(sourceCodexHome);
   const codexHome = path.join(params.baseDir, "codex-home");
@@ -235,10 +232,12 @@ async function prepareIsolatedCodexHome(params: {
     renderIsolatedCodexConfig({
       sourceConfigToml: sourceConfig,
       projectPaths: [params.workspaceDir],
+      mcpServers: isConfigRecord(params.migratedConfig?.mcp_servers)
+        ? params.migratedConfig.mcp_servers
+        : undefined,
     }),
     "utf8",
   );
-  return codexHome;
 }
 
 async function writeAdapterWrapper(
@@ -420,20 +419,6 @@ function resolveCodexAdapterLaunch(
   return { args: maintainedAdapterArgs };
 }
 
-async function persistMigratedCodexMcpConfig(params: {
-  codexHome: string;
-  migratedConfig: Record<string, unknown> | undefined;
-}): Promise<void> {
-  const mcpServers = params.migratedConfig?.mcp_servers;
-  if (!isConfigRecord(mcpServers)) {
-    return;
-  }
-  const configPath = path.join(params.codexHome, "config.toml");
-  const current = parseToml(await fs.readFile(configPath, "utf8")) as Record<string, unknown>;
-  const merged = mergeConfigRecords(current, { mcp_servers: mcpServers });
-  await fs.writeFile(configPath, stringifyToml(merged as TomlTableWithoutBigInt), "utf8");
-}
-
 function buildClaudeAcpWrapperCommand(
   wrapperPath: string,
   configuredCommand?: AcpxAgentCommand,
@@ -460,12 +445,9 @@ export async function prepareAcpxCodexAuthConfig(params: {
   const configuredCodexCommand = params.pluginConfig.agents.codex;
   const configuredClaudeCommand = params.pluginConfig.agents.claude;
   const codexLaunch = resolveCodexAdapterLaunch(configuredCodexCommand);
-  const codexHome = await prepareIsolatedCodexHome({
+  await prepareIsolatedCodexHome({
     baseDir: codexBaseDir,
     workspaceDir: params.pluginConfig.cwd,
-  });
-  await persistMigratedCodexMcpConfig({
-    codexHome,
     migratedConfig: codexLaunch?.migratedConfig,
   });
   const installedCodexBinPath = await (params.resolveInstalledCodexAcpBinPath

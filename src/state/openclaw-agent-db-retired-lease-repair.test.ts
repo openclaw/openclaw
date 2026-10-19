@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { migrateOpenClawAgentDatabaseForMaintenance } from "./openclaw-agent-db-maintenance.js";
@@ -13,6 +14,10 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const tempDirs: string[] = [];
+type Database = EngineConnection;
+const row = (db: Database, sql: string) => db.prepare(sql).get();
+const rows = (db: Database, sql: string) => db.prepare(sql).all();
+const leaseTable = "SELECT name FROM sqlite_schema WHERE name = 'state_leases'";
 
 function createCurrentAgentDatabase(): { databasePath: string; env: NodeJS.ProcessEnv } {
   const stateDir = makeTempDir(tempDirs, "agent-db-retired-lease-");
@@ -24,42 +29,41 @@ function createCurrentAgentDatabase(): { databasePath: string; env: NodeJS.Proce
 }
 
 function installRetiredLeaseSchema(databasePath: string): void {
-  const database = openNodeSqliteDatabase(databasePath);
-  try {
-    database.exec(`
+  using database = openNodeSqliteDatabase(databasePath);
+  database.exec(`
       CREATE TABLE state_leases (
-        scope TEXT NOT NULL,
-        lease_key TEXT NOT NULL,
-        owner TEXT NOT NULL,
-        expires_at INTEGER,
-        heartbeat_at INTEGER,
-        payload_json TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
+        scope TEXT NOT NULL, lease_key TEXT NOT NULL, owner TEXT NOT NULL,
+        expires_at INTEGER, heartbeat_at INTEGER, payload_json TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
         PRIMARY KEY (scope, lease_key)
       ) STRICT;
-      CREATE INDEX idx_agent_state_leases_expiry
-        ON state_leases(expires_at, scope, lease_key)
+      CREATE INDEX idx_agent_state_leases_expiry ON state_leases(expires_at, scope, lease_key)
         WHERE expires_at IS NOT NULL;
-      CREATE INDEX idx_agent_state_leases_owner
-        ON state_leases(owner, updated_at DESC);
-      INSERT INTO state_leases (
-        scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at
-      ) VALUES ('retired', 'orphan', 'nobody', NULL, NULL, NULL, 1, 1);
+      CREATE INDEX idx_agent_state_leases_owner ON state_leases(owner, updated_at DESC);
+      INSERT INTO state_leases VALUES ('retired', 'orphan', 'nobody', NULL, NULL, NULL, 1, 1);
       ANALYZE state_leases;
     `);
-  } finally {
-    database.close();
-  }
 }
 
 function readPrimarySchemaMetadata(databasePath: string): unknown {
-  const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
-  try {
-    return database.prepare("SELECT * FROM schema_meta WHERE meta_key = 'primary'").get();
-  } finally {
-    database.close();
-  }
+  using database = openNodeSqliteDatabase(databasePath, { readOnly: true });
+  return row(database, "SELECT * FROM schema_meta WHERE meta_key = 'primary'");
+}
+
+function migrate(databasePath: string, env: NodeJS.ProcessEnv) {
+  return withAgentDatabaseMaintenanceLease({ env }, (maintenance) =>
+    migrateOpenClawAgentDatabaseForMaintenance(
+      { agentId: "worker-1", pathname: databasePath },
+      maintenance,
+    ),
+  );
+}
+
+function expectMetadata(database: Database, before: unknown) {
+  expect(row(database, "SELECT * FROM schema_meta WHERE meta_key = 'primary'")).toEqual(before);
+  expect(row(database, "PRAGMA user_version")).toEqual({
+    user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+  });
 }
 
 afterEach(() => {
@@ -73,8 +77,8 @@ describe("retired agent state lease repair", () => {
     const { databasePath, env } = createCurrentAgentDatabase();
     installRetiredLeaseSchema(databasePath);
     const beforeMetadata = readPrimarySchemaMetadata(databasePath);
-    const database = openNodeSqliteDatabase(databasePath);
-    try {
+    {
+      using database = openNodeSqliteDatabase(databasePath);
       database
         .prepare(
           "INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES (?, ?, ?)",
@@ -85,174 +89,102 @@ describe("retired agent state lease repair", () => {
           "INSERT INTO auth_profile_store (store_key, store_json, updated_at) VALUES (?, ?, ?)",
         )
         .run("primary", '{"profiles":{"primary":{"provider":"openai"}}}', 10);
-    } finally {
-      database.close();
     }
 
     expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
     expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
 
-    const repaired = openNodeSqliteDatabase(databasePath, { readOnly: true });
-    try {
-      expect(repaired.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-      });
-      expect(
-        repaired.prepare("SELECT * FROM schema_meta WHERE meta_key = 'primary'").get(),
-      ).toEqual(beforeMetadata);
-      expect(
-        repaired
-          .prepare("SELECT state_json FROM auth_profile_state WHERE state_key = 'last-good'")
-          .get(),
-      ).toEqual({ state_json: '{"profile":"primary"}' });
-      expect(
-        repaired
-          .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'")
-          .get(),
-      ).toEqual({ store_json: '{"profiles":{"primary":{"provider":"openai"}}}' });
-      expect(
-        repaired
-          .prepare(
-            `SELECT type, name FROM sqlite_schema
-             WHERE name IN (
-               'state_leases',
-               'idx_agent_state_leases_expiry',
-               'idx_agent_state_leases_owner'
-             )`,
-          )
-          .all(),
-      ).toEqual([]);
-      expect(
-        repaired.prepare("SELECT tbl, idx FROM sqlite_stat1 WHERE tbl = 'state_leases'").all(),
-      ).toEqual([]);
-      expect(repaired.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      expect(repaired.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    } finally {
-      repaired.close();
-    }
+    using repaired = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    expectMetadata(repaired, beforeMetadata);
+    expect(
+      row(repaired, "SELECT state_json FROM auth_profile_state WHERE state_key = 'last-good'"),
+    ).toEqual({ state_json: '{"profile":"primary"}' });
+    expect(
+      row(repaired, "SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'"),
+    ).toEqual({ store_json: '{"profiles":{"primary":{"provider":"openai"}}}' });
+    expect(
+      rows(
+        repaired,
+        `SELECT type, name FROM sqlite_schema
+        WHERE name IN ('state_leases', 'idx_agent_state_leases_expiry', 'idx_agent_state_leases_owner')`,
+      ),
+    ).toEqual([]);
+    expect(rows(repaired, "SELECT tbl, idx FROM sqlite_stat1 WHERE tbl = 'state_leases'")).toEqual(
+      [],
+    );
+    expect(row(repaired, "PRAGMA integrity_check")).toEqual({ integrity_check: "ok" });
+    expect(rows(repaired, "PRAGMA foreign_key_check")).toEqual([]);
   });
 
   it("leaves a clean v17 database unchanged", async () => {
     const { databasePath, env } = createCurrentAgentDatabase();
     const beforeMetadata = readPrimarySchemaMetadata(databasePath);
-    const before = openNodeSqliteDatabase(databasePath, { readOnly: true });
-    const beforeSchemaVersion = before.prepare("PRAGMA schema_version").get();
-    before.close();
-
-    await withAgentDatabaseMaintenanceLease({ env }, (maintenance) =>
-      migrateOpenClawAgentDatabaseForMaintenance(
-        { agentId: "worker-1", pathname: databasePath },
-        maintenance,
-      ),
-    );
-
-    const after = openNodeSqliteDatabase(databasePath, { readOnly: true });
-    try {
-      expect(after.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-      });
-      expect(after.prepare("SELECT * FROM schema_meta WHERE meta_key = 'primary'").get()).toEqual(
-        beforeMetadata,
-      );
-      expect(after.prepare("PRAGMA schema_version").get()).toEqual(beforeSchemaVersion);
-      expect(
-        after.prepare("SELECT name FROM sqlite_schema WHERE name = 'state_leases'").get(),
-      ).toBeUndefined();
-    } finally {
-      after.close();
+    let beforeSchemaVersion;
+    {
+      using before = openNodeSqliteDatabase(databasePath, { readOnly: true });
+      beforeSchemaVersion = row(before, "PRAGMA schema_version");
     }
+    await migrate(databasePath, env);
+    using after = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    expectMetadata(after, beforeMetadata);
+    expect(row(after, "PRAGMA schema_version")).toEqual(beforeSchemaVersion);
+    expect(row(after, leaseTable)).toBeUndefined();
   });
 
   it("rejects a foreign state_leases structure without changing it", async () => {
     const { databasePath, env } = createCurrentAgentDatabase();
     const beforeMetadata = readPrimarySchemaMetadata(databasePath);
-    const database = openNodeSqliteDatabase(databasePath);
-    try {
+    {
+      using database = openNodeSqliteDatabase(databasePath);
       database.exec(`
         CREATE TABLE state_leases (
-          foreign_id TEXT NOT NULL PRIMARY KEY,
-          foreign_payload TEXT NOT NULL
+          foreign_id TEXT NOT NULL PRIMARY KEY, foreign_payload TEXT NOT NULL
         ) STRICT;
         INSERT INTO state_leases VALUES ('foreign', 'preserve-me');
       `);
-    } finally {
-      database.close();
     }
 
-    await expect(
-      withAgentDatabaseMaintenanceLease({ env }, (maintenance) =>
-        migrateOpenClawAgentDatabaseForMaintenance(
-          { agentId: "worker-1", pathname: databasePath },
-          maintenance,
-        ),
-      ),
-    ).rejects.toThrow(/state_leases.*noncanonical|column definitions differ for state_leases/iu);
+    await expect(migrate(databasePath, env)).rejects.toThrow(
+      /state_leases.*noncanonical|column definitions differ for state_leases/iu,
+    );
 
-    const after = openNodeSqliteDatabase(databasePath, { readOnly: true });
-    try {
-      expect(after.prepare("SELECT * FROM state_leases").all()).toEqual([
-        { foreign_id: "foreign", foreign_payload: "preserve-me" },
-      ]);
-      expect(after.prepare("SELECT * FROM schema_meta WHERE meta_key = 'primary'").get()).toEqual(
-        beforeMetadata,
-      );
-      expect(after.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-      });
-    } finally {
-      after.close();
-    }
+    using after = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    expect(rows(after, "SELECT * FROM state_leases")).toEqual([
+      { foreign_id: "foreign", foreign_payload: "preserve-me" },
+    ]);
+    expectMetadata(after, beforeMetadata);
   });
 
   it("rolls back the lease drop when canonical validation fails", async () => {
     const { databasePath, env } = createCurrentAgentDatabase();
     installRetiredLeaseSchema(databasePath);
     const beforeMetadata = readPrimarySchemaMetadata(databasePath);
-    const database = openNodeSqliteDatabase(databasePath);
-    try {
+    {
+      using database = openNodeSqliteDatabase(databasePath);
       database.exec(`
         DROP TABLE session_key_contract;
         CREATE VIEW session_key_contract AS SELECT 1 AS id, 'main' AS main_key, 0 AS updated_at;
       `);
-    } finally {
-      database.close();
     }
 
-    await expect(
-      withAgentDatabaseMaintenanceLease({ env }, (maintenance) =>
-        migrateOpenClawAgentDatabaseForMaintenance(
-          { agentId: "worker-1", pathname: databasePath },
-          maintenance,
-        ),
-      ),
-    ).rejects.toThrow(/session_key_contract/iu);
+    await expect(migrate(databasePath, env)).rejects.toThrow(/session_key_contract/iu);
 
-    const after = openNodeSqliteDatabase(databasePath, { readOnly: true });
-    try {
-      expect(after.prepare("SELECT scope, lease_key FROM state_leases").all()).toEqual([
-        { lease_key: "orphan", scope: "retired" },
-      ]);
-      expect(
-        after
-          .prepare(
-            `SELECT name FROM sqlite_schema
+    using after = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    expect(rows(after, "SELECT scope, lease_key FROM state_leases")).toEqual([
+      { lease_key: "orphan", scope: "retired" },
+    ]);
+    expect(
+      rows(
+        after,
+        `SELECT name FROM sqlite_schema
              WHERE type = 'index' AND name LIKE 'idx_agent_state_leases_%'
              ORDER BY name`,
-          )
-          .all(),
-      ).toEqual([
-        { name: "idx_agent_state_leases_expiry" },
-        { name: "idx_agent_state_leases_owner" },
-      ]);
-      expect(after.prepare("SELECT * FROM schema_meta WHERE meta_key = 'primary'").get()).toEqual(
-        beforeMetadata,
-      );
-      expect(after.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-      });
-    } finally {
-      after.close();
-    }
+      ),
+    ).toEqual([
+      { name: "idx_agent_state_leases_expiry" },
+      { name: "idx_agent_state_leases_owner" },
+    ]);
+    expectMetadata(after, beforeMetadata);
   });
 
   it("repairs the same canonical drift through the writable schema owner", () => {
@@ -260,22 +192,17 @@ describe("retired agent state lease repair", () => {
     installRetiredLeaseSchema(databasePath);
     expect(
       withOpenClawAgentDatabaseReadOnly(
-        ({ db }) => db.prepare("SELECT COUNT(*) AS count FROM state_leases").get(),
+        ({ db }) => row(db, "SELECT COUNT(*) AS count FROM state_leases"),
         { agentId: "worker-1", env },
       ),
     ).toEqual({ found: true, value: { count: 1 } });
-    const beforeWritableOpen = openNodeSqliteDatabase(databasePath, { readOnly: true });
-    expect(
-      beforeWritableOpen
-        .prepare("SELECT name FROM sqlite_schema WHERE name = 'state_leases'")
-        .get(),
-    ).toEqual({ name: "state_leases" });
-    beforeWritableOpen.close();
+    {
+      using beforeWritableOpen = openNodeSqliteDatabase(databasePath, { readOnly: true });
+      expect(row(beforeWritableOpen, leaseTable)).toEqual({ name: "state_leases" });
+    }
 
     const repaired = openOpenClawAgentDatabase({ agentId: "worker-1", env });
 
-    expect(
-      repaired.db.prepare("SELECT name FROM sqlite_schema WHERE name = 'state_leases'").get(),
-    ).toBeUndefined();
+    expect(row(repaired.db, leaseTable)).toBeUndefined();
   });
 });

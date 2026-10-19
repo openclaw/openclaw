@@ -1,4 +1,5 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -18,14 +19,15 @@ import {
   createRunExit,
   runtimeManagedRun,
 } from "../../agents/bash-tools.exec-runtime.test-support.js";
-import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
-import { CronService } from "../../cron/service.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import type { SpawnInput } from "../../process/supervisor/types.js";
 import { readAgentDeletionJournalAsync } from "../../state/agent-deletion-journal.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import {
+  configureDeletionAgents,
+  createDeletionCron,
+} from "./agents-delete.fixture.test-support.js";
 import { deleteGatewayAgent } from "./agents-delete.js";
 
 const supervisor = vi.hoisted(() => ({ spawn: vi.fn(), cancel: vi.fn() }));
@@ -75,23 +77,22 @@ function launchOwnedProcess() {
   });
 }
 
-it("drains an independent agent service through exit while preserving another agent and ordinary Stop", async () => {
-  await withOpenClawTestState({ label: "agent-delete-exec" }, async (state) => {
+function routeCancellation(...processes: Array<{ id: string; cancel: () => void }>) {
+  supervisor.cancel.mockImplementation((id: string) => {
+    processes.find((process) => process.id === id)?.cancel();
+  });
+}
+
+it("drains an independent agent service through exit while preserving another agent and ordinary Stop", async () =>
+  withOpenClawTestState({ label: "agent-delete-exec" }, async (state) => {
     const workspace = state.path("workspace-doomed");
     await fs.mkdir(workspace);
-    await fs.writeFile(`${workspace}/witness.txt`, "process still owns its workspace");
-    await state.writeConfig({
-      agents: {
-        ownership: "explicit",
-        defaults: { skipBootstrap: true },
-        entries: { keeper: { workspace: state.workspaceDir }, doomed: { workspace } },
-      },
-    });
-    await captureRuntimeConfigAsyncReader()();
+    await fs.writeFile(`${workspace}/witness.txt`, "owned");
+    await configureDeletionAgents(state, workspace, { skipBootstrap: true });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const launch = async (agentId: string, cwd: string) => {
       const identity = { runId: `${agentId}-run`, agentId };
-      const result = await withExecRequestTurn({ identity }, () =>
+      const { details } = await withExecRequestTurn({ identity }, () =>
         createExecTool({
           ...identity,
           config: getRuntimeConfig(),
@@ -108,64 +109,36 @@ it("drains an independent agent service through exit while preserving another ag
           timeoutSeconds: 0,
         }),
       );
-      const details = result.details;
-      if (details.status !== "running") {
-        throw new Error(`Expected a running service: ${JSON.stringify(result)}`);
-      }
+      assert(details.status === "running", "Expected a running service");
       const session = getSession(details.sessionId);
-      if (!session) {
-        throw new Error("Service is missing from its process owner");
-      }
+      assert(session, "Service is missing from its process owner");
       return session;
     };
     const doomed = prepareProcess();
     const doomedSession = await launch("doomed", workspace);
     const keeper = prepareProcess();
     const keeperSession = await launch("keeper", state.workspaceDir);
-    supervisor.cancel.mockImplementation((id: string) => {
-      if (id === doomedSession.id) {
-        doomed.cancel();
-      }
-      if (id === keeperSession.id) {
-        keeper.cancel();
-      }
-    });
+    routeCancellation(
+      { id: doomedSession.id, cancel: doomed.cancel },
+      { id: keeperSession.id, cancel: keeper.cancel },
+    );
     const stop = captureExecRequestCancellation({ agentId: "doomed" });
     expect(stop.cancel()).toBe(false);
     await stop.settle();
     expect(doomed.cancel).not.toHaveBeenCalled();
-    const scheduler = createTestGatewayScheduler();
-    const cron = new CronService({
-      scheduler,
-      storePath: state.statePath("cron/jobs.json"),
-      cronEnabled: false,
-      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-    const deleting = deleteGatewayAgent(
-      "doomed",
-      true,
-      createDirectChatContext({ cron, getRuntimeConfig }),
-    );
+    const { stop: stopCron, context } = createDeletionCron(state);
+    const deleting = deleteGatewayAgent("doomed", true, context);
     const settled = vi.fn();
     void deleting.then(settled, settled);
     try {
-      await awaitGateBeforeSettlement(
-        doomed.cancelled.promise,
-        deleting,
-        "deletion skipped independent exec",
-      );
+      await awaitGateBeforeSettlement(doomed.cancelled.promise, deleting, "exec skipped");
       expect(keeper.cancel).not.toHaveBeenCalled();
       expect(await readAgentDeletionJournalAsync("doomed")).toMatchObject({
         phase: "draining",
         cleanupCompleted: false,
       });
       expect(settled).not.toHaveBeenCalled();
-      expect(await fs.readFile(`${workspace}/witness.txt`, "utf8")).toBe(
-        "process still owns its workspace",
-      );
+      expect(await fs.readFile(`${workspace}/witness.txt`, "utf8")).toBe("owned");
       doomed.exit.resolve(createRunExit({ reason: "manual-cancel" }));
       await expect(deleting).resolves.toMatchObject({ ok: true, failed: [] });
       await expect(fs.stat(workspace)).rejects.toMatchObject({ code: "ENOENT" });
@@ -180,12 +153,9 @@ it("drains an independent agent service through exit while preserving another ag
         waitForExecSession(keeperSession),
       ]);
       vi.useRealTimers();
-      cron.stop();
-      await cron.waitForIdle();
-      await scheduler.stop();
+      await stopCron();
     }
-  });
-});
+  }));
 
 it("rejects later exec cancellation after authority loss while joining the accepted process", async () => {
   let current = true;
@@ -195,14 +165,10 @@ it("rejects later exec cancellation after authority loss while joining the accep
   const firstRun = await launchOwnedProcess();
   const second = prepareProcess();
   const secondRun = await launchOwnedProcess();
-  supervisor.cancel.mockImplementation((id: string) => {
-    if (id === firstRun.session.id) {
-      first.cancel();
-    }
-    if (id === secondRun.session.id) {
-      second.cancel();
-    }
-  });
+  routeCancellation(
+    { id: firstRun.session.id, cancel: first.cancel },
+    { id: secondRun.session.id, cancel: second.cancel },
+  );
   const draining = drainAgentExecProcesses("doomed", () => {
     if (!current) {
       throw new Error("deletion authority lost");
@@ -241,27 +207,24 @@ it("joins an already exiting process and refuses uncertain cleanup on deletion r
   markBackgrounded(run.session);
   await entered.promise;
   const draining = drainAgentExecProcesses("doomed", () => {});
+  const uncertainCleanup = {
+    errors: [
+      expect.objectContaining({
+        message: expect.stringContaining("cleanup could not be confirmed"),
+      }),
+    ],
+  };
   const settled = vi.fn();
   void draining.then(settled, settled);
   try {
     expect(supervisor.cancel).not.toHaveBeenCalled();
     expect(settled).not.toHaveBeenCalled();
     extinction.reject(new Error("physical exit could not be confirmed"));
-    await expect(draining).rejects.toMatchObject({
-      errors: [
-        expect.objectContaining({
-          message: expect.stringContaining("cleanup could not be confirmed"),
-        }),
-      ],
-    });
+    await expect(draining).rejects.toMatchObject(uncertainCleanup);
     await run.promise;
-    await expect(drainAgentExecProcesses("doomed", () => {})).rejects.toMatchObject({
-      errors: [
-        expect.objectContaining({
-          message: expect.stringContaining("cleanup could not be confirmed"),
-        }),
-      ],
-    });
+    await expect(drainAgentExecProcesses("doomed", () => {})).rejects.toMatchObject(
+      uncertainCleanup,
+    );
   } finally {
     extinction.resolve();
     await Promise.allSettled([draining, run.promise]);

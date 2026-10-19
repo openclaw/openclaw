@@ -5,7 +5,7 @@ Use this when writing or auditing rendering consumers. The installed rc.14
 `@solidjs/signals/dist/types/` own the API contract; Solid 1 examples are not a
 substitute. Examples below abbreviate code from the named OpenClaw modules.
 
-## Replace Lit-era controllers
+## Replace rendering controllers
 
 Replace a rendering controller with `createThing(deps)`, called inside the owning
 component or Solid root. Return accessors and actions. Local interaction state
@@ -52,29 +52,34 @@ test-only exports together. Keep an adapter only while `git grep` shows real
 callers. Tests assert public behavior and cleanup, not controller internals.
 
 Keep routes, keyboard/focus behavior, tags, selectors, and lazy boundaries.
-Before editing, check open `solid2/*` PRs and skip files owned by another lane.
-Keep each PR focused (about 40 files maximum) and reduce production LOC. Report
-before/after controller-pattern references, `createEffect`, `untrack`, native
-listener registrations, and LOC for touched production files. The existing Lit
-ratchet reports controller-pattern growth while legacy callers remain; after
-the production baseline reaches zero it rejects reintroductions.
+Keep each PR focused and reduce production LOC. When refactoring lifecycles,
+report before/after controller-pattern references, `createEffect`, `untrack`,
+native listener registrations, and LOC for touched production files.
 
 ## Choose the primitive
 
 Start from the narrowest primitive that expresses the data's owner and lifetime:
 
-| Data                                                                             | Primitive                                                                           |
-| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Authoritative domain state (Gateway store, sessions, caches, mutation authority) | Plain TypeScript owner; never a signal. Read it through a projection.               |
-| An owner's snapshot in a view                                                    | `projectOwner`/`projectSource` (`lib/reactive/projection.ts`), narrowed with memos  |
-| A cheap value derived from props or signals                                      | An accessor `() => …` or a JSX expression                                           |
-| An expensive or shared derivation                                                | `createMemo` (with `equals` only for immutable values)                              |
-| Local interaction state (open, hovered, active tab)                              | `createSignal`                                                                      |
-| A local draft that resets or reconciles from a source                            | Writable derivation `createSignal(() => source())`, with the reset policy commented |
-| Structured or keyed local state                                                  | `createStore` with draft setters; `reconcile(rows, "id")` for keyed lists           |
-| A keyed collection derived from async or owner data                              | `createProjection(fn, initial, { key: "id" })`                                      |
-| An expected value shown before a mutation settles                                | `createOptimistic`/`createOptimisticStore` inside `action`                          |
-| Count-only repetition                                                            | `<Repeat count={n}>`                                                                |
+| Data                                                                             | Primitive                                                                                            |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Authoritative domain state (Gateway store, sessions, caches, mutation authority) | Plain TypeScript owner; never a signal. Read it through a projection.                                |
+| An owner's snapshot in a view                                                    | `projectOwner`/`projectSource` (`lib/reactive/projection.ts`), narrowed with memos                   |
+| A cheap value derived from props or signals                                      | An accessor `() => …` or a JSX expression                                                            |
+| An expensive or shared derivation                                                | `createMemo` (with `equals` only for immutable values)                                               |
+| Local interaction state (open, hovered, active tab)                              | `createSignal`                                                                                       |
+| A local draft that resets or reconciles from a source                            | Writable derivation `createSignal(() => source())`, with the reset policy commented                  |
+| Structured or keyed local state                                                  | `createStore` with draft setters; `reconcile(rows, "id")` for keyed lists                            |
+| A keyed collection derived from async or owner data                              | `createProjection(fn, initial, { key: "id" })`                                                       |
+| An expected value shown before a mutation settles                                | `createOptimistic`/`createOptimisticStore` inside `action`                                           |
+| Count-only repetition                                                            | `<Repeat count={n}>`                                                                                 |
+| Browser document title                                                           | `createDocumentTitle(title)` from `lib/reactive/document-title.ts`                                   |
+| Resize notifications for owned elements                                          | `createResizeObserver(() => [element], callback)` from `lib/reactive/observers.ts`                   |
+| Visibility notifications for owned elements                                      | `createIntersectionObserver(() => [element], callback, options)` from the same module                |
+| Periodic work while a reactive cadence is enabled                                | `createInterval(callback, () => enabled() ? milliseconds : undefined)` from `lib/reactive/timers.ts` |
+| Restartable event-driven delay or feedback reset                                 | `createTimeout(callback, milliseconds)`; call `schedule()` or `cancel()`                             |
+| Browser media capability                                                         | `createMediaQuery(query, fallback)` from `lib/reactive/platform.ts`                                  |
+| Document visibility                                                              | `createDocumentVisibility()` from `lib/reactive/platform.ts`; polling policy stays with its owner    |
+| One owned pointer gesture                                                        | `createPointerDrag()` from `lib/reactive/pointer-drag.ts`; caller keeps geometry and commit policy   |
 
 `createMemo(fn, { lazy: true })` defers the first computation until something
 reads it and disposes it when nothing observes it; `createSignal(v, { unobserved })`
@@ -176,8 +181,10 @@ boundary still need the owned listener/ref pattern. Dashed events use
 `onWa-select`, not `onWaSelect`. Prefer the existing owned primitive to `wa-*`.
 
 Commit-on-change inputs need special care: unrelated props refreshes must not
-rewrite the DOM draft. Memoize the committed owner value before binding `value`
-(see the Settings input incident in [lessons](lessons.md)). Do not use a second
+rewrite the DOM draft. Memoize the committed owner value and bind it through the
+`lib/reactive/live-value.ts` ref factory (see [lessons](lessons.md)). Native JSX
+attributes can share a compiled effect: a memo alone does not prevent an equal
+`value` assignment when an ARIA or disabled binding changes. Do not use a second
 signal to synchronize that value. Controlled inputs that publish every keystroke
 have a different contract; preserve composition, caret, and undo behavior.
 

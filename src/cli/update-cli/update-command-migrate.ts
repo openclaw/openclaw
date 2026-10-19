@@ -17,11 +17,11 @@ import {
   requireDirectorySync,
   syncDirectory,
 } from "../../infra/directory-durability.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { readJsonIfExists, writeJsonAtomic, writeTextAtomic } from "../../infra/json-files.js";
 import { removePackageUpdatePath } from "../../infra/package-update-filesystem.js";
-import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { readExistingStateRootMode } from "../../infra/private-dir-mode.js";
 import {
   createUpdateDatabaseBackup,
@@ -109,12 +109,7 @@ async function saveReceipt(file: string, receipt: Receipt) {
 async function readIdentities(databases: readonly string[]) {
   const identities: Record<string, FileIdentity> = {};
   for (const database of databases) {
-    const info = await fs.stat(database, { bigint: true }).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
+    const info = await fs.stat(database, { bigint: true }).catch(ignoreMissingPath);
     if (info) {
       identities[database] = { dev: info.dev, ino: info.ino };
     }
@@ -141,7 +136,10 @@ async function readConfigIdentity(configPath: string): Promise<Receipt["configId
 }
 
 /** The external supervisor owns drain/start; the candidate owns backup and schema repair. */
-export async function updateMigrateCommand(backupRoot: string): Promise<void> {
+export async function updateMigrateCommand(
+  backupRoot: string,
+  options: { fullIntegrityCheck?: boolean } = {},
+): Promise<void> {
   const file = receiptPath(backupRoot);
   if ((await readJsonIfExists(file)) !== null) {
     throw new Error(
@@ -251,6 +249,7 @@ export async function updateMigrateCommand(backupRoot: string): Promise<void> {
           repair: true,
           nonInteractive: true,
           workspaceSuggestions: false,
+          fullIntegrityCheck: options.fullIntegrityCheck,
         },
         undefined,
         preflight,

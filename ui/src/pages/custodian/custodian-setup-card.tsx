@@ -5,7 +5,7 @@ import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { CustodianAutoSetup } from "./custodian-auto-setup.ts";
 import type { CustodianSessionStore } from "./custodian-session-store.ts";
 import "../../styles/custodian-setup-card.css";
@@ -79,11 +79,9 @@ export function CustodianSetupCard(props: { store: CustodianSessionStore }) {
   const projection = createMemo(() => projectOwner(source(), (store) => store.autoSetup));
   const setup = () => projection().read();
   const result = () => setup().result;
-  const native = projectSource(context.nativeDeviceSettings, {
-    read: () => nativeSetupCapability(context),
-    subscribe: (settings, notify) => settings?.subscribe(notify) ?? (() => {}),
-    equality: "revision",
-  }).read;
+  const native = context.nativeDeviceSettings
+    ? projectOwner(context.nativeDeviceSettings, () => nativeSetupCapability(context)).read
+    : () => nativeSetupCapability(context);
   const busy = () => {
     const current = setup();
     return (

@@ -4,7 +4,7 @@ import {
   type GeneratedImageAsset,
   type ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { resolveGeneratedImageDownloadMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -179,7 +179,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
         readOptions: {
           maxBytes: resolveInlineImageJsonResponseMaxBytes(
             GOOGLE_MAX_IMAGE_RESULTS,
-            resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+            resolveGeneratedImageDownloadMaxBytes(req.cfg),
           ),
         },
       });

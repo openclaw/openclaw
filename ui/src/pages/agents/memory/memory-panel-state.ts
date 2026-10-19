@@ -1,11 +1,8 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createStore, onSettled } from "solid-js";
-import type {
-  ApplicationContext,
-  ApplicationGateway,
-  ApplicationGatewaySnapshot,
-} from "../../../app/context.ts";
+import type { ApplicationContext, ApplicationGateway } from "../../../app/context.ts";
+import { hasOperatorReadAccess } from "../../../app/operator-access.ts";
 import {
   showConfirmDialog,
   type ConfirmDialogOptions,
@@ -15,14 +12,16 @@ import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { currentConfigObject } from "../../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
-import { GatewayPageBinding } from "../../../lib/gateway-page-binding.ts";
+import { GatewayPageBinding, type GatewayPageChange } from "../../../lib/gateway-page-binding.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
-import { projectSource } from "../../../lib/reactive/projection.ts";
+import { projectOwner, projectMutableSource } from "../../../lib/reactive/projection.ts";
 import {
   canCallDreamingMethod,
   copyDreamingArchivePath,
   createDreamingState,
+  createDreamingViewState,
+  DREAM_PHRASE_KEYS,
   loadDreamingResource,
   resolveConfiguredDreaming,
   runDreamDiaryAction,
@@ -30,11 +29,11 @@ import {
   type DreamDiaryActionMethod,
   type DreamingResourceKey,
   type DreamingState,
+  type DreamingViewState,
   type WikiPagePreview,
+  type WikiPreviewState,
 } from "./dreaming.ts";
 import type { DreamingToggleConfirmationProps } from "./toggle-confirmation.tsx";
-import type { DreamingViewState, WikiPreviewState } from "./view-types.ts";
-import { createDreamingViewState, DREAM_PHRASE_KEYS, type DreamingProps } from "./view.tsx";
 
 registerDreamingEnglish();
 
@@ -55,7 +54,16 @@ function resolveDreamingNextCycle(status: DreamingState["dreamingStatus"]): stri
 
 export type AgentMemoryState = ReturnType<typeof createAgentMemory>;
 
-export function createAgentMemory(context: ApplicationContext) {
+export type AgentMemoryTarget = {
+  read(): string | null;
+  subscribe(notify: () => void): () => void;
+};
+
+export function createAgentMemory(
+  context: ApplicationContext,
+  getInitialAgentTarget: () => AgentMemoryTarget,
+) {
+  const config = projectOwner(context.runtimeConfig, (source) => source.state);
   let active = false;
   let publish = () => {};
   let dreaming = createDreamingState();
@@ -82,11 +90,41 @@ export function createAgentMemory(context: ApplicationContext) {
   }
   const gateway = new GatewayPageBinding(notify, {
     getGateway: () => context.gateway,
-    onSnapshot: ({ snapshot, initial, sourceChanged }) =>
-      applyGatewaySnapshot(
-        snapshot,
-        initial ? "initial" : sourceChanged ? "replacement" : undefined,
-      ),
+    invalidateRequests: ({ identityChanged }) => {
+      // Retain published data in a new owner; retired reads can only mutate the old state.
+      dreaming = {
+        ...dreaming,
+        get configSnapshot() {
+          return context.runtimeConfig.state.configSnapshot;
+        },
+      };
+      dreaming.dreamingStatusLoading = false;
+      dreaming.dreamDiaryLoading = false;
+      dreaming.wikiImportInsightsLoading = false;
+      dreaming.wikiOverviewLoading = false;
+      if (
+        !identityChanged &&
+        dreaming.dreamDiaryActionLoading &&
+        !dreaming.dreamDiaryActionMessage
+      ) {
+        dreaming.dreamDiaryActionMessage = {
+          kind: "error",
+          text: t("dreaming.actions.actionInterrupted"),
+        };
+      }
+      dreaming.dreamDiaryActionLoading = false;
+      dreaming.dreamingModeSaving = false;
+      toggleConfirmLoading = false;
+    },
+    onSnapshot: applyGatewaySnapshot,
+    ensureInitialData: ({ snapshot }) => {
+      if (selectedAgentId && hasOperatorReadAccess(snapshot.hello?.auth ?? null)) {
+        void loadResources();
+        if (wikiPreview?.loading) {
+          void loadWikiPreview(wikiPreview);
+        }
+      }
+    },
   });
   let selectedAgentId: string | null = null;
   function captureTaskScope(): DreamingTaskScope | null {
@@ -114,33 +152,32 @@ export function createAgentMemory(context: ApplicationContext) {
   }
 
   function createGatewayState(snapshot = context.gateway.snapshot): DreamingState {
-    return createDreamingState({
-      client: snapshot.client,
-      connected: snapshot.phase === "connected",
-      hello: snapshot.hello,
-      configSnapshot: context.runtimeConfig.state.configSnapshot,
-      selectedAgentId,
-    });
+    return {
+      ...createDreamingState({
+        client: snapshot.client,
+        connected: snapshot.phase === "connected",
+        hello: snapshot.hello,
+        selectedAgentId,
+      }),
+      get configSnapshot() {
+        return context.runtimeConfig.state.configSnapshot;
+      },
+    };
   }
 
-  function applyGatewaySnapshot(
-    snapshot: ApplicationGatewaySnapshot,
-    sourceBind?: "initial" | "replacement",
-  ) {
-    const clientChanged = dreaming.client !== snapshot.client;
-    const connectionChanged = dreaming.connected !== (snapshot.phase === "connected");
-    const replaceState = sourceBind === "replacement" || clientChanged || connectionChanged;
-    if (replaceState) {
+  function applyGatewaySnapshot({ snapshot, initial, identityChanged }: GatewayPageChange) {
+    if (
+      initial ||
+      identityChanged ||
+      (snapshot.phase === "connected" && !hasOperatorReadAccess(snapshot.hello?.auth ?? null))
+    ) {
       dreaming = createGatewayState(snapshot);
-      if (sourceBind !== "initial") {
+      if (!initial) {
         resetTransientState();
       }
     } else {
       dreaming.connected = snapshot.phase === "connected";
       dreaming.hello = snapshot.hello;
-    }
-    if (snapshot.phase === "connected" && selectedAgentId && replaceState) {
-      void loadResources();
     }
     notify();
   }
@@ -161,10 +198,6 @@ export function createAgentMemory(context: ApplicationContext) {
       void loadResources();
     }
     notify();
-  }
-
-  function syncConfigSnapshot() {
-    dreaming.configSnapshot = context.runtimeConfig.state.configSnapshot;
   }
 
   async function runDreamingTask<T>(
@@ -194,11 +227,20 @@ export function createAgentMemory(context: ApplicationContext) {
     if (!scope || !(await showConfirmDialog(confirmation)) || !isTaskScopeCurrent(scope)) {
       return;
     }
-    await runDreamingTask((current) => runDreamDiaryAction(current, method), scope);
+    await runDreamingTask(
+      (current) => runDreamDiaryAction(current, method, () => isTaskScopeCurrent(scope)),
+      scope,
+    );
   }
 
   function runDiaryAction(method: DreamDiaryActionMethod) {
-    return runDreamingTask((current) => runDreamDiaryAction(current, method));
+    const scope = captureTaskScope();
+    return scope
+      ? runDreamingTask(
+          (current) => runDreamDiaryAction(current, method, () => isTaskScopeCurrent(scope)),
+          scope,
+        )
+      : undefined;
   }
 
   async function loadResources(
@@ -217,7 +259,6 @@ export function createAgentMemory(context: ApplicationContext) {
     if (!isTaskScopeCurrent(scope) || context.runtimeConfig !== runtimeConfig) {
       return;
     }
-    syncConfigSnapshot();
     if (resource === "all") {
       await Promise.all(
         (["dreamingStatus", "dreamDiary", "wikiImportInsights", "wikiOverview"] as const).map(
@@ -290,7 +331,6 @@ export function createAgentMemory(context: ApplicationContext) {
       if (!isTaskScopeCurrent(scope) || context.runtimeConfig !== runtimeConfig) {
         return;
       }
-      syncConfigSnapshot();
       await runDreamingTask((current) => loadDreamingResource(current, "dreamingStatus"), scope);
       if (!isTaskScopeCurrent(scope)) {
         return;
@@ -422,11 +462,12 @@ export function createAgentMemory(context: ApplicationContext) {
             message: t("dreaming.actions.confirmRepairDescription"),
             confirmLabel: t("dreaming.scene.repairCache"),
           }),
-      } satisfies Omit<DreamingProps, "viewState" | "onViewStateChange">,
+      },
       toggle: {
         open: pendingEnabled !== null,
         enabling: pendingEnabled === true,
         loading: toggleConfirmLoading,
+        disabled: !canUpdateConfig,
         onConfirm: () => void confirmToggle(),
         onCancel: () => cancelToggle(),
         hasError: Boolean(dreaming.dreamingStatusError),
@@ -434,7 +475,11 @@ export function createAgentMemory(context: ApplicationContext) {
     };
   }
 
-  async function openWikiPreview(lookup: string) {
+  function openWikiPreview(lookup: string): Promise<void> {
+    const scope = captureTaskScope();
+    if (!scope || !scope.state.connected) {
+      return Promise.resolve();
+    }
     const request: WikiPreviewState = {
       page: { title: pathDisplayName(lookup), path: lookup, content: "" },
       loading: true,
@@ -442,9 +487,18 @@ export function createAgentMemory(context: ApplicationContext) {
     };
     wikiPreview = request;
     notify();
+    return loadWikiPreview(request);
+  }
+
+  async function loadWikiPreview(request: WikiPreviewState) {
+    const scope = captureTaskScope();
+    if (!scope) {
+      return;
+    }
+    const lookup = request.page.path;
     try {
       const page = await openWikiPage(lookup);
-      if (wikiPreview !== request) {
+      if (wikiPreview !== request || !isTaskScopeCurrent(scope)) {
         return;
       }
       if (page) {
@@ -453,48 +507,40 @@ export function createAgentMemory(context: ApplicationContext) {
         request.error = t("dreaming.wiki.pageNotFound", { lookup });
       }
     } catch (error) {
-      if (wikiPreview === request) {
+      if (wikiPreview === request && isTaskScopeCurrent(scope)) {
         request.error = formatUiError(error);
       }
     } finally {
-      if (wikiPreview === request) {
+      if (wikiPreview === request && isTaskScopeCurrent(scope)) {
         request.loading = false;
         notify();
       }
     }
   }
-  const projection = projectSource(context, {
-    read,
-    subscribe: (_source, listener) => {
-      publish = listener;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const projection = projectMutableSource(context, read);
+  publish = projection.publish;
   onSettled(() => {
+    const agentTarget = getInitialAgentTarget();
+    const syncAgent = () => setAgentId(agentTarget.read() ?? "");
+    // Agent receipts invalidate prior requests and replace their resource state synchronously.
+    const stopAgent = agentTarget.subscribe(syncAgent);
+    syncAgent();
     active = true;
     gateway.connect();
-    syncConfigSnapshot();
-    const unsubscribe = context.runtimeConfig.subscribe(() => {
-      syncConfigSnapshot();
-      notify();
-    });
     return () => {
+      stopAgent();
       active = false;
       publish = () => {};
-      unsubscribe();
       resetTransientState();
       dreaming = createDreamingState();
       gateway.dispose();
     };
   });
   return {
-    setAgentId,
     loadResources,
     setEnabled,
     view() {
+      config.read();
       const model = projection.read();
       return {
         ...model,

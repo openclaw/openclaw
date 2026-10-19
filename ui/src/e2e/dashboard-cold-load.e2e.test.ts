@@ -219,36 +219,16 @@ suite.define(() => {
             const frames = await page.evaluate(() => Reflect.get(window, "dashboardPaints"));
             console.log("Dashboard reload first painted frame", JSON.stringify(frames[0]));
             expect(frames.length).toBeGreaterThan(0);
-            expect(frames).toEqual(
-              expect.arrayContaining([
-                {
-                  title,
-                  welcome: false,
-                  board: true,
-                  boardRegion: "main",
-                  transcript: true,
-                  transcriptRegion: "side",
-                },
-              ]),
-            );
-            expect(
-              frames.every(
-                (frame: {
-                  title: string;
-                  welcome: boolean;
-                  board: boolean;
-                  boardRegion: string | null;
-                  transcript: boolean;
-                  transcriptRegion: string | null;
-                }) =>
-                  frame.title === title &&
-                  !frame.welcome &&
-                  frame.board &&
-                  frame.boardRegion === "main" &&
-                  frame.transcript &&
-                  frame.transcriptRegion === "side",
-              ),
-            ).toBe(true);
+            for (const frame of frames) {
+              expect(frame).toEqual({
+                title,
+                welcome: false,
+                board: true,
+                boardRegion: "main",
+                transcript: true,
+                transcriptRegion: "side",
+              });
+            }
             expect(await gateway.getRequests("board.get")).toHaveLength(0);
             const helloReleasedAt = performance.now();
             await gateway.resolveDeferred("connect");

@@ -1,4 +1,4 @@
-// Covers JSONL socket request framing and response handling.
+// Covers exec host JSONL framing and response lifetime through the authenticated requester.
 import { getEventListeners } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
 import net from "node:net";
@@ -7,6 +7,7 @@ import timers from "node:timers";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { requestExecHostViaSocket } from "./exec-host.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 
 async function withSocketServer(
@@ -61,29 +62,67 @@ async function withControlledTimers(run: () => Promise<void>): Promise<void> {
   }
 }
 
-function acceptDoneValue(msg: unknown): number | null | undefined {
-  const value = msg as { type?: string; value?: number };
-  return value.type === "done" ? (value.value ?? null) : undefined;
-}
+const token = "exec-host-framing-test-token";
+const request = { command: ["echo", "hi"] };
+const success = {
+  ok: true,
+  payload: { timedOut: false, success: true, stdout: "done", stderr: "" },
+};
+const denial = { ok: false, error: { code: "DENIED", message: "Denied by host policy" } };
+const timeoutResponse = {
+  ok: false,
+  error: {
+    code: "TIMEOUT",
+    reason: "timeout",
+    message: "TIMEOUT: macOS app exec host response timed out; execution outcome is unknown",
+  },
+};
+const responseLost = {
+  ok: false,
+  error: {
+    code: "UNKNOWN",
+    reason: "response-lost",
+    message: "UNKNOWN: macOS app exec host response was lost; execution outcome is unknown",
+  },
+};
 
-describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
-  it("ignores malformed and non-accepted lines until one is accepted", async () => {
-    const server = net.createServer((socket) => {
+describe.runIf(process.platform !== "win32")("exec host JSONL framing", () => {
+  it.each([success, denial])(
+    "ignores malformed, incomplete, and unrelated lines before an exec response: $ok",
+    async (response) => {
+      const server = net.createServer((socket) => {
+        socket.on("data", () => {
+          socket.write("\n{bad json}\nnull\n");
+          socket.write('{"type":"ignore"}\n');
+          socket.write('{"type":"exec-res","ok":true}\n');
+          socket.write(JSON.stringify({ type: "exec-res", ...response }) + "\n");
+        });
+      });
+      await withSocketServer(server, async (socketPath) => {
+        await expect(
+          requestExecHostViaSocket({ socketPath, token, request, timeoutMs: 500 }),
+        ).resolves.toEqual(response);
+      });
+    },
+  );
+
+  it("preserves UTF-8 code points split between socket chunks", async () => {
+    const response = {
+      ok: true,
+      payload: { timedOut: false, success: true, stdout: "before 🦞 after", stderr: "" },
+    };
+    const frame = Buffer.from(JSON.stringify({ type: "exec-res", ...response }) + "\n");
+    const split = frame.indexOf(Buffer.from("🦞")) + 2;
+    const server = net.createServer({ allowHalfOpen: true }, (socket) => {
       socket.on("data", () => {
-        socket.write("{bad json}\n");
-        socket.write('{"type":"ignore"}\n');
-        socket.write('{"type":"done","value":42}\n');
+        socket.write(frame.subarray(0, split));
+        setImmediate(() => socket.end(frame.subarray(split)));
       });
     });
     await withSocketServer(server, async (socketPath) => {
       await expect(
-        requestJsonlSocket({
-          socketPath,
-          requestLine: '{"hello":"world"}',
-          timeoutMs: 500,
-          accept: acceptDoneValue,
-        }),
-      ).resolves.toBe(42);
+        requestExecHostViaSocket({ socketPath, token, request, timeoutMs: 500 }),
+      ).resolves.toEqual(response);
     });
   });
 
@@ -92,19 +131,64 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
     const server = net.createServer((socket) => {
       connected();
       socket.resume();
-      socket.on("end", () => socket.end('{"type":"done","value":7}\n'));
+      socket.on("end", () => socket.end(JSON.stringify({ type: "exec-res", ...success }) + "\n"));
+    });
+    await withSocketServer(server, async (socketPath) => {
+      await expect(
+        requestExecHostViaSocket({
+          socketPath,
+          token,
+          request,
+          timeoutMs: 500,
+          signal: AbortSignal.abort(),
+        }),
+      ).resolves.toBeNull();
+      expect(connected).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rechecks effect authority after connect and rejects without dispatch", async () => {
+    const received: Buffer[] = [];
+    const server = net.createServer((socket) => {
+      socket.on("data", (chunk) =>
+        received.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk),
+      );
+    });
+    await withSocketServer(server, async (socketPath) => {
+      let current = true;
+      const pending = requestJsonlSocket({
+        socketPath,
+        requestLine: "{}",
+        timeoutMs: 500,
+        accept: () => undefined,
+        beforeSend() {
+          if (!current) {
+            throw new Error("authority revoked");
+          }
+        },
+      });
+      current = false;
+      await expect(pending).rejects.toThrow("authority revoked");
+    });
+    expect(received).toEqual([]);
+  });
+
+  it("treats a caller-bounded oversized reply as terminal response loss", async () => {
+    const server = net.createServer((socket) => {
+      socket.on("error", () => {});
+      socket.on("data", () => socket.end(JSON.stringify({ padding: "x".repeat(128) }) + "\n"));
     });
     await withSocketServer(server, async (socketPath) => {
       await expect(
         requestJsonlSocket({
           socketPath,
-          requestLine: '{"hello":"world"}',
+          requestLine: "{}",
           timeoutMs: 500,
-          accept: acceptDoneValue,
-          signal: AbortSignal.abort(),
+          maxResponseLineBytes: 64,
+          accept: () => undefined,
+          onResponseLost: () => ({ kind: "lost" }),
         }),
-      ).resolves.toBeNull();
-      expect(connected).not.toHaveBeenCalled();
+      ).resolves.toEqual({ kind: "lost" });
     });
   });
 
@@ -120,16 +204,21 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
     await withSocketServer(server, async (socketPath) => {
       const controller = new AbortController();
       const completed = vi.fn();
-      const pending = requestJsonlSocket({
+      const pending = requestExecHostViaSocket({
         socketPath,
-        requestLine: '{"hello":"world"}',
+        token,
+        request,
         timeoutMs: 0,
-        accept: acceptDoneValue,
         signal: controller.signal,
       }).then(completed);
       try {
         const { socket, buffer } = await received.promise;
-        expect(buffer).toBe('{"hello":"world"}\n');
+        expect(buffer.endsWith("\n")).toBe(true);
+        expect(buffer.trim().split("\n")).toHaveLength(1);
+        expect(JSON.parse(buffer)).toMatchObject({
+          type: "exec",
+          requestJson: '{"command":["echo","hi"]}',
+        });
         expect(completed).not.toHaveBeenCalled();
         if (abort) {
           controller.abort();
@@ -139,13 +228,13 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
           // proves cancellation also closed the client's remaining read side.
           const writeError = vi.fn();
           socket.once("error", writeError);
-          socket.write('{"type":"done","value":7}\n');
+          socket.write(JSON.stringify({ type: "exec-res", ...success }) + "\n");
           await expect.poll(() => writeError.mock.calls.length, { timeout: 1_000 }).toBe(1);
           expect(writeError).toHaveBeenCalledWith(expect.objectContaining({ code: "EPIPE" }));
         } else {
-          socket.end('{"type":"done","value":7}\n');
+          socket.end(JSON.stringify({ type: "exec-res", ...success }) + "\n");
           await pending;
-          expect(completed).toHaveBeenCalledWith(7);
+          expect(completed).toHaveBeenCalledWith(success);
         }
         expect(getEventListeners(controller.signal, "abort")).toEqual([]);
       } finally {
@@ -155,34 +244,7 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
     });
   });
 
-  it("returns null on timeout and on socket errors", async () => {
-    let closedSocketPath = "";
-    const server = net.createServer({ allowHalfOpen: true }, (socket) => {
-      socket.resume();
-      // Intentionally keep the response side open after the request half-close.
-    });
-    await withSocketServer(server, async (socketPath) => {
-      closedSocketPath = socketPath;
-      await expect(
-        requestJsonlSocket({
-          socketPath,
-          requestLine: "{}",
-          timeoutMs: 50,
-          accept: () => undefined,
-        }),
-      ).resolves.toBeNull();
-    });
-    await expect(
-      requestJsonlSocket({
-        socketPath: closedSocketPath,
-        requestLine: "{}",
-        timeoutMs: 50,
-        accept: () => undefined,
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("returns the caller's typed timeout result after the request is submitted", async () => {
+  it("returns a timeout outcome after the request is submitted", async () => {
     const received = createDeferred();
     const server = net.createServer({ allowHalfOpen: true }, (socket) => {
       socket.resume();
@@ -192,61 +254,67 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
     await withSocketServer(server, async (socketPath) => {
       await withControlledTimers(async () => {
         const completed = vi.fn();
-        const pending = requestJsonlSocket({
+        const pending = requestExecHostViaSocket({
           socketPath,
-          requestLine: "{}",
+          token,
+          request,
           timeoutMs: 50,
-          onTimeout: () => ({ kind: "timeout" as const }),
-          accept: () => undefined,
         }).then(completed);
         await received.promise;
         await vi.advanceTimersByTimeAsync(49);
         expect(completed).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
         await pending;
-        expect(completed).toHaveBeenCalledWith({ kind: "timeout" });
+        expect(completed).toHaveBeenCalledWith(timeoutResponse);
       });
     });
   });
 
-  it("returns the caller's typed response-loss result after submission", async () => {
-    const server = net.createServer((socket) => {
-      socket.on("data", () => {
-        socket.destroy();
+  it.each([
+    { commandTimeoutMs: 30_000, responseTimeoutMs: 50_000 },
+    { commandTimeoutMs: 1_000, responseTimeoutMs: 21_000 },
+    { commandTimeoutMs: undefined, responseTimeoutMs: 20_000 },
+  ])(
+    "derives the response deadline from command timeout $commandTimeoutMs",
+    async ({ commandTimeoutMs, responseTimeoutMs }) => {
+      const received = createDeferred();
+      const server = net.createServer({ allowHalfOpen: true }, (socket) => {
+        socket.resume();
+        socket.on("end", () => received.resolve());
       });
-    });
-    await withSocketServer(server, async (socketPath) => {
-      await expect(
-        requestJsonlSocket({
-          socketPath,
-          requestLine: "{}",
-          timeoutMs: 500,
-          onResponseLost: () => ({ kind: "response-lost" as const }),
-          accept: () => undefined,
-        }),
-      ).resolves.toEqual({ kind: "response-lost" });
-    });
-  });
+      await withSocketServer(server, async (socketPath) => {
+        await withControlledTimers(async () => {
+          const completed = vi.fn();
+          const pending = requestExecHostViaSocket({
+            socketPath,
+            token,
+            request: { ...request, timeoutMs: commandTimeoutMs },
+          }).then(completed);
+          await received.promise;
+          await vi.advanceTimersByTimeAsync(responseTimeoutMs - 1);
+          expect(completed).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1);
+          await pending;
+          expect(completed).toHaveBeenCalledWith(timeoutResponse);
+        });
+      });
+    },
+  );
 
   it("classifies an oversized reply as response loss after submission", async () => {
-    const server = net.createServer((socket) => {
+    const server = net.createServer({ allowHalfOpen: true }, (socket) => {
       socket.on("error", () => {});
-      socket.on("data", () => socket.end("x".repeat(16 * 1024 * 1024 + 1)));
+      // Leave the response open: the byte bound, not peer EOF, must settle the request.
+      socket.on("data", () => socket.write("x".repeat(16 * 1024 * 1024 + 1)));
     });
     await withSocketServer(server, async (socketPath) => {
       await expect(
-        requestJsonlSocket({
-          socketPath,
-          requestLine: "{}",
-          timeoutMs: 0,
-          onResponseLost: () => ({ kind: "response-lost" as const }),
-          accept: () => undefined,
-        }),
-      ).resolves.toEqual({ kind: "response-lost" });
+        requestExecHostViaSocket({ socketPath, token, request, timeoutMs: 0 }),
+      ).resolves.toEqual(responseLost);
     });
   });
 
-  it("can wait without a transport deadline when timeoutMs is zero", async () => {
+  it("can wait without a transport deadline when command timeoutMs is zero", async () => {
     const received = createDeferred<net.Socket>();
     const server = net.createServer({ allowHalfOpen: true }, (socket) => {
       socket.resume();
@@ -255,25 +323,23 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
     await withSocketServer(server, async (socketPath) => {
       await withControlledTimers(async () => {
         const completed = vi.fn();
-        const pending = requestJsonlSocket<number | { kind: "timeout" }>({
+        const pending = requestExecHostViaSocket({
           socketPath,
-          requestLine: "{}",
-          timeoutMs: 0,
-          onTimeout: () => ({ kind: "timeout" as const }),
-          accept: acceptDoneValue,
+          token,
+          request: { ...request, timeoutMs: 0 },
         }).then(completed);
         const socket = await received.promise;
         expect(vi.getTimerCount()).toBe(0);
         await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
         expect(completed).not.toHaveBeenCalled();
-        socket.end('{"type":"done","value":7}\n');
+        socket.end(JSON.stringify({ type: "exec-res", ...success }) + "\n");
         await pending;
-        expect(completed).toHaveBeenCalledWith(7);
+        expect(completed).toHaveBeenCalledWith(success);
       });
     });
   });
 
-  it("returns null when the socket closes without an accepted response", async () => {
+  it("settles response loss without waiting for the deadline and clears its timer", async () => {
     const server = net.createServer((socket) => {
       socket.on("data", () => {
         socket.destroy();
@@ -282,14 +348,14 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
     await withSocketServer(server, async (socketPath) => {
       // Leave the deadline frozen: only the real socket close can settle this request.
       await withControlledTimers(async () => {
-        const pending = requestJsonlSocket({
+        const pending = requestExecHostViaSocket({
           socketPath,
-          requestLine: "{}",
+          token,
+          request,
           timeoutMs: 250,
-          accept: () => undefined,
         });
         expect(vi.getTimerCount()).toBe(1);
-        await expect(pending).resolves.toBeNull();
+        await expect(pending).resolves.toEqual(responseLost);
         expect(vi.getTimerCount()).toBe(0);
       });
     });

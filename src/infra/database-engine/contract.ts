@@ -63,14 +63,19 @@ export type StoreSchema = {
   }[];
   postgresFragments?: readonly PostgresSchemaFragment[];
   search?: SearchSchema;
+  /** Persisted, owner-registered derived search definitions. */
+  searchExtensions?: Record<string, SearchSchema>;
 };
 export type AdmittedStore = {
+  reusePostgresConnection?: boolean;
   anchor: DatabaseSync;
   schema: StoreSchema;
   input: DatabaseEngineInput;
   openSqlite: () => void;
   storeId?: string;
   namespace?: string;
+  /** Owner-specific data extraction inside the validated source migration transaction. */
+  beforeMigrate?: (database: EngineConnection, fromVersion: number) => void;
 };
 type TransactionRecipes<Connection extends SqlConnection> = {
   write<T>(connection: Connection, operation: () => T): T;

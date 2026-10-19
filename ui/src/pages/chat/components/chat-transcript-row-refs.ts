@@ -14,6 +14,11 @@ export class TranscriptRowRefs {
     },
   ) {}
 
+  get elements(): ReadonlySet<HTMLElement> {
+    // A commit can measure connected rows before their queued observer registration.
+    return new Set([...this.virtualizer.elementsCache.values(), ...this.pendingRows.keys()]);
+  }
+
   private queueUpdate(): void {
     if (this.updateQueued) {
       return;

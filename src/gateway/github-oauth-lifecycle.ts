@@ -59,6 +59,7 @@ import {
   authorizationStillOwned,
   authorizationStillOwnedAsync,
   configuredOAuthIdentities,
+  captureGitHubOAuthAuthorizationIdentity,
   createGitHubOAuthInventoryReader,
   identityStillSelected,
   MAINTENANCE_INTERVAL_MS,
@@ -576,9 +577,7 @@ export function createGitHubOAuthLifecycle(params: {
         throw new Error("GitHub authorization lifecycle is stopping.");
       }
       assertGitHubCliAvailable();
-      const expectedIdentity = structuredClone(
-        resolveConfiguredGitHubToolIdentity({ config: params.getConfig(), ...input }) ?? null,
-      );
+      const expectedIdentity = captureGitHubOAuthAuthorizationIdentity(params.getConfig(), input);
       const agentLifecycleBinding =
         input.scope === "agent"
           ? await captureAgentLifecycleBinding(params.getConfig, input.agentId)

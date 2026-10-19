@@ -8,7 +8,7 @@ import type { preserveDoctorOriginalState } from "./doctor-original-capture.js";
 export function createDoctorOriginalCaptureHook(
   params: Pick<
     Parameters<typeof preserveDoctorOriginalState>[0],
-    "root" | "runtime" | "writeAuthority"
+    "root" | "runtime" | "writeAuthority" | "fullIntegrityCheck"
   > & {
     rehearsalRoot?: string;
     json?: boolean;
@@ -64,6 +64,7 @@ export function createDoctorOriginalCaptureHook(
         signal,
         assertCurrent: () => scope.assertOwnerCurrent(),
         writeAuthority: params.writeAuthority,
+        fullIntegrityCheck: params.fullIntegrityCheck,
       }),
     );
   };

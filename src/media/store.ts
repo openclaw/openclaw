@@ -185,14 +185,24 @@ async function retryAfterRecreatingDir<T>(
 
 async function prunePlaybackTranscodeCacheToSize(): Promise<void> {
   const dir = resolveMediaScopedDir(PLAYBACK_TRANSCODE_SUBDIR, "prunePlaybackTranscodeCacheToSize");
-  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch((error: unknown) => {
+    if (!findErrorWithCode(error, "ENOENT")) {
+      throw error;
+    }
+    return [];
+  });
   const files = (
     await Promise.all(
       entries.map(async (entry) => {
         if (!entry.isFile() || entry.name.startsWith(".")) {
           return null;
         }
-        const stat = await fs.lstat(path.join(dir, entry.name)).catch(() => null);
+        const stat = await fs.lstat(path.join(dir, entry.name)).catch((error: unknown) => {
+          if (!findErrorWithCode(error, "ENOENT")) {
+            throw error;
+          }
+          return null;
+        });
         return stat?.isFile() ? { name: entry.name, size: stat.size, mtimeMs: stat.mtimeMs } : null;
       }),
     )
@@ -209,13 +219,14 @@ async function prunePlaybackTranscodeCacheToSize(): Promise<void> {
       PLAYBACK_TRANSCODE_SUBDIR,
       "prunePlaybackTranscodeCacheToSize",
     );
-    const removed = await openMediaStore()
+    await openMediaStore()
       .remove(relativePath)
-      .then(() => true)
-      .catch(() => false);
-    if (removed) {
-      totalBytes -= file.size;
-    }
+      .catch((error: unknown) => {
+        if (!findErrorWithCode(error, "ENOENT") && !findErrorWithCode(error, "not-found")) {
+          throw error;
+        }
+      });
+    totalBytes -= file.size;
   }
 }
 
@@ -226,7 +237,12 @@ async function pruneNonPlaybackMedia(ttlMs: number, options: CleanOldMediaOption
   }
   const mediaDir = getMediaDir();
   await openMediaStore().pruneExpired({ ttlMs, recursive: false, maxDepth: 0 });
-  const entries = await fs.readdir(mediaDir, { withFileTypes: true }).catch(() => []);
+  const entries = await fs.readdir(mediaDir, { withFileTypes: true }).catch((error: unknown) => {
+    if (!findErrorWithCode(error, "ENOENT")) {
+      throw error;
+    }
+    return [];
+  });
   for (const entry of entries) {
     if (
       !entry.isDirectory() ||
@@ -244,7 +260,16 @@ async function pruneNonPlaybackMedia(ttlMs: number, options: CleanOldMediaOption
       pruneEmptyDirs: options.pruneEmptyDirs,
     });
     if (options.pruneEmptyDirs) {
-      await fs.rmdir(scopedDir).catch(() => {});
+      await fs.rmdir(scopedDir).catch((error: unknown) => {
+        // Missing or still-populated directories need no further cleanup.
+        if (
+          !findErrorWithCode(error, "ENOENT") &&
+          !findErrorWithCode(error, "ENOTEMPTY") &&
+          !findErrorWithCode(error, "EEXIST")
+        ) {
+          throw error;
+        }
+      });
     }
   }
 }

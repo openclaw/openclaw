@@ -24,7 +24,7 @@ import { projectNativeDeviceSettings } from "../../lib/reactive/application-nati
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
-import "../../components/native-chrome-setup.ts";
+import "../../components/native-chrome-setup.tsx";
 import "./device.css";
 
 declare module "@solidjs/web" {
@@ -80,7 +80,6 @@ export function DevicePage() {
     pending: boolean;
     error?: Error;
   } | null>(null);
-  let gatewayHostingRequest = 0;
   let targetProfileTimer: ReturnType<typeof setTimeout> | null = null;
 
   const pendingEdits = () => {
@@ -233,10 +232,9 @@ export function DevicePage() {
             if (!capability) {
               return;
             }
-            const request = ++gatewayHostingRequest;
             setGatewayHostingEdit({ pending: true });
             capability.set("app.keepGatewayRunning", value, (error) => {
-              if (!disposed && gatewayHostingRequest === request) {
+              if (!disposed) {
                 setGatewayHostingEdit({ pending: false, error });
               }
             });

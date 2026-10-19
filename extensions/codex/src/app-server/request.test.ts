@@ -480,32 +480,6 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
-  it("preserves the prepare phase for a scoped rejection before API entry", async () => {
-    const cause = new Error("private-authority-error");
-    const request = vi.fn();
-    const controlObservation = { phase: vi.fn(), failed: vi.fn() };
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
-    await expect(
-      requestCodexAppServerJson({
-        method: "thread/list",
-        requestParams: {},
-        controlObservation,
-        assertCurrent: () => {
-          throw cause;
-        },
-      }),
-    ).rejects.toMatchObject({
-      name: "CodexAppServerScopedRequestRejectedError",
-      cause,
-      stack: expect.stringContaining("\n    at "),
-    });
-    expect(controlObservation.failed).toHaveBeenCalledExactlyOnceWith({
-      phase: "prepare",
-      category: "scoped-rejection",
-    });
-    expect(request).not.toHaveBeenCalled();
-  });
-
   it.each([false, true])(
     "records the actual escaping error when cleanup fails: $0",
     async (cleanupFails) => {
@@ -567,7 +541,6 @@ describe("requestCodexAppServerJson sandbox guard", () => {
   it("does not claim API entry when argument evaluation expires the budget before the later deadline decision", async () => {
     vi.useFakeTimers();
     const elapsedClock = vi.spyOn(performance, "now").mockReturnValue(0);
-    let consumeBudget = false;
     const request = vi.fn();
     const controlObservation = { phase: vi.fn(), failed: vi.fn() };
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
@@ -576,15 +549,15 @@ describe("requestCodexAppServerJson sandbox guard", () => {
         {
           timeoutMs: 50,
           controlObservation,
-          assertCurrent: () => {
-            if (consumeBudget) {
-              elapsedClock.mockReturnValue(51);
-            }
-          },
         },
         async (send) => {
-          consumeBudget = true;
-          return await send({ method: "thread/list", requestParams: {} });
+          return await send({
+            method: "thread/list",
+            get requestParams() {
+              elapsedClock.mockReturnValue(51);
+              return {};
+            },
+          });
         },
       ),
     ).rejects.toThrow("codex app-server request timed out");

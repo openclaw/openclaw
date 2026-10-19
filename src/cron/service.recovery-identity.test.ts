@@ -1,17 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
+import { createCronRegressionState } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { waitForActiveCronTaskRuns } from "./service/active-run-cancellation.js";
 import { findCronRunRecoveryInDatabase } from "./service/run-history-recovery.js";
 import { createCronRunHandle, finishCronRun } from "./service/run-history.js";
-import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
@@ -37,12 +36,9 @@ function rejectSchedulerWrite(jobId: string) {
   return () => db.exec("DROP TRIGGER IF EXISTS reject_identity_scheduler_write");
 }
 
-describe("cron recovery run identity", () => {
-  it.each([
-    { name: "retired predecessor", edit: "predecessor" },
-    { name: "retired pending run", edit: "pending" },
-    { name: "edit after completion", edit: "late" },
-  ] as const)("recovers the pending legacy result with $name", async ({ edit }) => {
+it.each(["predecessor", "pending", "late"] as const)(
+  "recovers the pending legacy result after a %s edit",
+  async (edit) => {
     const { storePath } = await makeStorePath();
     const storeKey = cronStoreKey(storePath);
     const firstStartedAt = Date.now();
@@ -58,21 +54,17 @@ describe("cron recovery run identity", () => {
       pending.started.resolve();
       return pending.completion.promise;
     });
-    const deps: CronServiceDeps = {
-      scheduler: createTestGatewayScheduler(),
-      nowMs: () => Date.now(),
+    const recoveryState = createCronRegressionState({
       storePath,
-      cronEnabled: true,
       cronConfig: { triggers: { enabled: true } },
       defaultAgentId: "alpha",
       resolveDefaultAgentId: () => "alpha",
       isAgentAvailable: () => true,
       log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       evaluateCronTrigger,
       runIsolatedAgentJob,
-    };
+    });
+    const deps = recoveryState.deps;
     const cron = new CronService(deps);
     let restarted: CronService | undefined;
     let run: ReturnType<CronService["run"]> | undefined;
@@ -94,42 +86,33 @@ describe("cron recovery run identity", () => {
       });
       const readJob = async () => (await loadCronStore(storePath)).jobs[0]!;
       const readHistory = () => readCronRunHistoryPageForTests({ storeKey, jobId: job.id }).entries;
-      const recoveryState = createCronServiceState(deps);
-
-      await cron.update(job.id, { state: { nextRunAtMs: firstStartedAt } });
-      run = cron.run(job.id, "due");
-      await awaitGateBeforeSettlement(
-        payload.started.promise,
-        run,
-        "Cron run settled before its payload started",
-      );
-      const first = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
-      if (!first) {
-        throw new Error("predecessor was not admitted");
-      }
+      const startPayload = async () => {
+        await cron.update(job.id, { state: { nextRunAtMs: firstStartedAt } });
+        run = cron.run(job.id, "due");
+        await awaitGateBeforeSettlement(
+          payload.started.promise,
+          run,
+          "Cron run settled before its payload started",
+        );
+        const receipt = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
+        if (!receipt) {
+          throw new Error("run was not admitted");
+        }
+        return receipt;
+      };
+      const first = await startPayload();
       if (edit === "predecessor") {
         await cron.update(job.id, { state: { triggerState: { owner: "predecessor edit" } } });
       }
       payload.completion.resolve({ status: "ok", summary: "first completed" });
       await expect(run).resolves.toEqual({ ok: true, ran: true });
 
-      const pendingStartedAt = firstStartedAt;
-      vi.setSystemTime(pendingStartedAt);
+      vi.setSystemTime(firstStartedAt);
       if (!cron.getJob(job.id)?.enabled) {
         await cron.update(job.id, { enabled: true });
       }
-      await cron.update(job.id, { state: { nextRunAtMs: pendingStartedAt } });
       payload = pendingPayload();
-      run = cron.run(job.id, "due");
-      await awaitGateBeforeSettlement(
-        payload.started.promise,
-        run,
-        "Cron run settled before its payload started",
-      );
-      const pending = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
-      if (!pending) {
-        throw new Error("pending run was not admitted");
-      }
+      const pending = await startPayload();
       if (edit === "pending") {
         await cron.update(job.id, { state: { triggerState: { owner: "replacement" } } });
       }
@@ -140,13 +123,13 @@ describe("cron recovery run identity", () => {
       allowWrites = undefined;
       run = undefined;
       await expect(waitForActiveCronTaskRuns(0)).resolves.toEqual({ drained: true, active: 0 });
-      expect((await readJob()).state.runningAtMs).toBe(pendingStartedAt);
+      expect((await readJob()).state.runningAtMs).toBe(firstStartedAt);
       // Released schedulers could persist history before their separate job write.
       await finishCronRun(recoveryState, {
         taskRunId: createCronRunHandle({
           state: recoveryState,
           job,
-          startedAt: pendingStartedAt,
+          startedAt: firstStartedAt,
           runReceipt: pending,
         }).runId,
         job,
@@ -157,7 +140,7 @@ describe("cron recovery run identity", () => {
           completionStatus: "succeeded",
           summary: "pending completed",
           triggerFired: true,
-          runAtMs: pendingStartedAt,
+          runAtMs: firstStartedAt,
           durationMs: 0,
           deliveryStatus: "not-requested",
         },
@@ -169,12 +152,8 @@ describe("cron recovery run identity", () => {
         const rank = db.prepare(
           "UPDATE task_runs SET task_id = ? WHERE runtime = 'cron' AND source_id = ? AND terminal_summary = ?",
         );
-        expect(rank.run(`z-predecessor-history:${job.id}`, job.id, "first completed").changes).toBe(
-          1,
-        );
-        expect(rank.run(`a-pending-history:${job.id}`, job.id, "pending completed").changes).toBe(
-          1,
-        );
+        expect(rank.run(`z:${job.id}`, job.id, "first completed").changes).toBe(1);
+        expect(rank.run(`a:${job.id}`, job.id, "pending completed").changes).toBe(1);
       });
       const history = readHistory();
       expect(history).toHaveLength(2);
@@ -190,7 +169,7 @@ describe("cron recovery run identity", () => {
           database: db,
           storeKey,
           jobId: job.id,
-          startedAt: pendingStartedAt,
+          startedAt: firstStartedAt,
         }),
       );
       expect(fallback.receiptId).toBe(first.receiptId);
@@ -199,16 +178,13 @@ describe("cron recovery run identity", () => {
       await restarted.start();
       restarted.pauseScheduling();
 
-      const recovered = await readJob();
+      const { enabled, agentId, state } = await readJob();
       const pendingRetired = edit === "pending" || edit === "late";
-      expect(recovered.enabled).toBe(pendingRetired);
-      expect(recovered.state.triggerState).toEqual({
+      expect([enabled, agentId, state.lastRunStatus]).toEqual([pendingRetired, "beta", "ok"]);
+      expect(state.triggerState).toEqual({
         owner: pendingRetired ? "replacement" : "evaluation-2",
       });
-      expect(recovered.agentId).toBe("beta");
-      expect(recovered.state.lastRunStatus).toBe("ok");
-      expect(recovered.state.runningAtMs).toBeUndefined();
-      expect(recovered.state.runningReceiptId).toBeUndefined();
+      expect([state.runningAtMs, state.runningReceiptId]).toEqual([undefined, undefined]);
       expect(readHistory()).toEqual(history);
       expect(evaluateCronTrigger).toHaveBeenCalledTimes(2);
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
@@ -219,5 +195,5 @@ describe("cron recovery run identity", () => {
       cron.stop();
       restarted?.stop();
     }
-  });
-});
+  },
+);

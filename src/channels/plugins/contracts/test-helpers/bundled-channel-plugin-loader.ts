@@ -1,8 +1,3 @@
-/**
- * Bundled channel plugin contract loader.
- *
- * Loads public plugin surfaces and directory contract artifacts without reaching into private sources.
- */
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -17,16 +12,21 @@ import type { AnyChannelPlugin as ChannelPlugin } from "../../types.plugin.js";
 type ChannelPluginApiModule = Record<string, unknown>;
 type ChannelDirectoryContractModule = Record<string, unknown>;
 
-const channelPluginCache = new Map<ChannelId, ChannelPlugin | null>();
-const channelPluginPromiseCache = new Map<ChannelId, Promise<ChannelPlugin | null>>();
-const channelDirectoryPluginCache = new Map<
-  ChannelId,
-  Pick<ChannelPlugin, "id" | "directory"> | null
->();
-const channelDirectoryPluginPromiseCache = new Map<
-  ChannelId,
-  Promise<Pick<ChannelPlugin, "id" | "directory"> | null>
->();
+// Share in-flight and completed imports, including missing plugins; retry failed loads.
+function cachePluginLoader<T>(load: (id: ChannelId) => Promise<T | null>) {
+  const cache = new Map<ChannelId, Promise<T | null>>();
+  return async (id: ChannelId): Promise<T | undefined> => {
+    let loading = cache.get(id);
+    if (!loading) {
+      loading = load(id).catch((error: unknown) => {
+        cache.delete(id);
+        throw error;
+      });
+      cache.set(id, loading);
+    }
+    return (await loading) ?? undefined;
+  };
+}
 
 class MissingBundledDirectoryContractArtifactError extends Error {
   constructor(id: ChannelId) {
@@ -142,45 +142,17 @@ function isExternalDistArtifactPath(entry: string): boolean {
   return relativeToCwd.startsWith("..") || path.isAbsolute(relativeToCwd);
 }
 
-async function importBundledChannelPluginSourceSurface(id: ChannelId) {
-  const artifactPath = resolveBundledPluginPublicModulePath({
-    pluginId: id,
-    artifactBasename: "channel-plugin-api.js",
-  });
-  const sourcePath =
-    artifactPath.endsWith(".js") && fs.existsSync(`${artifactPath.slice(0, -3)}.ts`)
-      ? `${artifactPath.slice(0, -3)}.ts`
-      : artifactPath;
-  return (await import(pathToFileURL(sourcePath).href)) as ChannelPluginApiModule;
-}
-
-function resolveSourceArtifactPath(artifactPath: string): string {
-  if (artifactPath.endsWith(".js") && fs.existsSync(`${artifactPath.slice(0, -3)}.ts`)) {
-    return `${artifactPath.slice(0, -3)}.ts`;
-  }
-  return artifactPath;
-}
-
-async function importBundledChannelDirectoryContractSourceSurface(
+async function importBundledChannelSourceSurface(
   id: ChannelId,
-): Promise<ChannelDirectoryContractModule> {
-  const artifactPath = resolveBundledPluginPublicModulePath({
-    pluginId: id,
-    artifactBasename: "directory-contract-api.js",
-  });
-  const sourcePath = resolveSourceArtifactPath(artifactPath);
-  if (!fs.existsSync(sourcePath)) {
+  artifactBasename = "channel-plugin-api.js",
+): Promise<ChannelPluginApiModule> {
+  const artifactPath = resolveBundledPluginPublicModulePath({ pluginId: id, artifactBasename });
+  const tsPath = `${artifactPath.slice(0, -3)}.ts`;
+  const sourcePath = artifactPath.endsWith(".js") && fs.existsSync(tsPath) ? tsPath : artifactPath;
+  if (artifactBasename === "directory-contract-api.js" && !fs.existsSync(sourcePath)) {
     throw new MissingBundledDirectoryContractArtifactError(id);
   }
-  return (await import(pathToFileURL(sourcePath).href)) as ChannelDirectoryContractModule;
-}
-
-function isMissingBundledDirectoryContractArtifact(error: unknown, id: ChannelId): boolean {
-  return (
-    error instanceof Error &&
-    error.message ===
-      `Unable to resolve bundled plugin public surface ${id}/directory-contract-api.js`
-  );
+  return (await import(pathToFileURL(sourcePath).href)) as ChannelPluginApiModule;
 }
 
 async function loadBundledChannelDirectoryContractSurface(
@@ -190,13 +162,13 @@ async function loadBundledChannelDirectoryContractSurface(
     pluginId: id,
     artifactBasename: "directory-contract-api.js",
   }).catch((error: unknown) => {
-    if (isMissingBundledDirectoryContractArtifact(error, id)) {
+    if (isMissingBundledArtifact(error, id, "directory-contract-api.js")) {
       throw new MissingBundledDirectoryContractArtifactError(id);
     }
     if (!isBuiltArtifactMissingDependency(error) || !canFallbackToPackageSource()) {
       throw error;
     }
-    return importBundledChannelDirectoryContractSourceSurface(id);
+    return importBundledChannelSourceSurface(id, "directory-contract-api.js");
   });
 }
 
@@ -205,14 +177,11 @@ async function resolveBundledChannelPluginFromSurface(
   loaded: ChannelPluginApiModule,
 ): Promise<ChannelPlugin | null> {
   const plugin = findChannelPlugin(loaded);
-  if (!plugin) {
-    return plugin;
-  }
-  if (hasBasePluginMetadata(plugin, id)) {
+  if (!plugin || hasBasePluginMetadata(plugin, id)) {
     return plugin;
   }
 
-  const sourceLoaded = await importBundledChannelPluginSourceSurface(id);
+  const sourceLoaded = await importBundledChannelSourceSurface(id);
   const sourcePlugin = findChannelPlugin(sourceLoaded);
   return sourcePlugin ?? plugin;
 }
@@ -225,78 +194,34 @@ export function listBundledChannelPluginIds(): readonly ChannelId[] {
 }
 
 /** Returns a bundled channel plugin from its generated public API artifact. */
-export async function getBundledChannelPluginAsync(
-  id: ChannelId,
-): Promise<ChannelPlugin | undefined> {
-  if (channelPluginCache.has(id)) {
-    return channelPluginCache.get(id) ?? undefined;
-  }
-
-  const cachedPromise = channelPluginPromiseCache.get(id);
-  if (cachedPromise) {
-    return (await cachedPromise) ?? undefined;
-  }
-
-  // Cache both resolved plugins and in-flight loads so sharded contract suites
-  // do not repeatedly import the same generated plugin artifact.
-  const loading = loadBundledPluginFacade<ChannelPluginApiModule>({
+export const getBundledChannelPluginAsync = cachePluginLoader(async (id) => {
+  const loaded = await loadBundledPluginFacade<ChannelPluginApiModule>({
     pluginId: id,
     artifactBasename: "channel-plugin-api.js",
-  })
-    .catch((error: unknown) => {
-      if (!isBuiltArtifactMissingDependency(error) || !canFallbackToPackageSource()) {
-        throw error;
-      }
-      return importBundledChannelPluginSourceSurface(id);
-    })
-    .then(async (loaded) => {
-      const plugin = await resolveBundledChannelPluginFromSurface(id, loaded);
-      channelPluginCache.set(id, plugin);
-      return plugin;
-    })
-    .finally(() => {
-      channelPluginPromiseCache.delete(id);
-    });
-  channelPluginPromiseCache.set(id, loading);
-  return (await loading) ?? undefined;
-}
-
-export async function getBundledChannelDirectoryPluginAsync(
-  id: ChannelId,
-): Promise<Pick<ChannelPlugin, "id" | "directory"> | undefined> {
-  if (channelDirectoryPluginCache.has(id)) {
-    return channelDirectoryPluginCache.get(id) ?? undefined;
-  }
-
-  const cachedPromise = channelDirectoryPluginPromiseCache.get(id);
-  if (cachedPromise) {
-    return (await cachedPromise) ?? undefined;
-  }
-
-  const loading = loadBundledChannelDirectoryContractSurface(id)
-    .catch(async (error: unknown) => {
-      if (error instanceof MissingBundledDirectoryContractArtifactError) {
-        return null;
-      }
+  }).catch((error: unknown) => {
+    if (!isBuiltArtifactMissingDependency(error) || !canFallbackToPackageSource()) {
       throw error;
-    })
-    .then(async (loaded) => {
-      if (!loaded) {
-        return (await getBundledChannelPluginAsync(id)) ?? null;
-      }
-      const plugin = findChannelDirectoryContractPlugin(loaded);
-      return plugin ?? (await getBundledChannelPluginAsync(id)) ?? null;
-    })
-    .then((plugin) => {
-      channelDirectoryPluginCache.set(id, plugin);
-      return plugin;
-    })
-    .finally(() => {
-      channelDirectoryPluginPromiseCache.delete(id);
-    });
-  channelDirectoryPluginPromiseCache.set(id, loading);
-  return (await loading) ?? undefined;
-}
+    }
+    return importBundledChannelSourceSurface(id);
+  });
+  return await resolveBundledChannelPluginFromSurface(id, loaded);
+});
+
+export const getBundledChannelDirectoryPluginAsync = cachePluginLoader<
+  Pick<ChannelPlugin, "id" | "directory">
+>(async (id) => {
+  const loaded = await loadBundledChannelDirectoryContractSurface(id).catch((error: unknown) => {
+    if (error instanceof MissingBundledDirectoryContractArtifactError) {
+      return null;
+    }
+    throw error;
+  });
+  return (
+    (loaded && findChannelDirectoryContractPlugin(loaded)) ??
+    (await getBundledChannelPluginAsync(id)) ??
+    null
+  );
+});
 
 type ChannelThreadBindingArtifactModule = { defaultTopLevelPlacement?: unknown };
 type ChannelSessionKeyArtifactModule = Record<string, unknown>;
@@ -332,42 +257,20 @@ async function getOptionalBundledChannelArtifactAsync<T extends object>(
   });
 }
 
-/** Returns a bundled channel's thread-binding artifact, or null when it ships none. */
-export async function getBundledChannelThreadBindingArtifactAsync(
-  id: ChannelId,
-): Promise<ChannelThreadBindingArtifactModule | null> {
-  return await getOptionalBundledChannelArtifactAsync<ChannelThreadBindingArtifactModule>(
+export const getBundledChannelThreadBindingArtifactAsync = (id: ChannelId) =>
+  getOptionalBundledChannelArtifactAsync<ChannelThreadBindingArtifactModule>(
     id,
     "thread-binding-api.js",
   );
-}
-
-/** Returns a bundled channel's session-key artifact, or null when it ships none. */
-export async function getBundledChannelSessionKeyArtifactAsync(
-  id: ChannelId,
-): Promise<ChannelSessionKeyArtifactModule | null> {
-  return await getOptionalBundledChannelArtifactAsync<ChannelSessionKeyArtifactModule>(
-    id,
-    "session-key-api.js",
-  );
-}
-
-/** Returns a bundled channel's message-tool artifact, or null when it ships none. */
-export async function getBundledChannelMessageToolArtifactAsync(
-  id: ChannelId,
-): Promise<ChannelMessageToolArtifactModule | null> {
-  return await getOptionalBundledChannelArtifactAsync<ChannelMessageToolArtifactModule>(
+export const getBundledChannelSessionKeyArtifactAsync = (id: ChannelId) =>
+  getOptionalBundledChannelArtifactAsync<ChannelSessionKeyArtifactModule>(id, "session-key-api.js");
+export const getBundledChannelMessageToolArtifactAsync = (id: ChannelId) =>
+  getOptionalBundledChannelArtifactAsync<ChannelMessageToolArtifactModule>(
     id,
     "message-tool-api.js",
   );
-}
-
-/** Returns a bundled channel's gateway-auth artifact, or null when it ships none. */
-export async function getBundledChannelGatewayAuthArtifactAsync(
-  id: ChannelId,
-): Promise<ChannelGatewayAuthArtifactModule | null> {
-  return await getOptionalBundledChannelArtifactAsync<ChannelGatewayAuthArtifactModule>(
+export const getBundledChannelGatewayAuthArtifactAsync = (id: ChannelId) =>
+  getOptionalBundledChannelArtifactAsync<ChannelGatewayAuthArtifactModule>(
     id,
     "gateway-auth-api.js",
   );
-}

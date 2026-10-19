@@ -313,6 +313,14 @@ describe("session status cost line", () => {
     );
   });
 
+  it("preserves existing usage when the session cost cache fails", async () => {
+    mocks.loadSessionCostSummariesFromCache.mockRejectedValue(new Error("cache unavailable"));
+
+    await expect(
+      appendSessionCostLine("existing usage", {}, "main", sessionEntry, storePath),
+    ).resolves.toBe("existing usage");
+  });
+
   it("omits a stale cached summary", async () => {
     mocks.loadSessionCostSummariesFromCache.mockResolvedValue({
       cacheStatus: {

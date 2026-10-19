@@ -99,6 +99,7 @@ export function subscribeWarmBootConnection(
       }
     },
   );
+  // Rejected connection receipts retire warm-boot ownership before recovery consumers run.
   const stopConnection = gateway.subscribe((snapshot) => {
     if (gateway.connectionRevision !== bootConnectionRevision) {
       pendingBootProfileId = undefined;
@@ -107,7 +108,7 @@ export function subscribeWarmBootConnection(
     if (
       pendingBootProfileId !== undefined &&
       (snapshot.lastErrorAuthReason ||
-        (typeof snapshot.lastErrorCode === "string" && snapshot.lastErrorCode !== "GATEWAY_BUSY"))
+        (snapshot.lastErrorCode !== null && snapshot.lastErrorCode !== "GATEWAY_BUSY"))
     ) {
       // A later transport failure cannot erase a rejected initial admission.
       // Retire this boot record, not drafts/outboxes or another Gateway’s cache.
@@ -190,6 +191,7 @@ export function subscribeBootRecordPersistence(
       });
     }
   };
+  // Persist admitted owner snapshots independently of mounted views.
   const stops = [gateway, agents, sessions].map((capability) =>
     capability.subscribe(persistLiveBootRecord),
   );

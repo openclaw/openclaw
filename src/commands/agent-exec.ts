@@ -204,12 +204,12 @@ export async function agentExecCommand(
   try {
     signal.throwIfAborted();
     const codeModeOverride = normalizeCodeMode(opts.codeMode);
-    const prompt = await resolveAgentExecPrompt(positionalMessage, opts.messageFile, process.stdin);
+    const prompt = await resolveAgentExecPrompt(positionalMessage, opts.messageFile);
     const cwd = await requireDirectory(opts.cwd ?? process.cwd(), "Working directory");
     const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
       await import("../infra/embedded-state-lock.js");
     // Admit cancellation before creating state so signals unwind temporary runs too.
-    signalBridge = createEmbeddedStateSignalBridge(process);
+    signalBridge = createEmbeddedStateSignalBridge();
     abortSignal = AbortSignal.any([signal, signalBridge.signal]);
     const stateDir = opts.stateDir
       ? await requireDirectory(opts.stateDir, "State directory")

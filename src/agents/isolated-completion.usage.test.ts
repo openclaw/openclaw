@@ -49,6 +49,8 @@ it("emits one model.usage for a completed CLI completion", async () => {
     agentId: "main",
     provider: "openai",
     model: "gpt-test",
+    purpose: "session-activity-summary",
+    runtimeKind: "cli",
     usage: { input: 10, output: 462, cacheWrite: 4111, total: 4583 },
   });
 });
@@ -70,6 +72,8 @@ it("emits one model.usage for a completed harness completion", async () => {
   expect(events[0]).toMatchObject({
     provider: "openai",
     model: "gpt-test",
+    purpose: "isolated-completion",
+    runtimeKind: "harness",
     usage: { input: 1, output: 1, total: 2 },
   });
 });

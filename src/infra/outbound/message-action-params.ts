@@ -424,6 +424,10 @@ export async function hydrateAttachmentParamsForAction(params: {
   if (params.action === "send") {
     const { args, preserveSendBuffer } = params;
     if (hasExplicitSendMediaSource(args, params.extraParamKeys)) {
+      const contentType = readAttachmentContentType(args);
+      if (contentType) {
+        args.contentType = contentType;
+      }
       delete args.buffer;
       return;
     }

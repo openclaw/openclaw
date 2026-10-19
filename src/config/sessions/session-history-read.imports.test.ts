@@ -11,6 +11,18 @@ it("keeps history worker transport independent of host config loading", () => {
   ).toEqual([]);
 });
 
+it("keeps transcript title and topology workers independent of host config loading", () => {
+  expect(
+    findSourceImportBackedges(
+      [
+        "src/gateway/session-transcript-title-reader.worker.ts",
+        "src/config/sessions/combined-store-topology.worker.ts",
+      ],
+      ["src/config/io.ts", "src/config/io.runtime.ts", "src/config/sessions/session-accessor.ts"],
+    ),
+  ).toEqual([]);
+});
+
 const readOwners = [
   "src/config/sessions/session-transcript.worker.ts",
   "src/config/sessions/session-accessor.sqlite-branches.ts",
@@ -40,6 +52,13 @@ it("keeps history readers independent of host acquisition and decoration", () =>
 });
 
 it("keeps lazy readers independent of unrelated runtime barrels", () => {
+  expect(
+    findSourceImportBackedges("src/gateway/session-history-worker-reader.ts", [
+      "src/gateway/session-utils-store-sources.ts",
+      "src/config/sessions/session-store-target-inventory.ts",
+      "src/config/runtime-source-projection.ts",
+    ]),
+  ).toEqual([]);
   expect(
     findSourceImportBackedges(
       [

@@ -1,5 +1,6 @@
 import { sql, type InferResult, type RawBuilder } from "kysely";
 import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
+import { jsonArrayElements } from "../../infra/database-engine/json-values.js";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -11,7 +12,7 @@ import {
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { captureSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
 import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -20,6 +21,7 @@ import type {
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import type { UnindexedHistoryControl } from "./session-accessor.sqlite-history-navigation.types.js";
+import type { VisibleHistoryProjection } from "./session-accessor.sqlite-history-projection.types.js";
 import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import { projectSessionActorContextMetadata } from "./session-actor-context-metadata.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
@@ -28,7 +30,11 @@ import { retainTranscriptContextFacts } from "./session-transcript-context-facts
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
 import { readSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
 import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
-import type { SessionTranscriptContextMetadata } from "./session-transcript-projection-facts.types.js";
+import type {
+  SessionTranscriptContextMetadata,
+  SessionTranscriptContextStats,
+  SessionTranscriptProjectionFacts,
+} from "./session-transcript-projection-facts.types.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { readTranscriptPayload, type TranscriptPayloadRecord } from "./transcript-payload.js";
 
@@ -50,7 +56,7 @@ export type CurrentTranscriptProjection = {
   generation: string | undefined;
   version: SessionTranscriptContextVersion;
   hasUnindexedPrefix: boolean;
-  latestIndexedReset?: { active_position: number; event_type: "reset"; seq: number } | null;
+  latestIndexedReset?: SessionTranscriptProjectionFacts["latestIndexedReset"];
   unindexedHistoryControls?: {
     coveredThrough: number;
     rows: readonly UnindexedHistoryControl[];
@@ -58,6 +64,9 @@ export type CurrentTranscriptProjection = {
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>;
   state: SessionTranscriptProjectionState;
   contextMetadata?: SessionTranscriptContextMetadata;
+  contextStats?: SessionTranscriptContextStats;
+  /** Installed by the history worker; accounting-only snapshots never resolve markers. */
+  resolveVisibleHistory?: (projection: CurrentTranscriptProjection) => VisibleHistoryProjection;
 };
 
 export type SessionTranscriptMessageEvent = {
@@ -138,7 +147,7 @@ export function readSnapshotEventRows(
       "event.seq",
       "in",
       /* kysely-allow-raw: bind physical sequences already selected in this snapshot. */
-      sql<number>`(SELECT value FROM json_each(${JSON.stringify(eventSeqs)}))`,
+      sql<number>`(SELECT CAST(value AS BIGINT) FROM ${jsonArrayElements(projection.database.db, sql.val(JSON.stringify(eventSeqs)))})`,
     ),
   ).rows;
 }
@@ -191,13 +200,7 @@ export function selectMessageRows(
         "in",
         selection.positions.length <= 500
           ? selection.positions
-          : getActiveTranscriptKysely(database)
-              .selectFrom((eb) =>
-                eb
-                  .fn<{ value: number }>("json_each", [eb.val(JSON.stringify(selection.positions))])
-                  .as("requested"),
-              )
-              .select("requested.value"),
+          : sql<number>`(SELECT CAST(value AS BIGINT) FROM ${jsonArrayElements(database.db, sql.val(JSON.stringify(selection.positions)))})` /* kysely-allow-raw: Retained positions are numeric on both engines and use one binding. */,
       )
     : query
         .where("active.message_position", ">=", selection.start)
@@ -322,6 +325,11 @@ function buildProjectionSnapshotQuery(
             .limit(1),
         ),
     )
+    .leftJoin("transcript_event_identities as latest_reset_identity", (join) =>
+      join
+        .onRef("latest_reset_identity.session_id", "=", "target.session_id")
+        .onRef("latest_reset_identity.seq", "=", "latest_reset.event_seq"),
+    )
     .select([
       "watermark.generation",
       "window.transcript_updated_at",
@@ -332,6 +340,7 @@ function buildProjectionSnapshotQuery(
       "state.needs_rebuild",
       "latest_reset.active_position as reset_active_position",
       "latest_reset.event_seq as reset_seq",
+      "latest_reset_identity.event_id as reset_event_id",
     ])
     .select((eb) => [
       eb
@@ -398,23 +407,28 @@ function readProjectionSnapshot(database: TranscriptReadDatabase, sessionId: str
     return {
       ...projectSessionTranscriptFacts(actor),
       contextMetadata: projectSessionActorContextMetadata(actor),
+      contextStats: actor.transcript.contextStats,
     };
   }
   const retained = readSessionTranscriptProjectionReceipt(database, sessionId);
-  if (retained && !retained.contextOnly) {
-    return retained.facts;
+  if (retained?.facts && !retained.contextOnly) {
+    return { ...retained.facts, contextStats: retained.contextStats };
   }
   const row = projectionSnapshotReader(database.db)(sessionId).rows[0]!;
   return {
     cold: Boolean(row.is_cold),
-    contextMetadata: retained?.facts.contextMetadata,
+    contextMetadata: retained?.facts?.contextMetadata,
+    contextStats: actor?.transcript.contextStats ?? retained?.contextStats,
     generation: row.generation ?? undefined,
     updatedAt: row.transcript_updated_at ?? null,
     hasUnclassified: Boolean(row.has_unclassified),
     latestIndexedReset:
-      typeof row.reset_seq === "number" && typeof row.reset_active_position === "number"
+      typeof row.reset_seq === "number" &&
+      typeof row.reset_active_position === "number" &&
+      typeof row.reset_event_id === "string"
         ? {
             active_position: row.reset_active_position,
+            event_id: row.reset_event_id,
             event_type: "reset" as const,
             seq: row.reset_seq,
           }
@@ -440,6 +454,7 @@ export function readCurrentProjectionSnapshot<T>(
   database: TranscriptReadDatabase,
   resolved: CurrentTranscriptProjection["resolved"],
   read: (projection: CurrentTranscriptProjection) => T,
+  prepared?: SessionTranscriptProjectionFacts & { contextStats?: SessionTranscriptContextStats },
 ) {
   const diagnostics: Record<string, string | number> = { sessionId: resolved.sessionId };
   const readerOperation = captureSqliteReaderOwner()?.operation;
@@ -447,7 +462,7 @@ export function readCurrentProjectionSnapshot<T>(
     diagnostics.readerOperation = readerOperation;
   }
   const readSnapshot = () => {
-    const snapshot = readProjectionSnapshot(database, resolved.sessionId);
+    const snapshot = prepared ?? readProjectionSnapshot(database, resolved.sessionId);
     if (snapshot.state) {
       diagnostics.activeEvents = snapshot.state.activeEventCount;
       diagnostics.activeMessages = snapshot.state.activeMessageCount;
@@ -488,12 +503,13 @@ export function readCurrentProjectionSnapshot<T>(
         resolved,
         state,
         contextMetadata: snapshot.contextMetadata,
+        contextStats: snapshot.contextStats,
       }),
     };
   };
   return database.db.isTransaction
     ? readSnapshot()
-    : runSqliteDeferredTransactionSync(database.db, readSnapshot, {
+    : runSqliteReadSnapshotSync(database.db, readSnapshot, {
         databaseLabel: database.path,
         operationLabel: "sessions.history.read",
         diagnosticContext: diagnostics,

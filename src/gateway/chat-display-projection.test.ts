@@ -100,6 +100,7 @@ describe("transcript display metadata", () => {
             ...metadata,
             upstreamUserText: "private decorated prompt ".repeat(12_000),
             sessionSendDelivery: Object.freeze({ source: "private-session" }),
+            chatInputRecovery: Object.freeze({ source: "private-operator-snapshot" }),
           },
           providerReplay: {
             type: "openai-responses-compaction",

@@ -26,7 +26,12 @@ const dispatch = vi.hoisted(() => ({
 }));
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const installUnhandledRejectionHandlerMock = vi.hoisted(() => vi.fn());
-// Only bootstrap/dispatch are replaced; process entry, registry scopes and cleanup are real.
+// Bootstrap/dispatch and process identity are replaced; entry, registry scopes and cleanup are real.
+// mock-isolation: One Vitest process simulates both CLI and Gateway entries; subprocess tests own role immutability.
+vi.mock("../infra/database-engine/admission-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/database-engine/admission-scope.js")>()),
+  installDatabaseProcessRole: vi.fn(),
+}));
 vi.mock("./route.js", () => ({
   tryRouteCli: async () => {
     await dispatch.run();
@@ -60,6 +65,8 @@ vi.mock("./dotenv.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./dotenv.js")>()),
   loadCliDotEnv() {},
 }));
+// mock-isolation: These lifecycle fixtures replace storage startup; PG CLI tests cover selection.
+vi.mock("./database-engine-selection.js", () => ({ prepareCliDatabaseEngine: async () => {} }));
 vi.mock("../config/io.js", () => ({ readBestEffortConfig: async () => ({}) }));
 // mock-isolation: Synthetic proxy handles exercise CLI custody without changing process-wide routing or starting Proxyline.
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({

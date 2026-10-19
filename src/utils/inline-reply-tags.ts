@@ -3,7 +3,7 @@ import {
   skipWhitespace,
 } from "../../packages/tool-call-repair/src/grammar.js";
 
-export type InlineReplyTag = {
+type InlineReplyTag = {
   start: number;
   end: number;
   id?: string;

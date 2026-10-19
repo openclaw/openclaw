@@ -6,13 +6,13 @@ import {
 } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   createProviderCredentialMatcher,
+  fetchWithProviderHttpGuard,
   resolveProviderHttpRequestConfigWithOriginTrust,
   resolveProviderTransportSsrFPolicy,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   localBaseUrl,
   providerBaseUrl,
@@ -218,7 +218,7 @@ export async function requestEvaluation(params: {
         body,
       },
     };
-    const guarded = await fetchWithSsrFGuard(
+    const guarded = await fetchWithProviderHttpGuard(
       !baseUrl && !resolved.dispatcherPolicy && shouldUseEnvHttpProxyForUrl(endpoint)
         ? withTrustedEnvProxyGuardedFetchMode(request)
         : request,

@@ -1,4 +1,3 @@
-/** Playwright browser session facade. */
 export type {
   BrowserConsoleMessage,
   BrowserNetworkRequest,

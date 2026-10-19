@@ -167,17 +167,15 @@ export function chatSubmitState(
     ? chatSendPendingReason({ client: state.client, connected: state.connected }, state.sessionKey)
     : null;
   const controlCommand = isChatControlCommand(state.chatMessage);
+  const routePending = state.isRouteSessionPending?.() === true;
   return {
-    ...(connectionPendingReason && !controlCommand ? { canSend: false } : {}),
+    ...(routePending || (connectionPendingReason && !controlCommand) ? { canSend: false } : {}),
     submitDisabledReason:
-      pendingReason ?? (unavailable ? (failure ?? t("chat.thread.loading")) : null),
-    submitPending: pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),
+      pendingReason ?? (routePending || unavailable ? (failure ?? t("chat.thread.loading")) : null),
+    submitPending:
+      routePending || pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),
     onDraftChange: (...args: Parameters<ChatPageHost["handleChatDraftChange"]>) => {
       state.handleChatDraftChange(...args);
-      // Nonempty draft edits can skip a pane render, but this gate depends on command intent.
-      if (pendingReason && controlCommand !== isChatControlCommand(state.chatMessage)) {
-        state.requestUpdate?.();
-      }
     },
   };
 }

@@ -1,4 +1,3 @@
-// Signal alias helpers keep OpenClaw-side names inside the Signal plugin boundary.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";

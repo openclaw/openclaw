@@ -1,268 +1,209 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { AgentToolModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { GenerateMusicParams } from "./runtime-types.js";
-import { generateMusic, listRuntimeMusicGenerationProviders } from "./runtime.js";
+import { generateMusic } from "./runtime.js";
 import type { MusicGenerationProvider, MusicGenerationRequest } from "./types.js";
 
 let providers: MusicGenerationProvider[] = [];
-let warnings: string[] = [];
+const warn = vi.hoisted(() => vi.fn());
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      ...(subsystem === "music-generation" ? { warn } : {}),
+    }),
+  };
+});
 const listProviders = vi.fn((_config?: OpenClawConfig) => providers);
 const runtimeDeps: NonNullable<Parameters<typeof generateMusic>[1]> = {
   getProvider: (id) => providers.find((provider) => provider.id === id),
   listProviders,
-  log: {
-    debug: () => {},
-    warn: (message) => warnings.push(message),
-  },
 };
-
-function musicConfig(music: AgentToolModelConfig): OpenClawConfig {
-  return { agents: { defaults: { mediaModels: { music } } } };
-}
-
-function runGenerateMusic(params: Partial<GenerateMusicParams> = {}) {
+function runGenerateMusic({
+  model = { primary: "music/track-v1" },
+  ...params
+}: Partial<GenerateMusicParams> & { model?: AgentToolModelConfig } = {}) {
   return generateMusic(
     {
-      cfg: musicConfig({ primary: "music-plugin/track-v1" }),
+      cfg: { agents: { defaults: { mediaModels: { music: model } } } },
       prompt: "play a synth line",
       ...params,
     },
     runtimeDeps,
   );
 }
-
-function createProvider(id = "music-plugin", overrides: Partial<MusicGenerationProvider> = {}) {
+function createProvider(id = "music", overrides: Partial<MusicGenerationProvider> = {}) {
   return {
     id,
     capabilities: {},
     generateMusic: vi.fn(async (req: MusicGenerationRequest) => ({
-      tracks: [
-        { buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg", fileName: "sample.mp3" },
-      ],
+      tracks: [{ buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg" }],
       model: req.model,
     })),
     ...overrides,
   };
 }
-
-describe("music-generation runtime", () => {
-  beforeEach(() => {
-    providers = [];
-    warnings = [];
-    listProviders.mockClear();
+function expectRequest(request: Partial<MusicGenerationRequest>) {
+  expect(providers[0]!.generateMusic).toHaveBeenCalledWith(expect.objectContaining(request));
+}
+type Overrides = Pick<
+  GenerateMusicParams,
+  "lyrics" | "instrumental" | "durationSeconds" | "format"
+>;
+async function checkOverrides(
+  capabilities: MusicGenerationProvider["capabilities"],
+  accepted: Overrides,
+  ignored: Overrides,
+  params: Parameters<typeof runGenerateMusic>[0] = {},
+) {
+  providers[0]!.capabilities = capabilities;
+  const result = await runGenerateMusic({ ...accepted, ...ignored, ...params });
+  expectRequest({
+    ...accepted,
+    ...Object.fromEntries(Object.keys(ignored).map((key) => [key, undefined])),
   });
+  expect(result.ignoredOverrides).toEqual(
+    Object.entries(ignored).map(([key, value]) => ({ key, value })),
+  );
+}
+beforeEach(() => {
+  providers = [createProvider()];
+  warn.mockClear();
+  listProviders.mockClear();
+});
 
-  it("uses configured music-generation timeout when call omits timeoutMs", async () => {
-    const provider = createProvider();
-    providers = [provider];
-    await runGenerateMusic({
-      cfg: musicConfig({ primary: "music-plugin/track-v1", timeoutMs: 300_000 }),
-    });
-    expect(provider.generateMusic).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 300_000 }),
-    );
+it("inherits the configured timeout", async () => {
+  await runGenerateMusic({
+    model: { primary: "music/track-v1", timeoutMs: 300_000 },
   });
+  expectRequest({ timeoutMs: 300_000 });
+});
 
-  it("does not list providers when explicit config disables auto provider fallback", async () => {
-    providers = [createProvider()];
-    const result = await runGenerateMusic({ autoProviderFallback: false });
-    expect(result.provider).toBe("music-plugin");
-    expect(listProviders).not.toHaveBeenCalled();
-  });
+it("skips provider discovery when fallback is disabled", async () => {
+  expect((await runGenerateMusic({ autoProviderFallback: false })).provider).toBe("music");
+  expect(listProviders).not.toHaveBeenCalled();
+});
 
-  it("auto-detects and falls through to another configured music-generation provider by default", async () => {
-    providers = [
-      createProvider("google", {
-        defaultModel: "lyria-3-clip-preview",
-        isConfigured: () => true,
-        async generateMusic() {
-          throw new Error("Google music generation response missing audio data");
-        },
-      }),
-      createProvider("minimax", { defaultModel: "music-2.6", isConfigured: () => true }),
-    ];
-    const result = await runGenerateMusic({ cfg: {} });
-
-    expect(result.provider).toBe("minimax");
-    expect(result.model).toBe("music-2.6");
-    expect(result.attempts).toEqual([
-      {
-        provider: "google",
-        model: "lyria-3-clip-preview",
-        error: "Google music generation response missing audio data",
+it("falls back between detected providers and logs the failure", async () => {
+  const failure = {
+    provider: "google",
+    model: "model-a",
+    error: "missing audio data",
+  };
+  providers = [
+    createProvider(failure.provider, {
+      defaultModel: failure.model,
+      isConfigured: () => true,
+      async generateMusic() {
+        throw new Error(failure.error);
       },
-    ]);
-    expect(warnings).toContain(
-      "music-generation candidate failed: google/lyria-3-clip-preview: Google music generation response missing audio data",
-    );
-  });
+    }),
+    createProvider("minimax", { defaultModel: "model-b", isConfigured: () => true }),
+  ];
+  const result = await runGenerateMusic({ cfg: {} });
+  expect(result).toMatchObject({ provider: "minimax", model: "model-b" });
+  expect(result.attempts).toEqual([failure]);
+  expect(warn).toHaveBeenCalledWith(
+    `music-generation candidate failed: ${failure.provider}/${failure.model}: ${failure.error}`,
+  );
+});
 
-  it("fails visibly when every music provider returns an empty buffer", async () => {
-    providers = ["empty-primary", "empty-fallback"].map((id) =>
-      createProvider(id, {
-        generateMusic: async () => ({
-          tracks: [{ buffer: Buffer.alloc(0), mimeType: "audio/mpeg" }],
-        }),
+it("rejects empty audio from every candidate", async () => {
+  providers = ["empty-primary", "empty-fallback"].map((id) =>
+    createProvider(id, {
+      generateMusic: async () => ({
+        tracks: [{ buffer: Buffer.alloc(0), mimeType: "audio/mpeg" }],
       }),
-    );
-    await expect(
-      runGenerateMusic({
-        cfg: musicConfig({
-          primary: "empty-primary/track-v1",
-          fallbacks: ["empty-fallback/track-v2"],
-        }),
-      }),
-    ).rejects.toThrow(
-      "All music generation models failed (2): empty-primary/track-v1: Music generation provider returned an empty track buffer at index 0. | empty-fallback/track-v2: Music generation provider returned an empty track buffer at index 0.",
-    );
-  });
-
-  it("lists runtime music-generation providers through the provider registry", () => {
-    providers = [createProvider()];
-    const config: OpenClawConfig = {};
-    expect(listRuntimeMusicGenerationProviders({ config }, runtimeDeps)).toEqual(providers);
-    expect(listProviders).toHaveBeenCalledExactlyOnceWith(config);
-  });
-
-  it("ignores unsupported optional overrides per provider and model", async () => {
-    const provider = createProvider("music-plugin", {
-      capabilities: {
-        generate: {
-          supportsLyrics: true,
-          supportsInstrumental: true,
-          supportsFormat: true,
-          supportedFormatsByModel: { "track-v1": ["mp3"] },
-        },
+    }),
+  );
+  await expect(
+    runGenerateMusic({
+      model: {
+        primary: "empty-primary/track-v1",
+        fallbacks: ["empty-fallback/track-v2"],
       },
-    });
-    providers = [provider];
-    const result = await runGenerateMusic({
-      lyrics: "Hero crab in the neon tide",
-      instrumental: true,
-      durationSeconds: 30,
-      format: "wav",
-    });
+    }),
+  ).rejects.toThrow(
+    "All music generation models failed (2): empty-primary/track-v1: Music generation provider returned an empty track buffer at index 0. | empty-fallback/track-v2: Music generation provider returned an empty track buffer at index 0.",
+  );
+});
 
-    expect(provider.generateMusic).toHaveBeenCalledWith(
-      expect.objectContaining({
-        lyrics: "Hero crab in the neon tide",
-        instrumental: true,
-        durationSeconds: undefined,
-        format: undefined,
-      }),
-    );
-    expect(result.ignoredOverrides).toEqual([
-      { key: "durationSeconds", value: 30 },
-      { key: "format", value: "wav" },
-    ]);
-  });
-
-  it("ignores model-specific unsupported lyrics and instrumental overrides", async () => {
-    const provider = createProvider("fal", {
-      capabilities: {
-        generate: {
-          supportsLyrics: true,
-          supportsLyricsByModel: { "fal-ai/stable-audio-25/text-to-audio": false },
-          supportsInstrumental: true,
-          supportsInstrumentalByModel: { "fal-ai/stable-audio-25/text-to-audio": false },
-        },
+it.each(["generate", "edit"] as const)("normalizes optional overrides in %s mode", async (mode) => {
+  const editing = mode === "edit";
+  await checkOverrides(
+    {
+      generate: {
+        supportsLyrics: !editing,
+        supportsInstrumental: !editing,
+        supportsFormat: true,
+        ...(editing
+          ? { supportedFormats: ["mp3"] }
+          : { supportedFormatsByModel: { "track-v1": ["mp3"] } }),
       },
-    });
-    providers = [provider];
-    const result = await runGenerateMusic({
-      cfg: musicConfig({ primary: "fal/fal-ai/stable-audio-25/text-to-audio" }),
-      lyrics: "rise up",
-      instrumental: true,
-    });
+      edit: editing
+        ? {
+            enabled: true,
+            maxInputImages: 1,
+            supportsLyrics: true,
+            supportsInstrumental: true,
+            supportsDuration: false,
+            supportsFormat: false,
+          }
+        : undefined,
+    },
+    { lyrics: "rise up", instrumental: true },
+    { durationSeconds: 30, format: editing ? "mp3" : "wav" },
+    editing ? { inputImages: [{ buffer: Buffer.from("png"), mimeType: "image/png" }] } : {},
+  );
+});
 
-    expect(provider.generateMusic).toHaveBeenCalledWith(
-      expect.objectContaining({ lyrics: undefined, instrumental: undefined }),
-    );
-    expect(result.ignoredOverrides).toEqual([
-      { key: "lyrics", value: "rise up" },
-      { key: "instrumental", value: true },
-    ]);
-  });
-
-  it("uses mode-specific capabilities for edit requests", async () => {
-    const provider = createProvider("music-plugin", {
-      capabilities: {
-        generate: {
-          supportsLyrics: false,
-          supportsInstrumental: false,
-          supportsFormat: true,
-          supportedFormats: ["mp3"],
-        },
-        edit: {
-          enabled: true,
-          maxInputImages: 1,
-          supportsLyrics: true,
-          supportsInstrumental: true,
-          supportsDuration: false,
-          supportsFormat: false,
-        },
+it("applies model-specific lyric and instrumental limits", async () => {
+  const model = "nested/model";
+  await checkOverrides(
+    {
+      generate: {
+        supportsLyrics: true,
+        supportsLyricsByModel: { [model]: false },
+        supportsInstrumental: true,
+        supportsInstrumentalByModel: { [model]: false },
       },
-    });
-    providers = [provider];
-    const result = await runGenerateMusic({
-      lyrics: "rise up",
-      instrumental: true,
-      durationSeconds: 30,
-      format: "mp3",
-      inputImages: [{ buffer: Buffer.from("png"), mimeType: "image/png" }],
-    });
+    },
+    {},
+    { lyrics: "rise up", instrumental: true },
+    {
+      model: { primary: `music/${model}` },
+    },
+  );
+});
 
-    expect(provider.generateMusic).toHaveBeenCalledWith(
-      expect.objectContaining({
-        lyrics: "rise up",
-        instrumental: true,
-        durationSeconds: undefined,
-        format: undefined,
-      }),
-    );
-    expect(result.ignoredOverrides).toEqual([
-      { key: "durationSeconds", value: 30 },
-      { key: "format", value: "mp3" },
-    ]);
+it("clamps duration and records normalization metadata", async () => {
+  providers[0]!.capabilities = { generate: { supportsDuration: true, maxDurationSeconds: 30 } };
+  const result = await runGenerateMusic({ durationSeconds: 45 });
+  expectRequest({ durationSeconds: 30 });
+  expect(result.ignoredOverrides).toStrictEqual([]);
+  expect(result.normalization?.durationSeconds).toEqual({ requested: 45, applied: 30 });
+  expect(result.metadata).toMatchObject({
+    requestedDurationSeconds: 45,
+    normalizedDurationSeconds: 30,
   });
+});
 
-  it("normalizes requested durations to the closest supported max duration", async () => {
-    const provider = createProvider("music-plugin", {
-      capabilities: { generate: { supportsDuration: true, maxDurationSeconds: 30 } },
-    });
-    providers = [provider];
-    const result = await runGenerateMusic({ durationSeconds: 45 });
-
-    expect(provider.generateMusic).toHaveBeenCalledWith(
-      expect.objectContaining({ durationSeconds: 30 }),
-    );
-    expect(result.ignoredOverrides).toStrictEqual([]);
-    expect(result.normalization?.durationSeconds).toEqual({ requested: 45, applied: 30 });
-    expect(result.metadata).toMatchObject({
-      requestedDurationSeconds: 45,
-      normalizedDurationSeconds: 30,
-    });
+it("skips candidates with insufficient reference-image capacity", async () => {
+  const incompatible = createProvider("fal", {
+    capabilities: { edit: { enabled: true, maxInputImages: 1 } },
   });
-
-  it("skips fallback candidates whose reference-image limit is too small", async () => {
-    const incompatible = createProvider("fal", {
-      capabilities: { edit: { enabled: true, maxInputImages: 1 } },
-    });
-    providers = [
-      incompatible,
-      createProvider("google", { capabilities: { edit: { enabled: true, maxInputImages: 14 } } }),
-    ];
-    const result = await runGenerateMusic({
-      cfg: musicConfig({ primary: "fal/prompt-only", fallbacks: ["google/lyria"] }),
-      inputImages: Array.from({ length: 2 }, () => ({
-        buffer: Buffer.from("reference"),
-        mimeType: "image/png",
-      })),
-    });
-
-    expect(incompatible.generateMusic).not.toHaveBeenCalled();
-    expect(result.provider).toBe("google");
-    expect(result.attempts).toHaveLength(1);
+  providers = [
+    incompatible,
+    createProvider("google", { capabilities: { edit: { enabled: true, maxInputImages: 14 } } }),
+  ];
+  const result = await runGenerateMusic({
+    model: { primary: "fal/prompt-only", fallbacks: ["google/lyria"] },
+    inputImages: [{ url: "https://example.test/a.png" }, { url: "https://example.test/b.png" }],
   });
+  expect(incompatible.generateMusic).not.toHaveBeenCalled();
+  expect(result.provider).toBe("google");
+  expect(result.attempts).toHaveLength(1);
 });

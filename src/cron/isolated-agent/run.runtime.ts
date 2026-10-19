@@ -15,8 +15,4 @@ export { ensureAgentWorkspace } from "../../agents/workspace.js";
 export { setSessionRuntimeModel } from "../../config/sessions/types.js";
 export { logWarn } from "../../logger.js";
 export { normalizeAgentId } from "../../routing/session-key.js";
-export {
-  isExternalHookSession,
-  mapHookExternalContentSource,
-  resolveHookExternalContentSource,
-} from "../../security/external-content-source.js";
+export { resolveHookExternalContentSource } from "../../security/external-content-source.js";

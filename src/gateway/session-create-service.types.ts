@@ -205,6 +205,8 @@ export type CreateGatewaySessionParams = {
     actor?: SessionCreatedActor;
     /** Host-verified human requester for matching spawn-owner inheritance. */
     requesterProfileId?: string;
+    /** Host-verified request credit, independent of operator role and ownership. */
+    gitContributorProfileId?: string;
     /** Trusted owner status of the spawning invocation, never synthetic child launch authority. */
     requesterSenderIsOwner?: boolean;
     sandbox?: "required";

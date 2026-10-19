@@ -8,4 +8,5 @@ export type WorkerTaskContext = {
   databaseEngineSelection?: DatabaseEngineSelection;
   deletedAgentDatabaseFences: [string, string][];
   databaseAdmissionPort?: MessagePort;
+  databaseAdmissionDeadlineAtMs?: number;
 };

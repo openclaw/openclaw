@@ -66,6 +66,15 @@ export function registerSharedClientManagedFallbackTests(params: {
       selected?: { command: string; nativeCommand: string; version: string };
     };
 
+    function selectCommand(command: string, managedFallbackCommandPaths?: string[]) {
+      params.resolveManagedStart.mockImplementation(async (start: CodexAppServerStartOptions) => ({
+        ...start,
+        command,
+        commandSource: "resolved-managed",
+        ...(managedFallbackCommandPaths ? { managedFallbackCommandPaths } : {}),
+      }));
+    }
+
     function selectInstalledCodex(): CodexAppServerStartOptions {
       const selected = {
         command: installedCommand,
@@ -74,14 +83,7 @@ export function registerSharedClientManagedFallbackTests(params: {
       };
       installedState.selected = selected;
       installedState.selection = Promise.resolve(selected);
-      params.resolveManagedStart.mockImplementation(
-        async (startOptions: CodexAppServerStartOptions) => ({
-          ...startOptions,
-          command: installedCommand,
-          commandSource: "resolved-managed",
-          managedFallbackCommandPaths: ["/cache/openclaw/codex"],
-        }),
-      );
+      selectCommand(installedCommand, ["/cache/openclaw/codex"]);
       return {
         transport: "stdio",
         command: "codex",
@@ -162,13 +164,7 @@ export function registerSharedClientManagedFallbackTests(params: {
       expect(installedState.selected).toBeUndefined();
       if (!isolated) {
         // Fresh acquisitions now resolve to the bundled package and share this client.
-        params.resolveManagedStart.mockImplementation(
-          async (startOptions: CodexAppServerStartOptions) => ({
-            ...startOptions,
-            command: "/cache/openclaw/codex",
-            commandSource: "resolved-managed",
-          }),
-        );
+        selectCommand("/cache/openclaw/codex");
         await expect(
           getSharedCodexAppServerClient({ startOptions: requested, timeoutMs: 1_000 }),
         ).resolves.toBe(bundled.client);
@@ -210,13 +206,7 @@ export function registerSharedClientManagedFallbackTests(params: {
         const options = { startOptions: requested, timeoutMs: 1_000 };
         const first = getLeasedSharedCodexAppServerClient(options);
         await installed.waitForWrite(0);
-        params.resolveManagedStart.mockImplementation(
-          async (start: CodexAppServerStartOptions) => ({
-            ...start,
-            command: "/cache/openclaw/codex",
-            commandSource: "resolved-managed",
-          }),
-        );
+        selectCommand("/cache/openclaw/codex");
         if (rejector === "this startup") {
           await params.sendInitializeResult(installed, `codex-cli/${CODEX_APP_SERVER_VERSION}`);
           await bundled.waitForWrite(0);

@@ -131,7 +131,13 @@ suite.define(() => {
         await waitForControlUiRoute(page, { routeId: "talk" });
         await page.locator(".native-embed-header__back").waitFor();
         await gateway.setOnline(false);
-        await page.locator("openclaw-router-outlet[inert]").waitFor({ state: "attached" });
+        await expect
+          .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase))
+          .toBe("reconnecting");
+        expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
+        const outlet = page.locator("openclaw-router-outlet");
+        expect(await outlet.getAttribute("inert")).toBeNull();
+        expect(await outlet.getAttribute("aria-disabled")).toBeNull();
         await page.locator(".native-embed-header__back").click();
         await waitForControlUiRoute(page, { routeId: "settings", pathname: "/settings" });
         await page

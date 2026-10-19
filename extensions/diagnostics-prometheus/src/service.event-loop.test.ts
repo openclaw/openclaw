@@ -98,6 +98,8 @@ describe("diagnostics-prometheus runtime metrics", () => {
         type: "diagnostic.memory.sample",
         memory: {
           ...memory,
+          anonymousRssBytes: 700,
+          anonymousSwapBytes: 0,
           workerHeaps: [
             {
               script: "code-mode-node.worker.js",
@@ -123,6 +125,8 @@ describe("diagnostics-prometheus runtime metrics", () => {
         },
       });
       const before = metrics.render();
+      expect(before).toContain('openclaw_process_anonymous_memory_bytes{kind="rss"} 700\n');
+      expect(before).toContain('openclaw_process_anonymous_memory_bytes{kind="swap"} 0\n');
       expect(before).toContain(
         'openclaw_gc_duration_seconds_count{kind="mark_sweep_compact",reason="forced",slot="1",thread="code-mode-node.worker.js"} 2\n',
       );
@@ -172,6 +176,7 @@ describe("diagnostics-prometheus runtime metrics", () => {
         },
       });
       const after = metrics.render();
+      expect(after).not.toContain("openclaw_process_anonymous_memory_bytes");
       expect(after).toContain('openclaw_code_mode_worker_heap_bytes{kind="used",slot="1"} 50\n');
       expect(after).not.toContain('openclaw_code_mode_worker_heap_bytes{kind="limit"');
       expect(after).not.toContain('openclaw_code_mode_worker_heap_bytes{kind="used",slot="2"}');
@@ -282,8 +287,25 @@ describe("diagnostics-prometheus runtime metrics", () => {
               },
             ],
             workerHeaps: [
-              { script: "sqlite-store.worker.js", heapUsed: 100, heapTotal: 200 },
-              { script: "sqlite-store.worker.js", heapUsed: 150, heapTotal: 200 },
+              {
+                script: "sqlite-store.worker.js",
+                heapUsed: 100,
+                heapTotal: 200,
+                heapSpaces: [
+                  { space_name: "old_space", space_used_size: 60 },
+                  { space_name: "code_space", space_used_size: 40 },
+                ],
+              },
+              {
+                script: "sqlite-store.worker.js",
+                heapUsed: 150,
+                heapTotal: 200,
+                heapSpaces: [
+                  { space_name: "old_space", space_used_size: 120 },
+                  { space_name: "code_space", space_used_size: 30 },
+                  { space_name: "future_v8_space", space_used_size: 0 },
+                ],
+              },
             ],
             workerMemoryMissing: [
               { script: "sqlite-store.worker.js", threadId: 3, reason: "pending" },
@@ -369,6 +391,16 @@ describe("diagnostics-prometheus runtime metrics", () => {
       expect(rendered).toContain(
         'openclaw_worker_heap_used_bytes{script="sqlite-store.worker.js"} 250\n',
       );
+      for (const [space, value] of [
+        ["old_space", 180],
+        ["code_space", 70],
+        ["future_v8_space", 0],
+      ]) {
+        expect(rendered).toContain(
+          `openclaw_worker_heap_space_used_bytes{script="sqlite-store.worker.js",space="${space}"} ${value}\n`,
+        );
+      }
+      expect(rendered).not.toContain('openclaw_worker_heap_space_used_bytes{script="other"');
       expect(rendered).toContain(
         'openclaw_child_process_spawn_total{family="node",operation="none"} 5\n',
       );
@@ -412,6 +444,7 @@ describe("diagnostics-prometheus runtime metrics", () => {
       expect(metrics.render()).toBe(rendered);
       metrics.record(retiredSample, trusted);
       expect(metrics.render()).not.toContain("openclaw_heap_space_bytes");
+      expect(metrics.render()).not.toContain("openclaw_worker_heap_space_used_bytes");
       expect(metrics.render()).not.toContain(
         'openclaw_worker_heap_used_bytes{script="sqlite-store',
       );
@@ -577,7 +610,7 @@ describe("diagnostics-prometheus runtime identity", () => {
         metrics.record({ type: "gateway.rpc", method: `method.${index}`, phase: "received" });
       }
       expect(metrics.render()).toContain(info);
-      expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 53");
+      expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 2153");
       metrics.stop();
       expect(metrics.render()).toBe("");
       identity.processInstanceId = "a6aa1fc7-1f10-4b56-8ae8-4ff8c4dc02ea";

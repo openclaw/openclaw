@@ -1,7 +1,7 @@
 // Public descriptions are fixed text: registry responses and local paths stay local.
 export const UPDATE_PREFLIGHT_DETAILS = {
   "gateway-stop-unverified":
-    "Gateway service inspection is unavailable; package replacement cannot proceed safely. Stop the Gateway through Task Scheduler, its original terminal, or openclaw gateway stop, then rerun openclaw update. No package replacement was attempted.",
+    "Gateway service inspection is unavailable; package replacement cannot proceed safely. Stop the Gateway through its service manager, its original terminal, or openclaw gateway stop, then rerun openclaw update. No package replacement was attempted.",
   "windows-task-elevation-required":
     "Windows Task Scheduler requires elevated access for this Gateway task. Rerun openclaw update from an elevated terminal (Run as administrator).",
   "windows-task-inspection-timeout":

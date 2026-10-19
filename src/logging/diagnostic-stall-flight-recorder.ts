@@ -22,11 +22,7 @@ export function createStallFlightRecorder(
   let active: v8.SyncCPUProfileHandle | undefined;
   let previous: { json: string; endedAt: number } | undefined;
   let startedAt = 0;
-  let disabled =
-    !isMainThread ||
-    typeof v8.startCpuProfile !== "function" ||
-    Boolean(versions.bun) ||
-    Number(versions.node.split(".")[0]) < 26;
+  let disabled = !isMainThread || Boolean(versions.bun) || Number(versions.node.split(".")[0]) < 26;
   let packageRoot: string | null = null;
   const stop = () => {
     disabled = true;

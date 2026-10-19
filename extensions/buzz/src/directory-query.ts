@@ -12,8 +12,7 @@ export function applyBuzzDirectoryQueryAndLimit(
   params: { query?: string | null; limit?: number | null },
 ): ChannelDirectoryEntry[] {
   const query = params.query?.trim().toLowerCase() ?? "";
-  const limit =
-    typeof params.limit === "number" && params.limit > 0 ? Math.floor(params.limit) : undefined;
+  const limit = params.limit != null && params.limit > 0 ? Math.floor(params.limit) : undefined;
   const result: ChannelDirectoryEntry[] = [];
   for (const entry of entries) {
     if (!matchesDirectoryQuery(entry, query)) {

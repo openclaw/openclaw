@@ -2,12 +2,14 @@ import type {
   SessionCatalog,
   SessionCatalogHost,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SessionCatalogListProviderParams } from "../../plugins/session-catalog.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import type { SessionCatalogInstances } from "./session-catalog-entry-snapshot.js";
 
 export const SESSION_CATALOG_LIST_LIFETIME_MS = 60_000;
+const catalogLog = createSubsystemLogger("gateway/session-catalog");
 
 export type CatalogListProgressSubscriber = (
   catalog: SessionCatalog,
@@ -31,7 +33,6 @@ type CatalogSubscriber = {
 // Native work still owns its admitted resources after delivery expires.
 class CatalogListWork {
   private pending = 0;
-  private listing = true;
   private releaseRoot: (() => void) | undefined;
 
   begin(retainRoot = false): void {
@@ -43,16 +44,7 @@ class CatalogListWork {
 
   end(): void {
     this.pending--;
-    this.finish();
-  }
-
-  finishListing(): void {
-    this.listing = false;
-    this.finish();
-  }
-
-  private finish(): void {
-    if (!this.listing && this.pending === 0) {
+    if (this.pending === 0) {
       this.releaseRoot?.();
       this.releaseRoot = undefined;
     }
@@ -114,7 +106,6 @@ function createProviderCallbacks(
 /** The aggregate response can finish before the native host publications it owns. */
 export class SessionCatalogListLifetime {
   private readonly controller = new AbortController();
-  private readonly catalogIds: ReadonlySet<string>;
   private readonly subscribers = new Map<string, CatalogSubscriber>();
   private readonly publishers = new Set<() => void>();
   private removeAbortListener: (() => void) | undefined;
@@ -124,8 +115,7 @@ export class SessionCatalogListLifetime {
   private readonly deadline: ReturnType<typeof setTimeout>;
   private readonly sourceSignal: AbortSignal;
 
-  constructor(signals: readonly AbortSignal[], catalogIds: readonly string[]) {
-    this.catalogIds = new Set(catalogIds);
+  constructor(signals: readonly AbortSignal[]) {
     // This bounds delivery captures, not custody of native work that ignores abort.
     this.deadline = setTimeout(
       () => this.retire(new Error("Session catalog list expired")),
@@ -182,7 +172,7 @@ export class SessionCatalogListLifetime {
   }
 
   publish(catalog: SessionCatalog, instances: SessionCatalogInstances): void {
-    if (!this.active() || !this.catalogIds.has(catalog.id)) {
+    if (!this.active()) {
       return;
     }
     for (const subscriber of this.subscribers.values()) {
@@ -218,9 +208,7 @@ export class SessionCatalogListLifetime {
         subscriber.preparing = true;
         this.pending++;
         this.work.begin();
-        void current.trackWork(() =>
-          this.deliverPreparedSubscriber(subscriber, preparation).catch(() => undefined),
-        );
+        void current.trackWork(() => this.deliverPreparedSubscriber(subscriber, preparation));
         return;
       }
       const publication = this.takeQueuedPublication(subscriber);
@@ -252,6 +240,11 @@ export class SessionCatalogListLifetime {
           return;
         }
         subscriber.current?.publish(publication.catalog, publication.instances);
+      }
+    } catch {
+      // Retirement intentionally ends delivery; an active subscriber needs a visible failure.
+      if (this.currentSubscriber(subscriber)) {
+        catalogLog.warn("Session catalog progress update failed; refresh the catalog to retry.");
       }
     } finally {
       subscriber.queued.clear();
@@ -327,7 +320,6 @@ export class SessionCatalogListLifetime {
     // source signal directly so response cleanup does not cancel their work.
     this.removeAbortListener?.();
     this.removeAbortListener = undefined;
-    this.work.finishListing();
     this.releaseUnusedPublishers();
     this.finish();
   }

@@ -29,7 +29,7 @@ function consumeChannelRunAdmission(
   gatewayLocalUserIngress?: GatewayLocalUserIngress,
 ): {
   ingressState: ExecutionIdentityAdmissionFacts["ingress"]["state"];
-  facts: Pick<ExecutionIdentityAdmissionFacts, "invoker" | "assurance"> &
+  facts: Pick<ExecutionIdentityAdmissionFacts, "invoker" | "assurance" | "representedSubject"> &
     Partial<Pick<ExecutionIdentityAdmissionFacts, "ingress">>;
   onAdmitted: (context: AdmittedRunContext) => void;
 } {

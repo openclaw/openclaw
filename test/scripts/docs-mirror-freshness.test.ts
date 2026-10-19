@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -14,19 +14,27 @@ const baseSha = "a".repeat(40);
 const oldSha = "b".repeat(40);
 const newestSha = "c".repeat(40);
 const excludedSha = "d".repeat(40);
+const instructions = "docs/AGENTS.md";
+const translations = "docs/.i18n/README.md";
+const guide = "docs/guide.md";
+const commit = (sha: string, minutes: number): Commit => ({ sha, minutes });
 const baseCommit = { sha: baseSha, minutes: 360 };
 type CommitFile = { filename: string; previous_filename?: string };
+type Commit = { sha: string; minutes: number };
 type Scenario = {
-  mirror: string;
-  history: Record<string, { sha: string; minutes: number }[]>;
+  mirror?: string;
+  history?: Record<string, Commit[]>;
   files?: Record<string, CommitFile[] | null>;
   workflow?: string;
   grace?: number;
   active?: number;
 };
 type Request = { method: string; pathname: string; search: string };
+const commitFiles = (...filenames: string[]): CommitFile[] =>
+  filenames.map((filename) => ({ filename }));
 
-function runScenario(scenario: Scenario) {
+function runScenario(options: Scenario) {
+  const scenario = { mirror: baseSha, history: {}, grace: 60, active: 0, files: {}, ...options };
   const root = createTempDir("openclaw-docs-mirror-");
   mkdirSync(path.join(root, ".github/workflows"), { recursive: true });
   writeFileSync(
@@ -104,13 +112,10 @@ globalThis.fetch = async (input, init = {}) => {
       PATH: process.env.PATH,
       SystemRoot: process.env.SystemRoot,
       WINDIR: process.env.WINDIR,
-      DOCS_MIRROR_STALE_MINUTES: String(scenario.grace ?? 60),
+      DOCS_MIRROR_STALE_MINUTES: String(scenario.grace),
       OPENCLAW_DOCS_TEST_REQUESTS: requestsPath,
       OPENCLAW_DOCS_TEST_SCENARIO: JSON.stringify({
         ...scenario,
-        grace: scenario.grace ?? 60,
-        active: scenario.active ?? 0,
-        files: scenario.files ?? {},
         ancestry: [baseSha, oldSha, newestSha],
       }),
     },
@@ -126,185 +131,134 @@ function expectRecovery(run: ReturnType<typeof runScenario>, stale: boolean, sha
   expect(run.requests.filter((request) => request.method === "POST")).toHaveLength(stale ? 1 : 0);
   expect(stale ? run.result.stderr : run.result.stdout).toContain(sha);
 }
+function runDocs(commits: Commit[], files: NonNullable<Scenario["files"]>, inspectBase = true) {
+  return runScenario({
+    workflow: syncWorkflow,
+    history: { docs: [...commits, baseCommit] },
+    files: { ...(inspectBase ? { [baseSha]: commitFiles(guide) } : {}), ...files },
+  });
+}
 
-describe("docs mirror freshness", () => {
-  it.each<[string, string, number, boolean, boolean, number, number, number]>([
-    ["a current mirror", newestSha, 10, true, true, 60, 0, 0],
-    ["an overdue change hidden by a recent edit", baseSha, 10, true, true, 60, 0, 120],
-    ["an overdue change with recovery already active", baseSha, 10, true, true, 60, 1, 120],
-    ["a quiet stale source", baseSha, 90, true, true, 60, 0, 90],
-    ["the first watched change still in grace", baseSha, 10, false, false, 60, 0, 0],
-    ["a configured longer grace period", baseSha, 10, true, true, 180, 0, 0],
-    ["a change just inside the grace boundary", oldSha, 59.75, true, true, 60, 0, 0],
-  ])(
-    "handles %s without live network access",
-    (_name, mirror, recentMinutes, old, base, grace, active, staleMinutes) => {
-      const earlier = base ? [baseCommit] : [];
-      const run = runScenario({
-        mirror,
-        grace,
-        active,
-        history: {
-          "watched-docs": [{ sha: newestSha, minutes: recentMinutes }, ...earlier],
-          "scripts/publish-support.mjs": [
-            ...(old ? [{ sha: oldSha, minutes: 120 }] : []),
-            ...earlier,
-          ],
-        },
-      });
-      expect(run.result.status, run.result.stdout + run.result.stderr).toBe(staleMinutes ? 1 : 0);
-      expect(run.requests.filter((request) => request.method === "POST")).toHaveLength(
-        staleMinutes && !active ? 1 : 0,
+it.each<[string, string, number, boolean, boolean, number, number, number]>([
+  ["a current mirror", newestSha, 10, true, true, 60, 0, 0],
+  ["an overdue change hidden by a recent edit", baseSha, 10, true, true, 60, 0, 120],
+  ["an overdue change with recovery already active", baseSha, 10, true, true, 60, 1, 120],
+  ["a quiet stale source", baseSha, 90, true, true, 60, 0, 90],
+  ["the first watched change still in grace", baseSha, 10, false, false, 60, 0, 0],
+  ["a configured longer grace period", baseSha, 10, true, true, 180, 0, 0],
+  ["a change just inside the grace boundary", oldSha, 59.75, true, true, 60, 0, 0],
+])(
+  "handles %s without live network access",
+  (_name, mirror, recentMinutes, old, base, grace, active, staleMinutes) => {
+    const earlier = base ? [baseCommit] : [];
+    const run = runScenario({
+      mirror,
+      grace,
+      active,
+      history: {
+        "watched-docs": [commit(newestSha, recentMinutes), ...earlier],
+        "scripts/publish-support.mjs": [...(old ? [commit(oldSha, 120)] : []), ...earlier],
+      },
+    });
+    expect(run.result.status, run.result.stdout + run.result.stderr).toBe(staleMinutes ? 1 : 0);
+    expect(run.requests.filter((request) => request.method === "POST")).toHaveLength(
+      staleMinutes && !active ? 1 : 0,
+    );
+    if (staleMinutes) {
+      expect(run.result.stderr).toContain("docs mirror stale for " + staleMinutes + "m");
+      expect(run.result.stderr).toContain(recentMinutes === staleMinutes ? newestSha : oldSha);
+    } else {
+      expect(run.result.stdout).toContain(
+        mirror === newestSha ? "docs mirror fresh:" : "within " + grace + "m grace",
       );
-      if (staleMinutes) {
-        expect(run.result.stderr).toContain("docs mirror stale for " + staleMinutes + "m");
-        expect(run.result.stderr).toContain(recentMinutes === staleMinutes ? newestSha : oldSha);
-      } else {
-        expect(run.result.stdout).toContain(
-          mirror === newestSha ? "docs mirror fresh:" : "within " + grace + "m grace",
-        );
-      }
-      expect(
-        run.requests.some((request) => /\/commits\/[a-f0-9]{40}$/.test(request.pathname)),
-      ).toBe(false);
-    },
+    }
+    expect(run.requests.some((request) => /\/commits\/[a-f0-9]{40}$/.test(request.pathname))).toBe(
+      false,
+    );
+  },
+);
+
+it.each<[string, CommitFile[] | null, boolean]>([
+  ["authoring instructions", commitFiles(instructions), false],
+  ["translation instructions", commitFiles(translations), false],
+  [
+    "both excluded files and unrelated code",
+    commitFiles(instructions, translations, "src/index.ts"),
+    false,
+  ],
+  ["a mixed public-docs change", commitFiles(instructions, guide), true],
+  ["the public AGENTS template", commitFiles("docs/reference/templates/AGENTS.md"), true],
+  [
+    "a public page renamed to an excluded file",
+    [{ filename: instructions, previous_filename: guide }],
+    true,
+  ],
+  ["an unavailable file inventory", null, true],
+  ["an empty file inventory", [], true],
+  [
+    "a full page that may omit a public file",
+    commitFiles(...Array.from({ length: 100 }, (_, index) => "src/file-" + index + ".ts")),
+    true,
+  ],
+])("handles %s using the publish workflow's paths", (_name, files, stale) => {
+  const run = runDocs([commit(newestSha, 90)], { [newestSha]: files });
+  expectRecovery(run, stale, stale ? newestSha : baseSha);
+});
+
+it("continues past a full page of excluded commits", () => {
+  const excluded = Array.from({ length: 100 }, (_, index) => ({
+    sha: (index + 4096).toString(16).padStart(40, "0"),
+    minutes: 90 + index,
+  }));
+  const run = runDocs(
+    excluded,
+    Object.fromEntries(excluded.map((entry) => [entry.sha, commitFiles(instructions)])),
   );
+  expectRecovery(run, false, baseSha);
+  expect(
+    run.requests.some(
+      (request) =>
+        request.pathname.endsWith("/commits") &&
+        new URLSearchParams(request.search).get("page") === "2",
+    ),
+  ).toBe(true);
+});
 
-  it.each<{ name: string; files: CommitFile[] | null; stale: boolean }>([
-    { name: "authoring instructions", files: [{ filename: "docs/AGENTS.md" }], stale: false },
+it.each([false, true])("skips excluded edits (grace-cutoff lookup: %s)", (cutoff) => {
+  const run = runDocs(
+    [
+      ...(cutoff ? [commit(newestSha, 10)] : []),
+      commit(excludedSha, cutoff ? 90 : 10),
+      commit(oldSha, 120),
+    ],
     {
-      name: "translation instructions",
-      files: [{ filename: "docs/.i18n/README.md" }],
-      stale: false,
+      ...(cutoff ? { [newestSha]: commitFiles("docs/new-guide.md") } : {}),
+      [excludedSha]: commitFiles(cutoff ? translations : instructions),
+      [oldSha]: commitFiles(guide),
     },
-    {
-      name: "both excluded files and unrelated code",
-      files: [
-        { filename: "docs/AGENTS.md" },
-        { filename: "docs/.i18n/README.md" },
-        { filename: "src/index.ts" },
-      ],
-      stale: false,
-    },
-    {
-      name: "a mixed public-docs change",
-      files: [{ filename: "docs/AGENTS.md" }, { filename: "docs/guide.md" }],
-      stale: true,
-    },
-    {
-      name: "the public AGENTS template",
-      files: [{ filename: "docs/reference/templates/AGENTS.md" }],
-      stale: true,
-    },
-    {
-      name: "a public page renamed to an excluded file",
-      files: [{ filename: "docs/AGENTS.md", previous_filename: "docs/guide.md" }],
-      stale: true,
-    },
-    { name: "an unavailable file inventory", files: null, stale: true },
-    { name: "an empty file inventory", files: [], stale: true },
-    {
-      name: "a full page that may omit a public file",
-      files: Array.from({ length: 100 }, (_, index) => ({ filename: "src/file-" + index + ".ts" })),
-      stale: true,
-    },
-  ])("handles $name using the publish workflow's paths", ({ files, stale }) => {
-    const run = runScenario({
-      workflow: syncWorkflow,
-      mirror: baseSha,
-      history: { docs: [{ sha: newestSha, minutes: 90 }, baseCommit] },
-      files: {
-        [newestSha]: files,
-        [baseSha]: [{ filename: "docs/guide.md" }],
-      },
-    });
-    expectRecovery(run, stale, stale ? newestSha : baseSha);
-  });
+    false,
+  );
+  expectRecovery(run, true, oldSha);
+});
 
-  it("continues past a full page of excluded commits", () => {
-    const excluded = Array.from({ length: 100 }, (_, index) => ({
-      sha: (index + 4096).toString(16).padStart(40, "0"),
-      minutes: 90 + index,
-    }));
-    const run = runScenario({
-      workflow: syncWorkflow,
-      mirror: baseSha,
-      history: { docs: [...excluded, baseCommit] },
-      files: {
-        ...Object.fromEntries(
-          excluded.map((commit) => [commit.sha, [{ filename: "docs/AGENTS.md" }]]),
-        ),
-        [baseSha]: [{ filename: "docs/guide.md" }],
-      },
-    });
-    expectRecovery(run, false, baseSha);
-    expect(
-      run.requests.some(
-        (request) =>
-          request.pathname.endsWith("/commits") &&
-          new URLSearchParams(request.search).get("page") === "2",
-      ),
-    ).toBe(true);
+it("honors a later exact-file inclusion after an exclusion", () => {
+  const run = runScenario({
+    workflow:
+      "on:\n  push:\n    paths:\n      - docs/**\n      - \"!docs/AGENTS.md\"\n      - 'docs/AGENTS.md'\n",
+    history: {
+      docs: [commit(newestSha, 90)],
+      [instructions]: [commit(newestSha, 90)],
+    },
+    files: { [newestSha]: commitFiles(instructions) },
   });
+  expectRecovery(run, true);
+});
 
-  it("does not let a recent excluded edit hide an overdue public change", () => {
-    const run = runScenario({
-      workflow: syncWorkflow,
-      mirror: baseSha,
-      history: {
-        docs: [{ sha: excludedSha, minutes: 10 }, { sha: oldSha, minutes: 120 }, baseCommit],
-      },
-      files: {
-        [excludedSha]: [{ filename: "docs/AGENTS.md" }],
-        [oldSha]: [{ filename: "docs/guide.md" }],
-      },
-    });
-    expectRecovery(run, true, oldSha);
+it.each(["!docs/**", "docs/*.md"])("rejects unsupported filter %s", (filter) => {
+  const run = runScenario({
+    workflow: 'on:\n  push:\n    paths:\n      - docs/**\n      - "' + filter + '"\n',
   });
-
-  it("skips excluded edits during the grace-cutoff lookup too", () => {
-    const run = runScenario({
-      workflow: syncWorkflow,
-      mirror: baseSha,
-      history: {
-        docs: [
-          { sha: newestSha, minutes: 10 },
-          { sha: excludedSha, minutes: 90 },
-          { sha: oldSha, minutes: 120 },
-          baseCommit,
-        ],
-      },
-      files: {
-        [newestSha]: [{ filename: "docs/new-guide.md" }],
-        [excludedSha]: [{ filename: "docs/.i18n/README.md" }],
-        [oldSha]: [{ filename: "docs/guide.md" }],
-      },
-    });
-    expectRecovery(run, true, oldSha);
-  });
-
-  it("honors a later exact-file inclusion after an exclusion", () => {
-    const run = runScenario({
-      workflow:
-        "on:\n  push:\n    paths:\n      - docs/**\n      - \"!docs/AGENTS.md\"\n      - 'docs/AGENTS.md'\n",
-      mirror: baseSha,
-      history: {
-        docs: [{ sha: newestSha, minutes: 90 }],
-        "docs/AGENTS.md": [{ sha: newestSha, minutes: 90 }],
-      },
-      files: { [newestSha]: [{ filename: "docs/AGENTS.md" }] },
-    });
-    expectRecovery(run, true);
-  });
-
-  it.each(["!docs/**", "docs/*.md"])("rejects unsupported filter %s", (filter) => {
-    const run = runScenario({
-      workflow: 'on:\n  push:\n    paths:\n      - docs/**\n      - "' + filter + '"\n',
-      mirror: baseSha,
-      history: {},
-    });
-    expect(run.result.status).toBe(1);
-    expect(run.result.stderr).toContain("unsupported glob in sync path filter");
-    expect(run.requests).toHaveLength(0);
-  });
+  expect(run.result.status).toBe(1);
+  expect(run.result.stderr).toContain("unsupported glob in sync path filter");
+  expect(run.requests).toHaveLength(0);
 });

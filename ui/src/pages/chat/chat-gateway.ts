@@ -40,7 +40,6 @@ import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-m
 import { persistedSteerTargetRunId, replaceChatStream } from "./stream-causal-boundary.ts";
 import {
   appendTerminalAssistantMessage,
-  clearToolStreamSegments,
   terminalMessageReplacesVisibleStream,
 } from "./stream-reconciliation.ts";
 import {
@@ -113,6 +112,18 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
     displayEvent.state === "aborted" && displayEvent.stopReason === "auth-revoked"
       ? { ...displayEvent, errorMessage: t("chat.providerAccessRemoved") }
       : displayEvent;
+  const chatgptUsageLimitCode =
+    payload.state === "error" &&
+    payload.errorDetail?.provider === "openai" &&
+    payload.errorDetail.httpStatus === 429
+      ? payload.errorDetail.providerErrorCode
+      : undefined;
+  const chatgptUsageLimitKind =
+    chatgptUsageLimitCode === "subscription_sharing_workplace_individual_usage_limit_exceeded"
+      ? "chatgpt_business_usage_limit"
+      : chatgptUsageLimitCode === "subscription_sharing_usage_limit_exceeded"
+        ? "chatgpt_consumer_usage_limit"
+        : undefined;
   const errorKind =
     payload.state === "error" && payload.errorKind === "state_contention"
       ? "state_contention"
@@ -120,7 +131,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         ? "stop"
         : payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
           ? "auth_refresh"
-          : undefined;
+          : chatgptUsageLimitKind;
   const injectedMessageId =
     payload.state === "final" && payload.seq === 0 && payload.runId?.startsWith("inject-")
       ? payload.runId.slice("inject-".length)
@@ -267,7 +278,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
     ) {
       return;
     }
-    clearToolStreamSegments(state);
+    state.chatStreamSegments = [];
     const sessionKeys = [state.sessionKey, payload.sessionKey];
     if (terminalStatus === "yielded") {
       reconcileChatRunLifecycle(state, {
@@ -293,6 +304,8 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       outcome: terminalStatus === "completed" ? "done" : "interrupted",
       sessionStatus,
       suppressErrorNotice: payload.suppressErrorNotice,
+      localModelMayStillBeFinishing:
+        payload.state === "aborted" && payload.localModelMayStillBeFinishing,
       errorMessage: payload.errorMessage?.trim()
         ? resolveGatewayErrorText(payload, null)
         : undefined,
@@ -322,7 +335,8 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         !payload.suppressErrorNotice &&
         diagnosticOwnerRunId === payload.runId &&
         payload.errorMessage?.trim() &&
-        projectedRun.currentRun?.errorMessage !== previousTerminalRun.errorMessage
+        (projectedRun.currentRun?.errorMessage !== previousTerminalRun.errorMessage ||
+          (chatgptUsageLimitKind && state.chatRunError?.kind !== errorKind))
       ) {
         // Late diagnostics belong to the active, pending, or latest locally terminal run;
         // publishing them over a newer response falsely marks the new run failed.
@@ -545,7 +559,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
   if (payload.state !== "delta") {
     // Terminal materialization transfers ownership into chatMessages; retaining
     // the stream segments would render the same run output a second time.
-    clearToolStreamSegments(state);
+    state.chatStreamSegments = [];
   }
   return payload.state;
 }

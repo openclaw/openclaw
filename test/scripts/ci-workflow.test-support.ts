@@ -3,6 +3,8 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
+import { expect } from "vitest";
 import { parse } from "yaml";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
@@ -23,6 +25,30 @@ export const AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC =
 export const testNodeExecPath = resolveTestNodeExecPath();
 export const TSX_IMPORT = import.meta.resolve("tsx");
 
+export function expectIncludes(actual: unknown, values: readonly unknown[], message?: string) {
+  for (const value of values) {
+    expect(actual, message).toContain(value);
+  }
+}
+
+export function expectExcludes(actual: unknown, values: readonly unknown[], message?: string) {
+  for (const value of values) {
+    expect(actual, message).not.toContain(value);
+  }
+}
+
+export function evaluateWorkflow(
+  expression: unknown,
+  context: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
+) {
+  return evaluateWorkflowExpression(expression, {
+    eventName: "pull_request",
+    repository: "openclaw/openclaw",
+    runAttempt: 1,
+    ...context,
+  });
+}
+
 export type WorkflowStep = {
   "continue-on-error"?: boolean;
   env?: Record<string, unknown>;
@@ -36,6 +62,17 @@ export type WorkflowStep = {
 };
 
 export const readCiWorkflow = () => readWorkflow(".github/workflows/ci.yml");
+
+export function requiredWorkflowStep<T extends readonly { name?: string }[]>(
+  steps: T,
+  name: string,
+): T[number];
+export function requiredWorkflowStep(steps: readonly { name?: string }[], name: string) {
+  return expectDefined(
+    steps.find((step) => step.name === name),
+    name,
+  );
+}
 
 export function evaluateWorkflowExpression(
   expression: unknown,
@@ -99,6 +136,8 @@ export function evaluateWorkflowExpression(
     ciShape?: "default" | "main";
     ciOnPush?: string;
     includeAndroid?: boolean;
+    inputs?: Record<string, unknown>;
+    runnerTemp?: string;
     runnerEnvironment?: "" | "github-hosted" | "self-hosted";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
@@ -165,6 +204,8 @@ export function evaluateWorkflowExpression(
       actor: context.actor ?? "",
       event_name: context.eventName,
       repository: context.repository,
+      repository_owner: context.repository.split("/")[0],
+      server_url: "https://github.com",
       ref: context.ref ?? "refs/heads/main",
       run_attempt: context.runAttempt,
       run_id: context.runId,
@@ -208,11 +249,12 @@ export function evaluateWorkflowExpression(
       run_windows_ci: context.runWindowsCi ?? false,
       skip_defender_exclusions: context.skipDefenderExclusions ?? false,
       windows_ci_replay: context.windowsCiReplay ?? "",
+      ...context.inputs,
     },
     env: context.env ?? {},
     secrets: context.secrets ?? {},
     matrix: context.matrix ?? {},
-    runner: { environment: context.runnerEnvironment ?? "" },
+    runner: { environment: context.runnerEnvironment ?? "", temp: context.runnerTemp ?? "" },
     steps: {
       runner_profile: { outputs: { node_runner_backend: "" } },
       qualification_dispatch: { outputs: { eligible: "false" } },

@@ -6,10 +6,15 @@ import {
 } from "openclaw/plugin-sdk/outbound-media";
 import type { QaBusAttachment, QaBusToolCall } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { resolveQaChannelAccount } from "./accounts.js";
-import { buildQaTarget, resolveQaTargetThread, sendQaBusMessage } from "./bus-client.js";
+import {
+  buildQaTarget,
+  resolveQaTargetThread,
+  sendQaBusMessage,
+  type QaMessageSendHandoff,
+} from "./bus-client.js";
 import type { CoreConfig } from "./types.js";
 
-type QaChannelTextSendParams = {
+type QaChannelTextSendParams = QaMessageSendHandoff & {
   cfg: CoreConfig;
   accountId?: string | null;
   to: string;
@@ -50,6 +55,9 @@ export async function sendQaChannelText(params: QaChannelTextSendParams) {
     senderName: account.botDisplayName,
     threadId: resolved.threadId,
     replyToId: params.replyToId == null ? undefined : String(params.replyToId),
+    signal: params.signal,
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     ...(params.attachments?.length ? { attachments: params.attachments } : {}),
     ...(params.toolCalls?.length ? { toolCalls: params.toolCalls } : {}),
   });

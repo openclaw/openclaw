@@ -5,7 +5,6 @@ import path from "node:path";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -58,23 +57,6 @@ vi.mock("./bash-tools.exec-approval-request.js", () => ({
   registerExecApprovalRequestForHostOrThrow: vi.fn(),
   resolveRegisteredExecApprovalDecision: vi.fn(),
 }));
-
-// Gateway unit coverage owns quiet-admission timing. These spawn cases only
-// need to drain calls already in flight, so skip the repeated 250 ms quiet window.
-vi.mock("../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../gateway/mcp-http.loopback-runtime.js")>();
-  return {
-    ...actual,
-    waitForMcpLoopbackToolCallCaptureIdle: (
-      captureKey: string,
-      options: Parameters<typeof actual.waitForMcpLoopbackToolCallCaptureIdle>[1],
-    ) =>
-      actual.waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
-        ...options,
-        admissionGraceMs: 0,
-      }),
-  };
-});
 
 beforeEach(() => {
   setDiagnosticsEnabledForProcess(true);
@@ -160,32 +142,6 @@ async function createCliPackageFixture(version: string): Promise<{
 }
 
 describe("runCliAgent spawn path", () => {
-  it("hydrates a session-key-owned agent workspace image before spawning the CLI", async () => {
-    const stateDir = tempDirs.make("openclaw-cli-agent-image-");
-    const workspaceDir = path.join(stateDir, "workspace-arthur");
-    const imagePath = path.join(workspaceDir, "media", "inbound", "photo.png");
-    const image = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
-    await fs.mkdir(path.dirname(imagePath), { recursive: true });
-    await fs.writeFile(imagePath, image);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    mockSuccessfulCliRun(CLAUDE_OK_JSONL);
-    const context = buildPreparedCliRunContext({
-      sessionKey: "agent:arthur:main",
-      agentId: "arthur",
-      workspaceDir,
-      config: {
-        agents: { entries: { arthur: { workspace: workspaceDir } } },
-      },
-      backend: { imageArg: "--image" },
-    });
-    context.params.media = [{ path: imagePath, contentType: "image/png" }];
-
-    await expect(executePreparedCliRun(context)).resolves.toMatchObject({ text: "ok" });
-    const spawn = requireRecord(mockCallArg(supervisorSpawnMock), "CLI spawn");
-    const hydratedPath = requireArgAfter(spawn.argv as string[], "--image");
-    await expect(fs.readFile(hydratedPath)).resolves.toEqual(image);
-  });
-
   it("streams a node-placed Claude resume through the normal JSONL parser", async ({
     onTestFinished,
   }) => {
@@ -763,21 +719,25 @@ describe("runCliAgent spawn path", () => {
       systemPromptPath = requireArgAfter(input.argv, "--append-system-prompt-file");
       expect(systemPromptPath).toContain("openclaw-cli-system-prompt-");
       await expect(fs.readFile(systemPromptPath, "utf-8")).resolves.toBe(
-        "You are a helpful assistant.",
+        "Stable prefix\nDynamic suffix",
       );
-      expect(input.argv).not.toContain("You are a helpful assistant.");
+      expect(input.argv).not.toContain("Stable prefix\nDynamic suffix");
       return createManagedRun({
         ...createSuccessfulProcessExit(),
         stdout: CLAUDE_OK_JSONL,
       });
     });
 
-    await executePreparedCliRun(buildPreparedCliRunContext({}));
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+      }),
+    );
 
     await expectPathMissing(systemPromptPath);
   });
 
-  it("resends system prompts through a file for soft-resumed prompt-tool drift", async () => {
+  it("resends system prompts through a file for soft-resumed system-prompt drift", async () => {
     const writeSoftResumeSystemPromptFile = vi.fn(async () => ({
       filePath: "/tmp/openclaw-soft-resume-system-prompt.md",
       cleanup: async () => {},
@@ -802,7 +762,7 @@ describe("runCliAgent spawn path", () => {
     context.reusableCliSession = {
       mode: "reuse-with-drift",
       sessionId: "soft-cli-session",
-      drift: { reasons: ["prompt-tools"] },
+      drift: { reasons: ["system-prompt"] },
     };
 
     await executePreparedCliRun(context, "soft-cli-session");

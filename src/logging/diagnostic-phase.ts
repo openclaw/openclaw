@@ -106,6 +106,7 @@ export async function withDiagnosticPhase<T>(
   }
 }
 
+/** @internal Test-support reset; see diagnostic.test-support.ts. */
 export function resetDiagnosticPhasesForTest(): void {
   activePhaseStack = [];
   recentPhases = [];

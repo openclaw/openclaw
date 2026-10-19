@@ -6,18 +6,13 @@ import {
 } from "../../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../../infra/sqlite-number.js";
-import {
-  assertTransactionUsable,
-  runSqliteImmediateTransactionSync,
-} from "../../../infra/sqlite-transaction.js";
+import { runSqliteImmediateTransactionSync } from "../../../infra/sqlite-transaction.js";
 import { bindSqliteWorkerDatabase } from "../../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../../infra/sqlite-worker-contract.js";
+import { encodeSqliteWorkerDomainError } from "../../../infra/sqlite-worker-domain-error.js";
 import type { DB } from "../../../state/openclaw-agent-db.generated.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../../state/openclaw-state-db-contract.js";
-import {
-  encodeOpenClawStateWorkerError,
-  type OpenClawStateWorkerErrorPayload,
-} from "../../../state/openclaw-state-worker-error.js";
+import type { OpenClawStateWorkerErrorPayload } from "../../../state/openclaw-state-worker-error.js";
 
 export type AcpParentStreamWorkerOperations = {
   record: {
@@ -81,16 +76,7 @@ export function bindSqliteWorkerBackend(
         );
         return { ok: true, value: undefined };
       } catch (error) {
-        // Only confirmed rollback is retryable; uncertain settlement stays with the broker.
-        assertTransactionUsable(database);
-        if (!database.isOpen || database.isTransaction) {
-          throw error;
-        }
-        const failure = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
-        if (!failure) {
-          throw error;
-        }
-        return { ok: false, error: failure };
+        return { ok: false, error: encodeSqliteWorkerDomainError(database, error) };
       }
     },
   });

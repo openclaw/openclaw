@@ -3,7 +3,7 @@ import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   assertSqliteSchemaContains,
-  getCanonicalSqliteNamedIndexContracts,
+  getCanonicalSqliteNamedIndexNames,
   getCanonicalSqliteTableNames,
 } from "../infra/sqlite-schema-contract.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
@@ -42,7 +42,7 @@ function ensureTable(
     const schema = getOpenClawStateFeatureSchemaSql(table, options);
     ensure = createSqliteSchemaEnsurer(() => schema, {
       tables: getCanonicalSqliteTableNames(schema),
-      indexes: getCanonicalSqliteNamedIndexContracts(schema).map(({ name }) => name),
+      indexes: getCanonicalSqliteNamedIndexNames(schema),
     });
     tableEnsurers.set(table, ensure);
   }

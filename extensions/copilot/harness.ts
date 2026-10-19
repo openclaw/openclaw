@@ -538,13 +538,7 @@ export function createCopilotAgentHarness(
         throw new Error("[copilot] harness has been disposed; cannot start new attempts");
       }
       const { resolvePoolAcquire, runCopilotAttempt } = await import("./src/attempt.js");
-      if (disposed) {
-        throw new Error("[copilot] harness was disposed while starting an attempt");
-      }
       const pool = await getPool();
-      if (disposed) {
-        throw new Error("[copilot] harness was disposed while starting an attempt");
-      }
       let poolAcquire: ReturnType<typeof resolvePoolAcquire>;
       try {
         poolAcquire = resolvePoolAcquire(params as never);
@@ -558,7 +552,7 @@ export function createCopilotAgentHarness(
         }
         throw error;
       }
-      const openclawSessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;
+      const openclawSessionId = params.sessionId;
 
       // Reuse the SDK session across turns within the same OpenClaw session so
       // Copilot's prompt cache, tool history, and compaction state survive.
@@ -582,9 +576,6 @@ export function createCopilotAgentHarness(
             return binding?.compatKey === currentCompatKey ? binding : undefined;
           })
         : undefined;
-      if (disposed) {
-        throw new Error("[copilot] harness was disposed while starting an attempt");
-      }
       const resumableSessionId = resumableBinding?.sdkSessionId;
       if (operation === "settled-tool-finalization" && !resumableSessionId) {
         throw new Error(
@@ -594,22 +585,6 @@ export function createCopilotAgentHarness(
       const effectiveParams: CopilotHarnessAttemptParams = resumableSessionId
         ? ({
             ...params,
-            ...(operation === "settled-tool-finalization"
-              ? {
-                  disableTools: true,
-                  onAgentEvent: undefined,
-                  onAgentToolResult: undefined,
-                  onAssistantDelta: undefined,
-                  onAssistantMessageStart: undefined,
-                  onBlockReply: undefined,
-                  onBlockReplyFlush: undefined,
-                  onPartialReply: undefined,
-                  onReasoningEnd: undefined,
-                  onReasoningStream: undefined,
-                  onToolResult: undefined,
-                  onToolStreamBoundary: undefined,
-                }
-              : {}),
             // Finalization is a new, isolated turn over settled state, not a
             // replay of the side-effecting prompt. Ignore replayInvalid while
             // still requiring the exact compatible native session above.
@@ -727,14 +702,8 @@ export function createCopilotAgentHarness(
         throw new Error("[copilot] harness has been disposed; cannot start isolated completion");
       }
       const { runCopilotIsolatedCompletion } = await import("./src/isolated-completion.js");
-      if (disposed) {
-        throw new Error("[copilot] harness was disposed while starting isolated completion");
-      }
       return await runCopilotIsolatedCompletion(params, async () => {
         const pool = await getPool();
-        if (disposed) {
-          throw new Error("[copilot] harness was disposed while starting isolated completion");
-        }
         return pool;
       });
     });
@@ -803,8 +772,7 @@ export function createCopilotAgentHarness(
         if (disposed) {
           return;
         }
-        const openclawSessionId =
-          typeof params.sessionId === "string" ? params.sessionId : undefined;
+        const openclawSessionId = params.sessionId;
         if (!openclawSessionId) {
           return;
         }
@@ -873,8 +841,7 @@ export function createCopilotAgentHarness(
         // the tracked SDK session and calls the session-scoped RPC; durable
         // OpenClaw session/transcript state stays in SQLite, with no marker
         // sidecars under the workspace.
-        const openclawSessionId =
-          typeof params.sessionId === "string" ? params.sessionId : undefined;
+        const openclawSessionId = params.sessionId;
         if (!openclawSessionId) {
           return {
             ok: false,

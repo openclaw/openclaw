@@ -237,6 +237,7 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
   const commandPath = getRootOptionAwareCommandPath(argv, 2);
   const isUpdateCommand = commandPath[0] === "update";
   const isPluginUpdateCommand = commandPath[0] === "plugins" && commandPath[1] === "update";
+  const isNodeRunCommand = commandPath[0] === "node" && commandPath[1] === "run";
   // Update subprocesses use both marker values and retain captured reasons for recovery.
   const showUpdateDiagnostics = ["0", "1"].includes(env.OPENCLAW_UPDATE_IN_PROGRESS ?? "");
   if (
@@ -269,7 +270,10 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
   );
   // Names survive worker transport without loading the state owner's runtime here.
   const stateRefusal = errors.find(
-    (error): error is Error => error instanceof Error && error.name === "StateDatabaseAccessError",
+    (error): error is Error =>
+      error instanceof Error &&
+      (error.name === "StateDatabaseAccessError" ||
+        error.name === "StateDatabaseMaintenanceScopeError"),
   );
   const reason = (error: unknown) =>
     `[openclaw] Reason: ${formatCliOperatorError(error, { argv, env })}`;
@@ -289,7 +293,10 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     // Config validation owns actionable file/field details; some startup paths have not printed them.
     const showReason = isInvalidConfigError(options.error)
       ? !options.error.diagnosticEmitted
-      : isUpdateCommand || isPluginUpdateCommand || isForegroundGatewayRunArgv(argv);
+      : isUpdateCommand ||
+        isPluginUpdateCommand ||
+        isNodeRunCommand ||
+        isForegroundGatewayRunArgv(argv);
     return [
       `[openclaw] ${options.title}`,
       ...(showReason ? [reason(options.error)] : []),

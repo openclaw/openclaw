@@ -59,7 +59,7 @@ function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalle
           author.label,
           row.lastMessagePreview,
           row.key,
-        ].some((value) => typeof value === "string" && value.toLocaleLowerCase().includes(query))
+        ].some((value) => value?.toLocaleLowerCase().includes(query))
       );
     })
     .toSorted((left, right) =>

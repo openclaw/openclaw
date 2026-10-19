@@ -75,6 +75,20 @@ export type SessionProgressCardStore = {
   subscribe: (listener: () => void) => () => void;
 };
 
+export function readSessionProgressCard(
+  store: SessionProgressCardStore | undefined,
+  target: ProgressCardGetParams | undefined,
+) {
+  const card = target ? store?.get(target) : undefined;
+  return {
+    card,
+    loading: card === undefined,
+    lifetime: target ? store?.getLifetime(target) : undefined,
+    error: target ? store?.getError(target) : undefined,
+    refreshState: target ? store?.getRefreshState(target) : undefined,
+  };
+}
+
 const stores = new WeakMap<ApplicationGateway, SessionProgressCardStore>();
 
 function parseProgressCardStep(value: unknown): ProgressCardStep {
@@ -445,6 +459,7 @@ export function sessionProgressCardsForGateway(
       retireClientEntries();
     }
     knownAvailable = available();
+    // Active card consumers keep cached snapshots fresh through Gateway connection and event receipts.
     stopGatewaySnapshots = gateway.subscribe(handleGatewaySnapshot);
     stopGatewayEvents = gateway.subscribeEvents(handleGatewayEvent);
   };
@@ -456,7 +471,6 @@ export function sessionProgressCardsForGateway(
     stopGatewayEvents?.();
     stopGatewaySnapshots = null;
     stopGatewayEvents = null;
-    // Without event/client subscriptions these snapshots cannot remain fresh.
     entries.forEach(retireRefresh);
     entries.clear();
   };

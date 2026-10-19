@@ -85,8 +85,6 @@ extensions/matrix/src/matrix/monitor/handler.test.ts
 extensions/matrix/src/matrix/sdk.test.ts
 extensions/matrix/src/matrix/send.test.ts
 extensions/mattermost/src/channel.ts
-extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts
-extensions/mattermost/src/mattermost/slash-http.ts
 extensions/memory-core/doctor-contract-api.test.ts
 extensions/memory-core/src/cli.test.ts
 extensions/memory-core/src/dreaming-phases.test.ts
@@ -102,7 +100,6 @@ extensions/memory-wiki/src/compile.ts
 extensions/memory-wiki/src/query.test.ts
 extensions/memory-wiki/src/query.ts
 extensions/microsoft-foundry/index.test.ts
-extensions/migrate-hermes/secrets.test.ts
 extensions/msteams/src/channel.ts
 extensions/mxc/test/mxc-backend.test.ts
 extensions/ollama/index.test.ts
@@ -177,7 +174,6 @@ extensions/zalouser/src/monitor.ts
 extensions/zalouser/src/zalo-js.ts
 packages/agent-core/src/agent-loop.test.ts
 packages/agent-core/src/agent-loop.ts
-packages/agent-core/src/harness/compaction/compaction.ts
 packages/ai/src/providers/anthropic.test.ts
 packages/ai/src/providers/openai-chatgpt-responses.ts
 packages/ai/src/providers/openai-completions.test.ts
@@ -266,7 +262,6 @@ src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
 src/auto-reply/reply/commands-acp.test.ts
 src/auto-reply/reply/directive-handling.model.test.ts
 src/auto-reply/reply/dispatch-acp.test.ts
-src/auto-reply/reply/dispatch-acp.ts
 src/auto-reply/reply/dispatch-from-config.abort-and-dedupe.test-utils.ts
 src/auto-reply/reply/dispatch-from-config.acp-abort.test.ts
 src/auto-reply/reply/dispatch-from-config.base.test-utils.ts
@@ -439,7 +434,6 @@ src/logging/diagnostic.test.ts
 src/logging/diagnostic.ts
 src/logging/redact.ts
 src/media-understanding/apply.test.ts
-src/media-understanding/runner.entries.ts
 src/media-understanding/runner.ts
 src/media/web-media.ts
 src/node-host/invoke-system-run-plan.test.ts
@@ -513,7 +507,6 @@ src/wizard/setup.test.ts
 src/worker/worker.runtime.test.ts
 ui/src/api/gateway.node.test.ts
 ui/src/lib/cron/index.test.ts
-ui/src/lib/cron/index.ts
 ui/src/lib/skills/index.test.ts
 ui/src/pages/agents/agents-page-state.ts
 ui/src/pages/chat/chat-gateway.test.ts

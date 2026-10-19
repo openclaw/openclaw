@@ -22,6 +22,10 @@ import {
   repairOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const authorityTables = [
@@ -69,6 +73,7 @@ function createV17PublicationState(options: { populated?: boolean; deferred?: bo
   closeOpenClawStateDatabaseForTest();
   const legacy = openNodeSqliteDatabase(databasePath);
   try {
+    addPreCutoverClientCredentialTablesForTest(legacy);
     if (options.populated !== false) {
       for (const table of authorityTables) {
         if (tableHasColumn(legacy, table, "requester_authority_json")) {
@@ -132,7 +137,7 @@ function createV17PublicationState(options: { populated?: boolean; deferred?: bo
 }
 
 describe("GitHub publication requester authority schema migration", () => {
-  it("keeps schema 17 unchanged when cold identity loading meets a published Gateway owner", () => {
+  it("keeps schema 17 unchanged while local identity loads beside a published Gateway owner", async () => {
     const { options, databasePath, before } = createV17PublicationState();
     const projectionPath = path.join(
       resolveGatewayLockDir(options.env.OPENCLAW_STATE_DIR),
@@ -149,9 +154,7 @@ describe("GitHub publication requester authority schema migration", () => {
     fs.mkdirSync(path.dirname(projectionPath), { recursive: true });
     fs.writeFileSync(projectionPath, previousOwner, { flag: "wx" });
     try {
-      expect(() => loadOrCreateDeviceIdentity(options)).toThrow(
-        expect.objectContaining({ name: "StateSchemaMutationConflictError" }),
-      );
+      expect(loadOrCreateDeviceIdentity(options).deviceId).toMatch(/^[a-f0-9]{64}$/u);
       const unchanged = openNodeSqliteDatabase(databasePath, { readOnly: true });
       try {
         expect(readSnapshot(unchanged)).toEqual(before);
@@ -164,7 +167,9 @@ describe("GitHub publication requester authority schema migration", () => {
       fs.rmSync(projectionPath);
     }
     expect(loadOrCreateDeviceIdentity(options).deviceId).toMatch(/^[a-f0-9]{64}$/u);
-    expect(openOpenClawStateDatabase(options).db.prepare("PRAGMA user_version").get()).toEqual({
+    await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
+    const migrated = openOpenClawStateDatabase(options);
+    expect(migrated.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
     expect(fs.existsSync(projectionPath)).toBe(false);
@@ -175,8 +180,8 @@ describe("GitHub publication requester authority schema migration", () => {
     { via: "doctor repair", deferred: false },
     { via: "doctor repair", deferred: true },
   ] as const)(
-    "preserves receipts and unknown requesters through $via (deferred: $deferred)",
-    ({ via, deferred }) => {
+    "preserves receipts and unknown requesters through captured $via (deferred: $deferred)",
+    async ({ via, deferred }) => {
       const { options, databasePath, before } = createV17PublicationState({ deferred });
       expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
         { kind: "github-publication-requester-authority-v18", path: databasePath },
@@ -185,16 +190,26 @@ describe("GitHub publication requester authority schema migration", () => {
         { kind: "meeting-transcript-start-time", path: databasePath },
         { kind: "task-run-indexes-v24", path: databasePath },
         { kind: "subagent-operator-recovery-v25", path: databasePath },
+        { kind: "session-state-head-layout-v26", path: databasePath },
+        { kind: "state-write-indexes-v27", path: databasePath },
+        { kind: "github-publication-draft-v28", path: databasePath },
+        { kind: "local-client-credentials-v29", path: databasePath },
       ]);
       if (via === "doctor repair") {
-        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+        expect(
+          await withStateMigrationBackupForTest(options, () =>
+            repairOpenClawStateDatabaseSchema(options),
+          ),
+        ).toEqual({
           changes: [
             "Added original requester authority to GitHub publication receipts (v18)",
             "Replaced retained task indexes with ordered cron history indexes (v24)",
+            "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
           ],
           warnings: [],
         });
       }
+      await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
       const { db } = openOpenClawStateDatabase(options);
       expect(readSnapshot(db).receipts).toEqual(
         Object.fromEntries(
@@ -229,33 +244,41 @@ describe("GitHub publication requester authority schema migration", () => {
     },
   );
 
-  it.each(migrationPaths)("rolls back receipt columns and version facts after failed %s", (via) => {
-    const { options, databasePath } = createV17PublicationState();
-    const legacy = openNodeSqliteDatabase(databasePath);
-    legacy.exec(`CREATE TRIGGER fixture_reject_upgrade BEFORE UPDATE ON schema_meta
+  it.each(migrationPaths)(
+    "rolls back receipt columns and version facts after failed %s",
+    async (via) => {
+      const { options, databasePath } = createV17PublicationState();
+      const legacy = openNodeSqliteDatabase(databasePath);
+      legacy.exec(`CREATE TRIGGER fixture_reject_upgrade BEFORE UPDATE ON schema_meta
       BEGIN SELECT RAISE(ABORT, 'publication authority migration rollback'); END;`);
-    const before = readSnapshot(legacy);
-    legacy.close();
-    if (via === "runtime open") {
-      expect(() => openOpenClawStateDatabase(options)).toThrow(
-        /publication authority migration rollback/,
-      );
-    } else {
-      expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-        changes: [],
-        warnings: [expect.stringContaining("publication authority migration rollback")],
-      });
-    }
-    const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
-    try {
-      expect(readSnapshot(preserved)).toEqual(before);
-    } finally {
-      preserved.close();
-    }
-  });
+      const before = readSnapshot(legacy);
+      legacy.close();
+      if (via === "runtime open") {
+        await expect(
+          withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options)),
+        ).rejects.toThrow(/publication authority migration rollback/);
+      } else {
+        expect(
+          await withStateMigrationBackupForTest(options, () =>
+            repairOpenClawStateDatabaseSchema(options),
+          ),
+        ).toEqual({
+          changes: [],
+          warnings: [expect.stringContaining("publication authority migration rollback")],
+        });
+      }
+      const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
+      try {
+        expect(readSnapshot(preserved)).toEqual(before);
+      } finally {
+        preserved.close();
+      }
+    },
+  );
 
-  it("keeps unused tables absent and creates the new columns only with their first write", () => {
+  it("keeps unused tables absent and creates the new columns only with their first write", async () => {
     const { options } = createV17PublicationState({ populated: false });
+    await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
     const { db } = openOpenClawStateDatabase(options);
     const ensureTables = () => {
       ensureGitHubPublicationSessionLifecycleSchema(db);

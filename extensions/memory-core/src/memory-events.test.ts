@@ -1,4 +1,3 @@
-// Memory Core tests cover memory events plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -17,45 +16,39 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 
+async function writeNote(workspaceDir: string, relativePath: string, content: string) {
+  const target = path.join(workspaceDir, relativePath);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, content, "utf8");
+}
+
+function recall(relativePath: string, snippet: string, score: number, endLine = 3) {
+  return { path: relativePath, snippet, score, startLine: 3, endLine, source: "memory" as const };
+}
+
+const permissivePromotion = { minScore: 0, minRecallCount: 0, minUniqueQueries: 0 };
+
 describe("memory host event journal integration", () => {
   it("records recall and promotion events from short-term promotion flows", async () => {
     const workspaceDir = await createTempWorkspace("memory-core-events-");
-    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-04-05.md"),
-      "# Daily\n\nalpha\nbeta\ngamma\n",
-      "utf8",
-    );
+    await writeNote(workspaceDir, "memory/2026-04-05.md", "# Daily\n\nalpha\nbeta\ngamma\n");
 
     await recordShortTermRecalls({
       workspaceDir,
       query: "alpha memory",
-      results: [
-        {
-          path: "memory/2026-04-05.md",
-          startLine: 3,
-          endLine: 4,
-          score: 0.92,
-          snippet: "alpha beta",
-          source: "memory",
-        },
-      ],
+      results: [recall("memory/2026-04-05.md", "alpha beta", 0.92, 4)],
       nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
     });
 
     const candidates = await rankShortTermPromotionCandidates({
       workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
+      ...permissivePromotion,
       nowMs: Date.UTC(2026, 3, 5, 12, 5, 0),
     });
     const applied = await applyShortTermPromotions({
       workspaceDir,
       candidates,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
+      ...permissivePromotion,
       nowMs: Date.UTC(2026, 3, 5, 12, 10, 0),
     });
 
@@ -63,102 +56,51 @@ describe("memory host event journal integration", () => {
 
     const events = await readMemoryHostEvents({ workspaceDir });
 
-    expect(events.map((event) => event.type)).toEqual([
-      "memory.recall.recorded",
-      "memory.promotion.applied",
+    expect(events).toMatchObject([
+      { type: "memory.recall.recorded", resultCount: 1, query: "alpha memory" },
+      { type: "memory.promotion.applied", applied: 1 },
     ]);
-    const recallEvent = events[0];
-    if (recallEvent?.type !== "memory.recall.recorded") {
-      throw new Error("expected recall event");
-    }
-    expect(recallEvent.resultCount).toBe(1);
-    expect(recallEvent.query).toBe("alpha memory");
-    const promotionEvent = events[1];
-    if (promotionEvent?.type !== "memory.promotion.applied") {
-      throw new Error("expected promotion event");
-    }
-    expect(promotionEvent.applied).toBe(1);
   });
 
   it("records skipped recall events for durable memory hits excluded from short-term promotion", async () => {
     const workspaceDir = await createTempWorkspace("memory-core-skipped-recall-events-");
-    await fs.mkdir(path.join(workspaceDir, "memory", "decisoes"), { recursive: true });
-    await fs.mkdir(path.join(workspaceDir, "memory", "idiomas"), { recursive: true });
-    await fs.writeFile(
-      path.join(workspaceDir, "MEMORY.md"),
-      "# Memory\n\nAlpha durable note.\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "decisoes", "2026-06.md"),
-      "# Decisoes\n\nAlpha monthly decision.\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", "idiomas", "PLANO.md"),
-      "# Plano\n\nAlpha language plan.\n",
-      "utf8",
-    );
+    const results = [
+      recall("MEMORY.md", "Alpha durable note.", 0.91),
+      recall("memory/decisoes/2026-06.md", "Alpha monthly decision.", 0.88),
+      recall("memory/idiomas/PLANO.md", "Alpha language plan.", 0.83),
+    ];
+    for (const result of results) {
+      await writeNote(workspaceDir, result.path, `# Memory\n\n${result.snippet}\n`);
+    }
 
     await recordShortTermRecalls({
       workspaceDir,
       query: "alpha durable memory",
-      results: [
-        {
-          path: "MEMORY.md",
-          startLine: 3,
-          endLine: 3,
-          score: 0.91,
-          snippet: "Alpha durable note.",
-          source: "memory",
-        },
-        {
-          path: "memory/decisoes/2026-06.md",
-          startLine: 3,
-          endLine: 3,
-          score: 0.88,
-          snippet: "Alpha monthly decision.",
-          source: "memory",
-        },
-        {
-          path: "memory/idiomas/PLANO.md",
-          startLine: 3,
-          endLine: 3,
-          score: 0.83,
-          snippet: "Alpha language plan.",
-          source: "memory",
-        },
-      ],
+      results,
       nowMs: Date.UTC(2026, 5, 13, 9, 0, 0),
     });
 
     const candidates = await rankShortTermPromotionCandidates({
       workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
+      ...permissivePromotion,
       nowMs: Date.UTC(2026, 5, 13, 9, 5, 0),
     });
     const events = await readMemoryHostEventRecords({ workspaceDir });
 
     expect(candidates).toEqual([]);
-    expect(events.map((event) => event.type)).toEqual(["memory.recall.skipped"]);
-    const skippedEvent = events[0];
-    if (skippedEvent?.type !== "memory.recall.skipped") {
-      throw new Error("expected skipped recall event");
-    }
-    expect(skippedEvent.query).toBe("alpha durable memory");
-    expect(skippedEvent.reason).toBe("non-short-term-memory-path");
-    expect(skippedEvent.eligibleResultCount).toBe(0);
-    expect(skippedEvent.skippedResultCount).toBe(3);
-    expect(skippedEvent.results.map((result) => result.path)).toEqual([
-      "MEMORY.md",
-      "memory/decisoes/2026-06.md",
-      "memory/idiomas/PLANO.md",
+    expect(events).toMatchObject([
+      {
+        type: "memory.recall.skipped",
+        query: "alpha durable memory",
+        reason: "non-short-term-memory-path",
+        eligibleResultCount: 0,
+        skippedResultCount: 3,
+        results: results.map(({ path: sourcePath }) => ({
+          path: sourcePath,
+          reason: "non-short-term-memory-path",
+        })),
+      },
     ]);
-    expect(
-      skippedEvent.results.every((result) => result.reason === "non-short-term-memory-path"),
-    ).toBe(true);
   });
 
   it("records dreaming completion events when phase artifacts are written", async () => {
@@ -181,15 +123,15 @@ describe("memory host event journal integration", () => {
     );
     await expect(fs.readFile(written.inlinePath ?? "", "utf8")).resolves.toContain("- staged note");
     await expect(fs.readFile(written.reportPath ?? "", "utf8")).resolves.toContain("- second note");
-    expect(events).toHaveLength(1);
-    const dreamEvent = events[0];
-    if (dreamEvent?.type !== "memory.dream.completed") {
-      throw new Error("expected dream completion event");
-    }
-    expect(dreamEvent.phase).toBe("light");
-    expect(dreamEvent.outcome).toBe("completed");
-    expect(dreamEvent.lineCount).toBe(2);
-    expect(dreamEvent.storageMode).toBe("both");
+    expect(events).toMatchObject([
+      {
+        type: "memory.dream.completed",
+        phase: "light",
+        outcome: "completed",
+        lineCount: 2,
+        storageMode: "both",
+      },
+    ]);
   });
 
   it("keeps legacy dreaming completion events without outcome readable", async () => {
@@ -205,12 +147,11 @@ describe("memory host event journal integration", () => {
 
     const events = await readMemoryHostEvents({ workspaceDir });
 
-    expect(events).toHaveLength(1);
-    const dreamEvent = events[0];
-    if (dreamEvent?.type !== "memory.dream.completed") {
+    expect(events).toMatchObject([{ type: "memory.dream.completed", phase: "deep" }]);
+    const event = events[0];
+    if (event?.type !== "memory.dream.completed") {
       throw new Error("expected dream completion event");
     }
-    expect(dreamEvent.outcome).toBeUndefined();
-    expect(dreamEvent.phase).toBe("deep");
+    expect(event.outcome).toBeUndefined();
   });
 });

@@ -1,3 +1,21 @@
+import {
+  SESSION_DASHBOARD_ROW_FIELDS,
+  SESSION_ROW_DETAIL_FIELDS,
+  SESSION_SIDEBAR_ROW_FIELDS,
+} from "../../../packages/gateway-protocol/src/session-row-fields.ts";
+import {
+  compareSessionEntryPairs,
+  type SessionEntryPair,
+} from "../../../src/gateway/session-list-order.ts";
+import {
+  SESSIONS_LIST_OWNER_LIMIT,
+  SESSIONS_LIST_TRANSCRIPT_LIMIT,
+} from "../../../src/shared/session-list-limits.ts";
+import {
+  isCronSessionDisplayKey,
+  isSubagentSessionRow,
+  isSystemCreatedSessionRow,
+} from "../../../src/shared/session-list-visibility.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
 
@@ -15,7 +33,7 @@ export type TeamScaleLiveEvent = {
   sessionMutation?: TeamScaleSessionMutation;
 };
 
-type TeamScaleSidebarListInventory = {
+export type TeamScaleSidebarListInventory = {
   rows: GatewaySessionRow[];
   viewerProfileId: string;
   now: number;
@@ -25,12 +43,30 @@ type TeamScaleSidebarListInventory = {
 type TeamScaleSidebarRow = GatewaySessionRow & { updatedAt: number | null };
 type TeamScaleSidebarListResult = SessionsListResult & { sessions: TeamScaleSidebarRow[] };
 
+function sessionEntryPair(row: GatewaySessionRow): SessionEntryPair {
+  return [
+    row.key,
+    {
+      sessionId: row.sessionId ?? row.key,
+      updatedAt: row.updatedAt ?? 0,
+      createdAt: row.createdAt,
+      lastActivityAt: row.lastActivityAt,
+      lastInteractionAt: row.lastInteractionAt,
+      pinnedAt: row.pinned ? row.pinnedAt : undefined,
+      spawnedBy: row.spawnedBy,
+      parentSessionKey: row.parentSessionKey,
+      sidebarRoot: row.sidebarRoot,
+    },
+  ];
+}
+
 /** Owns the synthetic Gateway's changing membership; production code packs its wire rows. */
 export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInventory) {
   const admit = (row: GatewaySessionRow): TeamScaleSidebarRow =>
     Object.freeze({ ...row, updatedAt: row.updatedAt ?? null });
   const rows = new Map(input.rows.map((row) => [row.key, admit(row)]));
   const previous = new Map<string, { rows: TeamScaleSidebarRow[]; revision: string }>();
+  const projections = new WeakMap<TeamScaleSidebarRow, Map<string, TeamScaleSidebarRow>>();
   const reads: Array<{
     params: Record<string, unknown>;
     changedRows: number;
@@ -43,7 +79,9 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
   let revision = 0;
   let ts = input.now;
   const ownedBy = (row: GatewaySessionRow, profileId: string) =>
-    row.owner?.actor.identity?.type === "profile" && row.owner.actor.identity.id === profileId;
+    row.owner?.actor.identity?.type === "profile"
+      ? row.owner.actor.identity.id === profileId
+      : row.owner?.actor.id === profileId;
   return {
     apply(mutation: TeamScaleSessionMutation | undefined) {
       for (const key of mutation?.removeKeys ?? []) {
@@ -60,6 +98,10 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
     } {
       const { source: _source, ifRowsRevision: _ifRowsRevision, ...query } = params;
       const key = JSON.stringify(Object.entries(query).toSorted(([a], [b]) => a.localeCompare(b)));
+      const sortBy =
+        query.sortBy === "lastInteractionAt" || query.sortBy === "activity"
+          ? query.sortBy
+          : undefined;
       const eligible = [...rows.values()]
         .filter((row) => {
           if (query.agentId && row.agentId !== query.agentId) {
@@ -91,10 +133,13 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
           if (query.excludeDock !== false && row.isDock === true) {
             return false;
           }
-          if (query.excludeSubagents && row.key.includes(":subagent:")) {
+          if (query.excludeSubagents && isSubagentSessionRow(row.key, row)) {
             return false;
           }
-          if (query.excludeCron && row.key.includes(":cron:")) {
+          if (query.excludeCron && isCronSessionDisplayKey(row.key)) {
+            return false;
+          }
+          if (query.excludeSystem && isSystemCreatedSessionRow(row)) {
             return false;
           }
           if (query.includeGlobal === false && row.kind === "global") {
@@ -105,7 +150,9 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
           }
           if (
             typeof query.spawnedBy === "string" &&
-            !row.childOwnerSessionKeys?.includes(query.spawnedBy)
+            !(row.childOwnerSessionKeys ?? [row.controlOwnerSessionKey ?? row.spawnedBy]).includes(
+              query.spawnedBy,
+            )
           ) {
             return false;
           }
@@ -114,7 +161,9 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
             `${row.label} ${row.displayName}`.toLowerCase().includes(query.search.toLowerCase())
           );
         })
-        .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || a.key.localeCompare(b.key));
+        .toSorted((a, b) =>
+          compareSessionEntryPairs(sessionEntryPair(a), sessionEntryPair(b), sortBy),
+        );
       const offset = typeof query.offset === "number" ? query.offset : 0;
       const limit = typeof query.limit === "number" ? query.limit : 200;
       const shared = eligible.slice(offset, offset + limit);
@@ -122,10 +171,57 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
         query.ownerFirst && offset === 0
           ? eligible
               .filter((row) => ownedBy(row, input.viewerProfileId))
-              .slice(0, Math.min(limit, 60))
+              .slice(0, Math.min(limit, SESSIONS_LIST_OWNER_LIMIT))
           : [];
       const ownerKeys = new Set(owned.map((row) => row.key));
-      const selected = [...owned, ...shared.filter((row) => !ownerKeys.has(row.key))];
+      const selected = [...owned, ...shared.filter((row) => !ownerKeys.has(row.key))].map(
+        (row, index) => {
+          const enrich = index < SESSIONS_LIST_TRANSCRIPT_LIMIT + owned.length;
+          const includeDerivedTitles = query.includeDerivedTitles === true && enrich;
+          const includeLastMessage = query.includeLastMessage === true && enrich;
+          const projectionKey = JSON.stringify([
+            query.rowMode,
+            includeDerivedTitles,
+            includeLastMessage,
+          ]);
+          let views = projections.get(row);
+          if (!views) {
+            views = new Map();
+            projections.set(row, views);
+          }
+          let projected = views.get(projectionKey);
+          if (projected) {
+            return projected;
+          }
+          projected = { ...row };
+          if (!includeDerivedTitles) {
+            delete projected.derivedTitle;
+          }
+          if (!includeLastMessage) {
+            delete projected.lastMessagePreview;
+          }
+          if (query.rowMode === "sidebar" || query.rowMode === "dashboard") {
+            const fields =
+              query.rowMode === "sidebar"
+                ? SESSION_SIDEBAR_ROW_FIELDS
+                : SESSION_DASHBOARD_ROW_FIELDS;
+            for (const field of Object.keys(projected)) {
+              if (!fields.has(field)) {
+                Reflect.deleteProperty(projected, field);
+              }
+            }
+            projected.rowMode = query.rowMode;
+          } else if (query.rowMode === "compact") {
+            for (const field of SESSION_ROW_DETAIL_FIELDS) {
+              delete projected[field];
+            }
+            projected.rowMode = "compact";
+          }
+          Object.freeze(projected);
+          views.set(projectionKey, projected);
+          return projected;
+        },
+      );
       const prior = previous.get(key);
       const unchanged =
         prior !== undefined &&
@@ -139,13 +235,9 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
         { profileId: string; open: number; running: number }
       >();
       if (query.includeOwnerSessionCounts) {
-        for (const row of rows.values()) {
+        for (const row of eligible) {
           const identity = row.owner?.actor.identity;
-          if (
-            row.archived ||
-            identity?.type !== "profile" ||
-            (query.agentId && row.agentId !== query.agentId)
-          ) {
+          if (row.archived || identity?.type !== "profile") {
             continue;
           }
           const counts = ownerSessionCounts.get(identity.id) ?? {
@@ -196,6 +288,147 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
     },
     stats: () => reads,
   };
+}
+
+export function prepareTeamScaleSessionOwnership(
+  sessions: GatewaySessionRow[],
+  owners: ControlUiMockPresenceUser[],
+): void {
+  for (const [index, row] of sessions.entries()) {
+    const owner = owners[index % owners.length]!;
+    row.owner = {
+      actor: {
+        type: "human",
+        id: owner.id,
+        identity: { type: "profile", id: owner.id },
+        label: owner.name,
+      },
+    };
+    row.hiddenFromInvolvingMe = false;
+    if (index < 230 && owner.id !== owners[0]!.id) {
+      row.participants = [
+        ...row.participants!,
+        { identity: { type: "profile", id: owners[0]!.id }, label: owners[0]!.name },
+      ];
+    }
+  }
+}
+
+export function createTeamScaleSessionEvents(
+  sessions: readonly GatewaySessionRow[],
+  now: number,
+  options: { durationMs?: number; ancestorSessionKey?: string } = {},
+): TeamScaleLiveEvent[] {
+  const liveEvents: TeamScaleLiveEvent[] = [];
+  const durationMs = options.durationMs ?? 30_000;
+  for (let index = 0; index < durationMs / 125; index++) {
+    const atMs = (index + 1) * 125;
+    const row = {
+      ...sessions[index % 24]!,
+      updatedAt: now + atMs,
+      snapshotAt: now + atMs,
+      lastMessagePreview: `Synthetic worker ${(index % 24) + 1}: completed checkpoint ${Math.floor((index % 240) / 24) + 1}.`,
+    };
+    liveEvents.push({
+      atMs,
+      kind: "sessions.changed.active-worker",
+      event: "sessions.changed",
+      sessionMutation: { upsert: [row] },
+      payload: {
+        ...row,
+        sessionKey: row.key,
+        reason: "agent.run.updated",
+        ts: row.updatedAt,
+        session: row,
+        ancestorSessions: [],
+      },
+    });
+  }
+  if (options.ancestorSessionKey) {
+    const source = sessions.find((row) => row.key === options.ancestorSessionKey);
+    const children = sessions.filter((row) => row.spawnedBy === options.ancestorSessionKey);
+    if (!source || !children.length) {
+      throw new Error("Ancestor-reference churn requires an existing parent and children");
+    }
+    const parent = { ...source, ancestorRevision: "team-scale-parent-v1" };
+    for (let index = 1; index < liveEvents.length; index += 2) {
+      const atMs = liveEvents[index]!.atMs;
+      const ts = now + atMs;
+      const row = {
+        ...children[Math.floor(index / 2) % children.length]!,
+        updatedAt: ts,
+        snapshotAt: ts,
+        lastMessagePreview: `Synthetic child checkpoint ${index}`,
+      };
+      const initial = index === 1;
+      liveEvents[index] = {
+        atMs,
+        kind: initial
+          ? "sessions.changed.child-parent-full"
+          : "sessions.changed.child-parent-reference",
+        event: "sessions.changed",
+        sessionMutation: { upsert: initial ? [row, parent] : [row] },
+        payload: {
+          ...row,
+          sessionKey: row.key,
+          reason: "agent.run.updated",
+          ts,
+          session: row,
+          ancestorSessions: initial
+            ? [{ key: parent.key, agentId: parent.agentId, version: 1, full: parent }]
+            : [],
+          ...(initial
+            ? {}
+            : {
+                ancestorSessionRefs: [
+                  {
+                    key: parent.key,
+                    agentId: parent.agentId,
+                    sessionId: parent.sessionId,
+                    revision: parent.ancestorRevision,
+                    snapshotAt: ts,
+                  },
+                ],
+              }),
+        },
+      };
+    }
+    // References must preserve raw version 1 so a later wire delta still decodes.
+    const atMs = durationMs + 125;
+    const ts = now + atMs;
+    const changed = {
+      label: "Synthetic ancestor baseline verified",
+      displayName: "Synthetic ancestor baseline verified",
+      derivedTitle: "Synthetic ancestor baseline verified",
+      updatedAt: ts,
+      snapshotAt: ts,
+      ancestorRevision: "team-scale-parent-v2",
+    };
+    liveEvents.push({
+      atMs,
+      kind: "sessions.changed.parent-raw-baseline-check",
+      event: "sessions.changed",
+      sessionMutation: { upsert: [{ ...parent, ...changed }] },
+      payload: {
+        sessionKey: parent.key,
+        agentId: parent.agentId,
+        sessionId: parent.sessionId,
+        reason: "patch",
+        ts,
+        updatedAt: ts,
+        ancestorSessions: [],
+        session: {
+          key: parent.key,
+          agentId: parent.agentId,
+          version: 2,
+          base: 1,
+          set: changed,
+          remove: [],
+        },
+      },
+    });
+  }
+  return liveEvents;
 }
 
 /** Applies membership churn to the existing 125-frame, 20-second live stream. */

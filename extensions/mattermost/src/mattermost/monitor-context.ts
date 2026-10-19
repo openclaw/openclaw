@@ -1,4 +1,5 @@
 import { resolveChannelStreamingPreviewToolProgress } from "openclaw/plugin-sdk/channel-outbound";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { countOutboundMedia } from "openclaw/plugin-sdk/reply-payload";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import {
@@ -104,7 +105,7 @@ export function formatMattermostFinalDeliveryOutcomeLog(params: {
   }
   if (params.outcome === "empty") {
     // Detect dropped substantive payloads even when the agent run succeeded (#80501).
-    const finalText = typeof params.payload.text === "string" ? params.payload.text.trim() : "";
+    const finalText = params.payload.text?.trim() ?? "";
     const mediaUrlCount = countOutboundMedia(params.payload);
     if (finalText.length > 0 || mediaUrlCount > 0) {
       return (
@@ -125,7 +126,7 @@ export function resolveMattermostThreadSessionContext(params: {
   baseSessionKey: string;
   kind: ChatType;
   postId?: string | null;
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: ReplyToMode;
   threadRootId?: string | null;
 }): { effectiveReplyToId?: string; sessionKey: string; parentSessionKey?: string } {
   // Flat DMs never thread; rooms retain existing roots even when new replies are off.

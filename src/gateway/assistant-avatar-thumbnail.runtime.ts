@@ -12,9 +12,12 @@ import {
 const AVATAR_THUMBNAIL_SIDE = 128;
 // The admitted source owns both pending and completed work until its revision is replaced.
 const thumbnails = new WeakMap<GatewayAvatarImageSource, Promise<HttpImageRepresentation>>();
+const notificationIcons = new WeakMap<GatewayAvatarImageSource, Promise<string | undefined>>();
 
 async function createAvatarThumbnail(
   source: GatewayAvatarImageSource,
+  maxSide = AVATAR_THUMBNAIL_SIDE,
+  signal?: AbortSignal,
 ): Promise<HttpImageRepresentation> {
   let body: Buffer;
   let contentType: string;
@@ -50,7 +53,8 @@ async function createAvatarThumbnail(
     body = (
       await createImageProcessor().encode(body, {
         format: "png",
-        resize: { maxSide: AVATAR_THUMBNAIL_SIDE, enlarge: false },
+        resize: { maxSide, enlarge: false },
+        signal,
       })
     ).data;
     contentType = "image/png";
@@ -68,6 +72,34 @@ export async function readGatewayAvatarThumbnail(
       throw error;
     });
     thumbnails.set(source, pending);
+  }
+  return pending;
+}
+
+/** Inline push icons work while the browser is offline from Gateway image authentication. */
+export function readGatewayAvatarNotificationIcon(
+  source: GatewayAvatarImageSource,
+): Promise<string | undefined> {
+  let pending = notificationIcons.get(source);
+  if (!pending) {
+    pending = (async () => {
+      const signal = AbortSignal.timeout(5_000);
+      for (const maxSide of [32, 24]) {
+        const image = await createAvatarThumbnail(source, maxSide, signal);
+        if (image.contentType !== "image/png") {
+          return undefined;
+        }
+        const icon = `data:image/png;base64,${image.body.toString("base64")}`;
+        if (icon.length <= 2_400) {
+          return icon;
+        }
+      }
+      return undefined;
+    })().catch(() => {
+      notificationIcons.delete(source);
+      return undefined;
+    });
+    notificationIcons.set(source, pending);
   }
   return pending;
 }

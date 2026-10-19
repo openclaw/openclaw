@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -27,6 +26,7 @@ import type {
   UpdateDoctorConfigWriteRefusal,
 } from "./update-doctor-config.js";
 import { UpdateDoctorLintFindingSchema } from "./update-doctor-lint-schema.js";
+import { runWithUpdateDoctorMigrationCapture } from "./update-doctor-migration-attribution.js";
 import { normalizeUpdateFailureFacts, type UpdateFailureFact } from "./update-failure-facts.js";
 import { UpdateFailureFactSchema } from "./update-run-schema.js";
 
@@ -151,7 +151,23 @@ export function collectUpdateDoctorFailureFacts(error: unknown): UpdateFailureFa
 /** Keep optional health diagnostics bounded across Doctor and its update parent. */
 export function normalizeUpdatePostInstallDoctorWarnings(warnings: readonly string[]): string[] {
   return [
-    ...new Set(warnings.map((warning) => truncateUtf16Safe(warning.trim(), 500)).filter(Boolean)),
+    ...new Set(
+      warnings
+        .map((warning) => {
+          const value = warning.trim();
+          if (value.length <= 500) {
+            return value;
+          }
+          const prefix = value.slice(0, 498);
+          const complete =
+            prefix.match(/^[\s\S]*(?:[.!?](?=\s)|\r?\n)/u)?.[0] ??
+            prefix.match(/^[^\r\n]+:(?=\s)/u)?.[0];
+          return complete
+            ? `${complete.trimEnd()} …`
+            : "Warning detail omitted because it exceeds the display limit.";
+        })
+        .filter(Boolean),
+    ),
   ].slice(0, 32);
 }
 
@@ -170,6 +186,7 @@ export type UpdateDoctorWriteAuthority = {
   commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
   postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
   databaseGenerations?: UpdateDatabaseGenerations;
+  databasePluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
   originalRecoveryCapture?: {
     runId: string;
     installRoot: string;
@@ -186,6 +203,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
     signal: AbortSignal;
     assertCurrent?: () => void;
     warn: (message: string) => void;
+    pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
   },
 ) {
   if (!input) {
@@ -225,6 +243,30 @@ export function createUpdateDoctorDatabaseWriteCapture(
     get receipt() {
       return receipt;
     },
+    run<T>(operation: () => T): T {
+      return runWithUpdateDoctorMigrationCapture(
+        {
+          expected: (pathname) => expectedGenerations?.[pathname],
+          assertCurrent: () => options.assertCurrent?.(),
+          accept(pathname, before, after) {
+            options.assertCurrent?.();
+            const expected = expectedGenerations;
+            if (!expected || !Object.hasOwn(expected, pathname) || expected[pathname] !== before) {
+              unchanged = false;
+              return;
+            }
+            expected[pathname] = after;
+          },
+          refuse(message) {
+            unchanged = false;
+            options.warn(
+              `Automatic database restoration cannot attribute migration writes: ${message}`,
+            );
+          },
+        },
+        operation,
+      );
+    },
     async admit() {
       receipt = undefined;
       const generations = await read();
@@ -239,8 +281,8 @@ export function createUpdateDoctorDatabaseWriteCapture(
     async settle() {
       const generations = await read();
       if (generations && expectedGenerations) {
-        // Maintenance excludes Gateway writers, not independent SQLite writers.
-        // Without transaction attribution, even Doctor-time changes are unknown.
+        // Only native migration publications advance the expected generation.
+        // Unattributed writes, including independent SQLite writers, remain unknown.
         unchanged &&= Object.entries(expectedGenerations).every(
           ([pathname, generation]) => generations[pathname] === generation,
         );

@@ -50,7 +50,6 @@ export function closePlacementAuthorityOwner(owner: PlacementAuthorityOwner): vo
   owner.claims.clear();
   owner.placements.clear();
   owner.observations.clear();
-  owner.placementReaders.clear();
   owner.projections.clear();
   owner.preservation = undefined;
   owner.recoveryCandidatesEmpty = undefined;
@@ -74,6 +73,21 @@ export function placementAuthorityOwnerFor(
   if (existing?.active) {
     return existing;
   }
+  if (identity.key.startsWith("file:")) {
+    for (const [key, candidate] of placementAuthorityOwners) {
+      if (
+        candidate.active &&
+        key.startsWith("path:") &&
+        candidate.identity.canonicalPath === identity.canonicalPath
+      ) {
+        // First creation preserves readers acquired before the database file existed.
+        placementAuthorityOwners.delete(key);
+        candidate.identity = identity;
+        placementAuthorityOwners.set(identity.key, candidate);
+        return candidate;
+      }
+    }
+  }
   const owner: PlacementAuthorityOwner = {
     identity,
     active: true,
@@ -81,7 +95,6 @@ export function placementAuthorityOwnerFor(
     claims: new Map(),
     placements: new Map(),
     observations: new Map(),
-    placementReaders: new Map(),
     pending: new Set(),
     sequence: 0,
     published: new Map(),

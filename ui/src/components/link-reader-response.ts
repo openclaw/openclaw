@@ -1,3 +1,5 @@
+import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   linkReaderTargetKey,
   resolveLinkReaderTarget,
@@ -24,4 +26,19 @@ export function linkReaderAuthorHref(value: unknown, source: string): string | u
     url.origin === URL.parse(source)?.origin
     ? url.href
     : undefined;
+}
+
+// Committed reader facts refresh projections, never another identity's cache.
+export const LINK_READER_METADATA_UPDATED_EVENT = "openclaw:link-reader-metadata-updated";
+export type LinkReaderMetadataUpdate = {
+  client: GatewayBrowserClient;
+  agentId: string | undefined;
+  sessionKey: string | undefined;
+  target: LinkReaderTarget;
+  preview: ControlUiLinkReaderPreview;
+};
+declare global {
+  interface WindowEventMap {
+    "openclaw:link-reader-metadata-updated": CustomEvent<LinkReaderMetadataUpdate>;
+  }
 }

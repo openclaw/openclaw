@@ -196,6 +196,7 @@ export function commitSessionEntryPatch(
         },
       };
       let mutation;
+      let lifecycleEffects: SessionEntryPatchCommitted["lifecycleEffects"];
       if ("operation" in input) {
         if (input.validateCanonicalKeys) {
           assertCanonicalSqliteSessionKeysCurrent(database);
@@ -240,6 +241,9 @@ export function commitSessionEntryPatch(
           existing,
           writeBase,
           operation: input.operation,
+          onLifecycleProjection: (effects) => {
+            lifecycleEffects = effects;
+          },
         });
         mutation = writeSessionEntryPatchInDatabase(database, {
           sessionKey: input.sessionKey,
@@ -276,8 +280,9 @@ export function commitSessionEntryPatch(
       }
       result = {
         kind: "session-entry-patch",
-        entry: mutation.entry,
+        ...(input.returnEntry === false ? {} : { entry: mutation.entry }),
         applied: mutation.applied,
+        lifecycleEffects,
         publication,
         transcriptPredicate:
           mutation.entry.sessionId === predicate.transcriptPredicate?.sessionId

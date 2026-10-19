@@ -1,4 +1,3 @@
-// Ollama plugin module owns model-specific native thinking contracts.
 import type { Model, ModelThinkingLevel } from "openclaw/plugin-sdk/llm";
 import {
   normalizeOllamaCloudModelId,

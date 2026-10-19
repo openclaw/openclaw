@@ -47,7 +47,8 @@ export function isOpenRouterMistralModelId(modelId: unknown): boolean {
 }
 
 export function isOpenRouterDeepSeekV4ModelId(modelId: unknown): boolean {
-  return /^deepseek\/deepseek-v4-(?:flash|pro)(?:-\d{4,8})?(?::[^/]*)?$/.test(
+  // Point releases (v4.1, ...) share the V4 reasoning-replay contract.
+  return /^deepseek\/deepseek-v4(?:\.\d+)?-(?:flash|pro)(?:-\d{4,8})?(?::[^/]*)?$/.test(
     normalizeOpenRouterModelFamilyId(modelId) ?? "",
   );
 }

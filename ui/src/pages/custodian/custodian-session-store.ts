@@ -62,6 +62,7 @@ export class CustodianSessionStore {
   eventNudge: eventNudgeState.CustodianEventNudge | null = null;
   eventNudgePending: eventNudgeState.CustodianEventNudge | null = null;
   eventNudgeClosed = false;
+  healthNudgeSource: eventNudgeState.CustodianHealthNudgeSource | null = null;
   channelOnboardingNudgeClosed = false;
   earlierBoundaryAfterId: number | null = null;
   abandonedTurnOutcomeUnknown = false;
@@ -110,14 +111,18 @@ export class CustodianSessionStore {
       this.context = context;
       this.inputDrafts.connect(context, () => this.emit());
       const recover = this.transcript.watchAvailability(() => void this.refreshTranscriptIfIdle());
+      // Every Gateway transition retires conversation requests and reconciles reconnect recovery synchronously.
       this.gatewayCleanup = context.gateway.subscribe(() => {
         // Reconnect hydration supersedes the queued availability recovery.
         recover();
         this.synchronizeClient();
+        this.synchronizeHealthNudge();
         this.emit();
       });
+      // Agent receipts reconcile configured inference and conversation admission before another turn can start.
       this.agentCleanup = context.agents.subscribe(() => {
         this.synchronizeClient();
+        this.synchronizeHealthNudge();
         this.emit();
       });
       this.eventCleanup = context.gateway.subscribeEvents((event) => {
@@ -125,13 +130,27 @@ export class CustodianSessionStore {
           return;
         }
         if (event.event === "health") {
+          if (this.healthNudgeSource) {
+            this.healthNudgeSource.pending = false;
+          }
           this.eventNudge = eventNudgeState.classifyCustodianHealthNudge(event.payload);
+        } else if (event.event === "tick") {
+          this.synchronizeHealthNudge();
         }
         this.emit();
       });
     }
     this.synchronizeClient();
+    this.synchronizeHealthNudge();
     this.emit();
+  }
+
+  private synchronizeHealthNudge(): void {
+    eventNudgeState.synchronizeCustodianHealthNudge(
+      this,
+      () => this.sessionOwner.key(this.context?.gateway ?? null),
+      () => this.emit(),
+    );
   }
 
   get input(): string {
@@ -687,10 +706,8 @@ export class CustodianSessionStore {
       this.inferenceState = "ready";
       this.wizardValue = result.step ? initialWizardValue(result.step) : undefined;
       const message = createCustodianReplyMessage(this.nextMessageId, result);
-      if (message) {
-        this.nextMessageId += 1;
-        this.messages = [...this.messages, message];
-      }
+      this.nextMessageId += 1;
+      this.messages = [...this.messages, message];
       if (result.handoff?.kind === "model-accounts") {
         this.exitSetup("profile");
       } else if (result.action === "open-agent") {

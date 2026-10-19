@@ -356,7 +356,6 @@ export class DiscordAudioWorker {
       sdk: this.sdk,
       reason,
       expirySeconds,
-      onVerbose: (message) => this.post({ type: "log", level: "verbose", message }),
       onWarn: (message) => this.post({ type: "log", level: "warn", message }),
     });
   }
@@ -516,7 +515,6 @@ export class DiscordAudioWorker {
           }
         },
         onError,
-        onVerbose: (message) => this.post({ type: "log", level: "verbose", message }),
         onWarn: (message) => this.post({ type: "log", level: "warn", message }),
       });
     } finally {

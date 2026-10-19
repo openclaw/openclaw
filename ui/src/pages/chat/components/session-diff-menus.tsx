@@ -4,6 +4,7 @@ import type { SessionsDiffResult } from "../../../../../packages/gateway-protoco
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import {
+  createMenuControls,
   Menu,
   type MenuEntry,
   type MenuHandle,
@@ -11,7 +12,6 @@ import {
 } from "../../../components/solid/menu.tsx";
 import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../../../lib/editor-links.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 
 export type SessionDiffScope =
   | { scope: "all" | "uncommitted" }
@@ -76,7 +76,7 @@ function menuItem(
   return {
     id,
     label,
-    class: `session-menu__item${checked === undefined ? "" : " session-diff-menu__scope-item"}`,
+    class: ["session-menu__item", { "session-diff-menu__scope-item": checked !== undefined }],
     type: checked === undefined ? undefined : "radio",
     checked,
     content: <span class="session-menu__text">{content ?? label}</span>,
@@ -95,12 +95,14 @@ function CopyRow(props: {
   label: string;
   command?: boolean;
   initialFocus?: boolean;
+  ref?: (element: HTMLButtonElement) => void;
 }) {
   return (
     <div class={["session-diff-menu__copy-row", { "is-command": props.command }]}>
       <span class="session-diff-menu__copy-label">{props.label}</span>
       <code title={props.value}>{props.value}</code>
       <CopyButton
+        ref={props.ref}
         text={props.value}
         idleLabel={props.label}
         buttonAttributes={{
@@ -112,8 +114,9 @@ function CopyRow(props: {
   );
 }
 let nextMenuId = 0;
-function SessionDiffMenuContent(props: SessionDiffMenuProps) {
+export function SessionDiffMenu(props: SessionDiffMenuProps) {
   const id = `session-diff-menu-${++nextMenuId}`;
+  const controls = createMenuControls();
   function select(value: string, menu: SessionDiffMenuData) {
     const simple: Record<string, SessionDiffMenuAction | undefined> = {
       "collapse-all": { kind: "collapse-all" },
@@ -159,7 +162,12 @@ function SessionDiffMenuContent(props: SessionDiffMenuProps) {
           kind: "content",
           id: "path",
           content: (
-            <CopyRow value={menu.path} label={t("chat.sessionDiff.copyPath")} initialFocus />
+            <CopyRow
+              ref={controls.ref()}
+              value={menu.path}
+              label={t("chat.sessionDiff.copyPath")}
+              initialFocus
+            />
           ),
         },
         {
@@ -256,13 +264,22 @@ function SessionDiffMenuContent(props: SessionDiffMenuProps) {
               <strong>{t("chat.sessionDiff.syncLocally")}</strong>
               <p>{t("chat.sessionDiff.syncDescription")}</p>
               <CopyRow
+                ref={controls.ref()}
                 value={menu.command}
                 label={t("chat.sessionDiff.copyCommand")}
                 command
                 initialFocus
               />
-              <CopyRow value={menu.root} label={t("chat.sessionDiff.checkoutPath")} />
-              <CopyRow value={menu.branch} label={t("chat.sessionDiff.branchName")} />
+              <CopyRow
+                ref={controls.ref()}
+                value={menu.root}
+                label={t("chat.sessionDiff.checkoutPath")}
+              />
+              <CopyRow
+                ref={controls.ref()}
+                value={menu.branch}
+                label={t("chat.sessionDiff.branchName")}
+              />
               <p class="session-diff-menu__note">{t("chat.sessionDiff.uncommittedStay")}</p>
             </div>
           ),
@@ -284,82 +301,69 @@ function SessionDiffMenuContent(props: SessionDiffMenuProps) {
     ];
   }
   return (
-    <Show when={props.menu} keyed>
-      {(menu) => {
-        let handle: MenuHandle | undefined;
-        const placement = menu.kind === "scope" ? (menu.placement ?? "top-start") : "bottom-end";
-        const entries = items(menu);
-        const label =
-          menu.kind === "file"
-            ? t("chat.sessionDiff.fileActions", { path: menu.path })
-            : t(
-                menu.kind === "scope"
-                  ? "chat.sessionDiff.scopeMenu"
-                  : menu.kind === "sync"
-                    ? "chat.sessionDiff.syncLocally"
-                    : "chat.sessionDiff.viewOptions",
-              );
-        return (
-          <div
-            style={{
-              "--session-diff-menu-width": `${menu.kind === "sync" ? 360 : menu.kind === "scope" ? 340 : 240}px`,
-            }}
-          >
-            <Menu
-              id={id}
-              class={`session-menu session-diff-menu session-diff-menu--${menu.kind}`}
-              panelClass="session-diff-menu__surface"
-              placement={placement}
-              label={label}
-              items={entries}
-              triggerAttributes={{
-                tabindex: -1,
-                "aria-hidden": "true",
-                style: {
-                  position: "fixed",
-                  left: `${Math.max(8, Math.min(menu.anchor.x, window.innerWidth - 8))}px`,
-                  top: `${Math.max(8, Math.min(menu.anchor.y, window.innerHeight - 8))}px`,
-                  width: "1px",
-                  height: "1px",
-                  opacity: 0,
-                  "pointer-events": "none",
-                },
+    <openclaw-session-diff-menu>
+      <Show when={props.menu} keyed>
+        {(menu) => {
+          let handle: MenuHandle | undefined;
+          const placement = menu.kind === "scope" ? (menu.placement ?? "top-start") : "bottom-end";
+          const entries = items(menu);
+          const label =
+            menu.kind === "file"
+              ? t("chat.sessionDiff.fileActions", { path: menu.path })
+              : t(
+                  menu.kind === "scope"
+                    ? "chat.sessionDiff.scopeMenu"
+                    : menu.kind === "sync"
+                      ? "chat.sessionDiff.syncLocally"
+                      : "chat.sessionDiff.viewOptions",
+                );
+          return (
+            <div
+              style={{
+                "--session-diff-menu-width": `${menu.kind === "sync" ? 360 : menu.kind === "scope" ? 340 : 240}px`,
               }}
-              ref={(value) => {
-                handle = value;
-                value.overlay.setReturnTarget(menu.trigger);
-                value.open();
-              }}
-              onSelect={(item, event) => {
-                event.preventDefault();
-                handle?.close();
-                select(item.id, menu);
-              }}
-              onOpenChange={(open) => {
-                if (!open && props.menu === menu && handle?.overlay.surface.isConnected) {
-                  props.onClose();
-                }
-              }}
-            />
-          </div>
-        );
-      }}
-    </Show>
+            >
+              <Menu
+                controls={controls}
+                id={id}
+                class={["session-menu session-diff-menu", `session-diff-menu--${menu.kind}`]}
+                panelClass="session-diff-menu__surface"
+                placement={placement}
+                label={label}
+                items={entries}
+                triggerAttributes={{
+                  tabindex: -1,
+                  "aria-hidden": "true",
+                  style: {
+                    position: "fixed",
+                    left: `${Math.max(8, Math.min(menu.anchor.x, window.innerWidth - 8))}px`,
+                    top: `${Math.max(8, Math.min(menu.anchor.y, window.innerHeight - 8))}px`,
+                    width: "1px",
+                    height: "1px",
+                    opacity: 0,
+                    "pointer-events": "none",
+                  },
+                }}
+                ref={(value) => {
+                  handle = value;
+                  value.overlay.setReturnTarget(menu.trigger);
+                  value.open();
+                }}
+                onSelect={(item, event) => {
+                  event.preventDefault();
+                  handle?.close();
+                  select(item.id, menu);
+                }}
+                onOpenChange={(open) => {
+                  if (!open && props.menu === menu && handle?.overlay.surface.isConnected) {
+                    props.onClose();
+                  }
+                }}
+              />
+            </div>
+          );
+        }}
+      </Show>
+    </openclaw-session-diff-menu>
   );
-}
-export const SessionDiffMenu = defineSolidBridge<SessionDiffMenuProps>(
-  "openclaw-session-diff-menu",
-  SessionDiffMenuContent,
-  {
-    properties: {
-      menu: { default: null, attribute: false },
-      onAction: { default: () => {}, attribute: false },
-      onClose: { default: () => {}, attribute: false },
-    },
-  },
-);
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-session-diff-menu": SolidBridgeElement<SessionDiffMenuProps>;
-  }
 }

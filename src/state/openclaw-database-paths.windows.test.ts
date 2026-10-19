@@ -29,6 +29,10 @@ import {
   repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 const MAX_PATH = 260;
 const AGENT_ID = "windows-long-path";
@@ -57,8 +61,8 @@ function createDeepStateEnv(): NodeJS.ProcessEnv {
 
 describe("OpenClaw database paths on Windows", () => {
   it.runIf(process.platform === "win32")(
-    "migrates legacy namespace collisions through startup and Doctor",
-    () => {
+    "migrates legacy namespace collisions through captured startup and Doctor",
+    async () => {
       for (const repair of [false, true]) {
         const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-native-legacy-alias-") };
         const database = openOpenClawStateDatabase({ env });
@@ -68,13 +72,18 @@ describe("OpenClaw database paths on Windows", () => {
         );
         insert.run(agentPath, 18, 100, 10);
         insert.run(path.toNamespacedPath(agentPath), 20, 200, 20);
+        addPreCutoverClientCredentialTablesForTest(database.db);
         database.db.exec(
           "PRAGMA user_version=8; UPDATE schema_meta SET schema_version=8 WHERE meta_key='primary'",
         );
         closeOpenClawStateDatabaseForTest();
-        if (repair) {
-          expect(repairOpenClawStateDatabaseSchema({ env }).warnings).toEqual([]);
-        }
+        await withStateMigrationBackupForTest({ env }, () => {
+          if (repair) {
+            expect(repairOpenClawStateDatabaseSchema({ env }).warnings).toEqual([]);
+          } else {
+            openOpenClawStateDatabase({ env });
+          }
+        });
         const migrated = openOpenClawStateDatabase({ env });
         expect(migrated.db.prepare("SELECT * FROM agent_databases").all()).toEqual([
           {

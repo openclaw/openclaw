@@ -11,6 +11,7 @@ import {
   readBoundedResponseText,
   toLintErrorObject,
 } from "../../../lib/bounded-response.mjs";
+import { createBuildSmokeEnv } from "../../../lib/build-smoke-env.mts";
 import { isRecord } from "../../../lib/record-shared.mjs";
 import { resolveWindowsTaskkillPath } from "../../../lib/windows-taskkill.mjs";
 import { readJson, writeJson } from "../fixtures/common.mjs";
@@ -1211,16 +1212,8 @@ export function createIsolatedStateEnv(label) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-${label}-`));
   const home = path.join(root, "home");
   const stateDir = path.join(home, ".openclaw");
-  const configPath = path.join(stateDir, "openclaw.json");
   fs.mkdirSync(stateDir, { recursive: true });
-  const env = {
-    ...process.env,
-    HOME: home,
-    USERPROFILE: home,
-    OPENCLAW_HOME: home,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_CONFIG_PATH: configPath,
-  };
+  const env = createBuildSmokeEnv(home, process.env);
   isolatedStateRoots.set(env, root);
   return env;
 }

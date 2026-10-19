@@ -13,11 +13,7 @@ import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
 import * as catalog from "./catalog-target.ts";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "./cloud-profile-discovery.ts";
 import { requestPlaceCatalog } from "./cloud-target.ts";
-import {
-  readDraftCloudProfiles,
-  type DraftCloudProfile,
-  type DraftEnvironment,
-} from "./discovery.ts";
+import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
 import type { DraftGatewayCallbacks, DraftGatewaySnapshot } from "./draft-gateway-contract.ts";
 import {
   DraftPreferenceState,
@@ -172,7 +168,9 @@ export class DraftGatewayState {
     const result =
       required || !canWrite
         ? Promise.resolve({
-            profiles: readDraftCloudProfiles(required ? [required] : []),
+            profiles: required?.providerId
+              ? [{ ...required, providerId: required.providerId }]
+              : [],
             environments: [],
             suggestedProfile: undefined,
           })
@@ -254,7 +252,7 @@ export class DraftGatewayState {
     }
     // Retire an older catalog read before publishing the saved profile.
     void this.readCloudProfiles();
-    this.applyCloudProfiles(readDraftCloudProfiles([profile]));
+    this.applyCloudProfiles([profile]);
     this.suggestedProfileValue = undefined;
     this.callbacks.changed();
     return profile.id;
@@ -325,16 +323,6 @@ export class DraftGatewayState {
 
   get preferenceLoading(): boolean {
     return this.preferences.loading || this.identityPreferences?.mode === "loading";
-  }
-
-  resolvedGroupCategory(): string | undefined {
-    const snapshot = this.read();
-    return isGatewayMethodAdvertised(
-      snapshot.context?.gateway.snapshot ?? {},
-      "sessions.groups.defaults",
-    ) === true
-      ? catalog.resolvedGroupName(snapshot.data, snapshot.context?.sessions)
-      : undefined;
   }
 
   refreshCloudProfiles(): Promise<void> {
@@ -721,6 +709,7 @@ export class DraftGatewayState {
       }
       this.callbacks.changed();
     };
+    // The preference lease requires this live-authority predicate when publishing results.
     this.stopPreferences = preferences.subscribe(
       notify,
       () =>

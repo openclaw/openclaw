@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   readSessionArchiveContentSync,
@@ -41,6 +42,56 @@ afterEach(() => {
 });
 
 describe("legacy media persistence doctor migration", () => {
+  it.each([undefined, "full"] as const)(
+    "honors %s during pre-v17 media migration",
+    async (mode) => {
+      const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "media-integrity-") };
+      const message = { role: "user", content: "preserved", MediaPath: "/media/image.png" };
+      const event = createEvent({ id: "kept", parentId: null, timestamp: 1, message });
+      const pathname = createLegacyDatabaseFixture({
+        env,
+        schemaVersion: 16,
+        eventsBySession: { media: [event] },
+      });
+      const before = readDatabaseSnapshot(pathname);
+      const hostQueries: string[] = [];
+      const sql = observeHostDataSql((query, database) => {
+        if (database?.location() === pathname) {
+          hostQueries.push(query);
+        }
+      });
+      const checks = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
+      try {
+        const result = await migrateLegacyMediaPersistence({ env, integrityCheck: mode });
+        expect(result.warnings).toEqual([]);
+        const after = readDatabaseSnapshot(pathname);
+        expect(after.version.user_version).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+        expect(after.identities).toEqual(before.identities);
+        expect(after.rows).toHaveLength(1);
+        const migratedMessage = JSON.parse(after.rows[0]!.event_json).message;
+        expect(migratedMessage).toMatchObject({
+          content: message.content,
+          __openclaw: { media: [{ path: message.MediaPath }] },
+        });
+        const requests = checks.mock.calls
+          .filter(([file]) => file === pathname)
+          .map((call) => call[5]);
+        expect([...new Set(requests.map((check) => check?.check))]).toEqual([mode ?? "quick"]);
+        if (mode === "full") {
+          expect(hostQueries.some((query) => /\bPRAGMA\s+quick_check\b/iu.test(query))).toBe(false);
+        } else {
+          expect(requests.some((check) => check?.tables?.includes("transcript_events"))).toBe(true);
+          expect(
+            hostQueries.filter((query) => /^PRAGMA\s+integrity_check\s*(?:;|$|\(\d)/iu.test(query)),
+          ).toEqual([]);
+        }
+      } finally {
+        checks.mockRestore();
+        sql.restore();
+      }
+    },
+  );
+
   it("renews maintenance while a synchronous transcript scan outlasts its lease", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-slow-scan-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -249,13 +300,13 @@ describe("legacy media persistence doctor migration", () => {
     expect(await migrateLegacyMediaPersistence({ env })).toEqual({ changes: [], warnings: [] });
   });
 
-  it("retains a completed schema crossing's integrity proof on reopen", async () => {
+  it("retains a completed FULL schema crossing's integrity proof on reopen", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-crossing-proof-");
     const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_UPDATE_IN_PROGRESS: "1" };
     const pathname = createLegacyDatabaseFixture({ env, eventsBySession: {}, schemaVersion: 21 });
     const checks = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
     try {
-      const result = await migrateLegacyMediaPersistence({ env });
+      const result = await migrateLegacyMediaPersistence({ env, integrityCheck: "full" });
       expect(result.warnings).toEqual([]);
       expect(checks.mock.calls.filter(([file]) => file === pathname)).toHaveLength(1);
       const sql = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "prepare");
@@ -834,16 +885,15 @@ describe("legacy media persistence doctor migration", () => {
       "drift.jsonl.deleted.2026-07-24T01-02-03.000Z",
     );
     writeArchive(archivePath, [event], false);
-    const archiveDrift = await migrateLegacyMediaPersistence({
-      env,
-      hooks: {
-        beforeArchiveReplace: (candidate) => {
-          if (candidate === archivePath) {
-            fs.writeFileSync(archivePath, "replacement\n");
-          }
-        },
-      },
+    const open = fs.openSync;
+    using archiveOpen = vi.spyOn(fs, "openSync");
+    archiveOpen.mockImplementation((candidate, flags, mode) => {
+      if (flags === "wx" && String(candidate).startsWith(`${archivePath}.media-retirement.`)) {
+        fs.writeFileSync(archivePath, "replacement\n");
+      }
+      return open(candidate, flags, mode);
     });
+    const archiveDrift = await migrateLegacyMediaPersistence({ env });
     expect(archiveDrift.warnings.join("\n")).toContain("changed before atomic");
     expect(fs.readFileSync(archivePath, "utf8")).toBe("replacement\n");
   });
@@ -873,12 +923,12 @@ describe("legacy media persistence NUL-tail recovery", () => {
   it("atomically removes a terminal NUL suffix from an otherwise valid archive", async () => {
     const valid = Buffer.from(`${JSON.stringify({ type: "event", id: "event-1" })}\n`);
     const { archivePath, env } = createArchiveFixture(Buffer.concat([valid, Buffer.alloc(284)]));
-    let replacements = 0;
+    using rename = vi.spyOn(fs, "renameSync");
 
-    const result = await migrateLegacyMediaPersistence({
-      env,
-      hooks: { beforeArchiveReplace: () => (replacements += 1) },
-    });
+    const result = await migrateLegacyMediaPersistence({ env });
+    const replacements = rename.mock.calls.filter(
+      ([, destination]) => destination === archivePath,
+    ).length;
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toContain(`Migrated archived transcript media in ${archivePath}.`);
@@ -894,12 +944,12 @@ describe("legacy media persistence NUL-tail recovery", () => {
     },
   ])("rejects and preserves $name", async ({ bytes }) => {
     const { archivePath, env } = createArchiveFixture(bytes);
-    let replacements = 0;
+    using rename = vi.spyOn(fs, "renameSync");
 
-    const result = await migrateLegacyMediaPersistence({
-      env,
-      hooks: { beforeArchiveReplace: () => (replacements += 1) },
-    });
+    const result = await migrateLegacyMediaPersistence({ env });
+    const replacements = rename.mock.calls.filter(
+      ([, destination]) => destination === archivePath,
+    ).length;
 
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("Skipped archived transcript media migration");
@@ -913,12 +963,12 @@ describe("legacy media persistence NUL-tail recovery", () => {
     async ({ bytes }) => {
       const { archivePath, env } = createArchiveFixture(bytes);
       const before = fs.lstatSync(archivePath);
-      let replacements = 0;
+      using rename = vi.spyOn(fs, "renameSync");
 
-      const result = await migrateLegacyMediaPersistence({
-        env,
-        hooks: { beforeArchiveReplace: () => (replacements += 1) },
-      });
+      const result = await migrateLegacyMediaPersistence({ env });
+      const replacements = rename.mock.calls.filter(
+        ([, destination]) => destination === archivePath,
+      ).length;
 
       const after = fs.lstatSync(archivePath);
       expect(result).toEqual({ changes: [], warnings: [] });

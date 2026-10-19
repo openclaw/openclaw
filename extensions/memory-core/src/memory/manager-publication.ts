@@ -23,6 +23,7 @@ import {
   memoryPublicationGroup,
   memoryPublicationHeader,
   memoryPublicationInline,
+  releaseMemoryPublication,
 } from "./manager-publication-transfer.js";
 import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
 
@@ -126,7 +127,17 @@ export async function retryMemoryPublication<T>(params: {
 }
 
 /** Small publications use one request; larger inputs retain their bounded transfer scope. */
-export async function publishMemorySource(params: {
+export async function publishMemorySource(params: Parameters<typeof publishMemorySourceOnce>[0]) {
+  // Preparation may splice the group, so capture its members before publishing.
+  const printed = Array.isArray(params.replacement) ? [...params.replacement] : params.replacement;
+  try {
+    return await publishMemorySourceOnce(params);
+  } finally {
+    releaseMemoryPublication(printed);
+  }
+}
+
+async function publishMemorySourceOnce(params: {
   replacement: MemorySourceIndexReplacement | MemorySourceIndexReplacement[];
   state: () => MemoryPublicationState;
   execute: PublicationScope["execute"];

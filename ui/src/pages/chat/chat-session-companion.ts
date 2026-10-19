@@ -148,7 +148,18 @@ export class ChatSessionCompanionThreads {
   private readonly hydrationTokens = new Map<string, symbol>();
   private readonly submissionTokens = new Map<string, Deferred>();
 
-  constructor(private readonly notify: () => void = () => {}) {}
+  private publish?: () => void;
+
+  subscribe(listener: () => void): () => void {
+    this.publish = listener;
+    return () => {
+      this.publish = undefined;
+    };
+  }
+
+  private readonly notify = () => {
+    this.publish?.();
+  };
 
   view(sessionKey: string, agentId?: string | null): ChatSessionCompanionThread {
     return this.get(companionThreadKey(sessionKey, agentId));

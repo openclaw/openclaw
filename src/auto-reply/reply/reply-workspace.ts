@@ -23,8 +23,8 @@ export async function prepareReplyWorkspace(params: {
     skipOptionalBootstrapFiles: params.skipOptionalBootstrapFiles,
   };
   const assertCurrent = () => {
-    assertReplyPreprocessingActive(abortSignal);
     operatorAuthority?.assertCurrent();
+    assertReplyPreprocessingActive(abortSignal);
   };
   assertCurrent();
   if (params.useFastTestBootstrap) {

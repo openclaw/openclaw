@@ -3,6 +3,7 @@
  * Covers identity safety, main-store adoption, refresh persistence, fallback
  * recovery, and external profile overlays.
  */
+import "./external-auth.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,11 +11,11 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../../state/openclaw-agent-db.js";
+  hasSqliteWorkerOutcomeUnknown,
+  SqliteWorkerError,
+} from "../../infra/sqlite-worker-contract.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -30,15 +31,18 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { oidcIdentity } from "./credential-fixtures.test-support.js";
-import { testing as externalAuthTesting } from "./external-auth.test-support.js";
+import * as externalCliSync from "./external-cli-sync.js";
 import { createOAuthManager } from "./oauth-manager.js";
+import {
+  mockOAuthProviderOperations,
+  type NativeOAuthProviderFixture,
+} from "./oauth-native-provider.test-support.js";
 import { isSettledOAuthRefreshFailure, OAuthManagerRefreshError } from "./oauth-refresh-failure.js";
 import { isOAuthRefreshFence, isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { withPersonalAuthProfileStore } from "./personal-store.js";
 import { removeAuthProfilesAcrossOwnerStores } from "./profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
-import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import * as authProfileStoreRuntime from "./store-runtime.js";
 import {
   ensureAuthProfileStore,
@@ -47,6 +51,8 @@ import {
 } from "./store-runtime.js";
 import { captureAuthProfileStorePersistenceSnapshot } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
+
+const { testing: externalAuthTesting } = await import("./external-auth.test-support.js");
 
 function retainPersistedCredential(agentDir: string, selectedProfileId: string) {
   const shared = openOpenClawStateDatabase();
@@ -72,14 +78,9 @@ function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCreden
   };
 }
 
-function createTestManager(overrides: Partial<Parameters<typeof createOAuthManager>[0]>) {
-  return createOAuthManager({
-    buildApiKey: async (_provider, credential) => credential.access,
-    canRefreshCredential: async () => true,
-    refreshCredential: async () => null,
-    readBootstrapCredential: () => null,
-    ...overrides,
-  });
+function createTestManager(overrides: NativeOAuthProviderFixture) {
+  mockOAuthProviderOperations(overrides);
+  return createOAuthManager();
 }
 
 function saveCredential(profileId: string, credential: OAuthCredential, agentDir: string) {
@@ -115,11 +116,13 @@ async function withOAuthAgentDirs(
 }
 
 beforeEach(() => {
+  vi.spyOn(externalCliSync, "readExternalCliBootstrapCredential").mockReturnValue(null);
   externalAuthTesting.setResolveExternalAuthProfilesForTest(() => []);
   clearRuntimeAuthProfileStoreSnapshots();
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   externalAuthTesting.resetResolveExternalAuthProfilesForTest();
   clearRuntimeAuthProfileStoreSnapshots();
   for (const stateDir of tempDirs) {
@@ -164,14 +167,15 @@ describe("createOAuthManager", () => {
           ...metadata,
         };
       });
-      const readBootstrapCredential = vi.fn(() => createCredential());
+      const readBootstrapCredential = vi
+        .spyOn(externalCliSync, "readExternalCliBootstrapCredential")
+        .mockImplementation(() => createCredential());
       const manager = createTestManager({
         buildApiKey: async (_provider, value, context) => {
           expect(context.cfg).toBe(cfg);
           return value.access;
         },
         refreshCredential,
-        readBootstrapCredential,
       });
       const results = await Promise.all(
         [mainAgentDir, agentDir].map((targetAgentDir) =>
@@ -380,6 +384,14 @@ describe("createOAuthManager", () => {
       });
       saveCredential(profileId, localCredential, agentDir);
 
+      vi.spyOn(externalCliSync, "readExternalCliBootstrapCredential").mockImplementation(() =>
+        createCredential({
+          provider: "minimax-portal",
+          access: "expired-external-access",
+          refresh: "external-refresh",
+          expires: Date.now() - 30_000,
+        }),
+      );
       const manager = createTestManager({
         refreshCredential: vi.fn(async (credential) => {
           expect(credential.refresh).toBe("external-refresh");
@@ -389,13 +401,6 @@ describe("createOAuthManager", () => {
             expires: Date.now() + 600_000,
           };
         }),
-        readBootstrapCredential: () =>
-          createCredential({
-            provider: "minimax-portal",
-            access: "expired-external-access",
-            refresh: "external-refresh",
-            expires: Date.now() - 30_000,
-          }),
       });
 
       const result = await manager.resolveOAuthAccess({
@@ -509,7 +514,16 @@ describe("createOAuthManager", () => {
     });
   });
 
-  it("keeps invalid_grant primary when owner cleanup and recovery reload both fail", async () => {
+  it.each([
+    {
+      name: "keeps invalid_grant primary when owner cleanup and recovery reload both fail",
+      cleanupCode: "unavailable" as const,
+    },
+    {
+      name: "does not recover an invalid_grant refresh after uncertain owner cleanup",
+      cleanupCode: "outcome-unknown" as const,
+    },
+  ])("$name", async ({ cleanupCode }) => {
     await withOAuthTempRoot("oauth-manager-cleanup-errors-", async (tempRoot) => {
       const agentDir = path.join(tempRoot, "agents", "main", "agent");
       await fs.mkdir(agentDir, { recursive: true });
@@ -531,30 +545,57 @@ describe("createOAuthManager", () => {
           summary: "provider rejected invalid_grant",
         },
       });
+      const ownerReadError = new Error("Owner credential read failed before dispatch");
+      const recoveryReadError = new Error("Recovery credential reload failed before dispatch");
+      const ownerCleanupError = new SqliteWorkerError(
+        cleanupCode === "unavailable"
+          ? "Owner cleanup failed before dispatch"
+          : "Owner cleanup acknowledgment was lost",
+        cleanupCode,
+      );
+      const readStore = vi.spyOn(
+        authProfileStoreRuntime,
+        "loadAuthProfileStoreWithoutExternalProfilesAsync",
+      );
+      const updateStore = vi.spyOn(authProfileStoreRuntime, "updateAuthProfileStoreWithLock");
+      let readsBeforeRefreshFailure = 0;
       const manager = createTestManager({
         refreshCredential: vi.fn(async () => {
-          clearRuntimeAuthProfileStoreSnapshots();
-          await closeOpenClawAgentDatabasesAsync(tempRoot);
-          closeOpenClawAgentDatabasesForTest(tempRoot);
-          await fs.writeFile(resolveAuthProfileDatabasePath(agentDir), "not a sqlite database");
+          readsBeforeRefreshFailure = readStore.mock.calls.length;
+          // Arm faults after the real owner has persisted its pending refresh fence.
+          readStore.mockRejectedValueOnce(ownerReadError).mockRejectedValue(recoveryReadError);
+          updateStore.mockRejectedValue(ownerCleanupError);
           throw initiatingError;
         }),
       });
 
       try {
-        await manager.resolveOAuthAccess({
-          store: { version: 1, profiles: { [profileId]: expired } },
-          profileId,
-          credential: expired,
-          agentDir,
-        });
-        throw new Error("Expected refresh failure");
-      } catch (caught) {
+        const caught: unknown = await manager
+          .resolveOAuthAccess({
+            store: { version: 1, profiles: { [profileId]: expired } },
+            profileId,
+            credential: expired,
+            agentDir,
+          })
+          .catch((error: unknown) => error);
+        if (cleanupCode === "outcome-unknown") {
+          expect(caught).toBeInstanceOf(AggregateError);
+          expect(caught).not.toBeInstanceOf(OAuthManagerRefreshError);
+          expect(hasSqliteWorkerOutcomeUnknown(caught)).toBe(true);
+          expect(isSettledOAuthRefreshFailure(caught)).toBe(false);
+          if (!(caught instanceof AggregateError)) {
+            throw caught;
+          }
+          expect(caught.errors).toEqual([initiatingError, ownerReadError, ownerCleanupError]);
+          expect(caught.cause).toBe(initiatingError);
+          expect(readStore).toHaveBeenCalledTimes(readsBeforeRefreshFailure + 1);
+          return;
+        }
         if (!(caught instanceof OAuthManagerRefreshError)) {
           throw caught;
         }
         expect(caught.message).toContain("provider rejected invalid_grant");
-        expect(caught.message).not.toContain("unreadable");
+        expect(caught.message).not.toContain("Owner credential read failed");
         expect(caught.errorType).toBe("invalid_grant_error");
         expect(caught.reason).toBe("invalid_grant");
         expect(caught.status).toBe(401);
@@ -564,12 +605,18 @@ describe("createOAuthManager", () => {
         const aggregate = caught.cause as AggregateError;
         expect(aggregate.errors).toHaveLength(4);
         expect(aggregate.cause).toBe(aggregate.errors[0]);
-        expect(formatErrorMessage(aggregate.errors[0])).toContain(
-          "provider rejected invalid_grant",
-        );
-        expect(formatErrorMessage(aggregate.errors[1])).toContain("is unreadable");
-        expect(formatErrorMessage(aggregate.errors[2])).toContain("file is not a database");
-        expect(formatErrorMessage(aggregate.errors[3])).toContain("is unreadable");
+        for (const [index, error] of [
+          initiatingError,
+          ownerReadError,
+          ownerCleanupError,
+          recoveryReadError,
+        ].entries()) {
+          expect(formatErrorMessage(aggregate.errors[index])).toContain(error.message);
+        }
+        expect(readStore).toHaveBeenCalledTimes(readsBeforeRefreshFailure + 2);
+      } finally {
+        readStore.mockRestore();
+        updateStore.mockRestore();
       }
     });
   });
@@ -610,7 +657,7 @@ describe("createOAuthManager", () => {
         const pending = authority.readCurrentCredential();
         expect(pending?.type === "oauth" && isPendingOAuthRefreshFence(pending)).toBe(true);
         refreshRejected = true;
-        // oxlint-disable-next-line prefer-promise-reject-errors -- providers can reject with unknown non-Error values.
+        // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- providers can reject with unknown non-Error values.
         return Promise.reject(undefined);
       });
       const manager = createTestManager({
@@ -682,13 +729,15 @@ describe("createOAuthManager", () => {
       });
       saveCredential(profileId, localCredential, agentDir);
 
+      vi.spyOn(externalCliSync, "readExternalCliBootstrapCredential").mockReturnValue(
+        externalCredential,
+      );
       const manager = createTestManager({
         refreshCredential: vi.fn(async () => {
           throw new Error(
             "refresh rejected external-attempt-access external-attempt-refresh external-attempt-id-token",
           );
         }),
-        readBootstrapCredential: () => externalCredential,
       });
 
       try {
@@ -833,7 +882,7 @@ describe("Copilot tenant boundaries", () => {
     return loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
   }
   function manager(
-    refreshCredential: Parameters<typeof createOAuthManager>[0]["refreshCredential"],
+    refreshCredential: NonNullable<NativeOAuthProviderFixture["refreshCredential"]>,
   ) {
     return createTestManager({ refreshCredential });
   }

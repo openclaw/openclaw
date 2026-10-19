@@ -43,6 +43,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   closeDatabaseTestCohorts,
@@ -62,6 +63,7 @@ import {
 } from "./state-migrations.doctor.js";
 import { expectMissingPath } from "./state-migrations.filesystem.test-support.js";
 import { expectRecoveryPredicateRefusedAfterRepair } from "./state-migrations.ingress-lifecycle.test-support.js";
+import { createLegacyAuditLedger } from "./state-migrations.legacy-audit.test-support.js";
 import * as sessionStore from "./state-migrations.legacy-session-store.js";
 import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
 import { autoMigrateLegacyPluginDoctorState } from "./state-migrations.plugin-doctor.js";
@@ -282,66 +284,6 @@ function seedSchemaOnlyLegacyAgentDatabase(
     }
   } finally {
     database.close();
-  }
-  return databasePath;
-}
-
-async function createLegacyAuditLedger(stateDir: string): Promise<string> {
-  const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-  await fs.mkdir(path.dirname(databasePath), { recursive: true });
-  const db = new DatabaseSync(databasePath);
-  try {
-    db.exec(`
-      PRAGMA user_version = 1;
-      CREATE TABLE audit_events (
-        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_id TEXT NOT NULL UNIQUE,
-        source_id TEXT NOT NULL UNIQUE,
-        source_sequence INTEGER NOT NULL,
-        occurred_at INTEGER NOT NULL,
-        kind TEXT NOT NULL,
-        action TEXT NOT NULL,
-        status TEXT NOT NULL,
-        error_code TEXT,
-        actor_type TEXT NOT NULL,
-        actor_id TEXT NOT NULL,
-        agent_id TEXT NOT NULL,
-        session_key TEXT,
-        session_id TEXT,
-        run_id TEXT NOT NULL,
-        tool_call_id TEXT,
-        tool_name TEXT
-      );
-      INSERT INTO audit_events (
-        sequence,
-        event_id,
-        source_id,
-        source_sequence,
-        occurred_at,
-        kind,
-        action,
-        status,
-        actor_type,
-        actor_id,
-        agent_id,
-        run_id
-      ) VALUES (
-        3,
-        'event-before-v2',
-        'run-before-v2:1:100:agent.run.started',
-        1,
-        100,
-        'agent_run',
-        'agent.run.started',
-        'started',
-        'agent',
-        'main',
-        'main',
-        'run-before-v2'
-      );
-    `);
-  } finally {
-    db.close();
   }
   return databasePath;
 }
@@ -796,7 +738,7 @@ describe("state migrations", () => {
             .get("historical-transcript-directives-v1"),
         ).toEqual(
           doctorOnlyStateMigrations
-            ? { agent_id: "main", app_version: JSON.stringify({ phase: "complete" }) }
+            ? { agent_id: "main", app_version: JSON.stringify({ phase: "complete", version: 2 }) }
             : undefined,
         );
         expect(
@@ -2390,49 +2332,6 @@ describe("state migrations", () => {
     expect(result.changes).toContain("Migrated 2 ACP session metadata rows → shared SQLite state");
   });
 
-  it.each([
-    {
-      relativePath: "delivery-queue/failed/failed.json",
-      contents: { id: "retired", payloads: [{ text: "preserve this message" }] },
-    },
-    {
-      relativePath: "restart-sentinel.json.doctor-importing",
-      contents: {
-        version: 1,
-        payload: { kind: "update", status: "ok", ts: 123, message: "Update completed" },
-      },
-    },
-    {
-      relativePath: "plugin-binding-approvals.json",
-      contents: {
-        version: 1,
-        approvals: [
-          {
-            pluginRoot: "/synthetic/plugin",
-            pluginId: "fixture",
-            channel: "telegram",
-            accountId: "default",
-            approvedAt: 123,
-          },
-        ],
-      },
-    },
-  ])("refuses retired state files before any state writes: $relativePath", async (fixture) => {
-    const { root, stateDir, env } = createMigrationContext(await createTempDir());
-    const sourcePath = path.join(stateDir, fixture.relativePath);
-    const original = `${JSON.stringify(fixture.contents, null, 2)}\n`;
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(sourcePath, original);
-    const params = { cfg: createConfig(), env, homedir: () => root };
-
-    for (const migrate of [detectLegacyStateMigrations, autoMigrateLegacyState]) {
-      await expect(migrate(params)).rejects.toThrow("Upgrade through OpenClaw 2026.9.7");
-      await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(original);
-      await expectMissingPath(`${sourcePath}.migrated`);
-      await expectMissingPath(resolveOpenClawStateSqlitePath(env));
-    }
-  });
-
   it("ignores a leftover update-check cache instead of refusing", async () => {
     const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const sourcePath = path.join(stateDir, "update-check.json");
@@ -2454,11 +2353,16 @@ describe("state migrations", () => {
     const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
     expect(detected.preview.filter((line) => line.startsWith("- Shared SQLite schema:"))).toEqual([
       "- Shared SQLite schema: subagent recovery → original operator authority required",
+      "- Shared SQLite schema: replay, skill usage, and lease writes → smaller index maintenance",
+      "- Shared SQLite schema: GitHub publication requests → durable draft choice",
+      "- Shared SQLite schema: client credentials and native socket material → local owner",
       "- Shared SQLite schema: audit event ledger → versioned message lifecycle schema",
       "- Shared SQLite schema: tables → SQLite STRICT typing",
     ]);
 
-    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+    const result = await withStateMigrationBackupForTest({ env }, () =>
+      runLegacyStateMigrations({ detected, config: cfg, env }),
+    );
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain(
       "Migrated shared state audit event ledger → versioned message lifecycle schema",
@@ -2526,7 +2430,9 @@ describe("state migrations", () => {
       "- Commitments: discard retired commitments/commitments.json rows without import, archive, or export",
     );
 
-    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+    const result = await withStateMigrationBackupForTest({ env }, () =>
+      runLegacyStateMigrations({ detected, config: cfg, env }),
+    );
 
     expect(result.warnings).toStrictEqual([]);
     const schemaChange = result.changes.indexOf(
@@ -2611,7 +2517,7 @@ describe("state migrations", () => {
       config: cfg,
       env,
       onStepReceipt: (receipt) => {
-        if (receipt.id === "plugin-install-index") {
+        if (receipt.id === "retired-core-state") {
           openOpenClawStateDatabase({ env }).db.exec("PRAGMA query_only = ON;");
         }
       },

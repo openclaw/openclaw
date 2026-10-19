@@ -1,6 +1,6 @@
 /** Manual cron wake helper for queueing system events into sessions. */
 import { isSubagentSessionKey, normalizeOptionalAgentId } from "../../routing/session-key.js";
-import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
+import { CronAgentSelectionRequiredError } from "../agent-id.js";
 import {
   resolveCronNotificationQueueOwner,
   type CronNotificationJob,
@@ -20,7 +20,7 @@ export async function enqueueCronNotification(
   const { sessionKey } = owner;
   const agentId = owner.agentId ?? normalizeOptionalAgentId(routing.defaultAgentId);
   if (!agentId) {
-    throw new Error(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
+    throw new CronAgentSelectionRequiredError();
   }
   const deliveryContext =
     sessionKey || (kind === "auto-disabled" && agentId)

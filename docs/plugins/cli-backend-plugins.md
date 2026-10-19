@@ -323,6 +323,12 @@ the input never started, so the host replays it as an ordinary queued turn rathe
 than losing it; the host records a started input in the session transcript, so a
 runtime must not also write it there. The registration lives as long as the run.
 
+A runtime that can end its current turn without closing the session can offer
+`ctx.registerTurnInterrupt({ interrupt })`; `interrupt("yield")` requests a graceful
+turn end, after which the stream must finish normally and the session remain
+reusable. OpenClaw calls it after observing the completed `sessions_yield` tool
+result, suppresses subsequent reply text, and drops the registration when the run closes.
+
 For a bundled or official plugin's bidirectional process, use the shared
 [`createOwnedStdioProcess` owner](/plugins/sdk-overview/infrastructure#owned-stdio-processes)
 with the prepared command, arguments, `argv0`, and `exactEnv: true`. On POSIX,
@@ -431,6 +437,16 @@ for backend-owned lifecycle records instead.
 Tool events describe work the backend already performed. OpenClaw renders and
 summarizes them, but does not treat them as host tool execution, trusted
 diagnostics, loopback correlation, or message-delivery evidence.
+
+### `classifyErrorCode`: backend-native failure details
+
+Set `classifyErrorCode(message)` to attach a diagnostic code to a selected CLI
+failure. OpenClaw calls it for structured terminal errors and failed process
+exits, after extracting the error message. Return `undefined` for unrecognized
+errors. This hook does not select the failover reason or change retry policy;
+host-owned terminal-stop, context-overflow, and empty-exit codes take precedence.
+For example, `refresh_contention` selects the sign-in-in-progress message instead
+of treating a refresh lock as an expired login.
 
 ### `parseJsonlLifecycleEvent`: provider-native lifecycle records
 

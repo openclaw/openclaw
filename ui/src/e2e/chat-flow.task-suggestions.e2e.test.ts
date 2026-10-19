@@ -1,20 +1,67 @@
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import type { TaskSuggestion } from "../../../packages/gateway-protocol/src/schema/task-suggestions.js";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { createControlUiMockBootstrapConfig } from "../test-helpers/control-ui-e2e.ts";
 import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
 import {
+  newChatPage,
   chatSessionListResponse,
   createChatFlowE2eSuite,
   controlUiSessionUrl,
-  captureUiProof,
   installMockGateway,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const startLabel = "Start in a new session";
+const optionsLabel = "Choose where to start the task";
+const visible = { state: "visible", timeout: 10_000 } as const;
+const findButton = (root: Page | Locator, name: string) => root.getByRole("button", { name });
+const exactText = (root: Page | Locator, text: string) => root.getByText(text, { exact: true });
+const taskCard = (page: Page, id: string) => page.locator(`.task-suggestion[data-task-id="${id}"]`);
+type GatewayOptions = Parameters<typeof installMockGateway>[1];
+
+function makeTask(fields: Pick<TaskSuggestion, "id"> & Partial<TaskSuggestion>): TaskSuggestion {
+  return {
+    title: "Remove stale adapter",
+    prompt: "Delete the stale adapter in src/example.ts and update tests.",
+    tldr: "The adapter is unreachable and adds maintenance cost.",
+    cwd: "/projects/example",
+    sessionKey: "main",
+    agentId: "main",
+    createdAt: Date.now(),
+    ...fields,
+  };
+}
+
+const listMethods = ["chat.metadata", "chat.startup", "taskSuggestions.list"];
+const acceptMethods = [...listMethods, "taskSuggestions.accept"];
+
+function installTasks(page: Page, suggestions: TaskSuggestion[], options: GatewayOptions = {}) {
+  return installMockGateway(page, {
+    featureMethods: [...acceptMethods, "taskSuggestions.dismiss"],
+    ...options,
+    methodResponses: { "taskSuggestions.list": { suggestions }, ...options.methodResponses },
+  });
+}
+
+async function openTasks(
+  suggestions: TaskSuggestion[],
+  options: GatewayOptions = {},
+  context?: Parameters<typeof newChatPage>[1],
+) {
+  const page = await newChatPage(suite, context);
+  const gateway = await installTasks(page, suggestions, options);
+  await page.goto(
+    options.sessionKey
+      ? controlUiSessionUrl(suite.server.baseUrl, options.sessionKey)
+      : `${suite.server.baseUrl}chat`,
+  );
+  return { page, gateway };
+}
 
 async function expectReadableButton(button: Locator) {
   const raw = await button.evaluate((element) => ({
@@ -27,13 +74,10 @@ async function expectReadableButton(button: Locator) {
       .map((value) => value / 255)
       .map((value) => (value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4))
       .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index]!, 0);
-  const foreground = colors.foreground!;
-  expect
-    .soft(Math.min(foreground.red, foreground.green, foreground.blue))
-    .toBeGreaterThanOrEqual(240);
-  expect
-    .soft((luminance(foreground) + 0.05) / (luminance(colors.background!) + 0.05))
-    .toBeGreaterThanOrEqual(4.5);
+  const { red, green, blue } = colors.foreground!;
+  expect.soft(Math.min(red, green, blue)).toBeGreaterThanOrEqual(240);
+  const ratio = (luminance(colors.foreground!) + 0.05) / (luminance(colors.background!) + 0.05);
+  expect.soft(ratio).toBeGreaterThanOrEqual(4.5);
 }
 
 suite.define(() => {
@@ -43,39 +87,15 @@ suite.define(() => {
     { mode: "session", label: "Start in this session", accent: "#ffffff" },
     { mode: "worktree", label: "Start in a new worktree", accent: "#00ff00" },
   ])("hides tasks and restores failures ($mode, $accent)", async ({ mode, label, accent }) => {
-    const context = await suite.newBrowserContext({
+    const page = await newChatPage(suite, {
       ...createControlUiE2eContextOptions(),
       colorScheme: mode === "worktree" ? "dark" : "light",
     });
-    const page = await context.newPage();
-    const suggestion = {
-      id: "task_123",
-      title: "Remove stale adapter",
-      prompt: "Delete the stale adapter in src/example.ts and update tests.",
-      tldr: "The adapter is unreachable and adds maintenance cost.",
-      cwd: "/projects/example",
-      sessionKey: "main",
-      agentId: "main",
-      createdAt: Date.now(),
-    };
-    const gateway = await installMockGateway(page, {
+    const suggestion = makeTask({ id: "task_123" });
+    const gateway = await installTasks(page, [suggestion], {
       deferredMethods: ["taskSuggestions.list"],
       featureCapabilities: [GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES],
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "taskSuggestions.list",
-        "taskSuggestions.accept",
-        "environments.list",
-      ],
-      methodResponses: {
-        "environments.list": { environments: [], profiles: [{ id: "build" }] },
-        "taskSuggestions.list": { suggestions: [suggestion] },
-        "taskSuggestions.accept": {
-          taskId: "task_123",
-          key: mode === "session" ? "main" : "agent:main:dashboard:suggested",
-        },
-      },
+      featureMethods: [...acceptMethods, "environments.list"],
     });
 
     await page.route("**/control-ui-config.json", (route) =>
@@ -84,317 +104,176 @@ suite.define(() => {
       }),
     );
 
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("taskSuggestions.list");
-      await gateway.emitGatewayEvent("task.suggestion", {
-        action: "created",
-        suggestion,
-      });
-      await gateway.resolveDeferred("taskSuggestions.list", { suggestions: [] });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    await gateway.waitForRequest("taskSuggestions.list");
+    await gateway.emitGatewayEvent("task.suggestion", {
+      action: "created",
+      suggestion,
+    });
+    await gateway.resolveDeferred("taskSuggestions.list", { suggestions: [] });
 
-      const startButton = page.getByRole("button", { name: "Start in a new session" });
-      await startButton.waitFor({ state: "visible", timeout: 10_000 });
-      const card = page.locator(`.task-suggestion[data-task-id="${suggestion.id}"]`);
-      const options = card.getByRole("button", { name: "Choose where to start the task" });
-      expect(
-        await startButton.evaluate((element) => getComputedStyle(element).borderTopRightRadius),
-      ).toBe("0px");
-      expect(
-        await options.evaluate((element) => getComputedStyle(element).borderTopLeftRadius),
-      ).toBe("0px");
-      await options.click();
-      await card.getByRole("menuitem", { name: "Start in a new worktree" }).waitFor();
-      expect(await gateway.getRequests("taskSuggestions.accept")).toHaveLength(0);
-      const triggerBox = await options.boundingBox();
-      expect(triggerBox).not.toBeNull();
-      const menuBox = await card.getByRole("menu").boundingBox();
-      expect.soft(menuBox?.y).toBeGreaterThanOrEqual(triggerBox!.y + triggerBox!.height);
-      for (const button of [startButton, options]) {
-        await page.mouse.move(0, 0);
-        await button.evaluate(finishElementAnimations);
-        await expectReadableButton(button);
-        await button.hover();
-        await button.evaluate(finishElementAnimations);
-        await expectReadableButton(button);
-      }
-      await captureUiProof(suite, page, "task-suggestions", `${mode}-${accent.slice(1)}-menu.png`);
-      await page.keyboard.press("Escape");
-      await expect
-        .poll(() => options.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      expect(await card.getByRole("button", { name: "Copy prompt" }).isEnabled()).toBe(true);
-      expect(await gateway.getRequests("environments.list")).toHaveLength(0);
-      await captureUiProof(
-        suite,
-        page,
-        "task-suggestions",
-        `${mode}-${accent.slice(1)}-split-button.png`,
-      );
-      await page.getByText("Show instructions", { exact: true }).click();
-      await page
-        .getByText("/projects/example", { exact: true })
-        .waitFor({ state: "visible", timeout: 10_000 });
-      await page
-        .getByText("Delete the stale adapter in src/example.ts and update tests.", {
-          exact: true,
-        })
-        .waitFor({ state: "visible", timeout: 10_000 });
-      const sourceUrl = page.url();
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      const draft = "Continue the current conversation.";
-      await composer.fill(draft);
-      await gateway.deferNext("taskSuggestions.accept");
-      if (mode === "local") {
-        await startButton.click();
-      } else {
-        await options.click();
-        await card.getByRole("menuitem", { name: label, exact: true }).click();
-      }
-      await gateway.waitForRequest("taskSuggestions.accept");
-      await card.waitFor({ state: "detached" });
-      await gateway.setMethodResponse("taskSuggestions.list", { suggestions: [] });
-      await gateway.emitGatewayEvent("task.suggestion", {
-        action: "resolved",
-        taskId: suggestion.id,
-        resolution: "accepted",
-      });
-      expect(await card.count()).toBe(0);
-      expect(page.url()).toBe(sourceUrl);
-      expect(await composer.inputValue()).toBe(draft);
-
-      if (mode !== "local") {
-        await gateway.rejectDeferred("taskSuggestions.accept", {
-          message: "Session creation unavailable",
-        });
-        await card.waitFor({ state: "visible" });
-        await card.getByRole("alert").filter({ hasText: "Session creation unavailable" }).waitFor();
-        expect(await card.getByText(suggestion.prompt, { exact: true }).isVisible()).toBe(true);
-        await captureUiProof(
-          suite,
-          page,
-          "task-suggestions",
-          `${mode}-${accent.slice(1)}-failed.png`,
-        );
-        await gateway.deferNext("taskSuggestions.accept");
-        await card.getByRole("button", { name: "Retry", exact: true }).click();
-        await waitForRequests(gateway, "taskSuggestions.accept", 2);
-        await card.waitFor({ state: "detached" });
-      }
-      await gateway.resolveDeferred("taskSuggestions.accept", {
-        taskId: suggestion.id,
-        key: mode === "session" ? "main" : "agent:main:dashboard:suggested",
-      });
-
-      const acceptRequest = await gateway.waitForRequest("taskSuggestions.accept");
-      expect(acceptRequest.params).toEqual({ taskId: "task_123", mode });
-      expect(await card.count()).toBe(0);
-      expect(page.url()).toBe(sourceUrl);
-      expect(await composer.inputValue()).toBe(draft);
-      expect(
-        (await gateway.getRequests("taskSuggestions.accept")).map((request) => request.params),
-      ).toEqual(
-        Array.from({ length: mode === "local" ? 1 : 2 }, () => ({ taskId: suggestion.id, mode })),
-      );
-      await captureUiProof(
-        suite,
-        page,
-        "task-suggestions",
-        `${mode}-${accent.slice(1)}-started.png`,
-      );
-    } finally {
-      await suite.closeBrowserContext(context);
+    const startButton = findButton(page, startLabel);
+    await startButton.waitFor(visible);
+    const card = taskCard(page, suggestion.id);
+    const options = findButton(card, optionsLabel);
+    expect(
+      await startButton.evaluate((element) => getComputedStyle(element).borderTopRightRadius),
+    ).toBe("0px");
+    expect(await options.evaluate((element) => getComputedStyle(element).borderTopLeftRadius)).toBe(
+      "0px",
+    );
+    await options.click();
+    await card.getByRole("menuitem", { name: "Start in a new worktree" }).waitFor();
+    expect(await gateway.getRequests("taskSuggestions.accept")).toHaveLength(0);
+    const triggerBox = await options.boundingBox();
+    expect(triggerBox).not.toBeNull();
+    const menuBox = await card.getByRole("menu").boundingBox();
+    expect.soft(menuBox?.y).toBeGreaterThanOrEqual(triggerBox!.y + triggerBox!.height);
+    for (const button of [startButton, options]) {
+      await page.mouse.move(0, 0);
+      await button.evaluate(finishElementAnimations);
+      await expectReadableButton(button);
+      await button.hover();
+      await button.evaluate(finishElementAnimations);
+      await expectReadableButton(button);
     }
+
+    await page.keyboard.press("Escape");
+    await expect
+      .poll(() => options.evaluate((element) => element === document.activeElement))
+      .toBe(true);
+    expect(await findButton(card, "Copy prompt").isEnabled()).toBe(true);
+    expect(await gateway.getRequests("environments.list")).toHaveLength(0);
+
+    await exactText(page, "Show instructions").click();
+    await exactText(page, suggestion.cwd).waitFor(visible);
+    await exactText(page, suggestion.prompt).waitFor(visible);
+    const sourceUrl = page.url();
+    const composer = page.locator(".agent-chat__composer-combobox textarea");
+    const draft = "Continue the current conversation.";
+    const currentState = async () => [await card.count(), page.url(), await composer.inputValue()];
+    await composer.fill(draft);
+    await gateway.deferNext("taskSuggestions.accept");
+    if (mode === "local") {
+      await startButton.click();
+    } else {
+      await options.click();
+      await card.getByRole("menuitem", { name: label, exact: true }).click();
+    }
+    await gateway.waitForRequest("taskSuggestions.accept");
+    await card.waitFor({ state: "detached" });
+    await gateway.setMethodResponse("taskSuggestions.list", { suggestions: [] });
+    await gateway.emitGatewayEvent("task.suggestion", {
+      action: "resolved",
+      taskId: suggestion.id,
+      resolution: "accepted",
+    });
+    expect(await currentState()).toEqual([0, sourceUrl, draft]);
+
+    if (mode !== "local") {
+      await gateway.rejectDeferred("taskSuggestions.accept", {
+        message: "Session creation unavailable",
+      });
+      await card.waitFor({ state: "visible" });
+      await card.getByRole("alert").filter({ hasText: "Session creation unavailable" }).waitFor();
+      expect(await exactText(card, suggestion.prompt).isVisible()).toBe(true);
+
+      await gateway.deferNext("taskSuggestions.accept");
+      await card.getByRole("button", { name: "Retry", exact: true }).click();
+      await waitForRequests(gateway, "taskSuggestions.accept", 2);
+      await card.waitFor({ state: "detached" });
+    }
+    await gateway.resolveDeferred("taskSuggestions.accept", {
+      taskId: suggestion.id,
+      key: mode === "session" ? "main" : "agent:main:dashboard:suggested",
+    });
+
+    expect(await currentState()).toEqual([0, sourceUrl, draft]);
+    const accepted = await gateway.getRequests("taskSuggestions.accept");
+    expect(accepted.map(({ params }) => params)).toEqual(
+      Array.from({ length: mode === "local" ? 1 : 2 }, () => ({ taskId: suggestion.id, mode })),
+    );
   });
 
   it("dismisses suggested tasks immediately and restores a rejected dismissal without changing selection", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const suggestion = {
-      id: "task_dismiss",
-      title: "Remove stale adapter",
-      prompt: "Delete the stale adapter and update its tests.",
-      tldr: "This follow-up is no longer needed.",
-      cwd: "/projects/example",
-      sessionKey: "main",
-      agentId: "main",
-      createdAt: 2,
+    const suggestion = makeTask({ id: "task_dismiss", createdAt: 2 });
+    const nextSuggestion = makeTask({ id: "task_next", createdAt: 1 });
+    const { page, gateway } = await openTasks([suggestion, nextSuggestion]);
+    const card = taskCard(page, suggestion.id);
+    const nextCard = taskCard(page, nextSuggestion.id);
+    await card.waitFor(visible);
+    await gateway.deferNext("taskSuggestions.dismiss");
+    await card.getByRole("button", { name: `Dismiss ${suggestion.title}` }).click();
+    const dismissal = await gateway.waitForRequest("taskSuggestions.dismiss");
+    expect(dismissal.params).toEqual({ taskId: suggestion.id });
+
+    await expect.poll(() => card.count()).toBe(0);
+    await nextCard.waitFor({ state: "visible" });
+    expect(await findButton(nextCard, startLabel).isEnabled()).toBe(true);
+    const composer = page.locator(".agent-chat__composer-combobox textarea");
+    await composer.fill("Continue working while the suggestion closes.");
+
+    await gateway.deferNext("taskSuggestions.list");
+    await gateway.emitGatewayEvent("task.suggestion", { action: "created", suggestion });
+    await waitForRequests(gateway, "taskSuggestions.list", 2);
+    const refreshedSuggestion = {
+      ...nextSuggestion,
+      tldr: "This follow-up remains available after refreshing the list.",
     };
-    const nextSuggestion = {
-      ...suggestion,
-      id: "task_next",
-      title: "Inspect remaining tests",
-      prompt: "Inspect coverage of the remaining adapters.",
-      tldr: "This follow-up remains useful.",
-      createdAt: 1,
-    };
-    const gateway = await installMockGateway(page, {
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "taskSuggestions.list",
-        "taskSuggestions.accept",
-        "taskSuggestions.dismiss",
-      ],
-      methodResponses: {
-        "taskSuggestions.list": { suggestions: [suggestion, nextSuggestion] },
-      },
+    await gateway.resolveDeferred("taskSuggestions.list", {
+      suggestions: [suggestion, refreshedSuggestion],
     });
+    await exactText(nextCard, refreshedSuggestion.tldr).waitFor();
+    expect(await card.count()).toBe(0);
 
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const card = page.locator(`.task-suggestion[data-task-id="${suggestion.id}"]`);
-      const nextCard = page.locator(`.task-suggestion[data-task-id="${nextSuggestion.id}"]`);
-      await card.waitFor({ state: "visible", timeout: 10_000 });
-      await gateway.deferNext("taskSuggestions.dismiss");
-      await card.getByRole("button", { name: `Dismiss ${suggestion.title}` }).click();
-      const dismissal = await gateway.waitForRequest("taskSuggestions.dismiss");
-      expect(dismissal.params).toEqual({ taskId: suggestion.id });
-      await captureUiProof(suite, page, "task-suggestions", "dismiss-pending.png");
-
-      await expect.poll(() => card.count()).toBe(0);
-      await nextCard.waitFor({ state: "visible" });
-      expect(
-        await nextCard.getByRole("button", { name: "Start in a new session" }).isEnabled(),
-      ).toBe(true);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("Continue working while the suggestion closes.");
-
-      await gateway.deferNext("taskSuggestions.list");
-      await gateway.emitGatewayEvent("task.suggestion", { action: "created", suggestion });
-      await waitForRequests(gateway, "taskSuggestions.list", 2);
-      const refreshedSuggestion = {
-        ...nextSuggestion,
-        tldr: "This follow-up remains available after refreshing the list.",
-      };
-      await gateway.resolveDeferred("taskSuggestions.list", {
-        suggestions: [suggestion, refreshedSuggestion],
-      });
-      await nextCard.getByText(refreshedSuggestion.tldr, { exact: true }).waitFor();
-      expect(await card.count()).toBe(0);
-
-      const failure = "The suggestion could not be dismissed.";
-      await gateway.rejectDeferred("taskSuggestions.dismiss", { message: failure });
-      await page.getByText(failure, { exact: true }).first().waitFor();
-      await expect.poll(() => card.count()).toBe(1);
-      expect(await card.isVisible()).toBe(false);
-      expect(await nextCard.isVisible()).toBe(true);
-      expect(await composer.inputValue()).toBe("Continue working while the suggestion closes.");
-      await nextCard.getByRole("button", { name: "Previous suggested task" }).click();
-      await card.waitFor({ state: "visible" });
-      expect(await card.getByRole("button", { name: "Start in a new session" }).isEnabled()).toBe(
-        true,
-      );
-      expect(await gateway.getRequests("taskSuggestions.dismiss")).toHaveLength(1);
-      expect(await gateway.getRequests("taskSuggestions.accept")).toHaveLength(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    const failure = "The suggestion could not be dismissed.";
+    await gateway.rejectDeferred("taskSuggestions.dismiss", { message: failure });
+    await exactText(page, failure).first().waitFor();
+    await expect.poll(() => card.count()).toBe(1);
+    expect(await card.isVisible()).toBe(false);
+    expect(await nextCard.isVisible()).toBe(true);
+    expect(await composer.inputValue()).toBe("Continue working while the suggestion closes.");
+    await nextCard.getByRole("button", { name: "Previous suggested task" }).click();
+    await card.waitFor({ state: "visible" });
+    expect(await findButton(card, startLabel).isEnabled()).toBe(true);
+    expect(await gateway.getRequests("taskSuggestions.dismiss")).toHaveLength(1);
+    expect(await gateway.getRequests("taskSuggestions.accept")).toHaveLength(0);
   });
 
   it("clears model-suggested follow-ups while switching sessions", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "taskSuggestions.list",
-        "taskSuggestions.accept",
-        "taskSuggestions.dismiss",
-      ],
-      methodResponses: {
-        "sessions.list": chatSessionListResponse(),
-        "taskSuggestions.list": {
-          suggestions: [
-            {
-              id: "task_session_a",
-              title: "Follow up from session A",
-              prompt: "Complete the follow-up discovered in session A.",
-              tldr: "This suggestion belongs only to session A.",
-              cwd: "/projects/example",
-              sessionKey: "agent:main:session-a",
-              agentId: "main",
-              createdAt: Date.now(),
-            },
-          ],
-        },
+    const { page, gateway } = await openTasks(
+      [makeTask({ id: "task_session_a", sessionKey: "agent:main:session-a" })],
+      {
+        methodResponses: { "sessions.list": chatSessionListResponse() },
+        sessionKey: "agent:main:session-a",
       },
-      sessionKey: "agent:main:session-a",
-    });
+    );
 
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
-      const startButton = page.getByRole("button", { name: "Start in a new session" });
-      await startButton.waitFor({ state: "visible", timeout: 10_000 });
-      await gateway.deferNext("taskSuggestions.list");
-      await page
-        .locator(
-          '.sidebar-recent-session[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link',
-        )
-        .click();
-      await waitForRequests(gateway, "taskSuggestions.list", 2);
+    const startButton = findButton(page, startLabel);
+    await startButton.waitFor(visible);
+    await gateway.deferNext("taskSuggestions.list");
+    await page
+      .locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link',
+      )
+      .click();
+    await waitForRequests(gateway, "taskSuggestions.list", 2);
 
-      await expect.poll(() => startButton.count()).toBe(0);
-      await gateway.resolveDeferred("taskSuggestions.list", { suggestions: [] });
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    await expect.poll(() => startButton.count()).toBe(0);
+    await gateway.resolveDeferred("taskSuggestions.list", { suggestions: [] });
   });
 
   it("keeps copy available when only listing is advertised", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "taskSuggestions.list"],
-      methodResponses: {
-        "taskSuggestions.list": {
-          suggestions: [
-            {
-              id: "task_list_only",
-              title: "Read-only follow-up",
-              prompt: "Copy this suggestion without mutating it.",
-              tldr: "Listing alone still exposes the client-local copy action.",
-              cwd: "/projects/example",
-              sessionKey: "main",
-              agentId: "main",
-              createdAt: Date.now(),
-            },
-          ],
-        },
-      },
+    const { page, gateway } = await openTasks([makeTask({ id: "task_list_only" })], {
+      featureMethods: listMethods,
     });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("taskSuggestions.list");
-      await expect
-        .poll(() =>
-          page
-            .locator("openclaw-chat-pane")
-            .evaluate(
-              (pane) =>
-                (pane as HTMLElement & { taskSuggestions?: unknown[] }).taskSuggestions?.length ??
-                0,
-            ),
-        )
-        .toBe(1);
-
-      await page
-        .locator(".agent-chat__composer-shell")
-        .waitFor({ state: "visible", timeout: 10_000 });
-      const card = page.locator('.task-suggestion[data-task-id="task_list_only"]');
-      await card.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await card.getByRole("button", { name: "Start in a new session" }).isDisabled()).toBe(
-        true,
-      );
-      expect(
-        await card.getByRole("button", { name: "Choose where to start the task" }).isDisabled(),
-      ).toBe(true);
-      expect(await card.getByRole("button", { name: "Copy prompt" }).isEnabled()).toBe(true);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    await gateway.waitForRequest("taskSuggestions.list");
+    const card = taskCard(page, "task_list_only");
+    await card.waitFor(visible);
+    expect(await findButton(card, startLabel).isDisabled()).toBe(true);
+    expect(await findButton(card, optionsLabel).isDisabled()).toBe(true);
+    expect(await findButton(card, "Copy prompt").isEnabled()).toBe(true);
   });
 
   it.each([
@@ -404,141 +283,108 @@ suite.define(() => {
   ])(
     "shows readable follow-up summaries and reachable actions at $width×$height",
     async ({ width, height }) => {
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height, width },
-      });
-      const page = await context.newPage();
-      const suggestions = Array.from({ length: 12 }, (_, index) => ({
-        id: `task_overflow_${index}`,
-        title: `Follow-up ${index}`,
-        prompt: "Inspect the related implementation and tests. ".repeat(12),
-        tldr: "The attached tool fails in coordination mode even with all selectors omitted, while a classless fixed-lease CLI warmup succeeds. Make the adapter preserve omitted selectors so both entry points select the same default and the follow-up can run without extra configuration.",
-        cwd: "/projects/example",
-        sessionKey: "main",
-        agentId: "main",
-        createdAt: Date.now() + index,
-      }));
-      const gateway = await installMockGateway(page, {
-        featureMethods: [
-          "chat.metadata",
-          "chat.startup",
-          "taskSuggestions.list",
-          "taskSuggestions.accept",
-          "taskSuggestions.dismiss",
-        ],
-        methodResponses: {
-          "taskSuggestions.list": { suggestions },
+      const suggestions = Array.from({ length: 12 }, (_, index) =>
+        makeTask({
+          id: `task_overflow_${index}`,
+          title: `Follow-up ${index}`,
+          prompt: "Inspect the related implementation and tests. ".repeat(12),
+          tldr: "The attached tool fails in coordination mode even with all selectors omitted, while a classless fixed-lease CLI warmup succeeds. Make the adapter preserve omitted selectors so both entry points select the same default and the follow-up can run without extra configuration.",
+          createdAt: Date.now() + index,
+        }),
+      );
+      const { page, gateway } = await openTasks(
+        suggestions,
+        {},
+        {
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { height, width },
         },
+      );
+      const tray = page.locator(".task-suggestions");
+      await tray.waitFor(visible);
+      expect(await tray.locator(".task-suggestion:visible").count()).toBe(1);
+      expect(await exactText(tray, "1 / 12").count()).toBe(1);
+      await tray.getByRole("button", { name: "Next suggested task" }).click();
+      expect(await exactText(tray, "2 / 12").count()).toBe(1);
+      const summary = tray.locator(".task-suggestion:visible .task-suggestion__summary");
+
+      expect(
+        await summary.evaluate((element) => ({
+          vertical: element.scrollHeight <= element.clientHeight + 1,
+          horizontal: element.scrollWidth <= element.clientWidth + 1,
+        })),
+      ).toEqual({ vertical: true, horizontal: true });
+
+      const verboseSuggestion = { ...suggestions[1]!, tldr: "W".repeat(1_024) };
+      suggestions[1] = verboseSuggestion;
+      await gateway.setMethodResponse("taskSuggestions.list", { suggestions });
+      await gateway.emitGatewayEvent("task.suggestion", {
+        action: "created",
+        suggestion: verboseSuggestion,
       });
-
-      try {
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const tray = page.locator(".task-suggestions");
-        await tray.waitFor({ state: "visible", timeout: 10_000 });
-        expect(await tray.locator(".task-suggestion:visible").count()).toBe(1);
-        expect(await tray.getByText("1 / 12", { exact: true }).count()).toBe(1);
-        await tray.getByRole("button", { name: "Next suggested task" }).click();
-        expect(await tray.getByText("2 / 12", { exact: true }).count()).toBe(1);
-        const summary = tray.locator(".task-suggestion:visible .task-suggestion__summary");
-        await captureUiProof(suite, page, "task-suggestions", `summary-${width}x${height}.png`);
-        expect(
-          await summary.evaluate((element) => element.scrollHeight <= element.clientHeight + 1),
-        ).toBe(true);
-
-        expect(
-          await summary.evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
-        ).toBe(true);
-
-        const verboseSuggestion = { ...suggestions[1]!, tldr: "W".repeat(1_024) };
-        suggestions[1] = verboseSuggestion;
-        await gateway.setMethodResponse("taskSuggestions.list", { suggestions });
-        await gateway.emitGatewayEvent("task.suggestion", {
-          action: "created",
-          suggestion: verboseSuggestion,
-        });
-        await expect.poll(() => summary.textContent()).toBe(verboseSuggestion.tldr);
-        expect(
-          await summary.evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
-        ).toBe(true);
-        await summary.evaluate(
-          (element) =>
-            new Promise<void>((resolve) => {
-              const observer = new ResizeObserver(() => {
-                observer.disconnect();
-                resolve();
-              });
-              observer.observe(element);
-            }),
+      await expect.poll(() => summary.textContent()).toBe(verboseSuggestion.tldr);
+      expect(
+        await summary.evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
+      ).toBe(true);
+      await summary.evaluate(
+        (element) =>
+          new Promise<void>((resolve) => {
+            const observer = new ResizeObserver(() => {
+              observer.disconnect();
+              resolve();
+            });
+            observer.observe(element);
+          }),
+      );
+      const summaryScroll = await summary.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+        return (
+          element.scrollTop > 0 &&
+          element.scrollTop + element.clientHeight >= element.scrollHeight - 1
         );
-        const summaryScroll = await summary.evaluate((element) => {
-          element.scrollTop = element.scrollHeight;
-          return {
-            reachesBottom:
-              element.scrollTop > 0 &&
-              element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
-            scrollTop: element.scrollTop,
-            scrollHeight: element.scrollHeight,
-            clientHeight: element.clientHeight,
-            clientWidth: element.clientWidth,
-          };
+      });
+      expect(summaryScroll).toBe(true);
+
+      const card = tray.locator(".task-suggestion:visible");
+      await exactText(card, "Show instructions").click();
+      const start = card.getByRole("button", { name: startLabel, exact: true });
+      const hasClearance = () =>
+        card.evaluate((element) => {
+          const { left, right, top, bottom } = element.getBoundingClientRect();
+          const area = element.closest(".chat-main__conversation")!.getBoundingClientRect();
+          const pane = element.closest("openclaw-chat-pane")!;
+          const details = pane.querySelector(".chat-details-toggle")!.getBoundingClientRect();
+          return (
+            top >= area.top &&
+            bottom <= area.bottom &&
+            left >= area.left &&
+            right <= area.right &&
+            (left >= details.right ||
+              right <= details.left ||
+              top >= details.bottom ||
+              bottom <= details.top)
+          );
         });
-        expect(summaryScroll.reachesBottom, JSON.stringify(summaryScroll)).toBe(true);
+      await expect.poll(hasClearance).toBe(true);
 
-        const card = tray.locator(".task-suggestion:visible");
-        await card.getByText("Show instructions", { exact: true }).click();
-        const start = card.getByRole("button", { name: "Start in a new session", exact: true });
-        await expect
-          .poll(() =>
-            card.evaluate((element) => {
-              const box = element.getBoundingClientRect();
-              const conversation = element
-                .closest(".chat-main__conversation")!
-                .getBoundingClientRect();
-              const details = element
-                .closest("openclaw-chat-pane")!
-                .querySelector(".chat-details-toggle")!
-                .getBoundingClientRect();
-              const clearOfDetails =
-                box.left >= details.right ||
-                box.right <= details.left ||
-                box.top >= details.bottom ||
-                box.bottom <= details.top;
-              return (
-                clearOfDetails &&
-                box.top >= conversation.top &&
-                box.bottom <= conversation.bottom &&
-                box.left >= conversation.left &&
-                box.right <= conversation.right
-              );
-            }),
-          )
-          .toBe(true);
-        await captureUiProof(suite, page, "task-suggestions", `verbose-${width}x${height}.png`);
-        for (const control of [card.getByRole("button", { name: "Copy prompt" }), start]) {
-          expect(
-            await control.evaluate((element) => {
-              const bounds = element.getBoundingClientRect();
-              return element.contains(
-                document.elementFromPoint(
-                  bounds.x + bounds.width / 2,
-                  bounds.y + bounds.height / 2,
-                ),
-              );
-            }),
-          ).toBe(true);
-        }
-        await start.click({ trial: true });
-
-        const composer = page.locator(".agent-chat__composer-shell");
-        await composer.waitFor({ state: "visible", timeout: 10_000 });
-        const box = await composer.boundingBox();
-        expect(box).not.toBeNull();
-        expect((box?.y ?? height) + (box?.height ?? 0)).toBeLessThanOrEqual(height);
-      } finally {
-        await suite.closeBrowserContext(context);
+      for (const control of [findButton(card, "Copy prompt"), start]) {
+        expect(
+          await control.evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            return element.contains(
+              document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
+            );
+          }),
+        ).toBe(true);
       }
+      await start.click({ trial: true });
+
+      const composer = page.locator(".agent-chat__composer-shell");
+      await composer.waitFor(visible);
+      const box = await composer.boundingBox();
+      expect(box).not.toBeNull();
+      expect((box?.y ?? height) + (box?.height ?? 0)).toBeLessThanOrEqual(height);
     },
   );
 });

@@ -80,11 +80,11 @@ export function createVllmQwenThinkingWrapper(params: {
   return createPayloadPatchStreamWrapper(
     params.baseStreamFn,
     ({ payload: payloadObj, model, options }) => {
-      if (!isCompletionsModel(model) || !(model.reasoning ?? true)) {
+      if (!isCompletionsModel(model) || !model.reasoning) {
         return;
       }
       const reasoning = resolveOpenAIRequestReasoning(
-        { ...model, reasoning: model.reasoning ?? true },
+        model,
         options?.reasoning ?? params.thinkingLevel,
       );
       const enableThinking = reasoning.thinkingEnabled ?? true;

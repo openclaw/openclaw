@@ -1,6 +1,6 @@
+import { STARTUP_INTERRUPTED_ERROR } from "../execution-error-constants.js";
 import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-import { STARTUP_INTERRUPTED_ERROR } from "./startup-run-repair.js";
 import { emit, type CronServiceState } from "./state.js";
 
 export function emitInterruptedCronRun(

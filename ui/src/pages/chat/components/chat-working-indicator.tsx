@@ -16,9 +16,9 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { projectSource } from "../../../lib/reactive/projection.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
+import { ChatRetryStatus } from "./chat-retry-status.tsx";
 import { ChatSubagentActivity } from "./chat-subagent-activity-live.ts";
 import type { SubagentActivityProps } from "./chat-subagent-activity.ts";
-import "./chat-retry-status.tsx";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
 type ReadingIndicator = Extract<ChatItem, { kind: "reading-indicator" }>;
@@ -130,12 +130,12 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
         </div>
       </Show>
       <span class="chat-working-indicator__status">
-        <span class={working() && !continuation() && indicator() !== "none" ? "sr-only" : ""}>
+        <span class={{ "sr-only": working() && !continuation() && indicator() !== "none" }}>
           <Show
             when={!waitingApproval() && props.options.retryAt !== undefined}
             fallback={statusLabel()}
           >
-            <openclaw-chat-retry-status prop:retryAt={props.options.retryAt} />
+            <ChatRetryStatus retryAt={props.options.retryAt ?? null} />
           </Show>
         </span>
         <Show
@@ -225,7 +225,16 @@ export function ChatWorkingIndicator(props: WorkingProps) {
         </Show>
       }
     >
-      <ChatSubagentActivity {...props.options.subagentActivity!} />
+      <ChatSubagentActivity
+        {...props.options.subagentActivity!}
+        fallback={
+          <WorkingStatus
+            part={props.part}
+            options={{ ...props.options, subagentActivity: undefined }}
+            branding={branding.read()}
+          />
+        }
+      />
     </Show>
   );
 }

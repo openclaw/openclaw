@@ -8,7 +8,6 @@ type BrowserAnnotationRemovalHost = {
   getSessionKey: () => string;
   getAttachments: () => ChatAttachment[];
   setAttachments: (attachments: ChatAttachment[]) => void;
-  requestUpdate: () => void;
   focusComposer: () => void;
   focusRestoredAnnotation: (attachmentId: string) => void;
 };
@@ -32,7 +31,6 @@ export function removeBrowserAnnotationWithUndo(
   }
 
   host.setAttachments(current.filter((candidate) => candidate.id !== attachment.id));
-  host.requestUpdate();
   host.focusComposer();
 
   let settled = false;
@@ -68,7 +66,6 @@ export function removeBrowserAnnotationWithUndo(
       const restored = [...latest];
       restored.splice(Math.min(sourceIndex, latest.length), 0, attachment);
       host.setAttachments(restored);
-      host.requestUpdate();
       host.focusRestoredAnnotation(attachment.id);
     },
     onDismiss: (reason) => {

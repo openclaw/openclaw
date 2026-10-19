@@ -1,4 +1,3 @@
-// Markdown → Bot API 10.3 InputRichBlock[] for Telegram rich messages.
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import {
   FormatCapabilityProfile,

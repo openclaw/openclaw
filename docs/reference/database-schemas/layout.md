@@ -9,10 +9,19 @@ title: "Database layout"
 
 ## Database layout
 
-| Scope                | Default path                                               | Contents                                                                                              |
-| -------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
-| Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
+| Scope                    | Default path                                               | Contents                                                                                                        |
+| ------------------------ | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Global control plane     | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state                       |
+| Per-agent data plane     | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state           |
+| Local client credentials | `<resolved-client-root>/client/credentials.sqlite`         | Client private identities, device and Gateway-scoped token caches, native socket secrets, and migration receipt |
+
+The client root is local even when the Gateway uses PostgreSQL or runs remotely.
+CLI clients normally use the selected state directory. The macOS app preserves
+its existing identity root in `~/Library/Application Support/OpenClaw` and its
+existing exec-host state root; configured roots remain explicit. iOS and extension
+clients retain their existing application-container roots. Each exact root has
+one credential owner; no timestamp reconciliation joins different roots.
+See [client migration and recovery](/reference/database-schemas/versioning#local-client-credentials).
 
 ### Local daemon service intent
 
@@ -23,6 +32,9 @@ the existing hashed service identity, with exact versioned `value_json` and
 reports an error instead of treating them as unpinned. The single-row
 `daemon_runtime_pin_migration` receipt records version 1, the source state path,
 `copied` or `complete`, and its update time. A pending receipt is never unpinned.
+Profile setup and Gateway startup record the completed no-work receipt when shared
+state has no legacy runtime pins, before the Gateway serves. They preserve existing
+receipts, including interrupted copies and receipts for another source.
 
 Doctor moves legacy `daemon-runtime-pin:*` rows from shared `config_machine_state`
 under exclusive state custody. It commits exact local copies before deleting

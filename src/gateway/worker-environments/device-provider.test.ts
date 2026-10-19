@@ -3,6 +3,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
@@ -18,6 +19,9 @@ import {
 
 const DEVICE_ID = "device-session-host";
 const DAY_MS = 24 * 60 * 60 * 1_000;
+const PROFILE = { device: DEVICE_ID };
+const LEASE = { leaseId: "device-lease", profile: PROFILE };
+const AUTHORITY = { assertCurrent: () => {} };
 function pairedDevice(
   deviceId = DEVICE_ID,
   nodeSurface?: PairedDevice["nodeSurface"],
@@ -27,14 +31,7 @@ function pairedDevice(
     publicKey: `public-key-${deviceId}`,
     role: "node",
     roles: ["node"],
-    tokens: {
-      node: {
-        token: "fixture-token",
-        role: "node",
-        scopes: [],
-        createdAtMs: 1,
-      },
-    },
+    tokens: { node: { token: "fixture-token", role: "node", scopes: [], createdAtMs: 1 } },
     ...(nodeSurface ? { nodeSurface } : {}),
     createdAtMs: 1,
     approvedAtMs: 1,
@@ -56,31 +53,77 @@ function connectedNode(deviceId = DEVICE_ID, available = true): NodeWorkerSuperv
 }
 
 function deviceRuntime(params: {
-  getPairedDevice: (deviceId: string) => Promise<PairedDevice | null>;
-  listCurrentNodes?: () => Promise<readonly NodeWorkerSupervisorNodeProof[]>;
+  getPairedDevice?: (deviceId: string) => Promise<PairedDevice | null>;
+  listCurrentNodes: () => Promise<readonly NodeWorkerSupervisorNodeProof[]>;
   getIssue?: () => NodeRunnerInventoryIssue | undefined;
   now?: () => number;
 }) {
   const runtime = createDeviceWorkerRuntime({
-    getPairedDevice: params.getPairedDevice,
+    getPairedDevice: params.getPairedDevice ?? (async (deviceId) => pairedDevice(deviceId)),
     ...(params.now ? { now: params.now } : {}),
   });
-  if (params.listCurrentNodes) {
-    runtime.bindNodeTransport({
-      async getCurrentNode(nodeId) {
-        return (await this.listCurrentNodes()).find((node) => node.nodeId === nodeId);
-      },
-      listCurrentNodes: params.listCurrentNodes,
-      hasCurrentRunner: () => true,
-      ...(params.getIssue ? { getIssue: params.getIssue } : {}),
-      isCurrent: () => true,
-      invoke: async () => ({ ok: false }),
-    });
-  }
+  runtime.bindNodeTransport({
+    async getCurrentNode(nodeId) {
+      return (await this.listCurrentNodes()).find((node) => node.nodeId === nodeId);
+    },
+    listCurrentNodes: params.listCurrentNodes,
+    hasCurrentRunner: () => true,
+    ...(params.getIssue ? { getIssue: params.getIssue } : {}),
+    isCurrent: () => true,
+    invoke: async () => ({ ok: false }),
+  });
   return runtime;
 }
 
 describe("device worker provider", () => {
+  it.each(["pairing", "presence"] as const)(
+    "cancels an in-flight %s inspection without waiting for the read",
+    async (phase) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const controller = new AbortController();
+      const read = async (current: typeof phase) => {
+        if (phase === current) {
+          entered.resolve();
+          await release.promise;
+        }
+      };
+      const listCurrentNodes = vi.fn(async () => {
+        await read("presence");
+        return [connectedNode()];
+      });
+      const { provider } = deviceRuntime({
+        getPairedDevice: async () => {
+          await read("pairing");
+          return pairedDevice();
+        },
+        listCurrentNodes,
+      });
+      let outcome: unknown;
+      const inspection = provider.inspect({ ...LEASE, signal: controller.signal }).then(
+        (result) => {
+          outcome = result;
+        },
+        (error: unknown) => {
+          outcome = error;
+        },
+      );
+      try {
+        await entered.promise;
+        controller.abort();
+        await vi.waitFor(() =>
+          expect(outcome).toMatchObject({ name: "AbortError", cause: controller.signal.reason }),
+        );
+        if (phase === "pairing") {
+          expect(listCurrentNodes).not.toHaveBeenCalled();
+        }
+      } finally {
+        release.resolve();
+        await inspection;
+      }
+    },
+  );
+
   it("binds targeted device reconciliation to the active worker service", async () => {
     const service = {};
     const reconcile = async (deviceId: string) => [`environment:${deviceId}`];
@@ -94,15 +137,13 @@ describe("device worker provider", () => {
 
   it("provisions deterministic node leases only for connected paired session hosts", async () => {
     const provider = deviceRuntime({
-      getPairedDevice: async (deviceId) => pairedDevice(deviceId),
       listCurrentNodes: async () => [connectedNode()],
     }).provider;
 
     expect(provider.supportedExecutionModes).toEqual(["worker-turn", "remote-exec"]);
-    const authority = { assertCurrent: () => {} };
-    const first = await provider.provision({ device: DEVICE_ID }, "operation-1", authority);
-    const repeated = await provider.provision({ device: DEVICE_ID }, "operation-1", authority);
-    const next = await provider.provision({ device: DEVICE_ID }, "operation-2", authority);
+    const first = await provider.provision(PROFILE, "operation-1", AUTHORITY);
+    const repeated = await provider.provision(PROFILE, "operation-1", AUTHORITY);
+    const next = await provider.provision(PROFILE, "operation-2", AUTHORITY);
 
     expect(first).toEqual({
       leaseId: expect.stringMatching(/^device:[a-f0-9]{64}:[a-f0-9]{32}$/u),
@@ -114,9 +155,9 @@ describe("device worker provider", () => {
     const getPairedDevice = vi.fn(async () => null);
     const listCurrentNodes = vi.fn(async () => []);
     const disconnected = deviceRuntime({ getPairedDevice, listCurrentNodes }).provider;
-    const allocation = await disconnected.resolveAllocation({ device: DEVICE_ID }, "operation-1");
+    const allocation = await disconnected.resolveAllocation(PROFILE, "operation-1");
     expect(allocation).toEqual({ leaseId: first.leaseId, sharedHost: true });
-    await disconnected.destroy({ leaseId: allocation.leaseId, profile: { device: DEVICE_ID } });
+    await disconnected.destroy({ leaseId: allocation.leaseId, profile: PROFILE });
     expect(getPairedDevice).not.toHaveBeenCalled();
     expect(listCurrentNodes).not.toHaveBeenCalled();
   });
@@ -124,14 +165,13 @@ describe("device worker provider", () => {
   it("returns the node's actionable disabled-host reason during provision", async () => {
     const message = "state directory /srv/node is group-writable; run chmod go-w /srv/node";
     const provider = deviceRuntime({
-      getPairedDevice: async () => pairedDevice(),
       listCurrentNodes: async () => [],
       getIssue: () => ({ code: "worker-host-unavailable", message }),
     }).provider;
 
-    await expect(
-      provider.provision({ device: DEVICE_ID }, "operation", { assertCurrent: () => {} }),
-    ).rejects.toThrow(`device worker node ${DEVICE_ID} cannot host sessions: ${message}`);
+    await expect(provider.provision(PROFILE, "operation", AUTHORITY)).rejects.toThrow(
+      `device worker node ${DEVICE_ID} cannot host sessions: ${message}`,
+    );
   });
 
   it.each([
@@ -151,9 +191,7 @@ describe("device worker provider", () => {
     "rejects $name during provision",
     async ({ getPairedDevice, listCurrentNodes, expectedMessage }) => {
       const provider = deviceRuntime({ getPairedDevice, listCurrentNodes }).provider;
-      const provision = provider.provision({ device: DEVICE_ID }, "operation", {
-        assertCurrent: () => {},
-      });
+      const provision = provider.provision(PROFILE, "operation", AUTHORITY);
 
       await expect(provision).rejects.toBeInstanceOf(WorkerProviderError);
       await expect(provision).rejects.toMatchObject({ message: expectedMessage });
@@ -161,22 +199,10 @@ describe("device worker provider", () => {
   );
 
   it.each([
-    {
-      name: "inside the dormancy ceiling",
-      disconnectedAtMs: 6 * DAY_MS + 1,
-      expected: { status: "dormant" },
-    },
-    {
-      name: "at the dormancy ceiling",
-      disconnectedAtMs: 6 * DAY_MS,
-      expected: { status: "unknown" },
-    },
-    {
-      name: "without exact legacy disconnect history",
-      disconnectedAtMs: undefined,
-      expected: { status: "dormant" },
-    },
-  ])("reports an offline paired node as $name", async ({ disconnectedAtMs, expected }) => {
+    ["inside the dormancy ceiling", 6 * DAY_MS + 1, "dormant"],
+    ["at the dormancy ceiling", 6 * DAY_MS, "unknown"],
+    ["without exact legacy disconnect history", undefined, "dormant"],
+  ] as const)("reports an offline paired node as %s", async (_, disconnectedAtMs, status) => {
     const nowMs = 20 * DAY_MS;
     const device = pairedDevice(DEVICE_ID, {
       createdAtMs: 1,
@@ -192,9 +218,7 @@ describe("device worker provider", () => {
       now: () => nowMs,
     }).provider;
 
-    await expect(
-      provider.inspect({ leaseId: "device-lease", profile: { device: DEVICE_ID } }),
-    ).resolves.toEqual(expected);
+    await expect(provider.inspect(LEASE)).resolves.toEqual({ status });
   });
 
   it("reports active, dormant, and unknown from pairing plus live presence", async () => {
@@ -206,15 +230,14 @@ describe("device worker provider", () => {
       listCurrentNodes: async () => (connected ? [connectedNode(DEVICE_ID, available)] : []),
     });
     const provider = runtime.provider;
-    const lease = { leaseId: "device-lease", profile: { device: DEVICE_ID } };
 
-    await expect(provider.inspect(lease)).resolves.toEqual({ status: "active", sharedHost: true });
+    await expect(provider.inspect(LEASE)).resolves.toEqual({ status: "active", sharedHost: true });
     available = false;
-    await expect(provider.inspect(lease)).resolves.toEqual({ status: "active", sharedHost: true });
+    await expect(provider.inspect(LEASE)).resolves.toEqual({ status: "active", sharedHost: true });
     connected = false;
-    await expect(provider.inspect(lease)).resolves.toEqual({ status: "dormant" });
+    await expect(provider.inspect(LEASE)).resolves.toEqual({ status: "dormant" });
     paired = null;
-    await expect(provider.inspect(lease)).resolves.toEqual({ status: "unknown" });
-    await expect(provider.destroy(lease)).resolves.toBeUndefined();
+    await expect(provider.inspect(LEASE)).resolves.toEqual({ status: "unknown" });
+    await expect(provider.destroy(LEASE)).resolves.toBeUndefined();
   });
 });

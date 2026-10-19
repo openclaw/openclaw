@@ -1,13 +1,66 @@
 import path from "node:path";
+import { z } from "zod";
 import {
   DAEMON_RUNTIME_PIN_SCHEMA_VERSION,
   resolveDaemonRuntimePinStorePath,
 } from "../daemon/runtime-pin-store.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
-import type { UpdateStateSchemaVersion } from "./update-candidate-state.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
+import { CLIENT_CREDENTIAL_SCHEMA_VERSION } from "./client-credential-schema.js";
+import type { StateDatabaseDiscovery } from "./update-candidate-paths.js";
+import type { StateInput } from "./update-candidate-state.shared.js";
+
+export const UpdateStateSchemaVersionsSchema = z.array(
+  z.object({
+    path: z.string(),
+    userVersion: z.number().nullable(),
+    contentVersion: z.number().optional(),
+    retainedAgentPaths: z.array(z.string()).optional(),
+  }),
+);
+export type UpdateStateSchemaVersion = z.infer<typeof UpdateStateSchemaVersionsSchema>[number];
+/** Publish exact aliases; released shared/agent callers opt out of local schema versions. */
+export function publishStateDatabaseVersions(
+  files: Map<string, StateDatabaseDiscovery>,
+  inspected: Map<string, Omit<UpdateStateSchemaVersion, "path">>,
+  input: Pick<StateInput, "stateDir" | "includeLocalStoreVersions">,
+): UpdateStateSchemaVersion[] {
+  const versions: UpdateStateSchemaVersion[] = [];
+  for (const [identity, discovery] of files) {
+    const result = inspected.get(identity);
+    if (!result) {
+      continue;
+    }
+    for (const spelling of discovery.spellings) {
+      versions.push({ path: spelling, ...result });
+    }
+  }
+  return input.includeLocalStoreVersions === false
+    ? versions.filter(
+        ({ path: file }) =>
+          file !== resolveClientCredentialStorePath({ OPENCLAW_STATE_DIR: input.stateDir }) &&
+          file !== resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: input.stateDir }),
+      )
+    : versions;
+}
 
 export function resolveUpdateStateContentVersion(entry: UpdateStateSchemaVersion): number | null {
   return entry.contentVersion ?? entry.userVersion;
+}
+
+/** Shared, agent, and local stores retain their own independently versioned contracts. */
+export function resolveUpdateStateTargetVersion(
+  databasePath: string,
+  params: { sharedPath: string; candidateSchemaVersions?: OpenClawSchemaVersions },
+): number | undefined {
+  const env = { OPENCLAW_STATE_DIR: path.dirname(path.dirname(params.sharedPath)) };
+  if (databasePath === resolveClientCredentialStorePath(env)) {
+    return CLIENT_CREDENTIAL_SCHEMA_VERSION;
+  }
+  if (databasePath === resolveDaemonRuntimePinStorePath(env)) {
+    return DAEMON_RUNTIME_PIN_SCHEMA_VERSION;
+  }
+  return params.candidateSchemaVersions?.[databasePath === params.sharedPath ? "state" : "agent"];
 }
 
 export function updateStateSchemaVersionsMatch(
@@ -15,6 +68,9 @@ export function updateStateSchemaVersionsMatch(
   after: readonly UpdateStateSchemaVersion[],
   params: { sharedPath: string; candidateSchemaVersions?: OpenClawSchemaVersions },
 ): boolean {
+  const clientPath = resolveClientCredentialStorePath({
+    OPENCLAW_STATE_DIR: path.dirname(path.dirname(params.sharedPath)),
+  });
   const daemonPath = resolveDaemonRuntimePinStorePath({
     OPENCLAW_STATE_DIR: path.dirname(path.dirname(params.sharedPath)),
   });
@@ -26,10 +82,12 @@ export function updateStateSchemaVersionsMatch(
   );
   const candidate = params.candidateSchemaVersions;
   if (!candidate) {
-    // An older baseline cannot name the new, still absent local store.
-    const legacyOmission = versions.get(daemonPath) === null && !baseline.has(daemonPath);
+    // An older baseline cannot name new, still absent local stores.
+    const legacyOmissions = [clientPath, daemonPath].filter(
+      (file) => versions.get(file) === null && !baseline.has(file),
+    ).length;
     return (
-      before.length + Number(legacyOmission) === after.length &&
+      before.length + legacyOmissions === after.length &&
       before.every((entry) => versions.get(entry.path) === resolveUpdateStateContentVersion(entry))
     );
   }
@@ -44,12 +102,7 @@ export function updateStateSchemaVersionsMatch(
       if (version === null || baseline.get(entry.path) === version) {
         return true;
       }
-      const supported =
-        entry.path === params.sharedPath
-          ? candidate.state
-          : entry.path === daemonPath
-            ? DAEMON_RUNTIME_PIN_SCHEMA_VERSION
-            : candidate.agent;
+      const supported = resolveUpdateStateTargetVersion(entry.path, params);
       return baseline.get(entry.path) == null && version === supported;
     })
   );

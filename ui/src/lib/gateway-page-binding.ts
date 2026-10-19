@@ -1,10 +1,12 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isGatewayAvailable } from "./gateway-availability.ts";
 import {
   createGatewayConnectionLifecycle,
   type GatewayConnectionScope,
 } from "./gateway-connection-lifecycle.ts";
+import { listen } from "./reactive/listener.ts";
 
 export type GatewayPageChange = {
   readonly snapshot: ApplicationGatewaySnapshot;
@@ -31,42 +33,38 @@ type GatewayRouteDataIdentity = {
   gatewaySnapshot: ApplicationGatewaySnapshot;
 };
 
-/**
- * Owns a page's Gateway binding and request epoch. Source replacement and
- * same-client reconnects share one request boundary, so stale work cannot survive either.
- */
 export class GatewayPageBinding {
   private readonly lifecycle = createGatewayConnectionLifecycle({
     client: null,
     phase: "stopped",
   });
   private stopGateway: (() => void) | undefined;
+  private stopActivation: Array<() => void> = [];
   private currentGateway: ApplicationContext["gateway"] | null = null;
   private currentSnapshot: ApplicationGatewaySnapshot | null = null;
   // Snapshots can be mutated in place; retain the previous transport facts.
   private currentClient: GatewayBrowserClient | null = null;
   private currentConnected = false;
+  private currentPresentationKey: number | undefined;
   private hasBoundGateway = false;
-
-  private readonly handlePageActivation = () => {
-    this.options.onPageActivation?.();
-  };
 
   constructor(
     private readonly notify: () => void,
     private readonly options: GatewayPageBindingOptions,
   ) {}
 
-  connect(): void {
+  connect(source = this.options.getGateway()): void {
     if (this.options.onPageActivation) {
-      document.addEventListener("visibilitychange", this.handlePageActivation);
-      globalThis.addEventListener("focus", this.handlePageActivation);
+      this.stopActivation = [
+        listen(document, "visibilitychange", this.options.onPageActivation),
+        listen(globalThis, "focus", this.options.onPageActivation),
+      ];
     }
-    this.refresh();
+    this.refresh(source);
   }
 
-  refresh(): void {
-    const gateway = this.options.getGateway() ?? null;
+  refresh(source = this.options.getGateway()): void {
+    const gateway = source ?? null;
     if (this.hasBoundGateway && gateway === this.currentGateway) {
       return;
     }
@@ -80,6 +78,7 @@ export class GatewayPageBinding {
       return;
     }
     this.applySnapshot(gateway.snapshot, { initial, sourceChanged });
+    // Source replacements and same-client reconnects retire stale requests before notifying consumers.
     this.stopGateway = gateway.subscribe((snapshot) => {
       if (this.currentGateway === gateway && this.options.getGateway() === gateway) {
         this.applySnapshot(snapshot, { initial: false, sourceChanged: false });
@@ -140,10 +139,8 @@ export class GatewayPageBinding {
   }
 
   dispose(): void {
-    if (this.options.onPageActivation) {
-      document.removeEventListener("visibilitychange", this.handlePageActivation);
-      globalThis.removeEventListener("focus", this.handlePageActivation);
-    }
+    this.stopActivation.forEach((stop) => stop());
+    this.stopActivation = [];
     this.stopGateway?.();
     this.stopGateway = undefined;
     const previous = this.currentSnapshot;
@@ -185,28 +182,38 @@ export class GatewayPageBinding {
     const nextConnected = snapshot.phase === "connected";
     const clientChanged = previousClient !== snapshot.client;
     const connectionChanged = previousConnected !== nextConnected;
+    const presentationKey = this.currentGateway
+      ? gatewayPresentationScope(this.currentGateway).key
+      : undefined;
+    const identityChanged =
+      !binding.initial &&
+      (binding.sourceChanged ||
+        clientChanged ||
+        (this.currentPresentationKey !== undefined &&
+          this.currentPresentationKey !== presentationKey));
     const lifecycleChanged = this.lifecycle.transition(snapshot);
-    if (binding.sourceChanged && !lifecycleChanged) {
-      // Provider ownership can change while reusing the same client and phase.
+    if (identityChanged && !lifecycleChanged) {
+      // Account and provider ownership can change while reusing the same socket.
       this.lifecycle.invalidate();
     }
     this.currentSnapshot = snapshot;
     this.currentClient = snapshot.client;
     this.currentConnected = nextConnected;
+    this.currentPresentationKey = presentationKey;
     const change: GatewayPageChange = {
       snapshot,
       initial: binding.initial,
       sourceChanged: binding.sourceChanged,
       clientChanged,
       connectionChanged,
-      identityChanged: !binding.initial && (binding.sourceChanged || clientChanged),
+      identityChanged,
       becameConnected: nextConnected && !previousConnected,
       becameAvailable: isGatewayAvailable(snapshot) && !previousAvailable,
     };
     if (change.identityChanged) {
       this.options.onIdentityChange?.(change);
     }
-    if (!binding.initial && (lifecycleChanged || binding.sourceChanged)) {
+    if (!binding.initial && (lifecycleChanged || identityChanged)) {
       this.options.invalidateRequests?.(change);
     }
     this.options.onSnapshot?.(change);

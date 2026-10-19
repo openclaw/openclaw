@@ -41,10 +41,21 @@ describe("PaletteSessionDraft", () => {
       initialRun: { status: "idle" },
     });
     vi.mocked(context.placementStartup.start).mockImplementation(() => submitted.resolve());
+    const readers: FileReader[] = [];
+    vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (this: FileReader) {
+      readers.push(this);
+    });
     host.draft.setMessage("Carry my cold Send into the required worker");
     host.draft.adoptImageFiles([new File(["cold attachment"], "cold.txt", { type: "text/plain" })]);
     await host.updateComplete;
-    expect(host.querySelector('.chat-attachment-loading[data-state="reading"]')).not.toBeNull();
+    await waitForSolid(() =>
+      expect(host.querySelector('.chat-attachment-loading[data-state="reading"]')).not.toBeNull(),
+    );
+    const pendingReader = expectDefined(readers[0], "pending cold attachment reader");
+    Object.defineProperty(pendingReader, "result", {
+      value: "data:text/plain;base64," + btoa("cold attachment"),
+    });
+    pendingReader.dispatchEvent(new ProgressEvent("load"));
     await waitForSolid(() => {
       expect(host.querySelector('.chat-attachment-loading[data-state="ready"]')).not.toBeNull();
     });
@@ -55,7 +66,6 @@ describe("PaletteSessionDraft", () => {
     expect(context.sessions.createResult).not.toHaveBeenCalled();
     policy.resolve({ sessionPlacement: { requiredProfile: profile } });
     await context.agents.refreshList();
-    host.requestUpdate();
     await host.coldOutcome.promise;
     expect(host.draft.submitting).toBe(true);
     expect(host.draft.error).toBeNull();
@@ -63,7 +73,10 @@ describe("PaletteSessionDraft", () => {
     expect(context.sessions.createResult).toHaveBeenCalledOnce();
     expect(context.sessions.createResult).toHaveBeenCalledWith(
       expect.objectContaining({ message: "", worktree: true, worktreeSource: "empty" }),
-      { reconciliation: "background" },
+      {
+        reconciliation: "background",
+        signal: expect.any(AbortSignal),
+      },
     );
     expect(context.placementStartup.start).toHaveBeenCalledOnce();
     expect(context.placementStartup.start).toHaveBeenCalledWith(
@@ -305,7 +318,10 @@ describe("PaletteSessionDraft", () => {
       await host.draft.submit();
       expect(context.sessions.createResult).toHaveBeenCalledWith(
         expect.objectContaining({ agentId: "other", message: "Create with this explicit agent" }),
-        { reconciliation: "background" },
+        {
+          reconciliation: "background",
+          signal: expect.any(AbortSignal),
+        },
       );
       if (initialRun.status === "rejected") {
         expect(host.started).not.toHaveBeenCalled();

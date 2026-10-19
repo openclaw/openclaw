@@ -1,13 +1,10 @@
 import type { messagingApi } from "@line/bot-sdk";
 import {
+  createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  createMessageReceiptFromOutboundResults,
-  createChannelMessageAdapterFromOutbound,
-  listMessageReceiptPlatformIds,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createAttachedChannelResultAdapter,
   createEmptyChannelResult,
@@ -82,7 +79,6 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         }
       : undefined;
     const sendOptions = {
-      verbose: false,
       cfg,
       accountId: accountId ?? undefined,
       authorize,
@@ -99,19 +95,12 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       } catch (error) {
         if (acceptedResults.length > 0) {
           const partial = isChannelPartialDeliveryError(error) ? error : undefined;
-          const receipt = createMessageReceiptFromOutboundResults({
-            results: [
-              ...acceptedResults,
-              ...(partial?.deliveryResult.receipt
-                ? [{ receipt: partial.deliveryResult.receipt }]
-                : (partial?.deliveryResult.messageIds ?? []).map((messageId) => ({ messageId }))),
-            ],
-          });
           throw createChannelPartialDeliveryError(partial?.cause ?? error, {
             ...partial?.deliveryResult,
-            messageIds: listMessageReceiptPlatformIds(receipt),
-            receipt,
-            visibleReplySent: true,
+            ...createAcceptedChannelDeliveryResult({
+              results: acceptedResults,
+              deliveryResults: partial ? [partial.deliveryResult] : undefined,
+            }),
           });
         }
         // Accepted payload parts keep their receipt and must not wait for quota diagnosis.
@@ -130,12 +119,10 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         await onDeliveryResult?.(createEmptyChannelResult("line", { ...result }));
       } catch (error) {
         // Observers run after provider acceptance; losing this receipt invites duplicate delivery.
-        const receipt = createMessageReceiptFromOutboundResults({ results: acceptedResults });
-        throw createChannelPartialDeliveryError(error, {
-          messageIds: listMessageReceiptPlatformIds(receipt),
-          receipt,
-          visibleReplySent: true,
-        });
+        throw createChannelPartialDeliveryError(
+          error,
+          createAcceptedChannelDeliveryResult({ results: acceptedResults }),
+        );
       }
       return result;
     };
@@ -178,10 +165,14 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
 
     const processed = payload.text ? outboundRuntime.processLineMessage(payload.text) : [];
 
-    const chunkLimit =
-      runtime.channel.text.resolveTextChunkLimit?.(cfg, "line", accountId ?? undefined, {
+    const chunkLimit = runtime.channel.text.resolveTextChunkLimit(
+      cfg,
+      "line",
+      accountId ?? undefined,
+      {
         fallbackLimit: 5000,
-      }) ?? 5000;
+      },
+    );
 
     const orderedMessages = processed.flatMap<messagingApi.FlexMessage | messagingApi.TextMessage>(
       (segment) =>
@@ -347,7 +338,6 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       await (
         await loadLineOutboundRuntime()
       ).pushMessageLine(to, text, {
-        verbose: false,
         mediaUrl,
         cfg,
         accountId: accountId ?? undefined,

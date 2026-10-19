@@ -46,7 +46,7 @@ async function mountSessionRoster(request: GatewayRequestHandler) {
 }
 
 describe("AppSidebar automatic list scope replacement", () => {
-  it("restores identical rows after a filter-menu close renders the pending list", async () => {
+  it("publishes a pending status-filter list before its data frame and restores identical rows", async () => {
     vi.useFakeTimers();
     storeSidebarSessionStatusFilter("all");
     const row: GatewaySessionRow = {
@@ -88,8 +88,6 @@ describe("AppSidebar automatic list scope replacement", () => {
       });
       vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
       sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
-      // Menu dismissal renders the empty pending view before the shared data frame.
-      sidebar.sidebarMenus.closePositionedMenu("sessionSort");
       await settleLitElement(sidebar);
       expect(sidebar.textContent).not.toContain(row.displayName);
 

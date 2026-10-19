@@ -181,7 +181,7 @@ describe("WorkboardStore", () => {
     changes.mockImplementation(() => {
       throw new Error("listener failed");
     });
-    store.subscribeChanges(changes);
+    store.onChange = changes;
     const card = await store.create({ title: "Idempotent", idempotencyKey: "same" });
     await store.create({ title: "Duplicate", idempotencyKey: "same" });
     await store.delete("missing");
@@ -2216,7 +2216,7 @@ describe("WorkboardStore", () => {
       }
       const archived = await store.archive(card.id, true);
       const changes = vi.fn();
-      const unsubscribe = store.subscribeChanges(changes);
+      store.onChange = changes;
       await expect(store.refreshDiagnostics(now + 1)).resolves.toEqual({
         diagnostics: [],
         count: 0,
@@ -2244,7 +2244,7 @@ describe("WorkboardStore", () => {
       await expect(store.get(card.id)).resolves.toEqual(archived);
       await expect(store.list()).resolves.toEqual([archived]);
       expect(changes).not.toHaveBeenCalled();
-      unsubscribe();
+      store.onChange = undefined;
       await store.archive(card.id, false);
       if (status === "done") {
         await expect(store.diagnostics(now + 2)).resolves.toMatchObject(missingProof);
@@ -2567,53 +2567,6 @@ describe("WorkboardStore", () => {
     );
   });
 
-  it("replays notification events with subscription cursors", async () => {
-    const {
-      store,
-      stores: { subscriptions },
-    } = createWorkboardSqliteTestHarness({ createStores: createKernelStores });
-    const card = await store.create({ title: "Notify me", boardId: "ops" });
-    const subscription = await store.subscribeNotifications({
-      boardId: "ops",
-      cardId: card.id,
-      target: "session:operator",
-      eventKinds: ["completed"],
-    });
-
-    await store.complete(card.id, { summary: "Done." });
-
-    const preview = await store.notificationEvents({ subscriptionId: subscription.id });
-    expect(preview.events).toEqual([expect.objectContaining({ kind: "completed" })]);
-    const storedPreview = await subscriptions.lookup(subscription.id);
-    expect(storedPreview?.subscription).not.toHaveProperty("lastEventAt");
-    expect(storedPreview?.subscription).not.toHaveProperty("lastEventId");
-
-    const first = await store.advanceNotificationEvents({
-      subscriptionId: subscription.id,
-    });
-    expect(first.events).toEqual([expect.objectContaining({ kind: "completed" })]);
-    const event = first.events[0];
-    if (!event) {
-      throw new Error("expected notification event");
-    }
-    await expect(subscriptions.lookup(subscription.id)).resolves.toMatchObject({
-      subscription: {
-        lastEventAt: event.createdAt,
-        lastEventId: event.id,
-      },
-    });
-    await expect(store.notificationEvents({ subscriptionId: subscription.id })).resolves.toEqual({
-      subscription: expect.objectContaining({ id: subscription.id }),
-      events: [],
-    });
-    await expect(store.notificationEvents({ subscriptionId: "missing" })).rejects.toThrow(
-      /subscription not found/,
-    );
-    await expect(store.advanceNotificationEvents({ boardId: "ops" })).rejects.toThrow(
-      /subscriptionId is required/,
-    );
-  });
-
   it("does not resurrect a subscription deleted during cursor advancement", async () => {
     let markCursorWriteStarted!: () => void;
     let releaseCursorWrite!: () => void;
@@ -2659,7 +2612,9 @@ describe("WorkboardStore", () => {
   });
 
   it("advances through mixed-sequence same-millisecond notifications without skips or replays", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const { store, stores } = createWorkboardSqliteTestHarness({
+      createStores: createKernelStores,
+    });
     for (const [id, sequence] of [
       ["z-event", 1234000],
       ["a-event", 1234001],
@@ -2678,17 +2633,34 @@ describe("WorkboardStore", () => {
       target: "session:operator",
       eventKinds: ["completed"],
     });
+    expect(
+      (await store.notificationEvents({ subscriptionId: subscription.id })).events.map(
+        (event) => event.id,
+      ),
+    ).toEqual(["z-event", "a-event", "0-event"]);
+    expect((await stores.subscriptions.lookup(subscription.id))?.subscription).toEqual(
+      subscription,
+    );
     for (const id of ["z-event", "a-event", "0-event"]) {
       const page = await store.advanceNotificationEvents({
         subscriptionId: subscription.id,
         limit: 1,
       });
       expect(page.events).toEqual([expect.objectContaining({ id })]);
+      await expect(stores.subscriptions.lookup(subscription.id)).resolves.toMatchObject({
+        subscription: { lastEventAt: 1234, lastEventId: id },
+      });
     }
     await expect(store.notificationEvents({ subscriptionId: subscription.id })).resolves.toEqual({
       subscription: expect.objectContaining({ id: subscription.id }),
       events: [],
     });
+    await expect(store.notificationEvents({ subscriptionId: "missing" })).rejects.toThrow(
+      /subscription not found/,
+    );
+    await expect(store.advanceNotificationEvents({ boardId: "ops" })).rejects.toThrow(
+      /subscriptionId is required/,
+    );
   });
 
   it("filters replayed notification events by session and run subscriptions", async () => {
@@ -3320,7 +3292,7 @@ describe("Workboard dependency and scheduled promotion", () => {
       });
       const archived = await store.archive(card.id, true);
       const changes = vi.fn();
-      store.subscribeChanges(changes);
+      store.onChange = changes;
 
       for (let attempt = 0; attempt < 10; attempt += 1) {
         await expect(store.dispatch(3_000 + attempt)).resolves.toEqual({

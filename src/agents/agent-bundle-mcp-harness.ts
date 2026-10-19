@@ -49,17 +49,6 @@ type StaticHarnessMcpTools = {
   dispose: () => Promise<void>;
 };
 
-function createHarnessDisposer(runtime: Pick<StaticHarnessMcpTools, "dispose"> | undefined) {
-  let disposed = false;
-  return async () => {
-    if (disposed) {
-      return;
-    }
-    disposed = true;
-    await runtime?.dispose();
-  };
-}
-
 function formatConfiguredMcpDiagnosticNotice(
   messages: readonly string[],
   runLabel: "this scheduled run" | "this run",
@@ -276,18 +265,12 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
         });
       }
     : undefined;
-  let liveRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>>;
-  try {
-    liveRuntime = await materializeBundleMcpToolsForRun({
-      ...acquisition,
-      agentId: params.agentId,
-      reservedToolNames: params.reservedToolNames,
-      ...(retireSnapshotRuntime ? { disposeRuntime: retireSnapshotRuntime } : {}),
-    });
-  } catch (error) {
-    await retireSnapshotRuntime?.();
-    throw error;
-  }
+  const liveRuntime = await materializeBundleMcpToolsForRun({
+    ...acquisition,
+    agentId: params.agentId,
+    reservedToolNames: params.reservedToolNames,
+    ...(retireSnapshotRuntime ? { disposeRuntime: retireSnapshotRuntime } : {}),
+  });
   try {
     // Policy warnings describe inputs; only actual omissions make configured MCP incomplete.
     const omissions: string[] = [];
@@ -342,7 +325,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
     return {
       tools: allowed,
       ...(diagnosticNotice ? { diagnosticNotice } : {}),
-      dispose: createHarnessDisposer(liveRuntime),
+      dispose: liveRuntime.dispose,
     };
   } catch (error) {
     await liveRuntime.dispose();
@@ -438,7 +421,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     return {
       tools: executableTools,
       advertisedTools: filteredAdvertised,
-      dispose: createHarnessDisposer(liveRuntime),
+      dispose: liveRuntime?.dispose ?? (async () => {}),
     };
   } catch (error) {
     await liveRuntime?.dispose();

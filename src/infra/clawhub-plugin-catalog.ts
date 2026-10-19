@@ -95,7 +95,7 @@ export type ClawHubPluginVersionCategories = {
 
 type ClawHubReadOptions = Pick<
   ClawHubRequestParams,
-  "baseUrl" | "token" | "skipAuth" | "timeoutMs" | "fetchImpl"
+  "baseUrl" | "token" | "skipAuth" | "timeoutMs"
 >;
 
 const BARE_ICON_KEY = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
@@ -414,7 +414,6 @@ export async function fetchClawHubPluginCatalog(
     baseUrl: params.baseUrl,
     token: params.token,
     timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   };
   if (query) {
     const searchSource = isClawHubTelemetryDisabled() ? undefined : params.searchSource;

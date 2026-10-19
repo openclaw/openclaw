@@ -17,19 +17,21 @@ const request: GuardRequest = {
   text: "meeting at ten",
   policyVersion: "v1",
 };
-const allow: Verdict = {
-  decision: "allow",
-  category: "coordination",
-  reason: "Routine coordination.",
-  model,
-  policyVersion: "v1",
-};
 const modelAllow = {
   decision: "allow",
   category: "coordination",
   reason: "Routine coordination.",
   policyVersion: "v1",
-};
+} as const;
+const allow: Verdict = { ...modelAllow, model };
+const failure = { decision: "deny", category: "guard_failure" };
+const adapterOptions = { apiKey: "test", pinnedModel: model };
+const openAiGuard = (fetch: FetchLike, rules?: GuardRules) =>
+  createOpenAiGuard({ ...adapterOptions, fetch, rules });
+const classifyEnvelope = (envelope: unknown) =>
+  openAiGuard(async () => jsonResponse(envelope)).classify(request);
+const rawGuard = (pinnedModel: string) =>
+  admitGuardAdapter({ providerId: "fake", pinnedModel, classifyRaw: async () => allow });
 
 describe("guard admission", () => {
   it.each([
@@ -37,11 +39,7 @@ describe("guard admission", () => {
     ["extra fields", async () => ({ ...allow, extra: true })],
   ])("fails closed when raw adapter %s", async (_name, classifyRaw) => {
     const guard = admitGuardAdapter({ providerId: "fake", pinnedModel: model, classifyRaw });
-    await expect(guard.classify(request)).resolves.toMatchObject({
-      decision: "deny",
-      category: "guard_failure",
-      model,
-    });
+    await expect(guard.classify(request)).resolves.toMatchObject({ ...failure, model });
   });
 
   it("fails closed on timeout", async () => {
@@ -49,67 +47,37 @@ describe("guard admission", () => {
       { providerId: "fake", pinnedModel: model, classifyRaw: () => new Promise(() => {}) },
       5,
     );
-    await expect(guard.classify(request)).resolves.toMatchObject({
-      decision: "deny",
-      category: "guard_failure",
-    });
+    await expect(guard.classify(request)).resolves.toMatchObject(failure);
   });
 
   it("rejects bare family aliases without a documented immutable id", () => {
-    expect(() =>
-      admitGuardAdapter({
-        providerId: "fake",
-        pinnedModel: "gpt-5.6",
-        async classifyRaw() {
-          return allow;
-        },
-      }),
-    ).toThrow("dated snapshot");
+    expect(() => rawGuard("gpt-5.6")).toThrow("dated snapshot");
   });
 
   it.each(["gpt-6.1-sol"])("accepts documented immutable undated id %s", (pinnedModel) => {
-    expect(() =>
-      admitGuardAdapter({
-        providerId: "fake",
-        pinnedModel,
-        async classifyRaw() {
-          return allow;
-        },
-      }),
-    ).not.toThrow();
+    expect(() => rawGuard(pinnedModel)).not.toThrow();
   });
 });
 
 describe("provider adapters", () => {
-  it.each([
-    [
-      "Anthropic",
-      (fetch: FetchLike) => createAnthropicGuard({ apiKey: "test", pinnedModel: model, fetch }),
-    ],
-  ])(
-    "cancels %s non-200 provider response bodies before failing closed",
-    async (_name, createGuard) => {
-      let cancelled = false;
-      const response = new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode("partial error body"));
-          },
-          cancel() {
-            cancelled = true;
-          },
-        }),
-        { status: 503 },
-      );
-      const guard = createGuard(async () => response);
+  it("cancels Anthropic non-200 provider response bodies before failing closed", async () => {
+    let cancelled = false;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("partial error body"));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      { status: 503 },
+    );
+    const guard = createAnthropicGuard({ ...adapterOptions, fetch: async () => response });
 
-      await expect(guard.classify(request)).resolves.toMatchObject({
-        decision: "deny",
-        category: "guard_failure",
-      });
-      expect(cancelled).toBe(true);
-    },
-  );
+    await expect(guard.classify(request)).resolves.toMatchObject(failure);
+    expect(cancelled).toBe(true);
+  });
 
   it("cancels oversized provider response streams before buffering them fully", async () => {
     const maxBytes = 256 * 1024;
@@ -133,78 +101,37 @@ describe("provider adapters", () => {
       }),
       { headers: { "content-type": "application/json" } },
     );
-    const guard = createOpenAiGuard({
-      apiKey: "test",
-      pinnedModel: model,
-      fetch: async () => response,
-    });
+    const guard = openAiGuard(async () => response);
 
-    await expect(guard.classify(request)).resolves.toMatchObject({
-      decision: "deny",
-      category: "guard_failure",
-    });
+    await expect(guard.classify(request)).resolves.toMatchObject(failure);
     expect(cancelled).toBe(true);
     // Allow the overflow chunk plus one chunk queued by the stream implementation.
     expect(emittedChunks * chunk.byteLength).toBeLessThanOrEqual(maxBytes + chunk.byteLength * 2);
   });
 
   it("fails closed on malformed JSON and provider model mismatch", async () => {
-    const malformed = createOpenAiGuard({
-      apiKey: "test",
-      pinnedModel: model,
-      fetch: async () => new Response("not json"),
-    });
+    const malformed = openAiGuard(async () => new Response("not json"));
     await expect(malformed.classify(request)).resolves.toMatchObject({ category: "guard_failure" });
-    const mismatch = createOpenAiGuard({
-      apiKey: "test",
-      pinnedModel: model,
-      fetch: async () =>
-        jsonResponse({ model: "other-model-2026-07-12", status: "completed", output: [] }),
-    });
-    await expect(mismatch.classify(request)).resolves.toMatchObject({ category: "guard_failure" });
-    const duplicate = createOpenAiGuard({
-      apiKey: "test",
-      pinnedModel: model,
-      fetch: async () =>
-        jsonResponse({
-          model,
-          status: "completed",
-          output: [
-            {
-              type: "message",
-              content: [
-                {
-                  type: "output_text",
-                  text: '{"decision":"allow","decision":"deny","category":"safe","reason":"No.","policyVersion":"v1"}',
-                },
-              ],
-            },
-          ],
-        }),
-    });
-    await expect(duplicate.classify(request)).resolves.toMatchObject({ category: "guard_failure" });
+    await expect(
+      classifyEnvelope({ model: "other-model-2026-07-12", status: "completed", output: [] }),
+    ).resolves.toMatchObject({ category: "guard_failure" });
+    await expect(
+      classifyEnvelope(
+        openAiTextEnvelope(
+          '{"decision":"allow","decision":"deny","category":"safe","reason":"No.","policyVersion":"v1"}',
+        ),
+      ),
+    ).resolves.toMatchObject({ category: "guard_failure" });
   });
 
   it("takes model evidence from the provider and requires the model policy echo", async () => {
-    const classify = (modelJson: unknown) =>
-      createOpenAiGuard({
-        apiKey: "test",
-        pinnedModel: model,
-        fetch: async () => jsonResponse(openAiEnvelope(modelJson)),
-      }).classify(request);
-    await expect(classify({ ...modelAllow, policyVersion: "v2" })).resolves.toMatchObject({
-      decision: "deny",
-      category: "guard_failure",
-    });
+    const classify = (modelJson: unknown) => classifyEnvelope(openAiEnvelope(modelJson));
+    await expect(classify({ ...modelAllow, policyVersion: "v2" })).resolves.toMatchObject(failure);
     const { policyVersion: _policyVersion, ...missingPolicyJson } = modelAllow;
-    await expect(classify(missingPolicyJson)).resolves.toMatchObject({
-      decision: "deny",
-      category: "guard_failure",
-    });
-    await expect(classify({ ...modelAllow, model: "invented-2026-01-01" })).resolves.toMatchObject({
-      decision: "deny",
-      category: "guard_failure",
-    });
+    await expect(classify(missingPolicyJson)).resolves.toMatchObject(failure);
+    await expect(classify({ ...modelAllow, model: "invented-2026-01-01" })).resolves.toMatchObject(
+      failure,
+    );
   });
 });
 
@@ -220,7 +147,7 @@ describe("operator sharing rules", () => {
       captured = init;
       return jsonResponse(openAiEnvelope());
     };
-    const guard = createOpenAiGuard({ apiKey: "test", pinnedModel: model, fetch, rules });
+    const guard = openAiGuard(fetch, rules);
     await expect(guard.classify(request)).resolves.toEqual(allow);
     const body = JSON.parse(captured!.body as string) as Record<string, any>;
     expect(body.instructions).toContain("<operator-policy>");
@@ -240,7 +167,7 @@ describe("operator sharing rules", () => {
         content: [{ type: "text", text: JSON.stringify(modelAllow) }],
       });
     };
-    const guard = createAnthropicGuard({ apiKey: "test", pinnedModel: model, fetch, rules });
+    const guard = createAnthropicGuard({ ...adapterOptions, fetch, rules });
     await guard.classify({ ...request, direction: "inbound" });
     const body = JSON.parse(captured!.body as string) as Record<string, any>;
     expect(body.system).toContain(rules.inbound);
@@ -253,12 +180,10 @@ describe("operator sharing rules", () => {
       { outbound: "   " },
       { inbound: "x".repeat(GUARD_RULES_MAX_CHARS + 1) },
     ]) {
-      expect(() =>
-        createOpenAiGuard({ apiKey: "test", pinnedModel: model, fetch, rules: invalid }),
-      ).toThrow("guard rules");
-      expect(() =>
-        createAnthropicGuard({ apiKey: "test", pinnedModel: model, fetch, rules: invalid }),
-      ).toThrow("guard rules");
+      expect(() => openAiGuard(fetch, invalid)).toThrow("guard rules");
+      expect(() => createAnthropicGuard({ ...adapterOptions, fetch, rules: invalid })).toThrow(
+        "guard rules",
+      );
     }
   });
 
@@ -276,18 +201,19 @@ describe("operator sharing rules", () => {
 });
 
 function openAiEnvelope(verdict: unknown = modelAllow) {
+  return openAiTextEnvelope(JSON.stringify(verdict));
+}
+
+function openAiTextEnvelope(text: string) {
   return {
     model,
     status: "completed",
-    output: [
-      { type: "message", content: [{ type: "output_text", text: JSON.stringify(verdict) }] },
-    ],
+    output: [{ type: "message", content: [{ type: "output_text", text }] }],
   };
 }
 
-function jsonResponse(value: unknown, status = 200): Response {
+function jsonResponse(value: unknown): Response {
   return new Response(JSON.stringify(value), {
-    status,
     headers: { "content-type": "application/json" },
   });
 }

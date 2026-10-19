@@ -47,6 +47,124 @@ async function mountModel(params: Omit<ModelPickerParams, "label" | "onChange">,
 }
 
 describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout", () => {
+  it("reveals keyboard highlights without untracked reactive reads", async () => {
+    const warning = vi.spyOn(console, "warn");
+    try {
+      const { page, userEvent } = await import("vitest/browser");
+      await page.viewport(1280, 844);
+      const { picker, onChange } = await mountModel(
+        {
+          value: "fixture/model-0",
+          options: Array.from({ length: 30 }, (_, index) => ({
+            value: `fixture/model-${index}`,
+            label: `Model ${index}`,
+          })),
+        },
+        "width:240px;margin:24px",
+      );
+      await page.getByRole("button", { name: "Model: Model 0", exact: true }).click();
+      await userEvent.keyboard("{ArrowUp}");
+      const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
+      const last = picker.querySelector<HTMLElement>('[data-value="fixture/model-29"]')!;
+      await expect.poll(() => last.hasAttribute("data-active")).toBe(true);
+      await expect.poll(() => list.scrollTop).toBeGreaterThan(0);
+      expect(last.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        list.getBoundingClientRect().bottom + 1,
+      );
+      const end = list.scrollHeight - list.clientHeight;
+      for (const [top, fadeStart, fadeEnd] of [
+        [0, false, true],
+        [1, true, true],
+        [end - 2, true, true],
+        [end - 1, true, false],
+      ] as const) {
+        list.scrollTop = top;
+        list.dispatchEvent(new Event("scroll"));
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+        expect(list.scrollTop).toBe(top);
+        expect(last.hasAttribute("data-active")).toBe(true);
+        expect(list.hasAttribute("data-fade-start")).toBe(fadeStart);
+        expect(list.hasAttribute("data-fade-end")).toBe(fadeEnd);
+        expect(onChange).not.toHaveBeenCalled();
+      }
+      await userEvent.keyboard("{ArrowDown}{Enter}");
+      expect(onChange).toHaveBeenCalledExactlyOnceWith("fixture/model-0");
+      expect(warning.mock.calls.flat().join(" ")).not.toContain("STRICT_READ_UNTRACKED");
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it.each([undefined, "submenu"] as const)(
+    "resolves writing direction on opening without reading closed picker styles (%s)",
+    async (variant) => {
+      const { userEvent } = await import("vitest/browser");
+      const computedStyle = vi.spyOn(window, "getComputedStyle");
+      try {
+        const [direction, setDirection] = createSignal<"ltr" | "rtl">("ltr");
+        const [placement, setPlacement] = createSignal<"top" | "bottom">("bottom");
+        const host = mountHost();
+        mountSolid(
+          () => (
+            <div dir={direction()}>
+              <Picker
+                params={{
+                  label: "Submenu",
+                  value: "one",
+                  options: [{ value: "one", label: "One" }],
+                  variant,
+                  placement: placement(),
+                  onChange() {},
+                }}
+              />
+            </div>
+          ),
+          { container: host },
+        );
+        const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
+        await picker.updateComplete;
+        const menu = picker.querySelector<HTMLElement>(".picker-select__menu")!;
+        const hostStyleReads = () =>
+          computedStyle.mock.calls.filter(([element]) => element === picker);
+        expect(hostStyleReads()).toHaveLength(0);
+
+        setDirection("rtl");
+        setPlacement("top");
+        flush();
+        await picker.updateComplete;
+        expect(hostStyleReads()).toHaveLength(0);
+        const trigger = picker.querySelector<HTMLButtonElement>("button")!;
+        trigger.focus();
+        await userEvent.keyboard(variant === "submenu" ? "{ArrowLeft}" : "{ArrowDown}");
+        await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
+        expect(menu.dataset.placement).toBe(variant === "submenu" ? "left-start" : "top-start");
+        expect(getComputedStyle(menu).direction).toBe("rtl");
+
+        setDirection("ltr");
+        setPlacement("bottom");
+        flush();
+        await picker.updateComplete;
+        expect(menu.dataset.placement).toBe(variant === "submenu" ? "right-start" : "bottom-start");
+        await userEvent.keyboard("{Escape}");
+        computedStyle.mockClear();
+        setDirection("rtl");
+        setPlacement("top");
+        flush();
+        await picker.updateComplete;
+        expect(hostStyleReads()).toHaveLength(0);
+        await userEvent.keyboard(variant === "submenu" ? "{ArrowLeft}" : "{ArrowDown}");
+        await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
+        expect(menu.dataset.placement).toBe(variant === "submenu" ? "left-start" : "top-start");
+        await userEvent.keyboard(variant === "submenu" ? "{ArrowRight}" : "{Escape}");
+        await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
+      } finally {
+        computedStyle.mockRestore();
+      }
+    },
+  );
+
   it.each([
     { width: 1280, direction: "ltr" },
     { width: 390, direction: "ltr" },
@@ -450,7 +568,7 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
               disabled={false}
               onChange={onChange}
             />
-            <button id="after-picker">Next field</button>
+            <input id="after-picker" aria-label="Next field" />
           </>
         ),
         { container: host },
@@ -496,7 +614,7 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       expect(onChange).not.toHaveBeenCalled();
       await userEvent.keyboard("{Tab}{Tab}");
       await expect
-        .element(page.getByRole("button", { name: "Next field", exact: true }))
+        .element(page.getByRole("textbox", { name: "Next field", exact: true }))
         .toHaveFocus();
       await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
       expect(onChange).not.toHaveBeenCalled();

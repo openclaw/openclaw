@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
-import { canCallGatewayMethod } from "./gateway-methods.ts";
+import { canCallGatewayMethod, canPresentGatewayMethod } from "./gateway-methods.ts";
 
 function snapshot(params: {
   connected?: boolean;
@@ -72,5 +72,27 @@ describe("canCallGatewayMethod", () => {
         { requireAdvertisement: false },
       ),
     ).toBe(true);
+  });
+
+  it.each(["connected", "reconnecting", "offline"] as const)(
+    "separates retained presentation from live dispatch in %s",
+    (phase) => {
+      const retained = { ...snapshot({ methods: ["skills.update"] }), phase };
+      expect(canPresentGatewayMethod(retained, "skills.update", "operator.admin")).toBe(true);
+      expect(canCallGatewayMethod(retained, "skills.update", "operator.admin")).toBe(
+        phase === "connected",
+      );
+    },
+  );
+
+  it.each([
+    { methods: [] },
+    { methods: ["skills.update"], scopes: ["operator.write"] },
+    { methods: ["skills.update"], includeAuth: false },
+    { methods: ["skills.update"], includeScopes: false },
+  ])("does not present unadvertised or unauthorized methods (%j)", (params) => {
+    expect(canPresentGatewayMethod(snapshot(params), "skills.update", "operator.admin")).toBe(
+      false,
+    );
   });
 });

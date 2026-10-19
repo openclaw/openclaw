@@ -25,7 +25,6 @@ import type { FeishuStatusSink } from "./monitor.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botOpenIds } from "./monitor.state.js";
-import { FeishuRetryableSyntheticEventError } from "./monitor.synthetic-error.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { createFeishuVcMeetingInvitedHandler } from "./monitor.vc-meeting-invited-handler.js";
 import { getFeishuRuntime } from "./runtime.js";
@@ -35,8 +34,6 @@ import { createFeishuThreadBindingManager } from "./thread-bindings.js";
 import { normalizeFeishuEventChatType, type ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
-
-export { FeishuRetryableSyntheticEventError };
 
 export type FeishuReactionCreatedEvent = {
   message_id: string;
@@ -53,27 +50,14 @@ type ResolveReactionSyntheticEventParams = {
   accountId: string;
   event: FeishuReactionCreatedEvent;
   botOpenId?: string;
-  fetchMessage?: typeof getMessageFeishu;
-  verificationTimeoutMs?: number;
   logger?: (message: string) => void;
-  uuid?: () => string;
   action?: "created" | "deleted";
 };
 
 export async function resolveReactionSyntheticEvent(
   params: ResolveReactionSyntheticEventParams,
 ): Promise<FeishuMessageEvent | null> {
-  const {
-    cfg,
-    accountId,
-    event,
-    botOpenId,
-    fetchMessage = getMessageFeishu,
-    verificationTimeoutMs = FEISHU_REACTION_VERIFY_TIMEOUT_MS,
-    logger,
-    uuid = () => crypto.randomUUID(),
-    action = "created",
-  } = params;
+  const { cfg, accountId, event, botOpenId, logger, action = "created" } = params;
 
   const emoji = event.reaction_type?.emoji_type;
   const messageId = event.message_id;
@@ -86,7 +70,7 @@ export async function resolveReactionSyntheticEvent(
 
   const { resolveFeishuAccount } = await import("./accounts.js");
   const account = resolveFeishuAccount({ cfg, accountId });
-  const reactionNotifications = account.config.reactionNotifications ?? "own";
+  const reactionNotifications = account.config.reactionNotifications;
   if (reactionNotifications === "off") {
     return null;
   }
@@ -106,9 +90,12 @@ export async function resolveReactionSyntheticEvent(
     return null;
   }
 
-  const reactedMsg = await raceWithTimeoutAndAbort(fetchMessage({ cfg, messageId, accountId }), {
-    timeoutMs: verificationTimeoutMs,
-  })
+  const reactedMsg = await raceWithTimeoutAndAbort(
+    getMessageFeishu({ cfg, messageId, accountId }),
+    {
+      timeoutMs: FEISHU_REACTION_VERIFY_TIMEOUT_MS,
+    },
+  )
     .then((result) => (result.status === "resolved" ? result.value : null))
     .catch(() => null);
   const isBotMessage = reactedMsg?.senderType === "app" || reactedMsg?.senderOpenId === botOpenId;
@@ -139,7 +126,7 @@ export async function resolveReactionSyntheticEvent(
       sender_type: "user",
     },
     message: {
-      message_id: `${messageId}:reaction:${emoji}:${uuid()}`,
+      message_id: `${messageId}:reaction:${emoji}:${crypto.randomUUID()}`,
       // Synthetic IDs are local-only; replies and topic routing must retain the real message facts.
       reply_target_message_id: messageId,
       typing_target_message_id: messageId,
@@ -426,7 +413,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     });
   }
 
-  const connectionMode = account.config.connectionMode ?? "websocket";
+  const connectionMode = account.config.connectionMode;
   if (connectionMode === "webhook" && !account.verificationToken?.trim()) {
     throw new Error(`Feishu account "${accountId}" webhook mode requires verificationToken`);
   }

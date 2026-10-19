@@ -4,10 +4,15 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { t } from "../../i18n/index.ts";
 import { readChatOutboxRecovery } from "../../lib/chat/outbox-recovery.ts";
-import { readStoredOutboxStore, storageTargetForComposer } from "../../lib/chat/outbox-store.ts";
+import {
+  readStoredOutboxStore,
+  storageTargetForComposer,
+  storageTargetForGateway,
+} from "../../lib/chat/outbox-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import "./chat-outbox-recovery.tsx";
 
 const recoveryIo = vi.hoisted(() => ({
@@ -46,7 +51,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function mountRecovery() {
+async function mountRecovery(kind: "draft" | "queue" = "draft") {
   const request = vi.fn(async () => ({}));
   const host: NonNullable<HTMLElementTagNameMap["openclaw-chat-outbox-recovery"]["host"]> = {
     settings: { gatewayUrl: "ws://recovery-owner.test" },
@@ -61,14 +66,29 @@ async function mountRecovery() {
     chatQueue: [],
     chatMessages: [],
   };
+  const preview = kind === "draft" ? "Saved input for explicit review" : "Saved queued input";
+  const target = storageTargetForGateway(host.settings.gatewayUrl);
   sessionStorage.setItem(
-    `openclaw.control.chatComposer.v2:${encodeURIComponent(host.settings.gatewayUrl)}`,
+    kind === "draft" ? target.previousKey : target.key,
     JSON.stringify({
-      version: 2,
+      version: kind === "draft" ? 2 : 4,
       gatewayOwner: host.settings.gatewayUrl,
+      recovery: {},
       sessions: {
-        "global\u0000agent:main": {
-          draft: "Saved input for explicit review",
+        [kind === "draft" ? "global\u0000agent:main" : "agent:main:main\u0000agent:main"]: {
+          ...(kind === "draft"
+            ? { draft: preview }
+            : {
+                queue: [
+                  {
+                    id: "queued-input",
+                    text: preview,
+                    createdAt: 1,
+                    sendRunId: "pending-delivery",
+                    sessionId: host.currentSessionId,
+                  },
+                ],
+              }),
           draftRevision: 1,
           updatedAt: 1,
         },
@@ -80,12 +100,10 @@ async function mountRecovery() {
     identity: "current-owner",
   });
   const restored = vi.fn();
-  element.addEventListener("outbox-restored", restored);
+  element.onRestored = restored;
   document.body.append(element);
   await waitForSolid(() =>
-    expect(element.querySelector(".chat-outbox-recovery__preview")?.textContent).toBe(
-      "Saved input for explicit review",
-    ),
+    expect(element.querySelector(".chat-outbox-recovery__preview")?.textContent).toBe(preview),
   );
   const button = (action: "restore" | "discard") => {
     const label = t(
@@ -101,6 +119,28 @@ async function mountRecovery() {
   };
   return { host, element, button, restored, request };
 }
+
+it("retires durable delivery receipts from the run owner without bridge prop refreshes", async () => {
+  const { host, element } = await mountRecovery("queue");
+  const owner = chatRunPresentation(host);
+  const initialReads = recoveryIo.prepare.mock.calls.length;
+  owner.publish();
+  await Promise.resolve();
+  flush();
+  expect(recoveryIo.prepare).toHaveBeenCalledTimes(initialReads);
+
+  host.chatMessages = [
+    { role: "user", __openclaw: { id: null, seq: null, idempotencyKey: "pending-delivery" } },
+  ];
+  await waitForSolid(() => expect(recoveryIo.prepare).toHaveBeenCalledTimes(initialReads + 1));
+  expect(readChatOutboxRecovery(host).entries).toHaveLength(1);
+
+  host.chatMessages = [
+    { role: "user", __openclaw: { id: "delivered", idempotencyKey: "pending-delivery" } },
+  ];
+  await waitForSolid(() => expect(element.querySelector(".chat-outbox-recovery-row")).toBeNull());
+  expect(readChatOutboxRecovery(host).entries).toEqual([]);
+});
 
 it("admits one review before Solid flushes and restores through the storage owner", async () => {
   const confirmation = createDeferred<boolean>();

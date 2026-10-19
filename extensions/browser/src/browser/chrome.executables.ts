@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { executableFileExistsSync as isExecutable } from "openclaw/plugin-sdk/path-existence-runtime";
 import { pathExistsSync as exists } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -75,7 +76,6 @@ const CHROMIUM_EXE_NAMES = new Set([
   "opera.exe",
   "yandex.exe",
   "yandexbrowser.exe",
-  // mac/linux names
   "google chrome",
   "google chrome canary",
   "brave browser",
@@ -87,19 +87,6 @@ const CHROMIUM_EXE_NAMES = new Set([
   "opera-stable",
   ...CHROMIUM_LINUX_NAMES,
 ]);
-
-function isExecutable(filePath: string, platform: NodeJS.Platform): boolean {
-  try {
-    if (!fs.statSync(filePath).isFile()) {
-      return false;
-    }
-    // Windows has no POSIX execute bit; a visible regular file preserves its native contract.
-    fs.accessSync(filePath, platform === "win32" ? fs.constants.F_OK : fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function inferKindFromIdentifier(identifier: string): BrowserExecutable["kind"] {
   const id = normalizeLowercaseStringOrEmpty(identifier);

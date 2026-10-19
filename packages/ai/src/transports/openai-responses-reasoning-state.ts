@@ -17,7 +17,7 @@ import {
   providerReplayContextMatches,
 } from "./provider-replay-context.js";
 
-type ReplayIdentity = { sessionId?: string; authProfileId?: string };
+type ReplayIdentity = NonNullable<Parameters<typeof buildProviderReplayContext>[1]>;
 
 /** Save only admitted settings and hashes, never another copy of the conversation. */
 export function recordResponsesReasoningState(

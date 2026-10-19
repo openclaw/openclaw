@@ -5,7 +5,6 @@ import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-s
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { classifyTransientNetworkErrorCode, retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { sleep, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -124,7 +123,7 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 export async function sendMessage(
   incomingUrl: string,
   text: string,
-  userId?: string | number,
+  userId?: string,
   allowInsecureSsl = false,
   onPlatformSendDispatch?: () => Promise<void>,
 ): Promise<boolean> {
@@ -183,17 +182,12 @@ export async function sendMessage(
 export async function sendHostedFileUrl(
   incomingUrl: string,
   fileUrl: SynologyHostedMediaUrl,
-  userId?: string | number,
+  userId?: string,
   allowInsecureSsl = false,
   onPlatformSendDispatch?: () => Promise<void>,
 ): Promise<SynologyHostedFileSendResult> {
   const effect = captureEffectAuthority();
-  let body: string;
-  try {
-    body = buildWebhookBody({ file_url: assertHostedMediaUrl(fileUrl) }, userId);
-  } catch {
-    return { status: "not-dispatched" };
-  }
+  const body = buildWebhookBody({ file_url: fileUrl }, userId);
 
   await waitForSendSlot(incomingUrl);
   await onPlatformSendDispatch?.();
@@ -227,90 +221,31 @@ async function fetchChatUsers(
   if (cached && now - cached.cachedAt < CACHE_TTL_MS) {
     return cached.users;
   }
-  return new Promise((resolve) => {
-    let settled = false;
-    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (users: ChatUser[]) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(deadlineTimer);
-      deadlineTimer = undefined;
-      resolve(users);
-    };
-    let parsedUrl: URL;
-    try {
-      parsedUrl = new URL(listUrl);
-    } catch {
+  try {
+    const response = await requestSynology(listUrl, allowInsecureSsl);
+    if (!response) {
       log?.warn("fetchChatUsers: invalid user_list URL, using cached data");
-      finish(cached?.users ?? []);
-      return;
+      return cached?.users ?? [];
     }
-    const transport = parsedUrl.protocol === "https:" ? https : http;
-    const requestOptions: http.RequestOptions | https.RequestOptions =
-      parsedUrl.protocol === "https:" ? { rejectUnauthorized: !allowInsecureSsl } : {};
-
-    const req = transport
-      .get(listUrl, requestOptions, (res) => {
-        void (async () => {
-          try {
-            const data = await readByteStreamWithLimit(res, {
-              maxBytes: USER_LIST_RESPONSE_MAX_BYTES,
-              onOverflow: ({ maxBytes }) =>
-                new Error(`user_list response exceeded ${maxBytes} bytes`),
-            });
-            if (settled) {
-              return;
-            }
-            const result = safeParseJsonWithSchema(
-              ChatUserListResponseSchema,
-              data.toString("utf8"),
-            );
-            if (!result) {
-              log?.warn("fetchChatUsers: failed to parse user_list response");
-              finish(cached?.users ?? []);
-              return;
-            }
-
-            if (result.success) {
-              const users = result.data?.users ?? [];
-              chatUserCache.set(listUrl, {
-                users,
-                cachedAt: now,
-              });
-              finish(users);
-              return;
-            }
-
-            log?.warn(`fetchChatUsers: API returned success=${result.success}, using cached data`);
-            finish(cached?.users ?? []);
-          } catch (err) {
-            if (settled) {
-              return;
-            }
-            log?.warn(`fetchChatUsers: ${formatErrorMessage(err)}, using cached data`);
-            finish(cached?.users ?? []);
-          }
-        })();
-      })
-      .on("error", (err) => {
-        if (settled) {
-          return;
-        }
-        log?.warn(`fetchChatUsers: HTTP error — ${err instanceof Error ? err.message : err}`);
-        finish(cached?.users ?? []);
-      });
-    // Use a wall-clock deadline, not ClientRequest.setTimeout. Node's socket
-    // idle timer resets on every data chunk, so a slow drip can hang user_list
-    // past the intended budget while body reads have no separate idle bound.
-    deadlineTimer = setTimeout(() => {
-      log?.warn("fetchChatUsers: request timed out, using cached data");
-      req.destroy?.();
-      finish(cached?.users ?? []);
-    }, USER_LIST_REQUEST_TIMEOUT_MS);
-    deadlineTimer.unref?.();
-  });
+    const result = safeParseJsonWithSchema(
+      ChatUserListResponseSchema,
+      response.data.toString("utf8"),
+    );
+    if (!result) {
+      log?.warn("fetchChatUsers: failed to parse user_list response");
+    } else if (result.success) {
+      const users = result.data?.users ?? [];
+      chatUserCache.set(listUrl, { users, cachedAt: now });
+      return users;
+    } else {
+      log?.warn(`fetchChatUsers: API returned success=${result.success}, using cached data`);
+    }
+  } catch (error) {
+    const message = formatErrorMessage(error);
+    const fallback = message.startsWith("HTTP error — ") ? "" : ", using cached data";
+    log?.warn(`fetchChatUsers: ${message}${fallback}`);
+  }
+  return cached?.users ?? [];
 }
 
 async function waitForSendSlot(incomingUrl: string): Promise<void> {
@@ -348,28 +283,6 @@ function pruneIdleSendSlots(): void {
   }
 }
 
-function assertHostedMediaUrl(fileUrl: SynologyHostedMediaUrl): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(fileUrl);
-  } catch (err) {
-    throw new Error(`Invalid Synology Chat file URL: ${formatErrorMessage(err)}`, { cause: err });
-  }
-
-  if (
-    parsed.protocol !== "https:" ||
-    !parsed.hostname ||
-    parsed.username ||
-    parsed.password ||
-    parsed.hash
-  ) {
-    throw new Error(
-      "Synology Chat hosted attachment URL must use HTTPS without credentials or a fragment",
-    );
-  }
-  return parsed.toString();
-}
-
 /**
  * Resolve a mutable webhook username/nickname to the correct Chat API user_id.
  *
@@ -395,7 +308,7 @@ export async function resolveLegacyWebhookNameToChatUserId(params: {
   return users.find((user) => normalizeLowercaseStringOrEmpty(user.username) === lower)?.user_id;
 }
 
-function buildWebhookBody(payload: ChatWebhookPayload, userId?: string | number): string {
+function buildWebhookBody(payload: ChatWebhookPayload, userId?: string): string {
   const numericId = parseNumericUserId(userId);
   if (numericId !== undefined) {
     payload.user_ids = [numericId];
@@ -403,113 +316,120 @@ function buildWebhookBody(payload: ChatWebhookPayload, userId?: string | number)
   return `payload=${encodeURIComponent(JSON.stringify(payload))}`;
 }
 
-function parseNumericUserId(userId?: string | number): number | undefined {
+function parseNumericUserId(userId?: string): number | undefined {
   if (userId === undefined) {
     return undefined;
-  }
-  if (typeof userId === "number") {
-    return Number.isSafeInteger(userId) ? userId : undefined;
   }
   return parseStrictNonNegativeInteger(userId);
 }
 
-function doPost(
+type SynologyResponse = { statusCode?: number; data: Buffer };
+
+function requestSynology(
+  url: string,
+  allowInsecureSsl: boolean,
+  body?: string,
+): Promise<SynologyResponse | undefined> {
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    return Promise.resolve(undefined);
+  }
+  const transport = parsedUrl.protocol === "https:" ? https : http;
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  return new Promise<SynologyResponse | undefined>((resolve, reject) => {
+    let response: http.IncomingMessage | undefined;
+    let req: http.ClientRequest;
+    const readResponse = (res: http.IncomingMessage) => {
+      response = res;
+      const chunks: Buffer[] = [];
+      let bytes = 0;
+      res.on("data", (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes <= USER_LIST_RESPONSE_MAX_BYTES) {
+          chunks.push(chunk);
+        } else {
+          chunks.length = 0;
+          // Lookup responses fail closed; POST responses must still be drained
+          // because an oversized envelope cannot undo HTTP200 acceptance.
+          if (body === undefined) {
+            reject(new Error(`user_list response exceeded ${USER_LIST_RESPONSE_MAX_BYTES} bytes`));
+            res.destroy();
+            req.destroy();
+          }
+        }
+      });
+      res.on("end", () =>
+        resolve({
+          statusCode: res.statusCode,
+          data:
+            bytes <= USER_LIST_RESPONSE_MAX_BYTES ? Buffer.concat(chunks, bytes) : Buffer.alloc(0),
+        }),
+      );
+      res.on("error", reject);
+      res.resume();
+    };
+    // Synology NAS may use self-signed certs; only the operator's explicit
+    // allowInsecureSsl setting skips certificate verification.
+    const requestOptions = { rejectUnauthorized: !allowInsecureSsl };
+    try {
+      req =
+        body === undefined
+          ? transport.get(url, requestOptions, readResponse)
+          : transport.request(
+              url,
+              {
+                ...requestOptions,
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/x-www-form-urlencoded",
+                  "Content-Length": Buffer.byteLength(body),
+                },
+              },
+              readResponse,
+            );
+    } catch {
+      // No request exists yet, so a hosted capability cannot have been sent.
+      resolve(undefined);
+      return;
+    }
+    req.on("error", (error) =>
+      reject(body === undefined ? new Error(`HTTP error — ${formatErrorMessage(error)}`) : error),
+    );
+    // One absolute budget includes connect, upload, and response drain.
+    deadlineTimer = setTimeout(
+      () => {
+        reject(new Error(body === undefined ? "request timed out" : "Request timeout"));
+        response?.destroy();
+        req.destroy();
+      },
+      body === undefined ? USER_LIST_REQUEST_TIMEOUT_MS : POST_REQUEST_TIMEOUT_MS,
+    );
+    deadlineTimer.unref?.();
+    if (body !== undefined) {
+      req.write(body);
+      req.end();
+    }
+  }).finally(() => clearTimeout(deadlineTimer));
+}
+
+async function doPost(
   url: string,
   body: string,
   allowInsecureSsl = false,
 ): Promise<SynologyHostedFileSendResult["status"]> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let response: http.IncomingMessage | undefined;
-    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (result: { status?: SynologyHostedFileSendResult["status"]; error?: Error }) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (deadlineTimer !== undefined) {
-        clearTimeout(deadlineTimer);
-        deadlineTimer = undefined;
-      }
-      if (result.error) {
-        reject(result.error);
-        return;
-      }
-      resolve(result.status ?? "rejected");
-    };
-    let parsedUrl: URL;
-    try {
-      parsedUrl = new URL(url);
-    } catch {
-      resolve("not-dispatched");
-      return;
-    }
-    const transport = parsedUrl.protocol === "https:" ? https : http;
-
-    let req: http.ClientRequest;
-    try {
-      req = transport.request(
-        url,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Content-Length": Buffer.byteLength(body),
-          },
-          // Synology NAS may use self-signed certs on local network.
-          // Set allowInsecureSsl: true in channel config to skip verification.
-          rejectUnauthorized: !allowInsecureSsl,
-        },
-        (res) => {
-          response = res;
-          const responseChunks: Buffer[] = [];
-          let responseBytes = 0;
-          res.on("data", (chunk: Buffer) => {
-            responseBytes += chunk.length;
-            if (responseBytes <= USER_LIST_RESPONSE_MAX_BYTES) {
-              responseChunks.push(chunk);
-            } else {
-              responseChunks.length = 0;
-            }
-          });
-          res.on("end", () => {
-            const result =
-              responseBytes <= USER_LIST_RESPONSE_MAX_BYTES
-                ? safeParseJsonWithSchema(
-                    ChatUserListResponseSchema.pick({ success: true }),
-                    Buffer.concat(responseChunks).toString("utf8"),
-                  )
-                : null;
-            if (res.statusCode === 200) {
-              finish({ status: result?.success === false ? "rejected" : "accepted" });
-              return;
-            }
-            // A reverse proxy can emit a server error after forwarding the POST
-            // and losing Synology's response, so 5xx cannot prove non-acceptance.
-            finish({ status: (res.statusCode ?? 500) >= 500 ? "indeterminate" : "rejected" });
-          });
-          res.on("error", (error) => finish({ error }));
-          res.resume();
-        },
-      );
-    } catch {
-      // Synchronous request construction failed before Node returned a request
-      // that could write the capability to the network.
-      finish({ status: "not-dispatched" });
-      return;
-    }
-
-    req.on("error", (error) => finish({ error }));
-    // ClientRequest timeout is socket-idle based. Keep one absolute budget
-    // across connect, upload, and response drain so trickling bodies terminate.
-    deadlineTimer = setTimeout(() => {
-      const error = new Error("Request timeout");
-      finish({ error });
-      response?.destroy();
-      req.destroy();
-    }, POST_REQUEST_TIMEOUT_MS);
-    deadlineTimer.unref?.();
-    req.write(body);
-    req.end();
-  });
+  const response = await requestSynology(url, allowInsecureSsl, body);
+  if (!response) {
+    return "not-dispatched";
+  }
+  const result = safeParseJsonWithSchema(
+    ChatUserListResponseSchema.pick({ success: true }),
+    response.data.toString("utf8"),
+  );
+  if (response.statusCode === 200) {
+    return result?.success === false ? "rejected" : "accepted";
+  }
+  // A proxy 5xx can follow acceptance, so it cannot prove rejection.
+  return (response.statusCode ?? 500) >= 500 ? "indeterminate" : "rejected";
 }

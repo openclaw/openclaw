@@ -97,7 +97,7 @@ async function processGoogleChatEvent(
   const sender = message.sender ?? event.user;
   const senderId = sender?.name ?? "";
   const senderName = sender?.displayName ?? "";
-  const senderEmail = sender?.email ?? undefined;
+  const senderEmail = sender?.email;
   const isBotSender = sender?.type?.toUpperCase() === "BOT";
   const appUserId = account.config.botUser?.trim() || "users/app";
 
@@ -272,7 +272,7 @@ async function processGoogleChatEvent(
       WasMentioned: isGroup ? effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
       GroupSubject: undefined,
-      GroupSpace: isGroup ? (space.displayName ?? undefined) : undefined,
+      GroupSpace: isGroup ? space.displayName : undefined,
     },
   });
 
@@ -394,7 +394,7 @@ async function downloadAttachment(
   if (!resourceName) {
     return null;
   }
-  const maxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
+  const maxBytes = mediaMaxMb * 1024 * 1024;
   const downloaded = await downloadGoogleChatMedia({ account, resourceName, maxBytes });
   const saved = await core.channel.media.saveMediaBuffer(
     downloaded.buffer,

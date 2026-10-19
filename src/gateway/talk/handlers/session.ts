@@ -60,6 +60,7 @@ import {
   rememberUnifiedTalkSession,
   requireUnifiedTalkSessionConn,
 } from "../session-registry.js";
+import { restoreTalkSessionTarget } from "../session-start.js";
 import { prepareTalkSessionTarget, requirePreparedTalkSessionTarget } from "../session-target.js";
 import {
   createTalkTranscriptionRelaySession,
@@ -274,6 +275,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           warn: (message) => context.logGateway.warn(`talk realtime context: ${message}`),
         });
         assertCommitAllowed();
+        await restoreTalkSessionTarget(request, target, replacement?.source(target).assertCurrent);
         const ensuredSessionId = await ensureClientVoiceAgentSessionEntry({
           agentId,
           sessionKey: target.canonicalKey,

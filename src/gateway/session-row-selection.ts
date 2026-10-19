@@ -11,7 +11,7 @@ import {
 import { compareSessionEntryPairs, type SessionEntryPair } from "./session-list-order.js";
 import {
   identity as rowIdentity,
-  type SelectionRow,
+  type SelectionRow as SelectionTarget,
   type SelectionChange,
 } from "./session-row-projection-record.js";
 import type { prepareSessionRowScopes } from "./session-row-scope.js";
@@ -21,16 +21,15 @@ import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 const sentinel = (key: string) => key === "global" || key === "unknown";
 type SelectionScope = ReturnType<ReturnType<typeof prepareSessionRowScopes>["select"]>;
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
-type SelectionTarget = Omit<SelectionRow, "generation">;
+type IndexedTarget = { row: SelectionTarget; pair: SessionEntryPair; position: number };
 
-export function createSessionRowSelection<Target extends SelectionTarget = SelectionRow>(
+export function createSessionRowSelection(
   cfg: OpenClawConfig,
   scope: SelectionScope,
   activeOnly: boolean,
   getContext: () => SessionListRowContext,
   indexCreators = false,
 ) {
-  type IndexedTarget = { row: Target; pair: SessionEntryPair; position: number };
   const groups = new Map<string, Map<string, IndexedTarget>>();
   const winners = new Map<string, IndexedTarget>();
   const duplicates = new Set<string>();
@@ -181,9 +180,9 @@ export function createSessionRowSelection<Target extends SelectionTarget = Selec
     changedInvolvements.clear();
   };
   let position = 0;
-  const keyFor = (row: Pick<Target, "key" | "agentId">) =>
+  const keyFor = (row: Pick<SelectionTarget, "key" | "agentId">) =>
     sentinel(row.key) && activeOnly ? JSON.stringify([row.key, row.agentId]) : row.key;
-  const update = (id: string, key: string, row?: Target) => {
+  const update = (id: string, key: string, row?: SelectionTarget) => {
     const previous = groups.get(key);
     const oldWinner = winners.get(key);
     const candidate = previous?.get(id);
@@ -269,17 +268,13 @@ export function createSessionRowSelection<Target extends SelectionTarget = Selec
     }
   };
   return {
-    add(row: Target) {
+    add(row: SelectionTarget) {
       update(rowIdentity(row), keyFor(row), row);
     },
-    change(
-      change: Omit<Exclude<SelectionChange, { kind: "reset" }>, "row"> & {
-        row: Target | undefined;
-      },
-    ) {
+    change(change: Exclude<SelectionChange, { kind: "reset" }>) {
       update(change.id, keyFor(change), change.row);
     },
-    createdEntries(profileIds: ReadonlySet<string>): Iterable<Target> {
+    createdEntries(profileIds: ReadonlySet<string>): Iterable<SelectionTarget> {
       assertCanonical();
       const profileOrders = Array.from(profileIds, (profileId) => {
         let entries = creatorOrders.get(profileId);
@@ -310,7 +305,7 @@ export function createSessionRowSelection<Target extends SelectionTarget = Selec
     },
     read(
       sortBy?: SessionsListParams["sortBy"],
-      candidates?: Iterable<Pick<Target, "key" | "agentId">>,
+      candidates?: Iterable<Pick<SelectionTarget, "key" | "agentId">>,
     ) {
       assertCanonical();
       if (!candidates && !partitions) {

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal } from "solid-js";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayEventListener } from "../../api/gateway.ts";
 import type {
@@ -42,8 +42,7 @@ const roster: AgentsListResult = {
   ],
 };
 
-function createPage(initiallyActive = true) {
-  const [active, setActive] = createSignal(initiallyActive);
+function createPage() {
   let sessions: GatewaySessionRow[] = [
     {
       key: "agent:harbor:team-room",
@@ -151,15 +150,7 @@ function createPage(initiallyActive = true) {
   const baselineEventListeners = eventListeners.size;
   const provider = createSolidApplicationContextProvider(context);
   const mountPage = () =>
-    mountSolid(
-      () =>
-        createComponent(AgentsHomePage, {
-          get active() {
-            return active();
-          },
-        }),
-      { wrapper: provider.wrapper },
-    );
+    mountSolid(() => createComponent(AgentsHomePage, {}), { wrapper: provider.wrapper });
   const view = mountPage();
   disposers.push(() => {
     agents.dispose();
@@ -171,7 +162,6 @@ function createPage(initiallyActive = true) {
     mountPage,
     rosterListenerCount: () => eventListeners.size - baselineEventListeners,
     request,
-    setActive,
     navigate,
     updateSessions: (next: GatewaySessionRow[]) => {
       sessions = next;
@@ -216,21 +206,6 @@ describe("AgentsHomePage", () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  it("waits until an initially inactive page is shown before loading its roster", async () => {
-    const { page, request, setActive } = createPage(false);
-    await waitForSolid(() => expect(page.querySelector(".agents-home")).not.toBeNull());
-    expect(request).not.toHaveBeenCalled();
-    expect(page.querySelectorAll(".agents-home__card")).toHaveLength(0);
-
-    setActive(true);
-    await waitForSolid(() => expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2));
-    expect(request).toHaveBeenCalledWith("agents.list", { includeSessionPlacement: true });
-    expect(request).toHaveBeenCalledWith(
-      "sessions.list",
-      expect.objectContaining({ includeLastMessage: true, archived: "all" }),
-    );
-  });
-
   it("shows the configured roster, prioritizes work across sessions, and opens the canonical main chat", async () => {
     const { page, request, navigate } = createPage();
     await waitForSolid(() => expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2));
@@ -238,15 +213,14 @@ describe("AgentsHomePage", () => {
     const cards = [...page.querySelectorAll(".agents-home__card")];
     expect(cards.map((card) => card.querySelector("h2")?.textContent)).toEqual(["Ember", "Harbor"]);
     expect(cards[0]?.textContent).toContain("Builds small tools");
-    expect(cards[0]?.textContent).toContain("example/model-small");
+    expect(page.textContent).not.toContain("example/model-small");
+    expect(page.textContent).not.toMatch(/Working now|Active .* ago|No recent activity/u);
     await waitForSolid(() =>
       expect(cards[0]?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
     );
     expect(cards[1]?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
       "⚓",
     );
-    expect(cards[0]?.querySelector(".agents-home__working")?.textContent).toBe("Working now");
-    expect(cards[1]?.querySelector(".agents-home__working")).toBeNull();
     expect(cards[0]?.querySelector(".agents-home__preview")?.textContent?.trim()).toBe(
       "The main chat summary.",
     );
@@ -259,8 +233,36 @@ describe("AgentsHomePage", () => {
 
     const openChat = cards[0]?.querySelector<HTMLElement>(".agents-home__open");
     expect(openChat?.textContent).toBe("Open chat");
+    expect(cards[0]?.tagName).toBe("A");
+    expect(cards[0]?.getAttribute("href")).toBe("/chat/ember");
+    expect(cards[0]?.querySelectorAll("a, button, [tabindex]")).toHaveLength(0);
+    const modifiedClick = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      metaKey: true,
+    });
+    openChat?.dispatchEvent(modifiedClick);
+    expect(modifiedClick.defaultPrevented).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
     openChat?.click();
     expect(navigate).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/ember" });
+  });
+
+  it("keeps chats reachable when agents have no messages", async () => {
+    vi.useFakeTimers();
+    const { page, updateSessions, emitChange, navigate } = createPage();
+    await waitForSolid(() => expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2));
+    updateSessions([]);
+    emitChange();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await waitForSolid(() =>
+      expect(
+        [...page.querySelectorAll(".agents-home__preview")].map((preview) => preview.textContent),
+      ).toEqual(["No messages yet", "No messages yet"]),
+    );
+    expect(page.textContent).not.toContain("No recent activity");
+    page.querySelector<HTMLElement>('[data-agent-id="harbor"]')?.click();
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/harbor" });
   });
 
   it("shares bounded activity loading between consumers and stops after the last detach", async () => {
@@ -318,10 +320,10 @@ describe("AgentsHomePage", () => {
     expect(calls("sessions.list")).toHaveLength(0);
   });
 
-  it("refreshes live status and previews after session events and gateway reconnect", async () => {
+  it("refreshes previews and activity ordering after session events and gateway reconnect", async () => {
     vi.useFakeTimers();
     const { page, updateSessions, emitChange, setPhase } = createPage();
-    await waitForSolid(() => expect(page.querySelector(".agents-home__working")).not.toBeNull());
+    await waitForSolid(() => expect(page.textContent).toContain("The main chat summary."));
     updateSessions([
       {
         key: "agent:ember:team-room",
@@ -336,7 +338,6 @@ describe("AgentsHomePage", () => {
     emitChange();
     await vi.advanceTimersByTimeAsync(5_000);
     await waitForSolid(() => expect(page.textContent).toContain("The tool is finished."));
-    expect(page.querySelector(".agents-home__working")).toBeNull();
 
     setPhase("reconnecting");
     await waitForSolid(() => expect(page.textContent).toContain("Connect to the Gateway"));
@@ -354,6 +355,5 @@ describe("AgentsHomePage", () => {
     setPhase("connected");
     await waitForSolid(() => expect(page.textContent).toContain("The next schedule is ready."));
     expect(page.querySelector(".agents-home__card h2")?.textContent).toBe("Harbor");
-    expect(page.querySelector(".agents-home__working")?.textContent).toBe("Working now");
   });
 });

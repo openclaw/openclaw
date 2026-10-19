@@ -23,7 +23,7 @@ function SendStatusAction(props: {
       <span class="chat-send-status__part">
         <span aria-hidden="true">{"·"}</span>
         <button
-          class={"chat-send-status__action chat-send-status__" + props.kind}
+          class={["chat-send-status__action", `chat-send-status__${props.kind}`]}
           type="button"
           aria-label={
             props.kind === "retry" ? (props.label ?? t("chat.queue.retryQueuedMessage")) : undefined

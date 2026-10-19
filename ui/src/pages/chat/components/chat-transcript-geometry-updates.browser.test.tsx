@@ -1,16 +1,23 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
 import { createMountedPanes } from "../chat-pane-mounted.test-support.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import { ChatPaneRuntime } from "../chat-pane-render.ts";
 import { createPaneTestHost } from "../chat-pane.test-support.ts";
-import { saveChatSessionScrollPosition } from "../scroll.ts";
+import {
+  handleChatScroll,
+  lockChatScroll,
+  saveChatSessionScrollPosition,
+  type ChatScrollHost,
+} from "../scroll.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
+
+// mock-isolation: Exercise runtime commit cadence without initializing the full pane renderer.
+vi.mock("../chat-pane-layout-view.tsx", () => import("../chat-pane-layout.test-support.tsx"));
 
 class GeometryPane extends ChatPaneRuntime {
   session: ChatSessionVirtualizerHost | undefined;
@@ -38,7 +45,11 @@ class GeometryPane extends ChatPaneRuntime {
     });
   }
 
-  override render() {
+  get scrollState() {
+    return expectDefined(this.state, "mounted pane state");
+  }
+
+  renderGeometry() {
     const layout = this.transcript.renderSession(this.sessionKey, (session) => {
       if (!(session instanceof ChatSessionVirtualizerHost)) {
         throw new Error("Expected the session virtualizer owner");
@@ -57,19 +68,40 @@ class GeometryPane extends ChatPaneRuntime {
       };
     });
     return {
-      layout: solidContent(GeometryLayout, layout),
+      layout: {
+        component: GeometryLayout,
+        props: {
+          ...layout,
+          scroll: this.scrollState,
+        },
+      },
       dialog: undefined,
       capabilityDialogs: undefined,
+      providerReviewSource: undefined,
     };
   }
 }
 
-function GeometryLayout(props: { contents: HTMLDivElement; size: number }) {
+function GeometryLayout(props: {
+  contents: HTMLDivElement;
+  size: number;
+  scroll: Pick<
+    ChatScrollHost,
+    "chatReadingHistory" | "chatNewMessagesBelow" | "chatFollowLocked" | "chatUserNearBottom"
+  >;
+}) {
   return (
     <div class="chat-thread-viewport" style="height: 400px; flex: none; padding: 20px 0">
       <div class="chat-thread" style="overflow-anchor: none">
         {props.contents}
-        <output>{props.size}</output>
+        <output
+          data-reading-history={String(props.scroll.chatReadingHistory)}
+          data-new-messages-below={String(props.scroll.chatNewMessagesBelow)}
+          data-follow-locked={String(props.scroll.chatFollowLocked)}
+          data-near-bottom={String(props.scroll.chatUserNearBottom)}
+        >
+          {props.size}
+        </output>
       </div>
     </div>
   );
@@ -102,6 +134,7 @@ async function mountPane(followEnd = false) {
     client: null,
   });
   pane = createPaneTestHost("test-transcript-geometry-pane", GeometryPane);
+  Object.assign(pane, { render: pane.renderGeometry.bind(pane) });
   pane.initialize(fixture.context, followEnd);
   pane.style.cssText = "display: block; width: 800px";
   document.body.append(pane.element);
@@ -167,6 +200,42 @@ it("commits each settled pane width with its new transcript rect in exactly one 
   console.info(`Settled width render counts: ${counts.join(", ")}`);
 });
 
+it("publishes reader policy and the tail indicator through the pane state", async () => {
+  const { host } = await mountPane();
+  const state = host.scrollState;
+  const updates = vi.spyOn(host, "render");
+  const scroll = (scrollTop: number) => {
+    const event = new Event("scroll");
+    Object.defineProperty(event, "currentTarget", {
+      value: { scrollHeight: 2000, clientHeight: 400, scrollTop },
+    });
+    handleChatScroll(state, event);
+  };
+  expect(state.chatReadingHistory).toBe(true);
+  scroll(1600);
+  await settleLayout();
+  expect(host.querySelector("output")?.dataset).toMatchObject({
+    readingHistory: "false",
+    newMessagesBelow: "false",
+    followLocked: "false",
+    nearBottom: "true",
+  });
+  expect(updates).not.toHaveBeenCalled();
+
+  updates.mockClear();
+  state.chatLastScrollTop = 600;
+  lockChatScroll(state);
+  scroll(500);
+  await settleLayout();
+  expect(host.querySelector("output")?.dataset).toMatchObject({
+    readingHistory: "true",
+    newMessagesBelow: "true",
+    followLocked: "true",
+    nearBottom: "false",
+  });
+  expect(updates).not.toHaveBeenCalled();
+});
+
 it.each(["pending", "committed"] as const)(
   "commits a non-sync measurement before paint with a %s pane update",
   async (phase) => {
@@ -178,13 +247,15 @@ it.each(["pending", "committed"] as const)(
     const frame = requestAnimationFrame(paint);
     const measure = () => virtualizer.resizeItem(0, 180);
     if (phase === "committed") {
-      const commit = host.commitRender.bind(host);
-      vi.spyOn(host, "commitRender").mockImplementationOnce(() => {
+      const commit = host.chatState.commitRender.bind(host.chatState);
+      vi.spyOn(host.chatState, "commitRender").mockImplementationOnce(() => {
         commit();
         measure();
       });
     }
-    host.requestUpdate();
+    host.style.width = "780px";
+    session.syncViewportGeometry();
+    notification.mockClear();
     if (phase === "pending") {
       measure();
     }
@@ -225,11 +296,10 @@ it.each([
       const rect = { width: Math.round(width), height: Math.round(height) };
       expect(session["virtualizer"].scrollRect).toEqual(rect);
       await host.updateComplete;
-      const requests = vi.spyOn(host, "requestUpdate");
+      expect(updates).toHaveBeenCalledTimes(1);
       await settleLayout();
       expect(observed).toEqual([{ width, height }]);
       expect(session["virtualizer"].scrollRect).toEqual(rect);
-      expect(requests).not.toHaveBeenCalled();
       expect(updates).toHaveBeenCalledTimes(1);
     } finally {
       observer.disconnect();

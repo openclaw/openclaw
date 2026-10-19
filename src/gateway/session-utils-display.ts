@@ -1,8 +1,15 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  SESSION_DASHBOARD_ROW_FIELDS,
+  SESSION_ROW_DETAIL_FIELDS,
+  SESSION_SIDEBAR_ROW_FIELDS,
+} from "../../packages/gateway-protocol/src/session-row-fields.js";
+import {
   buildSubagentSessionListReadIndex,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
+  isSubagentRunLive,
+  isSubagentRunQueued,
   resolveSubagentSessionStatus,
 } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
@@ -106,8 +113,7 @@ export function projectGatewaySessionRunState(params: {
   const subagentOwner =
     normalizeOptionalString(subagentRun?.controllerSessionKey) ||
     normalizeOptionalString(subagentRun?.requesterSessionKey);
-  const liveSubagentRunActive =
-    subagentRuns.isDisplayLiveRun(subagentRun) || subagentRuns.isDisplayQueuedRun(subagentRun);
+  const liveSubagentRunActive = isSubagentRunLive(subagentRun) || isSubagentRunQueued(subagentRun);
   // Follow-up turns retain the child session while owning a different run from its original spawn.
   const hasActiveSubagentRun =
     liveSubagentRunActive ||
@@ -218,4 +224,26 @@ export function projectGatewaySessionActiveRun(
     hasActiveRun: active?.active,
     status: active?.active ? (active.status ?? "running") : status,
   };
+}
+
+/** Shape the wire row after recipient-specific fields have been prepared. */
+export function applyGatewaySessionRowMode(
+  row: GatewaySessionRow,
+  rowMode: GatewaySessionRow["rowMode"],
+): void {
+  if (rowMode === "dashboard" || rowMode === "sidebar") {
+    const fields =
+      rowMode === "sidebar" ? SESSION_SIDEBAR_ROW_FIELDS : SESSION_DASHBOARD_ROW_FIELDS;
+    for (const field of Object.keys(row)) {
+      if (!fields.has(field)) {
+        Reflect.deleteProperty(row, field);
+      }
+    }
+    row.rowMode = rowMode;
+  } else if (rowMode === "compact") {
+    for (const field of SESSION_ROW_DETAIL_FIELDS) {
+      delete row[field];
+    }
+    row.rowMode = "compact";
+  }
 }

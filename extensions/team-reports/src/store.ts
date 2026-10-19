@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { resolveDatabaseEngineInput } from "openclaw/plugin-sdk/database-engine-runtime";
 import type { SqliteWorkerStore } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type { TeamReportsOperations } from "./store-contract.js";
@@ -102,7 +101,6 @@ export class TeamReportsStore {
 }
 
 export async function createTeamReportsStore(options: {
-  config?: Parameters<typeof resolveDatabaseEngineInput>[0];
   workerModuleUrl: URL;
   stateDir?: string;
   dbPath?: string;
@@ -115,9 +113,9 @@ export async function createTeamReportsStore(options: {
       "team-reports",
       "team-reports.sqlite",
     );
-  const { openEngineWorkerStore, resolveDatabaseEngineInput, runEngineStoreOperation } =
+  const { openEngineWorkerStore, getDatabaseEngineInput, runEngineStoreOperation } =
     await import("openclaw/plugin-sdk/database-engine-runtime");
-  const input = await resolveDatabaseEngineInput(options.config ?? {});
+  const input = getDatabaseEngineInput("team-reports");
   const worker = await openEngineWorkerStore<TeamReportsOperations>(
     {
       moduleUrl: options.workerModuleUrl,

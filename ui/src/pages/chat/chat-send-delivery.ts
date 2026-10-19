@@ -1,4 +1,3 @@
-import { readAgentRuntimeRestrictionErrorDetails } from "../../../../packages/gateway-protocol/src/index.js";
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
@@ -9,6 +8,7 @@ import {
 } from "../../lib/chat/outbox-store-codec.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { chatOutboxDeliveryKey, storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
+import { isAgentRuntimeRestrictionErrorDetails } from "../../lib/protocol-validators.generated/session-input.js";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { discardChatAttachmentDataUrls } from "./attachment-payload-store.ts";
@@ -56,7 +56,6 @@ import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
-import { controlUiNowMs } from "./performance.ts";
 import {
   adoptStartedChatRun,
   hasDirectSessionRun,
@@ -231,7 +230,7 @@ async function sendPreparedChatMessage(
   const requestConnectionIsCurrent = captureChatConnectionOwner(host);
   const runId = prepared.sendRunId ?? generateUUID();
   const startedAt = Date.now();
-  const requestStartedAtMs = controlUiNowMs();
+  const requestStartedAtMs = performance.now();
   const sendingItem = updateQueuedSendItem(host, storageMode, id, (item) => ({
     ...item,
     sendAttempts: (item.sendAttempts ?? 0) + 1,
@@ -485,8 +484,8 @@ async function sendPreparedChatMessage(
       );
     }
     const restriction =
-      err instanceof GatewayRequestError
-        ? readAgentRuntimeRestrictionErrorDetails(err.details)
+      err instanceof GatewayRequestError && isAgentRuntimeRestrictionErrorDetails(err.details)
+        ? err.details
         : undefined;
     if (restriction) {
       const error = formatConnectError(err);

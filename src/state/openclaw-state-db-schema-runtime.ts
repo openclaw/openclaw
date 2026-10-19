@@ -1,6 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
+import { prepareClientCredentialMigration } from "../infra/client-credential-migration.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
+import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import {
   hasNonStrictSqliteTables,
@@ -28,6 +30,7 @@ import {
 import type { StateDatabaseInitialization } from "./openclaw-state-db-initialization.js";
 import { assertStateDatabaseIntegrityOnce } from "./openclaw-state-db-integrity-admission.js";
 import {
+  assertMigratedStateTableIntegrity,
   assertOpenClawStateDatabaseForMaintenance,
   executeCanonicalStateSchema,
   migrateBoundedStateSchema,
@@ -65,6 +68,7 @@ import { describeAgentPathMigration, warnAgentPathMigration } from "./openclaw-s
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { resolveSchemaMigrationIntegrityCheck } from "./schema-migration-backup-scope.js";
 
 const stateDbLog = createSubsystemLogger("state/db");
 
@@ -113,13 +117,24 @@ export function ensureOpenClawStateRuntimeSchema(
           return [];
         }
         const previousVersion = readStateSchemaContentVersion(db);
+        if (previousVersion === 0 && !isUninitializedNativeStartupDatabase(db)) {
+          throw new Error(
+            "Unrecognized native bootstrap database; preserve it and run openclaw doctor --fix.",
+          );
+        }
+        if (previousVersion > 0) {
+          // Doctor-owned legacy repairs must keep their diagnostic before credential extraction.
+          assertCanonicalStateSchemaShape(db, pathname);
+        }
+        prepareClientCredentialMigration(db, { path: pathname, env, fromVersion: previousVersion });
         const schema = getAdmittedSqliteSchemaFacts(db);
         if (previousVersion === 0 && schema?.tables.size === 0 && schema.views.size === 0) {
           // The admitted empty catalog has no history to migrate or indexes to repair.
           createStateConfigMachineTable(db);
           executeCanonicalStateSchema(db, {
             includeVersionLazyAdditiveTables: true,
-            includeAgentDeletionJournal: initialization.kind === "fresh",
+            includeAgentDeletionJournal:
+              initialization.kind === "fresh" || initialization.nativeBootstrapEligible === true,
           });
           writeCurrentStateSchemaMetadata(db, now);
           runtimeReady = true;
@@ -147,11 +162,21 @@ export function ensureOpenClawStateRuntimeSchema(
         }
 
         openClawStateMigrationAssertions.get(previousVersion)?.(db, { pathname });
-        assertStateDatabaseIntegrityOnce(db, pathname);
+        const migrationIntegrity = resolveSchemaMigrationIntegrityCheck({
+          kind: "state",
+          foundVersion: previousVersion,
+          supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+        });
+        if (migrationIntegrity.check === "quick") {
+          assertSqliteIntegrity(db, pathname, migrationIntegrity);
+        } else {
+          assertStateDatabaseIntegrityOnce(db, pathname);
+        }
         const boundedChanges = migrateBoundedStateSchema(db, previousVersion);
         if (boundedChanges) {
           writeCurrentStateSchemaMetadata(db, now);
           assertCurrentStateRuntimeSchema(db, pathname);
+          assertMigratedStateTableIntegrity(db, pathname, previousVersion);
           runtimeReady = true;
           return boundedChanges;
         }
@@ -159,7 +184,8 @@ export function ensureOpenClawStateRuntimeSchema(
         const includeAgentDeletionJournal =
           tableExists(db, "agent_deletion_journal") ||
           hasPreJournalStateSchema(db) ||
-          (initialization.kind === "fresh" && isUninitializedNativeStartupDatabase(db));
+          ((initialization.kind === "fresh" || initialization.nativeBootstrapEligible === true) &&
+            isUninitializedNativeStartupDatabase(db));
         // Older schemas still need atomic content transforms before retiring their columns.
         dropLegacyStateTables(db);
         const changes = retirements.runRetiredStateTableMigrations(db, previousVersion);
@@ -217,6 +243,7 @@ export function ensureOpenClawStateRuntimeSchema(
         });
         writeCurrentStateSchemaMetadata(db, now);
         assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+        assertMigratedStateTableIntegrity(db, pathname, previousVersion, true);
         runtimeReady = true;
         warnAgentPathMigration(stateDbLog, pathMigration, pathname);
         return changes;

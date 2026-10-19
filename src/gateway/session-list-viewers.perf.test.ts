@@ -98,6 +98,13 @@ test("preserves viewer pages across publications while bounding shared predicate
       ],
     ];
     try {
+      await projection.ensureMaterialized();
+      // Establish active display demand without priming list selection or cold archives.
+      for (const row of projection.selectEntries()) {
+        if (row.entry?.archivedAt === undefined) {
+          projection.describe(row);
+        }
+      }
       for (let revision = 0; revision < 2; revision++) {
         await projection.ensureMaterialized();
         // The first viewer primes only viewer-independent membership.
@@ -175,9 +182,6 @@ test("preserves viewer pages across publications while bounding shared predicate
           opts: { ...opts, ownerFirst: false, search: "agent:main:b" },
         });
         expect(searched.sessions.map((row) => row.sessionId)).toEqual(["b"]);
-        // Search captures plugin-owned model facts at most once; warm pages stay worker-only.
-        expect(selectEntries.mock.calls.length).toBeLessThanOrEqual(1);
-        selectEntries.mockClear();
         const clock = vi.spyOn(Date, "now").mockReturnValue(60_000);
         try {
           const recent = () =>

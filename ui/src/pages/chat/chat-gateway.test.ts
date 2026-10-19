@@ -99,8 +99,11 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatSending: false,
     chatStream: null,
     chatStreamStartedAt: null,
+    chatStreamSegments: [],
+    chatToolMessages: [],
+    toolStreamById: new Map(),
+    toolStreamOrder: [],
     chatRunStartup: null,
-    chatThinkingLevel: null,
     chatVerboseLevel: null,
     client: null,
     connected: true,
@@ -1074,6 +1077,70 @@ describe("handleChatGatewayEvent", () => {
     verify?.(state);
   });
 
+  it.each([
+    [
+      "openai",
+      429,
+      "subscription_sharing_workplace_individual_usage_limit_exceeded",
+      "chatgpt_business_usage_limit",
+    ],
+    ["openai", 429, "subscription_sharing_usage_limit_exceeded", "chatgpt_consumer_usage_limit"],
+    ["openai", 429, "rate_limit_exceeded", undefined],
+    ["openai", 403, "subscription_sharing_workplace_individual_usage_limit_exceeded", undefined],
+    ["openai", 403, "subscription_sharing_usage_limit_exceeded", undefined],
+    ["other", 429, "subscription_sharing_workplace_individual_usage_limit_exceeded", undefined],
+    ["other", 429, "subscription_sharing_usage_limit_exceeded", undefined],
+  ])(
+    "classifies ChatGPT sharing limits only from provider facts (%s, %s, %s)",
+    (provider, httpStatus, providerErrorCode, kind) => {
+      const state = createState({ chatRunId: "run-1" });
+      receive(state, "error", {
+        errorMessage: "Usage limit reached",
+        errorDetail: { provider, httpStatus, providerErrorCode },
+      });
+      expect(state.chatRunError?.kind).toBe(kind);
+      expect(state.chatRunError?.runId).toBe("run-1");
+    },
+  );
+
+  it.each([
+    [
+      "subscription_sharing_workplace_individual_usage_limit_exceeded",
+      "chatgpt_business_usage_limit",
+    ],
+    ["subscription_sharing_usage_limit_exceeded", "chatgpt_consumer_usage_limit"],
+  ])(
+    "adopts %s recovery after history publishes the same terminal summary",
+    (providerErrorCode, kind) => {
+      const summary = "Usage limit reached";
+      const state = createState({
+        chatRunId: "run-1",
+        chatRunError: { runId: "run-1", summary },
+      });
+      const scope = { sessionKey: state.sessionKey };
+      publishChatSessionProjection(
+        state,
+        reduceSessionProjection(getChatSessionProjection(state, scope), {
+          type: "runTerminal",
+          runId: "run-1",
+          status: "error",
+          errorMessage: summary,
+          scope,
+        }),
+      );
+      receive(state, "error", {
+        errorMessage: summary,
+        errorDetail: {
+          provider: "openai",
+          httpStatus: 429,
+          providerErrorCode,
+        },
+      });
+      expect(state.chatRunError?.kind).toBe(kind);
+      expect(state.chatRunError?.runId).toBe("run-1");
+    },
+  );
+
   it("adds bounded OAuth facts to live errors without changing the summary", () => {
     const summary =
       "⚠️ Your refresh token has already been used to generate a new access token. Please try signing in again.";
@@ -1348,7 +1415,6 @@ describe("loadChatHistory filtering", () => {
     });
     await loadChatHistory(state);
     expect(state.chatMessages).toEqual(visible);
-    expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatVerboseLevel).toBe("full");
     expect(state.chatLoading).toBe(false);
   });
@@ -1379,7 +1445,13 @@ describe("loadChatHistory filtering", () => {
           type: "hello-ok",
           protocol: 4,
           auth: { role: "operator", scopes: [] },
-          snapshot: { sessionDefaults: { defaultAgentId: "ops" } },
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "ops",
+              mainKey: "main",
+              mainSessionKey: "agent:ops:main",
+            },
+          },
         },
       },
     );
@@ -1726,14 +1798,12 @@ describe("loadChatHistory retry handling", () => {
     const request = vi.fn().mockRejectedValue(new GatewayRequestError(scopeError));
     const state = createHistoryState(request, {
       chatMessages: [textMessage("assistant", "old")],
-      chatThinkingLevel: "high",
       chatVerboseLevel: "full",
     });
 
     await loadChatHistory(state);
 
     expect(state.chatMessages).toStrictEqual([]);
-    expect(state.chatThinkingLevel).toBeNull();
     expect(state.chatVerboseLevel).toBeNull();
     expect(getChatHistoryLoadState(state)).toMatchObject({
       phase: "failed",
@@ -1749,10 +1819,14 @@ describe("loadChatHistory retry handling", () => {
   it("refreshes history for a new pending source and coalesces unchanged receipt queries", async () => {
     const staleHistory = createDeferred<HistoryResult>();
     const currentHistory = createDeferred<HistoryResult>();
+    const currentHistoryStarted = createDeferred();
     const request = vi
       .fn()
       .mockImplementationOnce(() => staleHistory.promise)
-      .mockImplementationOnce(() => currentHistory.promise);
+      .mockImplementationOnce(() => {
+        currentHistoryStarted.resolve();
+        return currentHistory.promise;
+      });
     const state = createHistoryState(request);
 
     const firstLoad = loadChatHistory(state);
@@ -1768,19 +1842,20 @@ describe("loadChatHistory retry handling", () => {
     const thirdLoad = loadChatHistory(state);
 
     expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
-      ["chat.history", { sessionKey: "main", ...historyBudget }],
+      ["chat.history", { sessionKey: "main", ...historyBudget, knownState: {} }],
     ]);
     expect(state.chatMessages).toEqual([pending]);
 
     staleHistory.resolve(createAssistantHistory("stale history"));
-    await firstLoad;
+    await currentHistoryStarted.promise;
     expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
-      ["chat.history", { sessionKey: "main", ...historyBudget }],
+      ["chat.history", { sessionKey: "main", ...historyBudget, knownState: {} }],
       [
         "chat.history",
         {
           sessionKey: "main",
           ...historyBudget,
+          knownState: {},
           inputRunIds: ["same-session-pending-run"],
         },
       ],
@@ -1793,7 +1868,7 @@ describe("loadChatHistory retry handling", () => {
       seq: 1,
     });
     currentHistory.resolve({ messages: [persisted] });
-    await Promise.all([secondLoad, thirdLoad]);
+    await Promise.all([firstLoad, secondLoad, thirdLoad]);
 
     expect(request).toHaveBeenCalledTimes(2);
     expect(state.chatMessages).toEqual([persisted, pending]);
@@ -1826,14 +1901,12 @@ describe("loadChatHistory retry handling", () => {
     await staleLoad;
 
     expect(state.chatMessages).toEqual([visibleMessage]);
-    expect(state.chatThinkingLevel).toBeNull();
     expect(state.chatLoading).toBe(true);
 
     freshRequest.resolve(createAssistantHistory("fresh history", { thinkingLevel: "low" }));
     await freshLoad;
 
     expect(state.chatMessages).toEqual([textMessage("assistant", "fresh history")]);
-    expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
   });
 
@@ -1882,7 +1955,6 @@ describe("loadChatHistory retry handling", () => {
 
     expect(state.chatLoading).toBe(false);
     expect(state.chatMessages).toEqual([textMessage("assistant", "visible old")]);
-    expect(state.chatThinkingLevel).toBeNull();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

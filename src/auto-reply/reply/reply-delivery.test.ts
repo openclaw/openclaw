@@ -54,7 +54,6 @@ function buildFinalPayloads(
 ) {
   return buildReplyPayloads({
     isHeartbeat: false,
-    didLogHeartbeatStrip: false,
     blockStreamingEnabled: true,
     blockReplyPipeline: null,
     replyToMode: "off",
@@ -299,7 +298,6 @@ describe("createBlockReplyDeliveryHandler", () => {
   it.each<{
     name: string;
     payload: ReplyPayload;
-    extractMediaDirectives?: boolean;
     text?: string;
     mediaUrl?: string;
     mediaUrls?: string[];
@@ -317,21 +315,14 @@ describe("createBlockReplyDeliveryHandler", () => {
       mediaUrl: "./report.pdf",
       mediaUrls: [],
     },
-    {
-      name: "disabled parsing",
-      payload: { text: "Result\nMEDIA: ./image.png" },
-      extractMediaDirectives: false,
-      text: "Result\nMEDIA: ./image.png",
-    },
     { name: "plain reply", payload: { text: "plain reply" }, text: "plain reply" },
   ])(
     "normalizes $name without an explicit threading opt-out",
-    ({ payload, extractMediaDirectives, text, mediaUrl, mediaUrls }) => {
+    ({ payload, text, mediaUrl, mediaUrls }) => {
       const normalized = normalizeReplyPayloadDirectives({
         payload,
         trimLeadingWhitespace: true,
         parseMode: "auto",
-        extractMediaDirectives,
       });
       expect(normalized.payload.text).toBe(text);
       expect(normalized.payload.mediaUrl).toBe(mediaUrl);

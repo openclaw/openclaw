@@ -1,7 +1,8 @@
 import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
 import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog-paging";
 import { z } from "zod";
-import type { CodexThreadItem, CodexThreadTurnsListResponse } from "./app-server/protocol.js";
+import { jsonObjectSchema } from "./app-server/json-schema.js";
+import type { CodexThreadItem } from "./app-server/protocol.js";
 import {
   CatalogParamsError,
   MAX_TRANSCRIPT_PAGE_BYTES,
@@ -15,7 +16,7 @@ type TranscriptRequest = { threadId: string; cursor?: string; limit: number };
 type TranscriptPage = { items: SessionCatalogTranscriptItem[]; nextCursor?: string };
 type ReadTurns = (
   params: TranscriptRequest & { sortDirection: "desc"; itemsView: "full" },
-) => Promise<CodexThreadTurnsListResponse>;
+) => Promise<unknown>;
 const TURN_ITEM_CURSOR_PREFIX = "turn-item:";
 const transcriptPageSchema = z.strictObject({
   items: z.array(
@@ -23,7 +24,7 @@ const transcriptPageSchema = z.strictObject({
       id: z.string(),
       type: z.enum(["userMessage", "agentMessage", "reasoning", "toolCall", "toolResult", "other"]),
       text: z.string().optional(),
-      raw: z.record(z.string(), z.json()).optional(),
+      raw: jsonObjectSchema.optional(),
       truncated: z.boolean().optional(),
     }),
   ),

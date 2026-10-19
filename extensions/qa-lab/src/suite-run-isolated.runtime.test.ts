@@ -14,6 +14,49 @@ import * as suite from "./suite.js";
 vi.mock("./lab-server.js", () => ({ startQaLabServer: vi.fn() }));
 
 describe("implicit QA suite isolated runtimes", () => {
+  it.each([undefined, false])(
+    "publishes isolated Control UI only when enabled (override=%s)",
+    async (controlUiEnabled) => {
+      const context = createCleanupTestContext();
+      const scenarios = ["first", "second"].map((id) =>
+        makeQaSuiteTestScenario(id, { surface: "control-ui" }),
+      );
+      const runScenario = vi
+        .spyOn(suite, "runQaSuiteScenarioDefinitionForRuntime")
+        .mockImplementation(async (_env, scenario) => ({
+          name: scenario.title,
+          status: "pass",
+          steps: [],
+        }));
+
+      const { result } = await runQaSuite({
+        repoRoot: context.repoRoot,
+        outputDir: "output",
+        providerMode: "mock-openai",
+        scenarioIds: scenarios.map(({ id }) => id),
+        scenarioDefinitions: scenarios,
+        concurrency: 2,
+        workerStartStaggerMs: 0,
+        controlUiEnabled,
+        startLab: async () => createCleanupTestLab(),
+      });
+
+      expect(result.scenarios.map(({ status }) => status)).toEqual(["pass", "pass"]);
+      expect(mocks.startQaGatewayChild).toHaveBeenCalledTimes(2);
+      expect(runScenario).toHaveBeenCalledTimes(2);
+      for (const [env] of runScenario.mock.calls) {
+        if (controlUiEnabled === false) {
+          expect(env.lab.setControlUi).not.toHaveBeenCalled();
+        } else {
+          expect(env.lab.setControlUi).toHaveBeenCalledWith({
+            controlUiProxyTarget: "http://127.0.0.1:18789",
+            controlUiProxyToken: "qa-test-token",
+          });
+        }
+      }
+    },
+  );
+
   it.each([{ forcedRuntime: undefined, expectedPins: ["codex", "openclaw", undefined] }] as const)(
     "preserves scenario runtimes with global override $forcedRuntime",
     async ({ forcedRuntime, expectedPins }) => {

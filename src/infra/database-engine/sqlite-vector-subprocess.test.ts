@@ -1,14 +1,55 @@
 import * as childProcess from "node:child_process";
 import { once } from "node:events";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { ensureSqliteLibrarySelected } from "../bun-sqlite-library.js";
+import { readChildRuntimeViability } from "../child-runtime-viability.js";
 import { runVectorKnnInSubprocess } from "./sqlite-vector-subprocess.js";
+import { matchesVectorRow } from "./vector-contract.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return { ...actual, spawn: vi.fn(actual.spawn) };
 });
+
+it.skipIf(process.platform === "win32")(
+  "classifies a replaced runtime that cannot be executed before vector worker startup",
+  async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-vector-runtime-"));
+    const executable = process.execPath;
+    try {
+      process.execPath = path.join(directory, "node");
+      await fs.writeFile(process.execPath, "#!/bin/sh\nexit 0\n", { mode: 0o600 });
+      const run = () =>
+        runVectorKnnInSubprocess({
+          databasePath: "fixture:runtime-permission",
+          request: {
+            query: { sql: "", parameters: [] },
+            scopeCount: { sql: "", parameters: [] },
+            vectorTable: "vectors",
+            limit: 1,
+            candidateParameter: 0,
+            rowShape: {},
+          },
+          isRow: (_row): _row is never => false,
+        });
+      await expect(run()).rejects.toMatchObject({
+        code: "NODE_RUNTIME_UNAVAILABLE",
+        message: expect.stringContaining("Restart the Gateway."),
+      });
+      expect(readChildRuntimeViability().available).toBe(false);
+      const launches = vi.mocked(childProcess.spawn).mock.calls.length;
+      await expect(run()).rejects.toMatchObject({ code: "NODE_RUNTIME_UNAVAILABLE" });
+      expect(vi.mocked(childProcess.spawn)).toHaveBeenCalledTimes(launches);
+    } finally {
+      process.execPath = executable;
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  },
+);
 vi.mock("../bun-sqlite-library.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../bun-sqlite-library.js")>();
   return { ...actual, ensureSqliteLibrarySelected: vi.fn(actual.ensureSqliteLibrarySelected) };
@@ -65,5 +106,43 @@ it("forwards a discovered SQLite library through stdin without inheriting its en
     await closed;
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+  }
+});
+
+it("budgets the page cache on the child's per-request read-only connection", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-vector-knn-"));
+  const databasePath = path.join(directory, "memory.sqlite");
+  await fs.writeFile(databasePath, "");
+  const rowShape = { cache_size: "number" } as const;
+  try {
+    // The child runs the plan's statement verbatim, so the statement can read back the
+    // pragma that connection applied before the KNN query.
+    await expect(
+      runVectorKnnInSubprocess({
+        databasePath,
+        request: {
+          query: { sql: "SELECT cache_size FROM pragma_cache_size WHERE ? > 0", parameters: [0] },
+          scopeCount: { sql: "SELECT 0 AS count", parameters: [] },
+          vectorTable: "memory_index_chunks_vec",
+          limit: 1,
+          candidateParameter: 0,
+          rowShape,
+        },
+        isRow: (row): row is { cache_size: number } => matchesVectorRow(row, rowShape),
+      }),
+    ).resolves.toEqual({ rows: [{ cache_size: -65536 }], fallbackScanRequired: false });
+  } finally {
+    for (const result of vi.mocked(childProcess.spawn).mock.results) {
+      if (result.type !== "return") {
+        continue;
+      }
+      const child = result.value;
+      if (child.exitCode === null && child.signalCode === null) {
+        const closed = once(child, "close");
+        child.kill("SIGKILL");
+        await closed;
+      }
+    }
+    await fs.rm(directory, { force: true, recursive: true });
   }
 });

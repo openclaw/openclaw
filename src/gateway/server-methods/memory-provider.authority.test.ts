@@ -1,9 +1,7 @@
-// Gateway dispatch of provider-neutral memory reads: method scopes, caller kinds,
-// and request currency, through the real handlers and provider acquisition.
+import { dirname } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MemorySearchResult } from "../../memory-host-sdk/host/types.js";
-import type { MemoryProviderHandle } from "../../plugins/memory-provider-types.js";
 import type {
   MemoryPluginRuntime,
   MemoryProviderRuntime,
@@ -11,7 +9,14 @@ import type {
 } from "../../plugins/registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
+import { resolveBundledPluginPublicModulePath } from "../../test-utils/bundled-plugin-public-surface.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import {
+  createMemoryOperatorClient as cliClient,
+  createMemoryProvider,
+} from "./memory-provider.test-support.js";
+import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type Client = NonNullable<Parameters<typeof handleGatewayRequest>[0]["client"]>;
@@ -20,42 +25,18 @@ const providerConfig: OpenClawConfig = { agents: { entries: { main: {} } } };
 let config = providerConfig;
 const reference = { providerId: "records", id: "claim:42" };
 
-function createProvider() {
-  return {
-    capabilities: { sources: ["memory"], pagination: false, candidates: [], projectFilter: false },
-    search: vi.fn(async () => ({ hits: [{ reference, excerpt: "A record" }] })),
-    get: vi.fn(async () => ({ status: "ok" as const, reference, text: "Record body" })),
-    health: vi.fn(async () => ({ status: "ready" as const })),
-    close: vi.fn(async () => {}),
-  } satisfies MemoryProviderHandle;
-}
-
-// A token-authenticated CLI connection: scoped operator, no user profile or run authority.
-function cliClient(scopes: string[] = ["operator.read"]): Client {
-  return {
-    connId: "cli-connection",
-    connect: {
-      role: "operator",
-      scopes,
-      client: { id: "cli", version: "test", platform: "node", mode: "cli" },
-      minProtocol: 1,
-      maxProtocol: 1,
-    },
-  } as Client;
-}
-
-let provider: ReturnType<typeof createProvider>;
+let provider: ReturnType<typeof createMemoryProvider>;
 let open: ReturnType<typeof vi.fn<MemoryProviderRuntime["open"]>>;
 
 async function call(
   method: string,
   params: Record<string, unknown>,
-  client: Client,
+  client: Client = cliClient(),
   extra: Partial<Pick<GatewayRequestHandlerOptions, "signal" | "hasCurrentClientAuthority">> = {},
 ) {
   const respond = vi.fn();
   await handleGatewayRequest({
-    req: { type: "req", id: `${method}-request`, method, params },
+    req: { type: "req", id: `${method}-request`, method, params: { agentId: "main", ...params } },
     respond,
     client,
     isWebchatConnect: () => false,
@@ -68,9 +49,11 @@ async function call(
   return respond;
 }
 
+const searchParams = { version: 2, query: "x" };
+
 beforeEach(() => {
   config = providerConfig;
-  provider = createProvider();
+  provider = createMemoryProvider(reference);
   open = vi.fn<MemoryProviderRuntime["open"]>(async () => ({ provider }));
   const registry = createEmptyPluginRegistry();
   registry.memoryCapabilities.push({
@@ -80,62 +63,38 @@ beforeEach(() => {
   setActivePluginRegistry(registry);
 });
 
-afterEach(() => {
-  resetPluginRuntimeStateForTest();
-});
+afterEach(resetPluginRuntimeStateForTest);
 
 describe("memory provider reads through Gateway dispatch", () => {
   it("serves v2 search, get, and status to a token-authenticated operator.read client", async () => {
     const client = cliClient();
-    const search = await call("memory.search", { version: 2, agentId: "main", query: "x" }, client);
-    expect(search).toHaveBeenCalledWith(
-      true,
+    const search = await call("memory.search", searchParams, client);
+    expectRpcResult(
+      search,
       expect.objectContaining({ version: 2, providerId: "records", hits: [expect.anything()] }),
-      undefined,
     );
-    const get = await call("memory.get", { agentId: "main", reference }, client);
-    expect(get).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ status: "ok", text: "Record body" }),
-      undefined,
-    );
-    const status = await call("memory.status", { agentId: "main" }, client);
-    expect(status).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ providerId: "records", status: "ready" }),
-      undefined,
-    );
-    expect(open).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: expect.objectContaining({
-          authority: { kind: "operator", scopes: ["operator.read"], connId: "cli-connection" },
-        }),
-      }),
-    );
+    const get = await call("memory.get", { reference }, client);
+    expectRpcResult(get, expect.objectContaining({ status: "ok", text: "Record body" }));
+    const status = await call("memory.status", {}, client);
+    expectRpcResult(status, expect.objectContaining({ providerId: "records", status: "ready" }));
+    expect(open.mock.calls[0]?.[0].context.authority).toEqual({
+      kind: "operator",
+      scopes: ["operator.read"],
+      connId: "cli-connection",
+    });
   });
 
-  it("refuses a client without operator.read before provider admission", async () => {
-    const respond = await call(
-      "memory.search",
-      { version: 2, agentId: "main", query: "x" },
-      cliClient([]),
-    );
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("operator.read") }),
-    );
-    expect(open).not.toHaveBeenCalled();
-  });
-
-  it("keeps agent-tool callers on their run's operator authority", async () => {
-    const client = { ...cliClient(), internal: { syntheticClient: true } } as Client;
-    const respond = await call("memory.status", { agentId: "main" }, client);
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("operator authority") }),
-    );
+  it.each([
+    { method: "memory.search", client: () => cliClient([]), message: "operator.read" },
+    {
+      method: "memory.status",
+      client: () => ({ ...cliClient(), internal: { syntheticClient: true } }) as Client,
+      message: "operator authority",
+    },
+  ])("refuses $method without $message", async ({ method, client, message }) => {
+    expectRpcError(await call(method, method === "memory.search" ? searchParams : {}, client()), {
+      message: expect.stringContaining(message),
+    });
     expect(open).not.toHaveBeenCalled();
   });
 
@@ -159,48 +118,29 @@ describe("memory provider reads through Gateway dispatch", () => {
         }
         return { provider };
       });
-      const respond = await call(
-        "memory.search",
-        { version: 2, agentId: "main", query: "x" },
-        client,
-        {
-          signal: request.signal,
-          hasCurrentClientAuthority: () => authorized,
-        },
-      );
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE" }),
-      );
+      const respond = await call("memory.search", searchParams, client, {
+        signal: request.signal,
+        hasCurrentClientAuthority: () => authorized,
+      });
+      expectRpcError(respond, { code: "UNAVAILABLE" });
       expect(provider.search).not.toHaveBeenCalled();
       expect(provider.close).toHaveBeenCalledOnce();
     },
   );
 });
 
-describe("unversioned memory.search during the provider-runtime transition", () => {
-  it.each([undefined, 1])(
-    "directs version %s to v2 when the memory owner registers only a provider runtime",
-    async (version) => {
-      const respond = await call(
-        "memory.search",
-        { agentId: "main", query: "x", ...(version === undefined ? {} : { version }) },
-        cliClient(),
-      );
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message:
-            'memory plugin "records" uses the provider runtime; retry memory.search with version: 2',
-        }),
-      );
-      expect(open).not.toHaveBeenCalled();
-    },
-  );
-});
+it.each([{}, { version: 1 }])(
+  "directs %j to v2 when the memory owner registers only a provider runtime",
+  async (version) => {
+    const respond = await call("memory.search", { query: "x", ...version });
+    expectRpcError(respond, {
+      code: "INVALID_REQUEST",
+      message:
+        'memory plugin "records" uses the provider runtime; retry memory.search with version: 2',
+    });
+    expect(open).not.toHaveBeenCalled();
+  },
+);
 
 describe("Memory Core legacy owner", () => {
   const sessionHit = (path: string): MemorySearchResult => ({
@@ -226,7 +166,6 @@ describe("Memory Core legacy owner", () => {
   };
 
   beforeEach(async () => {
-    // Memory Core's registered runtime owns session-hit authorization, unmodified.
     const { createMemoryRuntime } = await vi.importActual<{
       createMemoryRuntime: (host: {
         runInBackgroundContext: <T>(run: () => T) => T;
@@ -238,6 +177,18 @@ describe("Memory Core legacy owner", () => {
       tools: { sessions: { visibility: "agent" } },
     };
     const registry = createEmptyPluginRegistry();
+    const source = resolveBundledPluginPublicModulePath({
+      pluginId: "memory-core",
+      artifactBasename: "index.js",
+    });
+    registry.plugins.push(
+      createPluginRecord({
+        id: "memory-core",
+        origin: "bundled",
+        rootDir: dirname(source),
+        source,
+      }),
+    );
     registry.memoryCapabilities.push({
       pluginId: "memory-core",
       capability: {
@@ -252,13 +203,8 @@ describe("Memory Core legacy owner", () => {
   });
 
   it("keeps the selected agent's own session hits for an operator v2 search, as v1 returns them", async () => {
-    const respond = await call(
-      "memory.search",
-      { version: 2, agentId: "main", query: "x" },
-      cliClient(),
-    );
-    expect(respond).toHaveBeenCalledWith(
-      true,
+    expectRpcResult(
+      await call("memory.search", searchParams),
       expect.objectContaining({
         providerId: "memory-core",
         hits: [
@@ -266,16 +212,13 @@ describe("Memory Core legacy owner", () => {
           expect.objectContaining({ reference: expect.objectContaining({ id: "MEMORY.md" }) }),
         ],
       }),
-      undefined,
     );
   });
 
   it("keeps the unversioned memory.search response on the legacy manager", async () => {
-    const respond = await call("memory.search", { agentId: "main", query: "x" }, cliClient());
-    expect(respond).toHaveBeenCalledWith(
-      true,
+    expectRpcResult(
+      await call("memory.search", { query: "x" }),
       expect.objectContaining({ agentId: "main", provider: "none", results: hits }),
-      undefined,
     );
   });
 });

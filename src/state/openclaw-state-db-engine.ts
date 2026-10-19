@@ -1,5 +1,9 @@
+import type { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData } from "node:worker_threads";
-import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import {
+  getDatabaseEngineInput,
+  getDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
 import type { PostgresSchemaFragment, StoreSchema } from "../infra/database-engine/contract.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import {
@@ -29,6 +33,7 @@ import {
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
+import { withLegacyPublicationDraft } from "./openclaw-state-db-schema-v28-publication.js";
 import { admitStateSchemaFacts } from "./openclaw-state-db-schema-version.js";
 import { writeStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
 import { statePostgresRuntime as runtime } from "./postgres-schema.generated/runtime.js";
@@ -37,9 +42,9 @@ const recovery =
   "Use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.";
 
 export function stateEngineInput() {
-  const selected = getDatabaseEngineSelection()?.input;
+  const selected = getDatabaseEngineSelection();
   if (selected) {
-    return selected;
+    return getDatabaseEngineInput("state");
   }
   const connection: unknown =
     process.env.NODE_ENV === "test"
@@ -96,6 +101,7 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
   }
   if (fresh) {
     const now = Date.now();
+    // sqlite-allow-raw: PostgreSQL bootstrap publishes the matching state schema metadata.
     db.prepare(
       `INSERT INTO schema_meta
         (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
@@ -103,10 +109,10 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
     ).run(OPENCLAW_STATE_SCHEMA_VERSION, VERSION, now, now);
     writeStateSchemaContentVersion(db);
   }
-  const meta = db
+  const meta = db // sqlite-allow-raw: Schema admission verifies identity fields before ordinary store queries.
     .prepare("SELECT schema_version, role, agent_id FROM schema_meta WHERE meta_key = 'primary'")
     .get();
-  const content = db
+  const content = db // sqlite-allow-raw: Schema admission compares physical and content schema versions.
     .prepare(
       "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
     )
@@ -143,6 +149,30 @@ const statePostgresSchema = {
     };
   }),
 };
+// v28 owns the current publication columns and pre-cutover credential tables.
+const statePostgresSchemaV28 = {
+  ...statePostgresSchema,
+  postgres: `${runtime.eagerSql}\n${runtime.clientCredentialSource.sql}`,
+};
+const statePostgresSchemaV27 = {
+  postgres: withLegacyPublicationDraft(statePostgresSchemaV28.postgres),
+  postgresFragments: statePostgresSchemaV28.postgresFragments.map((fragment) => ({
+    ...fragment,
+    sql: withLegacyPublicationDraft(fragment.sql),
+  })),
+};
+// v24-v26 share a PostgreSQL catalog; preserve their exact index definitions for admission.
+const statePostgresSchemaV26 = {
+  ...statePostgresSchemaV27,
+  postgres:
+    statePostgresSchemaV27.postgres.replace(
+      /CREATE INDEX "idx_state_leases_owner"[^;]*;/u,
+      runtime.preWriteIndexesV27Sql.state_leases,
+    ) +
+    runtime.preWriteIndexesV27Sql.skill_usage +
+    runtime.preWriteIndexesV27Sql.acp_replay_events,
+  postgresFragments: statePostgresSchemaV27.postgresFragments,
+};
 
 export const stateEngineSchema: StoreSchema = {
   id: "state",
@@ -153,8 +183,64 @@ export const stateEngineSchema: StoreSchema = {
     {
       version: 25,
       sql: runtime.operatorRecoveryV25Sql,
-      fromSchema: statePostgresSchema,
+      fromSchema: statePostgresSchemaV26,
+      schema: statePostgresSchemaV26,
+    },
+    {
+      version: 26,
+      // WITHOUT ROWID only changes SQLite storage; PostgreSQL keeps the same catalog.
+      fromSchema: statePostgresSchemaV26,
+      schema: statePostgresSchemaV26,
+      sql: `UPDATE schema_meta
+        SET schema_version = 26,
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';
+        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+        VALUES ('state.schema.contentVersion', '26',
+          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
+        ON CONFLICT (state_key) DO UPDATE
+          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+    },
+    {
+      version: 27,
+      fromSchema: statePostgresSchemaV26,
+      schema: statePostgresSchemaV27,
+      sql: `${runtime.writeIndexesV27Sql}
+        UPDATE schema_meta
+        SET schema_version = 27,
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';
+        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+        VALUES ('state.schema.contentVersion', '27',
+          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
+        ON CONFLICT (state_key) DO UPDATE
+          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+    },
+    {
+      version: 28,
+      fromSchema: statePostgresSchemaV27,
+      schema: statePostgresSchemaV28,
+      sql: `ALTER TABLE IF EXISTS github_publication_requests ADD COLUMN draft bigint;
+        ALTER TABLE IF EXISTS github_personal_publication_requests ADD COLUMN draft bigint;
+        ALTER TABLE IF EXISTS github_repository_publication_requests ADD COLUMN draft bigint;
+        UPDATE schema_meta
+        SET schema_version = 28,
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';
+        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+        VALUES ('state.schema.contentVersion', '28',
+          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
+        ON CONFLICT (state_key) DO UPDATE
+          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+    },
+    {
+      version: 29,
+      fromSchema: statePostgresSchemaV28,
       schema: statePostgresSchema,
+      sql: runtime.clientCredentialV29Sql,
     },
   ],
 };
@@ -199,6 +285,7 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
     throw new Error("PostgreSQL state fragments require the owner's transaction");
   }
   invalidateLocalSqliteSchemaAdmissions(db);
+  // sqlite-allow-raw: The schema owner installs a verified fragment under its transaction.
   db.exec(fragment.sql);
   admitPostgresPhysicalFacts({
     anchor: db.anchor,
@@ -213,14 +300,25 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
   admitStatePostgres(db, false);
 }
 
-export function openStatePostgresReadConnection(pathname: string, expectedIdentity?: string) {
-  const input = stateEngineInput();
-  if (!input) {
+export function openExistingStatePostgresConnection(pathname: string, expectedIdentity?: string) {
+  if (!stateEngineInput()) {
     return undefined;
   }
   const anchor = openTrackedStateDatabase(pathname, { existingOnly: true, expectedIdentity });
+  return openExistingStatePostgresConnectionFromAnchor(anchor, pathname);
+}
+
+/** Consumes an anchor whose caller owns path admission, including updater read-only custody. */
+export function openExistingStatePostgresConnectionFromAnchor(
+  anchor: DatabaseSync,
+  pathname: string,
+) {
   let db: PostgresSqlConnection | undefined;
   try {
+    const input = stateEngineInput();
+    if (!input) {
+      throw new Error("PostgreSQL state inspection requires the configured state connection.");
+    }
     admitStateSchemaFacts(anchor, pathname);
     const selected = openEngineStore({
       anchor,
@@ -230,6 +328,7 @@ export function openStatePostgresReadConnection(pathname: string, expectedIdenti
       prepareAnchor: () => {},
       openSqlite: () => {},
       existingOnly: true,
+      reusePostgresConnection: true,
       existingVersion: true,
       admitPostgres: admitStatePostgres,
       closeOnFailure: (connection, error) => {
@@ -249,7 +348,7 @@ export function openStatePostgresReadConnection(pathname: string, expectedIdenti
             db: selected,
             path: pathname,
           }),
-          "PostgreSQL state reader cleanup failed.",
+          "PostgreSQL state connection cleanup failed.",
         );
         return !selected.isOpen && !anchor.isOpen;
       },
@@ -262,7 +361,7 @@ export function openStatePostgresReadConnection(pathname: string, expectedIdenti
     if (errors.length) {
       throw createSqliteLifecycleAggregateError(
         [error, ...errors],
-        "PostgreSQL state reader acquisition and cleanup failed.",
+        "PostgreSQL state connection acquisition and cleanup failed.",
         error,
       );
     }

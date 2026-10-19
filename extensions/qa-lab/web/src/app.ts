@@ -1,6 +1,7 @@
 import { formatErrorMessage as formatSharedErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaBusStateSnapshot } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selection.js";
+import { deleteCaptureData } from "./capture-actions.js";
 import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
 import { getJson, postJson, QaLabHttpError } from "./http.js";
 import { conversationSelectionKey, findConversationBySelectionKey } from "./ui-conversation-key.js";
@@ -232,7 +233,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
     error: null,
   };
 
-  /* Track whether user has scrolled up in the chat */
   let chatScrollLocked = true;
   let previousMessageCount = 0;
 
@@ -426,6 +426,9 @@ export async function createQaLabApp(root: HTMLDivElement) {
   }
 
   async function runBusyAction(action: () => Promise<void>, onError?: (error: unknown) => void) {
+    if (state.busy) {
+      return;
+    }
     state.busy = true;
     render();
     try {
@@ -709,27 +712,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
     render();
   }
 
-  async function deleteCaptureData(sessionIds?: string[]) {
-    if (sessionIds?.length === 0) {
-      return;
-    }
-    const confirmed = window.confirm(
-      sessionIds
-        ? `Delete ${sessionIds.length} selected capture session${sessionIds.length === 1 ? "" : "s"}?`
-        : "Purge all captured sessions, events, and blobs?",
-    );
-    if (!confirmed) {
-      return;
-    }
-    await postJson(
-      sessionIds ? "/api/capture/delete-sessions" : "/api/capture/purge",
-      sessionIds ? { sessionIds } : {},
-    );
-    state.selectedCaptureSessionIds = [];
-    state.selectedCaptureEventKey = null;
-    await refresh();
-  }
-
   function bindEvents() {
     const bindClicks = (selector: string, onClick: (node: HTMLElement) => void) => {
       root.querySelectorAll<HTMLElement>(selector).forEach((node) => {
@@ -987,10 +969,12 @@ export async function createQaLabApp(root: HTMLDivElement) {
     root
       .querySelector<HTMLButtonElement>("#capture-delete-selected-sessions")
       ?.addEventListener("click", () => {
-        void deleteCaptureData(state.selectedCaptureSessionIds);
+        void runBusyAction(() =>
+          deleteCaptureData(state, refresh, state.selectedCaptureSessionIds),
+        );
       });
     root.querySelector<HTMLButtonElement>("#capture-purge-all")?.addEventListener("click", () => {
-      void deleteCaptureData();
+      void runBusyAction(() => deleteCaptureData(state, refresh));
     });
     bindValue("#capture-preset", "change", (value) => {
       state.captureQueryPreset = value as UiState["captureQueryPreset"];
@@ -1204,7 +1188,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       if (!text) {
         return;
       }
-      void navigator.clipboard.writeText(text).catch(() => undefined);
+      void runBusyAction(() => navigator.clipboard.writeText(text));
     });
     root.querySelectorAll<HTMLElement>("[data-capture-sparkline-window]").forEach((node) => {
       const readWindow = () => {

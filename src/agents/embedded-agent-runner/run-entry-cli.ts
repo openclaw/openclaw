@@ -85,6 +85,6 @@ export function withAdmittedCliCandidate(
         },
       });
     },
-    params.admission,
+    { ...params.admission, sessionTarget: params.sessionTarget },
   );
 }

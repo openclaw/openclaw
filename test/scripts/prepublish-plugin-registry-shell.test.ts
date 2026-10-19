@@ -22,6 +22,19 @@ const BASELINE_VERSION = "2026.7.1";
 const SCRIPT = "scripts/e2e/lib/prepublish-plugin-registry.sh";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function runShell(
+  script: string,
+  env: NodeJS.ProcessEnv,
+  options: { cwd?: string; timeout?: number; mounted?: boolean } = {},
+) {
+  const { mounted, ...spawnOptions } = options;
+  return spawnSync("bash", [...(mounted ? [resolve(SCRIPT), "bash"] : []), "-c", script], {
+    encoding: "utf8",
+    ...spawnOptions,
+    env: { ...process.env, ...env },
+  });
+}
+
 function sha256(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
@@ -148,13 +161,8 @@ describe("prepublish plugin registry shell helper", () => {
       const fixture = registryFixture(root, ["openclaw", "@openclaw/ai"], version);
       const registryUrl = join(root, "registry-url");
       await withPublishedRegistry(root, signal, async (upstream) => {
-        const result = spawnSync(
-          "bash",
-          [
-            resolve(SCRIPT),
-            "bash",
-            "-c",
-            `
+        const result = runShell(
+          `
 set -euo pipefail
 test "$BUN_CONFIG_REGISTRY" = "$NPM_CONFIG_REGISTRY"
 npm install --prefix "$INSTALL_DIR" openclaw@latest --ignore-scripts --no-fund --no-audit --package-lock=false --userconfig=/dev/null --cache "$INSTALL_DIR/cache"
@@ -163,21 +171,15 @@ npm install --prefix "$INSTALL_DIR" "$ROOT_TARBALL" --ignore-scripts --no-fund -
 node -e 'const fs=require("node:fs"); const root=require(process.env.INSTALL_DIR+"/node_modules/openclaw/package.json"); const ai=require(process.env.INSTALL_DIR+"/node_modules/@openclaw/ai/package.json"); if(root.dependencies["@openclaw/ai"] !== ai.version) process.exit(1); fs.writeFileSync(process.env.REGISTRY_URL_FILE, process.env.NPM_CONFIG_REGISTRY);'
 exit 17
 `,
-          ],
           {
-            cwd: root,
-            encoding: "utf8",
-            timeout: 30_000,
-            env: {
-              ...process.env,
-              ...fixture.env,
-              OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
-              BASELINE_VERSION,
-              INSTALL_DIR: join(root, "install"),
-              ROOT_TARBALL: join(fixture.artifactDir, "openclaw.tgz"),
-              REGISTRY_URL_FILE: registryUrl,
-            },
+            ...fixture.env,
+            OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
+            BASELINE_VERSION,
+            INSTALL_DIR: join(root, "install"),
+            ROOT_TARBALL: join(fixture.artifactDir, "openclaw.tgz"),
+            REGISTRY_URL_FILE: registryUrl,
           },
+          { cwd: root, timeout: 30_000, mounted: true },
         );
 
         expect(result.status, result.stdout + result.stderr).toBe(17);
@@ -247,13 +249,8 @@ fi
         root,
         signal,
         async (upstream) => {
-          const result = spawnSync(
-            "bash",
-            [
-              resolve(SCRIPT),
-              "bash",
-              "-c",
-              `
+          const result = runShell(
+            `
 set -euo pipefail
 source "$HELPER"
 source "$INSTANCE_HELPER"
@@ -296,37 +293,32 @@ test "$BUN_CONFIG_REGISTRY" = "$registry_before"
 npm install --prefix "$CANDIDATE_INSTALL" "$ROOT_TARBALL" --ignore-scripts --no-fund --no-audit --package-lock=false
 node -e 'const assert=require("node:assert/strict"); for(const name of ["openclaw","@openclaw/ai"]) assert.equal(require(process.env.CANDIDATE_INSTALL+"/node_modules/"+name+"/package.json").provenance,"candidate");'
 `,
-            ],
             {
-              encoding: "utf8",
-              timeout: 30_000,
-              env: {
-                ...process.env,
-                ...fixture.env,
-                PATH: `${bin}:${process.env.PATH}`,
-                OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
-                HELPER: resolve(SCRIPT),
-                INSTANCE_HELPER: resolve("scripts/lib/openclaw-e2e-instance.sh"),
-                MISSING_LOAD_PATH: resolve("scripts/e2e/lib/upgrade-survivor/missing-load-path.sh"),
-                STAGE: stage,
-                BASELINE_VERSION: baselineVersion,
-                BASELINE_RAW: `openclaw@${baselineVersion}`,
-                SCENARIO: "base",
-                UPDATE_RESTART_MODE: "manual",
-                COMMAND_TIMEOUT: "90s",
-                ARTIFACT_ROOT: root,
-                BASELINE_INSTALL_LOG: join(root, "baseline.log"),
-                npm_config_prefix: join(root, "baseline"),
-                npm_config_cache: join(root, "cache"),
-                NPM_CONFIG_USERCONFIG: "/dev/null",
-                npm_config_userconfig: "/dev/null",
-                PLUGIN_INSTALL: join(root, "plugin"),
-                COMPANION_INSTALLS: join(root, "companion-installs"),
-                READY: join(root, "ready"),
-                CANDIDATE_INSTALL: join(root, "candidate"),
-                ROOT_TARBALL: join(fixture.artifactDir, "openclaw.tgz"),
-              },
+              ...fixture.env,
+              PATH: `${bin}:${process.env.PATH}`,
+              OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
+              HELPER: resolve(SCRIPT),
+              INSTANCE_HELPER: resolve("scripts/lib/openclaw-e2e-instance.sh"),
+              MISSING_LOAD_PATH: resolve("scripts/e2e/lib/upgrade-survivor/missing-load-path.sh"),
+              STAGE: stage,
+              BASELINE_VERSION: baselineVersion,
+              BASELINE_RAW: `openclaw@${baselineVersion}`,
+              SCENARIO: "base",
+              UPDATE_RESTART_MODE: "manual",
+              COMMAND_TIMEOUT: "90s",
+              ARTIFACT_ROOT: root,
+              BASELINE_INSTALL_LOG: join(root, "baseline.log"),
+              npm_config_prefix: join(root, "baseline"),
+              npm_config_cache: join(root, "cache"),
+              NPM_CONFIG_USERCONFIG: "/dev/null",
+              npm_config_userconfig: "/dev/null",
+              PLUGIN_INSTALL: join(root, "plugin"),
+              COMPANION_INSTALLS: join(root, "companion-installs"),
+              READY: join(root, "ready"),
+              CANDIDATE_INSTALL: join(root, "candidate"),
+              ROOT_TARBALL: join(fixture.artifactDir, "openclaw.tgz"),
             },
+            { timeout: 30_000, mounted: true },
           );
           const gatewayLog = join(root, "missing-load-path/baseline-gateway.log");
           const diagnostics =
@@ -350,10 +342,10 @@ node -e 'const assert=require("node:assert/strict"); for(const name of ["opencla
   );
 
   it.for([
-    { name: "mismatched registry source", registry: true, fault: "source" },
-    { name: "mismatched registry digest", registry: true, fault: "manifest" },
-    { name: "mismatched root package digest", registry: true, fault: "package" },
-  ])("runs the native npm 12 workflow with $name", async ({ registry, fault }, { signal }) => {
+    { name: "mismatched registry source", fault: "source" },
+    { name: "mismatched registry digest", fault: "manifest" },
+    { name: "mismatched root package digest", fault: "package" },
+  ])("runs the native npm 12 workflow with $name", async ({ fault }, { signal }) => {
     const bash = resolveWorkflowBash();
     const root = tempDirs.make("openclaw-npm12-workflow-registry-");
     const fixture = registryFixture(root, ["@openclaw/ai"]);
@@ -428,34 +420,22 @@ NODE
             NPM_CONFIG_REGISTRY: upstream,
             npm_config_registry: upstream,
             OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
-            OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registry ? fixture.artifactDir : "",
             OPENCLAW_DOCKER_E2E_SELECTED_SHA: fault === "source" ? "b".repeat(40) : SOURCE_SHA,
             OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:
               fault === "manifest" ? "b".repeat(64) : sha256(fixture.manifestPath),
             EXPECTED_PACKAGE_SHA256: fault === "package" ? "b".repeat(64) : sha256(packageTgz),
             EXPECTED_PACKAGE_VERSION: VERSION,
-            EXPECTED_DEPENDENCY_VERSION: registry ? VERSION : BASELINE_VERSION,
+            EXPECTED_DEPENDENCY_VERSION: VERSION,
             INSTALL_MARKER: installed,
           },
         },
       );
-      if (fault) {
-        expect(result.status, result.stdout + result.stderr).not.toBe(0);
-        expect(existsSync(installed)).toBe(false);
-        if (fault !== "package") {
-          expect(result.stderr).toContain(
-            fault === "source" ? "source SHA differs" : "manifest SHA-256 differs",
-          );
-        }
-        return;
-      }
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-      const registryUrl = readFileSync(installed, "utf8");
-      if (registry) {
-        expect(registryUrl).not.toBe(upstream);
-        await expect(fetch(registryUrl, { signal: AbortSignal.timeout(1_000) })).rejects.toThrow();
-      } else {
-        expect(registryUrl).toBe(upstream);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(existsSync(installed)).toBe(false);
+      if (fault !== "package") {
+        expect(result.stderr).toContain(
+          fault === "source" ? "source SHA differs" : "manifest SHA-256 differs",
+        );
       }
     });
   });
@@ -475,11 +455,8 @@ NODE
         fixtureVersion,
       );
       await withPublishedRegistry(root, signal, (upstream) => {
-        const result = spawnSync(
-          "bash",
-          [
-            "-c",
-            `
+        const result = runShell(
+          `
 set -euo pipefail
 source "$HELPER"
 registry_pid=""
@@ -497,20 +474,15 @@ test "$(npm view @openclaw/discord version)" = "$VERSION"
 test "$(npm view @openclaw/discord@$BASELINE_VERSION version)" = "$BASELINE_VERSION"
 test "$(npm view @openclaw/brave-plugin version)" = "$FIXTURE_VERSION"
 `,
-          ],
           {
-            encoding: "utf8",
-            env: {
-              ...process.env,
-              ...fixture.env,
-              OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
-              BASELINE_VERSION,
-              BRAVE_TARBALL: braveTarball,
-              FIXTURE_VERSION: fixtureVersion,
-              HELPER: SCRIPT,
-              REGISTRY_ROOT: registryRoot,
-              VERSION: version,
-            },
+            ...fixture.env,
+            OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
+            BASELINE_VERSION,
+            BRAVE_TARBALL: braveTarball,
+            FIXTURE_VERSION: fixtureVersion,
+            HELPER: SCRIPT,
+            REGISTRY_ROOT: registryRoot,
+            VERSION: version,
           },
         );
 

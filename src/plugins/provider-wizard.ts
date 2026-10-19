@@ -28,25 +28,6 @@ export type ProviderModelPickerEntry = {
   hint?: string;
 };
 
-type ProviderWizardProvidersResolver = (params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  providerRefs?: readonly string[];
-}) => ProviderPlugin[];
-
-let providerWizardProvidersResolverForTest: ProviderWizardProvidersResolver | undefined;
-
-export function setProviderWizardProvidersResolverForTest(
-  resolver: ProviderWizardProvidersResolver | undefined,
-): () => void {
-  const previous = providerWizardProvidersResolverForTest;
-  providerWizardProvidersResolverForTest = resolver;
-  return () => {
-    providerWizardProvidersResolverForTest = previous;
-  };
-}
-
 function resolveMethodById(
   provider: ProviderPlugin,
   methodId?: string,
@@ -66,9 +47,6 @@ function resolveProviderWizardProviders(params: {
   env?: NodeJS.ProcessEnv;
   providerRefs?: readonly string[];
 }): ProviderPlugin[] {
-  if (providerWizardProvidersResolverForTest) {
-    return providerWizardProvidersResolverForTest(params);
-  }
   return resolvePluginProvidersCore({
     config: params.config,
     workspaceDir: params.workspaceDir,

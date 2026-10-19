@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   ErrorCodes,
-  PROTOCOL_VERSION,
   validateUpdateStatusParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -44,11 +43,15 @@ import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   SharedGatewaySessionGenerationState,
 } from "../../server-shared-auth-generation.js";
+import * as wsLog from "../../ws-log.js";
 import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test-helpers.js";
 import { disconnectDisallowedGatewayPolicyClients } from "../ws-origin-policy.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
 import type { GatewayWsClient } from "../ws-types.js";
-import { expectAuthenticatedOwnerReconnect } from "./message-handler.owner-reconnect.test-support.js";
+import {
+  expectAuthenticatedOwnerReconnect,
+  expectEphemeralOwnerConnect,
+} from "./message-handler.owner-reconnect.test-support.js";
 import {
   attachGatewayHarness,
   BACKEND_CONNECT_PARAMS,
@@ -62,6 +65,8 @@ import {
   createSetCloseCauseMock,
   createTestAgentRuntimeIdentityLease,
   DEVICE_TOKEN_MUTATION_PARAMS,
+  expectIdentityScopeAudit,
+  IDENTITY_SCOPE_AUDIT_CASES,
   localUserIngressFor,
   useGatewayTestConfig,
   waitForFast,
@@ -155,8 +160,10 @@ vi.mock("../../../infra/host-account-name.js", async (importOriginal) => ({
   resolveHostAccountName: resolveHostAccountNameMock,
 }));
 
+// mock-isolation: Ordinary connection tests do not use Enterprise identity or remote enrichment.
 vi.mock("../../github-user-identity.js", () => ({
   createAuthenticatedGitHubIdentitySync: createAuthenticatedGitHubIdentitySyncMock,
+  resolveTrustedEnterpriseGitHubAccountId: () => undefined,
 }));
 
 vi.mock("./auth-context.js", async (importOriginal) => {
@@ -243,6 +250,27 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         });
       },
     );
+  });
+
+  it("attributes ephemeral backend connections in the normal journal", async () => {
+    const mode = "backend";
+    const harness = attachGatewayHarness({
+      connId: `conn-${mode}`,
+      connectNonce: `nonce-${mode}`,
+    });
+    harness.sendConnect("connect", {
+      ...BACKEND_CONNECT_PARAMS,
+      client: { ...BACKEND_CONNECT_PARAMS.client, mode, displayName: "synthetic-poller" },
+    });
+    await harness.runWhenIdle();
+    expect(harness.frames).toContainEqual(expect.objectContaining({ id: "connect", ok: true }));
+    const connections = harness.logWsControl.info.mock.calls
+      .map(([message]) => message)
+      .filter((message) => message.startsWith("client connected "));
+    expect(connections).toHaveLength(1);
+    expect(connections[0]).toContain(`conn=conn-${mode}`);
+    expect(connections[0]).toContain("client=gateway-client name=synthetic-poller");
+    expect(connections[0]).toContain(`mode=${mode} role=operator`);
   });
 
   it("prewarms cold session history for an admitted operator without delaying hello", async () => {
@@ -393,33 +421,24 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     },
   );
 
-  it.each(["probe"])("keeps ephemeral %s connections unidentified", async (mode) => {
-    await withOpenClawTestState(
-      { label: "gateway-owner-ephemeral", prepareProfileCatalog: true },
-      async () => {
-        resolveConnectAuthStateMock.mockResolvedValueOnce({
-          authResult: { ok: true, method: "token" },
-          authOk: true,
-          authMethod: "token",
-          sharedAuthOk: true,
-        });
-        const harness = attachGatewayHarness({
-          connId: `ephemeral-${mode}`,
-          connectNonce: `nonce-${mode}`,
-        });
-        harness.sendConnect("connect", {
-          minProtocol: PROTOCOL_VERSION,
-          maxProtocol: PROTOCOL_VERSION,
-          client: { id: "gateway-client", version: "dev", platform: "test", mode },
-          role: "operator",
-          auth: { token: "owner-fixture" },
-          caps: [],
-        });
-        await waitForFast(() => expect(harness.client).not.toBeNull());
-        expect(harness.client).not.toHaveProperty("authenticatedUserProfile");
-      },
-    );
-  });
+  it.each([
+    ["cli", "token"],
+    ["backend", "token"],
+    ["probe", "token"],
+    ["probe", "none"],
+  ] as const)(
+    "keeps %s admission and identity independent of presence (auth: %s)",
+    async (mode, authMethod) => {
+      await withOpenClawTestState(
+        { label: "gateway-owner-ephemeral", prepareProfileCatalog: true },
+        async () => {
+          await expectEphemeralOwnerConnect(mode, authMethod);
+          expect(upsertPresenceMock).not.toHaveBeenCalled();
+          expect(prewarmGatewaySessionHistoryMock).not.toHaveBeenCalled();
+        },
+      );
+    },
+  );
 
   it("retains the watchdog through registration and holds pipelined frames until hello completion", async () => {
     const close = createCloseMock();
@@ -667,17 +686,36 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
 
   it("closes malformed JSON explicitly on an authenticated connection", async () => {
     const close = createCloseMock();
+    const setCloseCause = createSetCloseCauseMock();
+    const websocketLog = vi.spyOn(wsLog, "logWs");
+    onTestFinished(() => websocketLog.mockRestore());
     const harness = attachGatewayHarness({
       connId: "conn-malformed-json",
       connectNonce: "nonce-malformed-json",
       close,
+      setCloseCause,
     });
     harness.sendConnect("connect", BACKEND_CONNECT_PARAMS);
     await harness.runWhenIdle();
-    harness.sendMessage("{");
+    websocketLog.mockClear();
+    harness.logGateway.error.mockClear();
+    const marker = "PRIVATE_JSON_FRAME";
+    harness.sendMessage(marker);
     await harness.runWhenIdle();
     expect(close).toHaveBeenCalledWith(1007, "invalid JSON");
-    expect(harness.logGateway.error).toHaveBeenCalledWith(expect.stringContaining("parse error"));
+    expect(harness.logGateway.error).toHaveBeenCalledWith("parse error: invalid JSON");
+    expect(setCloseCause).toHaveBeenCalledWith("parse-error", { error: "invalid JSON" });
+    expect(websocketLog).toHaveBeenCalledWith("out", "parse-error", {
+      connId: "conn-malformed-json",
+      error: "invalid JSON",
+    });
+    expect(
+      JSON.stringify([
+        harness.logGateway.error.mock.calls,
+        websocketLog.mock.calls,
+        setCloseCause.mock.calls,
+      ]),
+    ).not.toContain(marker);
   });
 
   it.each(["bytes", "count"] as const)(
@@ -987,9 +1025,12 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         new RegExp(`^/api/users/${profileId}/avatar\\?v=[0-9a-f]{64}-png$`, "u"),
       );
 
-      expect(first.harness.logWsControl.info).toHaveBeenCalledWith(
-        "authenticated user connected conn=conn-trusted-proxy-user-first user=alice@example.com",
-      );
+      const connections = first.harness.logWsControl.info.mock.calls
+        .map(([message]) => message)
+        .filter((message) => message.includes(" connected "));
+      expect(connections).toHaveLength(1);
+      expect(connections[0]).toContain("client connected conn=conn-trusted-proxy-user-first");
+      expect(connections[0]).toContain("user=alice@example.com");
     });
   });
 
@@ -1772,7 +1813,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         scopes: ["operator.admin"],
         ...(remote ? { auth: { token: "gateway-token" } } : {}),
       });
-      await waitForFast(() => expect(harness.socketSend).toHaveBeenCalled());
+      await harness.whenAttached;
       const client = harness.client as GatewayWsClient;
       expect(client.clientIp).toBe(remote ? "203.0.113.50" : undefined);
       expect(client.internal?.isLocalClient).toBe(remote ? undefined : true);
@@ -1872,22 +1913,17 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
 
   it("keeps each identity scope grant in the info audit trail across reconnects and grant changes", async () => {
     await withGatewayTestState({ scenario: "minimal" }, async () => {
-      for (const [connId, scopes] of [
-        ["scope-grant-first", ["operator.admin"]],
-        ["scope-grant-reconnect", ["operator.admin"]],
-        ["scope-grant-changed", ["operator.read"]],
-        ["scope-grant-removed", []],
-      ] as const) {
-        const harness = connectTrustedProxyUser(loadConfigMock, connId, {}, [...scopes]);
+      for (const [connId, identityScopes, scopes, scopeCap] of IDENTITY_SCOPE_AUDIT_CASES) {
+        const harness = connectTrustedProxyUser(
+          loadConfigMock,
+          connId,
+          {},
+          identityScopes,
+          undefined,
+          scopeCap,
+        );
         await harness.whenAttached;
-        expect(harness.client).toMatchObject({ connect: { scopes: [...scopes] } });
-        const message = `security audit: identity scope grant elevated connection identity=alice@example.com addedScopes=${scopes.join(",")} auth=trusted-proxy conn=${connId}`;
-        expect(harness.logGateway.warn).not.toHaveBeenCalled();
-        if (scopes.length > 0) {
-          expect(harness.logGateway.info).toHaveBeenCalledExactlyOnceWith(message);
-        } else {
-          expect(harness.logGateway.info).not.toHaveBeenCalled();
-        }
+        expectIdentityScopeAudit(harness, connId, scopes);
       }
     });
   });
@@ -1910,7 +1946,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
             : { approvalRuntimeToken: await getOperatorApprovalRuntimeToken() }),
         },
       });
-      await waitForFast(() => expect(harness.socketSend).toHaveBeenCalled());
+      await harness.whenAttached;
       const client = harness.client as GatewayWsClient;
       if (kind === "missing") {
         expect(client.connect.scopes).toEqual(["operator.approvals"]);

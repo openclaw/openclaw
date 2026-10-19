@@ -2,7 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../../extensions/workboard/api.js";
 import plugin from "../../extensions/workboard/index.js";
 import {
@@ -38,13 +38,22 @@ import { createTestGatewayScheduler } from "../../src/test-utils/gateway-schedul
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "workboard-nudge-" });
 
-describe("Workboard terminal hook automation ownership", () => {
-  it.each(["agent_end", "subagent_ended"] as const)("%s survives closure", async (hook) => {
+it.each(["agent_end", "subagent_ended"] as const)(
+  "Workboard terminal hook %s survives closure",
+  async (hook) => {
     const sessionKey = "agent:main:subagent:workboard-d6-authority";
     const runId = `d6-${hook}`;
     const { storePath } = await makeStorePath();
     vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(storePath));
     const gatewayContext = createContext();
+    const gatewayScope = {
+      pluginId: "workboard",
+      pluginOrigin: "bundled" as const,
+      context: gatewayContext,
+      isWebchatConnect: () => false,
+    };
+    const inGatewayScope = <T>(run: () => T) =>
+      withPluginRuntimeGatewayRequestScope(gatewayScope, run);
     const finished = createFinishedBarrier();
     const executeJob = vi.fn(() => {
       expect(getGatewayToolCallerIdentity()).toBeUndefined();
@@ -127,15 +136,7 @@ describe("Workboard terminal hook automation ownership", () => {
           ...service,
           apiVersion: 2,
           start: (ctx) =>
-            withPluginRuntimeGatewayRequestScope(
-              {
-                pluginId: "workboard",
-                pluginOrigin: "bundled",
-                context: gatewayContext,
-                isWebchatConnect: () => false,
-              },
-              () => service.start({ ...ctx, logger: { ...ctx.logger, warn } }),
-            ),
+            inGatewayScope(() => service.start({ ...ctx, logger: { ...ctx.logger, warn } })),
         },
       });
     }
@@ -151,12 +152,7 @@ describe("Workboard terminal hook automation ownership", () => {
     const describeSession: GatewayRequestHandler = ({ respond }) => {
       expect(getGatewayToolCallerIdentity()).toBeUndefined();
       respond(true, {
-        session: {
-          key: sessionKey,
-          status: "done",
-          hasActiveRun: false,
-          updatedAt: Date.now(),
-        },
+        session: { key: sessionKey, status: "done", updatedAt: Date.now(), hasActiveRun: false },
       });
     };
     gatewayContext.getGatewayMethodRegistry = () =>
@@ -176,14 +172,12 @@ describe("Workboard terminal hook automation ownership", () => {
         },
       ]);
     const request = <T>(method: string, params: Record<string, unknown>) =>
-      withPluginRuntimeGatewayRequestScope(
-        {
-          pluginId: "workboard",
-          pluginOrigin: "bundled",
-          context: gatewayContext,
-          isWebchatConnect: () => false,
-        },
-        () => dispatchTrustedPluginGatewayMethod<T>(method, params, { scopes: ["operator.admin"] }),
+      inGatewayScope(() =>
+        dispatchTrustedPluginGatewayMethod<T>(method, params, { scopes: ["operator.admin"] }),
+      );
+    const expectRunRejected = () =>
+      expect(request("cron.run", { id: job.id, mode: "if-enabled" })).rejects.toThrow(
+        "agent tool caller authority is no longer active",
       );
     const admission = prepareAgentRunAdmission({
       cfg: {},
@@ -212,55 +206,37 @@ describe("Workboard terminal hook automation ownership", () => {
       if (!caller) {
         throw new Error("Expected an admitted worker caller");
       }
-      await withPluginRuntimeGatewayRequestScope(
-        {
-          pluginId: "workboard",
-          pluginOrigin: "bundled",
-          context: gatewayContext,
-          isWebchatConnect: () => false,
-        },
-        () =>
-          withGatewayToolCallerIdentity(caller, async () => {
-            const pending =
-              hook === "agent_end"
-                ? agentEnd!({ messages: [], success: true }, { agentId: "main", sessionKey, runId })
-                : subagentEnded!(
-                    {
-                      targetSessionKey: sessionKey,
-                      targetKind: "subagent",
-                      runId,
-                      endedAt: card.updatedAt + 1,
-                      outcome: "ok",
-                      reason: "subagent-complete",
-                    },
-                    { childSessionKey: sessionKey, runId },
-                  );
-            admission.close();
-            await pending;
-            await expect(
-              dispatchTrustedPluginGatewayMethod(
-                "cron.run",
-                { id: job.id, mode: "if-enabled" },
-                { scopes: ["operator.admin"] },
-              ),
-            ).rejects.toThrow("agent tool caller authority is no longer active");
-          }),
+      await inGatewayScope(() =>
+        withGatewayToolCallerIdentity(caller, async () => {
+          const pending =
+            hook === "agent_end"
+              ? agentEnd!({ messages: [], success: true }, { agentId: "main", sessionKey, runId })
+              : subagentEnded!(
+                  {
+                    targetSessionKey: sessionKey,
+                    targetKind: "subagent",
+                    runId,
+                    endedAt: card.updatedAt + 1,
+                    outcome: "ok",
+                    reason: "subagent-complete",
+                  },
+                  { childSessionKey: sessionKey, runId },
+                );
+          admission.close();
+          await pending;
+          await expectRunRejected();
+        }),
       );
 
       await withGatewayToolCallerIdentity({ ...caller }, async () => {
-        await expect(request("cron.run", { id: job.id, mode: "if-enabled" })).rejects.toThrow(
-          "agent tool caller authority is no longer active",
-        );
+        await expectRunRejected();
       });
       await expect(request("workboard.cards.list", { boardId: "planning" })).resolves.toMatchObject(
         {
           cards: [expect.objectContaining({ id: card.id, status: "review" })],
         },
       );
-      expect(
-        enqueue,
-        "the service-owned automation must survive closure of the completed worker caller",
-      ).toHaveBeenCalledOnce();
+      expect(enqueue).toHaveBeenCalledOnce();
       await settled;
       expect(executeJob).toHaveBeenCalledOnce();
       // The sibling terminal event for the same card shares the service's debounce owner.
@@ -277,5 +253,5 @@ describe("Workboard terminal hook automation ownership", () => {
       }
       vi.unstubAllEnvs();
     }
-  });
-});
+  },
+);

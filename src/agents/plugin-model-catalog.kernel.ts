@@ -1,4 +1,3 @@
-import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import type { Insertable } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -6,17 +5,13 @@ import {
   sqliteStringSet,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { OpenClawAgentDatabaseReadOnlyScope } from "../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
+import type { PersistedPluginModelCatalog } from "./plugin-model-catalog-read.types.js";
 import { stripPluginModelCatalogCredentials } from "./plugin-model-catalog-repair.js";
-import {
-  createPluginModelCatalogReadOperations,
-  type PersistedPluginModelCatalog,
-} from "./plugin-model-catalog.read-operation.js";
 
-export type { PersistedPluginModelCatalog } from "./plugin-model-catalog.read-operation.js";
+export type { PersistedPluginModelCatalog } from "./plugin-model-catalog-read.types.js";
 
 export const PLUGIN_MODEL_CATALOG_CACHE_SCOPE = "plugin-model-catalog-v1";
 export const PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE = "plugin-model-catalog-migration-v1";
@@ -24,6 +19,11 @@ export const PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE = "plugin-model-catalog-migrat
 type PluginModelCatalogDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 const CATALOG_WRITE_BATCH_SIZE = 64;
 const CATALOG_WRITE_BATCH_BYTES = 1024 * 1024;
+
+export type PluginModelCatalogReplacement = {
+  changed: boolean;
+  catalogs: PersistedPluginModelCatalog[];
+};
 
 export function readPluginModelCatalogEntries(
   options: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
@@ -54,20 +54,6 @@ export function readPluginModelCatalogEntries(
   return result.found ? result.value : [];
 }
 
-export const pluginModelCatalogReadOperations = createPluginModelCatalogReadOperations(
-  (input, context) => {
-    const scope = new OpenClawAgentDatabaseReadOnlyScope();
-    const options = { ...context, agentId: normalizeAgentId(input.agentId) };
-    try {
-      return scope.run(options, () =>
-        readPluginModelCatalogEntries(options, PLUGIN_MODEL_CATALOG_CACHE_SCOPE, input.pluginIds),
-      );
-    } finally {
-      scope.close();
-    }
-  },
-);
-
 /** The admitted worker or Doctor transaction owns the connection and commit. */
 export function replacePluginModelCatalogEntriesInDatabase(params: {
   database: EngineConnection;
@@ -76,7 +62,7 @@ export function replacePluginModelCatalogEntriesInDatabase(params: {
   deleteMissing?: boolean;
   removedCredentials?: ReadonlySet<string>;
   updatedAt: number;
-}): boolean {
+}): PluginModelCatalogReplacement {
   const kysely = getNodeSqliteKysely<PluginModelCatalogDatabase>(params.database);
   const existing = executeSqliteQuerySync(
     params.database,
@@ -153,6 +139,7 @@ export function replacePluginModelCatalogEntriesInDatabase(params: {
     }
     if (existingByPluginId.get(pluginId) !== contents) {
       queueCacheEntry(PLUGIN_MODEL_CATALOG_CACHE_SCOPE, pluginId, contents);
+      existingByPluginId.set(pluginId, contents);
       changed = true;
     }
     if (migrationPayload) {
@@ -173,8 +160,19 @@ export function replacePluginModelCatalogEntriesInDatabase(params: {
           .where("scope", "=", PLUGIN_MODEL_CATALOG_CACHE_SCOPE)
           .where("key", "in", pluginIds),
       );
+      for (const pluginId of pluginIds) {
+        existingByPluginId.delete(pluginId);
+      }
       changed = true;
     }
   }
-  return changed;
+  return {
+    changed,
+    // Match SQLite BINARY and the generated PostgreSQL C collation.
+    catalogs: [...existingByPluginId]
+      .flatMap(([pluginId, contents]) => (contents === null ? [] : [{ pluginId, contents }]))
+      .toSorted((left, right) =>
+        Buffer.compare(Buffer.from(left.pluginId), Buffer.from(right.pluginId)),
+      ),
+  };
 }

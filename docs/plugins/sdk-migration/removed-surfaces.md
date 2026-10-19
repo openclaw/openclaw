@@ -100,7 +100,10 @@ render the returned text and publish the matching terminal fact. Deliver the ful
 returned text rather than the bounded `terminalReply.text` snapshot. An exact uppercase
 `NO_REPLY`, ignoring surrounding whitespace, requests silence; punctuation,
 quotes, JSON, and prose do not. A literal leading `NO_REPLY\n` removes one line
-without reclassifying the suffix. See [Silent replies](/concepts/messages#silent-replies).
+without reclassifying the suffix. Otherwise, a standalone `NO_REPLY` on the last
+non-empty line is removed and the preceding answer is delivered; whitespace around
+that final line is allowed. Inline and mid-text mentions remain visible.
+See [Silent replies](/concepts/messages#silent-replies).
 
 ### Tool argument redaction
 

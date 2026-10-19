@@ -1,21 +1,22 @@
 import path from "node:path";
 import { GrammyError } from "grammy";
 import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
+import {
+  MediaFetchError,
+  saveMediaBuffer,
+  saveRemoteMedia,
+} from "openclaw/plugin-sdk/media-runtime";
+import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { TelegramBotApiFileTooLargeError } from "../bot-handlers.media.js";
-import type { TelegramTransport } from "../fetch.js";
+import {
+  resolveTelegramApiBase,
+  shouldRetryTelegramTransportFallback,
+  type TelegramTransport,
+} from "../fetch.js";
 import type { TelegramResolvedMedia } from "../message-cache-persistence.js";
 import { isRetryableTelegramApiError, readTelegramRetryAfterMs } from "../network-errors.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
-import {
-  formatErrorMessage,
-  logVerbose,
-  MediaFetchError,
-  resolveTelegramApiBase,
-  saveMediaBuffer,
-  saveRemoteMedia,
-  shouldRetryTelegramTransportFallback,
-  sleepWithAbort,
-} from "./delivery.resolve-media.runtime.js";
 import { resolveTelegramPrimaryMedia } from "./helpers.js";
 import type { TelegramContext } from "./types.js";
 
@@ -24,10 +25,7 @@ const TELEGRAM_GET_FILE_RETRY_DEADLINE_MS = 20 * 60_000;
 const TELEGRAM_GET_FILE_RETRY_ATTEMPTS = 3;
 
 type TelegramMediaContext = Pick<TelegramContext, "getFile" | "me"> & {
-  message: Pick<
-    TelegramContext["message"],
-    "photo" | "video" | "video_note" | "document" | "audio" | "voice" | "sticker" | "animation"
-  >;
+  message: NonNullable<Parameters<typeof resolveTelegramPrimaryMedia>[0]>;
 };
 
 function buildTelegramMediaSsrfPolicy(apiRoot?: string, dangerouslyAllowPrivateNetwork?: boolean) {
@@ -352,7 +350,6 @@ export async function resolveMedia(params: {
     const emoji = sticker.emoji ?? cached?.emoji;
     const setName = sticker.set_name ?? cached?.setName;
     if (cached) {
-      logVerbose(`telegram: sticker cache hit for ${sticker.file_unique_id}`);
       if (fileId !== cached.fileId || emoji !== cached.emoji || setName !== cached.setName) {
         // Refresh cached sticker metadata on hits so sends/searches use latest file_id.
         await cacheSticker({ ...cached, fileId, emoji, setName });

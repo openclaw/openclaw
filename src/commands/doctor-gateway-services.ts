@@ -279,7 +279,7 @@ export async function maybeRepairGatewayServiceConfig(
   const managedDefinition = resolveManagedGatewayServiceCommand(command) ?? command;
   note(
     formatGatewayHeapLimitReport(
-      inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS, {}, command.programArguments),
+      inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS, command.programArguments),
     ),
     "Gateway heap",
   );

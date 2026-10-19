@@ -334,7 +334,7 @@ function normalizeConfigModelRefsForWrite(
   };
 }
 
-export function applyProviderAuthConfigPatch(
+export function applyProviderAuthConfigPatchWithNormalization(
   cfg: OpenClawConfig,
   patch: unknown,
   options?: {

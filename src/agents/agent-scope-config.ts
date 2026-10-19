@@ -3,7 +3,6 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
-  readStringValue,
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -114,7 +113,7 @@ export function resolveAgentModelConfigForRuntime(
   if (runtime === "acp" || agent?.runtime?.type !== "acp") {
     return model;
   }
-  return model && typeof model === "object" && Array.isArray(model.fallbacks)
+  return model && typeof model === "object" && model.fallbacks
     ? { fallbacks: model.fallbacks }
     : undefined;
 }
@@ -400,19 +399,16 @@ export function resolveAgentConfig(
   }
   const agentDefaults = cfg.agents?.defaults;
   return {
-    name: readStringValue(entry.name),
-    workspace: readStringValue(entry.workspace),
-    agentDir: readStringValue(entry.agentDir),
-    model:
-      typeof entry.model === "string" || (entry.model && typeof entry.model === "object")
-        ? entry.model
-        : undefined,
+    name: entry.name,
+    workspace: entry.workspace,
+    agentDir: entry.agentDir,
+    model: entry.model,
     ...(entry.models ? { models: entry.models } : {}),
     ...(entry.params ? { params: entry.params } : {}),
     ...(entry.runtime ? { runtime: entry.runtime } : {}),
     ...(hasExplicitModelPolicyAllow(entry.modelPolicy) ? { modelPolicy: entry.modelPolicy } : {}),
-    utilityModel: readStringValue(entry.utilityModel),
-    decisionModel: readStringValue(entry.decisionModel),
+    utilityModel: entry.utilityModel,
+    decisionModel: entry.decisionModel,
     thinkingDefault: entry.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
     toolProgressDetail: entry.toolProgressDetail ?? agentDefaults?.toolProgressDetail,
@@ -421,27 +417,22 @@ export function resolveAgentConfig(
     contextInjection: entry.contextInjection,
     bootstrapMaxChars: entry.bootstrapMaxChars,
     bootstrapTotalMaxChars: entry.bootstrapTotalMaxChars,
-    experimental:
-      typeof entry.experimental === "object" && entry.experimental
-        ? { ...agentDefaults?.experimental, ...entry.experimental }
-        : agentDefaults?.experimental,
-    skills: Array.isArray(entry.skills) ? entry.skills : undefined,
+    experimental: entry.experimental
+      ? { ...agentDefaults?.experimental, ...entry.experimental }
+      : agentDefaults?.experimental,
+    skills: entry.skills,
     memory: entry.memory,
     humanDelay: entry.humanDelay,
     typingMode: entry.typingMode ?? agentDefaults?.typingMode,
     tts: entry.tts,
-    contextLimits:
-      typeof entry.contextLimits === "object" && entry.contextLimits
-        ? { ...agentDefaults?.contextLimits, ...entry.contextLimits }
-        : agentDefaults?.contextLimits,
+    contextLimits: entry.contextLimits
+      ? { ...agentDefaults?.contextLimits, ...entry.contextLimits }
+      : agentDefaults?.contextLimits,
     heartbeat: entry.heartbeat,
     identity: entry.identity,
     groupChat: entry.groupChat,
-    subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
-    embeddedAgent:
-      typeof entry.embeddedAgent === "object" && entry.embeddedAgent
-        ? entry.embeddedAgent
-        : undefined,
+    subagents: entry.subagents,
+    embeddedAgent: entry.embeddedAgent,
     sandbox: entry.sandbox,
     tools: entry.tools,
   };

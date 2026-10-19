@@ -2,6 +2,7 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CdpProtocolSend } from "./cdp-ax.js";
 import type { CdpRoleRef, CursorInteractiveInfo, RoleTreeNode } from "./cdp-role-snapshot-tree.js";
+import { INTERACTIVE_ROLES } from "./snapshot-roles.js";
 
 export async function findCursorInteractiveElements(
   send: CdpProtocolSend,
@@ -11,7 +12,7 @@ export async function findCursorInteractiveElements(
     const evaluated = (await send("Runtime.evaluate", {
       expression: `(() => {
           const out = [];
-          const roles = new Set(["button","link","textbox","checkbox","radio","combobox","listbox","menuitem","menuitemcheckbox","menuitemradio","option","searchbox","slider","spinbutton","switch","tab","treeitem"]);
+          const roles = new Set(${JSON.stringify([...INTERACTIVE_ROLES])});
           const tags = new Set(["a","button","input","select","textarea","details","summary"]);
           document.querySelectorAll("[${attr}]").forEach((el) => el.removeAttribute("${attr}"));
           for (const el of document.body ? document.body.querySelectorAll("*") : []) {

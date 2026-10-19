@@ -31,7 +31,6 @@ import {
   createEmptyDraftModelMetadata,
   isDraftAccountModelAvailable,
   resolveDraftModelControls,
-  resolveDraftModelUnavailableReason,
   resolveDraftModelSelectionBlockedReason,
   type NewSessionModelMetadata,
 } from "./model-target.ts";
@@ -422,15 +421,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     });
   }
 
-  modelUnavailableReason(agent: GatewayAgentRow | undefined) {
-    return resolveDraftModelUnavailableReason({
-      model: this.effectiveModel,
-      agentRuntime: this.agentRuntime,
-      metadata: this.metadataState,
-      agent,
-    });
-  }
-
   modelSelectionBlockedReason(
     agent: GatewayAgentRow | undefined,
     inference?: "worker",
@@ -671,7 +661,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
               }
             : undefined,
           onManage: () => options.context?.navigate("profile"),
-          onRequestUpdate: this.notify,
         }),
       activeRunId: null,
       connected: snapshot?.phase === "connected",
@@ -734,7 +723,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         }
         this.catalogTargets.retry(metadataClient, this.agentId);
       },
-      onRequestUpdate: this.notify,
     };
   }
 }

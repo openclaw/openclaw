@@ -39,7 +39,7 @@ import {
 import { MemoryBackgroundRebuildInterruptedError } from "./manager-sync-control.js";
 import { MemorySyncOutcomeLedger } from "./manager-sync-outcome.js";
 import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
-import { buildMemorySourceFilter } from "./source-filter.js";
+import { buildMemorySourceFilter, type MemorySourceFilter } from "./source-filter.js";
 
 export type MemorySyncProgressState = {
   completed: number;
@@ -178,7 +178,6 @@ export abstract class MemoryManagerSyncBase {
   protected sessionWatchTimer: NodeJS.Timeout | null = null;
   protected sessionUnsubscribe: (() => void) | null = null;
   protected fallbackReason?: string;
-  protected intervalTimer: NodeJS.Timeout | null = null;
   protected dirty = false;
   protected memoryWatchGeneration = 0;
   // A success clears only the failure visible when it started. This keeps a
@@ -648,9 +647,10 @@ export abstract class MemoryManagerSyncBase {
   protected buildSourceFilter(
     alias?: string,
     sourcesOverride?: MemorySource[],
-  ): { sql: string; params: MemorySource[] } {
+    excludedSessionPaths?: readonly string[],
+  ): MemorySourceFilter {
     const sources = sourcesOverride ?? Array.from(this.sources);
-    return buildMemorySourceFilter(alias, sources);
+    return buildMemorySourceFilter(alias, sources, excludedSessionPaths);
   }
 
   protected readMeta(): MemoryIndexMeta | null {

@@ -1,8 +1,10 @@
+import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
 import { normalizeOptionalString as stringValue } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsCreateParams,
   SessionsCreateResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 export type SessionCreateOutcome = {
@@ -17,6 +19,8 @@ export type SessionCreateOutcome = {
 export type SessionCreateParams = SessionsCreateParams & {
   currentSessionKey?: string;
 };
+
+export type SessionCreateRequestOptions = Pick<GatewayProtocolRequestOptions, "signal">;
 
 export function resolveSessionCreateParams(sessionKey = "", agentId?: string) {
   const normalizedSessionKey = sessionKey.trim();
@@ -36,8 +40,13 @@ export function resolveSessionCreateParams(sessionKey = "", agentId?: string) {
 export async function requestSessionCreate(
   client: Pick<GatewayBrowserClient, "request">,
   params: Omit<SessionCreateParams, "currentSessionKey"> = {},
+  options?: SessionCreateRequestOptions,
 ): Promise<SessionCreateOutcome> {
-  const result = await client.request<SessionsCreateResult>("sessions.create", params);
+  const result = await client.request<SessionsCreateResult>("sessions.create", params, {
+    timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+    signal: options?.signal,
+    retainSentResultOnAbort: true,
+  });
   const key = stringValue(result?.key) ?? "";
   if (!key) {
     throw new Error("sessions.create returned no key");

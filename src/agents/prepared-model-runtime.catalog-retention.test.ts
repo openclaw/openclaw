@@ -2,8 +2,7 @@
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { setImmediate } from "node:timers/promises";
-import v8 from "node:v8";
-import vm from "node:vm";
+import { queryObjects } from "node:v8";
 import { expect, it, vi } from "vitest";
 import {
   prepareModelRuntimeSnapshot,
@@ -13,13 +12,7 @@ import {
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime-retention" });
 const { mocks } = fixture;
 
-function exposeGc(): () => void {
-  v8.setFlagsFromString("--expose-gc");
-  return vm.runInNewContext("gc") as () => void;
-}
-
 it("releases superseded catalog inventories across neutral reloads", async () => {
-  const gc = exposeGc();
   mocks.configuredAgentIds = ["default"];
   mocks.runPreparedModelCatalogWorker.mockImplementation(async () => ({
     entries: [{ provider: "custom", id: "model", name: "Model" }],
@@ -38,8 +31,7 @@ it("releases superseded catalog inventories across neutral reloads", async () =>
   };
   const { resolvePreparedModelRuntimeOwnerBySnapshot } =
     await import("./prepared-model-runtime.owner.js");
-  const released = new Set<number>();
-  const releases = new FinalizationRegistry<number>((generation) => released.add(generation));
+  const inventories: WeakRef<object>[] = [];
   const generations = 6;
   for (let generation = 0; generation < generations; generation++) {
     const reloaded = { ...config, logging: { level: generation % 2 ? "debug" : "info" } } as const;
@@ -51,16 +43,21 @@ it("releases superseded catalog inventories across neutral reloads", async () =>
     await snapshot.loadFullModelCatalog?.({ refresh: true });
     const inventory = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot)?.catalogInventory;
     expect(inventory?.providers.has("custom")).toBe(true);
-    releases.register(inventory!, generation);
+    inventories.push(new WeakRef(inventory!));
     // Mock call records would otherwise retain every generation's catalog owner.
     vi.clearAllMocks();
   }
-  for (let attempt = 0; attempt < 20 && released.size < generations - 1; attempt++) {
-    gc();
+  for (let attempt = 0; attempt < 20; attempt++) {
     await setImmediate();
+    // queryObjects performs a full collection without V8-only flag mutation.
+    queryObjects(WeakRef);
+    if (inventories.slice(0, -1).every((inventory) => inventory.deref() === undefined)) {
+      break;
+    }
   }
   // Each refresh seeds from its predecessor; only the published generation may remain.
-  expect([...released].toSorted((left, right) => left - right)).toEqual(
-    Array.from({ length: generations - 1 }, (_, generation) => generation),
-  );
+  expect(inventories.map((inventory) => inventory.deref() !== undefined)).toEqual([
+    ...Array.from({ length: generations - 1 }, () => false),
+    true,
+  ]);
 });

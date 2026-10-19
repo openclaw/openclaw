@@ -1,12 +1,12 @@
 // Keep subprocess metadata independent of executable launcher declarations.
 export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
-  function runtimeProcessEntrypoint(modulePath: string) {
+  function runtimeProcessEntrypoint(modulePath: string, distModulePath = modulePath) {
     return {
       currentModuleUrl,
       sourceWorkerName: modulePath.startsWith("infra/")
         ? modulePath.slice("infra/".length)
         : `../${modulePath}`,
-      distWorkerPath: `${modulePath}.js`,
+      distWorkerPath: `${distModulePath}.js`,
     } as const;
   }
 
@@ -22,7 +22,6 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     cronStreamMatcher: runtimeProcessEntrypoint("gateway/cron-stream-matcher.worker"),
     controlUiFile: runtimeProcessEntrypoint("gateway/control-ui-file.worker"),
     publicSessionCard: runtimeProcessEntrypoint("gateway/control-ui-public-session-card.worker"),
-    sessionList: runtimeProcessEntrypoint("gateway/session-list.worker"),
     nodeBootstrapArtifact: runtimeProcessEntrypoint(
       "gateway/worker-environments/node-bootstrap-artifact.worker",
     ),
@@ -38,13 +37,26 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     gitPackCleanup: runtimeProcessEntrypoint("agents/worktrees/git-pack-cleanup.worker"),
     fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
     sharedStateStore: runtimeProcessEntrypoint("state/openclaw-state.worker"),
+    clientCredentials: runtimeProcessEntrypoint("infra/client-credential.worker"),
     authProfileInlineUsage: runtimeProcessEntrypoint("agents/auth-profiles/inline-usage.worker"),
+    pluginModelCatalogRead: runtimeProcessEntrypoint("agents/plugin-model-catalog-read.worker"),
     pluginModelCatalogCredentials: runtimeProcessEntrypoint("agents/plugin-model-catalog.worker"),
+    pluginGenerationPreparation: runtimeProcessEntrypoint(
+      "plugins/plugin-generation-preparation.worker",
+    ),
     agentDatabaseExecution: runtimeProcessEntrypoint("state/openclaw-agent-execution.worker"),
-    workspaceMemory: runtimeProcessEntrypoint("worker/memory-worker-entry"),
+    // dist/worker is the sealed portable-deploy graph and is excluded from npm.
+    // Local workspace subprocesses must remain directly launchable after installation.
+    workspaceMemory: runtimeProcessEntrypoint(
+      "worker/memory-worker-entry",
+      "agents/workspace-memory.worker",
+    ),
     localAgentAvatar: runtimeProcessEntrypoint("agents/identity-avatar-file.worker"),
     identityFile: runtimeProcessEntrypoint("agents/identity-file.worker"),
-    workspaceSkills: runtimeProcessEntrypoint("worker/skills-worker-entry"),
+    workspaceSkills: runtimeProcessEntrypoint(
+      "worker/skills-worker-entry",
+      "agents/workspace-skills.worker",
+    ),
     skillsDiscovery: runtimeProcessEntrypoint("skills/runtime/discovery.worker"),
     boardStore: runtimeProcessEntrypoint("boards/sqlite-board-store.worker"),
     progressCardStore: runtimeProcessEntrypoint("session-cards/progress-card-store.worker"),

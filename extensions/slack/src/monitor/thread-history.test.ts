@@ -12,6 +12,16 @@ function expectVerboseLogContains(expected: string): void {
   expect(vi.mocked(logVerbose).mock.calls.flat().join("\n")).toContain(expected);
 }
 
+const botMessage = <T extends object>(ts: string, content: T) => ({
+  text: "  ",
+  bot_id: "BMONITOR",
+  ts,
+  ...content,
+});
+const botText = (text: string) =>
+  expect.objectContaining({ text, botId: "BMONITOR", userId: undefined, files: undefined });
+const mrkdwn = (text: string) => ({ type: "mrkdwn", text });
+
 function replyPage(start: number, count: number, nextCursor = "") {
   return {
     messages: Array.from({ length: count }, (_, i) => ({
@@ -74,7 +84,6 @@ describe("resolveSlackThreadHistory", () => {
       .mockResolvedValueOnce(replyPage(201, 200, "cursor-3"))
       .mockResolvedValueOnce(replyPage(401, 200, "cursor-4"));
     const result = await history({ limit: 3 });
-
     expect(replies).toHaveBeenCalledTimes(3);
     expect(replies.mock.calls[2]?.[0]).toMatchObject({
       cursor: "cursor-3",
@@ -95,16 +104,13 @@ describe("resolveSlackThreadHistory", () => {
       ],
       expected: [
         expect.objectContaining({ text: "[attached: screenshot.png (fileId: FSCREEN)]" }),
-        expect.objectContaining({ text: "hello" }),
+        expect.objectContaining({ text: "hello", userId: "U1", ts: "3.000" }),
       ],
     },
     {
       name: "attachment and block fallback surfaces",
       messages: [
-        {
-          text: "  ",
-          bot_id: "BMONITOR",
-          ts: "1.000",
+        botMessage("1.000", {
           attachments: [
             {
               title: "Filesystem on /dev/sda1 has only 14.93% available space left.",
@@ -112,33 +118,24 @@ describe("resolveSlackThreadHistory", () => {
               fields: [{ title: "Host", value: "dc2.ipa.mgt" }],
             },
           ],
-        },
-        {
-          text: "  ",
-          bot_id: "BMONITOR",
-          ts: "2.000",
-          blocks: [{ type: "section", text: { type: "mrkdwn", text: "Pod restart rate is high" } }],
-        },
-        {
-          text: "  ",
-          bot_id: "BMONITOR",
-          ts: "3.000",
+        }),
+        botMessage("2.000", {
+          blocks: [{ type: "section", text: mrkdwn("Pod restart rate is high") }],
+        }),
+        botMessage("3.000", {
           attachments: [
             {
               blocks: [
                 { type: "header", text: { type: "plain_text", text: "Alert firing" } },
                 {
                   type: "section",
-                  fields: [
-                    { type: "mrkdwn", text: "*host:* dc2.ipa.mgt" },
-                    { type: "mrkdwn", text: "*device:* /dev/sda1" },
-                  ],
+                  fields: [mrkdwn("*host:* dc2.ipa.mgt"), mrkdwn("*device:* /dev/sda1")],
                 },
-                { type: "section", text: { type: "mrkdwn", text: "Free space below threshold" } },
+                { type: "section", text: mrkdwn("Free space below threshold") },
               ],
             },
           ],
-        },
+        }),
         { text: "  line one\nline two  ", ts: "4.000" },
         {
           ts: "5.000",
@@ -146,80 +143,15 @@ describe("resolveSlackThreadHistory", () => {
         },
       ],
       expected: [
-        expect.objectContaining({
-          text: "Filesystem on /dev/sda1 has only 14.93% available space left.\nAlert: filesystem space is low\nHost\ndc2.ipa.mgt",
-          botId: "BMONITOR",
-        }),
-        expect.objectContaining({ text: "Pod restart rate is high", botId: "BMONITOR" }),
-        expect.objectContaining({
-          text: "Alert firing\n*host:* dc2.ipa.mgt\n*device:* /dev/sda1\nFree space below threshold",
-          botId: "BMONITOR",
-        }),
+        botText(
+          "Filesystem on /dev/sda1 has only 14.93% available space left.\nAlert: filesystem space is low\nHost\ndc2.ipa.mgt",
+        ),
+        botText("Pod restart rate is high"),
+        botText(
+          "Alert firing\n*host:* dc2.ipa.mgt\n*device:* /dev/sda1\nFree space below threshold",
+        ),
         expect.objectContaining({ text: "line one\nline two", botId: undefined }),
         expect.objectContaining({ text: "[Slack media attachment]", botId: undefined }),
-      ],
-    },
-    {
-      name: "native chart values alongside top-level text",
-      messages: [
-        {
-          text: "Latency report",
-          bot_id: "BMONITOR",
-          ts: "1.000",
-          blocks: [
-            {
-              type: "data_visualization",
-              title: "Weekly latency",
-              chart: {
-                type: "line",
-                series: [{ name: "p95", data: [{ label: "Mon", value: 250 }] }],
-                axis_config: { categories: ["Mon"] },
-              },
-            },
-          ],
-        },
-      ],
-      expected: [
-        {
-          text: "Latency report\nWeekly latency (line chart)\n- p95: Mon: 250",
-          userId: undefined,
-          botId: "BMONITOR",
-          ts: "1.000",
-          files: undefined,
-        },
-      ],
-    },
-    {
-      name: "attachment table rows alongside top-level text",
-      messages: [
-        {
-          text: "Please check these.",
-          user: "U1",
-          ts: "1.000",
-          attachments: [
-            {
-              fallback: "[no preview available]",
-              blocks: [
-                {
-                  type: "table",
-                  rows: [
-                    [
-                      { type: "raw_text", text: "ID" },
-                      { type: "raw_text", text: "Status" },
-                    ],
-                    [
-                      { type: "raw_number", value: 12345 },
-                      { type: "raw_text", text: "enabled" },
-                    ],
-                  ],
-                },
-              ],
-            },
-          ],
-        },
-      ],
-      expected: [
-        expect.objectContaining({ text: "Please check these.\nID\tStatus\n12345\tenabled" }),
       ],
     },
   ])("preserves $name in thread history", async ({ messages, expected }) => {

@@ -13,7 +13,7 @@ import {
   type AuthProfileCredential as ProfileEntry,
   type AuthProfileEligibilityReasonCode,
   externalCliDiscoveryScoped,
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   listProfilesForProvider,
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileEligibility,
@@ -50,11 +50,8 @@ import {
   normalizeSecretInputString,
   resolveSecretInputRef,
 } from "../../config/types.secrets.js";
-import type {
-  EmbeddedStateLockHandle,
-  EmbeddedStateSignalProcess,
-} from "../../infra/embedded-state-lock.js";
-import type { GatewayLockIdentity, GatewayLockOptions } from "../../infra/gateway-lock.js";
+import type { EmbeddedStateLockHandle } from "../../infra/embedded-state-lock.js";
+import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { appendConfigPathSegment } from "../../shared/dot-path.js";
 import { redactStatusSecrets as redactAuthProbeError } from "../status-all/format.js";
@@ -299,7 +296,7 @@ export async function buildProbeTargets(params: {
 }): Promise<{ targets: AuthProbeTarget[]; results: AuthProbeResult[] }> {
   const { cfg, agentDir, providers, modelCandidates, options, workspaceDir } = params;
   const authAliasLookupParams = { config: cfg, workspaceDir };
-  const store = ensureAuthProfileStore(agentDir, {
+  const store = await ensureAuthProfileStoreAsync(agentDir, {
     externalCli: externalCliDiscoveryScoped({
       config: cfg,
       allowKeychainPrompt: false,
@@ -778,8 +775,6 @@ function formatActiveGatewayModelsProbeRefusal(identity: GatewayLockIdentity): s
 
 type AuthProbeStateOwnership = {
   mode: "exclusive";
-  gatewayLockOptions?: GatewayLockOptions;
-  process?: EmbeddedStateSignalProcess;
 };
 
 /** Own canonical state only for direct CLI probes; Gateway RPC probes already run under its lock. */
@@ -792,13 +787,12 @@ export async function withAuthProbeStateOwnership<T>(
   }
   const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
     await import("../../infra/embedded-state-lock.js");
-  const signalBridge = createEmbeddedStateSignalBridge(ownership.process ?? process);
+  const signalBridge = createEmbeddedStateSignalBridge();
   let stateLock: EmbeddedStateLockHandle | null | undefined;
   let work: Awaited<ReturnType<typeof createAuthProbeWork>> | undefined;
   try {
     work = await createAuthProbeWork(signalBridge.signal);
     stateLock = await acquireEmbeddedStateLock({
-      options: ownership.gatewayLockOptions,
       signal: signalBridge.signal,
       formatActiveGatewayRefusal: formatActiveGatewayModelsProbeRefusal,
     });

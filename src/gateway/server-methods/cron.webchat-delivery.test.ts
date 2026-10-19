@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
+import * as gatewayModule from "../../agents/tools/gateway.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
@@ -136,8 +137,33 @@ async function withWebchatTool(
       getRuntimeConfig: () => cfg,
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     });
-    const tool = createCronTool(
-      {
+    const gatewaySpy = vi
+      .spyOn(gatewayModule, "callGatewayTool")
+      .mockImplementation(async (method, _opts, params) => {
+        expect(["cron.add", "cron.update", "cron.get"]).toContain(method);
+        if (!isRecord(params)) {
+          throw new Error("expected cron request record");
+        }
+        const respond = vi.fn();
+        await expectDefined(
+          cronHandlers[method],
+          "cron handler",
+        )({
+          req: { type: "req", id: "webchat-cron-add", method, params },
+          params,
+          respond,
+          context,
+          client,
+          isWebchatConnect: () => false,
+        });
+        const [ok, result, error] = expectDefined(respond.mock.calls[0], "cron response");
+        if (!ok) {
+          throw new Error(String(error.message));
+        }
+        return result;
+      });
+    try {
+      const tool = createCronTool({
         config: cfg,
         agentSessionKey: sessionKey,
         currentDeliveryContext: {
@@ -147,34 +173,7 @@ async function withWebchatTool(
           threadId: "internal-thread",
         },
         creatorToolAllowlist: ["read"],
-      },
-      {
-        callGatewayTool: async (method, _opts, params) => {
-          expect(["cron.add", "cron.update", "cron.get"]).toContain(method);
-          if (!isRecord(params)) {
-            throw new Error("expected cron request record");
-          }
-          const respond = vi.fn();
-          await expectDefined(
-            cronHandlers[method],
-            "cron handler",
-          )({
-            req: { type: "req", id: "webchat-cron-add", method, params },
-            params,
-            respond,
-            context,
-            client,
-            isWebchatConnect: () => false,
-          });
-          const [ok, result, error] = expectDefined(respond.mock.calls[0], "cron response");
-          if (!ok) {
-            throw new Error(String(error.message));
-          }
-          return result;
-        },
-      },
-    );
-    try {
+      });
       await check({
         cron,
         creatorStorePath: sessionStorePath,
@@ -196,6 +195,7 @@ async function withWebchatTool(
         },
       });
     } finally {
+      gatewaySpy.mockRestore();
       revoke();
       cron.stop();
     }

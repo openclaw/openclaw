@@ -12,12 +12,9 @@ import type { GatewayPluginContract, VoicePluginContract } from "./plugin-contra
 import { RequestClient, type RequestClientOptions } from "./rest.js";
 import type { Guild, GuildMember, User } from "./structures.js";
 
-export abstract class Plugin {
-  abstract readonly id: string;
+export type RegisteredPlugin = (GatewayPluginContract | VoicePluginContract) & {
   registerClient?(client: Client): Promise<void> | void;
-}
-
-export type RegisteredPlugin = Plugin & (GatewayPluginContract | VoicePluginContract);
+};
 
 type AnyListener = {
   type: string;
@@ -91,12 +88,6 @@ export class Client {
   getPlugin(id: string): RegisteredPlugin | undefined;
   getPlugin(id: string): RegisteredPlugin | undefined {
     return this.plugins.find((plugin) => plugin.id === id);
-  }
-
-  getRuntimeMetrics() {
-    return {
-      eventQueue: this.eventQueue?.getMetrics(),
-    };
   }
 
   async fetchUser(id: string): Promise<User> {

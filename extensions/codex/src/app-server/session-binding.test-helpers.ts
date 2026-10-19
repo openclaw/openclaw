@@ -2,7 +2,10 @@ export * from "./session-binding.js";
 import type { inspectConversationBinding } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { legacyCodexConversationBindingId } from "../conversation-binding-data.js";
-import { resolveCodexSupervisionAppServerRuntimeOptions as supervisionOptions } from "./config.js";
+import {
+  readCodexPluginConfig,
+  resolveCodexSupervisionAppServerRuntimeOptions as supervisionOptions,
+} from "./config.js";
 import { buildCodexAppServerConnectionFingerprint as connectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   bindingStoreKey,
@@ -22,6 +25,15 @@ export function createCodexTestBindingStateStore(
     comparison: JSON.stringify([key, values.get(key)]),
   });
   return {
+    prepareRead: async (key) => {
+      let released = false;
+      return {
+        read: () => (released ? undefined : values.get(key)),
+        release: () => {
+          released = true;
+        },
+      };
+    },
     asyncReads: {
       lookup: async (key) => values.get(key),
       lookupMany: async (keys) => keys.map((key) => ({ ok: true, value: values.get(key) })),
@@ -69,7 +81,7 @@ export function buildCodexSupervisionTestConnectionFingerprint(
 ): string {
   return connectionFingerprint(
     supervisionOptions({
-      pluginConfig,
+      pluginConfig: readCodexPluginConfig(pluginConfig),
       env: {},
       requirementsToml: null,
     }),

@@ -7,30 +7,9 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { resolveBrewPathDirs } from "./brew.js";
 import { isTruthyEnvValue } from "./env.js";
+import { canAccessSync } from "./path-existence.js";
 import { isPathInside, safeStatSync } from "./path-guards.js";
 import { tryProcessCwd } from "./safe-cwd.js";
-
-type EnsureOpenClawPathOpts = {
-  /** Executable whose directory should stay first for shebang-compatible child processes. */
-  execPath?: string;
-  /** Working directory used only when project-local bin fallback is explicitly enabled. */
-  cwd?: string;
-  /** Home directory used for package-manager and user-bin fallback candidates. */
-  homeDir?: string;
-  /** Platform override for tests and platform-specific candidate filtering. */
-  platform?: NodeJS.Platform;
-  /** Existing PATH value to merge with; defaults to process.env.PATH. */
-  pathEnv?: string;
-};
-
-function isExecutable(filePath: string): boolean {
-  try {
-    fs.accessSync(filePath, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function isKnownPathDir(existingPathParts: ReadonlySet<string>, dirPath: string): boolean {
   return existingPathParts.has(dirPath) || safeStatSync(dirPath)?.isDirectory() === true;
@@ -117,14 +96,14 @@ function resolveMiseDataDir(params: { homeDir: string; platform: NodeJS.Platform
   return path.join(params.homeDir, ".local", "share", "mise");
 }
 
-function candidateBinDirs(
-  opts: EnsureOpenClawPathOpts,
-  existingPathParts: ReadonlySet<string>,
-): { prepend: string[]; append: string[] } {
-  const execPath = opts.execPath ?? process.execPath;
-  const cwd = opts.cwd ?? tryProcessCwd();
-  const homeDir = opts.homeDir ?? os.homedir();
-  const platform = opts.platform ?? process.platform;
+function candidateBinDirs(existingPathParts: ReadonlySet<string>): {
+  prepend: string[];
+  append: string[];
+} {
+  const execPath = process.execPath;
+  const cwd = tryProcessCwd();
+  const homeDir = os.homedir();
+  const platform = process.platform;
 
   const prepend: string[] = [];
   const append: string[] = [];
@@ -132,12 +111,12 @@ function candidateBinDirs(
   // Keep the active runtime directory ahead of PATH hardening so shebang-based
   // subprocesses keep using the same Node/Bun the current OpenClaw process is on.
   const execDir = path.dirname(execPath);
-  if (isExecutable(execPath)) {
+  if (canAccessSync(execPath, fs.constants.X_OK)) {
     prepend.push(execDir);
   }
 
   // Bundled macOS app: `openclaw` lives next to the executable (process.execPath).
-  if (isExecutable(path.join(execDir, "openclaw"))) {
+  if (canAccessSync(path.join(execDir, "openclaw"), fs.constants.X_OK)) {
     prepend.push(execDir);
   }
 
@@ -145,7 +124,7 @@ function candidateBinDirs(
   // disabled by default; if an operator explicitly enables it, only append (never prepend).
   if (isTruthyEnvValue(process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN) && cwd) {
     const localBinDir = path.join(cwd, "node_modules", ".bin");
-    if (isExecutable(path.join(localBinDir, "openclaw"))) {
+    if (canAccessSync(path.join(localBinDir, "openclaw"), fs.constants.X_OK)) {
       append.push(localBinDir);
     }
   }
@@ -213,7 +192,7 @@ function candidateBinDirs(
  * Best-effort PATH bootstrap so skills that require the `openclaw` CLI can run
  * under launchd/minimal environments (and inside the macOS app bundle).
  */
-export function ensureOpenClawCliOnPath(opts: EnsureOpenClawPathOpts = {}) {
+export function ensureOpenClawCliOnPath() {
   if (isTruthyEnvValue(process.env.OPENCLAW_PATH_BOOTSTRAPPED)) {
     return;
   }
@@ -221,9 +200,9 @@ export function ensureOpenClawCliOnPath(opts: EnsureOpenClawPathOpts = {}) {
   // not keep reshuffling PATH.
   process.env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
 
-  const existing = opts.pathEnv ?? process.env.PATH ?? "";
+  const existing = process.env.PATH ?? "";
   const existingPathParts = new Set(normalizeStringEntries(existing.split(path.delimiter)));
-  const { prepend, append } = candidateBinDirs(opts, existingPathParts);
+  const { prepend, append } = candidateBinDirs(existingPathParts);
   if (prepend.length === 0 && append.length === 0) {
     return;
   }

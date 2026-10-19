@@ -15,7 +15,6 @@ import {
   SetupInferenceFailureStatusSchema,
 } from "./setup-inference.js";
 import { withSince } from "./since.js";
-// Gateway Protocol schema module defines OpenClaw chat payloads.
 import { stringLiteralUnion } from "./string-literal-union.js";
 import { WizardAnswerSchema, WizardStartResultSchema, WizardStepSchema } from "./wizard.js";
 

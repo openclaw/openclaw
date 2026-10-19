@@ -6,7 +6,7 @@ import "../../../styles.css";
 import "../../../styles/chat.ts";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
-import { ToolPreview } from "./widget-card.ts";
+import { ToolPreview } from "./widget-card-view.tsx";
 
 let container: HTMLDivElement | undefined;
 afterEach(() => {
@@ -117,15 +117,18 @@ describe.runIf("__vitest_browser__" in globalThis)("widget action placement", ()
       let rerendered = false;
       rerenderObserver = new ResizeObserver(() => {
         rerenderObserver?.disconnect();
-        container!.style.width = "480px";
         draw();
         rerendered = true;
       });
       rerenderObserver.observe(preview);
-      await vi.waitFor(() => {
-        expect(rerendered).toBe(true);
-        expect(actions.getBoundingClientRect().left).toBe(preview.getBoundingClientRect().right);
-      });
+      await vi.waitFor(() => expect(rerendered).toBe(true));
+      expect(errors).toEqual([]);
+
+      // Resize the observed ancestor after delivery; doing it in the callback creates a loop.
+      container.style.width = "480px";
+      await vi.waitFor(() =>
+        expect(actions.getBoundingClientRect().left).toBe(preview.getBoundingClientRect().right),
+      );
       expect(errors).toEqual([]);
 
       container.style.width = "420px";

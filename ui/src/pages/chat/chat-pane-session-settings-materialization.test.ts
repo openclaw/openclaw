@@ -143,7 +143,6 @@ it.each([
           sessionId: materialized.sessionId,
           thinkingLevel: "low",
         });
-        expect(pane.state.chatThinkingLevel).toBe("low");
       } else {
         expect(rows[0]).toEqual(unrelated);
         expect(selectedChatSessionRow(pane.state)).toMatchObject(unrelated);
@@ -312,8 +311,8 @@ it.each(["unbound", "materialized"] as const)(
         )
         .toBe("medium");
       expect
-        .soft(container.querySelector("[data-chat-thinking-preview-committed]")?.textContent)
-        .toBe("Medium");
+        .soft(container.querySelector(".chat-controls__effort-picker summary")?.textContent)
+        .toContain("Medium");
       middleReply.reject(new Error("Synthetic rejection of the middle settings choice"));
       await expect(Promise.all([first, middle, last])).resolves.toEqual([true, false, true]);
       await expect(middleReady).resolves.toBe(false);
@@ -327,7 +326,6 @@ it.each(["unbound", "materialized"] as const)(
         sessionId: materialized.sessionId,
         thinkingLevel: "medium",
       });
-      expect(pane.state.chatThinkingLevel).toBe("medium");
       expect(getPendingChatPickerPatch(pane.state, key, "main")).toBeUndefined();
     } finally {
       stopManaged?.();

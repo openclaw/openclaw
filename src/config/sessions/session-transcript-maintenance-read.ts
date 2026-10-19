@@ -1,6 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { NESTED_TOOL_ACTIVITY_CUSTOM_TYPE } from "../../sessions/nested-tool-activity.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
@@ -47,7 +47,7 @@ export function readSessionTranscriptMaintenance(
   }
   if (request.operation === "nested-activity") {
     return readWithCanonicalSessionAdmission(database, () =>
-      runSqliteDeferredTransactionSync(database.db, () => {
+      runSqliteReadSnapshotSync(database.db, () => {
         const first = readTranscriptIdentityByEventId(
           database,
           target.sessionId,
@@ -89,7 +89,7 @@ export function readSessionTranscriptMaintenance(
     );
   }
   return readWithCanonicalSessionAdmission(database, () =>
-    runSqliteDeferredTransactionSync(
+    runSqliteReadSnapshotSync(
       database.db,
       (): SessionTranscriptMaintenanceFacts =>
         request.operation === "identity"

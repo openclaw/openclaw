@@ -1,14 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  createStore,
-  For,
-  Show,
-  onCleanup,
-  untrack,
-} from "solid-js";
+import { createMemo, createSignal, createStore, For, Show, onCleanup, onSettled } from "solid-js";
 import type {
   EnvironmentSummary,
   EnvironmentsListResult,
@@ -32,6 +23,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { createTimeout } from "../../lib/reactive/timers.ts";
 import { showToast } from "../../lib/toast.ts";
 import {
   cloudEnvironments,
@@ -84,52 +76,73 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   let refreshAgain = false;
   let activeLoad: object | undefined;
 
-  let pollTimer: ReturnType<typeof setTimeout> | undefined = undefined;
+  const polling = createTimeout(() => void load(), 10_000);
+  let previousInputs: readonly [string | null | undefined, boolean] | undefined;
 
   let activeConfirmation: AbortController | null = null;
 
+  function clearPresentation() {
+    setSelected(null);
+    dismissed.clear();
+    setView((draft) => {
+      draft.inventory = null;
+      draft.result = null;
+    });
+  }
+
+  function invalidateRequests() {
+    refreshAgain = false;
+    activeLoad = undefined;
+    polling.cancel();
+    setView((draft) => {
+      draft.preparing = false;
+      draft.destroying = null;
+      draft.loading = false;
+      draft.recovering = null;
+      draft.mutating = null;
+      draft.error = null;
+      draft.notice = null;
+    });
+    activeConfirmation?.abort();
+  }
+
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
-    invalidateRequests: () => {
-      refreshAgain = false;
-      activeLoad = undefined;
-      stopPolling();
-      setSelected(null);
-      dismissed.clear();
-      setView((draft) => {
-        draft.inventory = null;
-        draft.preparing = false;
-        draft.destroying = null;
-        draft.result = null;
-        draft.loading = false;
-        draft.recovering = null;
-        draft.mutating = null;
-        draft.error = null;
-        draft.notice = null;
-      });
-      activeConfirmation?.abort();
+    onIdentityChange: clearPresentation,
+    onSnapshot: ({ snapshot }) => {
+      if (
+        snapshot.phase === "connected" &&
+        !canCallGatewayMethod(snapshot, "environments.list", "operator.admin")
+      ) {
+        gateway.invalidate();
+        invalidateRequests();
+        clearPresentation();
+      }
+      syncInventoryInputs();
     },
+    invalidateRequests,
     ensureInitialData: () => queueMicrotask(() => void load()),
     onPageActivation: () => void load(),
   });
-
-  createEffect(
-    () =>
-      [
-        runtime.read().state.configSnapshot?.appliedConfigHash,
-        canCall("crabbox.images.list"),
-      ] as const,
-    (current, previous) => {
-      if (previous?.some((value, index) => value !== current[index])) {
-        queueMicrotask(() => void load());
-      }
-    },
-  );
-
-  onCleanup(() => {
-    stopPolling();
-    activeConfirmation?.abort();
+  function syncInventoryInputs() {
+    const current = [
+      context.runtimeConfig.state.configSnapshot?.appliedConfigHash,
+      canCallGatewayMethod(context.gateway.snapshot, "crabbox.images.list", "operator.admin"),
+    ] as const;
+    const changed = previousInputs?.some((value, index) => value !== current[index]);
+    previousInputs = current;
+    if (changed) {
+      queueMicrotask(() => void load());
+    }
+  }
+  onSettled(() => {
+    // Config and permission receipts invalidate the inventory at their synchronous owners.
+    const stop = runtime.subscribe(syncInventoryInputs);
+    syncInventoryInputs();
+    return stop;
   });
+
+  onCleanup(() => activeConfirmation?.abort());
 
   function canCall(method: string) {
     return canCallGatewayMethod(gateway.snapshot, method, "operator.admin");
@@ -217,40 +230,34 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
         setView((draft) => {
           draft.loading = false;
         });
-        stopPolling();
-        queueMicrotask(() =>
-          untrack(() => {
-            if (!gateway.isCurrent(scope)) {
-              return;
-            }
-            if (refreshAgain) {
-              refreshAgain = false;
-              void load();
-            } else if (
-              view.inventory?.environments.some(
-                (environment) =>
-                  environment.preparation &&
-                  environment.worker &&
-                  !environment.worker.attachedSessionIds.length &&
-                  ["requested", "provisioning", "bootstrapping", "ready"].includes(
-                    environment.worker.state,
-                  ),
-              ) ||
-              view.result?.images.some(
-                (image) => image.capture && image.capture.phase !== "uncertain",
-              )
-            ) {
-              pollTimer = setTimeout(() => void load(), 10_000);
-            }
-          }),
-        );
+        polling.cancel();
+        // This native microtask samples settled state once for polling, without subscribing.
+        queueMicrotask(() => {
+          if (!gateway.isCurrent(scope)) {
+            return;
+          }
+          if (refreshAgain) {
+            refreshAgain = false;
+            void load();
+          } else if (
+            view.inventory?.environments.some(
+              (environment) =>
+                environment.preparation &&
+                environment.worker &&
+                !environment.worker.attachedSessionIds.length &&
+                ["requested", "provisioning", "bootstrapping", "ready"].includes(
+                  environment.worker.state,
+                ),
+            ) ||
+            view.result?.images.some(
+              (image) => image.capture && image.capture.phase !== "uncertain",
+            )
+          ) {
+            polling.schedule();
+          }
+        });
       }
     }
-  }
-
-  function stopPolling() {
-    clearTimeout(pollTimer);
-    pollTimer = undefined;
   }
 
   async function prepare(profileId: string, projectPath: string) {
@@ -543,8 +550,12 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     <>
       <SettingsPage>
         <Show
-          when={advertised() && canCall("environments.list")}
-          fallback={<SettingsEmpty message={t("cloudWorkersPage.environments.adminRequired")} />}
+          when={(advertised() && canCall("environments.list")) || view.inventory !== null}
+          fallback={
+            gateway.connected ? (
+              <SettingsEmpty message={t("cloudWorkersPage.environments.adminRequired")} />
+            ) : undefined
+          }
         >
           <Show when={view.error}>
             <div class="callout warning" role="alert">

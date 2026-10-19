@@ -192,7 +192,9 @@ export async function withPreparedSessionEventRow(
     await withPreparedEventRow(projection, { key: sessionKey, agentId: routingAgentId }, publish);
     return;
   }
-  // Without a routing owner, consumers publish key-only events and cannot read a row.
+  do {
+    await projection.ensureMaterialized();
+  } while (projection.needsMaterialization);
   publish();
 }
 

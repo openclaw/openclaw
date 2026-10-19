@@ -32,6 +32,78 @@ afterEach(async () => {
   lookupMock.mockReset();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
+
+describe("discovery request authority and proxy routing", () => {
+  it("rechecks authority after DNS before sending credentials", async () => {
+    for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) {
+      vi.stubEnv(name, undefined);
+    }
+    let authorized = true;
+    const revoked = new Error("Synthetic setup authority revoked");
+    lookupMock.mockImplementation(async () => {
+      authorized = false;
+      return [{ address: "93.184.216.34", family: 4 }];
+    });
+    const fetch = vi.fn(async () => Response.json({ data: [{ id: "local-model" }] }));
+    vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", {
+      Agent,
+      EnvHttpProxyAgent,
+      ProxyAgent,
+      fetch,
+    });
+
+    const result = await discoverOpenAICompatibleLocalModels({
+      baseUrl,
+      apiKey: "synthetic-setup-key",
+      label: "self-hosted",
+      rawResult: true,
+      discoverRuntimeContext: false,
+      beforeRequest: () => {
+        if (!authorized) {
+          throw revoked;
+        }
+      },
+    });
+
+    expect(lookupMock).toHaveBeenCalledOnce();
+    expect(result).toEqual({ kind: "unreachable", error: revoked });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("routes a public model-list request through the ambient HTTP proxy", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:9");
+    vi.stubEnv("http_proxy", undefined);
+    vi.stubEnv("HTTPS_PROXY", undefined);
+    vi.stubEnv("https_proxy", undefined);
+    vi.stubEnv("NO_PROXY", "");
+    vi.stubEnv("no_proxy", "");
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const fetch = vi.fn(async () => Response.json({ data: [{ id: "local-model" }] }));
+    vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", {
+      Agent,
+      EnvHttpProxyAgent,
+      ProxyAgent,
+      fetch,
+    });
+
+    const result = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://public-provider.example/v1",
+      label: "self-hosted",
+      rawResult: true,
+      discoverRuntimeContext: false,
+    });
+
+    expect(result).toMatchObject({
+      kind: "success",
+      rows: [{ model: { id: "local-model" } }],
+    });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      "http://public-provider.example/v1/models",
+      expect.objectContaining({ dispatcher: expect.any(EnvHttpProxyAgent) }),
+    );
+  });
 });
 
 function discover(allowPrivateNetwork?: boolean) {

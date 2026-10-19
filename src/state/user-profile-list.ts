@@ -11,9 +11,9 @@ import {
   registerOpenClawStateDatabaseLifecycleListener,
   requireOpenClawStateDatabaseIdentity,
 } from "./openclaw-state-db-cache.js";
-import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { readUserProfileCatalogSnapshot } from "./user-profile-catalog-read.js";
 import {
   captureUserProfileAuthorityRead,
   emitUserProfilesChanged,
@@ -25,7 +25,7 @@ import { selectProfileAccessEntries } from "./user-profile-github-identity.js";
 import {
   profileCatalogPath,
   projectHasMultipleSessionSharingIdentities,
-  projectUserProfileDisplayFacts,
+  readCatalogUserProfileAuthority,
   resolveUserProfileReferenceInCatalog,
 } from "./user-profile-identity.read.js";
 import type { UserProfileEmailBindingChange } from "./user-profile-mutation.js";
@@ -181,8 +181,23 @@ export function readResidentUserProfileForEmail(email: string, pathname: string)
 
 /** Sharing pickers consume the session projection's committed display catalog. */
 export function listResidentUserProfileDisplayFacts(options: OpenClawStateDatabaseOptions = {}) {
-  const rows = requireResidentProfileCatalog(options);
-  return projectUserProfileDisplayFacts(rows, profileBindings.get(rows)!);
+  const catalog = profileCatalogs.get(profileCatalogPath(options));
+  const bindings = catalog && profileBindings.get(catalog.rows);
+  if (!catalog?.valid || !bindings) {
+    throw new Error("User profile catalog is not ready");
+  }
+  return [...catalog.rows.values()].map((profile) => ({
+    id: profile.id,
+    label:
+      profile.display_name?.trim() ||
+      profile.githubLogin ||
+      [...(bindings.emailsByProfile.get(profile.id) ?? [])].toSorted((left, right) =>
+        Buffer.compare(Buffer.from(left), Buffer.from(right)),
+      )[0] ||
+      profile.id,
+    hasAvatar: profile.has_avatar === 1,
+    updatedAt: profile.updated_at,
+  }));
 }
 
 /** Pass the prepared absolute database path for allocation-free checks of live owner state. */
@@ -525,10 +540,9 @@ async function acquireUserProfileCatalog(options: OpenClawStateDatabaseOptions =
   ) {
     const profileRevision = readUserProfileVersion();
     const bindingRevision = readUserProfileEmailBindingRevision();
-    const reply = await executeExistingOpenClawStateRead(
+    const reply = await readUserProfileCatalogSnapshot(
       { ...options, path: pathname },
-      { type: "userProfiles.catalog" },
-      { current: true },
+      { identityKey: context.admission.identity.key, profileRevision, bindingRevision },
     );
     context.admission.assertCurrent();
     if (
@@ -637,6 +651,9 @@ export async function prepareUserProfileCatalog(options: OpenClawStateDatabaseOp
       }
       return profile;
     },
+    readCurrentAuthority(this: void, profileId: string, includeProfile = false) {
+      return readCatalogUserProfileAuthority(catalog, profileId, includeProfile);
+    },
     release: catalog.release,
   };
 }
@@ -677,8 +694,6 @@ export function stageUserProfileCatalogChange(db: EngineConnection, profileIds: 
   if (catalog) {
     const rows = selectProfileAccessEntries(db, profileIds);
     stageSqliteTransactionState(db, {
-      stage: () => {},
-      rollback: () => {},
       commit: () => {
         for (const id of profileIds) {
           catalog.delete(id);
@@ -719,22 +734,6 @@ export function getResidentUserProfileDisplay(
     throw new UserProfileNotFoundError(profileId);
   }
   return projectUserProfileDisplay(profile);
-}
-
-/** Transfer display facts and aliases at the owner's publication revision, never authority. */
-export function captureResidentUserProfileDisplaySnapshot(
-  options: OpenClawStateDatabaseOptions = {},
-) {
-  const rows = requireResidentProfileCatalog(options);
-  return {
-    revision: readUserProfileVersion(),
-    displays: new Map(
-      [...rows.keys()].map((id) => [
-        id,
-        projectUserProfileDisplay(resolveCatalogProfile(rows, id)!),
-      ]),
-    ),
-  };
 }
 
 /** Activity references are display navigation, never authentication identifiers. */

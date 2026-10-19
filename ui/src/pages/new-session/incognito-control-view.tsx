@@ -48,7 +48,7 @@ function VisibilityToggle(props: {
       >
         <Icon name={draft() ? "pencil" : "incognito"} />
         {active() ? (
-          <span class={`new-session-page__${props.mode}-toggle-label`}>{label()}</span>
+          <span class={[`new-session-page__${props.mode}-toggle-label`]}>{label()}</span>
         ) : undefined}
       </button>
     </openclaw-tooltip>
@@ -69,9 +69,13 @@ export function NewSessionIncognitoControl(props: {
   );
 }
 
-export function NewSessionIncognitoNotice(props: { active: boolean }) {
+export function NewSessionIncognitoNotice(props: {
+  active: boolean;
+  ref?: (element: HTMLDivElement) => void;
+}) {
   return (
     <div
+      ref={(element) => props.ref?.(element)}
       class={[
         "new-session-page__incognito-notice",
         { "new-session-page__incognito-notice--visible": props.active },

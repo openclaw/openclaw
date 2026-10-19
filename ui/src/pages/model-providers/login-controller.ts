@@ -1,5 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { createEffect, createSignal, onCleanup } from "solid-js";
+import { createSignal, onCleanup, onSettled } from "solid-js";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type {
   ModelAuthStatusResult,
@@ -42,8 +42,8 @@ type LoginOptions = {
 };
 
 export function createModelProviderLogin(options: LoginOptions) {
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  let publish: (() => void) | undefined;
+  const notify = () => publish?.();
   const [query, setQuery] = createSignal("");
   const [providerSelection, setProvider] = createSignal("");
   let currentPicker:
@@ -58,8 +58,10 @@ export function createModelProviderLogin(options: LoginOptions) {
       ))
     | null = null;
   let inventoryRequest: AbortController | undefined;
+  let startChatRequest: AbortController | undefined;
   let searchInput: HTMLInputElement | undefined;
-  let methodChoice: HTMLButtonElement | undefined;
+  let methodChoices: HTMLDivElement | undefined;
+  let apiKeyChoice: HTMLButtonElement | undefined;
   let focusPicker: "search" | "method" | null = null;
   let generation = 0;
   let mutationActive = false;
@@ -100,18 +102,10 @@ export function createModelProviderLogin(options: LoginOptions) {
     },
   });
   const view = projectSource(null, {
-    read: () => ({
-      picker: currentPicker,
-      mutationActive,
-      refreshWarning,
-      message,
-      loginMode,
-      completionModel,
-      startingChat,
-    }),
+    read: () => null,
     subscribe: (_, listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      publish = listener;
+      return () => (publish = undefined);
     },
     equality: "revision",
   });
@@ -246,7 +240,7 @@ export function createModelProviderLogin(options: LoginOptions) {
       return;
     }
     const scope = options.getScope();
-    const { client, hello } = scope.context.gateway.snapshot;
+    const { client } = scope.context.gateway.snapshot;
     if (!client || !scope.agentId) {
       return;
     }
@@ -258,7 +252,6 @@ export function createModelProviderLogin(options: LoginOptions) {
       return (
         currentGeneration === generation &&
         current.context.gateway.snapshot.client === client &&
-        current.context.gateway.snapshot.hello === hello &&
         current.agentId === scope.agentId &&
         options.canContinue()
       );
@@ -277,7 +270,7 @@ export function createModelProviderLogin(options: LoginOptions) {
           agentId: scope.agentId,
           signal: controller.signal,
         }));
-      if (isCurrent()) {
+      if (inventoryRequest === controller && isCurrent()) {
         const available = loginProviders(providers, authStatus, allowSetup);
         const provider = providers && available.length === 1 ? available[0] : undefined;
         currentPicker = {
@@ -292,7 +285,7 @@ export function createModelProviderLogin(options: LoginOptions) {
         }
       }
     } catch (error) {
-      if (isCurrent()) {
+      if (inventoryRequest === controller && isCurrent()) {
         currentPicker = {
           ...picker,
           phase: "error",
@@ -300,24 +293,40 @@ export function createModelProviderLogin(options: LoginOptions) {
         };
       }
     } finally {
-      if (currentGeneration === generation) {
+      if (inventoryRequest === controller && currentGeneration === generation) {
         inventoryRequest = undefined;
         if (!isCurrent()) {
           currentPicker = null;
         }
         notify();
+        onSettled(focusPickerTarget);
       }
+    }
+  }
+
+  function invalidateInventory(): void {
+    inventoryRequest?.abort();
+    inventoryRequest = undefined;
+    if (currentPicker?.phase === "loading") {
+      currentPicker = {
+        ...currentPicker,
+        phase: "error",
+        message: t("modelProviders.requestFailed"),
+      };
     }
   }
 
   function reset(): void {
     generation += 1;
+    startChatRequest?.abort();
+    startChatRequest = undefined;
     inventoryRequest?.abort();
     inventoryRequest = undefined;
     currentPicker = null;
     focusPicker = null;
     searchInput = undefined;
-    methodChoice = undefined;
+    methodChoices = undefined;
+    apiKeyChoice = undefined;
     mutationActive = false;
     refreshWarning = null;
     message = undefined;
@@ -335,32 +344,22 @@ export function createModelProviderLogin(options: LoginOptions) {
 
   function focusPickerTarget() {
     if (focusPicker && currentPicker) {
-      const target = focusPicker === "search" ? searchInput : methodChoice;
-      if (target) {
+      // The method group contains only current choice buttons; quick-key-only groups use the fallback.
+      const target =
+        focusPicker === "search" ? searchInput : (methodChoices?.firstElementChild ?? apiKeyChoice);
+      if (target instanceof HTMLElement) {
         focusPicker = null;
         target.focus({ preventScroll: true });
       }
     }
   }
-  createEffect(
-    () => ({ revision: view.revision(), provider: providerSelection() }),
-    focusPickerTarget,
-  );
   onCleanup(() => {
-    listeners.clear();
+    publish = undefined;
     generation += 1;
+    startChatRequest?.abort();
     inventoryRequest?.abort();
     completionCatalog.clear();
   });
-
-  function setSearchInput(element: HTMLInputElement): void {
-    searchInput = element;
-  }
-
-  function setMethodChoice(element: HTMLButtonElement): void {
-    methodChoice = element;
-    focusPickerTarget();
-  }
 
   function wizardViewProps() {
     view.read();
@@ -453,10 +452,10 @@ export function createModelProviderLogin(options: LoginOptions) {
         if (!canSelect()) {
           return;
         }
-        methodChoice = undefined;
         setProvider(providerId);
         focusPicker = "method";
         notify();
+        onSettled(focusPickerTarget);
       },
       onChoice: (selected: (typeof groups)[number]["choices"][number]) => {
         if (!canSelect()) {
@@ -508,6 +507,7 @@ export function createModelProviderLogin(options: LoginOptions) {
         setProvider("");
         focusPicker = "search";
         notify();
+        onSettled(focusPickerTarget);
       },
     };
   }
@@ -605,14 +605,19 @@ export function createModelProviderLogin(options: LoginOptions) {
     }
     const currentGeneration = generation;
     const client = context.gateway.snapshot.client;
+    const request = new AbortController();
+    startChatRequest = request;
     startingChat = true;
     notify();
     try {
-      const key = await context.sessions.create({
-        agentId,
-        model: `${model.provider}/${model.id}`,
-        ...(model.agentRuntime ? { agentRuntime: model.agentRuntime.id } : {}),
-      });
+      const key = await context.sessions.create(
+        {
+          agentId,
+          model: `${model.provider}/${model.id}`,
+          ...(model.agentRuntime ? { agentRuntime: model.agentRuntime.id } : {}),
+        },
+        { signal: request.signal },
+      );
       if (currentGeneration !== generation || context.gateway.snapshot.client !== client) {
         return;
       }
@@ -627,6 +632,9 @@ export function createModelProviderLogin(options: LoginOptions) {
         refreshWarning = formatUiError(error, t("modelProviders.requestFailed"));
       }
     } finally {
+      if (startChatRequest === request) {
+        startChatRequest = undefined;
+      }
       if (currentGeneration === generation) {
         startingChat = false;
         notify();
@@ -709,10 +717,18 @@ export function createModelProviderLogin(options: LoginOptions) {
     },
     recoveryView,
     pickerView,
-    setSearchInput,
-    setMethodChoice,
+    setSearchInput(element: HTMLInputElement) {
+      searchInput = element;
+    },
+    setMethodChoices(element: HTMLDivElement) {
+      methodChoices = element;
+    },
+    setApiKeyChoice(element: HTMLButtonElement) {
+      apiKeyChoice = element;
+    },
     connectProvider,
     open,
+    invalidateInventory,
     reset,
   };
 }

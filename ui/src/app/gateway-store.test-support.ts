@@ -44,6 +44,10 @@ class FakeGatewayClient {
     return this.opts.url;
   }
 
+  get offlineRecoveryScope() {
+    return this.opts.offlineRecoveryScope;
+  }
+
   start() {
     this.started += 1;
   }
@@ -67,6 +71,7 @@ export function createGatewayStoreTestStore(
     persistDefaultConnectionSettings?: boolean;
     ownsWarmBoot?: boolean;
     resourceBasePath?: string;
+    getModelCatalogTarget?: () => GatewayBrowserClientOptions["modelCatalog"];
     clientOptions?: Pick<
       GatewayBrowserClientOptions,
       "clientName" | "mode" | "platform" | "deviceFamily" | "instanceId" | "scopes"
@@ -87,6 +92,7 @@ export function createGatewayStoreTestStore(
       persistDefaultConnectionSettings: params.persistDefaultConnectionSettings,
       ownsWarmBoot: params.ownsWarmBoot,
       resourceBasePath: params.resourceBasePath,
+      getModelCatalogTarget: params.getModelCatalogTarget,
       clientOptions: params.clientOptions,
     },
   );

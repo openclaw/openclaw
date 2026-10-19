@@ -111,7 +111,7 @@ describe("configured plugin install health findings", () => {
       spec: "@example/demo@1.2.3",
       installSpec: "@example/demo@1.2.3",
       fixHint:
-        "Run `openclaw plugins install @example/demo@1.2.3 --force` to reinstall the configured plugin package.",
+        "Run `openclaw plugins install npm:@example/demo@1.2.3 --force` to reinstall the configured plugin package.",
     },
     {
       name: "no recorded selector",

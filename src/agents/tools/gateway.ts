@@ -543,7 +543,9 @@ async function resolveMessageActionIdentity<T>(
   });
   if (!messageActionContext) {
     if (terminalSourceReply) {
-      throw new Error("terminal source reply requires an active turn capability");
+      throw new Error(
+        "terminal source reply requires an active turn capability. This run has no live source turn to finish (it ended, or this is a heartbeat or background run), so changing channel or target will not help. To deliver the message anyway, send it again with final=false.",
+      );
     }
     return undefined;
   }

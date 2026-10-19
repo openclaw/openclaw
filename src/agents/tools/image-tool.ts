@@ -1,4 +1,5 @@
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
@@ -51,7 +52,6 @@ import {
 import {
   buildToolModelConfigFromCandidates,
   hasToolModelConfig,
-  loadLegacyToolAuthProfileStore,
   prepareToolAuthProfileStore,
   resolveDefaultModelRef,
   resolveOpenAiImageMediaCandidate,
@@ -222,12 +222,6 @@ function resolveImageModelConfigForTool(params: {
   });
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.imageToolTestApi")] = {
-    resolveImageModelConfigForTool,
-  };
-}
-
 export function createImageTool(options?: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -244,11 +238,6 @@ export function createImageTool(options?: {
   currentChannelId?: string | null;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
   modelHasVision?: boolean;
-  /**
-   * Avoid resolving auto image-provider/model candidates while registering the
-   * tool. The concrete image model is still resolved before execution.
-   */
-  deferAutoModelResolution?: boolean;
 }): AnyAgentTool | null {
   const agentDir = options?.agentDir?.trim();
   const modelHasVision = options?.modelHasVision === true;
@@ -266,24 +255,6 @@ export function createImageTool(options?: {
           imageModelConfig: explicit,
         })
       : null;
-  const shouldResolveAutoImageModel =
-    !modelHasVision && !explicitImageModelConfig && !options?.deferAutoModelResolution;
-  const resolveInitialModelConfig = (authStore: AuthProfileStore | undefined) =>
-    resolveImageModelConfigForTool({
-      cfg: options?.config,
-      agentDir,
-      workspaceDir: options?.workspaceDir,
-      authStore,
-      preparedModelRuntime: options?.preparedModelRuntime,
-    });
-  const resolvedImageModelConfig = shouldResolveAutoImageModel
-    ? resolveInitialModelConfig(
-        options?.authProfileStore ?? loadLegacyToolAuthProfileStore(agentDir),
-      )
-    : explicitImageModelConfig;
-  if (!modelHasVision && !resolvedImageModelConfig && !options?.deferAutoModelResolution) {
-    return null;
-  }
   const remoteMediaSsrfPolicy = options?.config?.tools?.web?.fetch?.ssrfPolicy;
 
   const description = modelHasVision
@@ -311,10 +282,7 @@ export function createImageTool(options?: {
     }),
     execute: async (_toolCallId, args, suppliedSignal) =>
       runWithAsyncWorkResources(async (onAcquired) => {
-        const record: Record<string, unknown> = args && typeof args === "object" ? { ...args } : {};
-        if (Array.isArray(record.paths)) {
-          record.paths = [...record.paths];
-        }
+        const record = asRecord(args);
         const capturedOperator = await captureAmbientGatewayOperatorAuthority({
           missingBindingError: () =>
             new Error("Image analysis requires its current Gateway binding."),
@@ -374,7 +342,7 @@ export function createImageTool(options?: {
           imageRoute = { kind: "native" };
         } else {
           let imageModelConfig =
-            resolvedImageModelConfig ??
+            explicitImageModelConfig ??
             resolveImageModelConfigForOverride({
               cfg: options?.config,
               modelOverride,
@@ -382,7 +350,13 @@ export function createImageTool(options?: {
           if (!imageModelConfig) {
             const authStore = await prepareToolAuthProfileStore(options);
             assertCurrent();
-            imageModelConfig = resolveInitialModelConfig(authStore);
+            imageModelConfig = resolveImageModelConfigForTool({
+              cfg: options?.config,
+              agentDir,
+              workspaceDir: options?.workspaceDir,
+              authStore,
+              preparedModelRuntime: options?.preparedModelRuntime,
+            });
           }
           if (!imageModelConfig) {
             throw new Error(

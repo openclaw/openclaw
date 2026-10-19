@@ -48,7 +48,7 @@ export function resetMemorySessionEntryLifecycle(
             type: "session.lifecycle.reset",
             input: {
               expected,
-              nextEntry: structuredClone(nextEntry),
+              nextEntry,
               resetBoundary: params.resetBoundary,
             },
           },
@@ -166,12 +166,13 @@ export function deleteMemorySessionEntryLifecycle(
                   companions.settlement = capture([
                     { sessionKey: scope.sessionKey, entry: receipt.value.deletedEntry },
                   ]);
-                  companions.settlement.beforeCommit();
+                  return companions.settlement.beforeCommit();
                 }
+                return undefined;
               },
+              settled: (settledOutcome) => companions.settlement?.settle(settledOutcome.kind),
             },
           );
-          companions.settlement?.settle(outcome.kind);
           if (outcome.kind === "rolled-back") {
             if (authorityError) {
               throw toErrorObject(

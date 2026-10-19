@@ -1,5 +1,3 @@
-// Misc media-understanding tests cover scope matching and attachment cache SSRF
-// and local path safety behavior.
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -11,91 +9,85 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { MediaAttachmentCache } from "./attachments.js";
-import { resolveMediaUnderstandingScope } from "./scope.js";
+import { resolveScopeDecision } from "./resolve.js";
 
-describe("media understanding scope", () => {
-  it("matches channel chatType explicitly", () => {
-    const scope = {
-      rules: [{ action: "deny", match: { chatType: "channel" } }],
-    } as Parameters<typeof resolveMediaUnderstandingScope>[0]["scope"];
-
-    expect(resolveMediaUnderstandingScope({ scope, chatType: "channel" })).toBe("deny");
-  });
+it("matches channel chatType explicitly", () => {
+  expect(
+    resolveScopeDecision({
+      scope: { rules: [{ action: "deny", match: { chatType: "channel" } }] },
+      ctx: { ChatType: "channel" },
+    }),
+  ).toBe("deny");
 });
 
 const originalFetch = globalThis.fetch;
 const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+const withDir = (run: (base: string) => Promise<void>) =>
+  withTestDir({ prefix: "openclaw-media-cache-" }, run);
+const read = (cache: MediaAttachmentCache, attachmentIndex = 0) =>
+  cache.getBuffer({ attachmentIndex, maxBytes: 1024, timeoutMs: 1000 });
 
-function restoreProcessState() {
-  stateDirEnvSnapshot.restore();
+async function write(file: string, text: string) {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, text);
 }
-
-async function withLocalAttachmentCache(
-  prefix: string,
-  run: (params: {
-    cache: MediaAttachmentCache;
-    attachmentPath: string;
-    canonicalAttachmentPath: string;
-  }) => Promise<void>,
+function download(text: string, mime: string) {
+  const fetch = vi
+    .fn()
+    .mockResolvedValue(new Response(text, { headers: { "content-type": mime } }));
+  globalThis.fetch = withFetchPreconnect(fetch);
+  return fetch;
+}
+async function withLocal(
+  run: (cache: MediaAttachmentCache, file: string) => Promise<void>,
+  kind: "file" | "directory" | "symlink" = "file",
 ) {
-  await withTestDir({ prefix }, async (base) => {
-    const allowedRoot = path.join(base, "allowed");
-    const attachmentPath = path.join(allowedRoot, "voice-note.m4a");
-    await fs.mkdir(allowedRoot, { recursive: true });
-    await fs.writeFile(attachmentPath, "ok");
-    const canonicalAttachmentPath = await fs.realpath(attachmentPath).catch(() => attachmentPath);
-
-    const cache = new MediaAttachmentCache([{ index: 0, path: attachmentPath }], {
-      localPathRoots: [allowedRoot],
-    });
-
-    await run({ cache, attachmentPath, canonicalAttachmentPath });
+  await withDir(async (base) => {
+    const root = path.join(base, "allowed");
+    const file = path.join(
+      root,
+      kind === "file" ? "voice-note.m4a" : kind === "directory" ? "nested" : "note.txt",
+    );
+    await fs.mkdir(root);
+    if (kind === "directory") {
+      await fs.mkdir(file);
+    } else if (kind === "symlink") {
+      await fs.symlink("/etc/passwd", file);
+    } else {
+      await fs.writeFile(file, "ok");
+    }
+    await run(
+      new MediaAttachmentCache([{ index: 0, path: file }], { localPathRoots: [root] }),
+      file,
+    );
   });
 }
 
 describe("media understanding attachments SSRF", () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
-    restoreProcessState();
+    stateDirEnvSnapshot.restore();
     vi.restoreAllMocks();
   });
 
   it("blocks private IP URLs before fetching", async () => {
     const fetchSpy = vi.fn();
     globalThis.fetch = withFetchPreconnect(fetchSpy);
-
     const cache = new MediaAttachmentCache([{ index: 0, url: "http://127.0.0.1/secret.jpg" }]);
-
-    await expect(
-      cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
-    ).rejects.toThrow(/private|internal|blocked/i);
-
+    await expect(read(cache)).rejects.toThrow(/private|internal|blocked/i);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("allows RFC2544 benchmark-range URLs only when media fetch policy opts in", async () => {
-    const url = "http://198.18.0.153/file.jpg";
-    const deniedCache = new MediaAttachmentCache([{ index: 0, url }]);
-    await expect(
-      deniedCache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
-    ).rejects.toThrow(/private|internal|blocked/i);
-
-    const fetchSpy = vi.fn().mockResolvedValue(
-      new Response("image", {
-        headers: { "content-type": "image/jpeg" },
-      }),
+    const attachment = { index: 0, url: "http://198.18.0.153/file.jpg" };
+    await expect(read(new MediaAttachmentCache([attachment]))).rejects.toThrow(
+      /private|internal|blocked/i,
     );
-    globalThis.fetch = withFetchPreconnect(fetchSpy);
-    const allowedCache = new MediaAttachmentCache([{ index: 0, url }], {
+    const fetchSpy = download("image", "image/jpeg");
+    const cache = new MediaAttachmentCache([attachment], {
       ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
-
-    const result = await allowedCache.getBuffer({
-      attachmentIndex: 0,
-      maxBytes: 1024,
-      timeoutMs: 1000,
-    });
-    expect(result).toStrictEqual({
+    expect(await read(cache)).toStrictEqual({
       buffer: Buffer.from("image"),
       classification: { mime: "image/jpeg", class: "image" },
       mime: "image/jpeg",
@@ -106,17 +98,10 @@ describe("media understanding attachments SSRF", () => {
   });
 
   it("carries no local path when a blocked path recovers through the URL fallback", async () => {
-    await withTestDir({ prefix: "openclaw-media-cache-blocked-" }, async (base) => {
+    await withDir(async (base) => {
       const blockedPath = path.join(base, "outside-roots", "report.doc");
-      await fs.mkdir(path.dirname(blockedPath), { recursive: true });
-      await fs.writeFile(blockedPath, "blocked");
-      const fetchSpy = vi.fn().mockResolvedValue(
-        new Response("remote-bytes", {
-          headers: { "content-type": "application/msword" },
-        }),
-      );
-      globalThis.fetch = withFetchPreconnect(fetchSpy);
-
+      await write(blockedPath, "blocked");
+      download("remote-bytes", "application/msword");
       const cache = new MediaAttachmentCache(
         [{ index: 0, path: blockedPath, url: "http://198.18.0.153/report.doc" }],
         {
@@ -125,45 +110,23 @@ describe("media understanding attachments SSRF", () => {
           ssrfPolicy: { allowRfc2544BenchmarkRange: true },
         },
       );
-
-      const result = await cache.getBuffer({
-        attachmentIndex: 0,
-        maxBytes: 1024,
-        timeoutMs: 1000,
-      });
-
-      // Bytes recovered remotely; the blocked path must never surface as a
-      // self-serve target in model context.
+      const result = await read(cache);
       expect(result.buffer.toString()).toBe("remote-bytes");
       expect(result.localPath).toBeUndefined();
     });
   });
 
   it("resolves each relative attachment against its own workspace", async () => {
-    await withTestDir({ prefix: "openclaw-media-cache-workspaces-" }, async (base) => {
+    await withDir(async (base) => {
       const workspaces = ["first", "second"].map((name) => path.join(base, name));
       await Promise.all(
-        workspaces.map(async (workspaceDir, index) => {
-          await fs.mkdir(workspaceDir, { recursive: true });
-          await fs.writeFile(path.join(workspaceDir, "attachment.txt"), `slot-${index}`);
-        }),
+        workspaces.map((dir, index) => write(path.join(dir, "attachment.txt"), `slot-${index}`)),
       );
       const cache = new MediaAttachmentCache(
-        workspaces.map((workspaceDir, index) => ({
-          index,
-          path: "attachment.txt",
-          workspaceDir,
-        })),
+        workspaces.map((workspaceDir, index) => ({ index, path: "attachment.txt", workspaceDir })),
         { localPathRoots: workspaces },
       );
-
-      await expect(
-        Promise.all(
-          workspaces.map((_workspaceDir, attachmentIndex) =>
-            cache.getBuffer({ attachmentIndex, maxBytes: 1024, timeoutMs: 1000 }),
-          ),
-        ),
-      ).resolves.toEqual([
+      await expect(Promise.all(workspaces.map((_, index) => read(cache, index)))).resolves.toEqual([
         expect.objectContaining({ buffer: Buffer.from("slot-0") }),
         expect.objectContaining({ buffer: Buffer.from("slot-1") }),
       ]);
@@ -171,19 +134,14 @@ describe("media understanding attachments SSRF", () => {
   });
 
   it("resolves managed inbound media URI attachments", async () => {
-    await withTestDir({ prefix: "openclaw-media-cache-managed-inbound-" }, async (stateDir) => {
+    await withDir(async (stateDir) => {
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       const saved = await saveMediaBuffer(Buffer.from("managed-media"), "text/plain", "inbound");
-
       const cache = new MediaAttachmentCache(
         [{ index: 0, path: `media://inbound/${encodeURIComponent(saved.id)}` }],
-        {
-          localPathRoots: [path.join(stateDir, "media")],
-        },
+        { localPathRoots: [path.join(stateDir, "media")] },
       );
-
-      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
-
+      const result = await read(cache);
       expect(result.buffer.toString()).toBe("managed-media");
       expect(result.fileName).toBe(saved.id);
     });
@@ -193,57 +151,32 @@ describe("media understanding attachments SSRF", () => {
     const cache = new MediaAttachmentCache([
       { index: 0, path: "media://inbound/nested%2Ffile.pdf" },
     ]);
-
-    await expect(
-      cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
-    ).rejects.toThrow(/outside allowed roots/i);
+    await expect(read(cache)).rejects.toThrow(/outside allowed roots/i);
   });
 
-  it("prefers an existing cwd-relative attachment over a state-relative collision", async () => {
-    await withTestDir({ prefix: "openclaw-media-cache-relative-collision-" }, async (base) => {
-      const stateDir = path.join(base, "state");
-      const cwd = path.join(base, "cwd");
-      const relativePath = "media/inbound/photo.jpg";
-      const cwdPath = path.join(cwd, relativePath);
-      const statePath = path.join(stateDir, relativePath);
-      await fs.mkdir(path.dirname(cwdPath), { recursive: true });
-      await fs.mkdir(path.dirname(statePath), { recursive: true });
-      await fs.writeFile(cwdPath, "cwd-media");
-      await fs.writeFile(statePath, "state-media");
-      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-      vi.spyOn(process, "cwd").mockReturnValue(cwd);
-
-      const cache = new MediaAttachmentCache([{ index: 0, path: relativePath }], {
-        localPathRoots: [path.join(cwd, "media"), path.join(stateDir, "media")],
+  it.each([true, false])(
+    "resolves cwd/state collisions with cwd allowed: %s",
+    async (allowedCwd) => {
+      await withDir(async (base) => {
+        const stateDir = path.join(base, "state");
+        const cwd = path.join(base, "cwd");
+        const relativePath = "media/inbound/photo.jpg";
+        await write(path.join(cwd, relativePath), "cwd-media");
+        await write(path.join(stateDir, relativePath), "state-media");
+        setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+        vi.spyOn(process, "cwd").mockReturnValue(cwd);
+        const roots = (allowedCwd ? [cwd, stateDir] : [stateDir]).map((root) =>
+          path.join(root, "media"),
+        );
+        const cache = new MediaAttachmentCache([{ index: 0, path: relativePath }], {
+          localPathRoots: roots,
+        });
+        expect((await read(cache)).buffer.toString()).toBe(
+          allowedCwd ? "cwd-media" : "state-media",
+        );
       });
-      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
-
-      expect(result.buffer.toString()).toBe("cwd-media");
-    });
-  });
-
-  it("falls back to state media when a cwd collision is outside allowed roots", async () => {
-    await withTestDir({ prefix: "openclaw-media-cache-blocked-cwd-collision-" }, async (base) => {
-      const stateDir = path.join(base, "state");
-      const cwd = path.join(base, "cwd");
-      const relativePath = "media/inbound/photo.jpg";
-      const cwdPath = path.join(cwd, relativePath);
-      const statePath = path.join(stateDir, relativePath);
-      await fs.mkdir(path.dirname(cwdPath), { recursive: true });
-      await fs.mkdir(path.dirname(statePath), { recursive: true });
-      await fs.writeFile(cwdPath, "blocked-cwd-media");
-      await fs.writeFile(statePath, "state-media");
-      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-      vi.spyOn(process, "cwd").mockReturnValue(cwd);
-
-      const cache = new MediaAttachmentCache([{ index: 0, path: relativePath }], {
-        localPathRoots: [path.join(stateDir, "media")],
-      });
-      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
-
-      expect(result.buffer.toString()).toBe("state-media");
-    });
-  });
+    },
+  );
 
   it("blocks local attachments outside configured roots", async () => {
     if (process.platform === "win32") {
@@ -252,93 +185,49 @@ describe("media understanding attachments SSRF", () => {
     const cache = new MediaAttachmentCache([{ index: 0, path: "/etc/passwd" }], {
       localPathRoots: ["/Users/*/Library/Messages/Attachments"],
     });
-
-    await expect(
-      cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
-    ).rejects.toThrow(/outside allowed roots/i);
+    await expect(read(cache)).rejects.toThrow(/outside allowed roots/i);
   });
 
-  it("blocks directory attachments even inside configured roots", async () => {
-    await withTestDir({ prefix: "openclaw-media-cache-dir-" }, async (base) => {
-      const allowedRoot = path.join(base, "allowed");
-      const attachmentPath = path.join(allowedRoot, "nested");
-      await fs.mkdir(attachmentPath, { recursive: true });
-
-      const cache = new MediaAttachmentCache([{ index: 0, path: attachmentPath }], {
-        localPathRoots: [allowedRoot],
-      });
-
-      await expect(
-        cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
-      ).rejects.toThrow(/not a regular file/i);
-    });
-  });
-
-  it("blocks symlink escapes that resolve outside configured roots", async () => {
-    if (process.platform === "win32") {
+  it.each([
+    ["directory", /not a regular file/i],
+    ["symlink", /outside allowed roots/i],
+  ] as const)("blocks %s attachments inside configured roots", async (kind, error) => {
+    if (kind === "symlink" && process.platform === "win32") {
       return;
     }
-    await withTestDir({ prefix: "openclaw-media-cache-symlink-" }, async (base) => {
-      const allowedRoot = path.join(base, "allowed");
-      const outsidePath = "/etc/passwd";
-      const symlinkPath = path.join(allowedRoot, "note.txt");
-      await fs.mkdir(allowedRoot, { recursive: true });
-      await fs.symlink(outsidePath, symlinkPath);
-
-      const cache = new MediaAttachmentCache([{ index: 0, path: symlinkPath }], {
-        localPathRoots: [allowedRoot],
-      });
-
-      await expect(
-        cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
-      ).rejects.toThrow(/outside allowed roots/i);
-    });
+    await withLocal(async (cache) => {
+      await expect(read(cache)).rejects.toThrow(error);
+    }, kind);
   });
 
   it("opens local attachments with nofollow on posix", async () => {
     if (process.platform === "win32") {
       return;
     }
-    await withLocalAttachmentCache(
-      "openclaw-media-cache-flags-",
-      async ({ cache, canonicalAttachmentPath }) => {
-        const openSpy = vi.spyOn(fs, "open");
-
-        await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
-
-        expect(openSpy).toHaveBeenCalled();
-        const [openedPath, openedFlags] = mockCall(openSpy);
-        expect(await fs.realpath(String(openedPath)).catch(() => String(openedPath))).toBe(
-          canonicalAttachmentPath,
-        );
-        // fs-safe 0.5.2 may add O_NONBLOCK so a raced FIFO cannot pin a worker.
-        expect(Number(openedFlags) & ~fsConstants.O_NONBLOCK).toBe(
-          fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
-        );
-      },
-    );
+    await withLocal(async (cache, file) => {
+      const openSpy = vi.spyOn(fs, "open");
+      await read(cache);
+      expect(openSpy).toHaveBeenCalled();
+      const [openedPath, openedFlags] = mockCall(openSpy);
+      expect(await fs.realpath(String(openedPath)).catch(() => String(openedPath))).toBe(
+        await fs.realpath(file),
+      );
+      // fs-safe may add O_NONBLOCK so a raced FIFO cannot pin a worker.
+      expect(Number(openedFlags) & ~fsConstants.O_NONBLOCK).toBe(
+        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+      );
+    });
   });
 
   it("rejects local attachments when canonicalization fails", async () => {
-    await withTestDir({ prefix: "openclaw-media-cache-realpath-failure-" }, async (base) => {
-      const allowedRoot = path.join(base, "allowed");
-      const attachmentPath = path.join(allowedRoot, "voice-note.m4a");
-      await fs.mkdir(allowedRoot, { recursive: true });
-      await fs.writeFile(attachmentPath, "ok");
-
-      const cache = new MediaAttachmentCache([{ index: 0, path: attachmentPath }], {
-        localPathRoots: [allowedRoot],
-      });
+    await withLocal(async (cache, file) => {
       vi.spyOn(fsSafe, "openLocalFileSafely").mockImplementation(async (params) => {
-        if (params.filePath === attachmentPath) {
+        if (params.filePath === file) {
           throw new Error("EACCES");
         }
         throw new Error(`Unexpected attachment path: ${params.filePath}`);
       });
-
-      await expect(
-        cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
-      ).rejects.toThrow(/could not be canonicalized/i);
+      await expect(read(cache)).rejects.toThrow(/could not be canonicalized/i);
     });
   });
 });

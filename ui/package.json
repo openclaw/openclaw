@@ -15,8 +15,6 @@
     "@codemirror/state": "6.7.6",
     "@codemirror/view": "6.43.14",
     "@lezer/highlight": "1.2.5",
-    "@lit/context": "1.1.6",
-    "@lit/task": "1.0.3",
     "@modelcontextprotocol/client": "2.3.1",
     "@modelcontextprotocol/core": "2.3.1",
     "@modelcontextprotocol/ext-apps": "2.0.3",
@@ -37,8 +35,7 @@
     "@panzoom/panzoom": "4.6.2",
     "@solidjs/signals": "2.0.0-rc.14",
     "@solidjs/web": "2.0.0-rc.14",
-    "@tanstack/lit-virtual": "3.14.2",
-    "@tanstack/virtual-core": "3.17.11",
+    "@tanstack/virtual-core": "3.19.0",
     "@zag-js/menu": "2.0.0-next.3",
     "@zag-js/rect-utils": "2.0.0-next.3",
     "@zag-js/vanilla": "2.0.0-next.3",
@@ -47,7 +44,6 @@
     "highlight.js": "11.12.0",
     "json5": "2.2.3",
     "jsonc-parser": "3.3.1",
-    "lit": "3.3.3",
     "markdown-it": "15.0.2",
     "markdown-it-cjk-friendly": "3.0.0",
     "markdown-it-emoji": "3.1.0",
@@ -55,7 +51,7 @@
     "parse5": "8.0.1",
     "remend": "1.4.0",
     "solid-js": "2.0.0-rc.14",
-    "zod": "4.6.5"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@solidjs/compiler": "2.0.0-rc.14",

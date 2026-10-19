@@ -10,6 +10,23 @@ import {
   unregisterMatrixApprovalReactionTargetsForApproval,
 } from "./approval-reactions.js";
 
+const { sendSingleTextMessage, sendMessage, reactMessage, repairDirectRooms } = vi.hoisted(() => ({
+  sendSingleTextMessage: vi.fn(),
+  sendMessage: vi.fn(),
+  reactMessage: vi.fn(),
+  repairDirectRooms: vi.fn(),
+}));
+vi.mock("./matrix/send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./matrix/send.js")>()),
+  sendSingleTextMessageMatrix: sendSingleTextMessage,
+  sendMessageMatrix: sendMessage,
+  reactMatrixMessage: reactMessage,
+}));
+vi.mock("./matrix/direct-management.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./matrix/direct-management.js")>()),
+  repairMatrixDirectRooms: repairDirectRooms,
+}));
+
 type ResolveTargetParams = Parameters<
   typeof resolveMatrixApprovalReactionTargetWithPersistenceRaw
 >[0];
@@ -194,16 +211,11 @@ async function buildPendingPayload(view: MatrixPendingApprovalView) {
 async function deliverPending(
   view: MatrixPendingApprovalView,
   pendingPayload: MatrixDeliverPendingParams["pendingPayload"],
-  deps: {
-    sendSingleTextMessage: ReturnType<typeof vi.fn>;
-    reactMessage: ReturnType<typeof vi.fn>;
-    sendMessage?: ReturnType<typeof vi.fn>;
-  },
 ) {
   return await matrixApprovalNativeRuntime.transport.deliverPending({
     cfg: {} as never,
     accountId: "default",
-    context: { client: {} as never, deps },
+    context: { client: {} as never },
     request: {} as never,
     approvalKind: view.approvalKind,
     plannedTarget: buildMatrixApprovalRoomTarget("!room:example.org"),
@@ -215,6 +227,9 @@ async function deliverPending(
 
 describe("matrixApprovalNativeRuntime", () => {
   beforeEach(async () => {
+    for (const mock of [sendSingleTextMessage, sendMessage, reactMessage, repairDirectRooms]) {
+      mock.mockReset();
+    }
     await unregisterMatrixApprovalReactionTargetsForApproval({
       accountId: "default",
       approvalId: "req-1",
@@ -228,20 +243,17 @@ describe("matrixApprovalNativeRuntime", () => {
   });
 
   it("delivers Matrix approval content with plugin approval fields", async () => {
-    const sendSingleTextMessage = vi.fn().mockResolvedValue({
+    sendSingleTextMessage.mockResolvedValue({
       messageId: "$plugin-approval",
       primaryMessageId: "$plugin-approval",
       receipt: buildMatrixReceipt(["$plugin-approval"]),
       roomId: "!room:example.org",
     });
-    const reactMessage = vi.fn().mockResolvedValue(undefined);
+    reactMessage.mockResolvedValue(undefined);
     const view = buildPluginApprovalView();
     const pendingPayload = await buildPendingPayload(view);
 
-    await deliverPending(view, pendingPayload, {
-      sendSingleTextMessage,
-      reactMessage,
-    });
+    await deliverPending(view, pendingPayload);
 
     const [target, text, options] = mockCall(sendSingleTextMessage) ?? [];
     expect(target).toBe("room:!room:example.org");
@@ -280,13 +292,13 @@ describe("matrixApprovalNativeRuntime", () => {
   });
 
   it("binds Matrix approval reactions before publishing option reactions", async () => {
-    const sendSingleTextMessage = vi.fn().mockResolvedValue({
+    sendSingleTextMessage.mockResolvedValue({
       messageId: "$approval",
       primaryMessageId: "$approval",
       receipt: buildMatrixReceipt(["$approval"]),
       roomId: "!room:example.org",
     });
-    const reactMessage = vi.fn().mockImplementation(async () => {
+    reactMessage.mockImplementation(async () => {
       expect(
         await resolveMatrixApprovalReactionTargetWithPersistence({
           roomId: "!room:example.org",
@@ -302,17 +314,13 @@ describe("matrixApprovalNativeRuntime", () => {
     const view = buildExecApprovalView();
     const pendingPayload = await buildPendingPayload(view);
 
-    await deliverPending(view, pendingPayload, {
-      sendSingleTextMessage,
-      reactMessage,
-    });
+    await deliverPending(view, pendingPayload);
 
     expect(reactMessage).toHaveBeenCalled();
   });
 
   it("retries transient Matrix direct-room repair failures before preparing approval DMs", async () => {
-    const repairDirectRooms = vi
-      .fn()
+    repairDirectRooms
       .mockRejectedValueOnce(new Error("direct account data not ready"))
       .mockResolvedValue({
         activeRoomId: "!dm:example.org",
@@ -329,9 +337,6 @@ describe("matrixApprovalNativeRuntime", () => {
       accountId: "default",
       context: {
         client: {} as never,
-        deps: {
-          repairDirectRooms,
-        },
       },
       request: {} as never,
       approvalKind: "exec",
@@ -356,16 +361,16 @@ describe("matrixApprovalNativeRuntime", () => {
   });
 
   it("falls back to chunked Matrix delivery when approval content exceeds one event", async () => {
-    const sendSingleTextMessage = vi
-      .fn()
-      .mockRejectedValue(new Error("Matrix single-message text exceeds limit (5000 > 4000)"));
-    const sendMessage = vi.fn().mockResolvedValue({
+    sendSingleTextMessage.mockRejectedValue(
+      new Error("Matrix single-message text exceeds limit (5000 > 4000)"),
+    );
+    sendMessage.mockResolvedValue({
       messageId: "$last",
       primaryMessageId: "$legacy-primary",
       receipt: buildMatrixReceipt(["$primary", "$last"]),
       roomId: "!room:example.org",
     });
-    const reactMessage = vi.fn().mockResolvedValue(undefined);
+    reactMessage.mockResolvedValue(undefined);
     const view = buildExecApprovalView({
       actions: [
         {
@@ -378,11 +383,7 @@ describe("matrixApprovalNativeRuntime", () => {
     });
     const pendingPayload = await buildPendingPayload(view);
 
-    const entry = await deliverPending(view, pendingPayload, {
-      sendSingleTextMessage,
-      sendMessage,
-      reactMessage,
-    });
+    const entry = await deliverPending(view, pendingPayload);
 
     expect(mockCall(sendMessage)?.[0]).toBe("room:!room:example.org");
     expect(mockCall(sendMessage)?.[1]).toBe(pendingPayload.text);

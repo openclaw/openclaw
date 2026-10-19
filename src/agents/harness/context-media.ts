@@ -12,25 +12,23 @@ export function bindHarnessContextMedia(params: {
   if (!attempt.workspaceDir || !attempt.model) {
     return undefined;
   }
-  const modelInput = structuredClone(attempt.model.input);
-  Object.freeze(modelInput);
-  const contextMedia = Object.freeze({
+  const contextMedia = {
     config,
     workspaceDir: attempt.sandbox?.enabled ? attempt.sandbox.workspaceDir : attempt.workspaceDir,
     agentWorkspaceDir: attempt.workspaceDir,
-    modelInput,
+    modelInput: attempt.model.input,
     agentId: attempt.agentId,
     channelId: attempt.messageChannel ?? attempt.messageProvider,
     accountId: attempt.agentAccountId,
     ...(attempt.sandbox?.enabled && attempt.sandbox.fsBridge
       ? {
-          sandbox: Object.freeze({
+          sandbox: {
             root: attempt.sandbox.workspaceDir,
             bridge: attempt.sandbox.fsBridge,
-          }),
+          },
         }
       : {}),
-  });
+  };
   const assertCurrent = () => {
     assertActive();
     attempt.abortSignal?.throwIfAborted();

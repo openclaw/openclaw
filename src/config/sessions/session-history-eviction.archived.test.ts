@@ -2,7 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
@@ -136,7 +136,7 @@ it.each(["rebound", "admitted", "registered", "rejected", "revoked"] as const)(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
-    let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
     let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
     try {
       await awaitGateBeforeSettlement(reached.promise, sweep, "Archived worker read was bypassed");
@@ -147,7 +147,7 @@ it.each(["rebound", "admitted", "registered", "rejected", "revoked"] as const)(
           options,
         );
       } else if (outcome === "admitted") {
-        admission = await beginSessionWorkAdmission({
+        admission = await beginSessionEffect({
           scope: storePath,
           identities: [key, victim.sessionId],
           assertAllowed: () => {},

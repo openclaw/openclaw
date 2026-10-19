@@ -18,9 +18,9 @@ function readCurrentReceipt(database: { db: EngineConnection; path: string }, se
   const receipt = projectionReceipts.getStore();
   if (
     !receipt ||
-    receipt.path !== database.path ||
     receipt.sessionId !== sessionId ||
     hasUncommittedSqliteWrites(database.db) ||
+    // The scoped token binds the admitted physical store and its committed revision.
     readSqliteDatabaseScopedWriteToken(database.db, receipt.writeScopes) !== receipt.writeToken
   ) {
     return undefined;
@@ -33,7 +33,14 @@ export function readSessionTranscriptProjectionReceipt(
   sessionId: string,
 ) {
   const receipt = readCurrentReceipt(database, sessionId);
-  return receipt && structuredClone({ facts: receipt.facts, contextOnly: receipt.contextOnly });
+  return (
+    receipt &&
+    structuredClone({
+      facts: receipt.facts,
+      contextStats: receipt.contextStats,
+      contextOnly: receipt.contextOnly,
+    })
+  );
 }
 
 /** Accounting needs row validity, already established by the complete actor postimage. */

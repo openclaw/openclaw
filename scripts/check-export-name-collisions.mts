@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -697,11 +697,19 @@ const sealedRecoveryNativeLoaderModules = [
 const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
   [
     "createSqliteWorkerBackend",
-    new Set(["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"]),
+    new Set([
+      "src/state/openclaw-state.worker.ts",
+      "src/state/openclaw-agent-execution.worker.ts",
+      "src/infra/client-credential.worker.ts",
+    ]),
   ],
   [
     "openExistingSqliteWorkerBackend",
-    new Set(["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"]),
+    new Set([
+      "src/state/openclaw-state.worker.ts",
+      "src/state/openclaw-agent-execution.worker.ts",
+      "src/infra/client-credential.worker.ts",
+    ]),
   ],
   [
     "bindSqliteWorkerBackend",

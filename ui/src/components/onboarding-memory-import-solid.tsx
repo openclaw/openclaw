@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
+import { createMemo, createSignal, createStore, For, onCleanup, onSettled, Show } from "solid-js";
 import type {
   MemoryMigrationProviderPlan,
   MigrationsMemoryApplyResult,
@@ -8,8 +8,10 @@ import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import { projectSource } from "../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import "../styles/onboarding-memory-import.css";
 import "./modal-dialog.ts";
 
@@ -84,164 +86,170 @@ function providerResultMessage(result: ProviderResult | undefined) {
       });
 }
 
-function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryImportElement }) {
-  const host = untrack(() => props.host);
-  // Workflow decisions remain synchronous; this signal only publishes their presentation.
-  const [revision, setRevision] = createSignal(0);
+function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImportElement) {
   const [planRequest, setPlanRequest] = createSignal(0);
-  const publish = () => setRevision((value) => value + 1);
+  const sources = createMemo(() =>
+    projectSource(props.context, {
+      read: (context) => context,
+      subscribe(context, notify) {
+        const releases = [context?.gateway, context?.agents, context?.agentSelection].map(
+          (source) => source?.subscribe(notify),
+        );
+        return () => releases.forEach((release) => release?.());
+      },
+      equality: "revision",
+    }),
+  );
+  // Selection and admission stay synchronous for same-turn changes and cancellation.
   let selectedByProvider: Record<string, boolean> = {};
+  const [selection, setSelection] = createSignal(selectedByProvider, { equals: false });
+  const [results, setResults] = createStore<Record<string, ProviderResult>>({});
+  const recordResult = (providerId: string, result: ProviderResult) =>
+    setResults((draft) => {
+      draft[providerId] = result;
+    });
   let applyingProviderId: string | null = null;
-  let results: Record<string, ProviderResult> = {};
+  const [applying, setApplying] = createSignal<string | null>(null);
   let done = false;
+  const [isDone, setDone] = createSignal(false);
   let closed = false;
+  const [isClosed, setClosed] = createSignal(false);
   let binding: PlanBinding | null = null;
+  const [offer, setOffer] = createSignal<PlanBinding | null>(null);
   let abortPlan: AbortController | undefined;
   let agentsListRequest: ApplicationContext["agents"] | undefined;
   let disposed = false;
 
-  createEffect(
-    () => props.context,
-    (context) => {
-      if (!context) {
-        return undefined;
-      }
-      const releases = [context.gateway, context.agents, context.agentSelection].map((source) =>
-        source.subscribe(publish),
-      );
-      return () => releases.forEach((release) => release());
-    },
-  );
-  createEffect(
-    () => {
-      revision();
-      return { context: props.context, list: props.context?.agents.state.agentsList };
-    },
-    ({ context, list }) => {
-      if (list) {
-        agentsListRequest = undefined;
-      } else if (context && agentsListRequest !== context.agents) {
-        const agents = context.agents;
-        agentsListRequest = agents;
-        void agents
-          .ensureList()
-          .catch(() => null)
-          .then(() => {
-            if (host.context?.agents === agents && !agents.state.agentsList) {
+  const agentsLifetime = (
+    <Show when={sources()} keyed>
+      {(source) => {
+        onSettled(() => {
+          const requestList = () => {
+            const context = source.read();
+            if (context?.agents.state.agentsList) {
               agentsListRequest = undefined;
+            } else if (context && agentsListRequest !== context.agents) {
+              const agents = context.agents;
+              agentsListRequest = agents;
+              void agents
+                .ensureList()
+                .catch(() => null)
+                .then(() => {
+                  if (host.context?.agents === agents && !agents.state.agentsList) {
+                    agentsListRequest = undefined;
+                  }
+                });
             }
-          });
-      }
-    },
+          };
+          // Keep list admission latched through the owner's loading and failure notifications.
+          const stop = source.subscribe(requestList);
+          requestList();
+          return stop;
+        });
+        return null;
+      }}
+    </Show>
   );
 
   const planInputs = createMemo(
     () => {
-      revision();
-      const snapshot = props.context?.gateway.snapshot;
+      const context = sources().read();
+      const snapshot = context?.gateway.snapshot;
       return [
         props.active,
-        closed,
+        isClosed(),
         guardIsDone(),
         snapshot?.phase === "connected" ? snapshot.client : null,
         snapshot ? hasOperatorAdminAccess(snapshot.hello?.auth ?? null) : false,
-        currentAgentId(props.context),
+        currentAgentId(context),
         planRequest(),
       ] as const;
     },
     { equals: (left, right) => left.every((value, index) => value === right[index]) },
   );
-  createEffect(planInputs, ([active, isClosed, guarded, client, admin, agentId]) => {
-    // Hiding an import must retain its frozen offer and eventual completion view.
-    if (applyingProviderId !== null || done) {
-      return undefined;
-    }
-    binding = null;
-    publish();
-    if (!active || isClosed || guarded || !client || !admin || !agentId) {
-      return undefined;
-    }
-    const controller = new AbortController();
-    abortPlan = controller;
-    void (async () => {
-      try {
-        const plan = await client.request<MigrationsMemoryPlanResult>(
-          "migrations.memory.plan",
-          { agentId, overwrite: false },
-          { signal: controller.signal },
-        );
-        const context = host.context;
-        if (
-          controller.signal.aborted ||
-          disposed ||
-          !host.isConnected ||
-          context?.gateway.snapshot.client !== client ||
-          currentAgentId(context) !== agentId ||
-          plan.agentId !== agentId
-        ) {
-          return;
-        }
-        const providers = offeredProviders(plan);
-        if (providers.length === 0) {
-          if (!plan.providers.some((provider) => provider.error)) {
-            setGuardDone();
-            closed = true;
-            publish();
+  const planLifetime = (
+    <Show when={planInputs()} keyed>
+      {(inputs) => {
+        onSettled(() => {
+          const [active, closedInput, guarded, client, admin, agentId] = inputs;
+          // Hiding an import must retain its frozen offer and eventual completion view.
+          if (applyingProviderId !== null || done) {
+            return undefined;
           }
-          return;
-        }
-        binding = { client, agentId, plan };
-        selectedByProvider = Object.fromEntries(
-          providers.map((provider) => [provider.providerId, true]),
-        );
-        results = {};
-        done = false;
-        publish();
-      } catch {
-        // Planning is an optional, silent onboarding offer.
-      }
-    })();
-    return () => {
-      controller.abort();
-      if (abortPlan === controller) {
-        abortPlan = undefined;
-      }
-    };
-  });
-  const liveBinding = () => {
-    revision();
+          setOffer((binding = null));
+          if (!active || closedInput || guarded || !client || !admin || !agentId) {
+            return undefined;
+          }
+          const controller = new AbortController();
+          abortPlan = controller;
+          void client
+            .request<MigrationsMemoryPlanResult>(
+              "migrations.memory.plan",
+              { agentId, overwrite: false },
+              { signal: controller.signal },
+            )
+            .then((plan) => {
+              const context = host.context;
+              if (
+                controller.signal.aborted ||
+                disposed ||
+                !host.isConnected ||
+                context?.gateway.snapshot.client !== client ||
+                currentAgentId(context) !== agentId ||
+                plan.agentId !== agentId
+              ) {
+                return;
+              }
+              const providers = offeredProviders(plan);
+              if (providers.length === 0) {
+                if (!plan.providers.some((provider) => provider.error)) {
+                  finish();
+                }
+                return;
+              }
+              setOffer((binding = { client, agentId, plan }));
+              selectedByProvider = Object.fromEntries(
+                providers.map((provider) => [provider.providerId, true]),
+              );
+              setSelection(selectedByProvider);
+              setResults(() => ({}));
+              setDone((done = false));
+            })
+            .catch(() => {
+              // Planning is an optional, silent onboarding offer.
+            });
+          return () => {
+            controller.abort();
+            if (abortPlan === controller) {
+              abortPlan = undefined;
+            }
+          };
+        });
+        return null;
+      }}
+    </Show>
+  );
+  const currentBinding = (candidate: PlanBinding | null) => {
     const context = props.context;
-    return binding?.client === context?.gateway.snapshot.client &&
-      binding?.agentId === currentAgentId(context)
-      ? binding
+    return candidate?.client === context?.gateway.snapshot.client &&
+      candidate?.agentId === currentAgentId(context)
+      ? candidate
       : null;
   };
-  const plan = createMemo(() => liveBinding()?.plan ?? null);
-  const providers = createMemo(() => offeredProviders(plan()));
-  const view = createMemo(() => {
-    revision();
-    return { selectedByProvider, applyingProviderId, results, done };
+  const providers = createMemo(() => {
+    sources().read();
+    return offeredProviders(currentBinding(offer())?.plan ?? null);
   });
   const isVisible = () => {
-    revision();
-    const snapshot = props.context?.gateway.snapshot;
-    return (
-      props.active &&
-      !closed &&
-      !guardIsDone() &&
-      snapshot?.phase === "connected" &&
-      snapshot.client &&
-      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-      providers().length > 0
-    );
+    const [active, closedInput, guarded, client, admin] = planInputs();
+    return active && !closedInput && !guarded && client && admin && providers().length > 0;
   };
   const finish = () => {
     setGuardDone();
-    closed = true;
-    publish();
+    setClosed((closed = true));
   };
   const importSelected = async () => {
-    const current = liveBinding();
+    const current = currentBinding(binding);
     if (!current || applyingProviderId !== null || done) {
       return;
     }
@@ -260,11 +268,10 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
         context?.gateway.snapshot.client !== current.client ||
         currentAgentId(context) !== current.agentId
       ) {
-        results[provider.providerId] = {
+        recordResult(provider.providerId, {
           kind: "error",
           message: t("onboarding.memoryImport.connectionChanged"),
-        };
-        publish();
+        });
         continue;
       }
       const itemIds = plannedItems(provider).map((item) => item.id);
@@ -272,8 +279,7 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
       if (!planFingerprint || itemIds.length === 0) {
         continue;
       }
-      applyingProviderId = provider.providerId;
-      publish();
+      setApplying((applyingProviderId = provider.providerId));
       try {
         const result = await current.client.request<MigrationsMemoryApplyResult>(
           "migrations.memory.apply",
@@ -286,46 +292,44 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
             overwrite: false,
           },
         );
-        results[provider.providerId] = {
+        recordResult(provider.providerId, {
           kind: result.summary.errors > 0 || result.summary.conflicts > 0 ? "partial" : "success",
           result,
-        };
+        });
       } catch (error) {
-        results[provider.providerId] = {
+        recordResult(provider.providerId, {
           kind: "error",
           message: formatUiError(error, t("onboarding.memoryImport.unknownError")),
-        };
+        });
       }
-      publish();
     }
-    applyingProviderId = null;
+    setApplying((applyingProviderId = null));
     done =
       host.context?.gateway.snapshot.client === current.client &&
       currentAgentId(host.context) === current.agentId;
-    publish();
+    setDone(done);
     if (!done) {
       setPlanRequest((value) => value + 1);
     }
   };
   const disconnect = () => {
     abortPlan?.abort();
-    binding = null;
-    publish();
+    setOffer((binding = null));
     queueMicrotask(() => {
       if (!disposed && host.isConnected) {
         setPlanRequest((value) => value + 1);
       }
     });
   };
-  host.addEventListener("onboarding-memory-disconnect", disconnect);
+  const stopDisconnect = listen(host, "onboarding-memory-disconnect", disconnect);
   onCleanup(() => {
     disposed = true;
     abortPlan?.abort();
-    host.removeEventListener("onboarding-memory-disconnect", disconnect);
+    stopDisconnect();
   });
 
   function Provider(providerProps: { provider: MemoryMigrationProviderPlan }) {
-    const result = () => view().results[providerProps.provider.providerId];
+    const result = () => results[providerProps.provider.providerId];
     const conflicts = () =>
       providerProps.provider.items.filter((item) => item.status === "conflict").length;
     return (
@@ -336,11 +340,11 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
         <label>
           <input
             type="checkbox"
-            checked={view().selectedByProvider[providerProps.provider.providerId] ?? false}
-            disabled={view().applyingProviderId !== null || view().done}
+            checked={selection()[providerProps.provider.providerId] ?? false}
+            disabled={applying() !== null || isDone()}
             onChange={(event) => {
               selectedByProvider[providerProps.provider.providerId] = event.currentTarget.checked;
-              publish();
+              setSelection(selectedByProvider);
             }}
           />
           <span class="onboarding-memory-import__provider-copy">
@@ -362,7 +366,7 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
         </label>
         <div class="onboarding-memory-import__provider-status" aria-live="polite">
           <Show
-            when={view().applyingProviderId === providerProps.provider.providerId}
+            when={applying() === providerProps.provider.providerId}
             fallback={
               result()?.kind === "success"
                 ? providerResultMessage(result())
@@ -375,17 +379,14 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
       </li>
     );
   }
-  const total = (field: "migrated" | "skipped") => {
-    revision();
-    return Object.values(results).reduce(
+  const total = (field: "migrated" | "skipped") =>
+    Object.values(results).reduce(
       (sum, result) => sum + (result.kind === "error" ? 0 : result.result.summary[field]),
       0,
     );
-  };
-  const busy = () => view().applyingProviderId !== null;
-  const hasSelected = () =>
-    providers().some((provider) => view().selectedByProvider[provider.providerId]);
-  const actions = (): ImportAction[] => (view().done ? ["continue"] : ["import", "skip", "review"]);
+  const busy = () => applying() !== null;
+  const hasSelected = () => providers().some((provider) => selection()[provider.providerId]);
+  const actions = (): ImportAction[] => (isDone() ? ["continue"] : ["import", "skip", "review"]);
   const actionLabels = () => ({
     continue: t("common.continue"),
     import: t(busy() ? "common.importing" : "onboarding.memoryImport.import"),
@@ -403,74 +404,76 @@ function OnboardingMemoryImportContent(props: Props & { host: OnboardingMemoryIm
     }
   };
   return (
-    <Show when={isVisible()}>
-      <openclaw-modal-dialog
-        class="onboarding-memory-import-dialog"
-        label={t("onboarding.memoryImport.title")}
-        description={t("onboarding.memoryImport.body")}
-        onModal-cancel={(event: Event) => {
-          if (applyingProviderId !== null) {
-            event.preventDefault();
-          } else {
-            finish();
-          }
-        }}
-      >
-        <section class="onboarding-memory-import">
-          <header>
-            <h2>
-              {view().done
-                ? t("onboarding.memoryImport.doneTitle")
-                : t("onboarding.memoryImport.title")}
-            </h2>
-            <p>
-              {view().done
-                ? t("onboarding.memoryImport.doneBody", {
-                    migrated: String(total("migrated")),
-                    skipped: String(total("skipped")),
-                  })
-                : t("onboarding.memoryImport.body")}
-            </p>
-          </header>
-          <ul>
-            <For each={providers()}>{(provider) => <Provider provider={provider} />}</For>
-          </ul>
-          <openclaw-modal-actions class="onboarding-memory-import__actions">
-            <For each={actions()}>
-              {(action) => (
-                <button
-                  class={[
-                    "btn",
-                    {
-                      primary: action === "import" || action === "continue",
-                      "btn--ghost onboarding-memory-import__review": action === "review",
-                    },
-                  ]}
-                  type="button"
-                  data-test-id={
-                    action === "review" ? undefined : `onboarding-memory-import-${action}`
-                  }
-                  disabled={
-                    action !== "continue" && (busy() || (action === "import" && !hasSelected()))
-                  }
-                  onClick={() => runAction(action)}
-                >
-                  {actionLabels()[action]}
-                </button>
-              )}
-            </For>
-          </openclaw-modal-actions>
-        </section>
-      </openclaw-modal-dialog>
-    </Show>
+    <>
+      {agentsLifetime}
+      {planLifetime}
+      <Show when={isVisible()}>
+        <openclaw-modal-dialog
+          class="onboarding-memory-import-dialog"
+          label={t("onboarding.memoryImport.title")}
+          description={t("onboarding.memoryImport.body")}
+          onModal-cancel={(event: Event) => {
+            if (applyingProviderId !== null) {
+              event.preventDefault();
+            } else {
+              finish();
+            }
+          }}
+        >
+          <section class="onboarding-memory-import">
+            <header>
+              <h2>
+                {isDone()
+                  ? t("onboarding.memoryImport.doneTitle")
+                  : t("onboarding.memoryImport.title")}
+              </h2>
+              <p>
+                {isDone()
+                  ? t("onboarding.memoryImport.doneBody", {
+                      migrated: String(total("migrated")),
+                      skipped: String(total("skipped")),
+                    })
+                  : t("onboarding.memoryImport.body")}
+              </p>
+            </header>
+            <ul>
+              <For each={providers()}>{(provider) => <Provider provider={provider} />}</For>
+            </ul>
+            <openclaw-modal-actions class="onboarding-memory-import__actions">
+              <For each={actions()}>
+                {(action) => (
+                  <button
+                    class={[
+                      "btn",
+                      {
+                        primary: action === "import" || action === "continue",
+                        "btn--ghost onboarding-memory-import__review": action === "review",
+                      },
+                    ]}
+                    type="button"
+                    data-test-id={
+                      action === "review" ? undefined : `onboarding-memory-import-${action}`
+                    }
+                    disabled={
+                      action !== "continue" && (busy() || (action === "import" && !hasSelected()))
+                    }
+                    onClick={() => runAction(action)}
+                  >
+                    {actionLabels()[action]}
+                  </button>
+                )}
+              </For>
+            </openclaw-modal-actions>
+          </section>
+        </openclaw-modal-dialog>
+      </Show>
+    </>
   );
 }
 
 export const OnboardingMemoryImport = defineSolidBridge<Props>(
   "openclaw-onboarding-memory-import",
-  (props, host) => (
-    <OnboardingMemoryImportContent context={props.context} active={props.active} host={host} />
-  ),
+  OnboardingMemoryImportContent,
   {
     properties: {
       context: { default: undefined, attribute: false },

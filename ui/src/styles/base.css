@@ -11,7 +11,6 @@
   --popover: #191c24;
   --popover-foreground: #f0f0f2;
   --session-hovercard-surface: color-mix(in srgb, var(--card) 94%, black 6%);
-  --session-hovercard-progress-surface: color-mix(in srgb, var(--card) 58%, var(--bg) 42%);
 
   --panel: #0e1015;
   --panel-strong: #191c24;
@@ -84,7 +83,6 @@
   --accent-foreground: #0e1015;
   --accent-glow: rgba(255, 92, 92, 0.2);
   --inbox-attention: #e5243b;
-  --inbox-attention-hover: color-mix(in srgb, var(--inbox-attention) 88%, black);
   --inbox-attention-foreground: #ffffff;
 
   /* Lobster mascot icon (icons-tools.ts). Dark surfaces swallowed the shipped
@@ -194,7 +192,6 @@
   --destructive-hover: var(--destructive);
   --destructive-foreground: #fafafa;
   --warn: #f59e0b;
-  --warn-muted: rgba(245, 158, 11, 0.75);
   --warn-subtle: rgba(245, 158, 11, 0.08);
   /* Presence dots are indicators, not text: idle keeps this amber in every theme. */
   --presence-idle: #f59e0b;
@@ -251,7 +248,6 @@
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.4);
   --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.5);
-  --shadow-glow: 0 0 24px var(--accent-glow);
 
   /* Transient surfaces use one edge and elevation treatment. Persistent
      panels and dialogs keep their independent elevation hierarchy. */
@@ -325,7 +321,6 @@
 
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --duration-fast: 100ms;
   --duration-normal: 180ms;
   --duration-slow: 300ms;
@@ -435,7 +430,7 @@
     :is(.chat-thread, .chat-session-rail__thread)
     .chat-group.user
     :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
-    > :is(.chat-text, .chat-message-disclosure, .chat-json-collapse) {
+    > :is(.chat-text, .chat-message-disclosure) {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
@@ -517,11 +512,6 @@
   --popover: #ffffff;
   --popover-foreground: #211e1a;
   --session-hovercard-surface: var(--card);
-  --session-hovercard-progress-surface: color-mix(
-    in srgb,
-    var(--card) 54%,
-    var(--panel-strong) 46%
-  );
 
   --panel: #faf9f7;
   --panel-strong: #f4f1ec;
@@ -606,7 +596,6 @@
   --destructive: #dc2626;
   --destructive-foreground: #fafafa;
   --warn: #92400e;
-  --warn-muted: rgba(146, 64, 14, 0.75);
   --warn-subtle: rgba(146, 64, 14, 0.08);
   --danger: #b91c1c;
   --danger-muted: rgba(185, 28, 28, 0.75);
@@ -635,7 +624,6 @@
   --shadow-md: 0 4px 12px rgba(60, 42, 24, 0.07);
   --shadow-lg: 0 12px 28px rgba(60, 42, 24, 0.09);
   --shadow-xl: 0 24px 48px rgba(60, 42, 24, 0.11);
-  --shadow-glow: 0 0 20px var(--accent-glow);
   --overlay-border: color-mix(in srgb, var(--border-strong) 64%, transparent);
   --overlay-shadow: 0 1px 2px rgb(60 42 24 / 0.035), 0 8px 24px rgb(60 42 24 / 0.065);
   --overlay-modal-backdrop: color-mix(in oklab, #101219 50%, transparent);

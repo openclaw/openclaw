@@ -5,14 +5,22 @@ description: "Review, triage, repair, or land OpenClaw issues and pull requests 
 
 # OpenClaw PR Maintainer
 
-- Requested issue/PR operation only. Root `AGENTS.md`: repair, product, source-trust, approval policy. This skill: GitHub workflow.
+- Requested issue/PR operation only. Root `AGENTS.md`: repair, product, source-trust, approval policy. This skill: GitHub workflow and maintainer authority.
 - Pasted ref ≠ publication permission or scope expansion.
+
+## Maintainer authority
+
+- **Red `main` is an emergency, not an unrelated landing prerequisite.** Push proven red-`main` fixes directly to `main` within repair scope. For a scoped maintainer instruction to land despite unrelated/pre-existing CI, select the [inherited-failure exception](references/landing.md#authorized-pre-existing-failures); do not demand special wording, renewed approval, or repair/rerun unrelated main CI first. Human authorization, failure evidence, and the protected writer's execution capability are separate checks.
+- Repair-and-land authority covers internal scheduling, database admission, lifecycle design, risk, verification. In-task bug fixes (including compatible SDK fixes) and backed-up repairs removing only invalid or unreachable data need no renewed approval.
+- Bulk close/reopen above 50 items needs explicit count and scope.
+- Advisory workflows need explicit security request.
+- Peter-instructed Team updates use the [release deployer](../update-team-server/SKILL.md); never edit live state outside its owner. Notify Night Watch of every deploy/restart; it coordinates restart timing, not update approval.
 
 ## Select the scope
 
 - **Review/triage/list:** read-only; explain change/findings/proof/uncertainty. Edits, assignment, labels, comments, closes need authority.
 - **Fix only:** investigate/repair/validate locally; publication needs ship/land or scoped equivalent.
-- **Land/ship/autonomous repair:** source proof → review → native submission → verified merge. Track pending requests; repair CI/conflicts under same authority. Accepted auto-merge ≠ done. Preserve credit/unrelated work; root gates remain, no repeat routine permission.
+- **Land/ship/autonomous repair:** source proof → review → native submission → verified merge. Track pending requests; repair PR-caused CI/conflicts under same authority, route attributed inherited CI through the exception above. Accepted auto-merge ≠ done. Preserve credit/unrelated work; root gates remain, no repeat routine permission.
 - **Queue/discovery:** read [triage](references/triage.md). Batch live reads/shared discovery; named PR ≠ queue sweep.
 - **Author/regression attribution:** [author and provenance research](references/attribution.md); account age/history conditional.
 - Lead hands-on; bounded useful workers, serialized checkout/refs + GitHub writes. No user-owned app tasks hiding internal subtasks. Preserve stalled worker patches/claims/proof before takeover/reassignment.

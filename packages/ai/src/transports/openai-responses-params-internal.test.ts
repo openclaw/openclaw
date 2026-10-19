@@ -2,6 +2,7 @@ import type { Model } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import {
   buildOpenAIResponsesCompactSystemMessage,
+  buildOpenAIResponsesParams,
   sanitizeOpenAICodexResponsesParams,
 } from "./openai-responses-params-internal.js";
 
@@ -77,5 +78,21 @@ describe("buildOpenAIResponsesCompactSystemMessage", () => {
       "Retain the conversation.",
     );
     expect(message.role).toBe("system");
+  });
+});
+
+describe("buildOpenAIResponsesParams reasoning summary", () => {
+  it.each([
+    [null, null],
+    [undefined, "auto"],
+  ] as const)("sends summary %s as %s", (reasoningSummary, expected) => {
+    const params = buildOpenAIResponsesParams(
+      reasoningModel,
+      { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      { reasoningEffort: "medium", reasoningSummary },
+    );
+
+    expect(params.reasoning).toEqual({ effort: "medium", summary: expected });
+    expect(params.include).toEqual(["reasoning.encrypted_content"]);
   });
 });

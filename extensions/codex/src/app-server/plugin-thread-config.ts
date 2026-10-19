@@ -2,15 +2,13 @@ import { codexAppIdentityKey } from "./app-identity.js";
 import { defaultCodexAppInventoryCache, CodexAppInventoryCache } from "./app-inventory-cache.js";
 import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import {
+  readCodexPluginConfig,
   resolveCodexPluginsPolicy,
   type CodexPluginDestructiveApprovalMode,
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,
 } from "./config.js";
-import {
-  ensureCodexPluginActivation,
-  type CodexPluginActivationResult,
-} from "./plugin-activation.js";
+import { ensureCodexPluginActivation } from "./plugin-activation.js";
 import { buildCodexAppApprovalOverrides } from "./plugin-app-approval-overrides.js";
 import {
   readCodexPluginInventory,
@@ -81,7 +79,7 @@ const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 15;
 const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
 
 export function shouldBuildCodexPluginThreadConfig(pluginConfig?: unknown): boolean {
-  return resolveCodexPluginsPolicy(pluginConfig).configured;
+  return resolveCodexPluginsPolicy(readCodexPluginConfig(pluginConfig)).configured;
 }
 
 /** Fingerprints policy and app-cache identity before runtime inventory is read. */
@@ -123,7 +121,8 @@ export async function buildCodexPluginThreadConfig(
 ): Promise<CodexPluginThreadConfig> {
   const appCache = params.appCache ?? defaultCodexAppInventoryCache;
   const threadAppCacheKey = resolveCodexPluginThreadAppCacheKey(params);
-  const policy = params.policy ?? resolveCodexPluginsPolicy(params.pluginConfig);
+  const policy =
+    params.policy ?? resolveCodexPluginsPolicy(readCodexPluginConfig(params.pluginConfig));
   const inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
     policy,
     appCacheKey: params.appCacheKey,
@@ -177,7 +176,8 @@ export async function buildCodexPluginThreadConfig(
     });
   }
   const activationDiagnostics: CodexPluginThreadConfigDiagnostic[] = [];
-  const activationResults: CodexPluginActivationResult[] = [];
+  const activationResults = new Map<string, boolean>();
+  let postInstallRefreshRequired = false;
   for (const record of inventory.records) {
     if (!record.activationRequired) {
       continue;
@@ -188,7 +188,8 @@ export async function buildCodexPluginThreadConfig(
       deferAppInventoryRefresh: true,
       targetAppIds: record.ownedAppIds,
     });
-    activationResults.push(activation);
+    activationResults.set(record.policy.configKey, activation.ok);
+    postInstallRefreshRequired ||= activation.ok && activation.installAttempted;
     if (!activation.ok) {
       activationDiagnostics.push({
         code: "plugin_activation_failed",
@@ -197,9 +198,6 @@ export async function buildCodexPluginThreadConfig(
       });
     }
   }
-  const postInstallRefreshRequired = activationResults.some(
-    (activation) => activation.ok && activation.installAttempted,
-  );
   // Activation can become unnecessary or fail before it refreshes apps. Rebuild the
   // deferred missing snapshot so unrelated active plugin apps are not silently erased.
   const deferredMissingRefreshRequired =
@@ -277,10 +275,8 @@ export async function buildCodexPluginThreadConfig(
     if (!record.policy.enabled) {
       continue;
     }
-    const activation = activationResults.find(
-      (item) => item.identity.configKey === record.policy.configKey,
-    );
-    if (activation?.ok === false || (record.activationRequired && !activation?.ok)) {
+    const activationSucceeded = activationResults.get(record.policy.configKey);
+    if (activationSucceeded === false || (record.activationRequired && !activationSucceeded)) {
       continue;
     }
     if (record.appOwnership !== "proven") {

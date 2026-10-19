@@ -14,17 +14,24 @@ import { withinTest } from "../../../helpers/promise.js";
 type ExecTool = ReturnType<typeof createExecTool>;
 type ProcessTool = ReturnType<typeof createProcessTool>;
 type ToolResult = Awaited<ReturnType<ExecTool["execute"]>>;
+type ProcessAction = ReturnType<typeof processActions>;
 type ProcessDetails = {
-  aggregated?: string;
-  exitReason?: string;
   pid?: number;
   sessionId?: string;
   sessions?: Array<{ sessionId: string; status: string }>;
   status?: string;
-  timedOut?: boolean;
 };
 
 const POLL_OPTIONS = { timeout: 10_000, interval: 25 };
+
+function processActions(tool: ProcessTool) {
+  return (action: string, sessionId?: string) =>
+    tool.execute(`${action}-${sessionId ?? "all"}`, {
+      action,
+      sessionId,
+      ...(action === "poll" ? { timeout: 250 } : {}),
+    });
+}
 let cleanupProcesses: (() => Promise<void>) | undefined;
 
 afterEach(async () => {
@@ -49,9 +56,11 @@ function nodeEvalCommand(source: string): string {
 
 function requireSession(result: ToolResult): { pid: number; sessionId: string } {
   const details = result.details as ProcessDetails;
-  expect(details.status).toBe("running");
-  expect(details.sessionId).toEqual(expect.any(String));
-  expect(details.pid).toEqual(expect.any(Number));
+  expect(details).toMatchObject({
+    status: "running",
+    sessionId: expect.any(String),
+    pid: expect.any(Number),
+  });
   return { pid: details.pid as number, sessionId: details.sessionId as string };
 }
 
@@ -99,15 +108,11 @@ function injectKillPermissionError(child: ChildProcess): void {
   }
 }
 
-async function pollTerminal(processTool: ProcessTool, sessionId: string) {
+async function pollTerminal(action: ProcessAction, sessionId: string) {
   let terminal: Awaited<ReturnType<ProcessTool["execute"]>> | undefined;
   await expect
     .poll(async () => {
-      terminal = await processTool.execute(`poll-${sessionId}`, {
-        action: "poll",
-        sessionId,
-        timeout: 250,
-      });
+      terminal = await action("poll", sessionId);
       return (terminal.details as ProcessDetails).status;
     }, POLL_OPTIONS)
     .not.toBe("running");
@@ -117,47 +122,42 @@ async function pollTerminal(processTool: ProcessTool, sessionId: string) {
   return terminal;
 }
 
-async function clearFinished(processTool: ProcessTool, sessionId: string): Promise<void> {
-  const cleared = await processTool.execute(`clear-${sessionId}`, {
-    action: "clear",
-    sessionId,
-  });
-  expect(cleared.details).toMatchObject({ status: "completed" });
-}
-
 test("OpenClaw executes and controls the complete real process lifecycle", async ({
   signal,
   onTestFinished,
 }) => {
   resetProcessRegistryForTests();
   const scopeKey = `agent:qa:exec-lifecycle-${process.pid}`;
-  const execTool = createExecTool({
+  const execOptions = {
     host: "gateway",
     security: "full",
     ask: "off",
-    allowBackground: true,
-    backgroundMs: 20,
     notifyOnExit: false,
     scopeKey,
-  });
-  const foregroundExecTool = createExecTool({
-    host: "gateway",
-    security: "full",
-    ask: "off",
-    allowBackground: false,
-    notifyOnExit: false,
-    scopeKey,
-  });
-  const processTool = createProcessTool({ scopeKey });
+  } as const;
+  const execTool = createExecTool({ ...execOptions, allowBackground: true, backgroundMs: 20 });
+  const foregroundExecTool = createExecTool({ ...execOptions, allowBackground: false });
+  const action = processActions(createProcessTool({ scopeKey }));
   const cleanupPids = new Set<number>();
+  const track = (result: ToolResult) => {
+    const session = requireSession(result);
+    cleanupPids.add(session.pid);
+    return session;
+  };
+  const finish = async (session: ReturnType<typeof track>, expected: object, forget = true) => {
+    expect((await pollTerminal(action, session.sessionId)).details).toMatchObject(expected);
+    expect((await action("clear", session.sessionId)).details).toMatchObject({
+      status: "completed",
+    });
+    if (forget) {
+      cleanupPids.delete(session.pid);
+    }
+  };
   let cleanupPromise: Promise<void> | undefined;
   const cleanup = () =>
     (cleanupPromise ??= (async () => {
       for (const session of listRunningSessions().filter((entry) => entry.scopeKey === scopeKey)) {
-        await processTool.execute(`cleanup-${session.id}`, {
-          action: "remove",
-          sessionId: session.id,
-        });
+        await action("remove", session.id);
       }
       for (const pid of cleanupPids) {
         if (pidExists(pid)) {
@@ -173,82 +173,60 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
   onTestFinished(cleanup);
 
   try {
-    const missingRunId = `missing-command-${process.pid}`;
     await expect(
       getProcessSupervisor().spawn({
         mode: "child",
         argv: ["/definitely/not/a/real-openclaw-command"],
         env: { OPENCLAW_CHILD_OOM_SCORE_ADJ: "0" },
-        runId: missingRunId,
+        runId: `missing-command-${process.pid}`,
       }),
     ).rejects.toMatchObject({ code: "ENOENT" });
 
-    const shellMarker = `shell-route-${process.pid}`;
     const foregroundCommand =
       process.platform === "win32"
-        ? `Write-Output -NoNewline ${shellQuote(shellMarker)}; Write-Output -NoNewline "|$env:OPENCLAW_SHELL"`
-        : `printf '%s' ${shellQuote(shellMarker)} && printf '|%s' "$OPENCLAW_SHELL"`;
+        ? 'Write-Output -NoNewline shell-route; Write-Output -NoNewline "|$env:OPENCLAW_SHELL"'
+        : 'printf shell-route && printf "|%s" "$OPENCLAW_SHELL"';
     const foreground = await foregroundExecTool.execute("foreground-shell", {
       command: foregroundCommand,
     });
     expect(foreground.details).toMatchObject({ status: "completed", exitCode: 0 });
-    expect(textOf(foreground)).toContain(`${shellMarker}|exec`);
+    expect(textOf(foreground)).toContain("shell-route|exec");
 
-    const backgroundStart = `background-start-${process.pid}`;
-    const backgroundEnd = `background-end-${process.pid}`;
     const background = await execTool.execute("explicit-background", {
       command: nodeEvalCommand(
-        `process.stdout.write(${JSON.stringify(backgroundStart + "\n")});` +
-          `setTimeout(() => process.stdout.write(${JSON.stringify(backgroundEnd + "\n")}), 350);`,
+        "console.log('background-start');setTimeout(() => console.log('background-end'), 350);",
       ),
       background: true,
     });
-    const backgroundSession = requireSession(background);
-    cleanupPids.add(backgroundSession.pid);
+    const backgroundSession = track(background);
 
-    const listed = await processTool.execute("list-background", { action: "list" });
-    expect((listed.details as ProcessDetails).sessions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          sessionId: backgroundSession.sessionId,
-          status: "running",
-        }),
-      ]),
+    const listed = await action("list");
+    expect((listed.details as ProcessDetails).sessions).toContainEqual(
+      expect.objectContaining({ sessionId: backgroundSession.sessionId, status: "running" }),
     );
 
     await expect
       .poll(async () => {
-        const log = await processTool.execute("log-background", {
-          action: "log",
-          sessionId: backgroundSession.sessionId,
-        });
+        const log = await action("log", backgroundSession.sessionId);
         return textOf(log);
       }, POLL_OPTIONS)
-      .toContain(backgroundStart);
+      .toContain("background-start");
 
-    const backgroundTerminal = await pollTerminal(processTool, backgroundSession.sessionId);
-    expect(backgroundTerminal.details).toMatchObject({
+    await finish(backgroundSession, {
       status: "completed",
       exitCode: 0,
+      aggregated: expect.stringContaining("background-end"),
     });
-    expect((backgroundTerminal.details as ProcessDetails).aggregated).toContain(backgroundEnd);
-    await clearFinished(processTool, backgroundSession.sessionId);
-    cleanupPids.delete(backgroundSession.pid);
 
-    const yieldedMarker = `yielded-terminal-${process.pid}`;
     const yielded = await execTool.execute("yielded-background", {
-      command: nodeEvalCommand(
-        `setTimeout(() => process.stdout.write(${JSON.stringify(yieldedMarker + "\n")}), 350);`,
-      ),
+      command: nodeEvalCommand("setTimeout(() => console.log('yielded-terminal'), 350);"),
       yieldMs: 20,
     });
-    const yieldedSession = requireSession(yielded);
-    cleanupPids.add(yieldedSession.pid);
-    const yieldedTerminal = await pollTerminal(processTool, yieldedSession.sessionId);
-    expect(yieldedTerminal.details).toMatchObject({ status: "completed", exitCode: 0 });
-    expect((yieldedTerminal.details as ProcessDetails).aggregated).toContain(yieldedMarker);
-    await clearFinished(processTool, yieldedSession.sessionId);
-    cleanupPids.delete(yieldedSession.pid);
+    await finish(track(yielded), {
+      status: "completed",
+      exitCode: 0,
+      aggregated: expect.stringContaining("yielded-terminal"),
+    });
 
     const timedOut = await foregroundExecTool.execute("foreground-timeout", {
       command: nodeEvalCommand("setTimeout(() => {}, 5000);"),
@@ -261,17 +239,15 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
     });
     expect(textOf(timedOut)).toContain("Command timed out after 0.05 seconds.");
 
-    const ptyMarker = `pty-route-${process.pid}`;
     const pty = await foregroundExecTool.execute("foreground-pty", {
       command: nodeEvalCommand(
-        `process.stdout.write(${JSON.stringify(ptyMarker + ":")} + String(Boolean(process.stdout.isTTY)) + ":" + (process.env.OPENCLAW_SHELL || ""));`,
+        'process.stdout.write("pty-route:" + Boolean(process.stdout.isTTY) + ":" + (process.env.OPENCLAW_SHELL || ""));',
       ),
       pty: true,
     });
     expect(pty.details).toMatchObject({ status: "completed", exitCode: 0 });
-    expect(textOf(pty)).toContain(`${ptyMarker}:true:exec`);
+    expect(textOf(pty)).toContain("pty-route:true:exec");
 
-    const killMarker = `kill-target-${process.pid}`;
     const spawnedChildren = new Map<number, ChildProcess>();
     // oxlint-disable-next-line typescript/unbound-method -- Forward with each child's receiver via originalEmit.call(this, ...).
     const originalEmit = ChildProcess.prototype.emit;
@@ -287,9 +263,7 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
     });
     let killTarget: ToolResult;
     try {
-      const childCommand = nodeEvalCommand(
-        `process.stdout.write(${JSON.stringify(killMarker + "\n")});setInterval(() => {}, 1000);`,
-      );
+      const childCommand = nodeEvalCommand("setInterval(() => {}, 1000);");
       killTarget = await execTool.execute("kill-background", {
         command: process.platform === "win32" ? childCommand : `exec ${childCommand}`,
         background: true,
@@ -297,8 +271,7 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
     } finally {
       captureSpawn.mockRestore();
     }
-    const killedSession = requireSession(killTarget);
-    cleanupPids.add(killedSession.pid);
+    const killedSession = track(killTarget);
     const child = spawnedChildren.get(killedSession.pid);
     if (!child) {
       throw new Error(`missing spawned child ${killedSession.pid}`);
@@ -315,34 +288,23 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
       expect(child.listenerCount("error")).toBe(errorListenerCount);
       expect(observedErrors[attempt]).toMatchObject({ code: "EPERM", syscall: "kill" });
       await Promise.resolve();
-      expect(listRunningSessions()).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ id: killedSession.sessionId, exited: false }),
-        ]),
+      expect(listRunningSessions()).toContainEqual(
+        expect.objectContaining({ id: killedSession.sessionId, exited: false }),
       );
       expect(getActiveBackgroundExecSessionCount()).toBe(1);
       expect(pidExists(killedSession.pid)).toBe(true);
     }
 
-    const killed = await processTool.execute("kill-session", {
-      action: "kill",
-      sessionId: killedSession.sessionId,
-    });
+    const killed = await action("kill", killedSession.sessionId);
     expect(killed.details).toMatchObject({ status: "completed" });
-    const killedTerminal = await pollTerminal(processTool, killedSession.sessionId);
-    expect(killedTerminal.details).toMatchObject({
-      status: "completed",
-      exitReason: "manual-cancel",
-    });
-    await clearFinished(processTool, killedSession.sessionId);
+    await finish(killedSession, { status: "completed", exitReason: "manual-cancel" }, false);
     await waitForExitedPids([killedSession.pid], signal);
     expect(pidExists(killedSession.pid)).toBe(false);
-    expect(child.listenerCount("error")).toBe(0);
-    expect(child.listenerCount("exit")).toBe(0);
-    expect(child.listenerCount("close")).toBe(0);
+    for (const event of ["error", "exit", "close"]) {
+      expect(child.listenerCount(event)).toBe(0);
+    }
     cleanupPids.delete(killedSession.pid);
-
-    const finalList = await processTool.execute("list-final", { action: "list" });
+    const finalList = await action("list");
     expect((finalList.details as ProcessDetails).sessions).toEqual([]);
     expect(listRunningSessions().filter((session) => session.scopeKey === scopeKey)).toEqual([]);
     expect(getActiveBackgroundExecSessionCount()).toBe(0);

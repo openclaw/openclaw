@@ -71,7 +71,7 @@ function sandboxFixture(source = "openclaw-managed") {
         name: "autoreview",
         source: {
           filePath: sourceFile,
-          fileHost: source === "openclaw-managed" ? "gateway" : "workspace",
+          fileHost: "gateway",
         },
       },
     ],
@@ -82,7 +82,7 @@ function sandboxFixture(source = "openclaw-managed") {
         baseDir: "/managed/autoreview",
         filePath: sourceFile,
         source,
-        fileHost: source === "openclaw-managed" ? "gateway" : "workspace",
+        fileHost: "gateway",
         sourceInfo: { path: sourceFile, source, scope: "user", origin: "top-level" },
         disableModelInvocation: false,
       },
@@ -91,30 +91,33 @@ function sandboxFixture(source = "openclaw-managed") {
   return { sandbox, backend: sandbox.backend, snapshot, build, terminate, finalize };
 }
 
-it("exposes only the selected installed skill inside the actual protected sandbox mount", () => {
-  const fixture = sandboxFixture();
-  const capability = preparePluginToolExecutionCapabilities({
-    sandbox: fixture.sandbox,
-    skillsSnapshot: fixture.snapshot,
-  })(() => {});
-  expect(capability.sandbox?.workspaceDir).toBe("/guest/repo");
-  expect(capability.sandbox?.installedSkillRoots).toEqual({
-    autoreview: "/guest/repo/skills/autoreview",
-  });
-  fixture.snapshot.resolvedSkills![0]!.source = "openclaw-workspace";
-  const shadow = preparePluginToolExecutionCapabilities({
-    sandbox: fixture.sandbox,
-    skillsSnapshot: fixture.snapshot,
-  })(() => {});
-  expect(shadow.sandbox?.installedSkillRoots).toEqual({});
-  fixture.snapshot.resolvedSkills![0]!.source = "openclaw-managed";
-  fixture.sandbox.docker.binds = ["/untrusted:/guest/repo/skills/autoreview/scripts:rw"];
-  const overlaid = preparePluginToolExecutionCapabilities({
-    sandbox: fixture.sandbox,
-    skillsSnapshot: fixture.snapshot,
-  })(() => {});
-  expect(overlaid.sandbox?.installedSkillRoots).toEqual({});
-});
+it.each(["openclaw-managed", "openclaw-library", "openclaw-bundled", "agents-skills-personal"])(
+  "exposes the selected %s skill only inside the actual protected sandbox mount",
+  (source) => {
+    const fixture = sandboxFixture(source);
+    const capability = preparePluginToolExecutionCapabilities({
+      sandbox: fixture.sandbox,
+      skillsSnapshot: fixture.snapshot,
+    })(() => {});
+    expect(capability.sandbox?.workspaceDir).toBe("/guest/repo");
+    expect(capability.sandbox?.installedSkillRoots).toEqual({
+      autoreview: "/guest/repo/skills/autoreview",
+    });
+    fixture.snapshot.resolvedSkills![0]!.source = "openclaw-workspace";
+    const shadow = preparePluginToolExecutionCapabilities({
+      sandbox: fixture.sandbox,
+      skillsSnapshot: fixture.snapshot,
+    })(() => {});
+    expect(shadow.sandbox?.installedSkillRoots).toEqual({});
+    fixture.snapshot.resolvedSkills![0]!.source = source;
+    fixture.sandbox.docker.binds = ["/untrusted:/guest/repo/skills/autoreview/scripts:rw"];
+    const overlaid = preparePluginToolExecutionCapabilities({
+      sandbox: fixture.sandbox,
+      skillsSnapshot: fixture.snapshot,
+    })(() => {});
+    expect(overlaid.sandbox?.installedSkillRoots).toEqual({});
+  },
+);
 
 it("retains selected installation identity after sandbox prompt remapping and budgeting", () => {
   const fixture = sandboxFixture();
@@ -281,6 +284,9 @@ it("releases managed workspace admission while the helper waits for exchange com
       } finally {
         admitted = false;
       }
+    },
+    async terminate(action) {
+      await action();
     },
     async checkpoint() {},
     [Symbol.dispose]() {},

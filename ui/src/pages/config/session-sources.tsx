@@ -5,51 +5,21 @@ import { SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { pluginConfigSchema, pluginEntryValue } from "../plugins/settings-model.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
+import { sessionSourcePresentations } from "./session-source-presentation.ts";
 import { asConfigSchema } from "./view-schema.tsx";
 import type { ConfigProps } from "./view-types.ts";
-
-const SESSION_SOURCES = [
-  {
-    pluginId: "anthropic",
-    plugin: "Anthropic",
-    icon: "claude",
-    key: "sessionCatalog",
-    labelKey: "configView.sessionSources.claude",
-  },
-  {
-    pluginId: "codex",
-    plugin: "Codex",
-    icon: "codex",
-    key: "sessionCatalog",
-    labelKey: "configView.sessionSources.codex",
-  },
-  {
-    pluginId: "opencode",
-    plugin: "OpenCode",
-    icon: "opencode",
-    key: "sessionCatalog",
-    labelKey: "configView.sessionSources.opencode",
-  },
-  {
-    pluginId: "acpx",
-    plugin: "ACPX",
-    icon: "pi",
-    key: "piSessionCatalog",
-    labelKey: "configView.sessionSources.pi",
-  },
-] as const;
 
 export function SessionSources(props: ConfigProps) {
   const sources = createMemo(() => {
     const schema = asConfigSchema(props.schema);
-    return SESSION_SOURCES.filter((source) =>
-      props.installedSessionSourcePluginIds?.has(source.pluginId),
-    ).map((source) =>
-      Object.assign({}, source, {
-        enabledSchema: pluginConfigSchema(schema, source.pluginId)?.properties?.[source.key]
-          ?.properties?.enabled,
-      }),
-    );
+    return sessionSourcePresentations
+      .filter((source) => props.installedSessionSourcePluginIds?.has(source.pluginId))
+      .map((source) =>
+        Object.assign({}, source, {
+          enabledSchema: pluginConfigSchema(schema, source.pluginId)?.properties?.[source.key]
+            ?.properties?.enabled,
+        }),
+      );
   });
   const disabled = () =>
     !props.connected ||

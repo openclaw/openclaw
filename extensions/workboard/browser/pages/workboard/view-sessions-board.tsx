@@ -124,6 +124,10 @@ export function SessionsBoard(props: SessionsBoardProps) {
       hasDock: controller.hasDock,
       hasSnapshot: Boolean(snapshot),
       loading: controller.loading,
+      nextCursor: snapshot?.nextCursor,
+      canLoad: host.connection.connected && !controller.busy,
+      loaded: snapshot?.sessions.length ?? 0,
+      total: snapshot?.total ?? snapshot?.sessions.length ?? 0,
       visibleError: [props.pageError, controller.error].filter(Boolean).join("\n"),
       warning: snapshot?.warning,
       peopleFilter: controller.peopleFilter,
@@ -217,6 +221,24 @@ export function SessionsBoard(props: SessionsBoardProps) {
         ) : null}
         {!state().hasSnapshot && state().loading ? (
           <div role="status">{t("workboard.sessionsBoard.loading")}</div>
+        ) : null}
+        {state().nextCursor ? (
+          <div class="workboard-pagination" role="status">
+            <span>
+              {t("workboard.sessionsBoard.partial", {
+                count: String(state().loaded),
+                total: String(state().total),
+              })}
+            </span>
+            <button
+              class="btn"
+              type="button"
+              disabled={state().loading || !state().canLoad}
+              onClick={() => void props.controller.loadMore()}
+            >
+              {t("workboard.sessionsBoard.loadMore")}
+            </button>
+          </div>
         ) : null}
         <div class="workboard-board-viewport">
           <div

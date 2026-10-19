@@ -13,11 +13,11 @@ describe("inspectModelReference", () => {
     expect(inspect({}, "no-such-provider", "no-such-model")).toBe("unknown-provider");
   });
 
-  it("does not treat an unlisted id as unknown when the provider plans no catalog rows", () => {
-    // OpenRouter declares runtime discovery and ships no manifest seed rows, so the
-    // planned catalog has nothing for the membership check to compare against.
+  it("does not use decision-only rows as a conversational catalog", () => {
+    // OpenRouter seeds Jev decision-only rows; its chat catalog is discovered at runtime.
     expect(inspect({}, "openrouter", "openrouter/auto")).toBe("uncatalogued-provider");
     expect(inspect({}, "openrouter", "deepseek/deepseek-v4-pro")).toBe("uncatalogued-provider");
+    expect(inspect({}, "openrouter", "typesafe/jev-1.13")).toBe("uncatalogued-provider");
   });
 
   it("uses models.providers.<id>.models as the catalog baseline when present", () => {

@@ -288,10 +288,16 @@ it.skipIf(process.platform === "win32").for([
           url: instance.url,
           token: instance.gatewayToken,
           clientName: "gateway-client",
-          mode: "backend",
+          // Recovery needs the original profiled operator; backend probes are unprofiled.
+          mode: "test",
           scopes: ["operator.admin", "operator.read", "operator.write"],
           deviceIdentity: loadOrCreateDeviceIdentity({
-            path: instance.state.path("proof-device.sqlite"),
+            path: instance.state.statePath(
+              "proof-identities",
+              "requester",
+              "client",
+              "credentials.sqlite",
+            ),
           }),
           onEvent: ({ event, payload }) => {
             if (
@@ -416,6 +422,8 @@ it.skipIf(process.platform === "win32").for([
               slots: { memory: "none" },
             },
             models: {
+              // Keep this synthetic restart fixture independent of remote catalog adoption.
+              catalogRefresh: { enabled: false },
               mode: "replace",
               providers: {
                 [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
@@ -488,17 +496,41 @@ it.skipIf(process.platform === "win32").for([
               if (!entry) {
                 throw new Error("Child registry row is missing");
               }
+              expect(entry.operatorRecoverySource).toMatchObject({
+                sessionKey: PARENT_KEY,
+                sourceRunId: originalRunId,
+              });
               return entry;
             },
             { timeout: 30_000 },
           );
           observations.childKey = child.key;
           observations.beforeShutdown = persistedChild({ runId: childRunId });
+          const parentSession = persisted(PARENT_KEY);
+          const parentSessionId = parentSession?.sessionId;
+          expect(observations.beforeShutdown).toMatchObject({
+            operatorRecoverySource: {
+              version: 1,
+              agentId: "main",
+              sessionKey: PARENT_KEY,
+              sessionId: parentSessionId,
+              lifecycleRevision: parentSession?.lifecycleRevision,
+              sourceRunId: originalRunId,
+              snapshot: {
+                profileId: expect.any(String),
+                scopes: expect.arrayContaining([
+                  "operator.admin",
+                  "operator.read",
+                  "operator.write",
+                ]),
+                localOperator: true,
+              },
+            },
+          });
           expect(
             JSON.stringify(await client.request("chat.history", { sessionKey: PARENT_KEY })),
           ).toContain(PARENT_FINAL);
           observeRecovery = true;
-          const parentSessionId = persisted(PARENT_KEY)?.sessionId;
           const recoveryStartedAt = Date.now();
           await restart(replaceChild);
           phase = "waiting-for-continuation";

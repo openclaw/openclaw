@@ -1,6 +1,7 @@
 import Darwin
 import Dispatch
 import Foundation
+import OpenClawNativeState
 @testable import OpenClaw
 
 enum ExecApprovalsSocketTestSupport {
@@ -19,7 +20,7 @@ enum ExecApprovalsSocketTestSupport {
     }
 
     static func makeRoot() throws -> URL {
-        let base = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+        let base = temporaryDirectoryForTests()
         let template = base.appendingPathComponent("XXXXXX", isDirectory: true).path
         // CuaDriverHostCoordinator.createSocketDirectory adds this 39-byte suffix.
         // Reserve its full sun_path budget before mkdtemp creates any fixture state.
@@ -37,6 +38,13 @@ enum ExecApprovalsSocketTestSupport {
             }
             return URL(fileURLWithPath: String(cString: created), isDirectory: true).resolvingSymlinksInPath()
         }
+    }
+
+    static func seedLocalCredentials(in root: URL) throws {
+        let owner = try OpenClawClientCredentialStore(rootURL: root, migration: true)
+        defer { owner.close() }
+        try owner.writeReceipt(ClientCredentialReceipt(sharedFile: .inspect(
+            root.appendingPathComponent("state/openclaw.sqlite"))))
     }
 
     static func makeServer(

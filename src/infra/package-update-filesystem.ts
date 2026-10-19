@@ -6,7 +6,8 @@ import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
-import { formatErrorMessage, hasErrnoCode, isErrno } from "./errors.js";
+import { ignoreMissingPath } from "./errno.js";
+import { formatErrorMessage, formatErrorMessageWithCode, hasErrnoCode, isErrno } from "./errors.js";
 import { isRemovalIoError, removePathWithinRoot } from "./fs-safe-remove.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import {
@@ -15,6 +16,7 @@ import {
   packageLauncherDifferences,
 } from "./package-update-integrity.js";
 import type { StagedPackageSwapParams } from "./package-update-swap-contract.js";
+import { pathEntryExists as packagePathEntryExists } from "./path-existence.js";
 import { retryAsync } from "./retry.js";
 import { UPDATE_CLEANUP_BUDGET_MS } from "./update-maintenance.js";
 
@@ -59,17 +61,7 @@ export function createPackagePathAssertion(
   };
 }
 
-export async function packagePathEntryExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.lstat(targetPath);
-    return true;
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return false;
-    }
-    throw error;
-  }
-}
+export { packagePathEntryExists };
 
 export async function packagePathEntriesMatch(left: string, right: string): Promise<boolean> {
   const [leftStat, rightStat] = await Promise.all([
@@ -483,12 +475,7 @@ export async function capturePackageLaunchers(
             native
               ? fs.readdir(params.stage.layout.binDir)
               : reader.entries(params.stage.layout.binDir)
-          ).catch((error: unknown) => {
-            if (hasErrnoCode(error, "ENOENT")) {
-              return [];
-            }
-            throw error;
-          }),
+          ).catch((error: unknown) => ignoreMissingPath(error) ?? []),
         );
   if (shimEntries.length > 0) {
     snapshot.backupDir = await fs.mkdtemp(
@@ -634,14 +621,14 @@ export async function discardPackageUpdateBackup(
       await fs.rename(backup, retiredPath);
       assertParents();
       assertPackagePathIdentity(retiredPath, backupIdentity);
-      return `preserved ${label} at ${retiredPath} for delayed cleanup`;
+      return `preserved ${label} at ${retiredPath} for delayed cleanup: ${formatErrorMessageWithCode(error)}`;
     } catch (retirementError) {
       assertBackup();
       assertPackagePathIdentity(backup, backupIdentity);
       if (!isRemovalIoError(retirementError)) {
         throw retirementError;
       }
-      return `preserved ${label} at ${backupPath}; remove it manually after verifying the installation`;
+      return `preserved ${label} at ${backupPath}; removal failed: ${formatErrorMessageWithCode(error)}; retirement rename failed: ${formatErrorMessageWithCode(retirementError)}; remove it manually after verifying the installation`;
     }
   }
 }

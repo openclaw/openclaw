@@ -3,7 +3,7 @@ import { isMainThread, MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
-import { getDatabaseEngineSelection } from "../../infra/database-engine/context.js";
+import { getDatabaseEngineInput } from "../../infra/database-engine/context.js";
 import { runSqliteReadOnlyWorker } from "../../infra/sqlite-readonly-worker.js";
 import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
@@ -85,7 +85,7 @@ export function prepareAgentAuthProfileRowsRead(options: {
   const databasePath = path.resolve(options.databasePath);
   const agentId = options.agentId;
   const env = cloneEnvWithPlatformSemantics(options.env);
-  const postgres = getDatabaseEngineSelection()?.input !== undefined;
+  const postgres = getDatabaseEngineInput("agent") !== undefined;
   const captured: Result<OpenClawStateWorkerContext, unknown> = (() => {
     try {
       return {
@@ -169,11 +169,10 @@ export function prepareAgentAuthProfileRowsRead(options: {
       });
       try {
         unregisterRoot = registerOpenClawStateDatabaseAsyncResource({
-          close: async (closedIdentity) => {
-            if (!closedIdentity || closedIdentity.key === root.admission.identity.key) {
-              revoke();
-              await dispose();
-            }
+          admission: root.admission,
+          close: async () => {
+            revoke();
+            await dispose();
           },
         });
       } catch (error) {
@@ -221,15 +220,16 @@ export function prepareAgentAuthProfileRowsRead(options: {
     return { store: rows.store, state: rows.state, cacheable: rows.cacheable };
   };
   const cachedReader =
-    isMainThread &&
-    options.source !== "canonical" &&
-    !uncached &&
-    !getActiveOpenClawStateDatabaseReadSnapshot({ env })
-      ? runtimeAuthProfileRowsCache.prepare(databasePath, {
-          identity: identity && `${identity.key}:${identity.birthtime ?? ""}`,
-          read: readRows,
-          assertCurrent,
-        })
+    isMainThread && !uncached && !getActiveOpenClawStateDatabaseReadSnapshot({ env })
+      ? runtimeAuthProfileRowsCache.prepare(
+          databasePath,
+          {
+            identity: identity && `${identity.key}:${identity.birthtime ?? ""}`,
+            read: readRows,
+            assertCurrent,
+          },
+          options.source,
+        )
       : { read: readRows };
   const read = (): Promise<AuthProfileRowRead> => {
     if (closed) {
@@ -343,7 +343,6 @@ export async function readSharedAuthProfileRows(
   const read = () => readSharedAuthProfileRowsUncached(context, artifactPreserving);
   if (
     !isMainThread ||
-    source === "canonical" ||
     artifactPreserving ||
     context.maintenanceScope ||
     getActiveOpenClawStateDatabaseReadSnapshot({ env: context.environment })
@@ -351,11 +350,15 @@ export async function readSharedAuthProfileRows(
     return read();
   }
   return runtimeAuthProfileRowsCache
-    .prepare(context.admission.databasePath, {
-      identity: `${context.admission.identity.key}:${context.admission.identity.birthtime ?? ""}`,
-      read,
-      assertCurrent: () => context.admission.assertCurrent(),
-    })
+    .prepare(
+      context.admission.databasePath,
+      {
+        identity: `${context.admission.identity.key}:${context.admission.identity.birthtime ?? ""}`,
+        read,
+        assertCurrent: () => context.admission.assertCurrent(),
+      },
+      source,
+    )
     .read();
 }
 

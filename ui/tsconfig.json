@@ -2,7 +2,8 @@
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "jsx": "preserve",
-    "jsxImportSource": "@solidjs/web"
+    "jsxImportSource": "@solidjs/web",
+    "rootDir": ".."
   },
   // This editor/lint graph includes tests; retain their compatibility augmentation.
   "files": ["../src/config/sessions/session-entry.test-compat.d.ts"],

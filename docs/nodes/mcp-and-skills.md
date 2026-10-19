@@ -57,6 +57,10 @@ expires, the node withdraws that server's stale tools and reconnects with
 bounded backoff. The failed call that detects an expired session is not replayed;
 a later call can use the replacement connection after its tools are republished.
 
+If a node warns that an MCP server's cleanup could not be confirmed, check that
+server process on the node. Other servers continue shutting down or reconnecting;
+the warning does not confirm that the affected server has stopped.
+
 Gateway operators can ignore all agent-visible tools published by paired nodes,
 including node-hosted MCP tools, with
 `gateway.nodes.pluginTools.enabled: false`. Exact command denies such as

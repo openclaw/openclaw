@@ -11,8 +11,8 @@ import type {
   DiscordComponentSelectType,
   DiscordModalEntry,
 } from "./components.types.js";
-import { AnySelectMenu } from "./internal/components.message.js";
 import {
+  AnySelectMenu,
   Button,
   ChannelSelectMenu,
   Container,
@@ -28,8 +28,8 @@ import {
   TextDisplay,
   Thumbnail,
   UserSelectMenu,
-  type TopLevelComponents,
-} from "./internal/discord.js";
+} from "./internal/components.message.js";
+import type { TopLevelComponents } from "./internal/payload.js";
 import { stripUndefinedFields } from "./internal/undefined-fields.js";
 
 function createShortId(prefix: string) {

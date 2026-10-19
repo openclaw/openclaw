@@ -73,6 +73,14 @@ describe("Control UI cached output identity", () => {
       const encodedOffline = worker.match(/^const OFFLINE_BOOT = (.+);$/mu)?.[1];
       assert.ok(encodedOffline, "service worker must contain the offline build inventory");
       const offline = JSON.parse(encodedOffline);
+      expect(offline.routes).toEqual(
+        expect.arrayContaining(["/new", "/settings/connection", "/appearance", "/usage"]),
+      );
+      expect(offline.routes).not.toContain("/api");
+      expect(offline.routePrefixes).toEqual(
+        expect.arrayContaining(["/chat/", "/dashboard/", "/settings/agents/"]),
+      );
+      expect(offline.routePrefixes).not.toContain("/plugins/");
       expect(offline.html).toBe(html);
       expect(offline.csp).toContain(
         `sha256-${createHash("sha256").update(identityScript!).digest("base64")}`,

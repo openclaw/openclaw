@@ -1,9 +1,9 @@
 import { setImmediate as setImmediatePromise } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
-  beginSessionWorkAdmission,
-  closeSessionWorkAdmissions,
-} from "../../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  closeSessionControllerAdmission,
+} from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import {
@@ -145,7 +145,7 @@ describe("worker placement dispatch coordinator", () => {
       reclaim: async (
         ...[_request, _authorize, _beforeDrain, serialize]: Parameters<DispatchService["reclaim"]>
       ) => {
-        const release = closeSessionWorkAdmissions({
+        const release = closeSessionControllerAdmission({
           scope,
           identities,
           reason: new Error("older Stop"),
@@ -161,7 +161,7 @@ describe("worker placement dispatch coordinator", () => {
     } as unknown as DispatchService;
     const coordinated = coordinateWorkerPlacementDispatch(service, async (_request, run) => {
       const controller = new AbortController();
-      const admission = await beginSessionWorkAdmission({
+      const admission = await beginSessionEffect({
         scope,
         identities,
         assertAllowed: () => {},

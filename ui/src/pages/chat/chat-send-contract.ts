@@ -3,12 +3,7 @@ import type { ChatSendIntent } from "../../../../packages/gateway-protocol/src/s
 import type { ApplicationChatSubmissions } from "../../app/chat-submissions.ts";
 import type { CommandClientPresentationAction } from "../../app/command-client-presentation.ts";
 import type { UiSettings } from "../../app/settings.ts";
-import type {
-  ChatAttachment,
-  ChatGoalDraftMode,
-  ChatReplyTarget,
-  HumanMention,
-} from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import type { SessionRefreshTarget } from "../../lib/sessions/index.ts";
 import type { ChatCommandHost } from "./chat-commands.ts";
@@ -52,8 +47,6 @@ export type ChatHost = ToolStreamHost &
     applySettings: (patch: Partial<UiSettings>) => void;
     /** Prepared from the browser override and current Gateway effective queue mode. */
     chatFollowUpMode?: ControlUiFollowUpMode;
-    /** Selected message to reply to (right-click / keyboard shortcut). */
-    chatReplyTarget?: ChatReplyTarget | null;
     /** Control UI route for /btw and /side; server/TUI command handling remains unchanged. */
     openSessionCompanion?: (question: string) => Promise<void> | void;
     /** Handles a recognized catalog action only when this client can complete it. */

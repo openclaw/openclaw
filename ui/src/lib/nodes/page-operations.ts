@@ -75,7 +75,7 @@ type QueuedRefresh = "none" | "quiet" | "visible";
 type InventoryState = NodesRequestState & {
   nodesLoading: boolean;
   nodesQueuedRefresh: QueuedRefresh;
-  nodes: Array<Record<string, unknown>>;
+  nodes: NodeListNode[];
   lastError: string | null;
   devicesLoading: boolean;
   devicesQueuedRefresh: QueuedRefresh;
@@ -127,10 +127,6 @@ function isCurrentNodesRequest(
   return state.connected && state.client === client && state.requestGeneration === generation;
 }
 
-function queueRefresh(current: QueuedRefresh, quiet: boolean | undefined): QueuedRefresh {
-  return current === "visible" || quiet !== true ? "visible" : "quiet";
-}
-
 export function loadNodes(state: InventoryState, opts?: { quiet?: boolean }) {
   return loadInventory(state, "nodes", opts);
 }
@@ -152,7 +148,8 @@ async function loadInventory(
   const queuedRefresh = `${kind}QueuedRefresh` as const;
   const error = kind === "nodes" ? "lastError" : "devicesError";
   if (state[loading]) {
-    state[queuedRefresh] = queueRefresh(state[queuedRefresh], opts?.quiet);
+    state[queuedRefresh] =
+      state[queuedRefresh] === "visible" || opts?.quiet !== true ? "visible" : "quiet";
     return;
   }
   state[loading] = true;
@@ -162,17 +159,14 @@ async function loadInventory(
   const generation = state.requestGeneration;
   try {
     if (kind === "nodes") {
-      const res = await client.request<{ nodes?: NodeListNode[] }>("node.list", {});
+      const res = await client.request<{ nodes: NodeListNode[] }>("node.list", {});
       if (isCurrentNodesRequest(state, client, generation)) {
-        state.nodes = Array.isArray(res.nodes) ? res.nodes : [];
+        state.nodes = res.nodes;
       }
     } else {
-      const res = await client.request<Partial<DevicePairingList>>("device.pair.list", {});
+      const res = await client.request<DevicePairingList>("device.pair.list", {});
       if (isCurrentNodesRequest(state, client, generation)) {
-        state.devicesList = {
-          pending: Array.isArray(res?.pending) ? res.pending : [],
-          paired: Array.isArray(res?.paired) ? res.paired : [],
-        };
+        state.devicesList = res;
       }
     }
   } catch (err) {
@@ -492,15 +486,17 @@ export async function loadExecApprovals(
 }
 
 function applyExecApprovalsSnapshot(state: ExecApprovalsState, snapshot: ExecApprovalsSnapshot) {
+  // A refresh must not rebase an authored security policy onto another writer's hash.
+  if (state.execApprovalsDirty) {
+    return;
+  }
   state.execApprovalsSnapshot = snapshot;
   if (isNativeExecApprovalsSnapshot(snapshot)) {
     state.execApprovalsForm = null;
     state.execApprovalsDirty = false;
     return;
   }
-  if (!state.execApprovalsDirty) {
-    state.execApprovalsForm = structuredClone(snapshot.file);
-  }
+  state.execApprovalsForm = structuredClone(snapshot.file);
 }
 
 export function isNativeExecApprovalsSnapshot(

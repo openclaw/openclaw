@@ -114,7 +114,6 @@
   padding-block: 3px;
   list-style: none;
   appearance: none;
-  -webkit-appearance: none;
 }
 
 .chat-tool-disclosure__content {
@@ -325,10 +324,6 @@
   color: var(--text);
 }
 
-.chat-tool-row__cmd {
-  color: inherit;
-}
-
 .chat-tool-row__verb {
   flex-shrink: 0;
 }
@@ -363,7 +358,6 @@
       var(--text) 100%
     );
     background-size: 200% 100%;
-    -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
     animation: text-shimmer 2.2s ease-in-out infinite;

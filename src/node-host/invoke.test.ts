@@ -22,8 +22,8 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as nodeRunCommand from "./invoke-run-command.js";
-import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
+import type { SkillBinsProvider } from "./runtime-skill-bins.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -477,8 +477,7 @@ describe("node host invoke", () => {
     expect(execApprovalsStoreMock.readCalls).toBe(1);
     expect(execApprovalsStoreMock.updateCalls).toBe(1);
     expect(execApprovalsStoreMock.updateParams?.baseHash).toBe(missingSnapshot.hash);
-    expect(prepared?.socket?.path).toBeTruthy();
-    expect(prepared?.socket?.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(prepared?.socket).toBeUndefined();
     expect(JSON.parse(result.payloadJSON ?? "{}")).toMatchObject({
       hash: "sha256:created",
       file: { socket: { path: "/tmp/exec-approvals.sock" } },

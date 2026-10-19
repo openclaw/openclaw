@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -21,7 +22,89 @@ import {
   iteratePendingExecNotificationEntriesInWorker,
   readPendingInputRecoveryEntriesInWorker,
 } from "./session-entry-read-maintenance.js";
+import { readSessionEntrySummariesInWorker } from "./session-entry-read-runtime.js";
 import { readSessionSendRecoveryPage } from "./session-pending-input-history.js";
+import type { InternalSessionEntry } from "./types.js";
+
+it("selects recovery custody and startup orphans without settled or non-main sessions", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const recovery = { cycleId: "interrupted-cycle", revision: 1, chargedAttempts: 0 };
+    const runs = [{ runId: "interrupted-run", lifecycleGeneration: "previous-gateway" }];
+    const entries: Record<string, Partial<InternalSessionEntry>> = {
+      archived: { archivedAt: 1, mainRestartRecovery: recovery },
+      empty: { restartRecoveryRuns: [] },
+      settled: { status: "done" },
+      terminal: { restartRecoveryRuns: runs, restartRecoveryTerminalRunIds: ["interrupted-run"] },
+      tombstoned: { mainRestartRecovery: { ...recovery, tombstone: { reason: "exhausted" } } },
+      "pending-cycle": { abortedLastRun: true, mainRestartRecovery: recovery },
+      "pending-delivery": { status: "done", restartRecoveryDeliveryRunId: "delivery-run" },
+      "pending-execution": { status: "done", restartRecoveryRuns: runs },
+      "pending-final": {
+        status: "done",
+        pendingFinalDelivery: { createdAt: 1, kind: "transport-only" },
+      },
+      "pending-residue": {
+        status: "done",
+        mainRestartRecovery: recovery,
+        restartRecoveryRuns: runs,
+        restartRecoveryTerminalRunIds: ["interrupted-run"],
+      },
+      "orphan-aborted": { abortedLastRun: true },
+      "orphan-interrupted": { status: "interrupted" },
+      "settled-aborted": { abortedLastRun: false },
+      "settled-interruption": {
+        status: "interrupted",
+        abortedLastRun: false,
+        lastRunId: "interrupted-run",
+        restartRecoveryTerminalRunIds: ["interrupted-run"],
+      },
+      "archived-orphan": { archivedAt: 1, abortedLastRun: true },
+      "subagent:orphan": { abortedLastRun: true },
+      "cron:orphan": { abortedLastRun: true },
+      "acp:orphan": { abortedLastRun: true },
+      "spawned-orphan": { abortedLastRun: true, spawnDepth: 1 },
+    };
+    for (const [name, entry] of Object.entries(entries)) {
+      replaceSessionEntrySync(
+        { agentId: "main", env, sessionKey: `agent:main:${name}` },
+        { sessionId: name, updatedAt: 1, ...entry },
+      );
+    }
+
+    const selected = await readSessionEntrySummariesInWorker({
+      agentId: "main",
+      storePath: database.path,
+      env,
+      mainSessionRecovery: "claims",
+    });
+    expect(selected.map(({ sessionKey }) => sessionKey)).toEqual([
+      "agent:main:pending-cycle",
+      "agent:main:pending-delivery",
+      "agent:main:pending-execution",
+      "agent:main:pending-final",
+      "agent:main:pending-residue",
+    ]);
+    const orphans = await readSessionEntrySummariesInWorker({
+      agentId: "main",
+      storePath: database.path,
+      env,
+      mainSessionRecovery: "orphans",
+    });
+    expect(orphans.map(({ sessionKey }) => sessionKey)).toEqual([
+      "agent:main:orphan-aborted",
+      "agent:main:orphan-interrupted",
+      "agent:main:pending-cycle",
+      "agent:main:pending-delivery",
+      "agent:main:pending-execution",
+      "agent:main:pending-final",
+      "agent:main:pending-residue",
+    ]);
+    expect(
+      await readSessionEntrySummariesInWorker({ agentId: "main", storePath: database.path, env }),
+    ).toHaveLength(Object.keys(entries).length);
+  });
+});
 
 it("pages only pending exec owners without reading unrelated session entries or saved prompts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -118,6 +201,59 @@ it("pages saved deliveries without unrelated or cancelled inputs and preserves l
       expect(older.nextBefore).toBeUndefined();
       expect(newer.items.at(-1)?.state).toBe("queued");
       expect(newer.items.slice(0, -1).every((item) => item.state === "interrupted")).toBe(true);
+    } finally {
+      for (const receipt of receipts) {
+        receipt.finish("interrupted");
+      }
+      await Promise.all(receipts.map(async (receipt) => receipt.settled?.()));
+    }
+  });
+});
+
+it("discovers interrupted chat inputs and reconciles crash-left queued inputs at startup", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const store = { agentId: "main", storePath: database.path, env };
+    const scope = { ...store, sessionKey: "agent:main:chat-recovery", sessionId: "chat-recovery" };
+    writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+    const receipts: SessionPendingInputReceipt[] = [];
+    try {
+      for (const runId of ["terminated", "killed", "legacy"]) {
+        const receipt = expectDefined(
+          await stageSessionPendingInput(scope, {
+            runId,
+            message: {
+              role: "user",
+              content: `Saved ${runId} chat input`,
+              timestamp: 1,
+              idempotencyKey: `${runId}:user`,
+              ...(runId === "legacy" ? {} : { __openclaw: { chatInputRecovery: { version: 1 } } }),
+            },
+            assertCurrent() {},
+          }),
+          "Expected accepted chat input",
+        );
+        receipts.push(receipt);
+        receipt.finish("interrupted");
+        await receipt.settled?.();
+        if (runId !== "terminated") {
+          // Crash-left rows have no live receipt for lifecycle rotation to finish.
+          database.db
+            .prepare("UPDATE session_pending_inputs SET state = 'queued' WHERE input_id = ?")
+            .run(receipt.inputId);
+        }
+      }
+      rotateAgentEventLifecycleGeneration();
+      expect(
+        (await readPendingInputRecoveryEntriesInWorker(store)).map((row) => row.sessionKey),
+      ).toEqual([scope.sessionKey]);
+      // This is the startup owner's read, without a preceding chat.history request.
+      const page = await readSessionSendRecoveryPage(scope);
+      expect(page.items.map(({ runId, state }) => ({ runId, state }))).toEqual([
+        { runId: "terminated", state: "interrupted" },
+        { runId: "killed", state: "interrupted" },
+        { runId: "legacy", state: "interrupted" },
+      ]);
     } finally {
       for (const receipt of receipts) {
         receipt.finish("interrupted");

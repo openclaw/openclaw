@@ -1,13 +1,23 @@
 import { createComponent, flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { GatewayPendingRequests } from "../../../packages/gateway-client/src/pending-request.js";
+import type { RequestFrame } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import type { McpAppDiscoverResult } from "../../../src/shared/mcp-app-extensions.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import {
+  createTestSessionCapability,
+  sessionsResult,
+} from "../lib/sessions/session-capability.test-support.ts";
 import { AppsPage } from "../pages/apps/apps-page.tsx";
 import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
-import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "./mcp-app-catalog.tsx";
@@ -20,6 +30,7 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 const result: McpAppDiscoverResult = {
   servers: [
@@ -90,6 +101,199 @@ function appendElement(element: HTMLElement) {
 }
 
 describe("app launch catalog", () => {
+  it("prepares a global catalog again when its session was deleted offline", async () => {
+    let sessionExists = true;
+    const request = createGatewayRequestMock(() =>
+      sessionExists
+        ? Promise.resolve(result)
+        : Promise.reject(new Error("The requested session is unavailable")),
+    );
+    const describeSession = vi.fn(() =>
+      Promise.resolve({ session: sessionExists ? { key: "agent:main:one" } : null }),
+    );
+    const createResult = vi.fn(() => {
+      sessionExists = true;
+      return Promise.resolve({ key: "agent:main:one" });
+    });
+    const { gateway, publish } = createApplicationGateway();
+    const hello = gatewayHelloForMethods(["mcp.app.discover"]);
+    publish({
+      ...gateway.snapshot,
+      client: createTestGatewayClient(request),
+      phase: "connected",
+      hello,
+    });
+    const catalog = document.createElement("openclaw-mcp-app-catalog");
+    catalog.sessionKey = "agent:main:one";
+    provide(catalog, {
+      ...discoveryContext(request).context,
+      gateway,
+      sessions: { describe: describeSession, createResult, state: { error: null } },
+    });
+    appendElement(catalog);
+    await waitForSolid(() => expect(catalog.textContent).toContain("Library"));
+    expect(describeSession).toHaveBeenCalledOnce();
+    expect(createResult).not.toHaveBeenCalled();
+
+    publish({ ...gateway.snapshot, phase: "reconnecting", hello: null });
+    flush();
+    sessionExists = false;
+    expect(catalog.textContent).toContain("Library");
+    publish({ ...gateway.snapshot, phase: "connected", hello });
+    await waitForSolid(() => {
+      expect(describeSession).toHaveBeenCalledTimes(2);
+      expect(createResult).toHaveBeenCalledOnce();
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(catalog.textContent).toContain("Library");
+      expect(catalog.querySelector('[role="alert"]')).toBeNull();
+    });
+  });
+
+  it("retains expanded discoveries offline, refreshes on reconnect, and clears a changed Gateway", async () => {
+    const refreshed = createDeferred<McpAppDiscoverResult>();
+    const request = vi.fn().mockResolvedValueOnce(result).mockReturnValue(refreshed.promise);
+    const { gateway, publish } = createApplicationGateway();
+    const hello = gatewayHelloForMethods(["mcp.app.discover"]);
+    publish({
+      ...gateway.snapshot,
+      client: createTestGatewayClient(request),
+      phase: "connected",
+      hello,
+    });
+    const context = { ...discoveryContext(request).context, gateway };
+    const catalog = document.createElement("openclaw-mcp-app-catalog");
+    catalog.surface = "thread";
+    catalog.sessionKey = "agent:main:one";
+    provide(catalog, context);
+    appendElement(catalog);
+    await waitForSolid(() => expect(catalog.querySelector("button")).not.toBeNull());
+    catalog.querySelector<HTMLButtonElement>("button")!.click();
+    await waitForSolid(() => expect(catalog.textContent).toContain("Parts tray"));
+    const entry = catalog.querySelector<HTMLButtonElement>(".mcp-app-catalog__entry button")!;
+    publish({ ...gateway.snapshot, phase: "reconnecting", hello: null });
+    flush();
+    expect(catalog.querySelector(".mcp-app-catalog__entry button")).toBe(entry);
+    expect(entry.disabled).toBe(true);
+    publish({ ...gateway.snapshot, phase: "connected", hello });
+    flush();
+    expect(catalog.querySelector(".mcp-app-catalog__entry button")).toBe(entry);
+    expect(entry.disabled).toBe(false);
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+    refreshed.resolve(result);
+    await refreshed.promise;
+    publish({
+      ...gateway.snapshot,
+      client: createTestGatewayClient(vi.fn(() => new Promise(() => {}))),
+    });
+    flush();
+    expect(catalog.textContent).not.toContain("Parts tray");
+  });
+
+  it.each(["closed", "agent changed", "conversation changed", "open"] as const)(
+    "only creates a startup-waiting catalog session while its target remains open (%s)",
+    async (lifetime) => {
+      vi.useFakeTimers();
+      let ready = false;
+      const writes: RequestFrame[] = [];
+      const issued = createDeferred();
+      const pending = new GatewayPendingRequests({
+        createRequestId: () => "catalog",
+        nowMs: Date.now,
+      });
+      onTestFinished(() => pending.flush(new Error("test disposed")));
+      const client = createTestGatewayClient((method, params, options) => {
+        if (method === "sessions.create") {
+          return pending.request(
+            {
+              send(raw) {
+                // SAFETY: The production request owner serializes this frame.
+                const frame = JSON.parse(raw) as RequestFrame;
+                if (ready) {
+                  writes.push(frame);
+                }
+                pending.handleResponse({
+                  type: "res",
+                  id: frame.id,
+                  ok: ready,
+                  ...(ready
+                    ? { payload: { key: "agent:main:one" } }
+                    : {
+                        error: {
+                          code: "UNAVAILABLE",
+                          message: "Agent is preparing",
+                          retryable: true,
+                          retryAfterMs: 1_000,
+                          details: { reason: "startup-sidecars", method },
+                        },
+                      }),
+                });
+                issued.resolve();
+              },
+            },
+            method,
+            params,
+            options,
+          );
+        }
+        if (method === "sessions.describe") {
+          // SAFETY: The session capability constructs this typed describe target.
+          const target = params as { key: string; agentId?: string };
+          return {
+            session:
+              target.key === "agent:main:one" && target.agentId === "main"
+                ? null
+                : { key: target.key, kind: "direct", updatedAt: 1 },
+          };
+        }
+        if (method === "sessions.list") {
+          return sessionsResult([], 1);
+        }
+        return method === "mcp.app.discover" ? result : {};
+      });
+      const { gateway, publish } = createApplicationGateway();
+      publish({
+        ...gateway.snapshot,
+        client,
+        phase: "connected",
+        hello: gatewayHelloForMethods(["mcp.app.discover"]),
+      });
+      const sessions = createTestSessionCapability(gateway);
+      const catalog = document.createElement("openclaw-mcp-app-catalog");
+      catalog.sessionKey = "agent:main:one";
+      catalog.agentId = "main";
+      provide(catalog, {
+        gateway,
+        sessions,
+        agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
+      });
+      appendElement(catalog);
+      await issued.promise;
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(writes).toHaveLength(0);
+      expect(pending.hasPending).toBe(true);
+
+      if (lifetime === "closed") {
+        catalog.remove();
+        await Promise.resolve();
+      } else if (lifetime === "agent changed") {
+        catalog.agentId = "other";
+      } else if (lifetime === "conversation changed") {
+        catalog.sessionKey = "agent:main:two";
+      }
+      await catalog.updateComplete;
+      ready = true;
+      await vi.advanceTimersByTimeAsync(GATEWAY_STARTUP_ADMISSION_WAIT_MS);
+      expect(writes.map((frame) => frame.params)).toEqual(
+        lifetime === "open" ? [{ key: "agent:main:one", agentId: "main" }] : [],
+      );
+      expect(pending.hasPending).toBe(false);
+      expect(sessions.state.error).toBeNull();
+      if (lifetime === "open") {
+        expect(catalog.textContent).toContain("Library");
+      }
+    },
+  );
+
   it("waits for the new session's discovery before retaining an Apps page launch", async () => {
     // Observe the page-to-conversation contract without loading the conversation runtime.
     const lookup = customElements.get.bind(customElements);
@@ -427,7 +631,7 @@ describe("app launch catalog", () => {
       } else {
         expect(createResult).toHaveBeenCalledExactlyOnceWith(
           { key: "agent:main:main", agentId: "main" },
-          { reconciliation: "background" },
+          { reconciliation: "background", signal: expect.any(AbortSignal) },
         );
       }
       expect(request).toHaveBeenCalledWith("mcp.app.discover", {

@@ -16,6 +16,21 @@ function tsquery(query: TextQuery, config: string): RawBuilder<unknown> {
     throw new Error("Contains is only available on an admitted trigram index");
   }
   if (query.kind !== "term" && query.kind !== "phrase") {
+    if (query.clauses.every((clause) => clause.kind === "term" || clause.kind === "phrase")) {
+      // Bind a flat query once. Thousands of literal atoms must not expand the
+      // SQL expression tree before PostgreSQL can apply its text-search parser.
+      const separator = query.kind === "all" ? " & " : " | ";
+      return /* kysely-allow-raw: The recordset contains bound literals; only the closed query-kind selects conjunction. */ sql`coalesce((
+        SELECT string_agg('(' || nullif(parsed.value::text, '') ||
+          CASE WHEN atom.prefix THEN ':*' ELSE '' END || ')', ${separator})
+        FROM json_to_recordset(${JSON.stringify(query.clauses)}::json)
+          AS atom(kind text, text text, prefix boolean)
+        CROSS JOIN LATERAL (SELECT CASE WHEN atom.kind = 'term'
+          THEN plainto_tsquery(${sql.lit(config)}::regconfig, atom.text)
+          ELSE phraseto_tsquery(${sql.lit(config)}::regconfig, atom.text)
+        END AS value) AS parsed
+      ), '')::tsquery`;
+    }
     const clauses = query.clauses.map((clause) => tsquery(clause, config));
     return clauses.length
       ? /* kysely-allow-raw: Only the closed query-kind enum selects an operator. */ sql`(${sql.join(clauses, sql.raw(query.kind === "all" ? " && " : " || "))})`
@@ -36,6 +51,7 @@ export function bindPostgresSearch(
 ): StoreSearchCapabilities {
   assertPostgresSearchAdmitted(db, schema);
   const config = `${pgSearchName(getPostgresPhysicalFacts(db)!.namespace)}.${pgSearchName(searchConfig)}`;
+  const extension = pgSearchName(schema.extensionSchema ?? "public");
   const store = {};
   const text = Object.fromEntries(
     Object.entries(schema.text ?? {}).map(([name, index]) => [name, { ...index, store }]),
@@ -65,17 +81,40 @@ export function bindPostgresSearch(
     fullText: Object.keys(text).length
       ? {
           match(index, query) {
-            const column = relation(index);
+            const column = relation(index, query.kind === "contains" ? index.fields[0] : undefined);
+            // Long intent prompts can exceed PostgreSQL's tsquery tree limit.
+            // Ordinary queries keep the indexable single-tsquery predicate.
+            if (
+              query.kind === "any" &&
+              query.clauses.length > 128 &&
+              query.clauses.every(
+                (clause): clause is Extract<TextQuery, { kind: "phrase" }> =>
+                  clause.kind === "phrase" && !clause.prefix,
+              )
+            ) {
+              const phrases = query.clauses.map((clause) => clause.text);
+              return /* kysely-allow-raw: Bound literal phrases are matched independently against the admitted vector. */ sql<boolean>`EXISTS (SELECT 1 FROM json_array_elements_text(${JSON.stringify(phrases)}::json) AS search_terms(value) WHERE ${column} @@ phraseto_tsquery(${sql.lit(config)}::regconfig, search_terms.value))`;
+            }
             if (query.kind === "contains") {
               if (index.postgres?.mode !== "trigram") {
                 throw new Error("Contains requires a declared PostgreSQL trigram index");
               }
               const pattern = `%${query.text.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
-              return /* kysely-allow-raw: PostgreSQL's literal trigram predicate returns boolean. */ sql<boolean>`${relation(index, index.fields[0])} ILIKE ${pattern} ESCAPE '\\'`;
+              return /* kysely-allow-raw: PostgreSQL's literal trigram predicate returns boolean. */ sql<boolean>`${column} ILIKE ${pattern} ESCAPE '\\'`;
             }
             return /* kysely-allow-raw: PostgreSQL's tsvector predicate returns boolean. */ sql<boolean>`${column} @@ ${tsquery(query, config)}`;
           },
           rank(index, query) {
+            if (query?.kind === "contains") {
+              if (index.postgres?.mode !== "trigram") {
+                throw new Error("Contains requires a declared PostgreSQL trigram index");
+              }
+              return {
+                value: /* kysely-allow-raw: The admitted extension ranks a bound literal against its declared field. */ sql<number>`${sql.raw(extension)}.word_similarity(${query.text}, ${relation(index, index.fields[0])})`,
+                order: "desc",
+                toRank: (raw) => raw,
+              };
+            }
             const column = relation(index);
             return {
               value: /* kysely-allow-raw: The native rank is a numeric scalar. */ sql<number>`ts_rank_cd(${column}, ${requireQuery(query)}, 2)`,
@@ -95,8 +134,7 @@ export function bindPostgresSearch(
           },
           identity: (index) =>
             /* kysely-allow-raw: The declared source identity is the native numeric row identity. */ sql<number>`${relation(index, index.postgres!.identity)}`,
-          allocatedIdentity(index) {
-            relation(index);
+          allocatedIdentity() {
             throw new Error("PostgreSQL insert identities must use RETURNING");
           },
         }

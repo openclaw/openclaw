@@ -54,7 +54,7 @@ import {
 type SessionTranscriptHydrationReader = {
   target: CapturedSessionTranscriptTargetBinding;
   assertCurrent: () => void;
-  read: () => Promise<PreparedSessionTranscriptHydration>;
+  read: (options?: { compaction?: true }) => Promise<PreparedSessionTranscriptHydration>;
   readCohort?: (
     selection: NonNullable<SessionEntryCohortRequest["transcript"]>,
     consume: (prepared: PreparedSessionTranscriptHydration) => void,
@@ -86,9 +86,21 @@ export function prepareSessionTranscriptHydration(
     return {
       target: memory.target,
       assertCurrent: memory.assertCurrent,
-      read: async () => {
+      read: async (options) => {
         if (!memory.missing) {
-          return memory.read("session.history.hydrate", { limits });
+          const prepared = await memory.read("session.history.hydrate", { limits });
+          if (options?.compaction && prepared.kind === "full") {
+            const { resolveCurrentSessionPrimaryConversation } =
+              await import("./conversation-registry.js");
+            const entry = memory.currentEntry();
+            prepared.compaction = {
+              sessionTarget: memory.target,
+              entry,
+              runtimeEntry: entry,
+              primaryConversation: await resolveCurrentSessionPrimaryConversation(memory.target),
+            };
+          }
+          return prepared;
         }
         memory.assertCurrent();
         return limits
@@ -113,6 +125,16 @@ export function prepareSessionTranscriptHydration(
           : {
               kind: "full",
               snapshot: { events: [], eventJson: [], eventSeqs: [], version: version() },
+              ...(options?.compaction
+                ? {
+                    compaction: {
+                      sessionTarget: memory.target,
+                      entry: undefined,
+                      runtimeEntry: undefined,
+                      primaryConversation: undefined,
+                    },
+                  }
+                : {}),
             };
       },
       readCurrentTurnEntry: async (request) => {
@@ -249,21 +271,23 @@ export function prepareSessionTranscriptHydration(
       retainSessionActorTranscriptReplica(hot, retained);
     }
   };
-  const read = async (): Promise<PreparedSessionTranscriptHydration> => {
+  const read: SessionTranscriptHydrationReader["read"] = async (options) => {
     signal?.throwIfAborted();
     const retained = retainedRead();
     if (retained) {
       return retained;
     }
     const prepared = await readInOwner<PreparedSessionTranscriptHydration>((owner, resolvedScope) =>
-      owner.readTranscript({ target, resolvedScope, limits: contextLimits, admission }, signal),
+      owner.readTranscript(
+        { target, resolvedScope, limits: contextLimits, admission, ...options },
+        signal,
+      ),
     );
     retainRead(prepared);
     return prepared;
   };
   const readCohort: SessionTranscriptHydrationReader["readCohort"] = contextLimits
     ? (selection, consume) => {
-        const capturedSelection = structuredClone(selection);
         return withSessionTranscriptReadSource(
           target,
           async ({ scope, resolved, owner, expectedIdentity, assertCurrent: assertSource }) => {
@@ -285,7 +309,7 @@ export function prepareSessionTranscriptHydration(
                     assertSource();
                     const assertNative = captureSessionEntryNativeMutationWitness([database]);
                     const prepared =
-                      retainedRead(capturedSelection) ??
+                      retainedRead(selection) ??
                       (await owner.readTranscript(
                         {
                           target: scope,
@@ -293,7 +317,7 @@ export function prepareSessionTranscriptHydration(
                           expectedIdentity,
                           limits: contextLimits,
                           admission,
-                          transcript: capturedSelection,
+                          transcript: selection,
                           preparedEntry: readOwnedSessionTranscriptEntry(target),
                         },
                         signal,

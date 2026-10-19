@@ -564,6 +564,21 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
     expect(killSpy).not.toHaveBeenCalledWith(oldManagedPid, expect.anything());
   });
 
+  it("reports the raw owner lease read failure without scanning or signaling processes", () => {
+    const cause =
+      "EACCES: permission denied reading gateway owner lease password=synthetic-review-only-abcdefghijk";
+    mockReadGatewayOwnerLease.mockImplementationOnce(() => {
+      throw new Error(cause);
+    });
+    const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+    expect(cleanStaleGatewayProcessesSync(18789)).toEqual([]);
+    expectWarningContaining("stale gateway process cleanup failed:");
+    expectWarningContaining(cause);
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
   it("fails closed when the refreshed protected pid cannot be resolved", () => {
     const listenerPid = process.pid + 4301;
     mockSpawnSync.mockReturnValue(createOpenClawBusyResult(listenerPid));
@@ -578,6 +593,7 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
 
     expect(result).toEqual([]);
     expect(resolveProtectedPid).toHaveBeenCalledOnce();
+    expectWarningContaining("launchctl print failed");
     expect(killSpy).not.toHaveBeenCalled();
   });
 
