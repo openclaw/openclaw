@@ -33,6 +33,7 @@ import {
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
@@ -117,6 +118,7 @@ function ChatHeaderSessionMenuContent(
   const presentation = createParkedProjection(() => ({ ...liveProps }), open, preparation);
   const props = createProjection(presentation, {}, { key: "id" });
   let menu: MenuHandle | undefined;
+  let stopShortcut: (() => void) | undefined;
   const quickActions = useChatQuickActionEntries(() => props.sessionActions, false, "quick:");
   const state = merge(props, { selectionCount: 1, navigationAllowed: true, disabled: false });
   const readState = () => state;
@@ -178,7 +180,7 @@ function ChatHeaderSessionMenuContent(
   };
   onCleanup(() => {
     openMenus.delete(host);
-    menu?.overlay.surface.removeEventListener("keydown", shortcut, true);
+    stopShortcut?.();
   });
   const content = (id: string, value: JSX.Element): MenuEntry => ({
     kind: "content",
@@ -480,7 +482,7 @@ function ChatHeaderSessionMenuContent(
       onSelect={select}
       ref={(handle) => {
         menu = handle;
-        handle.overlay.surface.addEventListener("keydown", shortcut, true);
+        stopShortcut = listen(handle.overlay.surface, "keydown", shortcut, true);
       }}
       onEscape={(event) => actions.handleKeydown(event, view.appearance)}
       onBeforeShow={() => {

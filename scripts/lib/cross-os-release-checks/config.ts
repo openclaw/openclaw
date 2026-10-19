@@ -380,7 +380,7 @@ export function resolveRunnerMatrix(params: {
     {
       os_id: "macos",
       display_name: "macOS",
-      runner: pick(params.macosRunner, params.varMacosRunner, "blacksmith-6vcpu-macos-15"),
+      runner: pick(params.macosRunner, params.varMacosRunner, "xcode-27"),
       artifact_name: "macos",
     },
   ];

@@ -5,8 +5,6 @@ import { pathToFileURL } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { isPrivateQaCliEnabled } from "./private-qa-policy.js";
 
-export { isPrivateQaCliEnabled } from "./private-qa-policy.js";
-
 const PRIVATE_QA_DIST_RELATIVE_PATH = path.join("dist", "plugin-sdk", "qa-lab.js");
 const SOURCE_CHECKOUT_MARKER_RELATIVE_PATHS = [".git", "pnpm-workspace.yaml"] as const;
 

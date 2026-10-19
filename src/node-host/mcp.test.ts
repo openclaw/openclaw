@@ -1,5 +1,5 @@
 import "./mcp-manager.test-support.js";
-import { ErrorCode, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
+import { SdkErrorCode, type CallToolResult, type Tool } from "@modelcontextprotocol/client";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -130,7 +130,6 @@ describe("node host MCP manager", () => {
     );
     expect(docs.callTool).toHaveBeenCalledWith(
       { name: "search", arguments: { query: "x" } },
-      undefined,
       { timeout: 120_000 },
     );
 
@@ -329,7 +328,7 @@ describe("node host MCP manager", () => {
     const manager = await starting;
 
     expect(slow.request).toHaveBeenCalledTimes(2);
-    expect(slow.request.mock.calls.map((call) => call[2]?.timeout)).toEqual([50, 50]);
+    expect(slow.request.mock.calls.map((call) => call[1]?.timeout)).toEqual([50, 50]);
     expect(slow.close).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("timed out after 50ms"));
@@ -443,10 +442,13 @@ describe("node host MCP manager", () => {
 
     const pending = callTool(manager, "slow", { signal: controller.signal });
     await vi.waitFor(() => expect(client.callTool).toHaveBeenCalledOnce());
-    expect(client.callTool).toHaveBeenCalledWith({ name: "slow", arguments: {} }, undefined, {
-      timeout: 120_000,
-      signal: controller.signal,
-    });
+    expect(client.callTool).toHaveBeenCalledWith(
+      { name: "slow", arguments: {} },
+      {
+        timeout: 120_000,
+        signal: controller.signal,
+      },
+    );
 
     controller.abort(new Error("node invocation canceled"));
 
@@ -461,7 +463,7 @@ describe("node host MCP manager", () => {
         await new Promise((resolve) => {
           setTimeout(resolve, options?.timeout ?? 1);
         });
-        throw Object.assign(new Error("request timed out"), { code: ErrorCode.RequestTimeout });
+        throw Object.assign(new Error("request timed out"), { code: SdkErrorCode.RequestTimeout });
       },
     });
     const manager = await startManager(
@@ -474,9 +476,12 @@ describe("node host MCP manager", () => {
     await expect(callTool(manager, "slow", { timeoutMs: 50 })).rejects.toMatchObject({
       code: "MCP_TOOL_TIMEOUT",
     });
-    expect(client.callTool).toHaveBeenCalledWith({ name: "slow", arguments: {} }, undefined, {
-      timeout: 5,
-    });
+    expect(client.callTool).toHaveBeenCalledWith(
+      { name: "slow", arguments: {} },
+      {
+        timeout: 5,
+      },
+    );
     await expect(manager.callMcpTool({ server: "missing", tool: "slow" })).rejects.toMatchObject({
       code: "MCP_SERVER_UNAVAILABLE",
     });
@@ -495,9 +500,12 @@ describe("node host MCP manager", () => {
     );
 
     await callTool(manager, "search", { timeoutMs: 1e306 });
-    expect(client.callTool).toHaveBeenCalledWith({ name: "search", arguments: {} }, undefined, {
-      timeout: MAX_TIMER_TIMEOUT_MS,
-    });
+    expect(client.callTool).toHaveBeenCalledWith(
+      { name: "search", arguments: {} },
+      {
+        timeout: MAX_TIMER_TIMEOUT_MS,
+      },
+    );
     await manager.close();
   });
 
