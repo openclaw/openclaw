@@ -49,10 +49,7 @@ const widgetContents = [
 const boardSession = { sessionKey: "agent:main:board" };
 
 it("releases SQLite before awaiting a widget consumer's external work", async () => {
-  const { store, database, target } = boardFixture(
-    tempDirs.make("openclaw-board-consume-"),
-    "agent:main:consume",
-  );
+  const { store, database, target } = boardFixture(tempDirs.make("board-consume-"));
   await putHtml(store, target.sessionKey, "status", "original");
   const started = createDeferred();
   const release = createDeferred();
@@ -172,8 +169,7 @@ it.each(
 
 it("upgrades registered ownership from its exact legacy descriptor and preserves it", async () => {
   const { sessionKey, put, snapshot, grant, database } = boardFixture(
-    tempDirs.make("openclaw-board-legacy-registered-"),
-    "agent:main:legacy-registered",
+    tempDirs.make("board-legacy-registered-"),
   );
   const content = {
     kind: "registered" as const,
@@ -502,16 +498,10 @@ describe("SqliteBoardStore behavior", () => {
 
   it("requires a fresh grant when an MCP app widget changes servers", async () => {
     const { put: putWidget, grant } = testBoard();
-    const descriptor = {
-      serverName: "server-a",
-      toolName: "weather",
-      uiResourceUri: "ui://weather",
-      toolCallId: "call-a",
-    };
     const put = (serverName: string, toolCallId: string) =>
       putWidget({
         name: "weather",
-        content: mcpContent({ ...descriptor, serverName, toolCallId }),
+        content: mcpContent({ serverName, toolCallId }),
         declared: { tools: ["refresh"] },
       });
     const first = await put("server-a", "call-a");
@@ -683,10 +673,7 @@ describe("SqliteBoardStore persistence", () => {
   });
 
   it("rejects board writes for transcript-only placeholder nodes", async () => {
-    const { env, sessionKey, store, database } = boardFixture(
-      tempDirs.make("openclaw-board-transcript-only-"),
-      "agent:main:transcript-only",
-    );
+    const { env, sessionKey, store, database } = boardFixture(tempDirs.make("board-transcript-"));
     await deleteSessionEntryLifecycle({
       env,
       storePath: database.path,
@@ -699,10 +686,7 @@ describe("SqliteBoardStore persistence", () => {
   });
 
   it("fails closed when reading a persisted unsafe capability manifest", async () => {
-    const { sessionKey, store, database } = boardFixture(
-      tempDirs.make("openclaw-board-unsafe-manifest-"),
-      "agent:main:unsafe-manifest",
-    );
+    const { sessionKey, store, database } = boardFixture(tempDirs.make("board-unsafe-manifest-"));
     await putHtml(store, sessionKey, "status", "ok");
     database.db
       .prepare(
@@ -771,32 +755,31 @@ describe("SqliteBoardStore persistence", () => {
   });
 
   it("requires reapproval for grants stored before byte-frozen semantics", async () => {
-    const { sessionKey, store, database } = boardFixture(
-      tempDirs.make("openclaw-board-legacy-grant-"),
-      "agent:main:legacy-grant",
+    const { sessionKey, database, put, grant, snapshot, document } = boardFixture(
+      tempDirs.make("board-legacy-grant-"),
     );
-    const current = await store.putWidget({
-      ...htmlWidget(sessionKey, "status", "approved"),
+    const current = await put({
+      name: "status",
+      content: { kind: "html", html: "approved" },
       declared: { tools: ["health"] },
     });
-    await store.grant({ sessionKey }, "status", "granted", 1, current.widgets[0]?.instanceId);
+    await grant("status", 1, current.widgets[0]?.instanceId);
 
     database.db
       .prepare("UPDATE board_widgets SET manifest = ? WHERE session_key = ? AND name = 'status'")
       .run(JSON.stringify({ tools: ["health"] }), sessionKey);
 
-    expect((await store.getSnapshot({ sessionKey })).widgets[0]).toMatchObject({
+    expect((await snapshot()).widgets[0]).toMatchObject({
       grantState: "pending",
       declared: { tools: ["health"] },
     });
-    expect(await readBoardHtml(store, { sessionKey }, "status")).toMatchObject({
+    expect(await document("status")).toMatchObject({
       grantState: "pending",
       declared: { tools: ["health"] },
     });
-    expect(
-      (await store.grant({ sessionKey }, "status", "granted", 1, current.widgets[0]?.instanceId))
-        .widgets[0],
-    ).toMatchObject({ grantState: "granted" });
+    expect((await grant("status", 1, current.widgets[0]?.instanceId)).widgets[0]).toMatchObject({
+      grantState: "granted",
+    });
     const row = database.db
       .prepare("SELECT manifest FROM board_widgets WHERE session_key = ? AND name = 'status'")
       .get(sessionKey) as { manifest: string };

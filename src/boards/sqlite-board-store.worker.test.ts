@@ -33,6 +33,7 @@ import {
   htmlWidget,
   mcpContent,
 } from "./board-store.fixtures.test-support.js";
+import type { BoardSnapshotWithHtmlViewMetadata } from "./board-store.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 import { readBoardSnapshotWithHtmlViewMetadata } from "./sqlite-board-store.kernel.js";
 
@@ -68,13 +69,7 @@ function observeChanges(sessionKey: string) {
 }
 
 function interceptSnapshotRead(
-  afterRead: (
-    snapshot: Awaited<
-      ReturnType<
-        ReturnType<typeof historyReaders.createSessionHistoryWorkerReaders>["readBoardSnapshot"]
-      >
-    >,
-  ) => void | Promise<void>,
+  afterRead: (snapshot: BoardSnapshotWithHtmlViewMetadata | undefined) => void | Promise<void>,
 ) {
   const create = historyReaders.createSessionHistoryWorkerReaders;
   return vi.spyOn(historyReaders, "createSessionHistoryWorkerReaders").mockImplementation((run) => {
@@ -100,34 +95,6 @@ async function holdWriter(options: Parameters<typeof runOpenClawAgentWorkerWrite
   await entered.promise;
   return { release, held };
 }
-
-it("admits Board writes and request authority without reading SQLite on the caller thread", async () => {
-  const { store, target } = fixture();
-  const assertCurrent = vi.fn();
-  const host = observeHostDataSql();
-  try {
-    await store.applyOps(target, [{ kind: "tab_create", tabId: "main", title: "Main" }], {
-      assertCurrent,
-    });
-    const put = await store.putWidget(
-      {
-        ...htmlWidget(target.sessionKey, "status", "<p>status</p>"),
-        declared: { tools: ["health"] },
-      },
-      { assertCurrent },
-    );
-    await store.grant(target, "status", "granted", 1, put.widgets[0]?.instanceId, {
-      assertCurrent,
-    });
-    expect(assertCurrent).toHaveBeenCalled();
-    expect(host.queries.filter((sql) => /\bboard_(?:tabs|widgets)\b/iu.test(sql))).toEqual([]);
-    expect(
-      host.queries.filter((sql) => /select "entry_json" from "session_nodes"/iu.test(sql)),
-    ).toEqual([]);
-  } finally {
-    host.restore();
-  }
-});
 
 it.each([false, true])(
   "rejects a Board write whose session is replaced during preparation (cross-store: %s)",
@@ -178,17 +145,26 @@ it.each([false, true])(
   },
 );
 
-it("executes Board mutations off the host and publishes each committed change once", async () => {
+it("admits authorized Board writes off host and publishes each committed change once", async () => {
   const { database, store, target, document } = fixture();
+  const assertCurrent = vi.fn();
+  const authority = { assertCurrent };
+  const pipelineSql: string[] = [];
+  let readingPublication = false;
   const changes: Array<{ change: SessionRowChange; inTransaction: boolean; revision: number }> = [];
   const unsubscribe = sessionChanges.subscribe((change) => {
     if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
-      changes.push({
-        change,
-        inTransaction: database.db.isTransaction,
-        revision: readBoardSnapshotWithHtmlViewMetadata(database, target.sessionKey)!.snapshot
-          .revision,
-      });
+      readingPublication = true;
+      try {
+        changes.push({
+          change,
+          inTransaction: database.db.isTransaction,
+          revision: readBoardSnapshotWithHtmlViewMetadata(database, target.sessionKey)!.snapshot
+            .revision,
+        });
+      } finally {
+        readingPublication = false;
+      }
     }
   });
   const facts: SessionRowChange[] = [];
@@ -198,7 +174,12 @@ it("executes Board mutations off the host and publishes each committed change on
     }
   });
   clearNodeSqliteKyselyCacheForDatabase(requireNativeSqliteDatabase(database.db));
-  const host = observeHostDataSql();
+  const host = observeHostDataSql((sql) => {
+    // The publication observer deliberately reads the committed snapshot on the host.
+    if (!readingPublication) {
+      pipelineSql.push(sql);
+    }
+  });
   const expectPublication = (revision: number) => {
     expect(changes).toEqual([
       {
@@ -215,17 +196,24 @@ it("executes Board mutations off the host and publishes each committed change on
   };
   try {
     expect(
-      await store.applyOps(target, [{ kind: "tab_create", tabId: "main", title: "Main" }]),
+      await store.applyOps(
+        target,
+        [{ kind: "tab_create", tabId: "main", title: "Main" }],
+        authority,
+      ),
     ).toMatchObject({ revision: 1, tabs: [{ tabId: "main" }] });
     expectPublication(1);
-    const put = await store.putWidget({
-      ...htmlWidget(target.sessionKey, "status", "<p>committed</p>"),
-      declared: { tools: ["health"] },
-    });
+    const put = await store.putWidget(
+      {
+        ...htmlWidget(target.sessionKey, "status", "<p>committed</p>"),
+        declared: { tools: ["health"] },
+      },
+      authority,
+    );
     expect(put).toMatchObject({ revision: 2, widgets: [{ revision: 1, grantState: "pending" }] });
     expectPublication(2);
     expect(
-      await store.grant(target, "status", "granted", 1, put.widgets[0]?.instanceId),
+      await store.grant(target, "status", "granted", 1, put.widgets[0]?.instanceId, authority),
     ).toMatchObject({ revision: 3, widgets: [{ revision: 1, grantState: "granted" }] });
     expectPublication(3);
     expect(await document("status")).toMatchObject({
@@ -244,6 +232,11 @@ it("executes Board mutations off the host and publishes each committed change on
       ),
     ).toEqual([]);
     expect(changes).toEqual([]);
+    expect(assertCurrent).toHaveBeenCalled();
+    expect(pipelineSql.filter((sql) => /\bboard_(?:tabs|widgets)\b/iu.test(sql))).toEqual([]);
+    expect(
+      pipelineSql.filter((sql) => /select "entry_json" from "session_nodes"/iu.test(sql)),
+    ).toEqual([]);
   } finally {
     host.restore();
     stopFacts();
@@ -276,24 +269,22 @@ it.each([false, true])(
     const { database, options, store, target, document, snapshot } = fixture();
     const { release, held } = await holdWriter(options);
     const { changes, unsubscribe } = observeChanges(target.sessionKey);
-    let current = true;
+    const authority = new AbortController();
     const params: BoardWidgetMaterializedPutParams = htmlWidget(
       target.sessionKey,
       "captured",
       "<p>captured</p>",
     );
     const pending = store.putWidget(params, {
-      assertCurrent() {
-        if (!current) {
-          throw new Error("Board request retired while queued");
-        }
-      },
+      assertCurrent: () => authority.signal.throwIfAborted(),
     });
     void pending.catch(() => undefined);
     try {
       params.name = "changed";
       params.content = { kind: "html", html: "<p>changed</p>" };
-      current = !revoke;
+      if (revoke) {
+        authority.abort(new Error("Board request retired while queued"));
+      }
       expect(changes).toEqual([]);
       release.resolve();
       await held;

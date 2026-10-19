@@ -8,7 +8,7 @@ import {
   settleSqliteWorkerJob,
   withSqliteWorkerCleanupFailure,
 } from "../infra/sqlite-worker-broker-reply.js";
-import type { Actor, Job } from "../infra/sqlite-worker-broker.types.js";
+import type { Actor } from "../infra/sqlite-worker-broker.types.js";
 import {
   isSqliteWorkerError,
   SqliteWorkerError,
@@ -83,38 +83,36 @@ function fixture() {
   return { store, params, change, expectPublication };
 }
 
-async function failureOutcome(kind: boolean | "cleanup") {
-  if (kind === "cleanup") {
+async function failureOutcome(retire: boolean | "cleanup") {
+  if (retire === "cleanup") {
     return ["Native cleanup failed", "Later cleanup failed"].reduce<Error>(
       (error, message) => withSqliteWorkerCleanupFailure(error, new Error(message)),
       new SqliteWorkerError("Native Board outcome is unknown", "outcome-unknown"),
     );
   }
-  const retire = kind;
   const rejected = createDeferredCore<unknown>();
   const events: string[] = [];
   const custody = new SqliteWorkerSlotCustody();
   const requestCustody = custody.createRequest();
   requestCustody.activate();
   requestCustody.accept();
-  const job: Job = {
-    custody: requestCustody,
-    observation: { started() {}, completed() {} },
-    request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
-    bytes: 0,
-    settleNative: (settlement) => events.push(`settled:${settlement.kind}`),
-    resolve: () => rejected.reject(new Error("Failure reply unexpectedly resolved")),
-    reject: (error) => {
-      events.push("rejected");
-      rejected.resolve(error);
-    },
-    detach() {},
-  };
   const slot: Parameters<typeof receiveSqliteWorkerReply>[0] &
     Parameters<typeof failSqliteWorkerSlot>[0] = {
     custody,
     actors: new Set<Actor>(),
-    current: job,
+    current: {
+      custody: requestCustody,
+      observation: { started() {}, completed() {} },
+      request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
+      bytes: 0,
+      settleNative: (settlement) => events.push(`settled:${settlement.kind}`),
+      resolve: () => rejected.reject(new Error("Failure reply unexpectedly resolved")),
+      reject: (error) => {
+        events.push("rejected");
+        rejected.resolve(error);
+      },
+      detach() {},
+    },
     queue: [],
     worker: {
       postMessage() {
@@ -140,9 +138,7 @@ async function failureOutcome(kind: boolean | "cleanup") {
           currentError,
           openOutcome,
           completed,
-          retire: async () => {
-            events.push("retired");
-          },
+          retire: async () => void events.push("retired"),
           finish: settleSqliteWorkerJob,
         });
       },
@@ -187,20 +183,16 @@ it("relays a committed Board outcome after revocation without failing on client 
     widgets: [],
     resolvedWidgetName: params.name,
   };
-  let current = true;
+  const authority = new AbortController();
   boundary.execute.mockImplementation(async () => {
-    current = false;
+    authority.abort(new Error("Board request revoked during committed delivery"));
     params.sessionKey = "agent:main:replacement";
     return { value: committed, changes: [change] };
   });
   boundary.close.mockRejectedValue(new Error("Client cleanup failed after committed publication"));
   await expect(
     store.putWidget(params, {
-      assertCurrent: composeSessionSourceAssertion([], () => {
-        if (!current) {
-          throw new Error("Board request revoked during committed delivery");
-        }
-      }),
+      assertCurrent: composeSessionSourceAssertion([], () => authority.signal.throwIfAborted()),
     }),
   ).resolves.toBe(committed);
   expectPublication([change]);

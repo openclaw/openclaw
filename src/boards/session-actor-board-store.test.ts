@@ -70,32 +70,26 @@ const app = (serverName = "server") => ({
 it("inherits the memory owner's state root after async preparation", () =>
   withStore(async () => {
     const binding = (await bindingForSession())!;
-    try {
-      await runWithSessionActorStorage(binding, async () => {
-        const store = new SqliteBoardStore({
-          resolveSession: async () => ({ agentId: "main", sessionKey }),
-        });
-        await store.putWidget(html("inherited"));
-        expect(await store.getSnapshot(target)).toMatchObject({
-          revision: 1,
-          widgets: [{ name: "inherited" }],
-        });
+    await runWithSessionActorStorage(binding, async () => {
+      const store = new SqliteBoardStore({
+        resolveSession: async () => ({ agentId: "main", sessionKey }),
       });
-    } finally {
-      await binding.actor.release();
-    }
+      await store.putWidget(html("inherited"));
+      expect(await store.getSnapshot(target)).toMatchObject({
+        revision: 1,
+        widgets: [{ name: "inherited" }],
+      });
+    }).finally(() => binding.actor.release());
   }));
 
 it("retains the committed widget after publication failure", () =>
   withStore(async ({ store, snapshot }) => {
     const stop = failSessionActorMemoryPublication(sessionKey);
-    try {
-      await expect(store.putWidget(html("saved"))).rejects.toMatchObject({
+    await expect(store.putWidget(html("saved")))
+      .rejects.toMatchObject({
         name: "SessionActorStorageCommittedError",
-      });
-    } finally {
-      stop();
-    }
+      })
+      .finally(stop);
     expect(await snapshot()).toMatchObject({ revision: 1, widgets: [{ name: "saved" }] });
   }));
 
@@ -192,18 +186,14 @@ it("prepares MCP outside the FIFO and checks write authority", () =>
     });
     expect(noninteractive.widgets.find((item) => item.name === "app")!.grantState).toBe("none");
     expect(await readApp()).toMatchObject({ interactive: false, declaredTools: [] });
-    let allowed = true;
+    const sourceAuthority = new AbortController();
     await expect(
       store.putWidget(app(), {
         resolveMcpAppInteraction: async () => {
-          allowed = false;
+          sourceAuthority.abort(new Error("Source permission revoked"));
           return true;
         },
-        assertCurrent() {
-          if (!allowed) {
-            throw new Error("Source permission revoked");
-          }
-        },
+        assertCurrent: () => sourceAuthority.signal.throwIfAborted(),
       }),
     ).rejects.toThrow("Source permission revoked");
     expect(await snapshot()).toMatchObject({
