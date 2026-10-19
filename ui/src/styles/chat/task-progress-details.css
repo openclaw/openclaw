@@ -442,7 +442,7 @@
   min-height: 40px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: var(--popover);
+  background: var(--bg-hover);
   color: var(--muted);
   pointer-events: auto;
   box-shadow: var(--shadow-sm);
