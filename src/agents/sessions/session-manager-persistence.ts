@@ -306,11 +306,19 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
             }
           },
         });
+      const authority = { assertCurrent, authorize: assertCurrent };
+      let mutationAt =
+        expectedMutationAt !== undefined ? expectedMutationAt : this.transcriptMutationAt;
+      if (retryMutationConflicts && expectedMutationAt === undefined) {
+        // Content-preserving rewrites publish the actor watermark before this manager adopts it.
+        const current = actor.snapshot(authority);
+        if (current) {
+          mutationAt = current.transcript.version.updatedAt;
+        }
+      }
       let outcome;
       try {
-        outcome = await append(
-          expectedMutationAt !== undefined ? expectedMutationAt : this.transcriptMutationAt,
-        );
+        outcome = await append(mutationAt);
       } catch (error) {
         if (
           !retryMutationConflicts ||
@@ -319,7 +327,6 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
         ) {
           throw error;
         }
-        const authority = { assertCurrent, authorize: assertCurrent };
         const current = actor.snapshot(authority) ?? (await actor.read(authority));
         outcome = await append(current.transcript.version.updatedAt);
       }
