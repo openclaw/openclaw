@@ -56,7 +56,7 @@ export function McpServersForm(props: {
       <label>
         <span>{t("mcpServers.nameLabel")}</span>
         <input
-          ref={(element) => props.onNameRef?.(element)}
+          ref={props.onNameRef}
           name="mcp-name"
           autofocus={props.autofocus}
           class="settings-input"

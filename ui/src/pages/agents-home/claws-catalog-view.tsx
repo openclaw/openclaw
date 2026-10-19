@@ -20,7 +20,7 @@ function CatalogList(
           <Icon name="search" />
         </span>
         <input
-          ref={(element) => props.onSearchRef(element)}
+          ref={props.onSearchRef}
           type="search"
           data-claws-search
           autofocus

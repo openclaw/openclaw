@@ -156,10 +156,7 @@ function createModalPolicy(host: OpenClawModalDialog): ModalPolicy {
       return;
     }
     const active = activeElement(host);
-    const initialFocus = host.initialFocus;
-    const autofocus = initialFocus
-      ? initialFocus()
-      : dialog.querySelector<HTMLElement>("[autofocus]");
+    const autofocus = host.initialFocus?.();
     if (
       active &&
       active !== dialog &&

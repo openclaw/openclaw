@@ -79,7 +79,7 @@ function TextAreaField(props: {
     <label class="secrets-store-field">
       <span>{t(props.field === "hosts" ? "secretsStore.allowedHosts" : "secretsStore.value")}</span>
       <textarea
-        ref={(element) => props.onInputRef?.(element)}
+        ref={props.onInputRef}
         class={[
           "settings-input",
           `secrets-store-dialog__${props.field}`,

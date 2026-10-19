@@ -268,6 +268,13 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
     <>
       <style>{styles}</style>
       <openclaw-modal-dialog
+        prop:initialFocus={() =>
+          [...targets.keys()]
+            .filter((element) => element.isConnected && element.autofocus)
+            .toSorted((left, right) =>
+              left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+            )[0] ?? null
+        }
         ref={(element) => (modal = element)}
         prop:onOpenChange={(open: boolean) => (modalOpen = open)}
         label={label()}
