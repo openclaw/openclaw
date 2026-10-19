@@ -564,16 +564,14 @@ export async function buildGatewayInstallPlan(params: {
   >;
 }): Promise<GatewayInstallPlan> {
   const platform = params.platform ?? process.platform;
-  const env = omitSecretEgressProxyEnvironment(params.env, platform, { preserveProvenance: true });
+  const env = omitSecretEgressProxyEnvironment(params.env, platform);
   const existingEnvironment = omitSecretEgressProxyEnvironment(
     params.existingEnvironment ?? {},
     platform,
   );
-  const currentCa = resolveEnvironmentValue(env, "NODE_EXTRA_CA_CERTS", platform);
-  const existingCa = resolveEnvironmentValue(existingEnvironment, "NODE_EXTRA_CA_CERTS", platform);
-  if (currentCa !== undefined || existingCa !== undefined) {
-    env.NODE_EXTRA_CA_CERTS = currentCa ?? existingCa;
-  }
+  env.NODE_EXTRA_CA_CERTS =
+    resolveEnvironmentValue(env, "NODE_EXTRA_CA_CERTS", platform) ??
+    resolveEnvironmentValue(existingEnvironment, "NODE_EXTRA_CA_CERTS", platform);
   const wrapperInput = params.wrapperPath ?? env[OPENCLAW_WRAPPER_ENV_KEY];
   const generatedWrapperPath =
     platform === "win32"

@@ -4,7 +4,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { resolveInlineCommandMatch } from "../infra/shell-inline-command.js";
 import { POSIX_SHELL_WRAPPERS } from "../infra/shell-wrapper-resolution.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
-import { secretEgressProxyEnvironmentKeys } from "../secrets/egress-proxy/environment.js";
+import { isSecretEgressProxyEnv } from "../secrets/egress-proxy/environment.js";
 import { auditLaunchdDefinition } from "./service-audit-launchd.js";
 import { auditGatewayInstallPreservation } from "./service-audit-preservation.js";
 import { auditGatewayRuntime, SERVICE_RUNTIME_AUDIT_CODES } from "./service-audit-runtime.js";
@@ -361,7 +361,10 @@ export async function auditGatewayServiceConfig(params: {
     );
   }
 
-  const egressKeys = secretEgressProxyEnvironmentKeys(params.command?.environment ?? {}, platform);
+  const environment = params.command?.environment ?? {};
+  const egressKeys = Object.keys(environment).filter((key) =>
+    isSecretEgressProxyEnv(environment, key, platform),
+  );
   if (egressKeys.length > 0) {
     issues.push({
       code: SERVICE_AUDIT_CODES.gatewayEgressProxyEnvEmbedded,

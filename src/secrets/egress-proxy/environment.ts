@@ -1,7 +1,6 @@
-// This receipt is process-local provenance, never service configuration or authority.
-const INJECTED_ENV = "OPENCLAW_SECRET_EGRESS_PROXY_ENV";
+import path from "node:path";
 
-function proxyEnvironment(proxyUrl: string, trustBundlePath: string): Record<string, string> {
+export function createSecretEgressProxyEnvironment(proxyUrl: string, trustBundlePath: string) {
   return {
     HTTPS_PROXY: proxyUrl,
     HTTP_PROXY: proxyUrl,
@@ -13,79 +12,40 @@ function proxyEnvironment(proxyUrl: string, trustBundlePath: string): Record<str
     GIT_SSL_CAINFO: trustBundlePath,
   };
 }
+export const SECRET_EGRESS_PROXY_ENV_KEYS: ReadonlySet<string> = new Set(
+  Object.keys(createSecretEgressProxyEnvironment("", "")),
+);
 
-export function createSecretEgressProxyEnvironment(
-  proxyUrl: string,
-  trustBundlePath: string,
-): Record<string, string> {
-  const env = proxyEnvironment(proxyUrl, trustBundlePath);
-  return { ...env, [INJECTED_ENV]: JSON.stringify(env) };
-}
-
-/** Identify only unchanged injected values; later operator overrides remain durable. */
-export function secretEgressProxyEnvironmentKeys(
-  env: Record<string, string | undefined>,
-  platform: NodeJS.Platform = process.platform,
-): string[] {
-  const normalize = (key: string) => (platform === "win32" ? key.toUpperCase() : key);
-  const entries = Object.entries(env);
-  const normalized = Object.fromEntries(entries.map(([key, value]) => [normalize(key), value]));
-  let recorded: Record<string, unknown> | undefined;
-  try {
-    const value: unknown = JSON.parse(normalized[INJECTED_ENV] ?? "null");
-    if (value && typeof value === "object" && !Array.isArray(value)) {
-      recorded = Object.fromEntries(Object.entries(value));
-    }
-  } catch {
-    // Pre-receipt services can still be recognized by their reserved CA directory.
+export function isSecretEgressProxyEnv(
+  env: NodeJS.ProcessEnv,
+  rawKey: string,
+  platform = process.platform,
+): boolean {
+  const value = env[rawKey];
+  const name = platform === "win32" ? rawKey.toUpperCase() : rawKey;
+  if (!value || !SECRET_EGRESS_PROXY_ENV_KEYS.has(name)) {
+    return false;
   }
-  const caPath = normalized.NODE_EXTRA_CA_CERTS;
-  const legacyCa = (value: string | undefined) =>
-    Boolean(
-      value &&
-      /(?:^|[\\/])secret-egress-proxy[\\/]gateway-[^\\/]+[\\/]trust-bundle\.pem$/u.test(
-        value.trim(),
-      ),
+  if (name === "NODE_USE_ENV_PROXY") {
+    const proxies = Object.keys(env).filter((key) => /^https?_proxy$/iu.test(key) && env[key]);
+    return (
+      value === "1" &&
+      proxies.length > 0 &&
+      proxies.every((key) => isSecretEgressProxyEnv(env, key, platform))
     );
-  const proxyUrl = normalized.HTTPS_PROXY;
-  const legacyProxy =
-    legacyCa(caPath) && /^http:\/\/openclaw:[^@]+@127\.0\.0\.1:\d+$/u.test(proxyUrl ?? "")
-      ? proxyUrl!
-      : "";
-  const legacy = proxyEnvironment(legacyProxy, caPath ?? "");
-  return entries.flatMap(([key, value]) => {
-    const name = normalize(key);
-    if (name === INJECTED_ENV) {
-      return [key];
-    }
-    if (recorded) {
-      return typeof value === "string" && recorded[name] === value ? [key] : [];
-    }
-    // Legacy units have no receipt. Match only owner-defined keys and reserved
-    // paths (or the matching authenticated loopback proxy), never arbitrary CAs.
-    if (!Object.hasOwn(legacy, name) || !value) {
-      return [];
-    }
-    return legacyCa(value) ||
-      (legacyCa(caPath) &&
-        value === legacy[name] &&
-        (name === "NODE_USE_ENV_PROXY" || Boolean(legacyProxy)))
-      ? [key]
-      : [];
-  });
+  }
+  if (name.endsWith("_PROXY")) {
+    return URL.canParse(value) && /^http:\/\/openclaw:[\w-]+@127\.0\.0\.1:\d+\/?$/u.test(value);
+  }
+  const resolved = (platform === "win32" ? path.win32 : path.posix).resolve(value);
+  return /(?:^|[\\/])secret-egress-proxy[\\/]gateway-[^\\/]+[\\/].+/u.test(resolved);
 }
 
 export function omitSecretEgressProxyEnvironment(
-  env: Record<string, string | undefined>,
-  platform: NodeJS.Platform = process.platform,
-  options: { preserveProvenance?: boolean } = {},
-): Record<string, string | undefined> {
-  const omitted = new Set(secretEgressProxyEnvironmentKeys(env, platform));
-  // Install/repair composition still needs this fact until its final snapshot.
+  env: NodeJS.ProcessEnv,
+  platform = process.platform,
+): NodeJS.ProcessEnv {
   return Object.fromEntries(
-    Object.entries(env).filter(
-      ([key]) =>
-        !omitted.has(key) || (options.preserveProvenance && key.toUpperCase() === INJECTED_ENV),
-    ),
+    Object.entries(env).filter(([key]) => !isSecretEgressProxyEnv(env, key, platform)),
   );
 }

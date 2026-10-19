@@ -303,9 +303,8 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
   const before = params.preManagedServiceStop;
   const verdict = before?.serviceUpdateVerdict;
   assertGatewayServiceManagementAllowedForUpdate(params.state.env);
-  const matchesRecordedDefinition = params.expectedDefinitionFingerprint !== undefined;
   if (
-    matchesRecordedDefinition &&
+    params.expectedDefinitionFingerprint !== undefined &&
     (await fingerprintGatewayServiceDefinition(params.state.command)) !==
       params.expectedDefinitionFingerprint
   ) {
@@ -375,7 +374,7 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
         params.state,
         inspection,
         params.allowIncompleteInspection,
-        matchesRecordedDefinition,
+        params.expectedDefinitionFingerprint !== undefined,
       ))
   ) {
     const unavailable = inspection.kind === "unavailable";

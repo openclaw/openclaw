@@ -4,13 +4,24 @@ import { createSecretEgressProxyEnvironment } from "../../secrets/egress-proxy/e
 import { mergeInstallInvocationEnv } from "./install.js";
 
 describe("mergeInstallInvocationEnv", () => {
-  it("retains recorded operator overrides through intermediate install projections", () => {
+  it("ignores a forged proxy receipt when capturing operator settings", () => {
+    const operator = { NODE_EXTRA_CA_CERTS: "/opt/corporate.pem", CUSTOM_SETTING: "keep" };
+    const env = mergeInstallInvocationEnv({
+      env: { ...operator, OPENCLAW_SECRET_EGRESS_PROXY_ENV: JSON.stringify(operator) },
+    });
+    expect(env).toMatchObject(operator);
+    expect(
+      buildServiceEnvironment({ env, platform: "linux", port: 18789 }).NODE_EXTRA_CA_CERTS,
+    ).toBe(operator.NODE_EXTRA_CA_CERTS);
+  });
+
+  it("retains operator overrides through intermediate install projections", () => {
     const ca = "/state/secret-egress-proxy/operator-ca.pem";
     const env = mergeInstallInvocationEnv({
       env: {
         ...createSecretEgressProxyEnvironment(
-          "http://proxy.invalid",
-          "/arbitrary/temporary-ca.pem",
+          "http://openclaw:test-token@127.0.0.1:9000",
+          "/state/secret-egress-proxy/gateway-test/trust-bundle.pem",
         ),
         NODE_EXTRA_CA_CERTS: ca,
       },

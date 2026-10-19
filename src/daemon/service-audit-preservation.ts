@@ -1,6 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
-import { secretEgressProxyEnvironmentKeys } from "../secrets/egress-proxy/environment.js";
+import { isSecretEgressProxyEnv } from "../secrets/egress-proxy/environment.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import { readServiceHeapExecArgv, resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
 import type {
@@ -151,7 +151,6 @@ export function auditGatewayInstallPreservation(
     Object.entries(expected.environment ?? {}).map(([key, value]) => [normalize(key), value]),
   );
   const managed = readManagedServiceEnvKeysFromEnvironment(current.environment);
-  const egressKeys = new Set(secretEgressProxyEnvironmentKeys(current.environment ?? {}, platform));
   for (const [key, value] of Object.entries(current.environment ?? {})) {
     const upper = key.toUpperCase();
     const replacement = next.get(normalize(key));
@@ -161,7 +160,7 @@ export function auditGatewayInstallPreservation(
     }
     if (
       replacement === value ||
-      egressKeys.has(key) ||
+      isSecretEgressProxyEnv(current.environment ?? {}, key, platform) ||
       managed.has(upper) ||
       upper === "OPENCLAW_SERVICE_MANAGED_ENV_KEYS" ||
       upper === "OPENCLAW_GATEWAY_PORT" ||
