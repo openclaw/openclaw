@@ -36,6 +36,7 @@ import {
 import {
   findCachedShortSession,
   findLocalSessionReference,
+  findSnapshotSessionReference,
   sessionKeyUuid,
 } from "./route-loader-short-cache.ts";
 import {
@@ -481,8 +482,12 @@ export async function loadChatRoute(
         : {}),
     };
   }
-  let localRow = cached?.row;
+  let localRow: SessionRoutePresentation | undefined = cached?.row;
   if (!cached && !preferenceDerived && !revalidation) {
+    localRow = await findSnapshotSessionReference(context, target);
+    signal.throwIfAborted();
+  }
+  if (!localRow && !cached && !preferenceDerived && !revalidation) {
     await context.sessions.whenCachedRosterSettled();
     signal.throwIfAborted();
     // Only the pre-hello cached roster resolves a short id locally; a connected
