@@ -1,5 +1,5 @@
-import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import type { NewSessionResponse, SessionUpdate } from "@agentclientprotocol/sdk";
+import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
@@ -17,7 +17,11 @@ import {
 } from "./translator.bridge-test-helpers.js";
 import type { GatewaySessionPresentationRow } from "./translator.presentation.js";
 import { createPromptScenario } from "./translator.scenario.test-support.js";
-import { createAcpConnection, createAcpGateway, createAcpGatewayAgent } from "./translator.test-helpers.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
 const explicitMultiAgentConfig = {
   agents: {
