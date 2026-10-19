@@ -11,9 +11,9 @@ const { createTempDir } = createScriptTestHarness();
 
 describe("development tool selection", () => {
   it.each([
-    ["format", {}, false],
+    ["format", {}, true],
     ["format", { CI: "true" }, false],
-    ["format", { CI: "false" }, false],
+    ["format", { CI: "false" }, true],
     ["format", { OPENCLAW_FORMAT_TOOL: "oxfmt" }, false],
     ["format", { OPENCLAW_FORMAT_TOOL: "bun" }, true],
     ["format", { CI: "true", OPENCLAW_FORMAT_TOOL: "bun" }, true],
@@ -56,6 +56,21 @@ describe("development tool selection", () => {
       ),
     ).toThrow("OPENCLAW_FORMAT_TOOL=bun: unavailable");
     expect(notice).not.toHaveBeenCalled();
+  });
+
+  it("falls back to oxfmt with a notice when the local pinned fork is unavailable", () => {
+    const notice = vi.fn();
+    const tool = resolveDevTool(
+      "format",
+      {},
+      {
+        resolvePinnedBun: () => ({ reason: "unavailable" }),
+        notice,
+      },
+    );
+    expect(tool.command).toBe(process.execPath);
+    expect(tool.args).toEqual([path.resolve("node_modules/oxfmt/bin/oxfmt")]);
+    expect(notice).toHaveBeenCalledExactlyOnceWith("[openclaw] unavailable; using oxfmt.");
   });
 
   it("rejects an invalid override", () => {
