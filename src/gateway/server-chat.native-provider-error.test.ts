@@ -9,19 +9,6 @@ import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-me
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
 
-// mock-isolation: Native lifecycle projection must not read an operator's session store.
-vi.mock("./session-utils.js", () => {
-  const loadSessionEntry = vi.fn(() => ({
-    cfg: {},
-    storePath: "/tmp/native-provider-error-sessions.json",
-    store: {},
-    entry: undefined,
-    canonicalKey: "session-native-provider-error",
-    storeKeys: ["session-native-provider-error"],
-  }));
-  return { loadSessionEntry, loadGatewaySessionEntryReadOnly: loadSessionEntry };
-});
-
 afterEach(() => vi.useRealTimers());
 
 it("preserves exhausted context-budget guidance in live chat, Details, history, and channel replies", async () => {

@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveCliRuntimeCanonicalProvider } from "./cli-backends.js";
-import { resolveEmbeddedCliBackendDispatchEligibility } from "./embedded-agent-runner/cli-backend-dispatch-eligibility.js";
+import { resolveEmbeddedCliBackendDispatchEligibilityAsync } from "./embedded-agent-runner/cli-backend-dispatch-eligibility.js";
 import {
   resolveAgentHarnessSelectionDecision,
   type AgentHarnessSelectionDecision,
@@ -65,7 +65,7 @@ export function resolveIsolatedCompletionProvider(params: {
 }
 
 /** Harness selection plus the CLI backend, when one owns this completion instead of a harness. */
-export function resolveIsolatedCompletionRoute(params: {
+export async function resolveIsolatedCompletionRoute(params: {
   config: OpenClawConfig;
   /** Canonical model provider from resolveIsolatedCompletionProvider. */
   provider: string;
@@ -78,7 +78,7 @@ export function resolveIsolatedCompletionRoute(params: {
   /** Only a caller-supplied owner suppresses automatic CLI discovery. */
   explicitRuntimeOverride?: string;
   preparedAuthStore?: AuthProfileStore;
-}): { selection: AgentHarnessSelectionDecision; cliOwner?: string } {
+}): Promise<{ selection: AgentHarnessSelectionDecision; cliOwner?: string }> {
   const selection = resolveAgentHarnessSelectionDecision({
     provider: params.provider,
     modelId: params.model,
@@ -104,16 +104,18 @@ export function resolveIsolatedCompletionRoute(params: {
       authProfileId: params.authProfileId,
       preparedAuthStore: params.preparedAuthStore,
     }) ??
-    resolveEmbeddedCliBackendDispatchEligibility({
-      provider: params.provider,
-      model: params.model,
-      agentId: params.agentId,
-      authProfileId: params.authProfileId,
-      config: params.config,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      preparedAuthStore: params.preparedAuthStore,
-    })?.provider;
+    (
+      await resolveEmbeddedCliBackendDispatchEligibilityAsync({
+        provider: params.provider,
+        model: params.model,
+        agentId: params.agentId,
+        authProfileId: params.authProfileId,
+        config: params.config,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        preparedAuthStore: params.preparedAuthStore,
+      })
+    )?.provider;
   return cliOwner ? { selection, cliOwner } : { selection };
 }
 
@@ -157,9 +159,9 @@ export function resolveIsolatedCompletionAuthorizationOwner(
  * Planned runtime for an isolated completion in the supplied prepared generation.
  * Undefined when no owner or runnable auth attempt can serve the request.
  */
-export function resolveIsolatedCompletionRuntime(
+export async function resolveIsolatedCompletionRuntime(
   params: IsolatedCompletionRouteParams,
-): IsolatedCompletionRuntime | undefined {
+): Promise<IsolatedCompletionRuntime | undefined> {
   const config = params.config ?? {};
   try {
     const agentId = params.agentId ?? resolveDefaultAgentId(config);
@@ -168,7 +170,7 @@ export function resolveIsolatedCompletionRuntime(
       config,
       agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
     });
-    const route = resolveIsolatedCompletionRoute({
+    const route = await resolveIsolatedCompletionRoute({
       config,
       provider,
       model: params.model,

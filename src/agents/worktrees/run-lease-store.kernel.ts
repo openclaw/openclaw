@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { worktreeRegistryPublication } from "./registry-publication.js";
 import { assertWorktreeRegistryPredicates } from "./registry-run-end.worker.js";
@@ -17,7 +17,7 @@ export type WorktreeRunLeaseRowInput = {
 };
 
 export function admitWorktreeRunLeaseInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: WorktreeRunLeaseRowInput,
 ): void {
   if (params.observed) {
@@ -64,7 +64,7 @@ export function admitWorktreeRunLeaseInDatabase(
 }
 
 export function releaseWorktreeRunLeaseInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   worktreeId: string,
   token: string,
 ): void {

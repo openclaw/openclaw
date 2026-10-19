@@ -5,8 +5,7 @@ import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { SESSION_TRANSCRIPT_FOREGROUND_WORKERS } from "../../infra/worker-pool-sizing.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -30,7 +29,7 @@ import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.t
 
 it("keeps native close conservative until an unqualified reader is retired", async () => {
   const pool = createSessionTranscriptHistoryPool();
-  const request = { kind: "prewarm" as const, database: input().database, env: {} };
+  const request = { kind: "prewarm" as const, database: input().database, env: {}, history: false };
   const read = () => pool.run(() => request, {});
   observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
   try {
@@ -47,6 +46,32 @@ it("keeps native close conservative until an unqualified reader is retired", asy
   } finally {
     observed.rotate.mockResolvedValue(undefined);
     await pool.rotate();
+  }
+});
+
+it("takes no writer reservations for 150 concurrent cold history reads", async () => {
+  observed.preparedDatabase = false;
+  const request = input();
+  const reservations = channel("openclaw.agent-database.reservation");
+  const reserve = vi.fn();
+  reservations.subscribe(reserve);
+  observed.run.mockResolvedValue({
+    ok: true,
+    value: { kind: "transcript-watermark", watermark: undefined },
+  });
+  try {
+    const results = await Promise.all(
+      Array.from({ length: 150 }, (_, index) =>
+        withSessionHistoryWorkerDatabase(request.database, (owner) =>
+          owner.readWatermark({ scope: { ...request.scope, sessionId: `cold-${index}` } }),
+        ),
+      ),
+    );
+    expect(results).toHaveLength(150);
+    expect(observed.run).toHaveBeenCalledTimes(150);
+    expect(reserve.mock.calls.length).toBe(0);
+  } finally {
+    reservations.unsubscribe(reserve);
   }
 });
 
@@ -121,6 +146,42 @@ it.each(["deadline", "revocation"])(
   },
 );
 
+it("admits foreground writes while 65 prepared history reads remain queued", async ({ signal }) => {
+  observed.serializePools = true;
+  const request = input();
+  const readersOccupied = createDeferredCore();
+  const releaseReaders = createDeferredCore();
+  let started = 0;
+  let completed = 0;
+  observed.run.mockImplementation(async () => {
+    if (++started === SESSION_TRANSCRIPT_FOREGROUND_WORKERS) {
+      readersOccupied.resolve();
+    }
+    await releaseReaders.promise;
+    completed++;
+    return { ok: true, value: { kind: "transcript-watermark", watermark: undefined } };
+  });
+  const reads = Array.from({ length: 65 }, () =>
+    withSessionHistoryWorkerDatabase(request.database, (owner) =>
+      owner.readWatermark({ scope: { ...request.scope, sessionId: "history-backlog" } }),
+    ),
+  );
+  let writer: Promise<string> | undefined;
+  try {
+    await withinTest(readersOccupied.promise, signal);
+    expect(started).toBe(SESSION_TRANSCRIPT_FOREGROUND_WORKERS);
+    expect(historyLane.pending).toBe(65);
+    writer = runOpenClawAgentWriteAdmission(request.database, () => "foreground admitted");
+    await expect(withinTest(writer, signal)).resolves.toBe("foreground admitted");
+    expect(completed).toBe(0);
+    expect(historyLane.pending).toBe(65);
+  } finally {
+    releaseReaders.resolve();
+    await Promise.allSettled([...reads, ...(writer ? [writer] : [])]);
+  }
+  expect(completed).toBe(65);
+});
+
 it("keeps cold reads progressing while history searches await the same writer", async () => {
   observed.serializePools = true;
   const request = input();
@@ -176,7 +237,7 @@ it("keeps cold reads progressing while history searches await the same writer", 
     );
     releaseWriter.resolve();
     await writer;
-    // A cold reader holding the writer must not queue behind searches needing that writer.
+    // Cold schema admission must not queue behind searches needing the same admission turn.
     expect(await coldQueued.promise).toBe(false);
     allowStatus.resolve();
     expect(await cold).toBe(false);
@@ -230,13 +291,11 @@ it("hands admitted read deadlines to the worker pool", async () => {
   }
 });
 
-it("retains branch reads across ten-minute gaps in the maintenance owner", async () => {
+it("retains branch reads across four-minute gaps and retires after five idle minutes", async () => {
   const { database, scope } = input();
   const request = {
     database,
-    databaseIdentity: "synthetic-branch-owner",
     sessionKey: scope.sessionKey,
-    sessionId: "branch-session",
   };
   const result = {
     status: "ok" as const,
@@ -248,20 +307,15 @@ it("retains branch reads across ten-minute gaps in the maintenance owner", async
     .spyOn(WorkerTaskPool.prototype, "run")
     .mockResolvedValue({ ok: true, value: result });
   observed.run.mockResolvedValue({ ok: true, value: { kind: "branch-summaries", result } });
-  const sequences = [historyLane.nativeSequence, projectionLane.nativeSequence];
-  const before = maintenanceLane.nativeSequence;
   const signal = new AbortController().signal;
   try {
     await expect(runSessionBranchSummaryWorkerRequest(request, signal)).resolves.toEqual(result);
-    expect(maintenanceLane.nativeSequence).toBe(before + 1);
-    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await vi.advanceTimersByTimeAsync(4 * 60_000);
     expect(observed.rotate).not.toHaveBeenCalled();
 
     await expect(runSessionBranchSummaryWorkerRequest(request, signal)).resolves.toEqual(result);
-    expect(maintenanceLane.nativeSequence).toBe(before + 2);
-    expect([historyLane.nativeSequence, projectionLane.nativeSequence]).toEqual(sequences);
     expect(independentRead).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
     expect(observed.rotate).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(observed.rotate).toHaveBeenCalledOnce();
@@ -283,6 +337,10 @@ it.each([historyLane, maintenanceLane])(
     const first = prewarmSessionHistoryWorker(request.database, lane);
     const second = prewarmSessionHistoryWorker(request.database, lane);
     expect(observed.run).toHaveBeenCalledOnce();
+    expect(observed.run.mock.calls[0]?.[0]).toMatchObject({
+      kind: "prewarm",
+      history: lane === historyLane,
+    });
     expect(lane.pending).toBe(1);
     expect(isSessionHistoryWorkerCold(lane)).toBe(false);
     reply.resolve({ ok: true, value: { kind: "prewarm" } });
@@ -290,7 +348,7 @@ it.each([historyLane, maintenanceLane])(
     expect(lane.pending).toBe(0);
     expect(observed.unregister).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
     await prewarmSessionHistoryWorker(request.database, lane);
     expect(observed.run).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1);
@@ -362,15 +420,10 @@ it("joins only the matching lane prewarm and prepares its replacement after reti
   }
 });
 
-it("maintenance cleanup preserves foreground custody with an older sequence", async () => {
+it("maintenance cleanup preserves the independent foreground reader", async () => {
   const request = input();
   const candidates = [{ path: request.database.path, physicalPath: request.database.path }];
   observed.run.mockResolvedValue({ ok: true, value: false });
-  // Independent queues can issue overlapping sequence numbers for the same store.
-  maintenanceLane.nativeSequence = Math.max(
-    maintenanceLane.nativeSequence,
-    historyLane.nativeSequence,
-  );
   await withSessionHistoryWorkerDatabase(request.database, (owner) =>
     owner.readEntryPresence(request.scope),
   );
@@ -400,7 +453,6 @@ it("maintenance cleanup preserves foreground custody with an older sequence", as
     },
     maintenanceLane,
   );
-  expect(historyLane.nativeSequence).toBeLessThan(maintenanceLane.nativeSequence);
   expect(observed.unregister).toHaveBeenCalledOnce();
   const retained = observed.resources.find((resource) => resource.agentId === "main");
   assert(retained);
@@ -457,6 +509,22 @@ it("joins sibling reader cleanup for an eviction reported during discovery clean
     cleanupFinished.resolve();
     await Promise.allSettled([discovery, missingRead]);
   }
+});
+
+it("releases missing-store registrations across distinct stores", async () => {
+  for (let index = 0; index < 3; index++) {
+    const request = input();
+    observed.run.mockResolvedValueOnce({
+      ok: true,
+      value: false,
+      closedHistoryDatabase: request.database,
+    });
+    await withSessionHistoryWorkerDatabase(request.database, async (owner) => {
+      await expect(owner.readEntryPresence(request.scope)).resolves.toBe(false);
+    });
+    expect(observed.unregister).toHaveBeenCalledTimes(index + 1);
+  }
+  expect(observed.rotate).not.toHaveBeenCalled();
 });
 
 it("joins unfinished reads before accepting a sibling eviction", async () => {
@@ -621,9 +689,9 @@ it.each([false, true])("retains reads dispatched after cleanup (capable=%s)", as
   const cleanup = capable ? observed.closeResources : observed.rotate;
   cleanup.mockReturnValueOnce(receipt.promise);
   const closing = resource.close();
-  await read();
+  const successor = read();
   receipt.resolve();
-  await closing;
+  await Promise.all([closing, successor]);
   expect(observed.unregister).not.toHaveBeenCalled();
   if (capable) {
     expect(observed.rotate).not.toHaveBeenCalled();
@@ -682,19 +750,16 @@ it("releases pressure subscriptions after native settlement and rearms reopened 
   // Closing discovery readers also leaves their worker available for reuse.
   expect(pressure.hasSubscribers).toBe(true);
   const reopenedRetirement = createDeferredCore();
-  // The pool resumes dispatch before the owner's rotation continuation runs.
-  const successor = reopenedRetirement.promise.then(() =>
-    withSessionHistoryWorkerDatabase(request.database, (owner) =>
-      owner.readEntryPresence(request.scope),
-    ),
-  );
   observed.rotate.mockReturnValueOnce(reopenedRetirement.promise);
   pressure.publish(undefined);
   const reopenedRotation = historyLane.rotation;
   assert(reopenedRotation);
+  const successor = withSessionHistoryWorkerDatabase(request.database, (owner) =>
+    owner.readEntryPresence(request.scope),
+  );
   reopenedRetirement.resolve();
   await Promise.all([reopenedRotation, successor]);
-  // The older rotation must not retire a newly dispatched native sequence.
+  // The queued successor retains its newly opened native reader.
   expect(pressure.hasSubscribers).toBe(true);
   pressure.publish(undefined);
   await historyLane.rotation;

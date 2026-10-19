@@ -15,10 +15,9 @@ it("keeps Control UI runtime imports off the state database", () => {
   const entries = files.filter(
     (file) =>
       file.startsWith("ui/src/") &&
-      /\.tsx?$/.test(file) &&
+      /\.tsx?$/u.test(file) &&
       !file.startsWith("ui/src/e2e/") &&
-      !/\.e2e\.test\.tsx?$/.test(file) &&
-      !/\.node\.test\.tsx?$/.test(file) &&
+      !/\.(?:e2e|node)\.test\.tsx?$/u.test(file) &&
       !uiNodeDrivenBrowserTestFiles.includes(file),
   );
   const forbidden = files.filter((file) =>

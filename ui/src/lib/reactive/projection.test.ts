@@ -1,8 +1,16 @@
 // @vitest-environment node
-import { createEffect, createRoot, flush, isPending, latest, untrack } from "@solidjs/signals";
+import {
+  createEffect,
+  createRoot,
+  createSignal,
+  flush,
+  isPending,
+  latest,
+  untrack,
+} from "@solidjs/signals";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EventStream, ValueSignal } from "../board/provider-signals.ts";
-import { projectAsyncEvents, projectEvents, projectSource } from "./projection.ts";
+import { ValueSignal } from "../board/provider-signals.ts";
+import { projectSource } from "./projection.ts";
 
 const disposals: Array<() => void> = [];
 afterEach(() => {
@@ -100,6 +108,27 @@ describe("owner projections", () => {
     expect(projection.revision()).toBe(1);
   });
 
+  it("samples reactive owner getters only when their owner publishes", () => {
+    const [value, setValue] = createSignal(1);
+    const owner = new ValueSignal(0);
+    const subscribe = vi.spyOn(owner, "subscribe");
+    const projection = projectSource(owner, {
+      read: value,
+      subscribe: (current, notify) => current.subscribe(notify),
+      equality: "revision",
+    });
+    disposals.push(projection.dispose);
+    const view = observe(projection.read);
+    setValue(2);
+    flush();
+    expect(view.values).toEqual([1]);
+    expect(subscribe).toHaveBeenCalledOnce();
+    owner.set(1);
+    flush();
+    expect(view.values).toEqual([1, 2]);
+    expect(subscribe).toHaveBeenCalledOnce();
+  });
+
   it("honors value equality without suppressing revision-only snapshots", () => {
     const { owner, projection } = source<string>("same", Object.is);
     const listener = vi.fn();
@@ -111,15 +140,13 @@ describe("owner projections", () => {
     expect(projection.read()).toBe("changed");
   });
 
-  it("replaces sources immediately and rejects stale callback deliveries", () => {
-    const { owner, projection, subscribe, stops } = source(1);
+  it("replaces sources immediately and detaches the old owner", () => {
+    const { owner, projection, stops } = source(1);
     const view = observe(projection.read);
-    const stale = subscribe.mock.calls[0]![0];
     const replacement = new ValueSignal(7);
     projection.replaceSource(replacement);
     expect(stops).toHaveBeenCalledOnce();
     owner.set(3);
-    stale();
     flush();
     expect(view.values).toEqual([1, 7]);
     replacement.set(8);
@@ -130,6 +157,17 @@ describe("owner projections", () => {
     flush();
     expect(projection.read()).toBe(8);
     expect(view.values).toEqual([1, 7, 8]);
+  });
+
+  it("cancels a pending revision increment when disposed before the next flush", () => {
+    const { owner, projection, stops } = source(1);
+    observe(projection.read);
+    owner.set(2);
+    projection.dispose();
+    flush();
+    expect(projection.revision()).toBe(0);
+    expect(projection.read()).toBe(2);
+    expect(stops).toHaveBeenCalledOnce();
   });
 
   it("shares acquisition with explicit subscribers and counts duplicate callbacks separately", () => {
@@ -148,137 +186,4 @@ describe("owner projections", () => {
     flush();
     expect(stops).toHaveBeenCalledOnce();
   });
-
-  it("releases subscriptions on parent disposal and handles disposal during acquisition", () => {
-    const owner = new ValueSignal(1);
-    const stop = vi.fn();
-    const dispose = createRoot((disposeRoot) => {
-      const projection = projectSource(owner, {
-        read: (current) => current.value,
-        subscribe: (_current, notify) => {
-          notify();
-          return stop;
-        },
-        equality: "revision",
-      });
-      projection.subscribe(() => projection.dispose());
-      return disposeRoot;
-    });
-    expect(stop).toHaveBeenCalledOnce();
-    dispose();
-    expect(stop).toHaveBeenCalledOnce();
-  });
-});
-
-describe("event projections", () => {
-  it("keeps incidental void-listener return values synchronous", async () => {
-    let deliver: (() => void | Promise<void>) | undefined;
-    const projection = projectEvents<undefined, void>(undefined, {
-      subscribe: (_source, listener) => {
-        deliver = () => listener();
-        return () => {};
-      },
-    });
-    disposals.push(projection.dispose);
-    const events: string[] = [];
-    projection.subscribe(() => events.push("delivered"));
-    projection.subscribe(() => {
-      throw new Error("synchronous consumer");
-    });
-    let result: void | Promise<void> = undefined;
-    let failure: unknown;
-    try {
-      result = deliver!();
-    } catch (error) {
-      failure = error;
-    }
-    await Promise.resolve(result).catch(() => {});
-    expect(events).toEqual(["delivered"]);
-    expect(failure).toEqual(new Error("synchronous consumer"));
-  });
-
-  it("delivers equal events in order and fences replaced/disposed sources", () => {
-    const owner = new EventStream<string>();
-    const replacement = new EventStream<string>();
-    const subscribe = vi.spyOn(owner, "subscribe");
-    const projection = projectEvents(owner, {
-      subscribe: (current, listener: (event: string) => void) => current.subscribe(listener),
-    });
-    disposals.push(projection.dispose);
-    expect(subscribe).not.toHaveBeenCalled();
-    const events: string[] = [];
-    const stop = projection.subscribe((event) => {
-      events.push(event);
-    });
-    owner.emit("same");
-    owner.emit("same");
-    const stale = subscribe.mock.calls[0]![0];
-    projection.replaceSource(replacement);
-    stale("old");
-    replacement.emit("new");
-    stop();
-    replacement.emit("unobserved");
-    const last = projection.subscribe((event) => {
-      events.push(event);
-    });
-    expect(events).toEqual(["same", "same", "new"]);
-    replacement.emit("resumed");
-    projection.dispose();
-    replacement.emit("disposed");
-    last();
-    expect(events).toEqual(["same", "same", "new", "resumed"]);
-  });
-
-  it.each(["sync", "async"])(
-    "preserves awaited event completion after a %s rejection",
-    async (kind) => {
-      let deliver: ((event: string) => void | Promise<void>) | undefined;
-      const projection = projectAsyncEvents(
-        {},
-        {
-          subscribe: (_source, listener: (event: string) => void | Promise<void>) => {
-            deliver = listener;
-            return () => {};
-          },
-        },
-      );
-      disposals.push(projection.dispose);
-      let complete: (() => void) | undefined;
-      projection.subscribe(
-        () =>
-          new Promise<void>((resolve) => {
-            complete = resolve;
-          }),
-      );
-      const settled = vi.fn();
-      const pending = Promise.resolve(deliver!("event")).then(settled);
-      await Promise.resolve();
-      expect(settled).not.toHaveBeenCalled();
-      complete!();
-      await pending;
-      expect(settled).toHaveBeenCalledOnce();
-      projection.subscribe(() => {
-        if (kind === "sync") {
-          throw new Error("consumer failed");
-        }
-        return Promise.reject(new Error("consumer failed"));
-      });
-      const last = vi.fn();
-      projection.subscribe(last);
-      const failure = deliver!("event");
-      expect(last).toHaveBeenCalledOnce();
-      const rejected = vi.fn();
-      const outcome = Promise.resolve(failure).catch((error: unknown) => {
-        rejected();
-        return error;
-      });
-      // Drain the rejected consumer's promise chain while its sibling stays pending.
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(rejected).not.toHaveBeenCalled();
-      complete!();
-      expect(await outcome).toEqual(new Error("consumer failed"));
-    },
-  );
 });

@@ -79,7 +79,10 @@ function request(
       },
     } as GatewayRequestOptions["client"],
     isWebchatConnect: () => false,
-    context: { logGateway: { warn: vi.fn() } } as unknown as GatewayRequestOptions["context"],
+    context: {
+      getRuntimeConfig: () => ({}),
+      logGateway: { warn: vi.fn() },
+    } as unknown as GatewayRequestOptions["context"],
     hasCurrentClientAuthority: options.hasAuthority,
   });
   return { respond, pending };

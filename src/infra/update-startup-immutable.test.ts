@@ -17,9 +17,10 @@ const mocks = vi.hoisted(() => ({
   runAutoUpdate: vi.fn(),
 }));
 vi.mock("./telemetry.js", () => ({ checkTelemetryUpdate: mocks.telemetry }));
-vi.mock("../state/config-machine-state.js", () => ({ readConfigMachineState: () => null }));
-vi.mock("../state/config-machine-state-write.js", () => ({
-  writeConfigMachineState: mocks.writeState,
+// mock-isolation: Update selection uses synthetic machine state without opening SQLite.
+vi.mock("../state/config-machine-state-async.js", () => ({
+  readConfigMachineStateAsync: async () => null,
+  writeConfigMachineStateAsync: mocks.writeState,
 }));
 
 let lifecycle: UpdateCheckLifecycle;

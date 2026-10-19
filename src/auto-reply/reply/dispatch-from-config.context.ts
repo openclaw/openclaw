@@ -1,16 +1,25 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentIds } from "../../agents/agent-roster.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import {
+  resolveExplicitSessionStorePathForScope,
+  resolveSessionStorePathCore,
+} from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
-import { isAcpSessionKey } from "../../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  isIncognitoSessionKey,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import {
   isNativeCommandTurn,
@@ -19,7 +28,6 @@ import {
 import type { FinalizedMsgContext } from "../templating.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
 import { isSlackDirectRoutedThreadTurn } from "./routed-delivery-thread.js";
 import {
   assertPreparedConversationBindingRoute,
@@ -59,13 +67,18 @@ export async function resolveSessionStoreLookup(
     return {};
   }
   const agentId = resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId });
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  const storePath =
+    resolveExplicitSessionStorePathForScope({ agentId, sessionKey }) ??
+    resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const target = { agentId, sessionKey, storePath };
   try {
-    const entry = await readSessionEntryReadOnlyInWorker(
-      { ...target, readConsistency: "latest", clone: false },
-      assertCurrent,
-    );
+    // Incognito databases are process-owned and unavailable to read workers.
+    const entry = isIncognitoSessionKey(sessionKey)
+      ? loadSessionEntryReadOnly({ ...target, readConsistency: "latest", clone: false })
+      : await readSessionEntryReadOnlyInWorker(
+          { ...target, readConsistency: "latest", clone: false },
+          assertCurrent,
+        );
     assertCurrent?.();
     return {
       ...target,
@@ -76,6 +89,30 @@ export async function resolveSessionStoreLookup(
     assertCurrent?.();
     return target;
   }
+}
+
+/** Legacy free-harness keys retain storage identity but use the inspected channel owner. */
+export function resolveBoundAcpDispatchRuntimeOwner(params: {
+  ctx: FinalizedMsgContext;
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+}): string {
+  const agentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+    fallbackAgentId: params.ctx.AgentId,
+  });
+  const configured = listAgentIds(params.cfg);
+  const rest = parseAgentSessionKey(params.sessionKey)?.rest.toLowerCase();
+  const route = readConversationBindingRouteFacts(params.ctx);
+  return !configured.includes(agentId) &&
+    rest?.startsWith("acp:") &&
+    !rest.startsWith("acp:binding:") &&
+    route?.kind === "agent" &&
+    route.targetSessionKey.trim() === params.sessionKey?.trim() &&
+    configured.includes(route.fallbackAgentId)
+    ? route.fallbackAgentId
+    : agentId;
 }
 
 export async function resolveBoundAcpDispatchSessionKey(params: {
@@ -179,13 +216,14 @@ export async function resolveDispatchResetAdmission(params: {
   ) {
     try {
       hasParentForkSource = Boolean(
-        loadSessionEntryReadOnly({
-          agentId: params.agentId,
-          storePath: params.storePath,
-          sessionKey: parentSessionKey,
-          readConsistency: "latest",
-          clone: false,
-        })?.sessionId,
+        (
+          await readSessionEntryReadOnlyInWorker({
+            agentId: params.agentId,
+            storePath: params.storePath,
+            sessionKey: parentSessionKey,
+            readConsistency: "latest",
+          })
+        )?.sessionId,
       );
     } catch {
       hasParentForkSource = false;

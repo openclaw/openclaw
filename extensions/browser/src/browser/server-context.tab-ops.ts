@@ -410,7 +410,12 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     let createdTargetId: string | undefined;
     let closeCreatedPage: (() => Promise<void>) | undefined;
     try {
-      if (capabilities.usesPersistentPlaywright) {
+      const headless =
+        resolveBrowserEngine(profile.engine).descriptor.id === "chromium" &&
+        (runtime.running?.headless ?? (await runtime.externalBrowserMode?.headless)) === true;
+      opts?.signal?.throwIfAborted();
+      // Playwright installs the context guard before creating or navigating the first page.
+      if (capabilities.usesPersistentPlaywright || headless) {
         const mod = await getPwAiModule({ mode: "strict" });
         if (mod) {
           const page = await mod.createPageViaPlaywright({
@@ -418,7 +423,9 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             ...(profile.engine ? { engine: profile.engine } : {}),
             url,
             cdpPolicy,
+            ...(headless ? { headless: true } : {}),
             ...(opts?.signal ? { signal: opts.signal } : {}),
+            ...(opts?.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
             ...ssrfPolicyOpts,
           });
           closeCreatedPage = page.close;

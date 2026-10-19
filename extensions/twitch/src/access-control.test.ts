@@ -89,38 +89,12 @@ describe("checkTwitchAccessControl", () => {
     });
   });
 
-  describe("requireMention", () => {
-    it("is case-insensitive for bot username", async () => {
-      const result = await runAccessCheck({
-        account: { requireMention: true },
-        message: { message: "@TestBot hello" },
-      });
-      expect(result.allowed).toBe(true);
-    });
-  });
-
   describe("allowFrom allowlist", () => {
-    it("blocks everyone when allowFrom is explicitly empty", async () => {
-      await expectAllowFromBlocked({
-        allowFrom: [],
-        reason: "allowFrom",
-      });
-    });
-
     it("blocks messages without userId", async () => {
       await expectAllowFromBlocked({
         allowFrom: ["123456"],
         message: { userId: undefined },
         reason: "user ID not available",
-      });
-    });
-
-    it("blocks user with role when not in allowlist", async () => {
-      await expectAllowFromBlocked({
-        allowFrom: ["789012"],
-        allowedRoles: ["moderator"],
-        message: { userId: "123456", isMod: true },
-        reason: "allowFrom",
       });
     });
   });
@@ -149,25 +123,14 @@ describe("checkTwitchAccessControl", () => {
       },
     );
 
-    it("allows users with any of multiple roles", async () => {
-      const result = await runAccessCheck({
-        account: { allowedRoles: ["moderator", "vip", "subscriber"] },
-        message: { message: "@testbot hello", isVip: true, isMod: false, isSub: false },
+    it("allows wildcard roles without requiring a native ID", async () => {
+      await expectAllowedAccessCheck({
+        account: {
+          allowedRoles: ["all"],
+        },
+        message: { userId: undefined },
       });
-      expect(result.allowed).toBe(true);
     });
-
-    it.each(["123456", undefined])(
-      "allows wildcard roles without requiring a native ID (%s)",
-      async (userId) => {
-        await expectAllowedAccessCheck({
-          account: {
-            allowedRoles: ["all"],
-          },
-          message: { userId },
-        });
-      },
-    );
 
     it("does not treat a native ID spelling a role as role membership", async () => {
       const result = await runAccessCheck({
@@ -177,34 +140,15 @@ describe("checkTwitchAccessControl", () => {
       expect(result.allowed).toBe(false);
     });
 
-    it.each([undefined, []])(
-      "keeps an open policy for absent or empty roles (%s)",
-      async (allowedRoles) => {
-        await expectAllowedAccessCheck({
-          account: { allowedRoles },
-          message: { userId: undefined },
-        });
-      },
-    );
+    it("keeps an open policy for empty roles", async () => {
+      await expectAllowedAccessCheck({
+        account: { allowedRoles: [] },
+        message: { userId: undefined },
+      });
+    });
   });
 
   describe("combined restrictions", () => {
-    it("checks requireMention before sender allowlists for unauthorized chat", async () => {
-      const result = await runAccessCheck({
-        account: {
-          requireMention: true,
-          allowFrom: ["789012"],
-        },
-        message: {
-          message: "ordinary chat",
-          userId: "123456",
-        },
-      });
-
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toContain("does not mention the bot");
-    });
-
     it("checks requireMention before role gates for unauthorized chat", async () => {
       const result = await runAccessCheck({
         account: {

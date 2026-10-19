@@ -27,7 +27,7 @@ import { recoverEmbeddedRunOverflow } from "./run/overflow-context-recovery.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import {
   clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
 } from "./session-prompt-state.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
 
@@ -270,11 +270,48 @@ describe("recoverEmbeddedRunOverflow", () => {
     mocks.warn.mockReset();
   });
 
-  it("uses the canonical assistant classifier when the text heuristic misses", async () => {
+  it.each([
+    "400 Your input exceeds the context window of this model",
+    '400 " Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input. Error Data: n/a, Additional Data: n/a"',
+  ])("compacts and retries the classified assistant overflow: %s", async (errorMessage) => {
     const assistantOverflowCandidate = makeAssistantMessage({
       stopReason: "error",
-      errorMessage: "400 Your input exceeds the context window of this model",
+      errorMessage,
     });
+    const result = await recoverEmbeddedRunOverflow(
+      makeInput({ promptError: null, assistantOverflowCandidate }),
+    );
+
+    expect(result).toEqual({ action: "retry" });
+    expect(mocks.compact).toHaveBeenCalledOnce();
+    expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
+  });
+
+  it.each([
+    "400 Invalid 'reasoning_effort' value: 'off'. Supported values: none, minimal, low, medium, high, xhigh.",
+    "400 Failed to apply prompt template. The model is loaded with context length of only 4096 tokens.",
+  ])("does not compact an unrelated local-server rejection: %s", async (errorMessage) => {
+    const input = makeInput({
+      promptError: null,
+      assistantOverflowCandidate: makeAssistantMessage({ stopReason: "error", errorMessage }),
+      assistantErrorText: errorMessage,
+    });
+
+    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "none" });
+    expect(mocks.compact).not.toHaveBeenCalled();
+    expect(mocks.markProviderPromptRejected).not.toHaveBeenCalled();
+  });
+
+  it("recovers a DashScope input-length range overflow as context overflow", async () => {
+    const assistantOverflowCandidate = makeAssistantMessage({
+      stopReason: "error",
+      errorMessage:
+        "400 <400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 202745]",
+    });
+    // The provider body also carries these structured fields; the text wording
+    // must outrank them so validation-shaped wrappers still recover.
+    assistantOverflowCandidate.errorType = "invalid_request_error";
+    assistantOverflowCandidate.errorCode = "invalid_parameter_error";
     const result = await recoverEmbeddedRunOverflow(
       makeInput({ promptError: null, assistantOverflowCandidate }),
     );
@@ -337,42 +374,76 @@ describe("recoverEmbeddedRunOverflow", () => {
   });
 
   it.each([
-    { reason: "Compaction timed out after 180000ms", summary: "Auto-compaction timed out" },
-    { reason: "The summary provider is unavailable", summary: "Auto-compaction failed" },
-  ])("preserves a precheck compaction failure: $reason", async ({ reason, summary }) => {
-    mocks.compact.mockResolvedValueOnce({ ok: false, compacted: false, reason });
-    const promptError = overflowError();
-    const input = makeInput({
-      promptError,
-      attempt: {
-        terminal: { kind: "failed", source: "precheck", error: promptError },
-        preflightRecovery: { route: "compact_only" },
-      },
+    {
+      source: "precheck",
+      reason: "Compaction timed out after 180000ms",
+      summary: "Auto-compaction timed out before the next model request.",
+    },
+    {
+      source: "precheck",
+      reason: "The summary provider is unavailable",
+      summary: "Auto-compaction failed before the next model request.",
+    },
+    {
+      source: "prompt",
+      reason: "Synthetic summary rejected",
+      summary: "Auto-compaction failed after the provider rejected the prompt.",
+    },
+  ] as const)(
+    "preserves a $source compaction failure: $reason",
+    async ({ source, reason, summary }) => {
+      mocks.compact.mockResolvedValueOnce({ ok: false, compacted: false, reason });
+      const promptError = overflowError();
+      const input = makeInput({
+        promptError,
+        attempt: {
+          terminal: { kind: "failed", source, error: promptError },
+          ...(source === "precheck" ? { preflightRecovery: { route: "compact_only" } } : {}),
+        },
+      });
+
+      const result = await recoverEmbeddedRunOverflow(input);
+
+      expect(result).toMatchObject({
+        action: "surface",
+        kind: "compaction_failure",
+        errorText: expect.stringContaining(reason),
+        userText: expect.stringContaining(summary),
+      });
+      if (result.action !== "surface") {
+        throw new Error("expected compaction failure");
+      }
+      expect(result.userText).toContain("Try again or run /compact");
+      expect(result.userText).not.toContain("Context overflow");
+      expect(mocks.markProviderPromptRejected).toHaveBeenCalledTimes(source === "prompt" ? 1 : 0);
+      expect(input.prepareCurrentTranscriptRetry).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps provider overflow guidance when compaction only skipped", async () => {
+    mocks.compact.mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+      reason: "nothing to compact",
     });
 
-    const result = await recoverEmbeddedRunOverflow(input);
+    const result = await recoverEmbeddedRunOverflow(makeInput({ promptError: overflowError() }));
 
     expect(result).toMatchObject({
       action: "surface",
-      kind: "compaction_failure",
-      errorText: expect.stringContaining(reason),
-      userText: expect.stringContaining(`${summary} before the next model request.`),
+      kind: "context_overflow",
+      userText: expect.stringContaining("Context overflow"),
     });
-    if (result.action !== "surface") {
-      throw new Error("expected precheck compaction failure");
-    }
-    expect(result.userText).toContain("Try again or run /compact");
-    expect(result.userText).not.toContain("Context overflow");
-    expect(mocks.markProviderPromptRejected).not.toHaveBeenCalled();
-    expect(input.prepareCurrentTranscriptRetry).not.toHaveBeenCalled();
   });
 
   it.each([true])(
     "truncates the active projection after mixed preflight compaction (successor=%s)",
     async (adoptsSuccessor) => {
       let sessionId = "session-1";
-      getEmbeddedSessionPromptState(sessionId).toolResults.frozen.add("predecessor-only");
-      const successorProjection = getEmbeddedSessionPromptState("rotated-session").toolResults;
+      using predecessor = retainEmbeddedSessionPromptState(sessionId);
+      using successor = retainEmbeddedSessionPromptState("rotated-session");
+      predecessor.state.toolResults.frozen.add("predecessor-only");
+      const successorProjection = successor.state.toolResults;
       successorProjection.frozen.add("successor-only");
       mocks.truncateOversizedToolResults.mockReturnValueOnce({
         truncated: true,
@@ -482,6 +553,27 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(input.state.toolResultTruncationAttempted).toBe(false);
   });
 
+  it("attributes oversized fixed context without retrying compaction or suggesting reset", async () => {
+    const input = makeInput({ contextTokenBudget: 32_000 });
+    input.state.compactionRequestBudget = createCompactionRequestBudget({
+      contextWindow: 32_000,
+      reserveTokens: 4_000,
+      systemPrompt: "Plugin instructions. ".repeat(10_000),
+      pendingPrompt: "hello",
+    });
+    const result = await recoverEmbeddedRunOverflow(input);
+    expect(result).toMatchObject({
+      action: "surface",
+      kind: "context_overflow",
+      userText: expect.stringContaining("system prompt, injected context, or tool definitions"),
+    });
+    expect(result).toMatchObject({
+      userText: expect.stringContaining("Reduce plugin-provided system context"),
+    });
+    expect(mocks.compact).not.toHaveBeenCalled();
+    expect(mocks.truncateOversizedToolResults).not.toHaveBeenCalled();
+  });
+
   it("rejects oversized pending input once and answers after its persisted history is compacted", async () => {
     const contextWindow = 40_000;
     const systemPrompt = "Follow the project rules. ".repeat(2_000);
@@ -506,7 +598,6 @@ describe("recoverEmbeddedRunOverflow", () => {
         sessionFile: "unused",
       },
       compactionReplayEnabled: false,
-      contextEngineAssemblySucceeded: false,
       contextEnginePromptAuthority: "assembled",
       contextTokenBudget: contextWindow,
       hookMessagesForCurrentPrompt: manager.buildSessionContext().messages,

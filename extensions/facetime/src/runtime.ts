@@ -9,6 +9,7 @@ import { resolveFaceTimeConfig, validateFaceTimeConfig, type FaceTimeConfig } fr
 import { installFaceTimeDriver } from "./driver-setup.js";
 import { resolveFaceTimeHelperEndpoint } from "./helper-endpoint.js";
 import {
+  DIAL_BUNDLES,
   FaceTimeHelperAmbiguousError,
   FaceTimeHelperUnavailableError,
   readHelperResults,
@@ -33,7 +34,6 @@ import { terminateExactCarrierProcesses } from "./runtime-carrier-process.js";
 import {
   reconcilePendingFaceTimeCarrier,
   hasDialHelperConfirmation,
-  OUTBOUND_DIAL_HELPER_BUNDLES,
   OUTBOUND_RECONCILE_ATTEMPTS,
   OUTBOUND_RECONCILE_INTERVAL_MS,
   retainOutboundDialHelperPeers,
@@ -76,16 +76,12 @@ export async function createFaceTimeRuntime(params: {
   }
 
   const calls = new FaceTimeCallRegistry<ActiveFaceTimeCall>();
-  const storeOptions = {
-    namespace: "pending-dial",
-    maxEntries: 1,
-    overflowPolicy: "reject-new" as const,
-  };
-  // package.json supports 2026.9.4 hosts; choose their API before any store work.
   const pendingDialStore = new PendingFaceTimeDialStore(
-    typeof params.runtime.state.openKeyedStoreV2 === "function"
-      ? params.runtime.state.openKeyedStoreV2(storeOptions)
-      : params.runtime.state.openKeyedStore(storeOptions),
+    params.runtime.state.openKeyedStoreV2({
+      namespace: "pending-dial",
+      maxEntries: 1,
+      overflowPolicy: "reject-new",
+    }),
   );
   let outboundDialInFlight: Promise<FaceTimeDialResult> | undefined;
   let outboundDialDispatchPending = false;
@@ -245,8 +241,7 @@ export async function createFaceTimeRuntime(params: {
       .finally(scheduleOutboundReconciliation);
     const helperResults = readHelperResults(result);
     const cancelled = helperResults.some((entry) => entry.cancelled === true);
-    const helpersContacted =
-      typeof result.helpersContacted === "number" ? result.helpersContacted : helperResults.length;
+    const helpersContacted = result.helpersContacted ?? helperResults.length;
     const definitivelyAbsent =
       helperResults.length === helpersContacted &&
       hasDialHelperConfirmation(helperResults) &&
@@ -277,7 +272,7 @@ export async function createFaceTimeRuntime(params: {
       }
       const outboundIdentity = normalizeFaceTimeOutboundIdentityEvent(message);
       if (outboundIdentity && outboundCallPending?.dialID === outboundIdentity.data.dial_id) {
-        if (OUTBOUND_DIAL_HELPER_BUNDLES.has(peer.bundleIdentifier)) {
+        if (DIAL_BUNDLES.has(peer.bundleIdentifier)) {
           outboundCarrierPeers.set(peer.processId, peer);
         }
         retainFaceTimeDialCallUUID(outboundCallPending, outboundIdentity.data.call_uuid);
@@ -666,7 +661,7 @@ export async function createFaceTimeRuntime(params: {
                   outboundCallPending !== shutdownPending ||
                   shutdownPending.ownerEpoch !== pendingEpoch
                 ) {
-                  throw new Error("pending FaceTime dial changed during fail-closed shutdown");
+                  throw new Error("pending FaceTime dial changed during shutdown");
                 }
               },
             });

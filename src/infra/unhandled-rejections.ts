@@ -265,15 +265,15 @@ export function isUncaughtExceptionHandled(error: unknown): boolean {
 export function installUnhandledRejectionHandler(): void {
   const exitWithTerminalRestore = (
     reason: string,
-    error?: unknown,
-    hookReason = reason,
+    error: unknown,
+    hookReason: string,
     exitCode = 1,
   ) => {
     for (const message of runFatalErrorHooks({ reason: hookReason, error })) {
       console.error("[openclaw]", message);
     }
     restoreRuntimeTerminalState(reason, { resumeStdinIfPaused: false });
-    exitAfterSignalExitBarriers(exitCode);
+    exitAfterSignalExitBarriers(exitCode, reason);
   };
 
   process.on("unhandledRejection", (reason, _promise) => {

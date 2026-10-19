@@ -52,7 +52,7 @@ Set `OPENCLAW_SECRET_SENTINELS=off` (also accepts `0` or `false`, case-insensiti
 
 ## Agent-access boundary
 
-SecretRefs stop credentials from being persisted in config and generated model files, but they are not a process-isolation boundary. A plaintext credential left on disk in a path the agent can read is still readable via file or shell tools, bypassing API-level redaction.
+SecretRefs stop credentials from being persisted in config and generated model files, but they are not a process-isolation boundary. A plaintext credential left on disk in a path the agent can read is still readable via file or shell tools. Tool results and transcripts do not secret-mask that content.
 
 For production deployments where agent-accessible files are in scope, treat migration as complete only when all of these hold:
 
@@ -73,6 +73,10 @@ SecretRefs are validated only on effectively active surfaces:
 
 - **Enabled surfaces**: retryable failures for mapped, isolatable owners enter cold or stale degradation. Strict failures, failures that must stop startup, Gateway-required failures, and unmapped failures block startup/reload.
 - **Inactive surfaces**: unresolved refs do not block startup/reload; they emit a non-fatal `SECRETS_REF_IGNORED_INACTIVE_SURFACE` diagnostic.
+
+Channel hot restarts also skip credential preparation for disabled idle accounts.
+An account that was running before it was disabled still receives cleanup using
+its admitted runtime credentials.
 
 <Accordion title="Examples of inactive surfaces">
 - Disabled channel/account entries.

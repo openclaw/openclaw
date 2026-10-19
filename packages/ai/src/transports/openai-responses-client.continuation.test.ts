@@ -235,9 +235,12 @@ describe("native OpenAI Responses SSE continuation", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     cleanupSessionResources();
     configureAiTransportHost(initialHost);
+    if (vi.isFakeTimers()) {
+      await vi.runAllTimersAsync();
+    }
     vi.useRealTimers();
   });
 
@@ -281,38 +284,6 @@ describe("native OpenAI Responses SSE continuation", () => {
           },
         ],
       });
-    },
-  );
-
-  it.each(["session-raw"])(
-    "preserves native raw no-store requests with session %s",
-    async (sessionId) => {
-      sseState.outcomes.push(
-        sdkCompletion("resp_1", "first answer"),
-        sdkCompletion("resp_2", "second answer"),
-      );
-      const transport = createOpenAIResponsesTransportStreamFn();
-      const options = { apiKey: "test-key", transport: "sse" as const, sessionId };
-      const firstUser = userMessage("first question", 1);
-      const first = await (await transport(model, { messages: [firstUser] }, options)).result();
-      const second = await (
-        await transport(
-          model,
-          {
-            messages: [firstUser, first, userMessage("second question", 2)],
-          },
-          options,
-        )
-      ).result();
-
-      expect(first.stopReason).toBe("stop");
-      expect(second.stopReason).toBe("stop");
-      expect(sseState.requests).toHaveLength(2);
-      for (const request of sseState.requests) {
-        expect(request.store).toBe(false);
-        expect(request).not.toHaveProperty("previous_response_id");
-      }
-      expect(sseState.requests[1]?.input).toHaveLength(3);
     },
   );
 

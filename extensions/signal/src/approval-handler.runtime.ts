@@ -2,7 +2,7 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   buildChannelApprovalExpiredText,
   buildChannelApprovalResolvedText,
-  createChannelApprovalNativeRuntimeAdapter,
+  createChannelApprovalNativeRuntimeAdapterAsync,
   resolvePreparedApprovalAccountId,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -66,7 +66,7 @@ function readSignalApprovalRuntimeContext(context: unknown): SignalApprovalRunti
   };
 }
 
-export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
+export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapterAsync<
   ApprovalReactionPendingContent,
   PreparedSignalApprovalTarget,
   PendingSignalApprovalEntry,

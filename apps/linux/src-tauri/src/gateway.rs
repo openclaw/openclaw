@@ -16,6 +16,8 @@ pub struct GatewaySnapshot {
     pub reachable: bool,
     pub status: String,
     pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setup_error: Option<String>,
     #[serde(skip)]
     pub runtime_path: Option<std::path::PathBuf>,
 }
@@ -30,6 +32,7 @@ impl GatewaySnapshot {
             reachable: false,
             status: status.to_string(),
             detail: Some(detail.into()),
+            setup_error: None,
         }
     }
 
@@ -221,10 +224,11 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
         reachable,
         status: status.to_string(),
         detail,
+        setup_error: None,
     })
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub fn ensure_ready(cli: &OpenClawCli) -> Result<ReadyGateway, String> {
     let mut snapshot = status(cli)?;
     if snapshot.reachable {

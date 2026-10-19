@@ -21,6 +21,7 @@ import { updateAuthProfileStoreWithLock } from "../../../agents/auth-profiles/st
 import type { AuthProfileStore, OAuthCredential } from "../../../agents/auth-profiles/types.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { hasErrnoCode } from "../../../infra/errno.js";
 import { shortenHomePath } from "../../../utils.js";
 import { resolveLegacyAuthProfilesPath as resolveAuthStorePath } from "../../doctor-auth-legacy-paths.js";
 
@@ -33,16 +34,24 @@ type StaleOAuthProfileShadow = {
 async function loadRawAuthProfileStore(authPath: string): Promise<Record<string, unknown> | null> {
   try {
     const raw = JSON.parse(await fs.readFile(authPath, "utf8")) as unknown;
-    return isRecord(raw) ? raw : null;
-  } catch {
-    return null;
+    if (!isRecord(raw)) {
+      throw new Error("Expected an auth profile store object");
+    }
+    return raw;
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return null;
+    }
+    throw new Error(
+      `Cannot read legacy auth profile store ${shortenHomePath(authPath)}; skipped OAuth shadow cleanup. Inspect or restore the file and rerun doctor.`,
+      { cause: error },
+    );
   }
 }
 
 function hasLegacyOAuthSidecarRef(raw: Record<string, unknown> | null, profileId: string): boolean {
   const profile = raw && isRecord(raw.profiles) ? raw.profiles[profileId] : undefined;
-  // Removal-only guard for #79006 sidecar OAuth profiles. Do not add OS-level
-  // keychain integrations; doctor must migrate these profiles, not delete them.
+  // Sidecar-backed profiles need legacy migration, never shadow cleanup.
   return (
     isRecord(profile) &&
     profile.type === "oauth" &&
@@ -78,7 +87,7 @@ function shouldRemoveLocalOAuthShadow(params: {
   now: number;
 }): boolean {
   const { local, main, now } = params;
-  if (!main || main.type !== "oauth" || local.provider !== main.provider) {
+  if (!main || isLegacyOAuthRef(local.oauthRef) || local.provider !== main.provider) {
     return false;
   }
   if (!isSafeToAdoptMainStoreOAuthIdentity(local, main)) {
@@ -103,30 +112,33 @@ export async function scanStaleOAuthProfileShadows(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   now?: number;
-}): Promise<StaleOAuthProfileShadow[]> {
+}): Promise<{ hits: StaleOAuthProfileShadow[]; warnings: string[] }> {
   const env = params.env ?? process.env;
   const now = params.now ?? Date.now();
   const mainAuthPath = path.resolve(resolveAuthStorePath(resolveSharedMainAuthAgentDir(env)));
   const mainStore = loadPersistedSharedAuthProfileStore(env);
   if (!mainStore) {
-    return [];
+    return { hits: [], warnings: [] };
   }
   const hits: StaleOAuthProfileShadow[] = [];
+  const warnings: string[] = [];
   for (const agentDir of await collectCandidateAgentDirs(params.cfg, env)) {
     const authPath = path.resolve(resolveAuthStorePath(agentDir));
     if (authPath === mainAuthPath) {
       continue;
     }
-    const rawLocalStore = await loadRawAuthProfileStore(authPath);
+    const rawLocalStore = await loadRawAuthProfileStore(authPath).catch((error: unknown) => {
+      warnings.push(String(error));
+    });
+    if (rawLocalStore === undefined) {
+      continue;
+    }
     const localStore = loadPersistedAuthProfileStore(agentDir);
     if (!localStore) {
       continue;
     }
     for (const [profileId, local] of Object.entries(localStore.profiles)) {
-      if (local.type !== "oauth") {
-        continue;
-      }
-      if (hasLegacyOAuthSidecarRef(rawLocalStore, profileId)) {
+      if (local.type !== "oauth" || hasLegacyOAuthSidecarRef(rawLocalStore, profileId)) {
         continue;
       }
       const main = mainStore.profiles[profileId];
@@ -141,7 +153,7 @@ export async function scanStaleOAuthProfileShadows(params: {
       }
     }
   }
-  return hits;
+  return { hits, warnings };
 }
 
 function removeStaleProfilesFromStore(params: {
@@ -184,38 +196,6 @@ function removeStaleProfilesFromStore(params: {
   return removedProfileIds;
 }
 
-async function repairStaleOAuthProfilesForAgent(params: {
-  agentDir: string;
-  mainStore: AuthProfileStore;
-  profileIds: Set<string>;
-  now: number;
-}): Promise<string[]> {
-  const rawStore = await loadRawAuthProfileStore(resolveAuthStorePath(params.agentDir));
-  const profileIds = new Set(
-    [...params.profileIds].filter((profileId) => !hasLegacyOAuthSidecarRef(rawStore, profileId)),
-  );
-  if (profileIds.size === 0) {
-    return [];
-  }
-  if (!loadPersistedAuthProfileStore(params.agentDir)) {
-    return [];
-  }
-  let removedProfileIds: string[] = [];
-  await updateAuthProfileStoreWithLock({
-    agentDir: params.agentDir,
-    updater: (store) => {
-      removedProfileIds = removeStaleProfilesFromStore({
-        store,
-        mainStore: params.mainStore,
-        profileIds,
-        now: params.now,
-      });
-      return removedProfileIds.length > 0;
-    },
-  });
-  return removedProfileIds;
-}
-
 /** Format warnings for stale per-agent OAuth profile shadows. */
 export function collectStaleOAuthProfileShadowWarnings(params: {
   hits: StaleOAuthProfileShadow[];
@@ -235,9 +215,8 @@ export async function repairStaleOAuthProfileShadows(params: {
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const env = params.env ?? process.env;
   const now = params.now ?? Date.now();
-  const hits = await scanStaleOAuthProfileShadows({ ...params, env, now });
+  const { hits, warnings } = await scanStaleOAuthProfileShadows({ ...params, env, now });
   const changes: string[] = [];
-  const warnings: string[] = [];
   const byAgentDir = new Map<string, Set<string>>();
   for (const hit of hits) {
     const profileIds = byAgentDir.get(hit.agentDir) ?? new Set<string>();
@@ -250,11 +229,25 @@ export async function repairStaleOAuthProfileShadows(params: {
       continue;
     }
     try {
-      const removedProfileIds = await repairStaleOAuthProfilesForAgent({
+      const rawStore = await loadRawAuthProfileStore(resolveAuthStorePath(agentDir));
+      const removableIds = new Set(
+        [...profileIds].filter((profileId) => !hasLegacyOAuthSidecarRef(rawStore, profileId)),
+      );
+      if (removableIds.size === 0 || !loadPersistedAuthProfileStore(agentDir)) {
+        continue;
+      }
+      let removedProfileIds: string[] = [];
+      await updateAuthProfileStoreWithLock({
         agentDir,
-        mainStore,
-        profileIds,
-        now,
+        updater: (store) => {
+          removedProfileIds = removeStaleProfilesFromStore({
+            store,
+            mainStore,
+            profileIds: removableIds,
+            now,
+          });
+          return removedProfileIds.length > 0;
+        },
       });
       if (removedProfileIds.length > 0) {
         changes.push(
@@ -270,10 +263,4 @@ export async function repairStaleOAuthProfileShadows(params: {
     }
   }
   return { changes, warnings };
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.staleOAuthProfileShadowsTestApi")
-  ] = { removeStaleProfilesFromStore, repairStaleOAuthProfilesForAgent };
 }

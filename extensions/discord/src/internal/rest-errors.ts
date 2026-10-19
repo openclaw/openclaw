@@ -5,6 +5,7 @@ import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime"
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseDiscordRetryAfterBodySeconds } from "../retry-after.js";
 
+const DISCORD_UNKNOWN_MESSAGE = 10008;
 const DISCORD_UNKNOWN_VOICE_STATE = 10065;
 const DISCORD_ERROR_BODY_MAX_DEPTH = 64;
 const DISCORD_ERROR_BODY_MAX_NODES = 10_000;
@@ -148,10 +149,17 @@ export function readDiscordMessage(body: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value : fallback;
 }
 
+function readErrorDiscordCode(err: unknown): number | undefined {
+  return parseStrictNonNegativeInteger(asOptionalObjectRecord(err)?.discordCode);
+}
+
+export function isUnknownDiscordMessageError(err: unknown): boolean {
+  return readErrorDiscordCode(err) === DISCORD_UNKNOWN_MESSAGE;
+}
+
 export function isUnknownDiscordVoiceStateError(err: unknown): boolean {
-  const discordCode = parseStrictNonNegativeInteger(asOptionalObjectRecord(err)?.discordCode);
   return (
-    discordCode === DISCORD_UNKNOWN_VOICE_STATE ||
+    readErrorDiscordCode(err) === DISCORD_UNKNOWN_VOICE_STATE ||
     /unknown voice state/i.test(formatErrorMessage(err))
   );
 }

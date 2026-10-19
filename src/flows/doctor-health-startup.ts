@@ -6,7 +6,9 @@ import type { DoctorDatabasePreflight } from "../commands/doctor-database-prefli
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
 import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { createNonExitingRuntime, defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
 export const showDoctorIntro = (message: string) =>
   clackIntro(stylePromptTitle(message) ?? message);
@@ -127,4 +129,46 @@ export async function prepareDoctorInteractiveMaintenance(params: {
       deep: params.options.deep,
     }),
   };
+}
+
+export async function prepareDoctorMaintenanceArchives(
+  databasePreflight: DoctorDatabasePreflight | undefined,
+  runtime: RuntimeEnv,
+  preflightOptions: { preserveSourceArtifacts?: true } = {},
+): Promise<DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"]> {
+  const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
+  let discovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
+  try {
+    const { prepareDoctorDatabasePreflight } =
+      await import("../commands/doctor-database-preflight.js");
+    discovery = (databasePreflight ?? (await prepareDoctorDatabasePreflight(preflightOptions)))
+      .agentDatabaseMigrationDiscovery;
+    if (discovery) {
+      const { prepareCanonicalTranscriptArchiveMigrations } =
+        await import("../infra/state-migrations.transcript-directives-archives.js");
+      await prepareCanonicalTranscriptArchiveMigrations(discovery);
+    }
+  } catch (error) {
+    // Offline admission still owns repairable schema and discovery failures.
+    runtime.log(`Archive verification preparation deferred: ${String(error)}`);
+  }
+  // Exit cleanup waits for this command to unwind; never join it from inside the command.
+  signal?.throwIfAborted();
+  return discovery;
+}
+
+export async function prepareDoctorStateSchema(
+  schemas: DoctorDatabasePreflight,
+  shouldRepair: boolean,
+  integrityCheck?: "quick" | "full",
+) {
+  if (!shouldRepair || !schemas.pendingMigrations?.some((entry) => entry.kind === "state")) {
+    return undefined;
+  }
+  const { prepareLegacyStateDatabaseSchema } = await import("../infra/state-migrations.doctor.js");
+  const { throwIfDoctorStateMigrationRefused } =
+    await import("../infra/state-migrations.messages.js");
+  const receipt = await prepareLegacyStateDatabaseSchema(process.env, integrityCheck);
+  throwIfDoctorStateMigrationRefused([receipt]);
+  return receipt;
 }

@@ -417,8 +417,6 @@ const WHATSAPP_AGENT_REACT_PROMPT =
   "React to this WhatsApp message with thumbs up for QA action check WHATSAPP_QA_AGENT_REACT_TEST.";
 const WHATSAPP_GROUP_AGENT_REACT_PROMPT =
   "openclawqa react to this WhatsApp group message with thumbs up for QA action check WHATSAPP_QA_GROUP_AGENT_REACT_TEST.";
-const WHATSAPP_AGENT_UPLOAD_TOKEN = "WHATSAPP_QA_AGENT_UPLOAD_TEST";
-const WHATSAPP_GROUP_AGENT_UPLOAD_TOKEN = "WHATSAPP_QA_GROUP_AGENT_UPLOAD_TEST";
 const WHATSAPP_PENDING_HISTORY_QUIET_MARKER = "WHATSAPP_QA_PENDING_HISTORY_QUIET_TEST";
 const WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL = "WHATSAPP_QA_PENDING_HISTORY_CONTEXT_ONLY_TEST";
 const WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER = "WHATSAPP_QA_PENDING_HISTORY_TRIGGER_TEST";
@@ -806,6 +804,7 @@ describe("qa mock openai server", () => {
 
   it("does not use stale exact replies from instructions after QA reads", async () => {
     const server = await startMockServer();
+    const evidencePrefix = "x".repeat(210);
 
     const final = await expectNonStreamingResponsesJson(server, {
       instructions: "If this is a heartbeat check, reply exactly: HEARTBEAT_OK",
@@ -813,26 +812,21 @@ describe("qa mock openai server", () => {
         makeUserInput("Read QA_KICKOFF_TASK.md, then summarize what you found."),
         makeToolOutputWithCallId(
           "call_mock_read_1",
-          JSON.stringify({ text: "QA mission: understand this OpenClaw repo." }),
+          JSON.stringify({ text: `${evidencePrefix}😀tail` }),
         ),
       ],
     });
 
     const text = outputText(final);
-    expect(text).toContain("Protocol note: I reviewed the requested material.");
+    expect(text).toBe(
+      `Protocol note: I reviewed the requested material. Evidence snippet: {"text":"${evidencePrefix}`,
+    );
     expect(text).not.toContain("HEARTBEAT_OK");
   });
 
-  const evidencePrefix = "x".repeat(219);
-  it.each([
-    [
-      "preserves surrogate pairs in HTTP tool-output evidence snippets",
-      [
-        makeUserInput("Summarize the tool result."),
-        makeToolOutputWithCallId("call_mock_read_1", `${evidencePrefix}😀tail`),
-      ],
-      `Protocol note: I reviewed the requested material. Evidence snippet: ${evidencePrefix}`,
-    ],
+  it.each<
+    [name: string, input: readonly unknown[], expected: string | RegExp, tools?: readonly unknown[]]
+  >([
     [
       "classifies a completion event before the child task text it quotes",
       [
@@ -841,7 +835,7 @@ describe("qa mock openai server", () => {
           "[Internal task completion event]\nTask: qa-terminal-empty\nChild task: Subagent terminal reply QA worker: empty.\nResult: (no output)",
         ),
       ],
-      "QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED",
+      "",
     ],
     [
       "lets child subagent prompts finish with an exact token",
@@ -906,9 +900,67 @@ describe("qa mock openai server", () => {
       ],
       "NO_REPLY",
     ],
-  ] as const)("%s", async (_name, input, expected) => {
-    const payload = await expectNonStreamingResponsesJson(await startMockServer(), { input });
-    expect(outputText(payload)).toBe(expected);
+    [
+      "prefers the current direct-fallback worker turn over an earlier parent kickoff",
+      [
+        makeUserInput("Subagent direct fallback QA check: spawn one worker and yield."),
+        makeUserInput(
+          "Subagent direct fallback worker: finish with exactly QA-SUBAGENT-DIRECT-FALLBACK-OK.",
+        ),
+      ],
+      "QA-SUBAGENT-DIRECT-FALLBACK-OK",
+      [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
+    ],
+    [
+      "returns the silent terminal worker result",
+      [makeUserInput("Subagent terminal reply QA worker: silent.")],
+      "NO_REPLY",
+    ],
+    [
+      "returns the fallback terminal worker result",
+      [makeUserInput("Subagent terminal reply QA worker: fallback.")],
+      [
+        "QA-SUBAGENT-TERMINAL-FALLBACK-OK",
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK",
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n"),
+    ],
+    [
+      "returns the private completion worker result",
+      [makeUserInput("Subagent private completion QA worker: first.")],
+      /^QA-PARENT-PRIVATE-CHILD1-[A-F0-9]{32}\nMEDIA:\.\/qa-private-result\.png$/u,
+    ],
+    [
+      "answers automation heartbeat without spawning extra subagents",
+      [
+        makeUserInput(
+          "System: Gateway restart config-apply ok\n\nFollow the heartbeat monitor scratch context when provided. If nothing needs attention, reply NO_REPLY.",
+        ),
+      ],
+      "NO_REPLY",
+    ],
+    [
+      "returns the visible skill marker",
+      [makeUserInput("Visible skill marker: give me the visible skill marker exactly.")],
+      "VISIBLE-SKILL-OK",
+    ],
+    [
+      "returns the hot-installed skill marker",
+      [makeUserInput("Hot install marker: give me the hot install marker exactly.")],
+      "HOT-INSTALL-OK",
+    ],
+  ])("%s", async (_name, input, expected, tools) => {
+    const payload = await expectNonStreamingResponsesJson(await startMockServer(), {
+      input,
+      ...(tools ? { tools } : {}),
+    });
+    if (typeof expected === "string") {
+      expect(outputText(payload)).toBe(expected);
+    } else {
+      expect(outputText(payload)).toMatch(expected);
+    }
+    expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
   });
 
   it("selects the latest block-streaming markers and target in one user envelope", async () => {
@@ -1123,52 +1175,29 @@ describe("qa mock openai server", () => {
     }
   });
 
-  it.each([
-    {
-      action: "react",
-      prompt: WHATSAPP_AGENT_REACT_PROMPT,
-      groupPrompt: WHATSAPP_GROUP_AGENT_REACT_PROMPT,
-    },
-  ])(
-    "emits WhatsApp $action only when the message tool is declared",
-    async ({ action, prompt, groupPrompt }) => {
-      const server = await startMockServer();
-      for (const tools of action === "react" ? [undefined, [READ_TOOL]] : [undefined]) {
-        const undeclared = await expectOpenAiNonStreamingResponsesJson(server, {
-          ...(tools ? { tools } : {}),
-          input: [makeUserInput(prompt)],
-        });
-        expect(
-          outputItems(undeclared).some(
-            (item) => item.type === "function_call" && item.name === "message",
-          ),
-        ).toBe(false);
-      }
-      for (const [input, caption] of [
-        [prompt, WHATSAPP_AGENT_UPLOAD_TOKEN],
-        [groupPrompt, WHATSAPP_GROUP_AGENT_UPLOAD_TOKEN],
-      ] as const) {
-        const declared = await expectOpenAiNonStreamingResponsesJson(server, {
-          tools: [MESSAGE_TOOL],
-          input: [makeUserInput(input)],
-        });
-        const call = outputToolCall(declared, "message");
-        expect(call).toMatchObject({ type: "function_call", name: "message" });
-        const args = outputToolArgsFromItem(call);
-        if (action === "react") {
-          expect(args).toEqual({ action: "react", emoji: "👍", final: true });
-        } else {
-          expect(args).toMatchObject({
-            action: "upload-file",
-            caption,
-            contentType: "image/png",
-            filename: "whatsapp-qa-agent-upload.png",
-          });
-          expect(args.buffer).toEqual(expect.any(String));
-        }
-      }
-    },
-  );
+  it("emits WhatsApp reactions only when the message tool is declared", async () => {
+    const server = await startMockServer();
+    for (const tools of [undefined, [READ_TOOL]]) {
+      const undeclared = await expectOpenAiNonStreamingResponsesJson(server, {
+        ...(tools ? { tools } : {}),
+        input: [makeUserInput(WHATSAPP_AGENT_REACT_PROMPT)],
+      });
+      expect(
+        outputItems(undeclared).some(
+          (item) => item.type === "function_call" && item.name === "message",
+        ),
+      ).toBe(false);
+    }
+    for (const input of [WHATSAPP_AGENT_REACT_PROMPT, WHATSAPP_GROUP_AGENT_REACT_PROMPT]) {
+      const declared = await expectOpenAiNonStreamingResponsesJson(server, {
+        tools: [MESSAGE_TOOL],
+        input: [makeUserInput(input)],
+      });
+      const call = outputToolCall(declared, "message");
+      expect(call).toMatchObject({ type: "function_call", name: "message" });
+      expect(outputToolArgsFromItem(call)).toEqual({ action: "react", emoji: "👍", final: true });
+    }
+  });
 
   it("answers WhatsApp pending-history prompts only with injected prior group context", async () => {
     const server = await startMockServer();
@@ -1248,33 +1277,27 @@ describe("qa mock openai server", () => {
 
   it("uses the WhatsApp broadcast runtime agent id context for distinct markers", async () => {
     const server = await startMockServer();
-
-    const mainPayload = await expectOpenAiNonStreamingResponsesJson(server, {
-      input: [
-        makeDeveloperInput("Runtime: agent=main | channel=whatsapp | capabilities=messageactions"),
-        makeUserInput(WHATSAPP_BROADCAST_PROMPT),
-      ],
-    });
-    const secondPayload = await expectOpenAiNonStreamingResponsesJson(server, {
-      input: [
-        makeDeveloperInput(
-          "Runtime: agent=qa-second | channel=whatsapp | capabilities=messageactions",
-        ),
-        makeUserInput(WHATSAPP_BROADCAST_PROMPT),
-      ],
-    });
-    const noIdentityPayload = await expectOpenAiNonStreamingResponsesJson(server, {
-      input: [
-        makeDeveloperInput("Runtime: channel=whatsapp | capabilities=messageactions"),
-        makeUserInput(WHATSAPP_BROADCAST_PROMPT),
-      ],
-    });
-
-    expect(outputText(mainPayload)).toBe(`${WHATSAPP_BROADCAST_TOKEN}_MAIN`);
-    expect(outputText(secondPayload)).toBe(`${WHATSAPP_BROADCAST_TOKEN}_SECOND`);
-    expect(outputText(noIdentityPayload)).not.toMatch(
-      new RegExp(`${WHATSAPP_BROADCAST_TOKEN}_(?:MAIN|SECOND)`, "u"),
-    );
+    for (const [identity, suffix] of [
+      ["agent=main | ", "MAIN"],
+      ["agent=qa-second | ", "SECOND"],
+      ["", undefined],
+    ] as const) {
+      const payload = await expectOpenAiNonStreamingResponsesJson(server, {
+        input: [
+          makeDeveloperInput(
+            `Runtime: ${identity}channel=whatsapp | channel_capabilities=messageactions`,
+          ),
+          makeUserInput(WHATSAPP_BROADCAST_PROMPT),
+        ],
+      });
+      if (suffix) {
+        expect(outputText(payload)).toBe(`${WHATSAPP_BROADCAST_TOKEN}_${suffix}`);
+      } else {
+        expect(outputText(payload)).not.toMatch(
+          new RegExp(`${WHATSAPP_BROADCAST_TOKEN}_(?:MAIN|SECOND)`, "u"),
+        );
+      }
+    }
   });
 
   it("matches WhatsApp group dispatch markers without answering unrelated prompts", async () => {
@@ -1740,54 +1763,6 @@ describe("qa mock openai server", () => {
     }
   });
 
-  it.each([
-    [
-      "prefers the current direct-fallback worker turn over an earlier parent kickoff",
-      [
-        makeUserInput("Subagent direct fallback QA check: spawn one worker and yield."),
-        makeUserInput(
-          "Subagent direct fallback worker: finish with exactly QA-SUBAGENT-DIRECT-FALLBACK-OK.",
-        ),
-      ],
-      "QA-SUBAGENT-DIRECT-FALLBACK-OK",
-    ],
-  ] as const)("%s", async (_name, input, expected) => {
-    const payload = await expectNonStreamingResponsesJson(await startMockServer(), {
-      tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
-      input,
-    });
-    expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
-    expect(outputText(payload)).toBe(expected);
-  });
-
-  it.each<[string, string | RegExp]>([
-    ["Subagent terminal reply QA worker: silent.", "NO_REPLY"],
-    [
-      "Subagent terminal reply QA worker: fallback.",
-      [
-        "QA-SUBAGENT-TERMINAL-FALLBACK-OK",
-        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-        "QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK",
-        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-      ].join("\n"),
-    ],
-    [
-      "Subagent private completion QA worker: first.",
-      /^QA-PARENT-PRIVATE-CHILD1-[A-F0-9]{32}\nMEDIA:\.\/qa-private-result\.png$/u,
-    ],
-  ])("returns the worker result for %s", async (prompt, expected) => {
-    const server = await startMockServer();
-    const payload = await expectNonStreamingResponsesJson(server, {
-      input: [makeUserInput(prompt)],
-    });
-
-    if (typeof expected === "string") {
-      expect(outputText(payload)).toBe(expected);
-    } else {
-      expect(outputText(payload)).toMatch(expected);
-    }
-  });
-
   it("consumes a private completion to spawn once and records the reviewed outcome", async () => {
     const server = await startMockServer();
     const nonce = "QA-PARENT-PRIVATE-CHILD1-0123456789ABCDEF0123456789ABCDEF";
@@ -1845,7 +1820,7 @@ describe("qa mock openai server", () => {
     expect(outputItems(settled).some((item) => item.type === "function_call")).toBe(false);
   });
 
-  it.each(["tool_call"])(
+  it.each(["dispatch_action"])(
     "makes the empty terminal worker terminal after one %s side effect",
     async (wireName) => {
       const server = await startMockServer();
@@ -1855,7 +1830,7 @@ describe("qa mock openai server", () => {
         input: [makeUserInput("Subagent terminal reply QA worker: empty.")],
       });
       const call = outputToolCall(kickoff, wireName);
-      if (wireName === "tool_call") {
+      if (wireName === "dispatch_action") {
         expect(outputToolArgsFromItem(call)).toMatchObject({
           id: "write",
           args: { path: "qa-terminal-empty-side-effect.txt" },
@@ -1879,7 +1854,7 @@ describe("qa mock openai server", () => {
           call,
           makeToolOutputWithCallId(
             String(writeRequest.plannedToolCallId),
-            wireName === "tool_call"
+            wireName === "dispatch_action"
               ? JSON.stringify({
                   tool: { id: "write", name: "write", source: "core" },
                   result: { content: [{ type: "text", text: "Wrote 40 bytes" }] },
@@ -1942,7 +1917,7 @@ describe("qa mock openai server", () => {
       const payload = await expectNonStreamingResponsesJson(server, { tools, input });
       if (terminalCase === "visible") {
         expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
-        expect(outputText(payload)).toBe("NO_REPLY");
+        expect(outputText(payload)).toBe("");
         return;
       }
       const messageCall = outputToolCall(payload, "message");
@@ -2217,38 +2192,40 @@ describe("qa mock openai server", () => {
     );
     expect(JSON.stringify(await threadMemorySummary.json())).toContain("ORBIT-22");
 
-    const rawThreadMemorySummary = await readMemory(
-      [makeToolOutput("Thread-hidden codename: ORBIT-23."), acknowledgement],
-      threadPrompt,
-    );
-    const rawThreadMemoryText = JSON.stringify(await rawThreadMemorySummary.json());
-    expect(rawThreadMemoryText).toContain("NONE");
-    expect(rawThreadMemoryText).not.toContain("ORBIT-23");
-
-    const unavailableThreadMemorySummary = await readMemory([
+    for (const { input, instructions, absent } of [
       {
-        role: "system",
-        content:
-          "Available tools include sessions_spawn.\n## /workspace/MEMORY.md\nThread-hidden codename: ORBIT-22.",
+        input: [makeToolOutput("Thread-hidden codename: ORBIT-23."), acknowledgement],
+        instructions: threadPrompt,
+        absent: "ORBIT-23",
       },
-      makeUserInput(threadPrompt),
-      memoryOutput({ results: [], unavailable: true, error: "database is not open" }),
-    ]);
-    const unavailableThreadMemoryText = JSON.stringify(await unavailableThreadMemorySummary.json());
-    expect(unavailableThreadMemoryText).toContain("NONE");
-    expect(unavailableThreadMemoryText).not.toContain("ORBIT-22");
-
-    const emptyThreadMemorySummary = await readMemory([
       {
-        role: "system",
-        content: "## /workspace/MEMORY.md\nThread-hidden codename: ORBIT-22.",
+        input: [
+          {
+            role: "system",
+            content:
+              "Available tools include sessions_spawn.\n## /workspace/MEMORY.md\nThread-hidden codename: ORBIT-22.",
+          },
+          makeUserInput(threadPrompt),
+          memoryOutput({ results: [], unavailable: true, error: "database is not open" }),
+        ],
+        absent: "ORBIT-22",
       },
-      makeUserInput(threadPrompt),
-      memoryOutput({ results: [] }),
-    ]);
-    const emptyThreadMemoryText = JSON.stringify(await emptyThreadMemorySummary.json());
-    expect(emptyThreadMemoryText).toContain("NONE");
-    expect(emptyThreadMemoryText).not.toContain("ORBIT-22");
+      {
+        input: [
+          {
+            role: "system",
+            content: "## /workspace/MEMORY.md\nThread-hidden codename: ORBIT-22.",
+          },
+          makeUserInput(threadPrompt),
+          memoryOutput({ results: [] }),
+        ],
+        absent: "ORBIT-22",
+      },
+    ]) {
+      const text = JSON.stringify(await (await readMemory(input, instructions)).json());
+      expect(text).toContain("NONE");
+      expect(text).not.toContain(absent);
+    }
 
     const currentSessionResult = {
       path: "sessions/qa-session-memory-ranking.jsonl",
@@ -2486,24 +2463,12 @@ describe("qa mock openai server", () => {
 
   it("replays completed subagent fanout on requester-settle continuation turns", async () => {
     const server = await startMockServer();
-
     const prompt = QA_FANOUT_PROMPT;
-    const spawn = await expectStreamingResponses(server, {
-      tools: [SESSIONS_SPAWN_TOOL],
-      input: [makeUserInput(prompt)],
-    });
-    expect(await spawn.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
-
-    const secondSpawn = await expectStreamingResponses(server, {
-      tools: [SESSIONS_SPAWN_TOOL],
-      input: [
-        makeUserInput(prompt),
-        makeToolOutput(
-          '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
-        ),
-      ],
-    });
-    expect(await secondSpawn.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
+    await startFanout(
+      server,
+      [SESSIONS_SPAWN_TOOL],
+      '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
+    );
 
     const settledFinal = await expectNonStreamingResponses(server, {
       tools: [SESSIONS_SPAWN_TOOL],
@@ -2571,24 +2536,11 @@ describe("qa mock openai server", () => {
 
   it("does not let fanout completion state hijack child worker replies", async () => {
     const server = await startMockServer();
-
-    const prompt = QA_FANOUT_PROMPT;
-    const spawn = await expectStreamingResponses(server, {
-      tools: [SESSIONS_SPAWN_TOOL],
-      input: [makeUserInput(prompt)],
-    });
-    expect(await spawn.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
-
-    const secondSpawn = await expectStreamingResponses(server, {
-      tools: [SESSIONS_SPAWN_TOOL],
-      input: [
-        makeUserInput(prompt),
-        makeToolOutput(
-          '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
-        ),
-      ],
-    });
-    expect(await secondSpawn.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
+    await startFanout(
+      server,
+      [SESSIONS_SPAWN_TOOL],
+      '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
+    );
 
     const childReply = await expectNonStreamingResponses(server, {
       input: [
@@ -2598,37 +2550,6 @@ describe("qa mock openai server", () => {
       ],
     });
     expect(outputText(await childReply.json())).toBe("ALPHA-OK");
-  });
-
-  it.each([
-    {
-      name: "automation heartbeat",
-      prompt:
-        "System: Gateway restart config-apply ok\n\nFollow the heartbeat monitor scratch context when provided. If nothing needs attention, reply NO_REPLY.",
-      reply: "NO_REPLY",
-    },
-  ])("answers $name prompts without spawning extra subagents", async ({ prompt, reply }) => {
-    const server = await startMockServer();
-
-    const response = await expectNonStreamingResponses(server, {
-      input: [makeUserInput(prompt)],
-    });
-
-    expect(outputText(await response.json())).toBe(reply);
-  });
-
-  it("returns exact markers for visible and hot-installed skills", async () => {
-    const server = await startMockServer();
-
-    const visible = await expectNonStreamingResponses(server, {
-      input: [makeUserInput("Visible skill marker: give me the visible skill marker exactly.")],
-    });
-    expect(outputText(await visible.json())).toBe("VISIBLE-SKILL-OK");
-
-    const hot = await expectNonStreamingResponses(server, {
-      input: [makeUserInput("Hot install marker: give me the hot install marker exactly.")],
-    });
-    expect(outputText(await hot.json())).toBe("HOT-INSTALL-OK");
   });
 
   it("reads only current WhatsApp sticker context", async () => {
@@ -2800,14 +2721,6 @@ describe("qa mock openai server", () => {
       "web_search",
       "OPENCLAW_QA_WEB_SEARCH_DENIED_INPUT",
     ],
-  ] as const)("%s", async (_name, body, tool, argument) => {
-    const item = outputItem(await expectNonStreamingResponsesJson(await startMockServer(), body));
-    expect(item.type).toBe("function_call");
-    expect(item.name).toBe(tool);
-    expect(String(item.arguments)).toContain(argument);
-  });
-
-  it.each([
     [
       "plans one structured batch search for the Tool Search gateway fixture",
       {
@@ -2830,7 +2743,11 @@ describe("qa mock openai server", () => {
     const item = outputItem(await expectNonStreamingResponsesJson(await startMockServer(), body));
     expect(item.type).toBe("function_call");
     expect(item.name).toBe(tool);
-    expect(JSON.parse(String(item.arguments))).toEqual(args);
+    if (typeof args === "string") {
+      expect(String(item.arguments)).toContain(args);
+    } else {
+      expect(JSON.parse(String(item.arguments))).toEqual(args);
+    }
   });
 
   const catalogTarget = "fake_plugin_tool_17";
@@ -2841,7 +2758,7 @@ describe("qa mock openai server", () => {
   it.each([
     {
       name: "calls the selected catalog tool after a structured batch search",
-      tools: ["tool_search", "tool_call"],
+      tools: ["tool_search", "dispatch_action"],
       callName: "tool_search",
       callId: "call_tool_search_1",
       args: { queries: catalogQueries },
@@ -2852,7 +2769,7 @@ describe("qa mock openai server", () => {
     },
     {
       name: "does not call a catalog tool when structured search returns no matching candidate",
-      tools: ["tool_search", "tool_call"],
+      tools: ["tool_search", "dispatch_action"],
       callName: "tool_search",
       callId: "call_tool_search_1",
       args: { queries: [{ query: catalogTarget, limit: 1 }] },
@@ -2873,10 +2790,10 @@ describe("qa mock openai server", () => {
     const item = outputItem(payload);
     if (invokes) {
       expect(item.type).toBe("function_call");
-      expect(item.name).toBe("tool_call");
+      expect(item.name).toBe("dispatch_action");
       expect(JSON.parse(String(item.arguments))).toMatchObject({ id: catalogTarget });
     } else {
-      expect(item.name).not.toBe("tool_call");
+      expect(item.name).not.toBe("dispatch_action");
     }
   });
 
@@ -3013,12 +2930,16 @@ describe("qa mock openai server", () => {
     expect(debug).not.toHaveProperty("plannedToolName");
   });
 
+  let nestedImageInput: unknown = QA_IMAGE_INPUT;
+  for (let index = 0; index < 4_000; index += 1) {
+    nestedImageInput = [{ type: "input_text", text: "nested" }, nestedImageInput];
+  }
   it.each([
     [
-      "uses current request instructions for image descriptions",
+      "uses current request instructions for deeply nested image descriptions",
       [
         makeDeveloperInput(QA_IMAGE_DESCRIPTION_PROMPT),
-        makeImageUserInput(QA_IMAGE_INPUT, QA_IMAGE_MEDIA_CONTEXT),
+        makeImageUserInput(nestedImageInput, QA_IMAGE_MEDIA_CONTEXT),
       ],
       ["red", "blue"],
     ],
@@ -3036,39 +2957,11 @@ describe("qa mock openai server", () => {
       ["lighthouse"],
     ],
   ] as const)("%s", async (_name, input, words) => {
-    const text = (
-      await readMockImageResponseText(await startMockServer(), [...input])
-    ).toLowerCase();
+    const server = await startMockServer();
+    const text = (await readMockImageResponseText(server, [...input])).toLowerCase();
     for (const word of words) {
       expect(text).toContain(word);
     }
-  });
-
-  it("handles deeply nested image input shapes without recursive traversal failure", async () => {
-    const server = await startMockServer();
-
-    let content: unknown = {
-      type: "input_image",
-      source: {
-        type: "base64",
-        mime_type: "image/png",
-        data: QA_IMAGE_PNG_BASE64,
-      },
-    };
-    for (let index = 0; index < 4_000; index += 1) {
-      content = [{ type: "input_text", text: "nested" }, content];
-    }
-
-    await expectNonStreamingResponses(server, {
-      model: "mock-openai/gpt-5.6-luna",
-      input: [
-        {
-          role: "user",
-          content,
-        },
-      ],
-    });
-
     expect((await readDebugRequest(server)).imageInputCount).toBe(1);
   });
 
@@ -3401,54 +3294,7 @@ describe("qa mock openai server", () => {
     );
   });
 
-  it("places tool_result after the parent user message even in mixed-content turns", async () => {
-    // Fresh text must not fence out the tool result from the same turn.
-    const server = await startMockServer();
-
-    await expectAnthropicMessages(server, {
-      messages: [
-        makeAnthropicUserText("Delegate one bounded QA task to a subagent."),
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "tool_use",
-              id: "toolu_mock_spawn_mixed",
-              name: "sessions_spawn",
-              input: { task: "Inspect the QA workspace", label: "qa-sidecar", thread: false },
-            },
-          ],
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "tool_result",
-              tool_use_id: "toolu_mock_spawn_mixed",
-              content: "SUBAGENT-OK",
-            },
-            {
-              type: "text",
-              text: "Keep going with the fanout.",
-            },
-          ],
-        },
-      ],
-    });
-
-    const debug = (await fetchOkJson(`${server.baseUrl}/debug/last-request`)) as {
-      prompt: string;
-      allInputText: string;
-      toolOutputCallId: string;
-      toolOutput: string;
-    };
-    expect(debug.toolOutput).toBe("SUBAGENT-OK");
-    expect(debug.toolOutputCallId).toBe("toolu_mock_spawn_mixed");
-    expect(debug.prompt).toBe("Keep going with the fanout.");
-    expect(debug.allInputText).toContain("Delegate one bounded QA task");
-  });
-
-  it("exposes structured Anthropic tool_result errors in debug snapshots", async () => {
+  it("preserves mixed-content Anthropic tool_result errors in debug snapshots", async () => {
     const server = await startMockServer();
 
     await expectAnthropicMessages(server, {
@@ -3464,16 +3310,24 @@ describe("qa mock openai server", () => {
             },
           ],
         },
-        makeAnthropicErrorToolResult("toolu_mock_read_error", "ENOENT: no such file or directory"),
+        {
+          role: "user",
+          content: [
+            ...makeAnthropicErrorToolResult(
+              "toolu_mock_read_error",
+              "ENOENT: no such file or directory",
+            ).content,
+            { type: "text", text: "Report the read failure." },
+          ],
+        },
       ],
     });
 
-    const debug = (await fetchOkJson(`${server.baseUrl}/debug/last-request`)) as {
-      toolOutputCallId: string;
-      toolOutputStructuredError?: boolean;
-    };
+    const debug = await readDebugRequest(server);
     expect(debug.toolOutputCallId).toBe("toolu_mock_read_error");
     expect(debug.toolOutputStructuredError).toBe(true);
+    expect(debug.toolOutput).toBe("ENOENT: no such file or directory");
+    expect(debug.prompt).toBe("Report the read failure.");
   });
 
   it.each([{ label: "whitespace", content: "  ", isError: false }])(
@@ -3705,49 +3559,57 @@ describe("qa mock openai server", () => {
     expect(debug.model).toBe("claude-opus-4-8");
   });
 
-  it("scripts a reasoning-only recovery sequence after a replay-safe read", async () => {
-    const server = await startMockServer();
+  it.each([
+    {
+      kind: "reasoning-only",
+      prompt: QA_REASONING_ONLY_RECOVERY_PROMPT,
+      retry: QA_REASONING_ONLY_RETRY_INSTRUCTION,
+      expected: "REASONING-RECOVERED-OK",
+    },
+    {
+      kind: "empty-response",
+      prompt: QA_EMPTY_RESPONSE_RECOVERY_PROMPT,
+      retry: QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+      expected: "EMPTY-RECOVERED-OK",
+    },
+  ])(
+    "scripts $kind recovery after a replay-safe read",
+    async ({ kind, prompt, retry, expected }) => {
+      const server = await startMockServer();
+      const toolPlan = await readOpenAiPromptResponseText(server, prompt);
+      expect(toolPlan).toContain('"name":"read"');
+      expect(toolPlan).toContain("QA_KICKOFF_TASK.md");
+      const output = makeToolOutput(
+        "QA mission: Understand this OpenClaw repo from source + docs before acting.",
+      );
+      const first = await expectOpenAiNonStreamingResponsesJson(server, {
+        input: [makeUserInput(prompt), output],
+      });
+      if (kind === "reasoning-only") {
+        const reasoningOutput = outputItem(first);
+        expect(reasoningOutput.type).toBe("reasoning");
+        expect(reasoningOutput.id).toBe("rs_mock_reasoning_recovery");
+        const summary = requireArray(reasoningOutput.summary, "reasoning summary");
+        expect(String(requireRecord(summary[0], "reasoning summary 0").text)).toContain(
+          "Need visible answer",
+        );
+      } else {
+        expect(outputContentItem(first)).toMatchObject({ type: "output_text", text: "" });
+        expect(outputText(first)).toBe("");
+      }
+      const recoveredPayload = await expectOpenAiNonStreamingResponsesJson(server, {
+        input: [makeUserInput(prompt), makeUserInput(retry), output],
+      });
+      expect(outputText(recoveredPayload)).toBe(expected);
 
-    const toolPlan = await readOpenAiPromptResponseText(server, QA_REASONING_ONLY_RECOVERY_PROMPT);
-    expect(toolPlan).toContain('"name":"read"');
-    expect(toolPlan).toContain("QA_KICKOFF_TASK.md");
-
-    const reasoningPayload = await expectOpenAiNonStreamingResponsesJson(server, {
-      input: [
-        makeUserInput(QA_REASONING_ONLY_RECOVERY_PROMPT),
-        makeToolOutput(
-          "QA mission: Understand this OpenClaw repo from source + docs before acting.",
-        ),
-      ],
-    });
-    const reasoningOutput = outputItem(reasoningPayload);
-    expect(reasoningOutput.type).toBe("reasoning");
-    expect(reasoningOutput.id).toBe("rs_mock_reasoning_recovery");
-    const reasoningSummary = requireArray(reasoningOutput.summary, "reasoning summary");
-    expect(String(requireRecord(reasoningSummary[0], "reasoning summary 0").text)).toContain(
-      "Need visible answer",
-    );
-
-    const recoveredPayload = await expectOpenAiNonStreamingResponsesJson(server, {
-      input: [
-        makeUserInput(QA_REASONING_ONLY_RECOVERY_PROMPT),
-        makeUserInput(QA_REASONING_ONLY_RETRY_INSTRUCTION),
-        makeToolOutput(
-          "QA mission: Understand this OpenClaw repo from source + docs before acting.",
-        ),
-      ],
-    });
-    expect(outputText(recoveredPayload)).toBe("REASONING-RECOVERED-OK");
-
-    const requestLog = requireArray(await getJson(server, "/debug/requests"), "debug requests");
-    expect(requireRecord(requestLog[0], "debug request 0").plannedToolName).toBe("read");
-    expect(String(requireRecord(requestLog[1], "debug request 1").allInputText)).toContain(
-      QA_REASONING_ONLY_RECOVERY_PROMPT,
-    );
-    expect(String(requireRecord(requestLog[2], "debug request 2").allInputText)).toContain(
-      QA_REASONING_ONLY_RETRY_INSTRUCTION,
-    );
-  });
+      const requestLog = requireArray(await getJson(server, "/debug/requests"), "debug requests");
+      expect(requireRecord(requestLog[0], "debug request 0").plannedToolName).toBe("read");
+      expect(String(requireRecord(requestLog[1], "debug request 1").allInputText)).toContain(
+        prompt,
+      );
+      expect(String(requireRecord(requestLog[2], "debug request 2").allInputText)).toContain(retry);
+    },
+  );
 
   it.each([
     {
@@ -3819,34 +3681,6 @@ describe("qa mock openai server", () => {
     const requests = await fetchOk(`${server.baseUrl}/debug/requests`);
     expect((await requests.json()) as Array<{ allInputText?: string }>).toHaveLength(2);
   });
-
-  it.each([
-    {
-      name: "recovery",
-      prompt: QA_EMPTY_RESPONSE_RECOVERY_PROMPT,
-      retry: QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
-      expected: "EMPTY-RECOVERED-OK",
-    },
-  ])(
-    "scripts empty-response $name after a replay-safe read",
-    async ({ prompt, retry, expected }) => {
-      const server = await startMockServer();
-      const plan = await readOpenAiPromptResponseText(server, prompt);
-      expect(plan).toContain('"name":"read"');
-      const output = makeToolOutput(
-        "QA mission: Understand this OpenClaw repo from source + docs before acting.",
-      );
-      const first = await expectOpenAiNonStreamingResponsesJson(server, {
-        input: [makeUserInput(prompt), output],
-      });
-      expect(outputContentItem(first)).toMatchObject({ type: "output_text", text: "" });
-      expect(outputText(first)).toBe("");
-      const second = await expectOpenAiNonStreamingResponsesJson(server, {
-        input: [makeUserInput(prompt), makeUserInput(retry), output],
-      });
-      expect(outputText(second)).toBe(expected);
-    },
-  );
 
   it.each([{ history: "settled exhaustion", completedScenario: "exhaustion" as const }])(
     "scripts settled continuation after a side-effecting write with $history",
@@ -3962,9 +3796,6 @@ describe("qa mock openai server", () => {
     });
     expect(outputText(succeeded)).toBe("BUG-TOOL-DID-NOT-FAIL");
   });
-});
-
-describe("qa mock openai server provider variant tagging", () => {
   it("pins provider-specific plans for parity scenarios", async () => {
     const sourcePrompt =
       "Read the seeded docs and source plan, then report grouped into Worked, Failed, Blocked, and Follow-up.";
@@ -4034,217 +3865,192 @@ describe("qa mock openai server provider variant tagging", () => {
       }
     }
   });
-});
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-
-describe("a2a", () => {
+  /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
   function expectTextOnly(response: unknown, text: string) {
     expect(outputText(response)).toBe(text);
     expect(outputItems(response).some((item) => item.type === "function_call")).toBe(false);
   }
 
-  describe("mock OpenAI A2A scenarios", () => {
-    it.each([
-      {
-        sessionKey: "agent:orion:main",
-        marker: "QA-A2A-DENIED-OK",
-        receipt: {
-          status: "forbidden",
-          error:
-            "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
-        },
-      },
-    ])(
-      "keeps $receipt.status sends empty through finalization",
-      async ({ sessionKey, marker, receipt }) => {
-        const server = await startMockServer();
-        const kickoff = makeUserInput(
-          `qa a2a message-tool mirror check. sessionKey="${sessionKey}". exact marker: \`${marker}\``,
-        );
-        const tools = [{ type: "function", name: "sessions_send" }];
-        const plan = await expectOpenAiNonStreamingResponsesJson(server, {
-          tools,
-          input: [kickoff],
-        });
-        const call = outputToolCall(plan, "sessions_send");
-        expect(outputItem(plan)).toMatchObject({ type: "function_call", name: "sessions_send" });
-        const args = outputToolArgs(plan);
-        expect(args).toMatchObject({ sessionKey, timeoutSeconds: 0 });
-        expect(String(args.message)).toContain("qa group visible reply tool check");
-        expect(String(args.message)).toContain(marker);
-        expect(await getJson(server, "/debug/last-request")).toMatchObject({
-          plannedToolName: "sessions_send",
-          plannedToolArgs: { sessionKey, timeoutSeconds: 0 },
-        });
-        const input: unknown[] = [
-          kickoff,
-          call,
-          makeToolOutputWithCallId(outputToolCallId(call, "call_a2a"), JSON.stringify(receipt)),
-        ];
-        const response = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
-        expectTextOnly(response, "");
-        expectTextOnly(
-          await expectOpenAiNonStreamingResponsesJson(server, {
-            tools: [],
-            input: [
-              ...input,
-              ...outputItems(response),
-              makeUserInput(
-                `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If a tool failed, say so; never claim completion or success.`,
-              ),
-            ],
-          }),
-          "",
-        );
-
-        const target = await expectOpenAiNonStreamingResponsesJson(server, {
-          tools: [...tools, { type: "function", name: "message" }],
-          input: [
-            kickoff,
-            makeUserInput(
-              `qa group visible reply tool check. Use the visible room reply path. exact marker: \`${marker}\``,
-            ),
-          ],
-        });
-        expect(outputItem(target)).toMatchObject({ type: "function_call", name: "message" });
-        expect(outputToolArgs(target)).toMatchObject({ action: "send", message: marker });
-      },
-    );
-  });
-});
-
-describe("anthropic-failure", () => {
   it.each([
-    { prompt: "Telegram unsent failure QA check.", stream: true, partialText: "" },
     {
-      prompt: "Telegram visible partial failure QA check.",
-      stream: true,
-      partialText: "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE",
+      sessionKey: "agent:orion:main",
+      marker: "QA-A2A-DENIED-OK",
+      receipt: {
+        status: "forbidden",
+        error:
+          "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+      },
     },
   ])(
-    "preserves Anthropic failure for $prompt (stream=$stream)",
-    async ({ prompt, stream, partialText }) => {
-      const response = await postJson(await startMockServer(), "/v1/messages", {
-        model: "qa-model",
-        max_tokens: 256,
-        stream,
-        messages: [{ role: "user", content: prompt }],
+    "keeps $receipt.status sends empty through finalization",
+    async ({ sessionKey, marker, receipt }) => {
+      const server = await startMockServer();
+      const kickoff = makeUserInput(
+        `qa a2a message-tool mirror check. sessionKey="${sessionKey}". exact marker: \`${marker}\``,
+      );
+      const tools = [{ type: "function", name: "sessions_send" }];
+      const plan = await expectOpenAiNonStreamingResponsesJson(server, {
+        tools,
+        input: [kickoff],
       });
-      const body = await response.text();
-      const expectedError = { type: "api_error", message: expect.any(String) };
-      if (stream) {
-        expect(response.status).toBe(200);
-        const events = body
-          .split("\n")
-          .filter((line) => line.startsWith("data: "))
-          .map((line) => JSON.parse(line.slice(6)));
-        expect(events.at(-1)).toMatchObject({ type: "error", error: expectedError });
-        expect(body).not.toContain("event: message_stop");
-        expect(body).not.toContain('"stop_reason":"end_turn"');
-        expect(
-          events
-            .filter((event) => event.type === "content_block_delta")
-            .map((event) => event.delta.text)
-            .join(""),
-        ).toBe(partialText);
-      } else {
-        expect(response.status).toBe(500);
-        expect(JSON.parse(body)).toEqual({ type: "error", error: expectedError });
-      }
+      const call = outputToolCall(plan, "sessions_send");
+      expect(outputItem(plan)).toMatchObject({ type: "function_call", name: "sessions_send" });
+      const args = outputToolArgs(plan);
+      expect(args).toMatchObject({ sessionKey, timeoutSeconds: 0 });
+      expect(String(args.message)).toContain("qa group visible reply tool check");
+      expect(String(args.message)).toContain(marker);
+      expect(await getJson(server, "/debug/last-request")).toMatchObject({
+        plannedToolName: "sessions_send",
+        plannedToolArgs: { sessionKey, timeoutSeconds: 0 },
+      });
+      const input: unknown[] = [
+        kickoff,
+        call,
+        makeToolOutputWithCallId(outputToolCallId(call, "call_a2a"), JSON.stringify(receipt)),
+      ];
+      const response = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+      expectTextOnly(response, "");
+      expectTextOnly(
+        await expectOpenAiNonStreamingResponsesJson(server, {
+          tools: [],
+          input: [
+            ...input,
+            ...outputItems(response),
+            makeUserInput(
+              `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If a tool failed, say so; never claim completion or success.`,
+            ),
+          ],
+        }),
+        "",
+      );
+
+      const target = await expectOpenAiNonStreamingResponsesJson(server, {
+        tools: [...tools, { type: "function", name: "message" }],
+        input: [
+          kickoff,
+          makeUserInput(
+            `qa group visible reply tool check. Use the visible room reply path. exact marker: \`${marker}\``,
+          ),
+        ],
+      });
+      expect(outputItem(target)).toMatchObject({ type: "function_call", name: "message" });
+      expect(outputToolArgs(target)).toMatchObject({ action: "send", message: marker });
     },
   );
-});
+  it.each([
+    { prompt: "Telegram unsent failure QA check.", partialText: "" },
+    {
+      prompt: "Telegram visible partial failure QA check.",
+      partialText: "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE",
+    },
+  ])("preserves Anthropic streaming failure for $prompt", async ({ prompt, partialText }) => {
+    const response = await postJson(await startMockServer(), "/v1/messages", {
+      model: "qa-model",
+      max_tokens: 256,
+      stream: true,
+      messages: [{ role: "user", content: prompt }],
+    });
+    const body = await response.text();
+    const expectedError = { type: "api_error", message: expect.any(String) };
+    expect(response.status).toBe(200);
+    const events = body
+      .split("\n")
+      .filter((line) => line.startsWith("data: "))
+      .map((line) => JSON.parse(line.slice(6)));
+    expect(events.at(-1)).toMatchObject({ type: "error", error: expectedError });
+    expect(body).not.toContain("event: message_stop");
+    expect(body).not.toContain('"stop_reason":"end_turn"');
+    expect(
+      events
+        .filter((event) => event.type === "content_block_delta")
+        .map((event) => event.delta.text)
+        .join(""),
+    ).toBe(partialText);
+  });
+  it("keeps cursor reads correct when retained debug requests rotate", async () => {
+    const server = await startMockServer();
+    const debugRequestLimit = 2_000;
+    const readCursor = async () =>
+      readQaMockRequestCursor(
+        await fetch(`${server.baseUrl}/debug/request-cursor`).then((response) => response.json()),
+      );
 
-describe("cursor", () => {
-  describe("qa mock openai server", () => {
-    it("keeps cursor reads correct when retained debug requests rotate", async () => {
-      const server = await startMockServer();
-      const debugRequestLimit = 2_000;
-      const readCursor = async () =>
-        readQaMockRequestCursor(
-          await fetch(`${server.baseUrl}/debug/request-cursor`).then((response) => response.json()),
-        );
+    const sendRequest = (index: number) =>
+      expectOpenAiNonStreamingResponsesJson(server, {
+        input: [makeUserInput(`cursor request ${index}`)],
+      });
 
-      const sendRequest = (index: number) =>
-        expectOpenAiNonStreamingResponsesJson(server, {
-          input: [makeUserInput(`cursor request ${index}`)],
-        });
-
-      expect(await readCursor()).toBe(0);
-      // Keep the evicted request and its retained successor ordered.
-      await sendRequest(0);
-      await sendRequest(1);
-      const batchSize = 32;
-      for (let start = 2; start < debugRequestLimit; start += batchSize) {
-        const results = await Promise.allSettled(
-          Array.from({ length: Math.min(batchSize, debugRequestLimit - start) }, (_, offset) =>
-            sendRequest(start + offset),
-          ),
-        );
-        // Join the whole batch before reporting a failure or issuing overflow.
-        for (const result of results) {
-          if (result.status === "rejected") {
-            throw result.reason;
-          }
+    expect(await readCursor()).toBe(0);
+    // Keep the evicted request and its retained successor ordered.
+    await sendRequest(0);
+    await sendRequest(1);
+    const batchSize = 32;
+    for (let start = 2; start < debugRequestLimit; start += batchSize) {
+      const results = await Promise.allSettled(
+        Array.from({ length: Math.min(batchSize, debugRequestLimit - start) }, (_, offset) =>
+          sendRequest(start + offset),
+        ),
+      );
+      // Join the whole batch before reporting a failure or issuing overflow.
+      for (const result of results) {
+        if (result.status === "rejected") {
+          throw result.reason;
         }
       }
-      const cursor = await readCursor();
-      expect(cursor).toBe(debugRequestLimit);
+    }
+    const cursor = await readCursor();
+    expect(cursor).toBe(debugRequestLimit);
 
-      await expectOpenAiNonStreamingResponsesJson(server, {
-        input: [makeUserInput("cursor request overflow")],
-      });
+    await expectOpenAiNonStreamingResponsesJson(server, {
+      input: [makeUserInput("cursor request overflow")],
+    });
 
-      const retained = requireArray(
-        await getJson(server, "/debug/requests"),
-        "retained debug requests",
-      );
-      expect(retained).toHaveLength(debugRequestLimit);
-      expect(retained[0]).toMatchObject({
-        cursor: 2,
-        allInputText: expect.stringContaining("cursor request 1"),
-      });
-      expect(retained.at(-1)).toMatchObject({
-        cursor: debugRequestLimit + 1,
-        allInputText: expect.stringContaining("cursor request overflow"),
-      });
+    const retained = requireArray(
+      await getJson(server, "/debug/requests"),
+      "retained debug requests",
+    );
+    expect(retained).toHaveLength(debugRequestLimit);
+    expect(retained[0]).toMatchObject({
+      cursor: 2,
+      allInputText: expect.stringContaining("cursor request 1"),
+    });
+    expect(retained.at(-1)).toMatchObject({
+      cursor: debugRequestLimit + 1,
+      allInputText: expect.stringContaining("cursor request overflow"),
+    });
 
-      const nextRequests = requireArray(
-        await fetch(`${server.baseUrl}/debug/requests?after=${cursor}`).then((response) =>
-          response.json(),
-        ),
-        "debug requests after cursor",
-      );
-      expect(nextRequests).toMatchObject([{ prompt: expect.stringContaining("overflow") }]);
+    const nextRequests = requireArray(
+      await fetch(`${server.baseUrl}/debug/requests?after=${cursor}`).then((response) =>
+        response.json(),
+      ),
+      "debug requests after cursor",
+    );
+    expect(nextRequests).toMatchObject([{ prompt: expect.stringContaining("overflow") }]);
 
-      const expired = await fetch(`${server.baseUrl}/debug/requests?after=0`);
-      expect(expired.status).toBe(409);
-      expect(await expired.json()).toEqual({
-        error: "request cursor expired",
-        after: 0,
-        oldestCursor: 2,
-        latestCursor: debugRequestLimit + 1,
-      });
+    const expired = await fetch(`${server.baseUrl}/debug/requests?after=0`);
+    expect(expired.status).toBe(409);
+    expect(await expired.json()).toEqual({
+      error: "request cursor expired",
+      after: 0,
+      oldestCursor: 2,
+      latestCursor: debugRequestLimit + 1,
+    });
 
-      const futureCursor = debugRequestLimit + 2;
-      const future = await fetch(`${server.baseUrl}/debug/requests?after=${futureCursor}`);
-      expect(future.status).toBe(409);
-      expect(await future.json()).toEqual({
-        error: "request cursor is ahead of the latest recorded request",
-        after: futureCursor,
-        latestCursor: debugRequestLimit + 1,
-      });
+    const futureCursor = debugRequestLimit + 2;
+    const future = await fetch(`${server.baseUrl}/debug/requests?after=${futureCursor}`);
+    expect(future.status).toBe(409);
+    expect(await future.json()).toEqual({
+      error: "request cursor is ahead of the latest recorded request",
+      after: futureCursor,
+      latestCursor: debugRequestLimit + 1,
+    });
 
-      const invalid = await fetch(`${server.baseUrl}/debug/requests?after=1.5`);
-      expect(invalid.status).toBe(400);
-      expect(await invalid.json()).toEqual({
-        error: "after must be a non-negative safe integer",
-      });
+    const invalid = await fetch(`${server.baseUrl}/debug/requests?after=1.5`);
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toEqual({
+      error: "after must be a non-negative safe integer",
     });
   });
-});
-
-describe("http", () => {
   it("rejects an oversized upload without taking down the provider", async () => {
     const server = await startMockServer();
     const result = await postRawWebhook({
@@ -4258,9 +4064,6 @@ describe("http", () => {
     expect(result.closedByServer).toBe(true);
     expect(await getJson(server, "/healthz")).toEqual({ ok: true, status: "live" });
   });
-});
-
-describe("memory-ranking-proof", () => {
   it("preserves memory retrieval line selection", async () => {
     const server = await startMockServer();
     for (const [range, from] of [
@@ -4285,46 +4088,38 @@ describe("memory-ranking-proof", () => {
       });
     }
   });
-});
-
-describe("responses-input", () => {
-  describe("mock Responses input text", () => {
-    it.each([
-      {
-        name: "fences completed tools with an empty user message after continuation",
-        laterInput: [
-          { role: "user", content: "Continue." },
-          { role: "user", content: [] },
-        ],
-        requestKind: "agent-initial",
-      },
-    ])("$name", async ({ laterInput, requestKind }) => {
-      const server = await startMockServer();
-      await expectOpenAiNonStreamingResponsesJson(server, {
-        model: "qa-model",
-        input: [
-          makeUserInput("Tool progress QA check: read `QA.md` before answering."),
-          {
-            type: "function_call",
-            id: "fc_fixture",
-            call_id: "fixture_call",
-            name: "read",
-            arguments: '{"path":"QA.md"}',
-          },
-          { type: "function_call_output", call_id: "fixture_call", output: "fixture result" },
-          ...laterInput,
-        ],
-      });
-      const snapshot = await getJson(server, "/debug/last-request");
-      expect(snapshot).toMatchObject({ requestKind });
-      if (requestKind === "agent-initial") {
-        expect(snapshot).not.toHaveProperty("plannedToolName");
-      }
+  it.each([
+    {
+      name: "fences completed tools with an empty user message after continuation",
+      laterInput: [
+        { role: "user", content: "Continue." },
+        { role: "user", content: [] },
+      ],
+      requestKind: "agent-initial",
+    },
+  ])("$name", async ({ laterInput, requestKind }) => {
+    const server = await startMockServer();
+    await expectOpenAiNonStreamingResponsesJson(server, {
+      model: "qa-model",
+      input: [
+        makeUserInput("Tool progress QA check: read `QA.md` before answering."),
+        {
+          type: "function_call",
+          id: "fc_fixture",
+          call_id: "fixture_call",
+          name: "read",
+          arguments: '{"path":"QA.md"}',
+        },
+        { type: "function_call_output", call_id: "fixture_call", output: "fixture result" },
+        ...laterInput,
+      ],
     });
+    const snapshot = await getJson(server, "/debug/last-request");
+    expect(snapshot).toMatchObject({ requestKind });
+    if (requestKind === "agent-initial") {
+      expect(snapshot).not.toHaveProperty("plannedToolName");
+    }
   });
-});
-
-describe("whatsapp-batched-reply", () => {
   it("requires both WhatsApp batched markers in the current turn without leaking prior batches", async () => {
     const server = await startMockServer();
     const first =

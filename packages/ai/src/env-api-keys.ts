@@ -6,43 +6,12 @@ type NodeHelpers = {
 };
 let nodeHelpers: NodeHelpers | undefined;
 
-type NodeBuiltinModule =
-  | typeof import("node:fs")
-  | typeof import("node:os")
-  | typeof import("node:path");
-
-const dynamicImport = (specifier: string): Promise<unknown> => import(specifier);
-const NODE_FS_SPECIFIER = "node:fs";
-const NODE_OS_SPECIFIER = "node:os";
-const NODE_PATH_SPECIFIER = "node:path";
-
-function loadNodeBuiltinModule(specifier: string): NodeBuiltinModule | null {
-  const getBuiltinModule = (typeof process !== "undefined" ? process : undefined) as
-    | (NodeJS.Process & { getBuiltinModule?: (id: string) => unknown })
-    | undefined;
-  if (typeof getBuiltinModule?.getBuiltinModule === "function") {
-    return getBuiltinModule.getBuiltinModule(specifier) as NodeBuiltinModule;
-  }
-  if (typeof require === "function") {
-    return require(specifier) as NodeBuiltinModule;
-  }
-  return null;
-}
-
 function loadNodeHelpersSync(): NodeHelpers | undefined {
   try {
-    const fsModule = loadNodeBuiltinModule(NODE_FS_SPECIFIER) as typeof import("node:fs") | null;
-    const osModule = loadNodeBuiltinModule(NODE_OS_SPECIFIER) as typeof import("node:os") | null;
-    const pathModule = loadNodeBuiltinModule(NODE_PATH_SPECIFIER) as
-      | typeof import("node:path")
-      | null;
-    if (fsModule && osModule && pathModule) {
-      nodeHelpers = {
-        existsSync: fsModule.existsSync,
-        homedir: osModule.homedir,
-        join: pathModule.join,
-      };
-    }
+    const { existsSync } = process.getBuiltinModule("node:fs");
+    const { homedir } = process.getBuiltinModule("node:os");
+    const { join } = process.getBuiltinModule("node:path");
+    nodeHelpers = { existsSync, homedir, join };
   } catch {
     // Browser environments may expose process without Node builtins.
   }
@@ -51,65 +20,15 @@ function loadNodeHelpersSync(): NodeHelpers | undefined {
 
 // Eagerly load in Node.js/Bun environment only
 if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
-  if (!loadNodeHelpersSync()) {
-    void Promise.all([
-      dynamicImport(NODE_FS_SPECIFIER),
-      dynamicImport(NODE_OS_SPECIFIER),
-      dynamicImport(NODE_PATH_SPECIFIER),
-    ]).then(([fsModule, osModule, pathModule]) => {
-      nodeHelpers = {
-        existsSync: (fsModule as typeof import("node:fs")).existsSync,
-        homedir: (osModule as typeof import("node:os")).homedir,
-        join: (pathModule as typeof import("node:path")).join,
-      };
-    });
-  }
+  loadNodeHelpersSync();
 }
-
-let procEnvCache: Map<string, string> | null = null;
 
 function getProcessEnv(): NodeJS.ProcessEnv | undefined {
   return typeof process === "undefined" ? undefined : process.env;
 }
 
-/**
- * Fallback for https://github.com/oven-sh/bun/issues/27802
- * Bun compiled binaries have an empty `process.env` inside sandbox
- * environments on Linux. We can recover the env from `/proc/self/environ`.
- */
-function getProcEnv(key: string): string | undefined {
-  if (typeof process === "undefined" || !process.versions?.bun) {
-    return undefined;
-  }
-  // If process.env already has entries, the bug is not triggered.
-  if (Object.keys(process.env).length > 0) {
-    return undefined;
-  }
-
-  if (procEnvCache === null) {
-    procEnvCache = new Map();
-    try {
-      const fsModule = loadNodeBuiltinModule(NODE_FS_SPECIFIER) as typeof import("node:fs") | null;
-      if (!fsModule) {
-        return undefined;
-      }
-      const data = fsModule.readFileSync("/proc/self/environ", "utf-8");
-      for (const entry of data.split("\0")) {
-        const idx = entry.indexOf("=");
-        if (idx > 0) {
-          procEnvCache.set(entry.slice(0, idx), entry.slice(idx + 1));
-        }
-      }
-    } catch {
-      // /proc/self/environ may not be readable.
-    }
-  }
-
-  return procEnvCache.get(key);
-}
-
 function getEnvValue(key: string): string | undefined {
-  return (getProcessEnv()?.[key] || getProcEnv(key))?.trim() || undefined;
+  return getProcessEnv()?.[key]?.trim() || undefined;
 }
 
 let cachedVertexAdcCredentialsExists: true | null = null;

@@ -124,22 +124,24 @@ function sourceExcerpt(value: unknown, name: WebToolName): string | undefined {
     return undefined;
   }
   const tokens = markdownTokens(prose);
-  const paragraphs = tokens.flatMap((token, index) =>
-    token.type === "inline" &&
-    tokens[index - 1]?.type === "paragraph_open" &&
-    (name === "web_search" || tokens[index - 1]?.level === 0)
-      ? [inlineText(token.children ?? [])]
-      : [],
-  );
   // A page heading or navigation label is not a useful excerpt. Search snippets
   // may legitimately be short; page previews need a readable paragraph.
-  const text = paragraphs.find((paragraph) => paragraph.length >= (name === "web_fetch" ? 60 : 1));
-  if (!text) {
-    return undefined;
+  for (const [index, token] of tokens.entries()) {
+    if (
+      token.type !== "inline" ||
+      tokens[index - 1]?.type !== "paragraph_open" ||
+      (name === "web_fetch" && tokens[index - 1]?.level !== 0)
+    ) {
+      continue;
+    }
+    const text = inlineText(token.children ?? []);
+    if (text.length >= (name === "web_fetch" ? 60 : 1)) {
+      return text.length > MAX_EXCERPT_CHARS
+        ? `${truncateUtf16Safe(text, MAX_EXCERPT_CHARS - 1).trimEnd()}…`
+        : text;
+    }
   }
-  return text.length > MAX_EXCERPT_CHARS
-    ? `${truncateUtf16Safe(text, MAX_EXCERPT_CHARS - 1).trimEnd()}…`
-    : text;
+  return undefined;
 }
 
 function readPayload(card: ToolCard): Record<string, unknown> | null {
@@ -264,8 +266,7 @@ export function extractChatSourcePreviews(params: {
   if (links.length === 0) {
     return [];
   }
-  // Message/text caches treat messages as immutable. Tool cards can receive
-  // projected outcomes, so snapshot their display fields as well as identity.
+  // Message and tool-card owners publish immutable snapshots; identity is enough.
   const basePath = params.basePath ?? resolveControlUiPaths(globalThis.location.pathname)[0];
   const inputs: unknown[] = [
     params.runId,
@@ -291,26 +292,6 @@ export function extractChatSourcePreviews(params: {
         continue;
       }
       messages.push(record);
-      inputs.push(
-        record.role,
-        record.toolName,
-        record.tool_name,
-        record.content,
-        transcriptRunId(record),
-      );
-      for (const card of extractToolCardsCached(record)) {
-        inputs.push(
-          card,
-          card.callId,
-          card.runId,
-          card.name,
-          card.completed,
-          card.live,
-          card.isError,
-          card.outputText,
-          card.details,
-        );
-      }
     }
   }
   if (!inFrame) {

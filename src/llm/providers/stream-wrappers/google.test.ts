@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeGoogleThinkingPayload } from "./google.js";
+import { sanitizeGoogleThinkingPayload } from "./google-thinking-payload.js";
 
 type ThinkingCase = {
   name: string;
@@ -12,6 +12,26 @@ type ThinkingCase = {
 
 describe("sanitizeGoogleThinkingPayload", () => {
   it.each<ThinkingCase>([
+    {
+      name: "maps Gemini 4 legacy budgets to medium",
+      modelId: "google/gemini-4-argon",
+      initial: { thinkingBudget: 8192, includeThoughts: true },
+      expected: { thinkingLevel: "MEDIUM", includeThoughts: true },
+    },
+    {
+      name: "maps disabled Gemini 4 to low",
+      modelId: "gemini-4-argon",
+      thinkingLevel: "off",
+      initial: { thinkingBudget: 0 },
+      expected: { thinkingLevel: "LOW" },
+    },
+    {
+      name: "uses provider defaults for Gemini 4 adaptive thinking",
+      modelId: "gemini-4-argon",
+      thinkingLevel: "adaptive",
+      initial: { thinkingBudget: 8192, thinkingLevel: "HIGH", includeThoughts: true },
+      expected: { includeThoughts: true },
+    },
     {
       name: "removes the empty thinking config",
       modelId: "gemini-2.5-pro",

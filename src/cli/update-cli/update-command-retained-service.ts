@@ -31,7 +31,8 @@ export async function withRetainedUpdateServiceAuthority<T>(
       "Retained native recovery requires Windows Job custody.",
     );
   }
-  const { run, root, signal } = params;
+  const { run, root } = params;
+  const signal = run.deadline?.signal ?? params.signal;
   const executor = run.executorFence;
   const assertCaller = params.assertCurrent;
   const assertCurrent = () => {

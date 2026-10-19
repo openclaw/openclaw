@@ -1,5 +1,23 @@
+.chat-subagent-activity-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.chat-subagent-activity__elapsed {
+  padding-top: 9px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .chat-subagent-activity {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
   min-width: 0;
   max-width: 100%;
@@ -7,8 +25,7 @@
 }
 
 .chat-subagent-activity__row {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) minmax(0, 1.5fr);
+  display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -31,12 +48,13 @@ button.chat-subagent-activity__row:is(:hover, :focus-visible) {
   display: inline-flex;
   width: 18px;
   height: 18px;
+  flex: 0 0 18px;
   align-items: center;
   color: var(--accent);
 }
 
 .chat-subagent-activity__icon > svg,
-.chat-subagent-activity__icon > openclaw-theme-brand-icon {
+.chat-subagent-activity__icon openclaw-theme-brand-icon {
   width: 16px;
   height: 16px;
 }
@@ -51,19 +69,20 @@ button.chat-subagent-activity__row:is(:hover, :focus-visible) {
 
 .chat-subagent-activity__name {
   font-weight: 500;
+  flex: 0 1 auto;
 }
 
 .chat-subagent-activity__status {
   color: var(--muted);
+  flex: 0 0 auto;
 }
 
-@media (max-width: 560px) {
-  .chat-subagent-activity__row {
-    grid-template-columns: 18px minmax(0, 1fr);
-    row-gap: 1px;
-  }
+.chat-subagent-activity__row--preview > .chat-subagent-activity__status {
+  flex: 1 1 120px;
+  min-width: min(120px, 28%);
+}
 
-  .chat-subagent-activity__status {
-    grid-column: 2;
-  }
+.chat-subagent-activity__separator {
+  color: var(--muted);
+  flex: 0 0 auto;
 }

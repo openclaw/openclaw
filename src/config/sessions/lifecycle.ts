@@ -5,7 +5,7 @@ import {
 } from "./lifecycle-timestamps.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
-import { loadTranscriptHeaderSync, readTranscriptMutationStateSync } from "./session-accessor.js";
+import { loadTranscriptHeaderSync } from "./session-accessor.js";
 import { isTerminalSessionStatus, type SessionEntry, type SessionScope } from "./types.js";
 export {
   createSessionWorkStartChangedError,
@@ -95,35 +95,9 @@ export function resolveTerminalMainSessionTranscriptRegistryCheck(
   if (registryTimestampMs === undefined) {
     return undefined;
   }
-  const sessionId = typeof params.entry.sessionId === "string" ? params.entry.sessionId.trim() : "";
+  const sessionId = params.entry.sessionId.trim();
   if (!sessionId) {
     return undefined;
   }
   return { sessionId, registryTimestampMs };
-}
-
-export function hasTerminalMainSessionTranscriptNewerThanRegistrySync(
-  params: TerminalMainSessionTranscriptRegistryParams,
-): boolean {
-  const check = resolveTerminalMainSessionTranscriptRegistryCheck(params);
-  if (!check) {
-    return false;
-  }
-  try {
-    // Runtime transcripts are SQLite-only. Legacy-looking sessionFile values still
-    // resolve through agent/session/store scope, so a file stat would read stale state.
-    const mutation = readTranscriptMutationStateSync({
-      agentId: params.agentId,
-      sessionId: check.sessionId,
-      storePath: params.storePath,
-    });
-    if (mutation.updatedAt === null) {
-      return false;
-    }
-    const transcriptMutationAtMs = Math.floor(mutation.updatedAt);
-    const registryTimestampMs = Math.floor(mutation.observedAt ?? check.registryTimestampMs);
-    return Number.isFinite(transcriptMutationAtMs) && transcriptMutationAtMs > registryTimestampMs;
-  } catch {
-    return false;
-  }
 }

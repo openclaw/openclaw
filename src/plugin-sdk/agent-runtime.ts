@@ -123,20 +123,32 @@ export {
 
 // Intentional public runtime surface: channel plugins use ingress agent helpers directly.
 export { agentCommandFromIngress } from "../agents/agent-command.js";
-export { getTtsProvider, resolveTtsConfig, resolveTtsPrefsPath } from "../tts/tts.js";
+export {
+  getTtsProvider,
+  getTtsProviderAsync,
+  resolveTtsConfig,
+  resolveTtsPrefsPath,
+  resolveTtsPrefsPathAsync,
+} from "../tts/tts.js";
 export type { ResolvedTtsConfig } from "../tts/tts.js";
 
 export {
   listProfilesForProvider,
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForRuntimeAsync,
   replaceRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshotsAsync,
   saveAuthProfileStore,
   findPersistedAuthProfileCredential,
+  findPersistedAuthProfileCredentialAsync,
   resolvePersistedAuthProfileOwnerAgentDir,
+  resolvePersistedAuthProfileOwnerAgentDirAsync,
   clearExpiredCooldowns,
   isProfileInCooldown,
   markAuthProfileBlockedUntil,

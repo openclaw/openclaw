@@ -4,8 +4,14 @@ import { getCompileCacheDir } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
+import { prepareAgentSessionStoreDeletionSafety } from "../agents/agent-delete-session-store-safety.targets.js";
 import { enableOpenClawCompileCache } from "../entry.compile-cache.js";
+import {
+  captureSqliteReadOnlyWorkerLaunch,
+  createScopedSqliteReadOnlyWorker,
+} from "./sqlite-readonly-worker.js";
 import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
+import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 const [root] = process.argv.slice(2);
 assert.ok(root, "SQLite compile-cache fixture requires its temporary directory");
@@ -15,6 +21,7 @@ fs.writeFileSync(path.join(installRoot, "package.json"), '{"version":"2026.9.6"}
 assert.equal(getCompileCacheDir(), undefined);
 const beforeEnable = { ...process.env };
 enableOpenClawCompileCache({
+  currentFile: path.join(installRoot, "dist", "entry.js"),
   installRoot,
   env: { ...process.env, NODE_COMPILE_CACHE: path.join(root, "native-cache") },
 });
@@ -36,7 +43,15 @@ fs.writeFileSync(
    fs.writeFileSync(path.join(${JSON.stringify(probes)}, process.pid + ".json"), JSON.stringify({
      directory: getCompileCacheDir() ?? null,
      disable: process.env.NODE_DISABLE_COMPILE_CACHE ?? null,
-   }));`,
+   }));
+   if (process.send) {
+     const send = process.send.bind(process);
+     // Let the real worker's deferred cache flush run before forwarding its reply.
+     process.send = (...args) => {
+       setImmediate(() => setImmediate(() => send(...args)));
+       return true;
+     };
+   }`,
 );
 process.env.NODE_OPTIONS = "--import=" + pathToFileURL(probe).href;
 const callEnv = { ...process.env };
@@ -49,6 +64,48 @@ try {
   database.close();
 }
 const before = fs.readFileSync(source);
+const cacheEntries = () =>
+  fs
+    .readdirSync(activeDirectory, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile()).length;
+let retainedLocation: string | undefined;
+const worker = createScopedSqliteReadOnlyWorker(captureSqliteReadOnlyWorkerLaunch());
+const directory = await worker.run(stagingRoot, { mode: "staging-create" });
+assert.ok(typeof directory === "string");
+try {
+  const location = await worker.run(source, { mode: "sync", stagingRoot: directory });
+  assert.ok(typeof location === "string");
+  retainedLocation = location;
+  assert.deepEqual(fs.readFileSync(location), before);
+  const startupEntries = cacheEntries();
+  assert.ok(startupEntries > 0, "retained child must persist startup bytecode before close");
+
+  const result = await worker.run(source, {
+    mode: "operation",
+    command: {
+      type: "agentRetirement.sessionStoreBlocker",
+      input: prepareAgentSessionStoreDeletionSafety({}, "main", process.env),
+    },
+    source: "snapshot",
+    expectedIdentity: readDatabasePathIdentitySync(source).key,
+    env: process.env,
+  });
+  assert.deepEqual(result, {
+    operation: "agentRetirement.sessionStoreBlocker",
+    value: { blocker: undefined },
+  });
+  assert.ok(
+    cacheEntries() > startupEntries,
+    "retained child must persist later operation bytecode before close",
+  );
+  assert.equal(worker.isRetired(), false);
+} finally {
+  await worker.run(directory, { mode: "staging-retire" });
+  await worker.close();
+}
+assert.ok(retainedLocation);
+assert.equal(fs.existsSync(retainedLocation), false);
+
 const prepared = prepareSqliteReadOnlyLocationSync(source);
 try {
   assert.deepEqual(fs.readFileSync(prepared.location), before);
@@ -90,9 +147,4 @@ for (const child of observed) {
     "readonly parent/child native directory must match exactly",
   );
 }
-assert.ok(
-  fs
-    .readdirSync(activeDirectory, { recursive: true, withFileTypes: true })
-    .some((entry) => entry.isFile()),
-);
 process.stdout.write("readonly-cache:verified");

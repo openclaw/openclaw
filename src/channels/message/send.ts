@@ -1,6 +1,9 @@
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
-import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
+import {
+  assertSessionWriterDeliveryAuthorized,
+  prepareSessionWriterDeliveryAuthority,
+} from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { DeliveryQueueStateContext } from "../../infra/delivery-queue-state-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -420,42 +423,52 @@ async function sendMessageBatch(
         const authority = getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority;
         return authority ? [authority] : [];
       });
-  const onPlatformSendDispatch =
-    ephemeralWriterAuthorities.length > 0
-      ? async () => {
-          for (const authority of ephemeralWriterAuthorities) {
-            assertSessionWriterDeliveryAuthorized(authority);
+  const prepared: Awaited<ReturnType<typeof prepareSessionWriterDeliveryAuthority>>[] = [];
+  try {
+    for (const authority of new Set(ephemeralWriterAuthorities)) {
+      prepared.push(await prepareSessionWriterDeliveryAuthority(authority));
+    }
+    const onPlatformSendDispatch =
+      ephemeralWriterAuthorities.length > 0
+        ? async () => {
+            for (const { authority } of prepared) {
+              assertSessionWriterDeliveryAuthorized(authority);
+            }
+            await params.onPlatformSendDispatch?.();
           }
-          await params.onPlatformSendDispatch?.();
-        }
-      : params.onPlatformSendDispatch;
-  const assertDirectAdapterHandoff =
-    ephemeralWriterAuthorities.length > 0
-      ? () => {
-          params.assertDirectAdapterHandoff?.();
-          for (const authority of ephemeralWriterAuthorities) {
-            assertSessionWriterDeliveryAuthorized(authority);
+        : params.onPlatformSendDispatch;
+    const assertDirectAdapterHandoff =
+      ephemeralWriterAuthorities.length > 0
+        ? () => {
+            params.assertDirectAdapterHandoff?.();
+            for (const { authority } of prepared) {
+              assertSessionWriterDeliveryAuthorized(authority);
+            }
           }
+        : params.assertDirectAdapterHandoff;
+    return await withMessageSendContext(
+      {
+        ...params,
+        ...pendingFinalDelivery,
+        onPlatformSendDispatch,
+        assertDirectAdapterHandoff,
+      },
+      async (ctx) => {
+        const rendered = await ctx.render();
+        const result = await ctx.send(rendered);
+        if (result.status === "sent" || result.status === "suppressed") {
+          await ctx.commit(result.receipt);
+        } else {
+          await ctx.fail(result.error);
         }
-      : params.assertDirectAdapterHandoff;
-  return await withMessageSendContext(
-    {
-      ...params,
-      ...pendingFinalDelivery,
-      onPlatformSendDispatch,
-      assertDirectAdapterHandoff,
-    },
-    async (ctx) => {
-      const rendered = await ctx.render();
-      const result = await ctx.send(rendered);
-      if (result.status === "sent" || result.status === "suppressed") {
-        await ctx.commit(result.receipt);
-      } else {
-        await ctx.fail(result.error);
-      }
-      return result;
-    },
-    deliver,
-    conversationDeliveryTarget,
-  );
+        return result;
+      },
+      deliver,
+      conversationDeliveryTarget,
+    );
+  } finally {
+    for (const current of prepared) {
+      current.release();
+    }
+  }
 }

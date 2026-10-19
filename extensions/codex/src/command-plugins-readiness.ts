@@ -1,5 +1,6 @@
 import type { MessagePresentationBlock } from "openclaw/plugin-sdk/interactive-runtime";
 import type { PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import { readCodexExperimentalFeature } from "./app-server/experimental-features.js";
 import {
   findCodexMarketplacePluginSummary,
   pluginReadParams,
@@ -65,32 +66,14 @@ export async function readCodexHostedAppsSupport(
   if (!isJsonObject(account.value.account) || account.value.account.type !== "chatgpt") {
     return "sign_in_required";
   }
-  const features = await readEvidence(async () => {
-    let cursor: string | undefined;
-    const visited = new Set<string>();
-    do {
-      const response = await context.request<CodexExperimentalFeatureListResponse>(
-        "experimentalFeature/list",
-        {
-          ...(context.threadId ? { threadId: context.threadId } : {}),
-          ...(cursor ? { cursor } : {}),
-          limit: 100,
-        },
-      );
-      const apps = response.data.find((feature) => feature.name === "apps");
-      if (apps) {
-        return apps.enabled;
-      }
-      cursor = response.nextCursor ?? undefined;
-      if (cursor && visited.has(cursor)) {
-        return undefined;
-      }
-      if (cursor) {
-        visited.add(cursor);
-      }
-    } while (cursor);
-    return undefined;
-  });
+  const features = await readEvidence(() =>
+    readCodexExperimentalFeature(
+      (params) =>
+        context.request<CodexExperimentalFeatureListResponse>("experimentalFeature/list", params),
+      "apps",
+      context.threadId,
+    ),
+  );
   if (features.status !== "known") {
     return features.reason === "unsupported" ? "unsupported" : "unknown";
   }

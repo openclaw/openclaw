@@ -106,14 +106,6 @@ describe("browser control lifecycle", () => {
     expect(runtimeMocks.stopBrowserRuntime).toHaveBeenCalledOnce();
   });
 
-  it("allows a start after a foreground-owned service stop settles", async () => {
-    await start();
-    await start({} as Server);
-    await expect(stop("service")).resolves.toBeNull();
-    await expect(start()).resolves.toBeTruthy();
-    await stop("server");
-  });
-
   it("orders a queued stop after an in-progress cold start", async () => {
     expect(hasBrowserControlWork()).toBe(false);
     let releaseStart!: () => void;

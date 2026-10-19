@@ -22,6 +22,33 @@ afterEach(() => {
 });
 
 describe("submitted request cache observation", () => {
+  it("rechecks request authority after asynchronous observation before dispatch", async () => {
+    const { activeSession } = createSession();
+    const provider = vi.fn<StreamFn>();
+    activeSession.agent.streamFn = provider;
+    let active = true;
+    await expect(
+      submitEmbeddedAttemptPrompt({
+        ...createBaseInput(),
+        activeSession,
+        assertHostActive: () => {
+          if (!active) {
+            throw new Error("request revoked");
+          }
+        },
+        onModelRequest: async () => {
+          active = false;
+          return undefined;
+        },
+        promptActiveSession: async (_prompt, options) => {
+          options?.preflightResult?.(true);
+          await activeSession.agent.streamFn(testModel, { messages: [] });
+        },
+      }),
+    ).rejects.toThrow("request revoked");
+    expect(provider).not.toHaveBeenCalled();
+  });
+
   it("observes canonical request prefixes before managed cache consumption and skips compaction", async () => {
     const { activeSession } = createSession();
     const observations = vi.fn<(observation: PromptCacheRequestObservation) => void>();
@@ -29,7 +56,11 @@ describe("submitted request cache observation", () => {
       { sessionId: "prompt-submit-cache-observer", streamStrategy: "test" },
       observations,
     );
-    const observeRequest = vi.fn(observer.onModelRequest);
+    const observeRequest = vi.fn(
+      async (...args: Parameters<typeof observer.onModelRequest>): Promise<undefined> => {
+        await observer.onModelRequest(...args);
+      },
+    );
     const provider: StreamFn = (model) =>
       createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done." }]));
     activeSession.agent.streamFn = (model, context, options) =>

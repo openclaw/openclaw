@@ -10,9 +10,12 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
+import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS,
@@ -362,12 +365,10 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
     expect(probe.status).toBe(403);
     expectNoApp(probe);
     const document = await readHttp(port, entry, deniedEmail, signal);
-    expect(document.status).toBe(303);
-    expect(document.headers.location).toBe(privatePath);
+    expect(document.status).toBe(403);
+    expect(document.headers.location).toBeUndefined();
     expectNoApp(document);
-    const unavailable = await readHttp(port, document.headers.location!, deniedEmail, signal);
-    expect(unavailable.status).toBe(404);
-    expectNoApp(unavailable);
+    expect(document.body).toContain("Session unavailable");
   });
 
   it("ignores spoofed identity on anonymous canonical documents while protecting the handoff", async ({
@@ -397,7 +398,7 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
     }
   });
 
-  for (const change of ["membership", "role"] as const) {
+  for (const change of ["visibility", "role"] as const) {
     it(`withholds all app bytes when ${change} changes after real document preparation`, async ({
       signal,
     }) => {
@@ -417,8 +418,9 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
         expect(prepared.current).toBe(true);
         expect(prepared.body).toContain("<openclaw-app");
         expect(prepared.res.headersSent).toBe(false);
-        if (change === "membership") {
-          expect(await removeSessionMember(privateScope, memberId)).not.toBeNull();
+        if (change === "visibility") {
+          // Membership alone does not grant or revoke this role's read access.
+          await patchSessionEntryCore(privateScope, () => ({ visibility: "draft" }));
         } else {
           await setCanonicalUserProfileRole(memberId, "denied", {
             onCommitted: invalidateOperatorRolePolicy,
@@ -428,13 +430,20 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
         held.resume();
         const response = await pending;
         expect(response.status).toBe(403);
+        expect(response.headers.location).toBeUndefined();
+        expect(response.headers["cache-control"]).toBe("no-store");
         expect(response.headers["content-encoding"]).toBeUndefined();
-        expect(response.body).toBe("Session access changed. Reload the conversation.");
+        expect(response.headers["content-type"]).toBe("text/plain; charset=utf-8");
+        expect(response.headers["content-security-policy"]).toBeUndefined();
+        expect(response.body).toContain("Session access changed");
         expectNoApp(response);
       } finally {
         held.resume();
         await Promise.allSettled([pending]);
         held.restore();
+        if (change === "visibility") {
+          await patchSessionEntryCore(privateScope, () => ({ visibility: "read-only" }));
+        }
         await setCanonicalUserProfileRole(memberId, null, {
           onCommitted: invalidateOperatorRolePolicy,
         });

@@ -17,7 +17,6 @@ import {
   type PreparedSessionSourceAuthority,
   type SessionSourceValidation,
 } from "./session-source-authority.js";
-import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 
 /** Keep the admitted physical owner and host authority until the combined write settles. */
 export function trimSessionTranscriptInWorker(
@@ -33,13 +32,9 @@ export function trimSessionTranscriptInWorker(
   const sources = authority.source?.checks.map(({ predicate }) => predicate) ?? [];
   let sourceMatches: ManualCompactValidation["sourceMatches"] = [];
   let sourceValidation: SessionSourceValidation | undefined;
-  const assertCurrent = () => {
-    authority.assertCurrent();
-    if (!sourceValidation) {
-      return;
-    }
+  const assertCommitCurrent = () => {
     authority.source?.assertCurrent();
-    for (const match of sourceValidation.conversationMatches) {
+    for (const match of sourceValidation?.conversationMatches ?? []) {
       const matches = sourceMatches.find(({ index }) => index === match.index)!.matches;
       const accepted = match.acceptedAlternatives ?? match.alternatives;
       for (let alternative = 0; alternative < matches.length - 1; alternative++) {
@@ -52,7 +47,8 @@ export function trimSessionTranscriptInWorker(
     databaseIdentity: authority.databaseIdentity,
     agentId: scope.agentId,
     candidateKind: "session-manual-compact",
-    assertCurrent,
+    assertCurrent: authority.assertCurrent,
+    assertCandidate: assertCommitCurrent,
     onTransactionFacts(facts) {
       if (!isRecord(facts) || facts.kind !== "session-manual-compact-validated") {
         return false;
@@ -64,7 +60,6 @@ export function trimSessionTranscriptInWorker(
       if (authority.source) {
         acceptSessionSourceValidation(authority.source, sourceValidation);
       }
-      assertCurrent();
       return true;
     },
     run: (worker, commit) =>
@@ -87,9 +82,6 @@ export function trimSessionTranscriptInWorker(
           published.current,
           published.prepared,
         );
-      }
-      if (candidate.projectionNeedsReconcile) {
-        startSessionTranscriptIndexReconcile({ ...database, preferredSessionId: scope.sessionId });
       }
       return candidate.result;
     },

@@ -1,22 +1,27 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
-import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
-import { renderChatPullRequests } from "./chat-pull-requests.ts";
+import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import {
+  paintChatPullRequests,
+  clearChatPullRequests,
+  publication,
+  sessionBranch,
+} from "./chat-pull-requests.test-support.ts";
+import type { ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 
 describe("GitHub publication account controls", () => {
   let container: HTMLDivElement;
 
-  function paint(props: Partial<Parameters<typeof renderChatPullRequests>[0]>) {
-    render(
-      renderChatPullRequests({
+  function paint(props: Partial<ChatPullRequestsProps>) {
+    paintChatPullRequests(
+      {
         pullRequests: [],
         status: "ready",
         onDismiss: () => {},
         ...props,
-      }),
+      },
       container,
     );
   }
@@ -27,6 +32,7 @@ describe("GitHub publication account controls", () => {
   });
 
   afterEach(() => {
+    clearChatPullRequests(container);
     container.remove();
   });
 
@@ -43,7 +49,7 @@ describe("GitHub publication account controls", () => {
           onSelect,
         }),
       });
-      expect(container.querySelector("select, wa-dropdown, wa-popover")).toBeNull();
+      expect(container.querySelector('select, [role="menu"], [role="dialog"][popover]')).toBeNull();
       expect(container.querySelector('[aria-label="Publication account"]')).toBeNull();
       expect(container.querySelector(".chat-pr__create")?.textContent?.trim()).toBe("Publish PR");
       expect(container.querySelector("[data-publication-account]")).toBeNull();
@@ -77,7 +83,7 @@ describe("GitHub publication account controls", () => {
 
   it.each([false, true])(
     "offers radio account choices, disambiguating matching logins only: %s",
-    (sameLogin) => {
+    async (sameLogin) => {
       const shared = { source: "agent-override" as const, accountId: 1, login: "agent-bot" };
       const personal = {
         state: "connected" as const,
@@ -102,10 +108,10 @@ describe("GitHub publication account controls", () => {
           }),
         });
       paintSelection("shared");
-      const menu = container.querySelector("wa-dropdown");
+      const menu = container.querySelector('[role="menu"]');
       expect(menu?.getAttribute("aria-label")).toBe("Publication account");
-      expect(container.querySelector("select, wa-popover")).toBeNull();
-      const choices = [...menu!.querySelectorAll("wa-dropdown-item")];
+      expect(container.querySelector('select, [role="dialog"][popover]')).toBeNull();
+      const choices = [...menu!.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
       expect(choices.map((item) => item.getAttribute("value"))).toEqual(["shared", "personal"]);
       expect(choices.map((item) => item.getAttribute("role"))).toEqual([
         "menuitemradio",
@@ -117,15 +123,22 @@ describe("GitHub publication account controls", () => {
       expect(menu?.textContent?.includes("Agent override")).toBe(sameLogin);
       expect(menu?.textContent?.includes("My GitHub")).toBe(sameLogin);
       expect(menu?.textContent).not.toContain("applies only to this explicit Publish PR action");
-      expect(choices[0]?.querySelector('[slot="details"] svg')).not.toBeNull();
-      expect(choices[1]?.querySelector('[slot="details"] svg')).toBeNull();
+      expect(choices[0]?.querySelector(".oc-menu-item__details svg")).not.toBeNull();
+      expect(choices[1]?.querySelector(".oc-menu-item__details svg")).toBeNull();
       expect(onSelect).not.toHaveBeenCalled();
-      menu?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: choices[1] } }));
-      expect(onSelect).toHaveBeenCalledExactlyOnceWith("personal");
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label="Publication account"]')!
+        .click();
+      await waitForSolid(() => expect(menu?.matches(":popover-open")).toBe(true));
+      choices[1]!.click();
+      await waitForSolid(() => expect(onSelect).toHaveBeenCalledExactlyOnceWith("personal"));
       paintSelection("personal");
+      await waitForSolid(() =>
+        expect(choices.map((item) => item.getAttribute("aria-checked"))).toEqual(["false", "true"]),
+      );
       expect(choices.map((item) => item.getAttribute("aria-checked"))).toEqual(["false", "true"]);
-      expect(choices[0]?.querySelector('[slot="details"] svg')).toBeNull();
-      expect(choices[1]?.querySelector('[slot="details"] svg')).not.toBeNull();
+      expect(choices[0]?.querySelector(".oc-menu-item__details svg")).toBeNull();
+      expect(choices[1]?.querySelector(".oc-menu-item__details svg")).not.toBeNull();
       expect(container.querySelector(".chat-pr__create")?.textContent?.trim()).toBe("Publish PR");
     },
   );
@@ -159,7 +172,7 @@ describe("GitHub publication account controls", () => {
       true,
     );
     expect(container.textContent).toContain("reclaim the workspace");
-    expect(container.querySelector("wa-dropdown")?.textContent).not.toContain(
+    expect(container.querySelector('[role="menu"]')?.textContent).not.toContain(
       "reclaim the workspace",
     );
     expect(

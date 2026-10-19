@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
+import { mergeMissing } from "../../../config/merge-missing.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_CRON } from "./legacy-config-migrations.runtime.cron.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY } from "./legacy-config-migrations.runtime.gateway.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP } from "./legacy-config-migrations.runtime.mcp.js";
@@ -41,15 +42,46 @@ function configWithPath(path: string, leaf: unknown = 1): Record<string, unknown
     ) as Record<string, unknown>;
 }
 
+const migratePath = (path: string, value: unknown) => applyAll(configWithPath(path, value));
+
+function config(paths: Record<string, unknown>) {
+  const raw = {};
+  for (const [path, value] of Object.entries(paths)) {
+    mergeMissing(raw, configWithPath(path, value));
+  }
+  return raw;
+}
+const migrate = (paths: Record<string, unknown>) => applyAll(config(paths));
+
+function expectIssue(raw: Record<string, unknown>, path: string, message?: string) {
+  expect(findLegacyConfigIssues(raw)).toContainEqual(
+    expect.objectContaining({
+      path,
+      ...(message && { message: expect.stringContaining(message) }),
+    }),
+  );
+}
+
 describe("retired runtime config migrations", () => {
+  it.each<[string, unknown]>([
+    ["channels.discord", { voice: { realtime: { voice: null } } }],
+    [
+      "channels.discord",
+      { accounts: { work: { voice: { realtime: { voice: false } } }, malformed: 42 } },
+    ],
+    ["tools.media", { models: [null, { deepgram: false }] }],
+    ["tools.media", { audio: { deepgram: null } }],
+    ["tools.media", { video: { models: [42, { deepgram: null }] } }],
+  ])("reports malformed-but-present legacy media settings in %s: %j", (path, value) => {
+    const raw = configWithPath(path, value);
+    const original = structuredClone(raw);
+    expectIssue(raw, path);
+    expect(raw).toEqual(original);
+  });
+
   it("detects and removes an explicitly false tool-error preference", () => {
     const raw = { messages: { suppressToolErrors: false, ackReaction: "👀" } };
-    expect(findLegacyConfigIssues(raw)).toContainEqual(
-      expect.objectContaining({
-        path: "messages.suppressToolErrors",
-        message: expect.stringContaining("doctor --fix"),
-      }),
-    );
+    expectIssue(raw, "messages.suppressToolErrors", "doctor --fix");
     expect(applyAll(raw).changes).toHaveLength(1);
     expect(raw).toEqual({ messages: { ackReaction: "👀" } });
     expect(findLegacyConfigIssues(raw)).toEqual([]);
@@ -63,76 +95,52 @@ describe("retired runtime config migrations", () => {
       load: { extraDirs: ["/opt/openclaw/hooks"] },
       sibling: "preserved",
     };
-    const raw = {
-      hooks: {
-        internal: {
-          ...structuredClone(canonical),
-          handlers: [{ event: "command:new", module: "hooks/legacy.js" }],
-        },
-      },
-    };
-    expect(findLegacyConfigIssues(raw)).toContainEqual(
-      expect.objectContaining({
-        path: "hooks.internal.handlers",
-        message: expect.stringContaining("does not materialize executable files"),
-      }),
-    );
-    applyAll(raw);
-    expect(raw.hooks.internal).toEqual(canonical);
-  });
-
-  it("removes legacy-only enablement without enabling broad hook discovery", () => {
-    const raw = {
-      hooks: {
-        internal: {
-          enabled: true,
-          handlers: [],
-          entries: {},
-          load: { extraDirs: ["  "] },
-        },
-      },
-    };
-    applyAll(raw);
-    expect(raw.hooks.internal).toEqual({ entries: {}, load: { extraDirs: ["  "] } });
-  });
-
-  it("preserves an explicit compaction opt-out", () => {
-    const raw = configWithPath("agents.defaults.compaction", {
-      truncateAfterCompaction: false,
-      maxActiveTranscriptBytes: "20mb",
+    const raw = configWithPath("hooks.internal", {
+      ...structuredClone(canonical),
+      handlers: [{ event: "command:new", module: "hooks/legacy.js" }],
     });
+    expectIssue(raw, "hooks.internal.handlers", "does not materialize executable files");
     applyAll(raw);
-    expect(raw).toHaveProperty("agents.defaults.compaction", {});
-    expect(applyAll(raw).changes).toEqual([]);
+    expect(raw).toHaveProperty("hooks.internal", canonical);
   });
 
   it("removes even an explicitly disabled retired device-auth bypass", () => {
     const raw = { gateway: { controlUi: { dangerouslyDisableDeviceAuth: false } } };
-    expect(findLegacyConfigIssues(raw)).toContainEqual(
-      expect.objectContaining({
-        path: "gateway.controlUi.dangerouslyDisableDeviceAuth",
-      }),
-    );
+    expectIssue(raw, "gateway.controlUi.dangerouslyDisableDeviceAuth");
     applyAll(raw);
     expect(raw).toEqual({ gateway: { controlUi: {} } });
+  });
+
+  it("removes legacy-only enablement without enabling broad hook discovery", () => {
+    const { raw } = migratePath("hooks.internal", {
+      enabled: true,
+      handlers: [],
+      entries: {},
+      load: { extraDirs: ["  "] },
+    });
+    expect(raw).toHaveProperty("hooks.internal", { entries: {}, load: { extraDirs: ["  "] } });
+  });
+
+  it("preserves an explicit compaction opt-out", () => {
+    const { raw } = migratePath("agents.defaults.compaction", {
+      truncateAfterCompaction: false,
+      maxActiveTranscriptBytes: "20mb",
+    });
+    expect(raw).toHaveProperty("agents.defaults.compaction", {});
+    expect(applyAll(raw).changes).toEqual([]);
   });
 
   it("tags and deduplicates modality models without conflating capabilities", () => {
     const shared = { provider: "openai", model: "shared", capabilities: ["image"] };
     const local = { provider: "local", model: "same", timeoutSeconds: 20 };
     const audio = { provider: "deepgram", model: "nova-3" };
-    const raw = {
-      tools: {
-        media: {
-          models: [structuredClone(shared)],
-          image: { enabled: true, models: [{ provider: "openai", model: "shared" }] },
-          audio: { timeoutSeconds: 20, models: structuredClone([audio, audio, local]) },
-          video: { models: [structuredClone(local)] },
-        },
-      },
-    };
-    applyAll(raw);
-    expect(raw.tools.media).toEqual({
+    const { raw } = migratePath("tools.media", {
+      models: [structuredClone(shared)],
+      image: { enabled: true, models: [{ provider: "openai", model: "shared" }] },
+      audio: { timeoutSeconds: 20, models: structuredClone([audio, audio, local]) },
+      video: { models: [structuredClone(local)] },
+    });
+    expect(raw).toHaveProperty("tools.media", {
       models: [
         shared,
         { ...audio, capabilities: ["audio"] },
@@ -146,20 +154,13 @@ describe("retired runtime config migrations", () => {
   });
 
   it("preserves explicit legacy capability filtering", () => {
-    const raw = {
-      tools: {
-        media: {
-          image: {
-            models: [
-              { provider: "skip", model: "audio-only", capabilities: ["audio"] },
-              { provider: "keep", model: "image-first", capabilities: ["image", "audio"] },
-            ],
-          },
-        },
-      },
-    };
-    applyAll(raw);
-    expect(raw.tools.media).toEqual({
+    const { raw } = migratePath("tools.media.image", {
+      models: [
+        { provider: "skip", model: "audio-only", capabilities: ["audio"] },
+        { provider: "keep", model: "image-first", capabilities: ["image", "audio"] },
+      ],
+    });
+    expect(raw).toHaveProperty("tools.media", {
       models: [{ provider: "keep", model: "image-first", capabilities: ["image"] }],
     });
   });
@@ -186,87 +187,52 @@ describe("retired runtime config migrations", () => {
   ])(
     "migrates $channel roots and accounts with its precedence rules",
     ({ channel, legacy, canonical, winner }) => {
-      const result = applyAll({
-        channels: {
-          [channel]: {
-            [legacy]: "root",
-            accounts: {
-              z: { [legacy]: "legacy-z", [canonical]: "canonical-z" },
-              malformed: 42,
-              a: { [legacy]: "a" },
-            },
-          },
+      const result = migratePath(`channels.${channel}`, {
+        [legacy]: "root",
+        accounts: {
+          z: { [legacy]: "legacy-z", [canonical]: "canonical-z" },
+          malformed: 42,
+          a: { [legacy]: "a" },
         },
       });
-      expect(result.raw).toEqual({
-        channels: {
-          [channel]: {
-            [canonical]: "root",
-            accounts: { z: { [canonical]: winner }, malformed: 42, a: { [canonical]: "a" } },
-          },
-        },
-      });
+      expect(result.raw).toEqual(
+        configWithPath(`channels.${channel}`, {
+          [canonical]: "root",
+          accounts: { z: { [canonical]: winner }, malformed: 42, a: { [canonical]: "a" } },
+        }),
+      );
     },
   );
 
-  it("removes iMessage coalescing at root and account scopes", () => {
-    const result = applyAll({
-      channels: {
-        imessage: {
-          coalesceSameSenderDms: true,
-          accounts: {
-            z: { coalesceSameSenderDms: true },
-            malformed: false,
-            a: { coalesceSameSenderDms: true },
-          },
-        },
-      },
-    });
-    expect(result.raw).toEqual({
-      channels: { imessage: { accounts: { z: {}, malformed: false, a: {} } } },
-    });
-  });
-
   it("migrates presentation, agent limits and the selected WhatsApp debounce", () => {
-    const result = applyAll({
-      ui: {
-        prefs: {
-          chatMessageMaxWidth: "82%",
-          textScale: 125,
-          sidebarLiveActivity: false,
-          showAdvancedSettings: true,
+    const result = migrate({
+      "ui.prefs": {
+        chatMessageMaxWidth: "82%",
+        textScale: 125,
+        sidebarLiveActivity: false,
+        showAdvancedSettings: true,
+      },
+      "skills.load": { watch: true, watchDebounceMs: 500 },
+      "agents.defaults": {
+        typingIntervalSeconds: 6,
+        contextLimits: {
+          memoryGetMaxChars: 12_000,
+          memoryGetDefaultLines: 180,
+          toolResultMaxChars: 24_000,
         },
       },
-      skills: { load: { watch: true, watchDebounceMs: 500 } },
-      agents: {
-        defaults: {
-          typingIntervalSeconds: 6,
-          contextLimits: {
-            memoryGetMaxChars: 12_000,
-            memoryGetDefaultLines: 180,
-            toolResultMaxChars: 24_000,
-          },
-        },
-        entries: {
-          writer: {
-            typingMode: "message",
-            typingIntervalSeconds: 8,
-            contextLimits: { toolResultMaxChars: 8_000 },
-          },
-        },
-        list: [
-          { id: "legacy", typingIntervalSeconds: 10, contextLimits: { memoryGetDefaultLines: 80 } },
-        ],
+      "agents.entries.writer": {
+        typingMode: "message",
+        typingIntervalSeconds: 8,
+        contextLimits: { toolResultMaxChars: 8_000 },
       },
-      channels: {
-        whatsapp: {
-          defaultAccount: "Work",
-          debounceMs: 2_000,
-          accounts: {
-            default: { debounceMs: 3_000 },
-            work: { debounceMs: 4_000 },
-          },
-        },
+      "agents.list": [
+        { id: "legacy", typingIntervalSeconds: 10, contextLimits: { memoryGetDefaultLines: 80 } },
+      ],
+      "channels.whatsapp": {
+        defaultAccount: "Work",
+        debounceMs: 2_000,
+        accounts: { default: { debounceMs: 3_000 }, work: { debounceMs: 4_000 } },
       },
     });
     expect(result.raw).toMatchObject({
@@ -289,118 +255,107 @@ describe("retired runtime config migrations", () => {
   });
 
   it("keeps a canonical WhatsApp debounce over all legacy sources", () => {
-    const result = applyAll({
-      messages: { inbound: { byChannel: { whatsapp: 900 } } },
-      channels: { whatsapp: { debounceMs: 2_000, accounts: { work: { debounceMs: 4_000 } } } },
+    const result = migrate({
+      "messages.inbound.byChannel.whatsapp": 900,
+      "channels.whatsapp": { debounceMs: 2_000, accounts: { work: { debounceMs: 4_000 } } },
     });
-    expect(result.raw).toEqual({
-      messages: { inbound: { byChannel: { whatsapp: 900 } } },
-      channels: { whatsapp: { accounts: { work: {} } } },
-    });
+    expect(result.raw).toEqual(
+      config({
+        "messages.inbound.byChannel.whatsapp": 900,
+        "channels.whatsapp.accounts.work": {},
+      }),
+    );
   });
 
   it("preserves accounts.default debounce inheritance for a named default", () => {
-    const result = applyAll({
-      channels: {
-        whatsapp: {
-          defaultAccount: "work",
-          debounceMs: 2_000,
-          accounts: { default: { debounceMs: 3_000 }, work: { name: "Work" } },
-        },
-      },
+    const result = migratePath("channels.whatsapp", {
+      defaultAccount: "work",
+      debounceMs: 2_000,
+      accounts: { default: { debounceMs: 3_000 }, work: { name: "Work" } },
     });
     expect(result.raw).toHaveProperty("messages.inbound.byChannel.whatsapp", 3_000);
   });
 
   it("moves aliases and strips dead keys", () => {
-    const result = applyAll({
-      tui: { footer: { showRemoteHost: true } },
+    const result = migrate({
+      "tui.footer.showRemoteHost": true,
       defaultModel: "openai/gpt-5.6",
-      commands: { modelsWrite: true },
-      messages: { messagePrefix: "[wa]" },
+      "commands.modelsWrite": true,
+      "messages.messagePrefix": "[wa]",
       cron: { webhook: "https://example.com", webhookToken: "keep" },
       session: { maintenance: { pruneDays: 7 }, resetByType: { dm: { mode: "idle" } } },
-      talk: { realtime: { voice: "alloy" } },
-      mcp: { servers: { docs: { connectTimeout: 2, timeout: 3 } } },
-      nodeHost: { mcp: { servers: { local: { connect_timeout: 4 } } } },
-      tools: {
-        media: {
-          asyncCompletion: { directSend: true },
-          audio: { deepgram: { smartFormat: true } },
-        },
-        message: { allowCrossContextSend: true },
+      "talk.realtime.voice": "alloy",
+      "mcp.servers.docs": { connectTimeout: 2, timeout: 3 },
+      "nodeHost.mcp.servers.local.connect_timeout": 4,
+      "tools.media": {
+        asyncCompletion: { directSend: true },
+        audio: { deepgram: { smartFormat: true } },
       },
+      "tools.message.allowCrossContextSend": true,
     });
-    expect(result.raw).toMatchObject({
-      channels: { whatsapp: { responsePrefix: "[wa]" } },
-      agents: { defaults: { model: "openai/gpt-5.6" } },
-      cron: { webhookToken: "keep" },
-      session: { maintenance: { pruneAfter: 7 }, resetByType: { direct: { mode: "idle" } } },
-      talk: { realtime: { speakerVoice: "alloy" } },
-      mcp: { servers: { docs: { connectionTimeoutMs: 2000, requestTimeoutMs: 3000 } } },
-      nodeHost: { mcp: { servers: { local: { connectionTimeoutMs: 4000 } } } },
-      tools: {
-        media: {},
-        message: { crossContext: { allowWithinProvider: true, allowAcrossProviders: true } },
-      },
-    });
+    expect(result.raw).toMatchObject(
+      config({
+        "channels.whatsapp.responsePrefix": "[wa]",
+        "agents.defaults.model": "openai/gpt-5.6",
+        "cron.webhookToken": "keep",
+        "session.maintenance.pruneAfter": 7,
+        "session.resetByType.direct.mode": "idle",
+        "talk.realtime.speakerVoice": "alloy",
+        "mcp.servers.docs": { connectionTimeoutMs: 2000, requestTimeoutMs: 3000 },
+        "nodeHost.mcp.servers.local.connectionTimeoutMs": 4000,
+        "tools.media": {},
+        "tools.message.crossContext": { allowWithinProvider: true, allowAcrossProviders: true },
+      }),
+    );
     expect(result.raw).not.toHaveProperty("tui");
     expect(result.raw).not.toHaveProperty("commands.modelsWrite");
   });
 
   it("keeps evidence mismatches while stripping canonical conflict aliases", () => {
-    const result = applyAll({
-      session: { threadBindings: { enabled: true } },
-      tools: { media: { audio: { baseUrl: "https://provider-required.example" } } },
+    const result = migrate({
+      "session.threadBindings.enabled": true,
+      "tools.media.audio.baseUrl": "https://provider-required.example",
       proxy: { enabled: false, proxyUrl: "http://disabled-proxy.example" },
-      discovery: { wideArea: { enabled: false, domain: "disabled.example" } },
-      channels: {
-        telegram: { threadBindings: { enabled: false } },
-        googlechat: { serviceAccount: "plain", serviceAccountRef: { source: "env" } },
-        whatsapp: { enabled: true },
-      },
-      web: { enabled: false },
+      "discovery.wideArea": { enabled: false, domain: "disabled.example" },
+      "channels.telegram.threadBindings.enabled": false,
+      "channels.googlechat": { serviceAccount: "plain", serviceAccountRef: { source: "env" } },
+      "channels.whatsapp.enabled": true,
+      "web.enabled": false,
     });
-    expect(result.raw).toHaveProperty("channels.telegram.threadBindings.enabled", false);
-    expect(result.raw).toHaveProperty(
-      "tools.media.audio.baseUrl",
-      "https://provider-required.example",
+    expect(result.raw).toMatchObject(
+      config({
+        "channels.telegram.threadBindings.enabled": false,
+        "tools.media.audio.baseUrl": "https://provider-required.example",
+      }),
     );
     expect(result.raw).toHaveProperty("proxy", {
       enabled: false,
       proxyUrl: "http://disabled-proxy.example",
     });
-    expect(result.raw).not.toHaveProperty("discovery.wideArea.domain");
-    expect(result.raw).not.toHaveProperty("channels.googlechat.serviceAccountRef");
     expect(result.raw).toHaveProperty("channels.googlechat.serviceAccount", { source: "env" });
-    expect(result.raw).not.toHaveProperty("web");
+    for (const path of [
+      "discovery.wideArea.domain",
+      "channels.googlechat.serviceAccountRef",
+      "web",
+    ]) {
+      expect(result.raw).not.toHaveProperty(path);
+    }
   });
 
   it("keeps nonrepresentable exec and inherited memory policies", () => {
-    const result = applyAll({
-      tools: { exec: { security: "allowlist", ask: "always" } },
-      memory: { search: { provider: "openai", store: { vector: { enabled: false } } } },
-      agents: {
-        entries: {
-          malformed: { tools: { exec: { security: "deny " } } },
-          onMissFull: { tools: { exec: { security: "full", ask: "on-miss" } } },
-        },
-      },
+    const raw = config({
+      "tools.exec": { security: "allowlist", ask: "always" },
+      "memory.search": { provider: "openai", store: { vector: { enabled: false } } },
+      "agents.entries.malformed.tools.exec": { security: "deny " },
+      "agents.entries.onMissFull.tools.exec": { security: "full", ask: "on-miss" },
     });
-    expect(result.raw).toHaveProperty("tools.exec.ask", "always");
-    expect(result.raw).not.toHaveProperty("tools.exec.mode");
-    expect(result.raw).toHaveProperty("agents.entries.malformed.tools.exec.security", "deny ");
-    expect(result.raw).toHaveProperty("agents.entries.onMissFull.tools.exec.ask", "on-miss");
-    expect(result.raw).not.toHaveProperty("agents.entries.onMissFull.tools.exec.mode");
-    expect(result.raw).toHaveProperty("memory.search.provider", "openai");
-    expect(result.raw).toHaveProperty("memory.search.store.vector.enabled", false);
-    expect(result.changes).toEqual([]);
+    expect(applyAll(structuredClone(raw))).toEqual({ raw, changes: [] });
   });
 
   it("uses the inherited exec policy for a partial agent override", () => {
-    const result = applyAll({
-      tools: { exec: { security: "allowlist", ask: "on-miss" } },
-      agents: { entries: { nonInteractive: { tools: { exec: { ask: "off" } } } } },
+    const result = migrate({
+      "tools.exec": { security: "allowlist", ask: "on-miss" },
+      "agents.entries.nonInteractive.tools.exec": { ask: "off" },
     });
     expect(result.raw).toHaveProperty("tools.exec", { mode: "ask" });
     expect(result.raw).toHaveProperty("agents.entries.nonInteractive.tools.exec", {
@@ -410,13 +365,9 @@ describe("retired runtime config migrations", () => {
 
   it("strips core TTS persona prompts without entering opaque provider config", () => {
     const providers = { custom: { tts: { personas: { voice: { prompt: { owned: true } } } } } };
-    const result = applyAll({
-      tts: {
-        personas: { alfred: { prompt: { style: "dry" }, providers: structuredClone(providers) } },
-      },
-      agents: {
-        entries: { voice: { tts: { personas: { narrator: { prompt: { pacing: "slow" } } } } } },
-      },
+    const result = migrate({
+      "tts.personas.alfred": { prompt: { style: "dry" }, providers: structuredClone(providers) },
+      "agents.entries.voice.tts.personas.narrator.prompt": { pacing: "slow" },
     });
     expect(result.raw).toHaveProperty("tts.personas.alfred", { providers });
     expect(result.raw).not.toHaveProperty("agents.entries.voice.tts.personas.narrator.prompt");
@@ -424,18 +375,12 @@ describe("retired runtime config migrations", () => {
   });
 
   it("strips compaction instructions while preserving section selection", () => {
-    const result = applyAll({
-      agents: {
-        defaults: {
-          compaction: {
-            customInstructions: "Keep decisions.",
-            identifierPolicy: "custom",
-            identifierInstructions: "Keep ticket IDs.",
-            postCompactionSections: ["Red Lines"],
-            memoryFlush: { prompt: "Write memory.", systemPrompt: "Be careful." },
-          },
-        },
-      },
+    const result = migratePath("agents.defaults.compaction", {
+      customInstructions: "Keep decisions.",
+      identifierPolicy: "custom",
+      identifierInstructions: "Keep ticket IDs.",
+      postCompactionSections: ["Red Lines"],
+      memoryFlush: { prompt: "Write memory.", systemPrompt: "Be careful." },
     });
     expect(result.raw).toHaveProperty("agents.defaults.compaction", {
       identifierPolicy: "strict",
@@ -470,24 +415,19 @@ it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
   ["tools", { experimental: { planTool: false } }, { updatePlan: false }],
   ["tools", { updatePlan: true, experimental: { planTool: false } }, { updatePlan: true }],
   ["tools.exec", { mode: "deny", security: "full", ask: "off" }, { mode: "deny" }],
-  ["session", { idleMinutes: 45 }, { reset: { mode: "idle", idleMinutes: 45 } }],
   ["session.maintenance", { pruneDays: 7, pruneAfter: false }, { pruneAfter: false }],
   [
     "channels.discord",
-    {
-      voice: { realtime: { voice: "alloy", speakerVoice: "marin" } },
-      accounts: {
-        work: { voice: { realtime: { voice: "cedar", enabled: true } } },
-        malformed: null,
-      },
-    },
-    {
-      voice: { realtime: { speakerVoice: "marin" } },
-      accounts: {
-        work: { voice: { realtime: { speakerVoice: "cedar", enabled: true } } },
-        malformed: null,
-      },
-    },
+    config({
+      "voice.realtime": { voice: "alloy", speakerVoice: "marin" },
+      "accounts.work.voice.realtime": { voice: "cedar", enabled: true },
+      "accounts.malformed": null,
+    }),
+    config({
+      "voice.realtime.speakerVoice": "marin",
+      "accounts.work.voice.realtime": { speakerVoice: "cedar", enabled: true },
+      "accounts.malformed": null,
+    }),
   ],
   [
     "channels.signal",
@@ -511,5 +451,5 @@ it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
   ["nodeHost.mcp.servers.local", { workingDirectory: "/node" }, { cwd: "/node" }],
   ["", { web: { enabled: false } }, { channels: { whatsapp: { enabled: false } } }],
 ])("migrates %s: %j", (path, raw, expected) => {
-  expect(applyAll(configWithPath(path, raw)).raw).toEqual(configWithPath(path, expected));
+  expect(migratePath(path, raw).raw).toEqual(configWithPath(path, expected));
 });

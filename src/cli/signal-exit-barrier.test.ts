@@ -23,8 +23,8 @@ it("retains an exclusive process exit owner until its exact release", async () =
   });
   try {
     expect(() => registerSignalExitOwner(other)).toThrow("already registered");
-    exitAfterSignalExitBarriers(7);
-    expect(owner).toHaveBeenCalledExactlyOnceWith(7);
+    exitAfterSignalExitBarriers(7, "unhandled rejection");
+    expect(owner).toHaveBeenCalledExactlyOnceWith(7, "unhandled rejection");
     expect(other).not.toHaveBeenCalled();
     expect(exit).not.toHaveBeenCalled();
     release();
@@ -32,7 +32,7 @@ it("retains an exclusive process exit owner until its exact release", async () =
     try {
       release();
       exitAfterSignalExitBarriers(9);
-      expect(other).toHaveBeenCalledExactlyOnceWith(9);
+      expect(other).toHaveBeenCalledExactlyOnceWith(9, undefined);
       expect(exit).not.toHaveBeenCalled();
     } finally {
       releaseOther();
@@ -41,7 +41,7 @@ it("retains an exclusive process exit owner until its exact release", async () =
     try {
       release();
       exitAfterSignalExitBarriers(11);
-      expect(owner).toHaveBeenLastCalledWith(11);
+      expect(owner).toHaveBeenLastCalledWith(11, undefined);
       expect(exit).not.toHaveBeenCalled();
     } finally {
       releaseSame();

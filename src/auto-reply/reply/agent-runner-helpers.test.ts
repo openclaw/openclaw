@@ -1,23 +1,7 @@
 // Tests agent runner helper decisions for payload and runtime preparation.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../types.js";
 import type { TypingSignaler } from "./typing-mode.js";
-
-const hoisted = vi.hoisted(() => {
-  const loadSessionEntryMock = vi.fn();
-  return { loadSessionEntryMock };
-});
-
-vi.mock("../../config/sessions/session-accessor.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
-    "../../config/sessions/session-accessor.js",
-  );
-  return {
-    ...actual,
-    loadSessionEntry: (...args: unknown[]) => hoisted.loadSessionEntryMock(...args),
-    loadSessionEntryReadOnly: (...args: unknown[]) => hoisted.loadSessionEntryMock(...args),
-  };
-});
 
 const {
   createShouldEmitToolOutput,
@@ -27,11 +11,6 @@ const {
 } = await import("./agent-runner-helpers.js");
 
 describe("agent runner helpers", () => {
-  beforeEach(() => {
-    vi.useRealTimers();
-    hoisted.loadSessionEntryMock.mockReset();
-  });
-
   it("detects audio payloads from mediaUrl/mediaUrls", () => {
     expect(isAudioPayload({ mediaUrl: "https://example.test/audio.mp3" })).toBe(true);
     expect(isAudioPayload({ mediaUrls: ["https://example.test/video.mp4"] })).toBe(false);
@@ -45,25 +24,21 @@ describe("agent runner helpers", () => {
     expect(createShouldEmitToolOutput({ resolvedVerboseLevel: "full" })()).toBe(true);
   });
 
-  it("falls back when store read fails or session value is invalid", () => {
-    hoisted.loadSessionEntryMock.mockImplementation(() => {
-      throw new Error("boom");
-    });
-    const fallbackOn = createShouldEmitToolResult({
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/store.json",
-      resolvedVerboseLevel: "on",
-    });
-    expect(fallbackOn()).toBe(true);
-
-    hoisted.loadSessionEntryMock.mockClear();
-    hoisted.loadSessionEntryMock.mockReturnValue({ verboseLevel: "weird" });
-    const fallbackFull = createShouldEmitToolOutput({
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/store.json",
-      resolvedVerboseLevel: "full",
-    });
-    expect(fallbackFull()).toBe(true);
+  it("uses the turn-owned preference while keeping explicit overrides fixed", () => {
+    let level = "off";
+    const params = { resolvedVerboseLevel: "on" as const, getVerboseLevel: () => level };
+    const results = createShouldEmitToolResult(params);
+    const output = createShouldEmitToolOutput(params);
+    const explicit = createShouldEmitToolOutput({ ...params, verboseLevelOverride: "off" });
+    expect(results()).toBe(false);
+    expect(output()).toBe(false);
+    level = "full";
+    expect(results()).toBe(true);
+    expect(output()).toBe(true);
+    expect(explicit()).toBe(false);
+    level = "invalid";
+    expect(results()).toBe(true);
+    expect(output()).toBe(false);
   });
 
   it("signals typing only when any payload has text or media", async () => {

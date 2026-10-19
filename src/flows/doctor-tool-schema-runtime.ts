@@ -199,11 +199,13 @@ export async function collectRuntimeToolSchemaFindings(
   ]);
   const cfg = captureRuntimeConfig(sourceConfig);
   const env = options.env ?? process.env;
+  await using ownedMetadataScope = options.runWithPluginMetadataSnapshot
+    ? undefined
+    : (
+        await import("../commands/doctor/shared/plugin-metadata-snapshot-scope.js")
+      ).createDoctorPluginMetadataSnapshotScope({ env });
   const runWithPluginMetadataSnapshot =
-    options.runWithPluginMetadataSnapshot ??
-    (
-      await import("../commands/doctor/shared/plugin-metadata-snapshot-scope.js")
-    ).createDoctorPluginMetadataSnapshotScope({ env }).run;
+    options.runWithPluginMetadataSnapshot ?? ownedMetadataScope!.run;
   const { frames, findings } = await prepareDoctorToolSchemaFrames(cfg, {
     ...options,
     env,

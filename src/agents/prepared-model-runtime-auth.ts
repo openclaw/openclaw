@@ -158,6 +158,14 @@ export function getPreparedModelRuntimeAuthLabels(snapshot: object): ModelCatalo
   return labels;
 }
 
+// Auth bindings can outlive publication; do not retain the catalog access scope.
+export function createPreparedModelCatalogUsageReader(
+  isCurrent: () => boolean,
+  readUsage: (store: AuthProfileStore) => AuthProfileStore,
+) {
+  return (store: AuthProfileStore) => (isCurrent() ? readUsage(store) : store);
+}
+
 export function setPreparedModelFullCatalogAuth(
   snapshot: object,
   auth: PreparedModelCatalogAuth,

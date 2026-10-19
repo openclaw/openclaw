@@ -1,10 +1,8 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { CallToolRequestSchema, CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { Server } from "@modelcontextprotocol/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -19,12 +17,14 @@ import {
 import { compileStructuredInputForm } from "../agents/harness/structured-input.js";
 import { bindMcpClientElicitation } from "../agents/mcp-client-elicitation.js";
 import { buildMcpClientCapabilities } from "../agents/mcp-metadata.js";
+import { toLegacyMcpCallToolResult } from "../agents/mcp-sdk-compatibility.js";
 import {
   getMcpAppViewLease,
   type McpAppPrepareToolCall,
   type McpFormResourceUpload,
 } from "../agents/mcp-ui-resource.js";
 import { testing as viewTesting } from "../agents/mcp-ui-resource.test-support.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { QuestionManager } from "./question-manager.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
@@ -56,8 +56,42 @@ vi.mock("./question-session-access.js", () => ({
     return consume([undefined]);
   },
 }));
-vi.mock("./server-methods/sessions-files.js", () => ({
+vi.mock("./server-methods/sessions-files.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-methods/sessions-files.js")>()),
   resolveLocalSessionWorkspaceRoot: () => state.root,
+  withSessionFileRoot: async (
+    params: { sessionKey: string; agentId?: string },
+    cfg: OpenClawConfig,
+    consume: (
+      loaded: {
+        canonicalKey: string;
+        agentId: string;
+        storePath: string;
+        cfg: OpenClawConfig;
+        entry: { sessionId: string; updatedAt: number };
+      },
+      assertCurrent: () => void,
+    ) => Promise<unknown>,
+  ) =>
+    consume(
+      {
+        canonicalKey: params.sessionKey,
+        agentId: params.agentId ?? "main",
+        storePath: state.root,
+        cfg,
+        entry: { sessionId: "session-1", updatedAt: 0 },
+      },
+      () => {},
+    ),
+}));
+vi.mock("../config/sessions/session-entry-read-facts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-entry-read-facts.js")>()),
+  readRetainedSessionEntryFacts: (_database: unknown, request: { sessionKeys: string[] }) => ({
+    entries: request.sessionKeys.map((sessionKey) => ({
+      sessionKey,
+      entry: { sessionId: "session-1", updatedAt: 0 },
+    })),
+  }),
 }));
 vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
   peekSessionMcpRuntime: () => undefined,
@@ -368,21 +402,21 @@ describe("registered MCP form resource route", () => {
     options.context.getGatewayMethodRegistry = () => registry;
     const client = new Client(
       { name: "form-host", version: "1" },
-      { capabilities: buildMcpClientCapabilities(true) },
+      { capabilities: buildMcpClientCapabilities(true), versionNegotiation: { mode: "legacy" } },
     );
     const server = new Server({ name: "origin", version: "1" }, { capabilities: { tools: {} } });
     const call = bindMcpClientElicitation(client);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
     vi.spyOn(f.runtime, "callTool").mockImplementation(async () =>
-      CallToolResultSchema.parse(
+      toLegacyMcpCallToolResult(
         await call(f.controller.signal, () => client.callTool({ name: "pick" })),
       ),
     );
     try {
-      server.setRequestHandler(CallToolRequestSchema, async () => ({
+      server.setRequestHandler("tools/call", async (_request, ctx) => ({
         content: [],
-        structuredContent: await server.request(
+        structuredContent: await ctx.mcpReq.send(
           { method: "openai/elicitation/create", params: f.snapshot },
           z.object({ action: z.string(), content: z.record(z.string(), z.unknown()).optional() }),
         ),

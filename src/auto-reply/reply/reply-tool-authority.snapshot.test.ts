@@ -15,12 +15,20 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { prepareReplyToolAuthority, type ReplyToolAuthorityInput } from "./reply-tool-authority.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 
 const route = { provider: "openai", model: "test-model" };
-const overlay = { senderIsOwner: true, disableTools: false, traceAuthorized: false };
+const overlay = {
+  senderIsOwner: true,
+  senderId: "alice",
+  messageProvider: "telegram",
+  disableTools: false,
+  traceAuthorized: false,
+};
+const authorities: Array<{ close(): void }> = [];
 
-function prepare(config: OpenClawConfig, sessionId: string) {
+async function prepare(config: OpenClawConfig, sessionId: string) {
   let projected: ReplyToolAuthorityInput | undefined;
   const authority = prepareReplyToolAuthority(
     {
@@ -31,6 +39,8 @@ function prepare(config: OpenClawConfig, sessionId: string) {
         sessionFile: "/tmp/synthetic-session.json",
         workspaceDir: "/tmp/synthetic-workspace",
         senderIsOwner: true,
+        senderId: "alice",
+        messageProvider: "telegram",
       },
     },
     (input) => {
@@ -38,17 +48,23 @@ function prepare(config: OpenClawConfig, sessionId: string) {
       return input;
     },
   );
-  const fingerprint = authority.project(overlay, route);
+  authorities.push(authority);
+  const fingerprint = await authority.projectAsync(overlay, route);
   return { authority, fingerprint, config: projected!.run.config! };
 }
 
-afterEach(() => clearRuntimeConfigSnapshot());
+afterEach(() => {
+  for (const authority of authorities.splice(0)) {
+    authority.close();
+  }
+  clearRuntimeConfigSnapshot();
+});
 
-it("shares reply policy across a generation and pins active turns across publication and reset", () => {
+it("shares reply policy across a generation and pins active turns across publication and reset", async () => {
   const config: OpenClawConfig = { tools: { deny: ["exec"] } };
   setRuntimeConfigSnapshot(config);
-  const first = prepare(config, "first");
-  const second = prepare(config, "second");
+  const first = await prepare(config, "first");
+  const second = await prepare(config, "second");
   expect(second.config).toBe(first.config);
   expect(second.config).toBe(captureRuntimeConfig(config));
   expect(Object.isFrozen(first.config.tools?.deny)).toBe(true);
@@ -56,7 +72,7 @@ it("shares reply policy across a generation and pins active turns across publica
 
   config.tools!.deny = ["read"];
   setRuntimeConfigSnapshot(config);
-  const next = prepare(config, "next");
+  const next = await prepare(config, "next");
   expect(next.config).not.toBe(first.config);
   expect(next.fingerprint).not.toBe(first.fingerprint);
   expect(first.authority.project(overlay, route)).toBe(first.fingerprint);
@@ -64,7 +80,7 @@ it("shares reply policy across a generation and pins active turns across publica
 
   clearRuntimeConfigSnapshot();
   setRuntimeConfigSnapshot(config);
-  expect(prepare(config, "after-reset").config).not.toBe(next.config);
+  expect((await prepare(config, "after-reset")).config).not.toBe(next.config);
 });
 
 it.each(["mutable", "captured", "republished", "async-republished"] as const)(
@@ -73,7 +89,7 @@ it.each(["mutable", "captured", "republished", "async-republished"] as const)(
     const policy: OpenClawConfig = { tools: { deny: ["exec"] } };
     const config = input === "captured" ? captureRuntimeConfig(policy) : policy;
     setRuntimeConfigSnapshot(config);
-    const first = prepare(getRuntimeConfigSnapshot()!, "first");
+    const first = await prepare(getRuntimeConfigSnapshot()!, "first");
     const toolConfig = await withPreparedToolConstruction(
       getRuntimeConfigSnapshot()!,
       { env: { HOME: "/tmp/synthetic-home", OPENCLAW_STATE_DIR: "/tmp/synthetic-state" } },
@@ -95,7 +111,7 @@ it.each(["mutable", "captured", "republished", "async-republished"] as const)(
         sourceConfig: source,
       }),
     ).toBe(true);
-    const next = prepare(getRuntimeConfigSnapshot()!, "next");
+    const next = await prepare(getRuntimeConfigSnapshot()!, "next");
     expect(next.config).not.toBe(first.config);
     expect(getConfigResolutionFacts(next.config)).toBe(facts);
     expect(getConfigResolutionFacts(first.config)).toBeNull();
@@ -103,12 +119,12 @@ it.each(["mutable", "captured", "republished", "async-republished"] as const)(
   },
 );
 
-it("isolates unpublished scoped configs without sharing later caller edits", () => {
+it("isolates unpublished scoped configs without sharing later caller edits", async () => {
   setRuntimeConfigSnapshot({ tools: { deny: ["write"] } });
   const scoped: OpenClawConfig = { tools: { deny: ["exec"] } };
-  const first = prepare(scoped, "first");
+  const first = await prepare(scoped, "first");
   scoped.tools!.deny = ["read"];
-  const next = prepare(scoped, "next");
+  const next = await prepare(scoped, "next");
   expect(first.config.tools?.deny).toEqual(["exec"]);
   expect(next.config.tools?.deny).toEqual(["read"]);
   expect(next.fingerprint).not.toBe(first.fingerprint);

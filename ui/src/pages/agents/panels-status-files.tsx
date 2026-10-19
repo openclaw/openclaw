@@ -6,7 +6,7 @@ import type {
   CronStatus,
 } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
-import { renderCronJobsPagination } from "../../components/cron-jobs-pagination.ts";
+import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
 import {
   SettingsEmpty,
   SettingsRow,
@@ -14,6 +14,7 @@ import {
   SettingsStatus,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import type { AgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "../../lib/channels/index.ts";
@@ -24,10 +25,11 @@ import {
   formatCronState,
   formatNextRun,
 } from "../../lib/presenter.ts";
-import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { AgentPanelAction } from "./panel-ui.tsx";
 import { renderAgentContextSection } from "./panels-overview.tsx";
+
+registerEnglishCatalog(registerSettingsEnglish);
 
 function resolveChannelEntries(snapshot: ChannelsStatusSnapshot | null) {
   if (!snapshot) {
@@ -292,17 +294,13 @@ export function AgentCron(params: {
                 );
               }}
             </For>
-            <LitContent
-              render={() =>
-                renderCronJobsPagination({
-                  jobsShown: params.jobs.length,
-                  jobsTotal: params.jobsTotal,
-                  hasMore: params.jobsHasMore,
-                  loading: params.loading,
-                  loadingMore: params.jobsLoadingMore,
-                  onLoadMore: params.onLoadMore,
-                })
-              }
+            <CronJobsPagination
+              jobsShown={params.jobs.length}
+              jobsTotal={params.jobsTotal}
+              hasMore={params.jobsHasMore}
+              loading={params.loading}
+              loadingMore={params.jobsLoadingMore}
+              onLoadMore={params.onLoadMore}
             />
           </>
         )}

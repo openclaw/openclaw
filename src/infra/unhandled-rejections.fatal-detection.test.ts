@@ -1,6 +1,6 @@
 import process from "node:process";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { waitForCliSignalExit } from "../cli/signal-exit-barrier.js";
+import { registerSignalExitOwner, waitForCliSignalExit } from "../cli/signal-exit-barrier.js";
 
 const restoreRuntimeTerminalStateMock = vi.hoisted(() => vi.fn());
 vi.mock("../runtime.js", () => ({
@@ -79,6 +79,21 @@ describe("process error handlers", () => {
       expect(warnSpy).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    ["ERR_WORKER_OUT_OF_MEMORY", "fatal unhandled rejection"],
+    [undefined, "unhandled rejection"],
+  ] as const)("passes the rejection reason to the process owner for code %s", (code, reason) => {
+    const owner = vi.fn();
+    const release = registerSignalExitOwner(owner);
+    try {
+      emitUnhandled(Object.assign(new Error("expected failure"), { code }));
+      expect(owner).toHaveBeenCalledExactlyOnceWith(1, reason);
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      release();
+    }
+  });
 
   it.each([
     Object.assign(new TypeError("request failed"), { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } }),

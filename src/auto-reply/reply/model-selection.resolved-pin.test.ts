@@ -1,6 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -12,23 +11,30 @@ import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { createModelSelectionState } from "./model-selection.js";
 
+// mock-isolation: Literal model identity cases use an empty store without discovering host accounts.
 vi.mock("../../agents/auth-profiles.runtime.js", () => ({
-  ensureAuthProfileStore: () => ({ version: 1, profiles: {} }),
+  ensureAuthProfileStoreAsync: () => ({ version: 1, profiles: {} }),
 }));
 
 afterEach(() => resetPluginRuntimeStateForTest());
 
+function selectModel(params: Partial<Parameters<typeof createModelSelectionState>[0]>) {
+  return createModelSelectionState({
+    agentId: "main",
+    cfg: { plugins: { enabled: false } },
+    agentCfg: undefined,
+    defaultProvider: "custom",
+    defaultModel: "model",
+    provider: "custom",
+    model: "model",
+    hasModelDirective: false,
+    ...params,
+  });
+}
+
 test("keeps thinking defaults separate for distinct literal model IDs", async () => {
   await withStateDirEnv("reply-thinking-identities-", async () => {
-    const selection = await createModelSelectionState({
-      agentId: "main",
-      cfg: { plugins: { enabled: false } },
-      agentCfg: undefined,
-      defaultProvider: "custom",
-      defaultModel: "model",
-      provider: "custom",
-      model: "model",
-      hasModelDirective: false,
+    const selection = await selectModel({
       preparedModelCatalog: {
         routeVariants: [],
         entries: [
@@ -37,71 +43,54 @@ test("keeps thinking defaults separate for distinct literal model IDs", async ()
         ],
       },
     });
-    expect(
-      await selection.resolveDefaultThinkingLevel({
+    const thinking = (model: string) =>
+      selection.resolveDefaultThinkingLevel({
         provider: "custom",
-        model: "model",
+        model,
         agentRuntime: "openclaw",
-      }),
-    ).toBe("off");
-    expect(
-      await selection.resolveDefaultThinkingLevel({
-        provider: "custom",
-        model: "custom/model",
-        agentRuntime: "openclaw",
-      }),
-    ).toBe("medium");
+      });
+    expect(await thinking("model")).toBe("off");
+    expect(await thinking("custom/model")).toBe("medium");
   });
 });
 
-test.each(["origin", "notice"])(
-  "resets a heartbeat fallback whose %s names another literal model",
-  async (source) => {
-    await withStateDirEnv("reply-heartbeat-origin-", async () => {
-      const entry: SessionEntry = {
-        sessionId: "heartbeat",
-        updatedAt: 1,
-        providerOverride: "custom",
-        modelOverride: "fallback",
-        modelOverrideSource: "auto",
-        modelOverrideRouteResolution: "resolved",
-        ...(source === "origin"
-          ? {
-              modelOverrideFallbackOriginProvider: "custom",
-              modelOverrideFallbackOriginModel: "model",
-            }
-          : {
-              fallbackNotice: {
-                kind: "active",
-                selectedModel: "custom/model",
-                activeModel: "custom/fallback",
-              },
-            }),
+test.each(["origin", "notice"])("resets stale heartbeat fallback from %s", async (source) => {
+  await withStateDirEnv("reply-heartbeat-origin-", async () => {
+    const entry: SessionEntry = {
+      sessionId: "heartbeat",
+      updatedAt: 1,
+      providerOverride: "custom",
+      modelOverride: "fallback",
+      modelOverrideSource: "auto",
+      modelOverrideRouteResolution: "resolved",
+    };
+    if (source === "origin") {
+      entry.modelOverrideFallbackOriginProvider = "custom";
+      entry.modelOverrideFallbackOriginModel = "model";
+    } else {
+      entry.fallbackNotice = {
+        kind: "active",
+        selectedModel: "custom/model",
+        activeModel: "custom/fallback",
       };
-      const selection = await createModelSelectionState({
-        agentId: "main",
-        cfg: { plugins: { enabled: false } },
-        agentCfg: undefined,
-        sessionEntry: entry,
-        sessionStore: { heartbeat: entry },
-        sessionKey: "heartbeat",
-        defaultProvider: "custom",
-        defaultModel: "custom/model",
-        provider: "custom",
-        model: "fallback",
-        hasModelDirective: false,
-        isHeartbeat: true,
-      });
-      expect(selection).toMatchObject({
-        provider: "custom",
-        model: "custom/model",
-        resetModelOverride: true,
-        resetModelOverrideReason: "stale",
-      });
-      expect(entry.modelOverride).toBeUndefined();
+    }
+    const selection = await selectModel({
+      sessionEntry: entry,
+      sessionStore: { heartbeat: entry },
+      sessionKey: "heartbeat",
+      defaultModel: "custom/model",
+      model: "fallback",
+      isHeartbeat: true,
     });
-  },
-);
+    expect(selection).toMatchObject({
+      provider: "custom",
+      model: "custom/model",
+      resetModelOverride: true,
+      resetModelOverrideReason: "stale",
+    });
+    expect(entry.modelOverride).toBeUndefined();
+  });
+});
 
 const metadataSnapshot = createPluginMetadataSnapshotFixture({
   plugins: [
@@ -115,10 +104,7 @@ const metadataSnapshot = createPluginMetadataSnapshotFixture({
   ],
 });
 
-type SelectionCase = {
-  name: string;
-  pin: string;
-  expected: string;
+type SelectionOptions = {
   allow?: string[];
   raw?: boolean;
   disallowed?: boolean;
@@ -126,185 +112,113 @@ type SelectionCase = {
   locked?: boolean;
   configuredProvider?: boolean;
   heartbeat?: boolean;
-  operatorRestricted?: boolean;
-  operatorRejected?: boolean;
+  operator?: "stored" | "inherited" | "locked";
 };
 
-test.each<SelectionCase>([
-  { name: "resolved alias-like model", pin: "middle", expected: "middle" },
-  { name: "legacy raw model normalized once", pin: "latest", expected: "middle", raw: true },
-  { name: "explicit heartbeat override", pin: "middle", expected: "heartbeat", heartbeat: true },
-  { name: "role-denied stored pin", pin: "middle", expected: "default", operatorRestricted: true },
-  {
-    name: "role-denied inherited pin",
-    pin: "middle",
-    expected: "default",
-    inherited: true,
-    operatorRestricted: true,
-  },
-  {
-    name: "role-denied locked pin",
-    pin: "middle",
-    expected: "middle",
-    locked: true,
-    operatorRestricted: true,
-    operatorRejected: true,
-  },
-  {
-    name: "resolved prefix rejected by a colliding exact allowlist",
-    pin: "custom/model",
-    expected: "default",
-    allow: ["custom/default", "custom/model"],
-    disallowed: true,
-  },
-  {
-    name: "inherited raw prefix allowed as the plain model",
-    pin: "custom/model",
-    expected: "model",
-    allow: ["custom/default", "custom/model"],
-    raw: true,
-    inherited: true,
-  },
-  {
-    name: "locked resolved prefix outside the exact allowlist",
-    pin: "custom/model",
-    expected: "custom/model",
-    allow: ["custom/default", "custom/model"],
-    locked: true,
-  },
-  {
-    name: "inherited resolved prefix allowed by its namespace wildcard",
-    pin: "custom/model",
-    expected: "custom/model",
-    allow: ["custom/default", "custom/custom/*"],
-    inherited: true,
-  },
-  {
-    name: "resolved prefix allowed by its exact configured ref",
-    pin: "custom/model",
-    expected: "custom/model",
-    allow: ["custom/default", "custom/custom/model"],
-    configuredProvider: true,
-  },
-])("selects $name through the reply owner", async (fixture) => {
+const exactAllow = ["custom/default", "custom/model"];
+const wildcardAllow = ["custom/default", "custom/custom/*"];
+const configuredAllow = ["custom/default", "custom/custom/model"];
+const literal = "custom/model";
+test.each<[string, string, string, SelectionOptions]>([
+  ["resolved alias-like model", "middle", "middle", {}],
+  ["legacy normalization once", "latest", "middle", { raw: true }],
+  ["heartbeat override", "middle", "heartbeat", { heartbeat: true }],
+  ["role-denied stored pin", "middle", "default", { operator: "stored" }],
+  ["role-denied inherited pin", "middle", "default", { operator: "inherited" }],
+  ["role-denied locked pin", "middle", "middle", { operator: "locked" }],
+  ["colliding exact allowlist", literal, "default", { allow: exactAllow, disallowed: true }],
+  ["raw inherited prefix", literal, "model", { allow: exactAllow, raw: true, inherited: true }],
+  ["locked resolved prefix", literal, literal, { allow: exactAllow, locked: true }],
+  ["inherited namespace wildcard", literal, literal, { allow: wildcardAllow, inherited: true }],
+  ["exact configured ref", literal, literal, { allow: configuredAllow, configuredProvider: true }],
+])("selects %s through the reply owner", async (_name, pin, expected, fixture) => {
   await withStateDirEnv("reply-resolved-pin-", async () => {
-    const allow = fixture.allow ?? (fixture.disallowed ? ["custom/default"] : undefined);
+    const allow = fixture.allow;
+    const inherited = fixture.inherited || fixture.operator === "inherited";
     const cfg: OpenClawConfig = {
       plugins: { enabled: false },
       agents: {
         entries: { main: {} },
         defaults: {
           model: "custom/default",
-          ...(allow ? { modelPolicy: { allow } } : {}),
+          modelPolicy: allow ? { allow } : undefined,
         },
       },
-      ...(fixture.configuredProvider
-        ? {
-            models: {
-              providers: {
-                custom: {
-                  api: "openai-responses",
-                  baseUrl: "https://custom.example/v1",
-                  models: [],
-                },
-              },
-            },
-          }
-        : {}),
     };
+    if (fixture.configuredProvider) {
+      cfg.models = {
+        providers: {
+          custom: { api: "openai-responses", baseUrl: "https://custom.example/v1", models: [] },
+        },
+      };
+    }
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry);
-    const provider = "custom";
     const pinnedEntry: SessionEntry = { sessionId: "resolved-pin", updatedAt: 1 };
     applyModelOverrideToSessionEntry({
       entry: pinnedEntry,
-      selection: { provider, model: fixture.pin },
+      selection: { provider: "custom", model: pin },
     });
     if (fixture.raw) {
       delete pinnedEntry.modelOverrideRouteResolution;
     }
-    const entry: SessionEntry = fixture.inherited
-      ? { sessionId: "child", updatedAt: 1 }
-      : pinnedEntry;
-    if (fixture.locked) {
+    const entry: SessionEntry = inherited ? { sessionId: "child", updatedAt: 1 } : pinnedEntry;
+    if (fixture.locked || fixture.operator === "locked") {
       entry.modelSelectionLocked = true;
     }
     const sessionKey = "agent:main:resolved-pin";
     const parentSessionKey = "agent:main:parent-pin";
     const sessionStore = {
       [sessionKey]: entry,
-      ...(fixture.inherited ? { [parentSessionKey]: pinnedEntry } : {}),
+      ...(inherited ? { [parentSessionKey]: pinnedEntry } : {}),
     };
-    const entries = [
-      "default",
-      "model",
-      "custom/model",
-      "customness/model",
-      "team/Reader",
-      "middle",
-      "final",
-      "denied",
-      "cli-model",
-      "plain-model",
-    ].map((id) => ({ provider: "custom", id, name: id }));
-    entries.push({ provider: "custom/team", id: "Reader", name: "Other provider" });
-    const preparedModelCatalog: ModelCatalogSnapshot = {
-      entries,
-      routeVariants: entries,
-      authoritative: true,
-    };
+    const entries = ["default", "model", "custom/model", "middle", "final"].map((id) => ({
+      provider: "custom",
+      id,
+      name: id,
+    }));
     await withPluginRuntimeGenerationScope(
       { metadataSnapshot, pluginRegistry: registry },
       async () => {
-        const pendingSelection = createModelSelectionState({
+        const pendingSelection = selectModel({
           cfg,
-          agentId: "main",
           agentCfg: cfg.agents?.defaults,
           sessionEntry: entry,
           sessionStore,
           sessionKey,
-          parentSessionKey: fixture.inherited ? parentSessionKey : undefined,
-          defaultProvider: "custom",
+          parentSessionKey: inherited ? parentSessionKey : undefined,
           defaultModel: "default",
-          provider: fixture.inherited ? provider : "custom",
-          model: fixture.heartbeat ? "heartbeat" : fixture.inherited ? fixture.pin : "default",
-          hasModelDirective: false,
+          model: fixture.heartbeat ? "heartbeat" : inherited ? pin : "default",
           isHeartbeat: fixture.heartbeat,
           hasResolvedHeartbeatModelOverride: fixture.heartbeat,
-          preparedModelCatalog,
-          ...(fixture.operatorRestricted
-            ? {
-                operatorAuthority: createAdmittedRunOperatorAuthority({
-                  profileId: "limited-operator",
-                  scopes: ["operator.write"],
-                  assertCurrent: () => {},
-                  modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { sourceAgent: "main" } }),
-                }),
-              }
-            : {}),
+          preparedModelCatalog: { entries, routeVariants: entries, authoritative: true },
+          operatorAuthority: fixture.operator
+            ? createAdmittedRunOperatorAuthority({
+                profileId: "limited-operator",
+                scopes: ["operator.write"],
+                assertCurrent: () => {},
+                modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { sourceAgent: "main" } }),
+              })
+            : undefined,
         });
-        if (fixture.operatorRejected) {
+        if (fixture.operator === "locked") {
           await expect(pendingSelection).rejects.toThrow(
             "Your operator role cannot use this model",
           );
-          expect(pinnedEntry.modelOverride).toBe(fixture.pin);
+          expect(pinnedEntry.modelOverride).toBe(pin);
           return;
         }
         const selection = await pendingSelection;
         expect(selection).toMatchObject({
           provider: "custom",
-          model: fixture.expected,
-          resetModelOverride: fixture.disallowed === true && !fixture.inherited,
+          model: expected,
+          resetModelOverride: fixture.disallowed === true && !inherited,
         });
         if (fixture.disallowed) {
           expect(selection.resetModelOverrideReason).toBe("disallowed");
         }
-        if (fixture.disallowed && !fixture.inherited) {
-          expect(entry.modelOverride).toBeUndefined();
-        } else {
-          expect(pinnedEntry.modelOverride).toBe(fixture.pin);
-        }
-        if (fixture.inherited) {
+        expect(pinnedEntry.modelOverride).toBe(fixture.disallowed && !inherited ? undefined : pin);
+        if (inherited) {
           expect(entry.modelOverride).toBeUndefined();
         }
       },

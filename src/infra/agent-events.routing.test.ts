@@ -139,12 +139,12 @@ describe("agent event routing after cancellation", () => {
     const published = captureEvents({ publishedOnly: true });
     registerAgentRunContext(runId, {});
     const stale = reserveAgentTerminalEvent({ runId, lifecycleGeneration: "stale" });
-    stale({ phase: "end" });
+    stale.publish({ phase: "end" });
     emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1 } });
     const reserved = reserveAgentTerminalEvent({ runId });
     clearAgentRunContext(runId);
     registerAgentRunContext(runId, {});
-    reserved({ phase: "end", aborted: true });
+    reserved.publish({ phase: "end", aborted: true });
     emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
     expect(published.map((event) => event.data)).toEqual([
       { phase: "start", startedAt: 1 },

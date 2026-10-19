@@ -27,12 +27,12 @@ it("keeps desktop codec detection lazy without adding boot facade requests", asy
   const root = tempDirs.make("control-ui-isolated-desktop-");
   const desktop = path.join(root, "desktop.js");
   const catalog = fileURLToPath(
-    new URL("../components/app-sidebar-session-catalog-render.ts", import.meta.url),
+    new URL("../components/app-sidebar-session-catalog-render.tsx", import.meta.url),
   );
   const outbox = fileURLToPath(new URL("../lib/chat/outbox-store-projection.ts", import.meta.url));
   // Real manifest entry IDs and payloads above the production group's minimum size.
-  const catalogValue = "catalog-value-".repeat(1500);
-  const outboxValue = "outbox-value-".repeat(1500);
+  const catalogValue = "catalog-value-".repeat(12_000);
+  const outboxValue = "outbox-value-".repeat(12_000);
   const sources = new Map([
     [
       catalog,

@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
@@ -7,7 +7,7 @@ import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-receipt.js";
 
 /** Physical extinction closes unfinished turns, never a result already recorded by the worker. */
 export function settleNodeWorkerActiveTurns(
-  database: DatabaseSync,
+  database: EngineConnection,
   owner: NodeWorkerLaunchReceipt,
   schema = getAdmittedSqliteSchemaFacts(database),
 ): void {

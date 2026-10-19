@@ -606,32 +606,6 @@ export function createBackendRedactPatterns() {
     ),
   ]);
 
-  const ambiguousAssignments = new Set([
-    ENV_ASSIGNMENT_REDACT_PATTERN,
-    ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
-    STRUCTURED_JSON_SECRET_REDACT_PATTERN,
-    AMBIGUOUS_QUOTED_SECRET_FIELD_REDACT_PATTERN,
-    AMBIGUOUS_QUOTED_AUTH_FIELD_REDACT_PATTERN,
-    STANDALONE_ASSIGNMENT_QUOTED_REDACT_PATTERN,
-    STANDALONE_ASSIGNMENT_REDACT_PATTERN,
-    CONFIG_QUOTED_ASSIGNMENT_REDACT_PATTERN,
-    CONFIG_ASSIGNMENT_REDACT_PATTERN,
-    CONFIG_DIRECT_ASSIGNMENT_REDACT_PATTERN,
-    CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_REDACT_PATTERN,
-    CONFIG_NAMESPACED_ASSIGNMENT_REDACT_PATTERN,
-  ]);
-
-  /** Programmatic counterparts of the ambiguous assignment rules: kept out of tool payloads, preserved in source. */
-  const ambiguousMatchers: ReadonlySet<RedactPattern> = new Set([BARE_PASS_ASSIGNMENT_MATCHER]);
-
-  // Tool output commonly contains source code. Keep key-name matching in logs, direct `.env` reads,
-  // and payment JSON; other model-visible text relies on registered and recognizable secret values.
-  const toolPayload: readonly RedactPattern[] = DEFAULT_REDACT_PATTERNS.filter((pattern) =>
-    typeof pattern === "string"
-      ? !ambiguousAssignments.has(pattern)
-      : !ambiguousMatchers.has(pattern),
-  );
-
   return {
     bodySecretKeys,
     credentialHeaderField,
@@ -639,8 +613,5 @@ export function createBackendRedactPatterns() {
     shellReferencePreserving,
     prefilters,
     chunkUnsafe,
-    ambiguousAssignments,
-    ambiguousMatchers,
-    toolPayload,
   };
 }

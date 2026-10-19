@@ -1,4 +1,3 @@
-import type WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
 import { chromium, type Browser, type CDPSession, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withBrowserPage } from "../test-helpers/browser-page.ts";
@@ -11,7 +10,7 @@ import {
 
 const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 
-describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibility", () => {
+describe.runIf(canRunPlaywrightChromium(executablePath))("Shared control accessibility", () => {
   let browser: Browser;
   let server: ControlUiE2eServer;
 
@@ -56,113 +55,13 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibil
     });
   }
 
-  async function withPopover(
-    initialOpen: boolean,
-    run: (page: Page, accessibility: CDPSession) => Promise<void>,
-  ) {
-    await withAccessibility(
-      `
-        const { syncPopoverLabel } = await import(${JSON.stringify(new URL("src/components/web-awesome-popover.ts", server.baseUrl).href)});
-        root.innerHTML = \`<h2 id="heading">Project details</h2>
-          <span id="context">Current</span>
-          <button id="trigger" aria-label="Open choices">Choices<span aria-hidden="true"> decoration</span></button>
-          <wa-popover for="trigger" aria-label="Choose project"><button>Save</button></wa-popover>\`;
-        const popover = root.querySelector("wa-popover");
-        popover.open = ${initialOpen};
-        syncPopoverLabel(popover);
-        await popover.updateComplete;
-        if (!${initialOpen}) {
-          await popover.show();
-        }
-        await popover.popup.updateComplete;
-      `,
-      run,
-    );
-  }
-
-  async function dialogNames(accessibility: CDPSession) {
-    const { nodes } = await accessibility.send("Accessibility.getFullAXTree");
-    return nodes
-      .filter((node) => !node.ignored && node.role?.value === "dialog")
-      .map((node) => node.name?.value ?? "");
-  }
-
-  async function removePopoverTrigger(page: Page) {
-    await page.locator("wa-popover").evaluate(async (element: WaPopover) => {
-      element.for = null;
-      await element.updateComplete;
-    });
-  }
-
-  async function movePopoverToNewTrigger(page: Page) {
-    await page.locator("wa-popover").evaluate(async (element: WaPopover) => {
-      await element.hide();
-      element.remove();
-      element.removeAttribute("aria-label");
-      const host = document.body.appendChild(document.createElement("div"));
-      const root = host.attachShadow({ mode: "open" });
-      root.innerHTML = '<button id="trigger" aria-label="New project choices">Choose</button>';
-      root.append(element);
-      await element.updateComplete;
-      await element.show();
-    });
-  }
-
-  it("names initially open dialogs and removes stale host names", async () => {
-    await withPopover(true, async (page, accessibility) => {
-      expect(await dialogNames(accessibility)).toEqual(["Choose project"]);
-      const popover = page.locator("wa-popover");
-      await popover.evaluate((element) => element.setAttribute("aria-label", "Choose folder"));
-      expect(await dialogNames(accessibility)).toEqual(["Choose folder"]);
-      await popover.evaluate((element) => element.setAttribute("aria-label", "  "));
-      expect(await dialogNames(accessibility)).toEqual(["Open choices"]);
-      await page.locator("#trigger").evaluate((element) => element.removeAttribute("aria-label"));
-      expect(await dialogNames(accessibility)).toEqual(["Choices"]);
-      await removePopoverTrigger(page);
-      expect(await dialogNames(accessibility)).toEqual([""]);
-    });
-  });
-
-  it("keeps referenced headings and triggers current across locale changes", async () => {
-    await withPopover(false, async (page, accessibility) => {
-      const popover = page.locator("wa-popover");
-      await popover.evaluate((element) =>
-        element.setAttribute("aria-labelledby", "context missing heading"),
-      );
-      expect(await dialogNames(accessibility)).toEqual(["Current Project details"]);
-      await page.locator("#heading").evaluate((element) => {
-        element.textContent = "Folder details";
-      });
-      expect(await dialogNames(accessibility)).toEqual(["Current Folder details"]);
-      await popover.evaluate((element) => element.setAttribute("aria-labelledby", "missing"));
-      expect(await dialogNames(accessibility)).toEqual(["Choose project"]);
-      await popover.evaluate((element) => element.removeAttribute("aria-label"));
-      expect(await dialogNames(accessibility)).toEqual(["Open choices"]);
-      await page.locator("#trigger").evaluate((element) => {
-        element.setAttribute("aria-label", "Open folders");
-      });
-      expect(await dialogNames(accessibility)).toEqual(["Open folders"]);
-    });
-  });
-
-  it("rebinds its name after moving to another shadow root", async () => {
-    await withPopover(false, async (page, accessibility) => {
-      await movePopoverToNewTrigger(page);
-      expect(await dialogNames(accessibility)).toEqual(["New project choices"]);
-      await page.locator("wa-popover").evaluate((element) => {
-        element.setAttribute("aria-label", "Renamed choices");
-      });
-      expect(await dialogNames(accessibility)).toEqual(["Renamed choices"]);
-    });
-  });
-
   it("keeps panel actions outside the tablist in the accessibility tree", async () => {
     await withAccessibility(
       `
-        const { render } = await import(${JSON.stringify(new URL(`/@fs${new URL(import.meta.resolve("lit")).pathname}`, server.baseUrl).href)});
-        const { renderPanelTabStrip } = await import(${JSON.stringify(new URL("src/components/panel-tab-strip.ts", server.baseUrl).href)});
+        const { render, createComponent } = await import(${JSON.stringify(new URL(`/@fs${new URL("./web.js", import.meta.resolve("@solidjs/web")).pathname}`, server.baseUrl).href)});
+        const { PanelTabStrip } = await import(${JSON.stringify(new URL("src/components/panel-tab-strip-solid.tsx", server.baseUrl).href)});
         render(
-          renderPanelTabStrip({
+          () => createComponent(PanelTabStrip, {
             tabs: ["first", "second"].map((id) => ({
               id,
               domId: id + "-tab",
@@ -178,8 +77,6 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibil
           }),
           root,
         );
-        await root.querySelector("openclaw-panel-tab-strip").updateComplete;
-        await root.querySelector("wa-tab-group").updateComplete;
       `,
       async (_page, accessibility) => {
         const { nodes } = await accessibility.send("Accessibility.getFullAXTree");

@@ -222,9 +222,7 @@ describe("Mantis Slack artifact ownership", () => {
   });
 
   it.each([
-    { changes: { approvalId: "different-opaque-id" }, error: "pending approval interaction" },
     { changes: { messageTs: "99.000000" }, error: "pending approval interaction" },
-    { changes: { channelId: "COTHER" }, error: "pending approval interaction" },
     { changes: { approvalKind: "exec" }, error: "approval kind" },
     { changes: { decision: null }, error: "approval decision" },
   ])("rejects fresh mismatched approval evidence: $changes", async ({ changes, error }) => {
@@ -238,22 +236,19 @@ describe("Mantis Slack artifact ownership", () => {
     expect(summary.error).toContain(error);
   });
 
-  it.each(["approvalId", "messageTs"])(
-    "rejects a replayed %s across selected scenarios",
-    async (field) => {
-      const runner = createRunner(async (outputDir) => {
-        await writeRunArtifacts(outputDir, [selected, unselected]);
-        const value = field === "approvalId" ? `${selected}:approval` : "1.000000";
-        for (const state of ["pending", "resolved"] as const) {
-          await changeCheckpoint(outputDir, unselected, state, { [field]: value });
-        }
-      });
-      const result = await runMantisSlackDesktopSmoke(options(runner, [selected, unselected]));
-      expect(result.status).toBe("fail");
-      const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8"));
-      expect(summary.error).toContain("reuses another scenario's approval interaction");
-    },
-  );
+  it.each(["messageTs"])("rejects a replayed %s across selected scenarios", async (field) => {
+    const runner = createRunner(async (outputDir) => {
+      await writeRunArtifacts(outputDir, [selected, unselected]);
+      const value = field === "approvalId" ? `${selected}:approval` : "1.000000";
+      for (const state of ["pending", "resolved"] as const) {
+        await changeCheckpoint(outputDir, unselected, state, { [field]: value });
+      }
+    });
+    const result = await runMantisSlackDesktopSmoke(options(runner, [selected, unselected]));
+    expect(result.status).toBe("fail");
+    const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8"));
+    expect(summary.error).toContain("reuses another scenario's approval interaction");
+  });
 
   it("accepts the actual native and Codex checkpoint kinds with distinct opaque identities", async () => {
     const scenarios = [

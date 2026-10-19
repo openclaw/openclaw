@@ -254,13 +254,18 @@ export function markdownToText(markdown: string): string {
     text += markdown.slice(pos, open).replaceAll("\0", "\0\0");
     const afterOpen = open + 3;
     const close = markdown.indexOf("```", afterOpen);
-    if (close === -1) {
-      text += markdown.slice(open).replaceAll("\0", "\0\0");
-      break;
-    }
     const firstLineEnd = markdown.indexOf("\n", afterOpen);
-    const contentStart = firstLineEnd === -1 || firstLineEnd > close ? afterOpen : firstLineEnd + 1;
-    const code = markdown.slice(contentStart, close);
+    if (close === -1) {
+      const lineStart = markdown.lastIndexOf("\n", open) + 1;
+      if (firstLineEnd === -1 || !/^[ \t]*$/.test(markdown.slice(lineStart, open))) {
+        text += markdown.slice(open).replaceAll("\0", "\0\0");
+        break;
+      }
+    }
+    const contentEnd = close === -1 ? markdown.length : close;
+    const contentStart =
+      firstLineEnd === -1 || firstLineEnd > contentEnd ? afterOpen : firstLineEnd + 1;
+    const code = markdown.slice(contentStart, contentEnd);
     // Keep the surrounding prose connected without interpreting the code as Markdown.
     // Preserve its final line boundary for heading/list markers after the closing fence.
     const lineEnd = /[\r\n\u2028\u2029]$/.test(code) ? code.slice(-1) : "";
@@ -270,7 +275,7 @@ export function markdownToText(markdown: string): string {
       codeBlocks.push(literal);
     }
     text += lineEnd;
-    pos = close + 3;
+    pos = close === -1 ? markdown.length : close + 3;
   }
   text = text.replace(/!\[[^\]]*]\([^)]+\)/g, "");
   text = text.replace(/\[([^\]]+)]\([^)]+\)/g, "$1");
@@ -280,10 +285,11 @@ export function markdownToText(markdown: string): string {
   text = text.replace(/^[^\S\n]*\d+\.\s+/gm, "");
   // Escaped input NUL pairs stay paired through prose formatting, so only our
   // single-NUL markers can restore code. Replacement output is not rescanned.
-  text = text.replace(/\0(?:\0|(\d+)\0)/g, (_match, index: string | undefined) =>
-    index === undefined ? "\0" : codeBlocks[Number(index)]!,
+  return normalizeWhitespace(text).replace(
+    /\0(?:\0|(\d+)\0)/g,
+    (_match, index: string | undefined) =>
+      index === undefined ? "\0" : codeBlocks[Number(index)]!,
   );
-  return normalizeWhitespace(text);
 }
 
 export function truncateWebFetchText(

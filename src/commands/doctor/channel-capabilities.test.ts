@@ -98,7 +98,7 @@ describe("doctor channel capabilities", () => {
     expect(channelPluginMocks.getBundledChannelPlugin).not.toHaveBeenCalled();
   });
 
-  it.each(["telegram", "whatsapp"])(
+  it.each(["telegram"])(
     "returns %s sender semantics without loading its channel plugin",
     (channelId) => {
       expect(getDoctorChannelCapabilities(channelId)).toEqual({

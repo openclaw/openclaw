@@ -38,21 +38,23 @@ Plugin dependencies installed by `claws add` retain the Claw batch lease;
 live activation of that batch is separate from this single-plugin command.
 
 ```bash
-openclaw plugins search "calendar"                      # search ClawHub plugins
-openclaw plugins install @openclaw/<package>            # trusted official catalog
-openclaw plugins install <package>                       # arbitrary npm package
-openclaw plugins install clawhub:<package>                # ClawHub only
-openclaw plugins install npm:<package>                    # npm only
-openclaw plugins install npm-pack:<path.tgz>               # local npm-pack tarball
-openclaw plugins install git:github.com/<owner>/<repo>     # git repo
+openclaw plugins search "calendar"                           # search ClawHub plugins
+openclaw plugins install @openclaw/<package>                 # official package from ClawHub
+openclaw plugins install discord                             # official plugin-id shortcut
+openclaw plugins install <package>                           # ClawHub by default
+openclaw plugins install @composio/composio                  # scoped ClawHub package
+openclaw plugins install clawhub:<package>                   # explicit ClawHub source
+openclaw plugins install npm:<package>                       # npm only
+openclaw plugins install npm-pack:<path.tgz>                 # local npm-pack tarball
+openclaw plugins install git:github.com/<owner>/<repo>       # git repo
 openclaw plugins install git:github.com/<owner>/<repo>@<ref>
-openclaw plugins install <path>                            # local path or archive
-openclaw plugins install -l <path>                         # link instead of copy
-openclaw plugins install <plugin>@<marketplace>             # marketplace shorthand
-openclaw plugins install <plugin> --marketplace <name>      # marketplace (explicit)
-openclaw plugins install <package> --force                  # confirm source / overwrite existing
-openclaw plugins install <package> --pin                    # pin resolved npm version
-openclaw plugins install <package> --no-enable              # preserve activation policy
+openclaw plugins install <path>                              # local path or archive
+openclaw plugins install -l <path>                           # link instead of copy
+openclaw plugins install <plugin>@<marketplace>              # marketplace shorthand
+openclaw plugins install <plugin> --marketplace <name>       # marketplace (explicit)
+openclaw plugins install <package> --force                   # confirm source / overwrite existing
+openclaw plugins install npm:<package> --pin                 # pin resolved npm version
+openclaw plugins install <package> --no-enable               # preserve activation policy
 openclaw plugins install <package> --acknowledge-install-policy-warning
 ```
 
@@ -60,8 +62,15 @@ Maintainers testing setup-time installs can override automatic plugin install
 sources with guarded environment variables. See
 [Plugin install overrides](/plugins/install-overrides).
 
+Packaged macOS builds from commits without an exact release tag prefer staged
+official plugins built from the same commit. Automatic setup uses those copies
+without fetching a registry package; official installs record the bundled source path.
+These copies follow app updates; Doctor and plugin updates keep them with their
+matching host SDK. Use `npm:<package>` to explicitly select the registry instead.
+Release builds keep the published plugin layout.
+
 <Warning>
-Bare package names install from npm by default. Bundled plugin ids select the bundled copy. Official plugin ids and unqualified official package names (bare or `@latest`) follow their catalog's declared source order, switching only when a target is unpublished. ClawHub-only plugins stay on ClawHub. Integrity, compatibility, trust, install-policy, and capability-consent failures stop the install without switching sources. Use `npm:<package>` when you deliberately want an external npm package instead. Use `clawhub:<package>` for ClawHub. Treat plugin installs like running code; prefer pinned versions.
+Package names, including `@openclaw/*`, scoped names, owner/name forms, and version or tag selectors, install from ClawHub by default without falling back to npm. The only shortcuts are bare plugin ids without a version or tag: bundled ids select the bundled copy, and official ids follow their catalog's declared source order, switching only when a target is unpublished. ClawHub-only plugins stay on ClawHub. Integrity, compatibility, trust, install-policy, and capability-consent failures stop the install without switching sources. Use `npm:<package>` when you deliberately want an external npm package instead. The explicit `clawhub:<package>` form remains available. Treat plugin installs like running code; prefer pinned versions.
 </Warning>
 
 <Warning>
@@ -96,12 +105,13 @@ restart the channel.
 Default `--limit` is 20, capped at 100. It only reads the remote catalog: no
 local state inspection, config mutation, package install, or plugin runtime
 load. Results include the ClawHub package name, family, channel, version,
-summary, and an install hint such as `openclaw plugins install clawhub:<package>`.
+summary, and an install hint such as `openclaw plugins install <package>`.
+Unscoped search results include `@latest` so they cannot resolve as bare plugin-id shortcuts.
 Human output adds `v` only to numeric version labels, preserving existing prefixes
 and build names. JSON output keeps the original version values.
 
 <Note>
-Default official installs follow the catalog's declared source order.
+Official plugin-id shortcuts and automatic setup installs follow the catalog's declared source order. Package names such as `@openclaw/discord` select ClawHub directly.
 ClawHub also provides plugin discovery. OpenClaw-owned
 `@openclaw/*` plugin packages are published on npm again; see the current list
 on [npmjs.com/org/openclaw](https://www.npmjs.com/org/openclaw) or the
@@ -129,20 +139,21 @@ pin becomes the exact replacement version on the same registry.
 
 ### Sources and locators
 
-ClawHub installs use an explicit `clawhub:<package>` locator:
+ClawHub is the default for package specs, including scoped names and optional
+version or tag selectors:
 
 ```bash
-openclaw plugins install clawhub:openclaw-codex-app-server
-openclaw plugins install clawhub:openclaw-codex-app-server@1.2.3
-```
-
-Bare npm-safe plugin specs install from npm by default unless they match an official plugin id:
-
-```bash
+openclaw plugins install @composio/composio
 openclaw plugins install openclaw-codex-app-server
+openclaw plugins install openclaw-codex-app-server@1.2.3
+openclaw plugins install @scope/plugin-name@beta
 ```
 
-Use `npm:` to make npm-only resolution explicit:
+The explicit `clawhub:<package>` form also works. Bundled and official catalog
+shortcuts apply only to bare plugin ids without a version or tag, as described above. If an ordinary
+package is missing from ClawHub, installation stops; it does not silently try npm.
+
+Use `npm:` to install directly from npm:
 
 ```bash
 openclaw plugins install npm:openclaw-codex-app-server
@@ -151,7 +162,7 @@ openclaw plugins install npm:@scope/plugin-name@1.0.1
 ```
 
 OpenClaw checks the advertised plugin API / minimum gateway compatibility before install. When the selected ClawHub version publishes a ClawPack artifact, OpenClaw downloads the versioned npm-pack `.tgz`, verifies the ClawHub digest header and the artifact digest, then installs it through the normal archive path. Older ClawHub versions without ClawPack metadata still install through the legacy package archive verification path. Recorded installs keep their ClawHub source metadata, artifact kind, npm integrity, npm shasum, tarball name, and ClawPack digest facts for later updates.
-Unversioned ClawHub installs keep an unversioned recorded spec so `openclaw plugins update` can follow newer ClawHub releases; explicit version or tag selectors such as `clawhub:pkg@1.2.3` and `clawhub:pkg@beta` remain pinned to that selector.
+Unversioned ClawHub installs keep an unversioned recorded spec so `openclaw plugins update` can follow newer ClawHub releases; explicit version or tag selectors such as `pkg@1.2.3` and `pkg@beta` remain pinned to that selector.
 
 When legacy metadata supplies `files[]` without an archive digest, OpenClaw verifies the normalized extracted paths and SHA-256 hashes before installing. Harmless archive spellings such as backslash separators may normalize to those paths; missing, changed, or extra files and named unsupported records still fail verification. Root-only records that create no output are ignored. Server-provided paths and generated `_meta.json` metadata remain strictly validated.
 
@@ -176,7 +187,7 @@ Managed npm installs prepare the package and its dependencies in a private stagi
 
 When a managed npm plugin lacks package metadata or required dependencies, status
 and management report **install incomplete**. The finding and Doctor give
-`openclaw plugins install <package-selector> --force`, using the recorded package
+`openclaw plugins install npm:<package-selector> --force`, using the recorded package
 selector when available. A complete plugin can still require consent for
 capabilities you have not accepted. Add
 `--accept-capabilities` only after reviewing that consent request.
@@ -206,7 +217,7 @@ If a plugin you published on ClawHub is hidden or blocked by a registry scan, us
 
 ### ClawHub security audit
 
-Community ClawHub installs check the selected release's trust record before downloading. OpenClaw prints the outcome, exact audit overview, and details link. A Review outcome is informational and installation continues. If ClawHub disables download or returns a blocking moderation outcome, OpenClaw refuses the release. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust check.
+Community ClawHub installs check the selected release's trust record before downloading. OpenClaw prints the outcome, exact audit overview, and details link. A Review outcome is informational and installation continues. If ClawHub disables download or returns a blocking moderation outcome, OpenClaw refuses the release. Direct official ClawHub plugin installs and bundled OpenClaw plugin sources bypass this release-trust check. When a Claw installs a plugin, the Claw flow checks release trust for official packages too and requires separate acknowledgement for Review outcomes.
 
 ### Hook packs and npm specs
 
@@ -214,15 +225,19 @@ Community ClawHub installs check the selected release's trust record before down
 
 Npm specs are **registry-only** (package name plus optional **exact version** or **dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency installs run in one managed npm project per plugin with `--ignore-scripts` for safety, even when your shell has global npm install settings. Managed plugin npm projects inherit the npm-compatible parts of OpenClaw's dependency overrides. pnpm parent-child selectors are skipped; npm aliases remain unless the installed npm version rejects them.
 
-Use `npm:<package>` to make npm resolution explicit. Bare package specs also install directly from npm unless they match an official plugin id.
+Use `npm:<package>` for npm resolution. Package specs without a source prefix
+default to ClawHub. Bare plugin ids without a version or tag can select a bundled
+plugin or official catalog entry.
 
-Raw `@openclaw/*` specs that match bundled plugins resolve to the image-owned bundled copy before npm fallback. For example, `openclaw plugins install @openclaw/discord@2026.5.20 --pin` uses the bundled Discord plugin from the current OpenClaw build instead of creating a managed npm override. To force the external npm package, use `openclaw plugins install npm:@openclaw/discord@2026.5.20 --pin`.
+Package names such as `@openclaw/discord` and `@openclaw/discord@2026.5.20` install from ClawHub even when a bundled plugin has the same package name. Use `openclaw plugins install npm:@openclaw/discord@2026.5.20 --pin` for an exact npm install.
 
-Bare specs and `@latest` stay on the stable track. OpenClaw date-stamped correction versions such as `2026.5.3-1` count as stable for this check. If npm resolves either form to a prerelease, OpenClaw stops and asks you to opt in explicitly with a prerelease tag (`@beta`/`@rc`) or an exact prerelease version (`@1.2.3-beta.4`).
+Unversioned npm specs and `@latest` stay on the stable track. OpenClaw date-stamped correction versions such as `2026.5.3-1` count as stable for this check. If npm resolves either form to a prerelease, OpenClaw stops and asks you to opt in explicitly with a prerelease tag (`@beta`/`@rc`) or an exact prerelease version (`@1.2.3-beta.4`).
 
 For npm installs without an exact version (`npm:<package>` or `npm:<package>@latest`), OpenClaw checks the resolved package metadata before install. If the latest stable package requires a newer OpenClaw plugin API or minimum host version, OpenClaw inspects older stable versions and installs the newest compatible release instead. Exact versions and explicit non-`latest` dist-tags stay strict: an incompatible selection fails and asks you to upgrade OpenClaw or choose a compatible version.
 
-If a bare install spec matches an official plugin id (for example `diffs`), OpenClaw installs the catalog entry directly. To install an npm package with the same name, use an explicit scoped spec (for example `@scope/diffs`).
+If a bare install spec without a version or tag matches an official plugin id (for example `diffs`), OpenClaw installs the catalog entry directly. To install a package with the same name from a specific registry, use
+`npm:diffs` or `clawhub:diffs`. A scoped npm package also needs the prefix,
+for example `npm:@scope/diffs`.
 
 ### Git repositories
 

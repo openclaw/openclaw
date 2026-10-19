@@ -1,5 +1,4 @@
 import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import type { ReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -10,6 +9,7 @@ import {
   getAgentRunLifecycleGeneration,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import type { ReplyTurnParticipants } from "../../sessions/session-controller.contracts.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   assertAdmittedRunOperatorAuthority,
@@ -19,6 +19,7 @@ import {
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
+import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import {
   captureGatewayToolReceiptAssertion,
   type getGatewayToolCallerIdentity,
@@ -46,7 +47,7 @@ export function bindHarnessHostSourceAuthority(params: {
     attempt.admittedRunContext,
     params.delegatedAuthority,
   );
-  const assertAdmitted = composeSessionSourceAssertion([admittedSource], (assertSource) => {
+  const checkAdmitted = (assertSource: () => void) => {
     if (
       !params.isActive() ||
       !admittedSource ||
@@ -62,7 +63,8 @@ export function bindHarnessHostSourceAuthority(params: {
     if (!params.isGatewayCurrent()) {
       throw inactiveError("agent harness host capability is no longer active");
     }
-  });
+  };
+  const assertAdmitted = composeSessionSourceAssertion([admittedSource], checkAdmitted);
   const receipt = sourceCaller?.receiptAuthority;
   const assertReceipt =
     receipt &&
@@ -70,27 +72,57 @@ export function bindHarnessHostSourceAuthority(params: {
       receipt,
       "agent harness host capability lost its source execution claim",
     );
+  const checkCaller = (assertSource: () => void) => {
+    if (
+      (sourceCaller &&
+        (sourceCaller.agentId !== attempt.agentId ||
+          sourceCaller.sessionKey !== attempt.sessionKey)) ||
+      (sourceCaller?.workerTurnClaim &&
+        (sourceCaller.workerTurnClaim.sessionId !== attempt.sessionId ||
+          sourceCaller.workerTurnClaim.runId !== attempt.runId)) ||
+      (sourceCaller?.workerTurnClaim && !receipt)
+    ) {
+      throw new Error("agent harness host capability lost its source execution claim");
+    }
+    assertSource();
+  };
   const assertCaller = composeSessionSourceAssertion(
     [captureExternalSessionCommitGuard(assertReceipt)],
-    (assertSource) => {
-      if (
-        (sourceCaller &&
-          (sourceCaller.agentId !== attempt.agentId ||
-            sourceCaller.sessionKey !== attempt.sessionKey)) ||
-        (sourceCaller?.workerTurnClaim &&
-          (sourceCaller.workerTurnClaim.sessionId !== attempt.sessionId ||
-            sourceCaller.workerTurnClaim.runId !== attempt.runId)) ||
-        (sourceCaller?.workerTurnClaim && !receipt)
-      ) {
-        throw new Error("agent harness host capability lost its source execution claim");
-      }
-      assertSource();
-    },
+    checkCaller,
   );
-  return composeSessionSourceAssertion([assertAdmitted, assertCaller]);
+  return Object.assign(composeSessionSourceAssertion([assertAdmitted, assertCaller]), {
+    assertScopeCurrent: () => {
+      checkAdmitted(() => admittedSource?.assertScopeCurrent());
+      checkCaller(() => (assertReceipt?.assertScopeCurrent ?? assertReceipt)?.());
+    },
+  });
 }
 
-/** Native delegation cannot select a person, so its live turn must remain unambiguous. */
+export function bindHarnessSettledTurnCallback(
+  onSettledTurn: EmbeddedRunAttemptParams["onSettledTurn"],
+  assertActive: () => void,
+  signal?: AbortSignal,
+): EmbeddedRunAttemptParams["onSettledTurn"] {
+  if (!onSettledTurn) {
+    return undefined;
+  }
+  const assertCurrent = () => {
+    signal?.throwIfAborted();
+    assertActive();
+  };
+  return async (attempt, captureContext) => {
+    assertCurrent();
+    await onSettledTurn(attempt, async () => {
+      assertCurrent();
+      const context = await captureContext();
+      assertCurrent();
+      return context;
+    });
+    assertCurrent();
+  };
+}
+
+/** Native delegation keeps the incumbent requester and its live turn authority. */
 export function bindHarnessNativeSpawnAuthority(
   participants: ReplyTurnParticipants | undefined,
   assertActive: () => void,
@@ -98,7 +130,7 @@ export function bindHarnessNativeSpawnAuthority(
   return participants
     ? () => {
         assertActive();
-        participants.resolve()?.assertCurrent();
+        participants.resolve(undefined, { allowTurnOwner: () => true });
       }
     : undefined;
 }
@@ -186,9 +218,7 @@ export function retainHarnessSource(
     },
     get sourceIdentity() {
       assertCurrent();
-      const identity = source.source;
-      assertCurrent();
-      return identity;
+      return source.source;
     },
     bindModelExecution: (model: ModelRef | undefined) => {
       assertCurrent();
@@ -227,6 +257,7 @@ export function retainHarnessSource(
 /** Host-only original source; an explicit undefined operator identifies System work. */
 export type AgentHarnessCompactionSourceAuthority = Readonly<{
   assertActive: SessionSourceAssertion;
+  prepareDispatch?: () => Promise<void>;
   operatorAuthority: AdmittedRunOperatorAuthority | undefined;
 }>;
 

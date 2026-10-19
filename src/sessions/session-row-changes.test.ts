@@ -3,7 +3,11 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { subscribeRuntimeSessionChanges } from "../plugins/runtime/session-changes.js";
-import { captureSessionRowChanges, sessionChanges } from "./session-row-changes.js";
+import {
+  captureSessionRowChanges,
+  readSessionRowChangeRevision,
+  sessionChanges,
+} from "./session-row-changes.js";
 
 const cleanup: Array<() => void> = [];
 afterEach(() => {
@@ -21,6 +25,7 @@ it("captures only surviving transaction postimages before the worker receipt is 
     database.prepare("INSERT INTO facts VALUES (?)").run(key);
     sessionChanges.emit({ sessionKey: key, facts: { kind: "unchanged" } }, database);
   };
+  const initialRevision = readSessionRowChangeRevision();
   const transaction = <T>(run: () => T) =>
     withSqlitePostCommitPublications(database, () =>
       runSqliteImmediateTransactionSync(database, run),
@@ -44,6 +49,7 @@ it("captures only surviving transaction postimages before the worker receipt is 
       ).toThrow("cancel nested mutation");
       write("last");
       expect(notifications).toEqual([]);
+      expect(readSessionRowChangeRevision()).toBe(initialRevision);
       return "committed";
     }),
   );
@@ -53,6 +59,7 @@ it("captures only surviving transaction postimages before the worker receipt is 
     "last",
   ]);
   expect(notifications).toEqual(["first", "last"]);
+  expect(readSessionRowChangeRevision()).toBeGreaterThan(initialRevision);
   expect(database.prepare("SELECT key FROM facts ORDER BY key").all()).toEqual([
     { key: "first" },
     { key: "last" },
@@ -84,6 +91,43 @@ it("keeps postcommit observer events outside the committing worker's captured po
   );
   expect(observed).toEqual(["committed", "observer"]);
   expect(captured.changes).toEqual([{ sessionKey: "committed", facts: { kind: "unchanged" } }]);
+});
+
+it("settles session notifications through a connection's separate publication anchor", () => {
+  const { DatabaseSync } = requireNodeSqlite();
+  const anchor = new DatabaseSync(":memory:");
+  const database = Object.assign(new DatabaseSync(":memory:"), {
+    anchor,
+    [Symbol.for("openclaw.postgres-sync-connection")]: true,
+  });
+  cleanup.push(
+    () => anchor.close(),
+    () => database.close(),
+  );
+  const observed: string[] = [];
+  cleanup.push(
+    sessionChanges.subscribe((change) => {
+      if ("sessionKey" in change) {
+        observed.push(change.sessionKey);
+      }
+    }),
+  );
+  const emit = (sessionKey: string) =>
+    sessionChanges.emit({ sessionKey, facts: { kind: "unchanged" } }, database);
+  const captured = captureSessionRowChanges(anchor, () =>
+    withSqlitePostCommitPublications(anchor, () => {
+      expect(() =>
+        withSqlitePostCommitPublications(anchor, () => {
+          emit("rolled-back");
+          throw new Error("cancel publication");
+        }),
+      ).toThrow("cancel publication");
+      emit("committed");
+      expect(observed).toEqual([]);
+    }),
+  );
+  expect(captured.changes).toEqual([{ sessionKey: "committed", facts: { kind: "unchanged" } }]);
+  expect(observed).toEqual(["committed"]);
 });
 
 it("installs private authority before observers without duplicate presentation notifications", () => {

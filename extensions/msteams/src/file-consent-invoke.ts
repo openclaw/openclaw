@@ -4,7 +4,6 @@ import { normalizeMSTeamsConversationId } from "./inbound.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getPendingUploadFs, removePendingUploadFs } from "./pending-uploads-fs.js";
 import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
-import { withRevokedProxyFallback } from "./revoked-context.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 async function handleMSTeamsFileConsentInvoke(
@@ -20,7 +19,7 @@ async function handleMSTeamsFileConsentInvoke(
 
   const consentResponse = parseFileConsentInvoke(activity);
   if (!consentResponse) {
-    log.debug?.("invalid file consent invoke", { value: activity.value });
+    log.debug?.("invalid file consent invoke");
     return false;
   }
 
@@ -52,12 +51,6 @@ async function handleMSTeamsFileConsentInvoke(
 
   if (consentResponse.action === "accept" && consentResponse.uploadInfo) {
     if (pendingFile) {
-      log.debug?.("user accepted file consent, uploading", {
-        uploadId,
-        filename: pendingFile.filename,
-        size: pendingFile.buffer.length,
-      });
-
       try {
         await uploadToConsentUrl({
           url: consentResponse.uploadInfo.uploadUrl,
@@ -85,12 +78,6 @@ async function handleMSTeamsFileConsentInvoke(
         } else {
           await context.sendActivity(fileActivity);
         }
-
-        log.info("file upload complete", {
-          uploadId,
-          filename: consentResponse.uploadInfo.name,
-          uniqueId: consentResponse.uploadInfo.uniqueId,
-        });
       } catch (err) {
         log.error("file upload failed", { uploadId, error: formatUnknownError(err) });
         await context.sendActivity("File upload failed. Please try again.");
@@ -121,13 +108,7 @@ export async function runMSTeamsFileConsentInvokeHandler(
   log: MSTeamsMonitorLogger,
 ): Promise<void> {
   try {
-    await withRevokedProxyFallback({
-      run: () => handleMSTeamsFileConsentInvoke(context, log),
-      onRevoked: async () => true,
-      onRevokedLog: () => {
-        log.debug?.("turn context revoked during file consent invoke; skipping delayed response");
-      },
-    });
+    await handleMSTeamsFileConsentInvoke(context, log);
   } catch (err) {
     log.debug?.("file consent handler error", { error: formatUnknownError(err) });
   }

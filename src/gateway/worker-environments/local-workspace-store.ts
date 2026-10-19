@@ -32,13 +32,7 @@ export async function hasLocalWorkspaceProjection(id: string, env?: NodeJS.Proce
     { type: "localWorkspace.exists", input: { id } },
     { current: true, live: true },
   );
-  if (!reply) {
-    return false;
-  }
-  if (!reply.ok || reply.type !== "localWorkspace.exists") {
-    throw new Error("Unexpected local workspace result");
-  }
-  return reply.exists;
+  return reply?.exists ?? false;
 }
 
 export type LocalWorkspaceStore = {
@@ -63,6 +57,7 @@ export function withLocalWorkspaceStore<T>(
   params: {
     worktreeId: string;
     env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
     assertCurrent?: () => void;
     workerAuthority?: WorktreeWorkerAuthority;
     requireAbsent?: boolean;
@@ -84,6 +79,7 @@ export function withLocalWorkspaceStore<T>(
         key: params.worktreeId,
         leaseMs: 60_000,
         waitMs: 600_000,
+        signal: params.signal,
         leaseLabel: "local sandbox workspace",
         operationLabel: "workspace.local-reconciliation",
       },
@@ -118,14 +114,6 @@ export function withLocalWorkspaceStore<T>(
                   },
                   { context, current: true, live: true },
                 );
-                if (
-                  reply &&
-                  (!reply.ok ||
-                    reply.type !==
-                      (params.requireAbsent ? "localWorkspace.exists" : "localWorkspace.get"))
-                ) {
-                  throw new Error("Unexpected local workspace result");
-                }
                 assertCurrent();
                 if (reply?.type === "localWorkspace.exists" && reply.exists) {
                   throw new Error(

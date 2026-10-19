@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { markPackagePostInstallDoctorAdvisory } from "./package-update-verification-step.js";
+import {
+  deferPackageStateVerification,
+  markPackagePostInstallDoctorAdvisory,
+  runPackagePostInstallVerification,
+} from "./package-update-verification-step.js";
+import { SqliteSchemaVersionError } from "./sqlite-user-version.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
 } from "./update-doctor-result.js";
+import { isFailedUpdateStep } from "./update-run-step.js";
 
 describe("markPackagePostInstallDoctorAdvisory", () => {
   it.each([0, UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE])(
@@ -95,3 +101,31 @@ describe("markPackagePostInstallDoctorAdvisory", () => {
     expect(step.stderrTail).toBe("doctor timed out");
   });
 });
+
+it.each([false, true])(
+  "treats a newer-schema refusal as advisory only after recorded candidate migration (%s)",
+  async (migrationRecorded) => {
+    const root = "/candidate/openclaw";
+    const params = { root, migrationRecorded, progress: undefined, assertCurrent: () => {} };
+    const step = await runPackagePostInstallVerification(root, async (_root, results) =>
+      deferPackageStateVerification(
+        { ...params, results },
+        new Error("Cannot read shared state for discovery", {
+          cause: new SqliteSchemaVersionError("State uses a newer schema version."),
+        }),
+      ),
+    );
+    expect(isFailedUpdateStep(step)).toBe(!migrationRecorded);
+    if (migrationRecorded) {
+      expect(step.advisory).toMatchObject({
+        kind: "recoverable-maintenance",
+        message: expect.stringContaining("candidate migration"),
+      });
+      expect(step.failureFacts).toBeUndefined();
+    } else {
+      expect(step.failureFacts).toEqual([
+        expect.objectContaining({ check: "package-runtime", code: "runtime-verification-failed" }),
+      ]);
+    }
+  },
+);

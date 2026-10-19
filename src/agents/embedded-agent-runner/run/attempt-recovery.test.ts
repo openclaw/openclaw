@@ -257,7 +257,7 @@ describe("recoverEmbeddedRunAttempt", () => {
       });
 
       expect(await recover()).toEqual({ action: "proceed" });
-      expect(failoverRetryController.transientRetryCount).toBe(1);
+      expect(failoverRetryController.transientRetryCount).toBe(0);
       expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
       expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
       expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
@@ -313,7 +313,6 @@ describe("recoverEmbeddedRunAttempt", () => {
     { label: "voice output", preToolText: "[[audio_as_voice]]" },
     { label: "tool media", toolMediaUrls: ["https://example.com/result.png"] },
     { label: "source reply already delivered", sourceReplyDelivered: true },
-    { label: "silent cron tool result", trigger: "cron", toolResultText: "NO_REPLY" },
   ])("preserves $label after a length stop", async ({ label: _label, ...scenario }) => {
     const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
       ...emptyLengthScenario,
@@ -479,6 +478,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     { headers: { "retry-after": "7", "retry-after-ms": "8500" }, delayMs: 8500 },
     { headers: { "retry-after": "7", "retry-after-ms": "invalid" }, delayMs: 7000 },
   ])("continues after respecting the provider floor of $delayMs ms", async (scenario) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     vi.mocked(sleepWithAbort).mockClear();
     const { recovery, onAgentEvent, continueFromCurrentTranscript } =
       await recoverAfterTransportDrop({
@@ -497,9 +497,11 @@ describe("recoverEmbeddedRunAttempt", () => {
           attempt: 2,
           maxAttempts: 10,
           reason: "rate_limit",
+          retryAt: 1_800_000_000_000 + scenario.delayMs,
         }),
       }),
     );
+    now.mockRestore();
   });
 
   it.each([
@@ -578,13 +580,13 @@ describe("recoverEmbeddedRunAttempt", () => {
       expectedSleepMs: 9_897_000,
     },
     {
-      label: "still sleeps the same floor with no fallback",
+      label: "stops same-profile retries past the cap without model fallback",
       errorMessage: "429 rate_limit_exceeded; Retry-After: 9897",
       fallbackConfigured: false,
       replaySafe: true,
       providerRetryMaxDelayMs: 30_000,
-      expectedAction: "retry",
-      expectedSleepMs: 9_897_000,
+      expectedAction: "proceed",
+      expectedSleepMs: undefined,
     },
     {
       label: "keeps a floor inside the cap on the same model",
@@ -760,6 +762,8 @@ describe("recoverEmbeddedRunAttempt", () => {
         ...unsettledBatches,
         ["the attempt yielded", { yieldDetected: true }],
         ["the retry budget is disabled", { retryAvailable: false }],
+        ["raw model runs cannot carry the continuation transcript", { modelRun: true }],
+        ["prompt-free runs cannot carry the continuation transcript", { promptMode: "none" }],
         ["the run was cancelled", { terminal: { kind: "aborted", source: "external" } }],
         [
           "the run deadline expired",

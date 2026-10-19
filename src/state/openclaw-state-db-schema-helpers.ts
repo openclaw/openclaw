@@ -1,26 +1,89 @@
-// Provides shared SQLite schema probes and additive column migration helpers.
-import type { DatabaseSync } from "node:sqlite";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { executeWithCachedStatement } from "../infra/kysely-sync-cache-state.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
+import { readSqlToken } from "../infra/sqlite-schema-sql.js";
 
-export function tableHasColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
+const tableColumns = new WeakMap<SqliteSchemaFacts, Map<string, Set<string>>>();
+
+export function tableHasColumn(
+  db: EngineConnection,
+  tableName: string,
+  columnName: string,
+): boolean {
   return readTableColumns(db, tableName).has(columnName);
 }
 
-function readTableColumns(db: DatabaseSync, tableName: string): Set<string> {
+export function readTableColumns(db: EngineConnection, tableName: string): Set<string> {
+  if (isPostgresSqlConnection(db)) {
+    return new Set(
+      getPostgresPhysicalFacts(db)?.catalog.flatMap((fact) =>
+        fact.table === tableName &&
+        fact.kind === "column" &&
+        fact.value &&
+        typeof fact.value === "object" &&
+        "name" in fact.value &&
+        typeof fact.value.name === "string"
+          ? [fact.value.name]
+          : [],
+      ) ?? [],
+    );
+  }
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  const sql = schema?.tableSql.get(tableName);
+  if (
+    schema &&
+    !sql &&
+    ![...schema.tables, ...schema.views].some(
+      (name) => name.toLowerCase() === tableName.toLowerCase(),
+    )
+  ) {
+    return new Set();
+  }
+  if (schema && sql && /^CREATE TABLE\b/iu.test(sql) && !/\bAS\b/iu.test(sql)) {
+    let tables = tableColumns.get(schema);
+    const retained = tables?.get(tableName);
+    if (retained) {
+      return retained;
+    }
+    const definition = parseSqliteTableDefinition(sql, tableName);
+    // table_info omits generated columns and preserves identifier spelling.
+    // Views, virtual tables, and noncanonical identifiers keep native inspection.
+    if (
+      [...definition.columns.values()].every((column) =>
+        /^[a-z_][a-z0-9_]*$/u.test(readSqlToken(column, 0)?.raw ?? ""),
+      )
+    ) {
+      const columns = new Set(definition.columns.keys());
+      if (!tables) {
+        tables = new Map();
+        tableColumns.set(schema, tables);
+      }
+      tables.set(tableName, columns);
+      return columns;
+    }
+  }
   const rows = db.prepare(`PRAGMA table_info(${tableName})`).all();
   return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
 }
 
 /** Inspect only failed queries; native unavailability must not become a schema refusal. */
 export function classifySqliteTableReadError(
-  db: DatabaseSync,
+  db: EngineConnection,
   tableName: string,
   columnNames: readonly string[],
   error: unknown,
 ): unknown {
+  if (isPostgresSqlConnection(db)) {
+    return error;
+  }
   if (sqlitePrimaryResultCode(error) !== 1) {
     return error;
   }
@@ -39,7 +102,15 @@ export function classifySqliteTableReadError(
   return error;
 }
 
-export function tablePrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {
+export function tablePrimaryKeyColumns(db: EngineConnection, tableName: string): string[] {
+  if (isPostgresSqlConnection(db)) {
+    const value = getPostgresPhysicalFacts(db)?.catalog.find(
+      (fact) => fact.table === tableName && fact.kind === "primaryKey",
+    )?.value;
+    return Array.isArray(value)
+      ? value.filter((column): column is string => typeof column === "string")
+      : [];
+  }
   const rows = db.prepare(`PRAGMA table_info(${tableName})`).all();
   return rows
     .filter((row) => Number(row.pk ?? 0) > 0 && typeof row.name === "string")
@@ -47,7 +118,14 @@ export function tablePrimaryKeyColumns(db: DatabaseSync, tableName: string): str
     .map((row) => row.name as string);
 }
 
-export function tableExists(db: DatabaseSync, tableName: string): boolean {
+export function tableExists(db: EngineConnection, tableName: string): boolean {
+  if (isPostgresSqlConnection(db)) {
+    return (
+      getPostgresPhysicalFacts(db)?.catalog.some(
+        (fact) => fact.table === tableName && fact.kind === "table",
+      ) ?? false
+    );
+  }
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (schema) {
     return schema.tables.has(tableName);
@@ -61,7 +139,7 @@ export function tableExists(db: DatabaseSync, tableName: string): boolean {
   return row?.ok === 1;
 }
 
-export function ensureColumn(db: DatabaseSync, tableName: string, columnSql: string): boolean {
+export function ensureColumn(db: EngineConnection, tableName: string, columnSql: string): boolean {
   const columnName = columnSql.trim().split(/\s+/, 1)[0];
   if (!columnName || !tableExists(db, tableName) || tableHasColumn(db, tableName, columnName)) {
     return false;
@@ -72,7 +150,10 @@ export function ensureColumn(db: DatabaseSync, tableName: string, columnSql: str
 }
 
 /** Missing runtime tables are empty only before state grows beyond checkpoint bootstrap. */
-export function hasOpenClawStateTablesBeyondStartupCheckpoint(db: DatabaseSync): boolean {
+export function hasOpenClawStateTablesBeyondStartupCheckpoint(db: EngineConnection): boolean {
+  if (isPostgresSqlConnection(db)) {
+    return true;
+  }
   return (
     /* sqlite-allow-raw -- Read-only startup-checkpoint schema discriminator. */ db
       .prepare(

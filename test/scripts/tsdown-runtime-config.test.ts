@@ -202,11 +202,15 @@ describe("tsdown config", () => {
       entryKeys(config).includes("package-update-activation-recovery"),
     );
     const executableGraphs = new Set([
+      ...configs.filter((config) =>
+        entryKeys(config).includes("worker/gateway-state-owner-heartbeat.worker"),
+      ),
       unifiedGraph,
       expectDefined(workerGraph, "deploy worker graph"),
       requireStandaloneRuntimeGraph("worker/code-mode-node.worker"),
       requireStandaloneRuntimeGraph("worker/file-tool-planning.worker"),
       requireStandaloneRuntimeGraph("worker/file-tool-read.worker"),
+      requireStandaloneRuntimeGraph("worker/gateway-state-owner-heartbeat.worker"),
       requireStandaloneRuntimeGraph("worker/image-processor.worker"),
       requireStandaloneRuntimeGraph("worker/sqlite-store.worker"),
       requireStandaloneRuntimeGraph("worker/sqlite-source-revision.worker"),
@@ -220,6 +224,7 @@ describe("tsdown config", () => {
       requireStandaloneRuntimeGraph("state/openclaw-state-read.worker"),
       requireStandaloneRuntimeGraph("agents/harness/native-hook-relay-client.worker"),
       requireStandaloneRuntimeGraph("process/spawn-broker/worker"),
+      requireStandaloneRuntimeGraph("plugins/plugin-generation-preparation.worker"),
       requireStandaloneRuntimeGraph("state/openclaw-state-lease-heartbeat.worker"),
       requireStandaloneRuntimeGraph("infra/gateway-state-owner-heartbeat.worker"),
       requireStandaloneRuntimeGraph("process/supervisor/service-child-relay"),
@@ -290,6 +295,11 @@ describe("tsdown config", () => {
 
   it.each([
     {
+      label: "plugin preparation worker",
+      entry: "plugins/plugin-generation-preparation.worker",
+      source: "src/plugins/plugin-generation-preparation.worker.ts",
+    },
+    {
       label: "read-only snapshot child",
       entry: "infra/sqlite-readonly-location.worker",
       source: "src/infra/sqlite-readonly-location.worker.ts",
@@ -317,7 +327,16 @@ describe("tsdown config", () => {
   ])("emits the $label once without sealing its package loaders", ({ entry, source }) => {
     const child = requireStandaloneRuntimeGraph(entry);
     expect(entrySources(child)).toEqual({ [entry]: path.resolve(source) });
-    expect(child.outputOptions).toEqual({ codeSplitting: false });
+    expect(child.outputOptions).toMatchObject({
+      codeSplitting:
+        entry === "infra/sqlite-readonly-location.worker" ||
+        entry === "plugins/plugin-generation-preparation.worker",
+    });
+    if (entry === "plugins/plugin-generation-preparation.worker") {
+      expect(child.outputOptions?.chunkFileNames).toBe(
+        "plugins/plugin-preparation-[name]-[hash].mjs",
+      );
+    }
     expect(child.outExtensions?.().js).toBe(".js");
     expect(child.define?.SEALED_RUNTIME_BUILD).toBeUndefined();
   });
@@ -370,19 +389,23 @@ describe("tsdown config", () => {
   });
 
   it("bundles SDK-owned helpers while retaining native package ownership", () => {
-    for (const graph of [
-      requireUnifiedDistGraph(),
-      requireStandaloneRuntimeGraph("infra/sqlite-readonly-location.worker"),
-    ]) {
+    for (const [graph, bundleFsSafe] of [
+      [requireUnifiedDistGraph(), false],
+      [requireStandaloneRuntimeGraph("infra/sqlite-readonly-location.worker"), true],
+    ] as const) {
       const alwaysBundle = graph.deps?.alwaysBundle;
       const external = graph.inputOptions?.({})?.external;
       if (typeof alwaysBundle !== "function" || typeof external !== "function") {
         throw new Error("expected runtime graph dependency predicates");
       }
 
-      expect(alwaysBundle("@openclaw/fs-safe")).toBe(false);
-      expect(alwaysBundle("@openclaw/fs-safe/path")).toBe(false);
-      expect(external("@openclaw/fs-safe/path", undefined, false)).toBe(true);
+      expect(alwaysBundle("@openclaw/fs-safe/path")).toBe(bundleFsSafe);
+      expect(external("@openclaw/fs-safe/path", undefined, false)).toBe(!bundleFsSafe);
+      for (const specifier of ["@openclaw/proc-safe/windows-job"]) {
+        expect(alwaysBundle(specifier.split("/").slice(0, 2).join("/"))).toBe(false);
+        expect(alwaysBundle(specifier)).toBe(false);
+        expect(external(specifier, undefined, false)).toBe(true);
+      }
       expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime-internal")).toBe(true);
       expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime")).toBe(false);
       expect(alwaysBundle("zod")).toBe(true);

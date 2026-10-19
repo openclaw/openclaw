@@ -14,7 +14,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plugins/installed-plugin-index-records.js";
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
@@ -220,7 +220,7 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
           expect(renderUpdateRunReport(latest).markdown).toContain("verify it against 2026.9.4");
         }
         expect(getUpdateRun(original.runId)).toEqual(retained);
-        expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual(records);
+        expect(await readPersistedInstalledPluginIndexInstallRecordsAsync()).toEqual(records);
         expect(await fs.readFile(state.configPath, "utf8")).toBe(configBytes);
         expect(await fs.readFile(`${localDir}/index.js`, "utf8")).toBe(payload);
         expect(await fs.readFile(`${managedDir}/index.js`, "utf8")).toBe(payload);

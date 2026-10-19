@@ -52,8 +52,9 @@ sidebarTitle: "Voice and speech"
     Talk over a ChatGPT subscription when the account has access (see the
     Realtime accordion).
     OpenAI TTS and GA realtime Voice Call, Gateway relay, and Discord sessions
-    still require a Platform API key. Codex GPT-Live supports ChatGPT OAuth
-    through the shared Gateway-owned bridge, including Discord and Voice Call.
+    still require a Platform API key. Codex GPT-Live supports ChatGPT OAuth and
+    pasted ChatGPT access-token profiles through the shared Gateway-owned bridge,
+    including Discord and Voice Call.
     </Note>
 
   </Accordion>

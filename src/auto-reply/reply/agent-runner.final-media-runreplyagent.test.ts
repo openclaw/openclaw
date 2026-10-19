@@ -1,13 +1,10 @@
 // Tests final media delivery through the run-reply-agent path.
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import {
-  createMockFollowupRun,
-  createMockReplyOperation,
-  createMockTypingController,
-} from "./test-helpers.js";
+import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
 const executeAgentTurnMock = vi.fn();
 const resolveOutboundAttachmentFromUrlMock = vi.fn();
@@ -29,12 +26,14 @@ vi.mock("../../agents/model-selection.js", async () => {
   };
 });
 
-vi.mock("../../agents/sandbox.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../agents/sandbox.js")>("../../agents/sandbox.js");
+vi.mock("../../agents/sandbox/context.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/sandbox/context.js")>(
+    "../../agents/sandbox/context.js",
+  );
   return {
     ...actual,
     ensureSandboxWorkspaceForSession: async () => null,
+    prepareSandboxWorkspaceForSession: async () => null,
   };
 });
 
@@ -64,8 +63,8 @@ vi.mock("../../media/outbound-attachment.js", () => ({
     resolveOutboundAttachmentFromUrlMock(...args),
 }));
 
-vi.mock("./agent-runner-failure-reply.js", () => ({
-  buildEmptyInteractiveReplyPayload: vi.fn(() => undefined),
+vi.mock("./agent-runner-failure-reply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-failure-reply.js")>()),
   buildKnownAgentRunFailureReplyPayload: vi.fn(() => undefined),
   markPostCompactionModelFailurePayload: (_failure: true | undefined, payload: unknown) => payload,
 }));
@@ -118,6 +117,12 @@ function makeRunReplyAgentParams(
   const provider = "telegram";
   const workspaceDir = "/tmp/workspace";
   const prompt = "generate chart";
+  const replyOperation = createReplyOperation({
+    sessionKey: "main",
+    sessionId: "session",
+    resetTriggered: false,
+  });
+  onTestFinished(() => replyOperation.complete());
 
   return {
     commandBody: prompt,
@@ -151,7 +156,7 @@ function makeRunReplyAgentParams(
     resolvedBlockStreamingBreak: "message_end",
     shouldInjectGroupIntro: false,
     typingMode: "instant",
-    replyOperation: createMockReplyOperation().replyOperation,
+    replyOperation,
     ...overrides,
   };
 }
@@ -168,6 +173,43 @@ describe("runReplyAgent final MEDIA replies", () => {
     resolveOutboundAttachmentFromUrlMock.mockImplementation(async (mediaUrl: string) => ({
       path: path.join("/tmp/outbound-media", path.basename(mediaUrl)),
     }));
+  });
+
+  it.each([
+    { mediaUrl: "https://example.invalid/pending.png", audioAsVoice: false },
+    { mediaUrl: "https://example.invalid/pending.opus", audioAsVoice: true },
+  ])("keeps pending tool media after NO_REPLY: $mediaUrl", async ({ mediaUrl, audioAsVoice }) => {
+    executeAgentTurnMock.mockResolvedValueOnce({
+      runId: "silent-media-test",
+      outcome: {
+        kind: "settled",
+        status: "ok",
+        result: {
+          payloads: [
+            { text: "Unsent confirmation" },
+            { text: "Unsent media caption", mediaUrl, audioAsVoice },
+          ],
+          meta: {
+            durationMs: 0,
+            finalAssistantRawText: "NO_REPLY",
+            terminalReply: { disposition: "silent" },
+          },
+        },
+        resolved: { provider: "anthropic", model: "claude" },
+        fallback: { exhausted: false, attempts: [] },
+        autoCompactionCount: 0,
+      },
+    } satisfies AgentTurnExecutionResult);
+
+    const result = await runReplyAgent(makeRunReplyAgentParams());
+    const payloads = Array.isArray(result) ? result : result ? [result] : [];
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      mediaUrl,
+      audioAsVoice,
+    });
+    expect(payloads[0]?.text).toBeUndefined();
+    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });
 
   it("uses one runReplyAgent media context for block and final MEDIA replies", async () => {
@@ -197,7 +239,6 @@ describe("runReplyAgent final MEDIA replies", () => {
       }
       const commonParams = {
         isHeartbeat: false,
-        didLogHeartbeatStrip: false,
         blockStreamingEnabled: false,
         blockReplyPipeline: null,
         replyToMode: "all" as const,

@@ -1,13 +1,18 @@
-import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
+import type {
+  ControlUiLinkReaderDocument,
+  ControlUiLinkReaderDeferredSection,
+} from "../../../src/shared/control-ui-link-reader.js";
 import { t } from "../i18n/index.ts";
 import { createDockPanelLayout } from "./dock-panel-layout.ts";
-import { dockPanelStyles } from "./dock-panel-styles.ts";
-import { icons } from "./icons.ts";
-import { linkReaderContentStyles } from "./link-reader-content.styles.ts";
+import { iconData, type IconName } from "./icon-data.ts";
 import type { LinkReaderImages } from "./link-reader-images.ts";
-import { linkReaderPanelStyles } from "./link-reader-panel.styles.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
-import { panelTabStripStyles } from "./panel-tab-strip.ts";
+import { createIconElement } from "./markdown-icon.ts";
+import type { PanelHostedTab } from "./panel-hosted-tabs.ts";
+import { panelTabStripCss } from "./panel-tab-strip-styles.ts";
+import dockPanelStyles from "./dock-panel.css?inline";
+import linkReaderContentStyles from "./link-reader-content.css?inline";
+import linkReaderPanelStyles from "./link-reader-panel.css?inline";
 
 export const linkReaderPanelLayout = createDockPanelLayout({
   storageKey: "openclaw.link-reader.panel.v1",
@@ -20,21 +25,66 @@ export const linkReaderPanelLayout = createDockPanelLayout({
 });
 
 export const linkReaderViewStyles = [
-  panelTabStripStyles,
+  panelTabStripCss,
   dockPanelStyles,
   linkReaderPanelStyles,
   linkReaderContentStyles,
 ];
 
-export function readerIcon(name: string | undefined) {
-  return Object.entries(icons).find(([key]) => key === name)?.[1] ?? icons.link;
+function readerIcon(name: string | undefined, ownerDocument: Document) {
+  const icon =
+    name && Object.hasOwn(iconData, name)
+      ? (name as IconName) // SAFETY: The own-key guard admits only names in the built-in catalog.
+      : "link";
+  return createIconElement(icon, ownerDocument);
+}
+
+export type ReaderSection = ControlUiLinkReaderDeferredSection;
+export type ReaderReadyView = {
+  status: "ready";
+  detail: ControlUiLinkReaderDocument;
+  images?: LinkReaderImages;
+  refreshing?: boolean;
+  message?: string;
+  sections: Partial<Record<ReaderSection, "idle" | "loading" | "error">>;
+};
+
+export function createReaderReadyView(
+  detail: ControlUiLinkReaderDocument,
+  previous?: ReaderReadyView,
+): ReaderReadyView {
+  const next: ReaderReadyView = { status: "ready", detail, sections: {} };
+  for (const deferred of detail.deferredSections ?? []) {
+    next.sections[deferred] = "idle";
+  }
+  // Same-revision refreshes retain loaded sections until their replacements arrive.
+  if (previous && previous.detail.revision === detail.revision) {
+    const old = previous.detail;
+    next.detail = {
+      ...detail,
+      ...(next.sections.checks && old.checks ? { checks: old.checks } : {}),
+      ...(next.sections.files && old.files
+        ? { files: old.files, filesTruncated: old.filesTruncated }
+        : {}),
+      ...(next.sections.discussion && old.comments
+        ? { comments: old.comments, commentsTruncated: old.commentsTruncated }
+        : {}),
+    };
+  }
+  return next;
 }
 
 type PanelView =
   | { status: "idle" | "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; detail: ControlUiLinkReaderDocument; images?: LinkReaderImages };
-export type ReaderTab = { id: string; history: LinkReaderTarget[]; index: number; view: PanelView };
+  | ReaderReadyView;
+export type ReaderTab = {
+  id: string;
+  history: LinkReaderTarget[];
+  index: number;
+  view: PanelView;
+  reloadPending: boolean;
+};
 export function tabTarget(tab: ReaderTab | undefined): LinkReaderTarget | null {
   return tab?.history[tab.index] ?? null;
 }
@@ -46,4 +96,23 @@ export function tabLabel(tab: ReaderTab): string {
   return target
     ? target.reader.label + " · " + new URL(target.href).pathname
     : t("linkReader.newTab");
+}
+
+export type LinkReaderPanelState = {
+  urlDraft: string;
+  invalidUrl: boolean;
+  tabLimitUrl: string | null;
+  tabs: ReaderTab[];
+  activeId: string | null;
+};
+
+export function readerHostedTabs(tabs: ReaderTab[], ownerDocument: Document): PanelHostedTab[] {
+  return tabs.map((tab) => ({
+    id: tab.id,
+    label: tabLabel(tab),
+    url: tabTarget(tab)?.href,
+    title: tabTarget(tab)?.href,
+    icon: readerIcon(tabTarget(tab)?.reader.icon, ownerDocument),
+    className: tab.view.status === "loading" ? "is-connecting" : "",
+  }));
 }

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import type { EnvironmentSummary, SystemInfoResult } from "@openclaw/gateway-protocol";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -8,6 +9,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { PresenceEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
 import { t } from "../../i18n/index.ts";
+import { invalidateConfigConnection } from "../../lib/config/config-state-model.ts";
 import {
   createInitialDevicesState,
   type DevicesPageDataState,
@@ -22,6 +24,7 @@ import {
   waitForRenderedModalDialog,
 } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DevicesPage, type DevicesRouteData } from "./devices-page.tsx";
 
 const ROTATED_TOKEN = "rotated-operator-token";
@@ -130,6 +133,7 @@ function mountPage(
     ...routeOverride,
   };
   const [currentGateway, setGateway] = createSignal(fixture.source);
+  const [presentation, setPresentation] = createSignal({ routeData });
   const context = {
     get gateway() {
       return currentGateway();
@@ -145,7 +149,7 @@ function mountPage(
   const mounted = mountSolid(
     () => (
       <ApplicationProvider value={context}>
-        <DevicesPage routeData={routeData} />
+        <DevicesPage routeData={presentation().routeData} />
       </ApplicationProvider>
     ),
     { container },
@@ -164,7 +168,12 @@ function mountPage(
   cleanups.push(dispose);
   return {
     container,
+    config: context.runtimeConfig.state,
     dispose,
+    refreshPresentation() {
+      setPresentation({ routeData });
+      flush();
+    },
     replaceGateway(next: ReturnType<typeof gatewayFixture>) {
       setGateway(next.source);
       flush();
@@ -215,15 +224,21 @@ function dialogButton(label: string) {
   return button(modal, label);
 }
 
-function selectEntryAction(container: ParentNode, action: string, name = "MacBook Pro") {
+async function selectEntryAction(container: ParentNode, action: string, name = "MacBook Pro") {
   const row = [...container.querySelectorAll(".device-entry")].find(
     (entry) => entry.querySelector(".settings-row__title")?.textContent === name,
   );
-  const menu = row?.querySelector("wa-dropdown");
-  if (!menu) {
-    throw new Error("Expected device actions menu");
-  }
-  menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: action } } }));
+  const trigger = expectDefined(
+    row?.querySelector<HTMLButtonElement>(".device-entry__menu-trigger"),
+    "device actions trigger",
+  );
+  trigger.click();
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  expectDefined(
+    row?.querySelector<HTMLButtonElement>(`[role="menuitem"][data-value="${action}"]`),
+    `device action ${action}`,
+  ).click();
+  await Promise.resolve();
   flush();
 }
 
@@ -303,6 +318,45 @@ describe("DevicesPage gateway lifecycle", () => {
     expect(page.container.textContent).not.toContain("Stale presence");
   });
 
+  it("retains inventory and an edited approval policy through a same-client reconnect", async () => {
+    const { client } = clientFor();
+    const snapshot = gatewaySnapshot(client, true, [], ["operator.admin"]);
+    const fixture = gatewayFixture(snapshot);
+    const page = mountPage(fixture, {
+      nodes: [{ nodeId: "retained", displayName: "Retained Mac" }],
+      execApprovalsSnapshot: {
+        path: "/synthetic/exec-approvals.json",
+        exists: true,
+        hash: "original-base",
+        file: { version: 1, defaults: { security: "deny" } },
+      },
+      execApprovalsForm: { version: 1, defaults: { security: "deny" } },
+    });
+    const policy = page.container.querySelector<HTMLSelectElement>('select[aria-label="Mode"]')!;
+    expect(policy).not.toBeNull();
+    policy.value = "allowlist";
+    policy.dispatchEvent(new Event("change", { bubbles: true }));
+    flush();
+    page.config.configForm = { tools: { exec: { node: "draft-node" } } };
+    invalidateConfigConnection(page.config);
+    fixture.emitSnapshot({ ...snapshot, phase: "reconnecting", hello: null });
+    expect(page.container.textContent).toContain("Retained Mac");
+    expect(
+      page.container.querySelector<HTMLSelectElement>('select[aria-label="Mode"]')?.value,
+    ).toBe("allowlist");
+    expect(button(page.container, "Save").disabled).toBe(true);
+    expect(
+      page.container.querySelector<HTMLSelectElement>('select[aria-label="Node"]')?.value,
+    ).toBe("draft-node");
+    fixture.emitSnapshot(snapshot);
+    expect(
+      page.container.querySelector<HTMLSelectElement>('select[aria-label="Mode"]')?.value,
+    ).toBe("allowlist");
+    page.replaceGateway(gatewayFixture(gatewaySnapshot(null, false)));
+    expect(page.container.textContent).not.toContain("Retained Mac");
+    expect(page.container.querySelector('select[aria-label="Mode"]')).toBeNull();
+  });
+
   it("rejects preloaded data after a same-client gateway epoch change", async () => {
     const { client, request } = clientFor();
     const fixture = gatewayFixture(gatewaySnapshot(client));
@@ -338,6 +392,9 @@ describe("DevicesPage gateway lifecycle", () => {
       expect(page.container.textContent).toContain("Earlier operator action failed");
       nodes.resolve({ nodes: [{ nodeId: "node-1", displayName: "Current Mac", connected: true }] });
       await vi.waitFor(() => expect(page.container.textContent).toContain("Current Mac"));
+      page.refreshPresentation();
+      expect(page.container.textContent).toContain("Current Mac");
+      expect(page.container.textContent).not.toContain("Office Mac");
     },
   );
 
@@ -345,15 +402,17 @@ describe("DevicesPage gateway lifecycle", () => {
     {
       name: "advertised",
       methods: ["system.info", "desktop.observe"],
+      read: true,
       systemInfo: true,
       desktop: true,
       scopes: ["operator.admin"],
     },
-    { name: "unadvertised", methods: [], systemInfo: false, desktop: false },
-    { name: "unknown features", methods: undefined, systemInfo: false, desktop: false },
+    { name: "unadvertised", methods: [], read: true, systemInfo: false, desktop: false },
+    { name: "unknown features", methods: undefined, read: true, systemInfo: false, desktop: false },
     {
       name: "read-only",
       methods: ["system.info", "desktop.observe"],
+      read: true,
       systemInfo: true,
       desktop: false,
       scopes: ["operator.read"],
@@ -361,6 +420,7 @@ describe("DevicesPage gateway lifecycle", () => {
     {
       name: "session-only",
       methods: ["system.info", "desktop.observe"],
+      read: false,
       systemInfo: false,
       desktop: false,
       scopes: ["operator.sessions.read", "operator.sessions.write"],
@@ -372,9 +432,14 @@ describe("DevicesPage gateway lifecycle", () => {
       delete snapshot.hello.features;
     }
     const page = mountPage(gatewayFixture(snapshot), { devicesList: { paired: [], pending: [] } });
-    await vi.waitFor(() => expect(page.container.textContent).toContain("Gateway host"));
+    await vi.waitFor(() =>
+      expect(page.container.textContent?.includes("Gateway host")).toBe(scenario.read),
+    );
     await Promise.resolve();
     flush();
+    for (const methodName of ["system-presence", "node.list"]) {
+      expect(request.mock.calls.some(([method]) => method === methodName)).toBe(scenario.read);
+    }
     expect(request.mock.calls.some(([method]) => method === "system.info")).toBe(
       scenario.systemInfo,
     );
@@ -687,16 +752,40 @@ describe("DevicesPage gateway lifecycle", () => {
   );
 
   it.each(["removal", "alias"])(
-    "cancels a pending %s dialog when the connection resets",
+    "retains a pending %s dialog through reconnect and cancels it on fresh pairing denial",
     async (kind) => {
       const request = vi.fn(async (method: string) => responseFor(method));
       const page = mountPaired(request);
-      selectEntryAction(page.container, kind === "alias" ? "editAlias" : "remove");
+      await selectEntryAction(page.container, kind === "alias" ? "editAlias" : "remove");
       await waitForRenderedModalDialog(document.body);
+      if (kind === "alias") {
+        const input = document.body.querySelector<HTMLInputElement>('input[name="value"]')!;
+        input.value = "Draft device alias";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        flush();
+      }
+      const label = kind === "alias" ? t("common.save") : t("devices.inventory.remove");
+      expect(dialogButton(label).disabled).toBe(false);
       request.mockClear();
       page.fixture.emitSnapshot(gatewaySnapshot(page.client, false));
-      await expectNoModal();
+      expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
+      expect(dialogButton(label).disabled).toBe(true);
       expect(request).not.toHaveBeenCalled();
+      page.fixture.emitSnapshot(gatewaySnapshot(page.client));
+      expect(dialogButton(label).disabled).toBe(false);
+      if (kind === "alias") {
+        expect(document.body.querySelector<HTMLInputElement>('input[name="value"]')?.value).toBe(
+          "Draft device alias",
+        );
+      }
+      page.fixture.emitSnapshot(gatewaySnapshot(page.client, true, [], ["operator.read"]));
+      await expectNoModal();
+      expect(page.container.textContent).not.toContain("MacBook Pro");
+      expect(page.container.textContent).toContain("Office Mac");
+      page.fixture.emitSnapshot(gatewaySnapshot(page.client, true, [], []));
+      expect(page.container.querySelector(".device-entry")).toBeNull();
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.remove");
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.rename");
     },
   );
 
@@ -733,7 +822,7 @@ describe("DevicesPage gateway lifecycle", () => {
       ],
       devicesList: { paired: [], pending: [] },
     });
-    selectEntryAction(page.container, "reject", "Pending node");
+    await selectEntryAction(page.container, "reject", "Pending node");
     await waitForRenderedModalDialog(document.body);
     request.mockClear();
     dialogButton(t("common.cancel")).click();
@@ -758,7 +847,12 @@ describe("DevicesPage gateway lifecycle", () => {
         page.fixture.emitSnapshot(
           gatewaySnapshot(page.client, true, ["device.token.revoke"], ["operator.read"]),
         );
+      }
+      if (transition === "connection resets") {
+        expect(dialogButton(t("devices.inventory.revoke")).disabled).toBe(true);
         dialogButton(t("devices.inventory.revoke")).click();
+        expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
+        dialogButton(t("common.cancel")).click();
       }
       await expectNoModal();
       expect(request.mock.calls.map(([method]) => method)).not.toContain("device.token.revoke");
@@ -783,9 +877,13 @@ describe("DevicesPage gateway lifecycle", () => {
     stubLocalDeviceIdentity();
     const page = mountPaired(rotatingRequest(ROTATED_TOKEN));
     button(page.container, t("devices.inventory.rotate")).click();
-    const { modal, webAwesomeDialog } = await waitForRenderedModalDialog(document.body);
-    const dismissal = new Event("wa-hide", { bubbles: true, cancelable: true, composed: true });
-    webAwesomeDialog.dispatchEvent(dismissal);
+    const { modal } = await waitForRenderedModalDialog(document.body);
+    const dismissal = new Event("modal-cancel", {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+    modal.dispatchEvent(dismissal);
     await modal.updateComplete;
     expect(dismissal.defaultPrevented).toBe(true);
     expect(secretDialogText()).toBe(ROTATED_TOKEN);
@@ -852,9 +950,13 @@ describe("DevicesPage gateway lifecycle", () => {
     stubLocalDeviceIdentity();
     const page = mountPaired(rotatingRequest(null));
     button(page.container, t("devices.inventory.rotate")).click();
-    const { webAwesomeDialog } = await waitForRenderedModalDialog(document.body);
-    const dismissal = new Event("wa-hide", { bubbles: true, cancelable: true, composed: true });
-    webAwesomeDialog.dispatchEvent(dismissal);
+    const { modal } = await waitForRenderedModalDialog(document.body);
+    const dismissal = new Event("modal-cancel", {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+    modal.dispatchEvent(dismissal);
     await expectNoModal();
     expect(dismissal.defaultPrevented).toBe(false);
   });

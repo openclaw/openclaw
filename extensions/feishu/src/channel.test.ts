@@ -560,56 +560,54 @@ describe("Feishu cards and delivery", () => {
     expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
     expect(feishuOutboundSendTextMock).not.toHaveBeenCalled();
   });
-  it("falls back when presentation text exceeds the card table limit", async () => {
-    feishuOutboundSendPayloadMock.mockResolvedValueOnce(receipt);
-    const sixTables = Array.from(
-      { length: 6 },
-      (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`,
-    ).join("\n\n");
-    expect(
-      details(
-        await run("send", {
+  it.each(["table-limit", "oversized-media"] as const)(
+    "uses payload fallback for %s presentations",
+    async (reason) => {
+      const media = reason === "oversized-media";
+      const sixTables = Array.from(
+        { length: 6 },
+        (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`,
+      ).join("\n\n");
+      feishuOutboundSendPayloadMock.mockResolvedValueOnce(receipt);
+      const result = await run(
+        "send",
+        {
           to: "chat:oc_group_1",
-          message: sixTables,
-          presentation: { title: "Status", blocks: [{ type: "text", text: "Build completed" }] },
-        }),
-      ),
-    ).toMatchObject({ ok: true, messageId: "om_sent" });
-    expect(sendCardFeishuMock).not.toHaveBeenCalled();
-    expect(feishuOutboundSendPayloadMock).toHaveBeenCalledOnce();
-    expect(args(feishuOutboundSendPayloadMock)).toMatchObject({
-      to: "chat:oc_group_1",
-      text: sixTables,
-    });
-  });
-  it("hides raw card JSON and preserves trusted media access in oversized fallbacks", async () => {
-    feishuOutboundSendPayloadMock.mockResolvedValueOnce(receipt);
-    await run(
-      "send",
-      {
-        to: "chat:oc_group_1",
-        message: `[Nexus] ${JSON.stringify(rawCard)}`,
-        presentation: oversizedPresentation,
-        media: "pipeline.png",
-        ...forgedMediaParams,
-      },
-      {
-        cfg: config({ ...cfg.channels.feishu, responsePrefix: "[Nexus]" }),
-        ...trustedMediaContext,
-      },
-    );
-    expect(sendCardFeishuMock).not.toHaveBeenCalled();
-    expect(feishuOutboundSendPayloadMock).toHaveBeenCalledOnce();
-    const sent = args(feishuOutboundSendPayloadMock);
-    expect(sent).toMatchObject({
-      text: "",
-      mediaLocalRoots: ["/legacy/workspace"],
-      mediaReadFile: legacyReadFile,
-      payload: { presentation: oversizedPresentation, mediaUrl: "pipeline.png", text: undefined },
-    });
-    expect(sent.mediaAccess).toBe(mediaAccess);
-    expect(sent.mediaAccess).not.toBe(forgedMediaAccess);
-  });
+          message: media ? `[Nexus] ${JSON.stringify(rawCard)}` : sixTables,
+          presentation: media
+            ? oversizedPresentation
+            : { title: "Status", blocks: [{ type: "text", text: "Build completed" }] },
+          ...(media ? { media: "pipeline.png", ...forgedMediaParams } : {}),
+        },
+        media
+          ? {
+              cfg: config({ ...cfg.channels.feishu, responsePrefix: "[Nexus]" }),
+              ...trustedMediaContext,
+            }
+          : {},
+      );
+      expect(details(result)).toMatchObject({ ok: true, messageId: "om_sent" });
+      expect(sendCardFeishuMock).not.toHaveBeenCalled();
+      expect(feishuOutboundSendPayloadMock).toHaveBeenCalledOnce();
+      const sent = args(feishuOutboundSendPayloadMock);
+      if (media) {
+        expect(sent).toMatchObject({
+          text: "",
+          mediaLocalRoots: ["/legacy/workspace"],
+          mediaReadFile: legacyReadFile,
+          payload: {
+            presentation: oversizedPresentation,
+            mediaUrl: "pipeline.png",
+            text: undefined,
+          },
+        });
+        expect(sent.mediaAccess).toBe(mediaAccess);
+        expect(sent.mediaAccess).not.toBe(forgedMediaAccess);
+      } else {
+        expect(sent).toMatchObject({ to: "chat:oc_group_1", text: sixTables });
+      }
+    },
+  );
   it("propagates upload failure from the presentation fallback (#125664)", async () => {
     feishuOutboundSendPayloadMock.mockRejectedValueOnce(new Error("upload failed"));
     await expect(

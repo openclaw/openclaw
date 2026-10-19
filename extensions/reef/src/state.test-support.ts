@@ -11,7 +11,6 @@ import type {
   PluginStateOperationReceipt,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
   createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -20,7 +19,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, vi } from "vitest";
 
-export function createRuntime(stateDir: string, registrationHost: "worker" | "legacy" = "worker") {
+export function createRuntime(stateDir: string) {
   const runtime = createPluginRuntimeMock();
   const stateStores: Array<Pick<PluginStateKeyedStore<unknown>, "createOperation">> = [];
   runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
@@ -28,32 +27,18 @@ export function createRuntime(stateDir: string, registrationHost: "worker" | "le
       ...options,
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
-  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) => {
-    const store = createPluginStateKeyedStoreForTests<T>("reef", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-    stateStores.push(store);
-    if (registrationHost === "legacy") {
-      const {
-        createOperation: _createOperation,
-        observe: _observe,
-        compareAndApply: _compareAndApply,
-        ...legacy
-      } = store;
-      return legacy;
-    }
-    return store;
-  };
   runtime.state.openKeyedStoreV2 = <T>(
     options: OpenAsyncKeyedStoreOptions,
     authority?: PluginStateActionAuthority,
-  ) =>
-    createPluginStateKeyedStoreV2ForTests<T>(
+  ) => {
+    const store = createPluginStateKeyedStoreV2ForTests<T>(
       "reef",
       { ...options, env: { OPENCLAW_STATE_DIR: stateDir } },
       authority ?? { assertCurrent() {} },
     );
+    stateStores.push(store);
+    return store;
+  };
   return Object.assign(runtime, { stateStores });
 }
 
@@ -89,10 +74,10 @@ export function beforeNextStateOperation(
     };
   };
   runtime.stateStores.forEach(intercept);
-  const open = runtime.state.openKeyedStore;
-  vi.spyOn(runtime.state, "openKeyedStore").mockImplementation(
-    <T>(options: OpenAsyncKeyedStoreOptions) => {
-      const store = open<T>(options);
+  const open = runtime.state.openKeyedStoreV2;
+  vi.spyOn(runtime.state, "openKeyedStoreV2").mockImplementation(
+    <T>(options: OpenAsyncKeyedStoreOptions, authority?: PluginStateActionAuthority) => {
+      const store = open<T>(options, authority);
       intercept(store);
       return store;
     },

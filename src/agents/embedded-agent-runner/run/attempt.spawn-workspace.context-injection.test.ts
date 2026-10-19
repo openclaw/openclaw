@@ -22,6 +22,7 @@ describe("embedded attempt context injection", () => {
         bootstrapMode: "limited",
         bootstrapContextRunKind: "default",
         bootstrapContextMode: "full",
+        deliversCompleteWorkspaceContext: false,
         hasCompletedBootstrapTurn,
         resolveBootstrapContextForRun,
       }),
@@ -34,6 +35,79 @@ describe("embedded attempt context injection", () => {
     expect(hasCompletedBootstrapTurn).toHaveBeenCalledOnce();
     expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      mode: "always",
+      bootstrapMode: "none",
+      runKind: "default",
+      contextMode: "full",
+      complete: true,
+      expected: false,
+    },
+    {
+      mode: "always",
+      bootstrapMode: "full",
+      runKind: "default",
+      contextMode: "full",
+      complete: true,
+      expected: true,
+    },
+    {
+      mode: "continuation-skip",
+      bootstrapMode: "none",
+      runKind: "cron",
+      contextMode: "full",
+      complete: true,
+      expected: false,
+    },
+    {
+      mode: "continuation-skip",
+      bootstrapMode: "none",
+      runKind: "heartbeat",
+      contextMode: "full",
+      complete: true,
+      expected: false,
+    },
+    {
+      mode: "continuation-skip",
+      bootstrapMode: "none",
+      runKind: "default",
+      contextMode: "lightweight",
+      complete: true,
+      expected: false,
+    },
+    {
+      mode: "continuation-skip",
+      bootstrapMode: "limited",
+      runKind: "default",
+      contextMode: "full",
+      complete: false,
+      expected: false,
+    },
+    {
+      mode: "never",
+      bootstrapMode: "full",
+      runKind: "default",
+      contextMode: "full",
+      complete: true,
+      expected: false,
+    },
+  ] as const)(
+    "completion eligibility: $mode / $bootstrapMode / $runKind / $contextMode",
+    async (testCase) => {
+      const result = await resolveAttemptBootstrapContext({
+        contextInjectionMode: testCase.mode,
+        bootstrapMode: testCase.bootstrapMode,
+        bootstrapContextRunKind: testCase.runKind,
+        bootstrapContextMode: testCase.contextMode,
+        deliversCompleteWorkspaceContext: testCase.complete,
+        hasCompletedBootstrapTurn: async () => false,
+        resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
+      });
+      expect(result.shouldRecordCompletedBootstrapTurn).toBe(testCase.expected);
+    },
+  );
 
   it("filters no-op heartbeat pairs before history limiting and context-engine assembly", async () => {
     const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({

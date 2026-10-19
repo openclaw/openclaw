@@ -301,9 +301,7 @@ export function resolveAnthropicServiceTier(
   return normalized;
 }
 
-export function wrapAnthropicProviderStream(
-  ctx: ProviderWrapStreamFnContext,
-): StreamFn | undefined {
+export function wrapAnthropicProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
   const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
   const needsAnthropicBetaWrapper =
     anthropicBetas !== undefined ||
@@ -313,7 +311,7 @@ export function wrapAnthropicProviderStream(
   const hasFastModeParam =
     ctx.extraParams !== undefined &&
     (Object.hasOwn(ctx.extraParams, "fastMode") || Object.hasOwn(ctx.extraParams, "fast_mode"));
-  return composeProviderStreamWrappers(
+  const wrapped = composeProviderStreamWrappers(
     ctx.streamFn,
     needsAnthropicBetaWrapper
       ? (streamFn) => createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas ?? [])
@@ -331,6 +329,6 @@ export function wrapAnthropicProviderStream(
       : undefined,
     // The shared plan owns the default, opt-out, and per-request auth/route gates.
     (streamFn) => createAnthropicCompactionWrapper(streamFn, ctx.extraParams),
-    createAnthropicThinkingPrefillWrapper,
   );
+  return createAnthropicThinkingPrefillWrapper(wrapped);
 }

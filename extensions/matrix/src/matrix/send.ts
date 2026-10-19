@@ -3,6 +3,7 @@ import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CoreConfig } from "../types.js";
 import {
   createMatrixPlannedEvents,
@@ -57,25 +58,12 @@ export { resolveMatrixRoomId } from "./send/targets.js";
 type MatrixClientResolveOpts = Parameters<typeof withResolvedMatrixControlClient>[0];
 
 function resolvePreviousThreadId(previousEvent: unknown): string | undefined {
-  if (!previousEvent || typeof previousEvent !== "object") {
+  const content = asOptionalObjectRecord(asOptionalObjectRecord(previousEvent)?.content);
+  const relation = asOptionalObjectRecord(content?.["m.relates_to"]);
+  if (relation?.rel_type !== RelationType.Thread || typeof relation.event_id !== "string") {
     return undefined;
   }
-  const content = (previousEvent as { content?: unknown }).content;
-  if (!content || typeof content !== "object") {
-    return undefined;
-  }
-  const relation = (content as Record<string, unknown>)["m.relates_to"];
-  if (!relation || typeof relation !== "object") {
-    return undefined;
-  }
-  const relationRecord = relation as { event_id?: unknown; rel_type?: unknown };
-  if (
-    relationRecord.rel_type !== RelationType.Thread ||
-    typeof relationRecord.event_id !== "string"
-  ) {
-    return undefined;
-  }
-  return normalizeThreadId(relationRecord.event_id) ?? undefined;
+  return normalizeThreadId(relation.event_id) ?? undefined;
 }
 
 function withMatrixExtraContentFields<T extends Record<string, unknown>>(
@@ -145,7 +133,7 @@ export async function sendMessageMatrix(
             wireEventType: wireEventType!,
           })
         : null;
-      let plannedEvents: MatrixPreparedEvent[] | undefined = storedPlan?.events;
+      let plannedEvents: readonly MatrixPreparedEvent[] | undefined = storedPlan?.events;
       if (!plannedEvents) {
         const preparedText = chunkMatrixText(messageText, {
           cfg,
@@ -159,10 +147,18 @@ export async function sendMessageMatrix(
         let textRelation = relation;
         let pendingExtraContent = opts.extraContent;
         const events: Omit<MatrixPreparedEvent, "transactionId">[] = [];
-        const prepareContent = (
+        const prepareContent = async (
           content: MatrixOutboundContent,
           receiptKind: MessageReceiptPartKind,
+          markdown: string,
         ) => {
+          await enrichMatrixFormattedContent({
+            client,
+            content,
+            markdown,
+            preparedBody: markdown === convertedText ? singleEventBody : undefined,
+            tableMode,
+          });
           events.push({
             content: withMatrixExtraContentFields(content, pendingExtraContent),
             receiptKind,
@@ -215,14 +211,7 @@ export async function sendMessageMatrix(
             isVoice: useVoice,
             imageInfo,
           });
-          await enrichMatrixFormattedContent({
-            client,
-            content,
-            markdown: captionMarkdown,
-            preparedBody: captionMarkdown === convertedText ? singleEventBody : undefined,
-            tableMode,
-          });
-          prepareContent(content, receiptKind);
+          await prepareContent(content, receiptKind, captionMarkdown);
           textChunks = useVoice ? chunks : rest;
           textRelation = useVoice || threadId ? relation : undefined;
         }
@@ -230,15 +219,7 @@ export async function sendMessageMatrix(
           if (!chunk.trim()) {
             continue;
           }
-          const content = buildTextContent(chunk, textRelation);
-          await enrichMatrixFormattedContent({
-            client,
-            content,
-            markdown: chunk,
-            preparedBody: chunk === convertedText ? singleEventBody : undefined,
-            tableMode,
-          });
-          prepareContent(content, "text");
+          await prepareContent(buildTextContent(chunk, textRelation), "text", chunk);
         }
         plannedEvents = durableIdentity
           ? createMatrixPlannedEvents({ identity: durableIdentity, events })

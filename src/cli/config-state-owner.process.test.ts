@@ -67,6 +67,33 @@ describe("config CLI database effects", () => {
   });
 
   it.each(operations)(
+    "allows $name previews while another process owns state",
+    async ({ args, input }) => {
+      const result = await runCliProcessChild({
+        nodeArgs: [...entrypoint, ...args, "--dry-run"],
+        env,
+        input,
+      });
+      expect(result.code, result.stderr).toBe(0);
+      expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe(originalConfig);
+      expect(await readLatestConfigSnapshotAuditRecordAsync({ env })).toBeNull();
+    },
+  );
+
+  it("does not bootstrap state for an unchanged config value", async () => {
+    const offline = await fixture(roots.make("openclaw-config-unchanged-"));
+    const result = await runCliProcessChild({
+      nodeArgs: [...entrypoint, "config", "set", "logging.level", "debug"],
+      env: offline,
+    });
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toContain("No change");
+    await expect(
+      fs.access(path.join(offline.OPENCLAW_STATE_DIR!, "state", "openclaw.sqlite")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(operations)(
     "refuses $name before changing live-owned config",
     async ({ args, input }) => {
       const result = await runCliProcessChild({ nodeArgs: [...entrypoint, ...args], env, input });

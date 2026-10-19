@@ -13,58 +13,45 @@ import type { WorkboardRefreshSource, WorkboardUiState } from "./types.ts";
 
 type LoadWorkboardParams = WorkboardClientContext & {
   force?: boolean;
+  more?: boolean;
   refreshDiagnostics?: boolean;
   preserveError?: boolean;
 };
 
 export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolean> {
-  return await loadWorkboardInternal(params);
-}
-
-export async function loadWorkboardCatalog(params: WorkboardClientContext): Promise<boolean> {
-  return await loadWorkboardInternal({ ...params, force: true }, true);
-}
-
-async function loadWorkboardInternal(
-  params: LoadWorkboardParams,
-  catalogOnly = false,
-): Promise<boolean> {
   const runtime = getWorkboardRuntime(params.host);
   const state = getWorkboardState(params.host);
   if (
     !params.client ||
     state.dispatching ||
     workboardHasActiveWrites(state) ||
-    (!params.force && (state.loaded || state.loadAttempted))
+    (params.more && !state.nextCursor) ||
+    (!params.force && !params.more && (state.loaded || state.loadAttempted))
   ) {
     return false;
   }
   const client = params.client;
   const existingLoad = runtime.loadPromise;
   if (existingLoad) {
-    const requiresTaskLoad = !catalogOnly && runtime.loadCatalogOnly;
     const result = await existingLoad;
     // Forced callers carry their own diagnostics/task-refresh contract, so a
     // weaker in-flight load cannot satisfy them.
-    return (params.force || requiresTaskLoad) &&
+    return params.force &&
       runtime.loadClient === client &&
       !state.dispatching &&
       !workboardHasActiveWrites(state)
-      ? await loadWorkboardInternal(params, catalogOnly)
+      ? await loadWorkboard(params)
       : result;
   }
-  runtime.loadCatalogOnly = catalogOnly;
   runtime.loadClient = client;
-  if (!catalogOnly) {
-    state.loadAttempted = true;
-    state.loading = true;
-    if (!params.preserveError) {
-      delete runtime.loadError;
-      state.error = null;
-    }
-    state.lastRefreshError = null;
-    params.requestUpdate?.();
+  state.loadAttempted = true;
+  state.loading = true;
+  if (!params.preserveError) {
+    delete runtime.loadError;
+    state.error = null;
   }
+  state.lastRefreshError = null;
+  params.requestUpdate?.();
   const loadPromise: Promise<boolean> = Promise.resolve().then(async () => {
     try {
       if (params.refreshDiagnostics) {
@@ -78,35 +65,52 @@ async function loadWorkboardInternal(
       }
       const payload = await client.request(
         "workboard.cards.list",
-        runtime.cardsRevision ? { sinceRevision: runtime.cardsRevision } : {},
+        params.more
+          ? { after: state.nextCursor }
+          : runtime.cardsRevision
+            ? { sinceRevision: runtime.cardsRevision }
+            : {},
       );
       if (runtime.loadPromise !== loadPromise) {
         return false;
       }
       const unchanged = isRecord(payload) && payload.unchanged === true;
-      if (
-        catalogOnly &&
-        !unchanged &&
-        (!isRecord(payload) || !Array.isArray(payload.cards) || !Array.isArray(payload.boards))
-      ) {
+      const normalized = unchanged ? state : normalizeCardsPayload(payload);
+      if (!unchanged && !params.more) {
+        // Refresh the held window through bounded pages; do not collapse a reader
+        // back to the first page after every live write.
+        while (normalized.nextCursor && normalized.cards.length < state.cards.length) {
+          const page = normalizeCardsPayload(
+            await client.request("workboard.cards.list", { after: normalized.nextCursor }),
+          );
+          if (runtime.loadPromise !== loadPromise) {
+            return false;
+          }
+          normalized.cards.push(...page.cards);
+          normalized.nextCursor = page.nextCursor;
+        }
+      }
+      if (params.preserveError && shouldDeferWorkboardLiveRefresh(state)) {
         return false;
       }
-      const normalized = unchanged ? state : normalizeCardsPayload(payload);
-      if (catalogOnly) {
-        state.boards = normalized.boards;
+      if (!params.more) {
+        runtime.cardsRevision = normalizeWorkboardChange(
+          isRecord(payload) ? payload.revision : null,
+        );
       }
-      // Keep navigation current without replacing cards beneath an unfinished draft.
-      if ((catalogOnly || params.preserveError) && shouldDeferWorkboardLiveRefresh(state)) {
-        return catalogOnly;
-      }
-      runtime.cardsRevision = normalizeWorkboardChange(isRecord(payload) ? payload.revision : null);
-      setWorkboardCards(state, normalized.cards);
+      setWorkboardCards(
+        state,
+        params.more
+          ? [
+              ...new Map(
+                [...state.cards, ...normalized.cards].map((card) => [card.id, card]),
+              ).values(),
+            ]
+          : normalized.cards,
+      );
+      state.nextCursor = normalized.nextCursor;
       state.boards = normalized.boards;
       state.statuses = normalized.statuses;
-      // Catalog hydration never authorizes stale edits.
-      if (catalogOnly) {
-        return true;
-      }
       const recoveredLoadError = runtime.loadError;
       if (recoveredLoadError !== undefined && state.error === recoveredLoadError) {
         state.error = null;
@@ -118,7 +122,7 @@ async function loadWorkboardInternal(
       state.loaded = true;
       return true;
     } catch (error) {
-      if (!catalogOnly && runtime.loadPromise === loadPromise) {
+      if (runtime.loadPromise === loadPromise) {
         const formattedError = formatError(error);
         if (params.preserveError) {
           state.lastRefreshError = formattedError;
@@ -130,11 +134,10 @@ async function loadWorkboardInternal(
       return false;
     } finally {
       if (runtime.loadPromise === loadPromise) {
-        if (!catalogOnly && !state.draftSaving) {
+        if (!state.draftSaving) {
           state.loading = false;
         }
         delete runtime.loadPromise;
-        delete runtime.loadCatalogOnly;
       }
       params.requestUpdate?.();
     }

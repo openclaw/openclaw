@@ -74,9 +74,7 @@ describe("workspace setup-only SQLite safety", () => {
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
-    await expect(
-      fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
-    ).resolves.toBeUndefined();
+    await fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
     expect((await readWorkspaceStateSnapshot(tempDir)).setup.setupCompletedAt).toBeUndefined();
   });
 
@@ -100,9 +98,7 @@ describe("workspace setup-only SQLite safety", () => {
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
-    await expect(
-      fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
-    ).resolves.toBeUndefined();
+    await fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
     expect((await readWorkspaceStateSnapshot(tempDir)).setup.setupCompletedAt).toBeUndefined();
   });
 

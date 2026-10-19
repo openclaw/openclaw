@@ -1,8 +1,13 @@
+import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import type {
   ApprovalDecision,
   ApprovalTerminalReason,
 } from "../../../packages/gateway-protocol/src/schema/approvals.js";
+import type { ImageContent } from "../../../packages/llm-core/src/types.js";
 import type { AnyAgentTool } from "../tools/common.js";
+
+export type AgentHarnessContextMedia = { text?: string; images: ImageContent[] };
+export type AgentHarnessContextMediaRequest = { message: AgentMessage; maxChars: number };
 
 type AgentHarnessHostApprovalResult = Readonly<{
   decision: ApprovalDecision | null | undefined;
@@ -22,6 +27,8 @@ type AgentHarnessPreparedEnvironment = Readonly<{
   localToolPathPrepend?: readonly string[];
   /** Non-secret fact used to select the local GitHub identity overlay. */
   managedLocalIdentity: boolean;
+  /** Use this host's tool surface when the runtime cannot bind credentials at process launch. */
+  hostExecutionRequired?: true;
 }>;
 
 type AgentHarnessToolSurfaceOptions = Omit<
@@ -40,7 +47,32 @@ export type AgentHarnessHostCapabilities = Readonly<{
   version: 1;
   /** Fails closed unless this exact admitted run capability remains active. */
   assertActive: () => void;
-  /** Native delegation without person selection must remain unambiguous at admission. */
+  /** Prepare history only when a native thread must be freshly seeded, under this run's authority. */
+  prepareBoundedSeed?: (
+    request: Readonly<{
+      assertCurrent: () => void;
+      signal?: AbortSignal;
+      /** Final delivery allowance; valid smaller values only narrow the captured host budget. */
+      tokenBudget?: number;
+    }>,
+  ) => Promise<readonly AgentMessage[]>;
+  /**
+   * Freeze the host continuation count before tools or inference, using the native
+   * owner's admitted Gateway-local cwd. Never pass a remote/container path.
+   * Repeat calls must use the same cwd; omission preserves the harness result budget.
+   */
+  prepareContinuationRetryCount?: (workspace: Readonly<{ cwd: string }>) => void;
+  /** Capture admitted request ancestry for descendants that outlive this foreground turn. */
+  captureRequestCustody?: () =>
+    | import("../../infra/exec-request-context.js").ExecRequestCustody
+    | undefined;
+  /** Native runtimes must install pre-tool admission for these pending workspace operations. */
+  workspaceReadiness?: Readonly<{
+    toolNames: readonly string[];
+    /** Await the existing workspace owner while preserving this run's authority. */
+    waitUntilReady: () => Promise<void>;
+  }>;
+  /** Native delegation retains the incumbent execution and requires its current authority. */
   assertNativeSubagentSpawnAllowed?: () => void;
   /** Binds the actual native model; returns undefined only for runs without an operator source. */
   bindModelExecution?: AgentHarnessModelExecutionBinder;
@@ -81,10 +113,9 @@ export type AgentHarnessHostCapabilities = Readonly<{
     signal?: AbortSignal;
   }) => Promise<string | undefined>;
   /** Rebuilds retained attachments under this host's captured media policy and run authority. */
-  prepareContextMedia?: (request: {
-    message: import("../runtime/index.js").AgentMessage;
-    maxChars: number;
-  }) => Promise<{ text?: string; images: import("../../llm/types.js").ImageContent[] }>;
+  prepareContextMedia?: (
+    request: AgentHarnessContextMediaRequest,
+  ) => Promise<AgentHarnessContextMedia>;
   /** Stages reply attachments under captured policy and live run authority. */
   prepareReplyMedia?: (
     request: {
@@ -131,7 +162,7 @@ export type AgentHarnessHostCapabilities = Readonly<{
   activeComputerContext?: () => string;
   /** Applies the exact host caller binding to a plugin-built tool surface. */
   bindToolSurface: (tools: AnyAgentTool[], options?: Readonly<{ cwd?: string }>) => AnyAgentTool[];
-  /** @deprecated Await createToolSurfaceAsync for fresh worker-backed exec policy. */
+  /** @deprecated Await createToolSurfaceAsync for worker-backed exec policy. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   createToolSurface?: (
     options: AgentHarnessToolSurfaceOptions,
     bindingOptions?: Readonly<{ cwd?: string }>,

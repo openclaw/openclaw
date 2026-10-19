@@ -170,6 +170,16 @@ export async function consumeGoogleGenerateContentStream(params: {
       const outputTokens = knownUsage.candidatesTokenCount + knownUsage.thoughtsTokenCount;
       params.output.usage = {
         ...createEmptyTransportUsage(),
+        usageReport: {
+          state:
+            sawTerminalReason ||
+            chunk.candidates?.some(
+              (candidate) =>
+                candidate.finishReason && candidate.finishReason !== "FINISH_REASON_UNSPECIFIED",
+            )
+              ? "available"
+              : "unavailable",
+        },
         input: Math.max(0, promptTokens - cacheRead) + toolUsePromptTokens,
         output: outputTokens,
         cacheRead,

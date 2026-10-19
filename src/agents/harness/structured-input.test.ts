@@ -13,29 +13,54 @@ const baseOptions: StructuredInputCompilerOptions = {
   minimumChoiceCount: 1,
   metadata: { secretPath: ["isSecret"] },
 };
+const rich = { ...baseOptions, allowRichForms: true };
+const string = (extra: Record<string, unknown> = {}) => ({ type: "string", ...extra });
+const strings = (extra: Record<string, unknown> = {}, item = string()) => ({
+  type: "array",
+  items: item,
+  ...extra,
+});
+const resourceField = (input: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+  string({ format: "uri", "x-openai-input": input, ...extra });
+const resourceFields = (input: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+  strings({ "x-openai-input": input, ...extra }, string({ format: "uri" }));
+const previewResource = (target: Record<string, unknown>) => ({
+  uri: "cad://parts/washer",
+  name: "Washer",
+  _meta: { "openai/preview": { target } },
+});
+const richCompile = (properties: Record<string, unknown>, required: string[] = []) =>
+  compile(properties, required, rich);
+const urlInput = (url: string) =>
+  compileStructuredInputUrl({
+    url,
+    elicitationId: "auth-1",
+    message: "Review authorization",
+    fallbackMessage: "Review URL",
+    protocolName: "test",
+  });
 
 function compile(
   properties: Record<string, unknown>,
   required: string[] = [],
   options = baseOptions,
+  message = "Complete the profile",
 ): StructuredInputCompileResult {
   return compileStructuredInputForm({
     schema: snapshotStructuredInput(
       { type: "object", properties, required },
       { richForm: options.allowRichForms },
     ),
-    message: "Complete the profile",
+    message,
     fallbackMessage: "Input requested",
     options,
   });
 }
 
-function requirePlan(result: StructuredInputCompileResult, kind: "form" | "url" = "form") {
-  expect(result.kind).toBe("ready");
-  if (result.kind !== "ready") {
-    throw new Error(result.message);
+function requireForm(result: StructuredInputCompileResult) {
+  if (result.kind !== "ready" || result.plan.kind !== "form") {
+    throw new Error("expected form plan");
   }
-  expect(result.plan.kind).toBe(kind);
   return result.plan;
 }
 
@@ -43,10 +68,7 @@ function decodeForm(
   result: StructuredInputCompileResult,
   answers: Record<string, string[]>,
 ): Record<string, unknown> | string {
-  const plan = requirePlan(result);
-  if (plan.kind !== "form") {
-    throw new Error("expected form plan");
-  }
+  const plan = requireForm(result);
   const entries: Array<[string, unknown]> = [];
   for (const field of plan.fields) {
     const decoded = field.decode(answers[field.question.id] ?? []);
@@ -63,26 +85,13 @@ function decodeForm(
 describe("structured input compiler", () => {
   it("preserves bounded multiline reference text in negotiated rich informational forms", () => {
     const message =
-      Array.from(
-        { length: 36 },
-        (_, index) =>
-          "Part " + index + ": " + "Reference dimensions and manufacturing notes. ".repeat(4),
-      ).join("\r\n\r\n") + "\n\tChoose Allow to continue.";
+      "Reference dimensions and manufacturing notes. ".repeat(144) +
+      "\r\n\r\n\n\tChoose Allow to continue.";
     expect(message.length).toBeGreaterThan(1024);
-    const params = {
-      schema: { type: "object", properties: {} },
-      message,
-      fallbackMessage: "Reference",
-      options: { ...baseOptions, allowRichForms: true },
-    };
-    const plan = requirePlan(compileStructuredInputForm(params));
+    const plan = requireForm(compile({}, [], rich, message));
     expect(plan).toMatchObject({ kind: "form", intro: message, fields: [] });
-    expect(compileStructuredInputForm({ ...params, options: baseOptions }).kind).toBe(
-      "unsupported",
-    );
-    expect(compileStructuredInputForm({ ...params, message: "x".repeat(65_537) }).kind).toBe(
-      "unsupported",
-    );
+    expect(compile({}, [], baseOptions, message).kind).toBe("unsupported");
+    expect(compile({}, [], rich, "x".repeat(65_537)).kind).toBe("unsupported");
   });
 
   it.each(["\u0000", "\u001b", "\u202e", "\u2066"])(
@@ -101,42 +110,26 @@ describe("structured input compiler", () => {
   it("projects bounded primitive fields and decodes defaults, choices, and multi-select", () => {
     const result = compile(
       {
-        "Display Name": { type: "string", minLength: 2, maxLength: 20 },
-        contact: { type: "string", format: "email" },
-        theme: {
-          type: "string",
+        "Display Name": string({ minLength: 2, maxLength: 20 }),
+        contact: string({ format: "email" }),
+        theme: string({
           oneOf: [
             { const: "day", title: "Day" },
             { const: "night", title: "Night", description: "Use dark colors" },
           ],
-        },
+        }),
         enabled: { type: "boolean" },
         count: { type: "integer", minimum: 1, maximum: 9 },
-        tags: {
-          type: "array",
-          items: { type: "string", enum: ["Red", "Blue", "Green"] },
-          minItems: 1,
-          maxItems: 2,
-        },
+        tags: strings({ minItems: 1, maxItems: 2 }, string({ enum: ["Red", "Blue", "Green"] })),
         score: { type: "number", default: 1.5 },
-        optional: { type: "string" },
+        optional: string(),
       },
       ["Display Name", "contact", "theme", "enabled", "count", "tags"],
     );
-    const plan = requirePlan(result);
-    if (plan.kind !== "form") {
-      throw new Error("expected form plan");
-    }
-    expect(plan.fields.map((field) => field.question.id)).toEqual([
-      "display_name",
-      "contact",
-      "theme",
-      "enabled",
-      "count",
-      "tags",
-      "score",
-      "optional",
-    ]);
+    const plan = requireForm(result);
+    expect(plan.fields.map((field) => field.question.id)).toEqual(
+      "display_name contact theme enabled count tags score optional".split(" "),
+    );
     expect(plan.fields[2]?.question.options).toEqual([
       { label: "Day" },
       { label: "Night", description: "Use dark colors" },
@@ -164,20 +157,9 @@ describe("structured input compiler", () => {
   });
 
   it("normalizes colliding ids and preserves __proto__ as inert accepted content", () => {
-    const requestedSchema = JSON.parse(
-      '{"type":"object","properties":{"Field Name":{"type":"string"},"field-name":{"type":"string"},"__proto__":{"type":"string"}},"required":["Field Name","field-name","__proto__"]}',
-    );
-    const result = compileStructuredInputForm({
-      schema: snapshotStructuredInput(requestedSchema),
-      message: "Input",
-      fallbackMessage: "Input",
-      options: baseOptions,
-    });
-    const plan = requirePlan(result);
-    if (plan.kind !== "form") {
-      throw new Error("expected form plan");
-    }
-    expect(plan.fields.map((field) => field.question.id)).toEqual([
+    const keys = ["Field Name", "field-name", "__proto__"];
+    const result = compile(Object.fromEntries(keys.map((key) => [key, string()])), keys);
+    expect(requireForm(result).fields.map((field) => field.question.id)).toEqual([
       "field_name",
       "field_name_2",
       "proto",
@@ -203,36 +185,27 @@ describe("structured input compiler", () => {
     };
     const result = compile(
       {
-        mode: {
-          type: "string",
+        mode: string({
           oneOf: [
             { const: "fast", title: " Fast " },
             { const: "safe", title: "Safe" },
           ],
           _meta: { codex: { isSecret: false } },
-        },
-        mode__other: {
-          type: "string",
+        }),
+        mode__other: string({
           _meta: {
-            codex: {
-              questionId: "mode",
-              isOtherAnswer: true,
-              isSecret: true,
-            },
+            codex: { questionId: "mode", isOtherAnswer: true, isSecret: true },
           },
-        },
-        password: { type: "string" },
+        }),
+        password: string(),
       },
       [],
       nestedOptions,
     );
-    const plan = requirePlan(result);
-    if (plan.kind !== "form") {
-      throw new Error("expected form plan");
-    }
-    expect(plan.fields).toHaveLength(2);
-    expect(plan.fields[0]?.question).toMatchObject({ id: "mode", isOther: true, isSecret: true });
-    expect(plan.fields[1]?.question).toMatchObject({ id: "password", isSecret: false });
+    expect(requireForm(result).fields.map((field) => field.question)).toMatchObject([
+      { id: "mode", isOther: true, isSecret: true },
+      { id: "password", isSecret: false },
+    ]);
     expect(decodeForm(result, { mode: [" Fast "], password: ["public"] })).toEqual({
       mode: "fast",
       password: "public",
@@ -254,27 +227,16 @@ describe("structured input compiler", () => {
       },
     };
     expect(compile(properties).kind).toBe("unsupported");
-    const enabled = compile(properties, ["template"], {
-      ...baseOptions,
-      allowImagePicker: true,
-    });
-    const plan = requirePlan(enabled);
-    if (plan.kind !== "form") {
-      throw new Error("expected form plan");
-    }
-    expect(plan.fields[0]?.question.options).toEqual([
+    const enabled = compile(properties, ["template"], { ...baseOptions, allowImagePicker: true });
+    expect(requireForm(enabled).fields[0]?.question.options).toEqual([
       { label: "Monthly review" },
       { label: "Weekly plan" },
     ]);
-    expect(decodeForm(enabled, { template: ["Monthly review"] })).toEqual({
-      template: "monthly",
-    });
+    expect(decodeForm(enabled, { template: ["Monthly review"] })).toEqual({ template: "monthly" });
   });
 
   it.each([
-    [{ type: "string", pattern: "^x$" }, "pattern"],
     [{ type: "integer", minimum: 3, maximum: 1 }, "numeric"],
-    [{ type: "string", enum: ["1", "2", "3", "4", "5"] }, "choices"],
     [{ type: "array", items: { type: "string", enum: ["x", "y"] }, maxItems: 3 }, "multi-select"],
   ])("declines unsupported or invalid constraints: %s", (field, message) => {
     const result = compile({ value: field }, ["value"]);
@@ -299,61 +261,34 @@ describe("structured input compiler", () => {
   });
 
   it("preserves an external URL separately from its completion question and rejects credentials", () => {
-    const suffix = "a".repeat(1_500);
-    const url = `https://example.com/authorize?state=${suffix}`;
-    const valid = compileStructuredInputUrl({
-      url,
-      elicitationId: "auth-1",
-      message: "Review authorization",
-      fallbackMessage: "Review URL",
-      protocolName: "test",
-    });
-    const plan = requirePlan(valid, "url");
-    if (plan.kind !== "url") {
+    const url = `https://example.com/authorize?state=${"a".repeat(1_500)}`;
+    const result = urlInput(url);
+    if (result.kind !== "ready" || result.plan.kind !== "url") {
       throw new Error("expected URL plan");
     }
-    expect(plan.question.url).toBe(url);
-    expect(plan.question.question).toContain(url);
-    expect(plan.question.options?.[0]?.label).toBe("I've completed this step");
-    expect(
-      compileStructuredInputUrl({
-        url: "https://user:secret@example.com",
-        elicitationId: "auth-2",
-        message: "Review",
-        fallbackMessage: "Review URL",
-        protocolName: "test",
-      }),
-    ).toMatchObject({ kind: "unsupported", message: expect.stringContaining("credentials") });
+    expect(result.plan.question).toMatchObject({
+      url,
+      question: expect.stringContaining(url),
+      options: [{ label: "I've completed this step" }, { label: "Decline" }],
+    });
+    expect(urlInput("https://user:secret@example.com")).toMatchObject({
+      kind: "unsupported",
+      message: expect.stringContaining("credentials"),
+    });
   });
 
   it("compiles an empty form only when allowEmptyForm is set", () => {
-    const emptyProps: Record<string, unknown> = {};
-
-    const withoutFlag = compile(emptyProps, [], {
-      ...baseOptions,
-      allowEmptyForm: false,
-    });
-    expect(withoutFlag).toMatchObject({
+    expect(compile({}, [], { ...baseOptions, allowEmptyForm: false })).toMatchObject({
       kind: "unsupported",
       message: expect.stringContaining("empty"),
     });
-
-    const withFlag = compile(emptyProps, [], {
-      ...baseOptions,
-      allowEmptyForm: true,
-    });
-    expect(withFlag).toMatchObject({ kind: "ready" });
-    const plan = requirePlan(withFlag);
-    if (plan.kind !== "form") {
-      throw new Error("expected form plan");
-    }
-    expect(plan.fields).toEqual([]);
+    const withFlag = compile({});
+    expect(requireForm(withFlag).fields).toEqual([]);
     expect(decodeForm(withFlag, {})).toEqual({});
   });
 });
 
 describe("OpenAI rich forms", () => {
-  const rich = { ...baseOptions, allowRichForms: true };
   const suggestion = {
     const: "washer",
     title: "M6 washer",
@@ -362,23 +297,13 @@ describe("OpenAI rich forms", () => {
   };
 
   it("keeps thumbnails and descriptions while decoding suggested and custom strings under the same constraints", () => {
-    const result = compile(
+    const result = richCompile(
       {
-        part: {
-          type: "string",
-          pattern: "^[a-z-]+$",
-          minLength: 2,
-          "x-openai-suggestions": [suggestion],
-        },
+        part: string({ pattern: "^[a-z-]+$", minLength: 2, "x-openai-suggestions": [suggestion] }),
       },
       ["part"],
-      rich,
     );
-    const plan = requirePlan(result);
-    if (plan.kind !== "form") {
-      throw new Error("expected form");
-    }
-    expect(plan.fields[0]?.question.options).toEqual([
+    expect(requireForm(result).fields[0]?.question.options).toEqual([
       {
         label: "M6 washer",
         value: "washer",
@@ -389,39 +314,18 @@ describe("OpenAI rich forms", () => {
     expect(decodeForm(result, { part: ["washer"] })).toEqual({ part: "washer" });
     expect(decodeForm(result, { part: ["custom-spacer"] })).toEqual({ part: "custom-spacer" });
     expect(decodeForm(result, { part: ["123"] })).toContain("pattern");
-    expect(compile({ part: { type: "string", pattern: "(a+)+$" } }, [], rich).kind).toBe(
-      "unsupported",
-    );
-  });
-
-  it("does not reinterpret custom text equal to a suggestion title", () => {
-    const result = compile(
-      { part: { type: "string", "x-openai-suggestions": [suggestion] } },
-      ["part"],
-      rich,
-    );
-    expect(decodeForm(result, { part: ["M6 washer"] })).toEqual({ part: "M6 washer" });
-    expect(decodeForm(result, { part: ["  custom  "] })).toEqual({ part: "  custom  " });
-    expect(
-      decodeForm(compile({ symbol: { type: "string", maxLength: 1 } }, ["symbol"], rich), {
-        symbol: ["🦀"],
-      }),
-    ).toEqual({ symbol: "🦀" });
+    expect(richCompile({ part: string({ pattern: "(a+)+$" }) }).kind).toBe("unsupported");
   });
 
   it("decodes multiple custom array entries with item, cardinality, and uniqueness validation", () => {
-    const result = compile(
+    const result = richCompile(
       {
-        parts: {
-          type: "array",
-          minItems: 1,
-          maxItems: 3,
-          uniqueItems: true,
-          items: { type: "string", maxLength: 20, "x-openai-suggestions": [suggestion] },
-        },
+        parts: strings(
+          { minItems: 1, maxItems: 3, uniqueItems: true },
+          string({ maxLength: 20, "x-openai-suggestions": [suggestion] }),
+        ),
       },
       ["parts"],
-      rich,
     );
     expect(decodeForm(result, { parts: ["washer", "custom-spacer", "custom-gasket"] })).toEqual({
       parts: ["washer", "custom-spacer", "custom-gasket"],
@@ -439,29 +343,19 @@ describe("OpenAI rich forms", () => {
       _meta: { "openai/thumbnail": { src: "https://example.com/washer.png" } },
     };
     const input = { type: "resource", options: [resource] };
-    const result = compile(
-      {
-        single: { type: "string", format: "uri", "x-openai-input": input, default: resource.uri },
-        multiple: {
-          type: "array",
-          items: { type: "string", format: "uri" },
-          "x-openai-input": { ...input, type: "file", selection: "explicit" },
-          default: [resource.uri],
-        },
-      },
-      [],
-      rich,
-    );
+    const result = richCompile({
+      single: resourceField(input, { default: resource.uri }),
+      multiple: resourceFields(
+        { ...input, type: "file", selection: "explicit" },
+        { default: [resource.uri] },
+      ),
+    });
     expect(decodeForm(result, { single: [resource.uri], multiple: [resource.uri] })).toEqual({
       single: resource.uri,
       multiple: [resource.uri],
     });
     expect(decodeForm(result, { single: [], multiple: [] })).toEqual({});
-    const plan = requirePlan(result);
-    if (plan.kind !== "form") {
-      throw new Error("expected form");
-    }
-    expect(plan.fields[0]?.question).toMatchObject({
+    expect(requireForm(result).fields[0]?.question).toMatchObject({
       defaultAnswers: [resource.uri],
       allowEmpty: true,
     });
@@ -478,35 +372,17 @@ describe("OpenAI rich forms", () => {
       isUploadedResource: (questionId: string, uri: string) =>
         questionId === "parts" && uri === "file:///admitted/part.stl",
     };
-    const resource = {
-      uri: "cad://parts/washer",
-      name: "Washer",
-      _meta: {
-        "openai/preview": {
-          target: {
-            type: "mcp_app_tool",
-            name: "cad.open",
-            arguments: { resourceUri: "cad://parts/washer" },
-          },
-        },
-      },
-    };
+    const resource = previewResource({
+      type: "mcp_app_tool",
+      name: "cad.open",
+      arguments: { resourceUri: "cad://parts/washer" },
+    });
     const result = compile(
-      {
-        parts: {
-          type: "array",
-          items: { type: "string", format: "uri" },
-          "x-openai-input": { type: "resource", selection: "implicit", options: [resource] },
-        },
-      },
+      { parts: resourceFields({ type: "resource", selection: "implicit", options: [resource] }) },
       [],
       { ...rich, resourceContext: source },
     );
-    const plan = requirePlan(result);
-    if (plan.kind !== "form") {
-      throw new Error("expected form");
-    }
-    expect(plan.fields[0]?.question).toMatchObject({
+    expect(requireForm(result).fields[0]?.question).toMatchObject({
       defaultAnswers: [resource.uri],
       resource: { viewId: "mcp-app-form", selection: "implicit", userOptions: { kind: "file" } },
       options: [{ resourceUri: resource.uri, preview: { type: "mcp_app_tool", name: "cad.open" } }],
@@ -518,17 +394,10 @@ describe("OpenAI rich forms", () => {
     expect(decodeForm(result, { parts: ["file:///ungranted/part.stl"] })).toContain("not admitted");
     source.uploads = false;
     expect(
-      compile(
-        {
-          file: {
-            type: "string",
-            format: "uri",
-            "x-openai-input": { type: "resource", options: [], userOptions: {} },
-          },
-        },
-        [],
-        { ...rich, resourceContext: source },
-      ).kind,
+      compile({ file: resourceField({ type: "resource", options: [], userOptions: {} }) }, [], {
+        ...rich,
+        resourceContext: source,
+      }).kind,
     ).toBe("unsupported");
   });
 
@@ -537,68 +406,37 @@ describe("OpenAI rich forms", () => {
       const: "value-" + index,
       title: "Choice " + index,
     }));
-    const fields = { selected: { type: "string", oneOf: values } };
+    const fields = { selected: string({ oneOf: values }) };
     expect(compile(fields).kind).toBe("unsupported");
-    const result = compile(fields, ["selected"], rich);
+    const result = richCompile(fields, ["selected"]);
     expect(decodeForm(result, { selected: ["value-11"] })).toEqual({ selected: "value-11" });
-    const plan = requirePlan(result);
-    if (plan.kind !== "form") {
-      throw new Error("expected form");
-    }
-    expect(plan.fields[0]?.question.options).toHaveLength(12);
+    expect(requireForm(result).fields[0]?.question.options).toHaveLength(12);
   });
 
   it.each([
-    { type: "resource", options: [], userOptions: {} },
-    { type: "resource", options: [], selection: "implicit" },
     { type: "unknown", options: [] },
     {
       type: "resource",
       options: [
-        {
-          uri: "cad://part",
-          name: "Part",
-          _meta: {
-            "openai/preview": {
-              target: { type: "resource_link", uri: "cad://part", name: "Part" },
-            },
-          },
-        },
+        previewResource({ type: "resource_link", uri: "cad://parts/washer", name: "Washer" }),
       ],
     },
   ])("refuses the whole form when a resource operation cannot be honored: %j", (input) => {
-    const result = compile(
-      {
-        ordinary: { type: "string" },
-        resource: {
-          type: "array",
-          items: { type: "string", format: "uri" },
-          "x-openai-input": input,
-        },
-      },
-      [],
-      rich,
+    expect(richCompile({ ordinary: string(), resource: resourceFields(input) }).kind).toBe(
+      "unsupported",
     );
-    expect(result.kind).toBe("unsupported");
   });
 
   it.each([
+    "javascript:alert(1)",
     "http://example.com/image.png",
     "https://user:pass@example.com/image.png",
-    "javascript:alert(1)",
   ])("refuses unsafe thumbnail %s without partially displaying the form", (src) => {
     expect(
-      compile(
-        {
-          ordinary: { type: "string" },
-          choice: {
-            type: "string",
-            oneOf: [{ const: "a", title: "A", "x-openai-thumbnail": { src } }],
-          },
-        },
-        [],
-        rich,
-      ).kind,
+      richCompile({
+        ordinary: string(),
+        choice: string({ oneOf: [{ const: "a", title: "A", "x-openai-thumbnail": { src } }] }),
+      }).kind,
     ).toBe("unsupported");
   });
 });

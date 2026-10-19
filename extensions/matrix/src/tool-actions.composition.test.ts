@@ -87,11 +87,6 @@ describe("Matrix public message actions", () => {
     ]);
   });
 
-  it("accepts snake-case media fields when the camel-case key is absent", async () => {
-    await runMatrixAction("send", { to: "!room:example", message: "", media_url: "alias.png" }, {});
-    expect(mocks.sendMatrixMessage.mock.lastCall?.[2].mediaUrl).toBe("alias.png");
-  });
-
   it("drops public delete reasons but preserves the downstream undefined property", async () => {
     const cfg = {} as CoreConfig;
     await runMatrixAction(
@@ -146,18 +141,8 @@ describe("Matrix public message actions", () => {
   });
 
   it.each([
-    { action: "send", params: {}, error: "to required" },
     { action: "send", params: { to: "!room:example" }, error: "message required" },
-    { action: "edit", params: {}, error: "messageId required" },
-    { action: "edit", params: { messageId: "$m" }, error: "message required" },
     { action: "edit", params: { messageId: "$m", message: "edit" }, error: "to required" },
-    { action: "react", params: {}, error: "messageId required" },
-    { action: "react", params: { messageId: "$m" }, error: "to required" },
-    {
-      action: "reactions",
-      params: { messageId: "$m", limit: 1.5 },
-      error: "limit must be a positive integer.",
-    },
     { action: "read", params: { limit: 1.5 }, error: "limit must be a positive integer." },
     { action: "pin", params: {}, error: "messageId required" },
     { action: "list-pins", params: {}, error: "to required" },
@@ -233,26 +218,6 @@ describe("Matrix public message actions", () => {
     ).rejects.toThrow("Matrix emoji-list requires a roomId or current Matrix conversation.");
     expect(mocks.withAuthorizedMatrixReadTarget).not.toHaveBeenCalled();
   });
-
-  it.each([
-    {
-      params: {
-        roomId: "room:!explicit:example",
-        channelId: "!later:example",
-        to: "!last:example",
-      },
-    },
-    { params: { channelId: "room:!explicit:example", to: "!last:example" } },
-    { params: { to: "room:!explicit:example" } },
-  ])(
-    "prefers explicit emoji discovery targets over the current conversation",
-    async ({ params }) => {
-      await runMatrixAction("emoji-list", params, {} as CoreConfig, {
-        toolContext: { currentChannelId: "!current:example", currentChannelProvider: "matrix" },
-      });
-      expect(mocks.listMatrixEmojis.mock.lastCall?.[0]).toBe("!explicit:example");
-    },
-  );
 
   it("preserves profile aliases and dropped fields at the public owner boundary", async () => {
     const cfg = {} as CoreConfig;

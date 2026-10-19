@@ -4,7 +4,8 @@ import { expect, it } from "vitest";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
-const { fixture, outcomeRef, describePosix } = createMergeOutcomeFixtureHarness();
+const { fixture, reuseCompletedSetup, outcomeRef, describePosix } =
+  createMergeOutcomeFixtureHarness();
 const { preExistingCandidate } = createPriorCiCandidateFactory(fixture);
 const refusal = readFileSync(
   new URL("../fixtures/pr-admin-base-modified-405.txt", import.meta.url),
@@ -20,7 +21,7 @@ function mergeRequests(f: RecoveryFixture) {
     );
 }
 
-function rejectedAttempt(response = refusal) {
+const rejectedAttempt = reuseCompletedSetup(function (response: string = refusal) {
   const f = preExistingCandidate();
   f.save({ ...f.state(), restMergeRefusal: response });
   const result = f.adminPriorCi(f.path);
@@ -37,10 +38,10 @@ function rejectedAttempt(response = refusal) {
   const record = f.record();
   const capture = `merge-output.${record.attempt}.log`;
   expect(readFileSync(join(f.worktree, ".local", capture), "utf8")).toBe(response);
-  expect(f.recover()).toBe(true);
+  expect(f.recover()).toBe(false);
   f.save({ ...f.state(), restMergeRefusal: "" });
   return { f, oid, record, capture };
-}
+});
 
 function expectRetainedCapture(f: RecoveryFixture, ref: string, capture: string) {
   // Blob equality checks the original bytes, including the final newline.
@@ -121,7 +122,7 @@ describePosix("explicit prior-CI provider rejection recovery", () => {
     expect(secondRecord).toMatchObject({ phase: "intent", accepted: false });
     expect(mergeRequests(f)).toHaveLength(2);
     expectRetainedCapture(f, secondOid, first.capture);
-    expect(f.recover()).toBe(true);
+    expect(f.recover()).toBe(false);
 
     const stale = f.adminPriorCi(f.path, true, first.oid);
     expect(stale.status, stale.output).toBe(1);

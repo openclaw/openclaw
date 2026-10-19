@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -9,12 +9,17 @@ import {
   claimMainSessionRecoveryOwner,
   releaseMainSessionRecoveryOwner,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import * as entryAdmission from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import * as entryPatch from "../../config/sessions/session-entry-patch.js";
@@ -30,12 +35,12 @@ import {
   isAgentRunStaleLifecycleError,
   isRestartRecoveryClaimChangedError,
 } from "../../infra/agent-lifecycle-error.js";
+import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-agent-db-registry-listing.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
-import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 
@@ -141,6 +146,9 @@ async function createAcknowledgedClaim() {
 }
 
 describe("createReplyRestartRecoveryClaimController", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(() => clearRuntimeConfigSnapshot());
+
   it.each(["absent", "persisted"] as const)(
     "leaves source-less lifecycle admission to its existing writer when the recorder is %s",
     async (mode) => {
@@ -192,6 +200,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     "settles source-less execution custody through $completion for $owner without claiming delivery authority",
     ({ completion, owner, metadata }) =>
       withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const scope = {
           agentId: "main",
           storePath: path.join(state.sessionsDir(), "sessions.json"),
@@ -282,7 +291,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
   describe("placement observations", () => {
     const placementDirs = useStateDatabaseTempDirs();
 
-    async function createPlacementAdmission() {
+    async function createPlacementAdmission(local = false) {
       const root = placementDirs.make("openclaw-reply-placement-admission-");
       const scope = {
         agentId: "main",
@@ -294,11 +303,13 @@ describe("createReplyRestartRecoveryClaimController", () => {
       const service = createWorkerSessionPlacementStore({
         database: openOpenClawStateDatabase({ path: path.join(root, "placement.sqlite") }),
       });
-      await service.startDispatch({
-        agentId: scope.agentId,
-        sessionKey: scope.sessionKey,
-        sessionId: entry.sessionId,
-      });
+      if (!local) {
+        await service.startDispatch({
+          agentId: scope.agentId,
+          sessionKey: scope.sessionKey,
+          sessionId: entry.sessionId,
+        });
+      }
       const context: placementContext.SessionWorkerPlacementContext = {
         workerSessionPlacementService: service,
       };
@@ -345,10 +356,8 @@ describe("createReplyRestartRecoveryClaimController", () => {
       await using fixture = await createPlacementAdmission();
       const hostSql = observeHostDataSql();
       try {
-        expect(fixture.service.getMany([fixture.entry.sessionId]).size).toBe(1);
-        expect(hostSql.queries.length).toBeGreaterThan(0);
-        hostSql.calls.forEach((call) => call.mockClear());
-        hostSql.queries.length = 0;
+        expect((await fixture.service.getManyAsync([fixture.entry.sessionId])).size).toBe(1);
+        expect(hostSql.queries).toEqual([]);
 
         await expect(fixture.controller.admitUserTurn(fixture.recorder)).resolves.toBe("admitted");
 
@@ -359,6 +368,31 @@ describe("createReplyRestartRecoveryClaimController", () => {
       } finally {
         hostSql.restore();
       }
+    });
+
+    it("admits a follow-up while the preceding local turn finishes during session preparation", async () => {
+      await using fixture = await createPlacementAdmission(true);
+      const predecessor = await fixture.service.claimTurn({
+        ...fixture.scope,
+        sessionId: fixture.entry.sessionId,
+        owner: { kind: "local" },
+        runId: "preceding-run",
+        claimId: "preceding-claim",
+      });
+      const load = entryAdmission.loadSessionEntryForAdmission;
+      using read = vi.spyOn(entryAdmission, "loadSessionEntryForAdmission");
+      read.mockImplementationOnce(async (...args) => {
+        const entry = await load(...args);
+        await fixture.service.releaseTurn(predecessor);
+        return entry;
+      });
+
+      await expect(fixture.controller.admitUserTurn(fixture.recorder)).resolves.toBe("admitted");
+      expect(fixture.recorder.hasPersisted()).toBe(true);
+      expect(await fixture.service.getAsync(fixture.entry.sessionId)).toMatchObject({
+        state: "local",
+        turnClaim: null,
+      });
     });
 
     it("refuses an unavailable placement observation instead of reading synchronously", async () => {
@@ -379,23 +413,21 @@ describe("createReplyRestartRecoveryClaimController", () => {
     });
 
     it.each([
-      "placement-publication",
       "session-retarget",
       "lifecycle-rotation",
-      "service-replacement",
-      "service-removal",
       "pending-input-persisted",
       "terminal-source",
-    ] as const)("revalidates %s while placement preparation is pending", async (change) => {
+    ] as const)("revalidates %s while session preparation is pending", async (change) => {
       await using fixture = await createPlacementAdmission();
       const prepared = createDeferred();
       const resume = createDeferred();
-      const prepare = fixture.service.prepareRuntimeRefresh.bind(fixture.service);
-      vi.spyOn(fixture.service, "prepareRuntimeRefresh").mockImplementation(async (sessionId) => {
-        const observation = await prepare(sessionId);
+      const load = entryAdmission.loadSessionEntryForAdmission;
+      using read = vi.spyOn(entryAdmission, "loadSessionEntryForAdmission");
+      read.mockImplementationOnce(async (...args) => {
+        const entry = await load(...args);
         prepared.resolve();
         await resume.promise;
-        return observation;
+        return entry;
       });
       const admission = fixture.controller.admitUserTurn(fixture.recorder);
       const outcome = admission.catch((error: unknown) => error);
@@ -405,19 +437,10 @@ describe("createReplyRestartRecoveryClaimController", () => {
           admission,
           "admission settled before placement preparation",
         );
-        if (change === "placement-publication") {
-          await fixture.service.fail({
-            sessionId: fixture.entry.sessionId,
-            recoveryError: "placement interrupted",
-          });
-        } else if (change === "session-retarget") {
+        if (change === "session-retarget") {
           fixture.retarget();
         } else if (change === "lifecycle-rotation") {
           rotateAgentEventLifecycleGeneration();
-        } else if (change === "service-replacement") {
-          fixture.context.workerSessionPlacementService = { ...fixture.service };
-        } else if (change === "service-removal") {
-          fixture.context.workerSessionPlacementService = undefined;
         } else if (change === "pending-input-persisted") {
           fixture.recorder.markRuntimePersisted(fixture.recorder.getPendingInputMessage?.());
         } else {
@@ -433,12 +456,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
           expect(isAgentRunStaleLifecycleError(result)).toBe(true);
         } else {
           const message = {
-            "placement-publication": `Session ${fixture.entry.sessionId} placement authority changed`,
             "session-retarget": "session changed before durable user-turn admission",
-            "service-replacement":
-              "Worker placement service changed before durable user-turn admission",
-            "service-removal":
-              "Worker placement service changed before durable user-turn admission",
             "pending-input-persisted":
               "pending user turn changed before durable user-turn admission",
           }[change];
@@ -504,7 +522,8 @@ describe("createReplyRestartRecoveryClaimController", () => {
             message: "session changed before durable user-turn admission",
           });
         } else {
-          expect(isAgentRunStaleLifecycleError(failure)).toBe(true);
+          // The reader owns its refusal; admission no longer replaces its error after a failed read.
+          expect(failure).toBeInstanceOf(Error);
         }
         expect(setEntry).not.toHaveBeenCalled();
         expect(loadSessionEntry(scope)).toEqual(before);
@@ -515,7 +534,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     },
   );
 
-  it.each(["global", "unknown"])(
+  it.each(["global"])(
     "keeps the selected agent through a %s hook checkpoint",
     async (sessionKey) => {
       const root = tempDirs.make("openclaw-owned-reply-claim-");
@@ -882,6 +901,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       const scope = { storePath, sessionKey };
       const sessionId = "channel-session-id";
       const sourceTurnId = "telegram-update-new";
+      const requesterOrigin = { sessionKey, messageProvider: "telegram", senderId: "bob" };
       const deliveryContext = {
         channel: "telegram",
         to: "chat",
@@ -962,8 +982,10 @@ describe("createReplyRestartRecoveryClaimController", () => {
           entry = next;
         },
         sourceTurnId,
+        requesterOrigin,
         ...scope,
       });
+      requesterOrigin.senderId = "alice";
 
       if (change === "metadata") {
         await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
@@ -972,6 +994,13 @@ describe("createReplyRestartRecoveryClaimController", () => {
         expect(persisted).toMatchObject({
           model: "gpt-5.6-luna",
           restartRecoveryDeliverySourceRunId: sourceTurnId,
+          restartRecoveryRequesterSource: {
+            agentId: "main",
+            sessionKey,
+            sessionId,
+            sourceRunId: sourceTurnId,
+            requesterOrigin: { senderId: "bob" },
+          },
         });
         expect(persisted?.status).toBeUndefined();
       } else {

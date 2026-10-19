@@ -90,6 +90,7 @@ export type RunInspectorState =
       result: RunInspectorResult;
       executionPageStatus?: "loading" | "error";
       decisionPageStatus?: "loading" | "error";
+      refreshError?: "restart" | "retry";
       receiptPageCursors: ReceiptPageCursorMap;
     };
 

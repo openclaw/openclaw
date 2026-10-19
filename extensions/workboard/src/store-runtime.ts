@@ -17,7 +17,7 @@ export class WorkboardStoreRuntime {
     Promise<
       WorkboardListResult & {
         boards: WorkboardBoardSummary[];
-        revision: WorkboardChange & { boardId?: string };
+        revision: WorkboardChange & { boardId?: string; sessionKey?: string };
       }
     >
   >();

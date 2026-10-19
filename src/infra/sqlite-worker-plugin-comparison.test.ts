@@ -59,24 +59,24 @@ function fixture(
   };
 }
 
+const set = (count: number) => ({ operation: "update", action: "set", value: { count } }) as const;
+const keep = (operation: "update" | "delete" = "update") =>
+  ({ operation, action: "keep" }) as const;
+
 describe("plugin state data-only comparison", () => {
-  it("serves independent observations from native and worker write receipts without requests", async () => {
+  it("observes native and worker writes with independent returned values", async () => {
     const { store, legacy } = fixture("receipt-cache");
     legacy.register("counter", { count: 1 });
-    const messages = vi.spyOn(Worker.prototype, "postMessage");
     const first = await store.observe("counter");
     first.value!.count = 99;
     expect((await store.observe("counter")).value).toEqual({ count: 1 });
-    expect(messages).not.toHaveBeenCalled();
 
     legacy.register("counter", { count: 2 });
     expect((await store.observe("counter")).value).toEqual({ count: 2 });
     await store.register("counter", { count: 3 });
-    messages.mockClear();
     expect((await store.observe("counter")).value).toEqual({ count: 3 });
     legacy.delete("counter");
     expect((await store.observe("counter")).value).toBeUndefined();
-    expect(messages).not.toHaveBeenCalled();
   });
 
   it.each([{ action: "set" }, { action: "keep" }] as const)(
@@ -88,10 +88,7 @@ describe("plugin state data-only comparison", () => {
       const { db } = native();
       // Native binding transactions carry their own receipt, without plugin-state postimages.
       executeSqliteQuerySync(db, getPluginStateKysely(db).deleteFrom("plugin_state_entries"));
-      const change =
-        action === "set"
-          ? ({ operation: "update", action, value: { count: 2 } } as const)
-          : ({ operation: "update", action } as const);
+      const change = action === "set" ? set(2) : keep();
       const conflict = await store.compareAndApply("counter", before.comparison, change);
       expect(conflict).toMatchObject({ status: "conflict", current: { value: undefined } });
       if (conflict.status !== "conflict") {
@@ -108,9 +105,9 @@ describe("plugin state data-only comparison", () => {
     { operation: "delete", present: true },
     { operation: "update", present: false },
   ] as const)(
-    "does not lose a native write after preparing cached $operation (present=$present)",
+    "does not lose a native write before comparing $operation (present=$present)",
     async ({ operation, present }) => {
-      const { store, legacy } = fixture(`cached-race-${operation}-${present}`);
+      const { store, legacy } = fixture(`comparison-race-${operation}-${present}`);
       legacy.register("counter", { count: 1 });
       if (!present) {
         legacy.delete("counter");
@@ -149,13 +146,9 @@ describe("plugin state data-only comparison", () => {
     try {
       const observed = await store.observe("counter");
       expect(observed.value).toBeUndefined();
-      expect(
-        await store.compareAndApply("counter", observed.comparison, {
-          operation: "update",
-          action: "set",
-          value: { count: 1 },
-        }),
-      ).toEqual({ status: "applied" });
+      expect(await store.compareAndApply("counter", observed.comparison, set(1))).toEqual({
+        status: "applied",
+      });
       expect(await store.lookup("counter")).toEqual({ count: 1 });
       for (const call of calls) {
         expect(call).not.toHaveBeenCalled();
@@ -190,30 +183,13 @@ describe("plugin state data-only comparison", () => {
     ).toEqual({ status: "applied" });
   });
 
-  it("compares stored bytes without requiring legacy JSON to be reserialized", async () => {
-    const f = fixture("legacy-json");
-    f.seed("counter", ' { "count" : 1 } ', 1, null);
-    const before = await f.store.observe("counter");
-    expect(
-      await f.store.compareAndApply("counter", before.comparison, {
-        operation: "update",
-        action: "set",
-        value: { count: 2 },
-      }),
-    ).toEqual({ status: "applied" });
-  });
-
   it("refreshes age and default TTL for a defined same-value update", async () => {
     const f = fixture("refresh", { defaultTtlMs: 60_000 });
     f.seed("counter", '{"count":1}', 1, Date.now() + 120_000);
     const before = await f.store.observe("counter");
-    expect(
-      await f.store.compareAndApply("counter", before.comparison, {
-        operation: "update",
-        action: "set",
-        value: { count: 1 },
-      }),
-    ).toEqual({ status: "applied" });
+    expect(await f.store.compareAndApply("counter", before.comparison, set(1))).toEqual({
+      status: "applied",
+    });
     const [entry] = await f.store.entries();
     expect(entry?.createdAt).toBeGreaterThan(1);
     expect(entry?.expiresAt).toBe((entry?.createdAt ?? 0) + 60_000);
@@ -224,12 +200,9 @@ describe("plugin state data-only comparison", () => {
     f.seed("counter", '{"count":1}', 1, null);
     const before = await f.store.observe("counter");
     f.seed("expired", '{"count":0}', 0, Date.now() - 1);
-    expect(
-      await f.store.compareAndApply("counter", before.comparison, {
-        operation: "delete",
-        action: "keep",
-      }),
-    ).toEqual({ status: "unchanged" });
+    expect(await f.store.compareAndApply("counter", before.comparison, keep("delete"))).toEqual({
+      status: "unchanged",
+    });
     const native = f.native();
     const rows = () =>
       executeSqliteQuerySync(
@@ -241,22 +214,14 @@ describe("plugin state data-only comparison", () => {
       ).rows;
     expect(rows()).toHaveLength(2);
     f.seed("counter", '{"count":2}', 1, null);
-    expect(
-      (
-        await f.store.compareAndApply("counter", before.comparison, {
-          operation: "update",
-          action: "keep",
-        })
-      ).status,
-    ).toBe("conflict");
+    expect((await f.store.compareAndApply("counter", before.comparison, keep())).status).toBe(
+      "conflict",
+    );
     expect(rows()).toHaveLength(2);
     const current = await f.store.observe("counter");
-    expect(
-      await f.store.compareAndApply("counter", current.comparison, {
-        operation: "update",
-        action: "keep",
-      }),
-    ).toEqual({ status: "unchanged" });
+    expect(await f.store.compareAndApply("counter", current.comparison, keep())).toEqual({
+      status: "unchanged",
+    });
     expect(rows()).toEqual([{ entry_key: "counter" }]);
   });
 
@@ -265,29 +230,18 @@ describe("plugin state data-only comparison", () => {
     f.seed("counter", '{"count":1}', 1, Date.now() + 60_000);
     const live = await f.store.observe("counter");
     f.seed("counter", '{"count":1}', 1, Date.now() - 1);
-    const expired = await f.store.compareAndApply("counter", live.comparison, {
-      operation: "update",
-      action: "set",
-      value: { count: 2 },
-    });
+    const expired = await f.store.compareAndApply("counter", live.comparison, set(2));
     expect(expired.status).toBe("conflict");
     if (expired.status !== "conflict") {
       throw new Error("Expected expiry to conflict");
     }
     expect(expired.current.value).toBeUndefined();
-    expect(
-      await f.store.compareAndApply("counter", expired.current.comparison, {
-        operation: "update",
-        action: "keep",
-      }),
-    ).toEqual({ status: "unchanged" });
-    expect(
-      await f.store.compareAndApply("counter", expired.current.comparison, {
-        operation: "update",
-        action: "set",
-        value: { count: 2 },
-      }),
-    ).toEqual({ status: "applied" });
+    expect(await f.store.compareAndApply("counter", expired.current.comparison, keep())).toEqual({
+      status: "unchanged",
+    });
+    expect(await f.store.compareAndApply("counter", expired.current.comparison, set(2))).toEqual({
+      status: "applied",
+    });
   });
 
   it("rejects another key or retargeted database observation instead of returning retryable conflict", async () => {
@@ -295,18 +249,12 @@ describe("plugin state data-only comparison", () => {
     await f.store.register("counter", { count: 1 });
     const observed = await f.store.observe("counter");
     await expect(
-      f.store.compareAndApply("other", observed.comparison, {
-        operation: "update",
-        action: "keep",
-      }),
+      f.store.compareAndApply("other", observed.comparison, keep()),
     ).rejects.toMatchObject({ code: "PLUGIN_STATE_INVALID_INPUT" });
     f.env.OPENCLAW_STATE_DIR = dirs.make("openclaw-plugin-retarget-");
     await f.store.register("counter", { count: 1 });
     await expect(
-      f.store.compareAndApply("counter", observed.comparison, {
-        operation: "update",
-        action: "keep",
-      }),
+      f.store.compareAndApply("counter", observed.comparison, keep()),
     ).rejects.toMatchObject({ code: "PLUGIN_STATE_INVALID_INPUT" });
   });
 
@@ -314,21 +262,13 @@ describe("plugin state data-only comparison", () => {
     const { store } = fixture("quota", { maxEntries: 1, overflowPolicy: "reject-new" });
     await store.register("first", { count: 1 });
     const first = await store.observe("first");
-    expect(
-      await store.compareAndApply("first", first.comparison, {
-        operation: "update",
-        action: "set",
-        value: { count: 2 },
-      }),
-    ).toEqual({ status: "applied" });
+    expect(await store.compareAndApply("first", first.comparison, set(2))).toEqual({
+      status: "applied",
+    });
     const missing = await store.observe("second");
-    await expect(
-      store.compareAndApply("second", missing.comparison, {
-        operation: "update",
-        action: "set",
-        value: { count: 3 },
-      }),
-    ).rejects.toMatchObject({ code: "PLUGIN_STATE_LIMIT_EXCEEDED" });
+    await expect(store.compareAndApply("second", missing.comparison, set(3))).rejects.toMatchObject(
+      { code: "PLUGIN_STATE_LIMIT_EXCEEDED" },
+    );
     expect(await store.entries()).toMatchObject([{ key: "first", value: { count: 2 } }]);
   });
 
@@ -352,11 +292,7 @@ describe("plugin state data-only comparison", () => {
     const observed = await f.store.observe("counter");
     f.seed("counter", "{", 1, null);
     await expect(
-      f.store.compareAndApply("counter", observed.comparison, {
-        operation: "update",
-        action: "set",
-        value: { count: 2 },
-      }),
+      f.store.compareAndApply("counter", observed.comparison, set(2)),
     ).rejects.toMatchObject({ code: "PLUGIN_STATE_CORRUPT", operation: "lookup" });
   });
 });

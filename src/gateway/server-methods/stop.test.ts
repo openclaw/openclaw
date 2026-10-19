@@ -72,6 +72,7 @@ function dispatchStop(
     client,
     isWebchatConnect: () => false,
     context: {
+      getRuntimeConfig: () => ({}),
       logGateway: { warn: vi.fn() },
       hostLifecycle: host.capability,
     } as unknown as GatewayRequestContext,

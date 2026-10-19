@@ -1,9 +1,9 @@
-// Coordinates native approval delivery routing and notices.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { ChannelOutboundTargetRef as RouteNoticeTarget } from "../channels/plugins/outbound.types.js";
 import type {
   ChannelApprovalNativeDeliveryPlan,
   ChannelApprovalNativePlannedTarget,
@@ -34,7 +34,9 @@ type ApprovalRouteRuntimeRecord = {
   accountId?: string | null;
   requestGateway: GatewayRequestFn;
   shouldHandle: (request: ApprovalRequest) => boolean | Promise<boolean>;
-  classifyRoute: (request: ApprovalRequest) => ApprovalRequestChannelRouteClass;
+  classifyRoute: (
+    request: ApprovalRequest,
+  ) => ApprovalRequestChannelRouteClass | Promise<ApprovalRequestChannelRouteClass>;
 };
 
 type ApprovalRouteSkipReason = "ambiguous-owner" | "ineligible" | "owner-unavailable";
@@ -66,13 +68,6 @@ type ApprovalRouteSelection = {
   ready: Promise<void>;
   verdicts: Map<string, ApprovalRouteSelectionVerdict>;
   cleanupTimeout: NodeJS.Timeout;
-};
-
-type RouteNoticeTarget = {
-  channel: string;
-  to: string;
-  accountId?: string | null;
-  threadId?: string | number | null;
 };
 
 type ApprovalNativeRouteCoordinatorState = {
@@ -156,7 +151,7 @@ async function resolveApprovalRouteSelection(
       );
       let routeClass: ApprovalRequestChannelRouteClass;
       try {
-        routeClass = group[0]?.classifyRoute(params.request) ?? "unbound";
+        routeClass = (await group[0]?.classifyRoute(params.request)) ?? "unbound";
       } catch (error) {
         for (const runtime of group) {
           verdicts.set(runtime.runtimeId, { kind: "selector-error", error });

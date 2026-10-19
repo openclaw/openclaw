@@ -129,7 +129,13 @@ async function withRepairResources<T>(run: () => Promise<T>): Promise<T> {
     Promise.resolve().then(() => {
       host.assertOpen();
       scheduler.signal.throwIfAborted();
-      return host.run(() => resources.run(run));
+      return host.run(() =>
+        resources.run(async () => {
+          const { captureRuntimeConfigAsyncReader } = await import("../config/io.js");
+          await captureRuntimeConfigAsyncReader()();
+          return run();
+        }),
+      );
     }),
   ]);
   try {

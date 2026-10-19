@@ -97,10 +97,6 @@ describe("agent session patch", () => {
     expect(patch.lastRunId).toBeUndefined();
   });
 
-  it("does not clear agent status for lifecycle-only patches", async () => {
-    expect(Object.hasOwn(await buildPatch(false), "agentStatus")).toBe(false);
-  });
-
   it("preserves a recovery reservation while reusing a session with a failed outcome", async () => {
     const entry: SessionEntry = {
       sessionId: "recovering-session",
@@ -141,7 +137,9 @@ describe("agent session patch", () => {
   });
 
   it("keeps the existing label when the request has none", async () => {
-    expect((await buildPatch(false, { label: "Existing" })).label).toBe("Existing");
+    const patch = await buildPatch(false, { label: "Existing" });
+    expect(patch.label).toBe("Existing");
+    expect(Object.hasOwn(patch, "agentStatus")).toBe(false);
   });
 
   it("names a new session from an explicit agent session key", async () => {
@@ -154,24 +152,18 @@ describe("agent session patch", () => {
   });
 
   it("does not name an existing session", async () => {
-    const entry: SessionEntry = { sessionId: "existing", updatedAt: 1_000 };
+    const entry: SessionEntry = {
+      sessionId: "existing",
+      updatedAt: 1_000,
+      displayName: "Existing display name",
+    };
     const result = await buildCreationPatch({
       explicitSessionKey: "agent:main:incident-42",
       freshEntry: entry,
     });
 
     expect(result.patch).not.toHaveProperty("displayName");
-  });
-
-  it("does not replace an existing display name", async () => {
-    const namedEntry = { displayName: "Existing display name" };
-    const entry: SessionEntry = { sessionId: "existing", updatedAt: 1_000, ...namedEntry };
-    const result = await buildCreationPatch({
-      explicitSessionKey: "agent:main:incident-42",
-      freshEntry: entry,
-    });
-
-    expect(mergeSessionEntry(entry, result.patch)).toMatchObject(namedEntry);
+    expect(mergeSessionEntry(entry, result.patch).displayName).toBe(entry.displayName);
   });
 
   it("does not name a defaulted main session", async () => {

@@ -21,6 +21,7 @@ import {
   resolvePublishedInstallSourceVerification,
   resolveInstalledBinaryCommandInvocation,
   retryNpmRegistryProvenanceRead,
+  verifyAttestedReleasePublishWorkflow,
   verifyNpmProvenanceAttestation,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
 import {
@@ -39,7 +40,8 @@ import { toolingTsEntrypoints } from "./scripts/tooling-ts-runtime.test-support.
 
 const { createTempDir } = createScriptTestHarness();
 const makeInstalledPackageRoot = () => createTempDir("openclaw-postpublish-");
-const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
+const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 20_000;
+const INSTALLED_WORKER_DIST_JS_FILE_SCAN_LIMIT = 10_000;
 
 function writeInstalledFile(root: string, relativePath: string, source = "export {};\n") {
   const file = join(root, relativePath);
@@ -241,6 +243,65 @@ describe("npm registry provenance verification", () => {
     ).rejects.toThrow("does not match");
   });
 
+  it("derives attested release-publish tooling only after the trusted-source check", async () => {
+    const sha = "a".repeat(40);
+    const ref = `refs/tags/release-publish/${sha.slice(0, 12)}-123`;
+    const attestations = attestationsFor(buildProvenancePayload(version, ref, sha));
+    const verifyBundle = makeBundleVerifier();
+    const verifyDerivedWorkflow = vi.fn();
+
+    await expect(
+      verifyProvenance({ attestations, verifyBundle, verifyDerivedWorkflow }),
+    ).resolves.toBeUndefined();
+    expect(verifyDerivedWorkflow).toHaveBeenCalledExactlyOnceWith({ ref, sha });
+    expect(verifyBundle.mock.calls[0]?.[1]).toEqual(releaseIdentity(ref));
+
+    verifyBundle.mockClear();
+    await expect(
+      verifyProvenance({
+        attestations,
+        verifyBundle,
+        verifyDerivedWorkflow: () => {
+          throw new Error("protected release tooling tag is missing or unreadable.");
+        },
+      }),
+    ).rejects.toThrow("protected release tooling tag is missing or unreadable.");
+    expect(verifyBundle).not.toHaveBeenCalled();
+
+    // An attested commit that does not match the tag's SHA prefix is never derived.
+    await expect(
+      verifyProvenance({
+        attestations: attestationsFor(buildProvenancePayload(version, ref, "b".repeat(40))),
+        verifyDerivedWorkflow,
+      }),
+    ).rejects.toThrow("has no matching workflow revision to verify");
+
+    // A partial explicit override stays strict instead of falling back to derivation.
+    verifyDerivedWorkflow.mockClear();
+    await expect(
+      verifyProvenance({ attestations, expectedWorkflowRef: ref, verifyDerivedWorkflow }),
+    ).rejects.toThrow("does not match the approved workflow ref and SHA");
+    expect(verifyDerivedWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("trusts derived publish tooling only at the live exact tag on main", () => {
+    const sha = "a".repeat(40);
+    const tag = `release-publish/${sha.slice(0, 12)}-123`;
+    const runGh = (tagSha: string, mainStatus: string) => (args: string[]) =>
+      args[1]?.includes("/git/ref/tags/")
+        ? JSON.stringify({ ref: `refs/tags/${tag}`, object: { type: "commit", sha: tagSha } })
+        : JSON.stringify({ status: mainStatus });
+    const identity = { ref: `refs/tags/${tag}`, sha };
+
+    expect(() => verifyAttestedReleasePublishWorkflow(identity, runGh(sha, "ahead"))).not.toThrow();
+    expect(() =>
+      verifyAttestedReleasePublishWorkflow(identity, runGh("b".repeat(40), "ahead")),
+    ).toThrow("bound to the wrong SHA");
+    expect(() => verifyAttestedReleasePublishWorkflow(identity, runGh(sha, "diverged"))).toThrow(
+      "not reachable from current main",
+    );
+  });
+
   it.each([
     ["ordinary release from a feature branch", version, "refs/heads/feature/untrusted"],
     ["later patch on a noncanonical branch", "2026.6.34", "refs/heads/extended-stable/2026.6.34"],
@@ -381,7 +442,7 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     writeInstalledFile(packageRoot, "dist/root.js");
-    for (let index = 0; index < INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT; index += 1) {
+    for (let index = 0; index < INSTALLED_WORKER_DIST_JS_FILE_SCAN_LIMIT; index += 1) {
       writeInstalledFile(packageRoot, `dist/worker/worker-chunk-${index}.mjs`);
     }
 
@@ -747,6 +808,7 @@ describe("runtime dependency ownership build contract", () => {
   async function buildInstalledFixture(
     rootSource: string,
     pluginSources: Record<string, string> = {},
+    extraEntries: Record<string, string> = {},
   ) {
     const root = realpathSync(createTempDir("runtime-dependency-ownership-"));
     const files = {
@@ -772,6 +834,7 @@ describe("runtime dependency ownership build contract", () => {
         root: "src/root.js",
         "extensions/example/index": "extensions/example/index.js",
         "extensions/example/observer": "extensions/example/observer.js",
+        ...extraEntries,
       },
       outDir: "dist",
       format: "esm",
@@ -829,6 +892,36 @@ describe("runtime dependency ownership build contract", () => {
       join(root, "dist/extensions/example/package.json"),
       JSON.stringify({ name: "@openclaw/example", dependencies: {} }),
     );
+    expect(collectInstalledRootDependencyManifestErrors(root)).toEqual([
+      expect.stringContaining("missing declared runtime dependency 'fixture-lazy'"),
+      expect.stringContaining("missing declared runtime dependency 'fixture-runtime'"),
+    ]);
+  });
+
+  it("retains every plugin owner across repeated entries and cyclic shared chunks", async () => {
+    const root = await buildInstalledFixture(
+      "export const ready = true;",
+      {
+        "extensions/other/index.js": 'export { value } from "../../src/shared.js";',
+        "src/shared.js": `
+          export { value } from "fixture-runtime";
+          export const load = () => import("../extensions/example/lazy.js");
+        `,
+        "extensions/example/lazy.js": `
+          export { lazy } from "fixture-lazy";
+          export const back = () => import("../../src/shared.js");
+        `,
+      },
+      { "extensions/other/index": "extensions/other/index.js" },
+    );
+    const manifestPath = "dist/extensions/other/package.json";
+    writePackageFile(root, manifestPath, {
+      name: "@openclaw/other",
+      dependencies: { "fixture-runtime": "1.0.0", "fixture-lazy": "1.0.0" },
+    });
+    expect(collectInstalledRootDependencyManifestErrors(root)).toEqual([]);
+
+    writePackageFile(root, manifestPath, { name: "@openclaw/other", dependencies: {} });
     expect(collectInstalledRootDependencyManifestErrors(root)).toEqual([
       expect.stringContaining("missing declared runtime dependency 'fixture-lazy'"),
       expect.stringContaining("missing declared runtime dependency 'fixture-runtime'"),

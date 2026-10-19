@@ -13,14 +13,17 @@ import {
   DEFAULT_CACHE_TTL_MINUTES,
   markdownToText,
   normalizeCacheKey,
-  readCache,
   readResponseText,
   resolveCacheTtlMs,
   withSelfHostedWebToolsEndpoint,
   withStrictWebToolsEndpoint,
-  writeCache,
 } from "openclaw/plugin-sdk/provider-web-fetch";
-import { resolveSiteName } from "openclaw/plugin-sdk/provider-web-search";
+import {
+  externalContentStamp,
+  readCachedSearchPayload,
+  resolveSiteName,
+  writeCachedSearchPayload,
+} from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   truncateSanitizedExternalContent,
@@ -51,10 +54,6 @@ import {
   resolveFirecrawlSearchTimeoutSeconds,
 } from "./config.js";
 
-const SEARCH_CACHE = new Map<
-  string,
-  { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
->();
 const DEFAULT_SEARCH_COUNT = 5;
 const FIRECRAWL_SEARCH_MAX_RESULTS = 100;
 const FIRECRAWL_SEARCH_MAX_CONTENT_CHARS = 20_000;
@@ -106,7 +105,7 @@ type FirecrawlScrapeParams = {
   signal?: AbortSignal;
 };
 
-export function assertFirecrawlScrapeTargetAllowed(url: string): void {
+function assertFirecrawlScrapeTargetAllowed(url: string): void {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -183,6 +182,14 @@ async function resolveEndpoint(
   return { url: url.toString(), mode };
 }
 
+function readFirecrawlErrorDetail(payload: Record<string, unknown>, fallback: string): string {
+  return typeof payload.error === "string"
+    ? payload.error
+    : typeof payload.message === "string"
+      ? payload.message
+      : fallback;
+}
+
 async function postFirecrawlJson<T>(
   params: FirecrawlResolvedEndpoint & {
     timeoutSeconds: number;
@@ -224,12 +231,7 @@ async function postFirecrawlJson<T>(
           // Non-JSON errors keep their bounded text body.
         }
         if (payload) {
-          detail =
-            typeof payload.error === "string"
-              ? payload.error
-              : typeof payload.message === "string"
-                ? payload.message
-                : detail;
+          detail = readFirecrawlErrorDetail(payload, detail);
         } else if (errorBody.text) {
           detail = errorBody.text;
         }
@@ -363,14 +365,10 @@ export async function runFirecrawlSearch(
   const count = resolveIntegerOption(params.count, DEFAULT_SEARCH_COUNT, { min: 1, max: 100 });
   const timeoutSeconds = resolveFirecrawlSearchTimeoutSeconds(params.timeoutSeconds);
   const scrapeResults = params.scrapeResults === true;
-  const sources = Array.isArray(params.sources) ? params.sources.filter(Boolean) : [];
-  const categories = Array.isArray(params.categories) ? params.categories.filter(Boolean) : [];
-  const includeDomains = Array.isArray(params.includeDomains)
-    ? params.includeDomains.filter(Boolean)
-    : [];
-  const excludeDomains = Array.isArray(params.excludeDomains)
-    ? params.excludeDomains.filter(Boolean)
-    : [];
+  const sources = params.sources?.filter(Boolean) ?? [];
+  const categories = params.categories?.filter(Boolean) ?? [];
+  const includeDomains = params.includeDomains?.filter(Boolean) ?? [];
+  const excludeDomains = params.excludeDomains?.filter(Boolean) ?? [];
   if (includeDomains.length > 0 && excludeDomains.length > 0) {
     throw new Error("Firecrawl search accepts includeDomains or excludeDomains, not both.");
   }
@@ -399,9 +397,9 @@ export async function runFirecrawlSearch(
     params.cfg?.tools?.web?.search?.cacheTtlMinutes,
     DEFAULT_CACHE_TTL_MINUTES,
   );
-  const cached = readCache(SEARCH_CACHE, cacheKey, cacheTtlMs);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
-    return { ...cached.value, cached: true };
+    return cached;
   }
 
   const body: Record<string, unknown> = {
@@ -435,12 +433,7 @@ export async function runFirecrawlSearch(
         "Firecrawl Search API error",
       );
       if (payloadValue.success === false) {
-        const error =
-          typeof payloadValue.error === "string"
-            ? payloadValue.error
-            : typeof payloadValue.message === "string"
-              ? payloadValue.message
-              : "unknown error";
+        const error = readFirecrawlErrorDetail(payloadValue, "unknown error");
         const safeError = wrapWebContent(
           truncateSanitizedExternalContent(error, 1_000).text,
           "web_search",
@@ -473,20 +466,15 @@ export async function runFirecrawlSearch(
     provider: providerId,
     count: items.length,
     tookMs,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: providerId,
-      wrapped: true,
-    },
+    externalContent: externalContentStamp(providerId),
     results,
     ...(truncated ? { truncated: true } : {}),
   };
-  writeCache(SEARCH_CACHE, cacheKey, result, cacheTtlMs);
+  writeCachedSearchPayload(cacheKey, result, cacheTtlMs);
   return result;
 }
 
-export function parseFirecrawlScrapePayload(params: {
+function parseFirecrawlScrapePayload(params: {
   payload: Record<string, unknown>;
   url: string;
   extractMode: "markdown" | "text";
@@ -603,12 +591,7 @@ export async function runFirecrawlScrape(params: FirecrawlScrapeParams) {
         maxBytes: FIRECRAWL_SCRAPE_RESPONSE_MAX_BYTES,
       });
       if (data.success === false) {
-        const detail =
-          typeof data.error === "string"
-            ? data.error
-            : typeof data.message === "string"
-              ? data.message
-              : response.statusText;
+        const detail = readFirecrawlErrorDetail(data, response.statusText);
         throw new Error(
           `Firecrawl fetch failed (${response.status}): ${wrapWebContent(
             truncateSanitizedExternalContent(detail, FIRECRAWL_SCRAPE_METADATA_MAX_CHARS).text,
@@ -626,10 +609,3 @@ export async function runFirecrawlScrape(params: FirecrawlScrapeParams) {
     maxChars,
   });
 }
-
-export const testing = {
-  assertFirecrawlScrapeTargetAllowed,
-  parseFirecrawlScrapePayload,
-  resolveEndpoint,
-  resolveSearchItems,
-};

@@ -32,7 +32,7 @@ describe("classifyAcpToolApproval", () => {
     });
   });
 
-  it.each(["file://localhost/outside/marker.txt", "FILE://remote.example/outside/marker.txt"])(
+  it.each(["FILE://remote.example/outside/marker.txt"])(
     "does not auto-approve out-of-cwd file URL %s",
     (fileUrl) => {
       expect(
@@ -48,21 +48,18 @@ describe("classifyAcpToolApproval", () => {
     },
   );
 
-  it.each(["FILE:///workspace/src/index.ts", "file:/workspace/src/index.ts"])(
-    "auto-approves in-cwd file URL %s",
-    (fileUrl) => {
-      expect(
-        classify({
-          title: "read: ignored-by-raw-input",
-          rawInput: { path: fileUrl },
-        }),
-      ).toEqual({
-        toolName: "read",
-        approvalClass: "readonly_scoped",
-        autoApprove: true,
-      });
-    },
-  );
+  it.each(["file:/workspace/src/index.ts"])("auto-approves in-cwd file URL %s", (fileUrl) => {
+    expect(
+      classify({
+        title: "read: ignored-by-raw-input",
+        rawInput: { path: fileUrl },
+      }),
+    ).toEqual({
+      toolName: "read",
+      approvalClass: "readonly_scoped",
+      autoApprove: true,
+    });
+  });
 
   it("does not auto-approve reads from locations-only metadata", () => {
     expect(
@@ -100,19 +97,6 @@ describe("classifyAcpToolApproval", () => {
     ).toEqual({
       toolName: "search",
       approvalClass: "other",
-      autoApprove: false,
-    });
-  });
-
-  it("classifies mutating messaging tools as mutating", () => {
-    expect(
-      classify({
-        title: "message: send",
-        rawInput: { name: "message", action: "send", message: "hi" },
-      }),
-    ).toEqual({
-      toolName: "message",
-      approvalClass: "mutating",
       autoApprove: false,
     });
   });

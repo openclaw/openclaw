@@ -1,6 +1,6 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { createMemo } from "solid-js";
-import type { ChannelPickerOption } from "../../components/channel-picker.ts";
+import type { ChannelPickerOption } from "../../components/solid/channel-picker.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsRow } from "../../components/solid/settings-ui.tsx";
 import type { CronFormState } from "../../lib/cron/types.ts";
@@ -258,12 +258,9 @@ function TriggerRows(props: CronProps) {
                       props.fieldErrors.triggerScript ? errorIdForField("triggerScript") : undefined
                     }
                     value={props.form.triggerScript}
-                    onInput={(event) => {
-                      const target = event.currentTarget;
-                      if (target instanceof HTMLTextAreaElement) {
-                        props.onFormChange({ triggerScript: target.value });
-                      }
-                    }}
+                    onInput={(event) =>
+                      props.onFormChange({ triggerScript: event.currentTarget.value })
+                    }
                   />
                 }
               />

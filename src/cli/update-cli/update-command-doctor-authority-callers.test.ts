@@ -434,7 +434,14 @@ describe("unproved Doctor authority callers", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: run.runId,
-        steps: [expect.objectContaining({ doctorLintFindings: [] })],
+        steps: [
+          expect.objectContaining({
+            name: "post-plugin doctor",
+            exitCode: 0,
+            deferredInspectionCheckIds: null,
+          }),
+          expect.objectContaining({ doctorLintFindings: [] }),
+        ],
       }),
     );
     expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);

@@ -7,7 +7,6 @@ import type { captureSessionPendingInputWorkerCustody } from "./session-accessor
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { installCommittedTranscriptMessageSequences } from "./session-accessor.sqlite-transcript-sequences.js";
 import type { SessionEntryTargetPatchScope } from "./session-accessor.types.js";
-import type { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import type { SessionTurnCommitted, SqliteSessionTurnOptions } from "./session-turn.types.js";
@@ -21,7 +20,6 @@ export function publishCommittedSessionTurn(
     custody,
     committedCompletions,
     execution,
-    incognito,
     inputActor,
   }: {
     scope: ResolvedTranscriptScope;
@@ -30,7 +28,6 @@ export function publishCommittedSessionTurn(
     custody: ReturnType<typeof captureSessionPendingInputWorkerCustody>;
     committedCompletions: Promise<void>[];
     execution: Pick<OpenClawAgentDatabaseExecution, "fileIdentity"> | undefined;
-    incognito: ReturnType<typeof captureIncognitoSessionOperation>;
     inputActor: { target: SessionEntryTargetPatchScope } | undefined;
   },
 ): void {
@@ -67,16 +64,14 @@ export function publishCommittedSessionTurn(
     ) {
       const identity = execution?.fileIdentity;
       const originalSource = inputActor?.target.readSource;
-      if (!identity && !incognito && !originalSource) {
+      if (!identity && !originalSource) {
         throw new Error("Committed transcript turn omitted its admitted database identity");
       }
       options.onCommittedSource(
         originalSource ?? {
           agentId: scope.agentId,
           path: database.path,
-          databaseIdentity: incognito
-            ? incognito.actor.identity.incarnation
-            : identity!.physicalIdentity,
+          databaseIdentity: identity!.physicalIdentity,
           databaseBirthtime: identity?.birthtime,
         },
         candidate.result.sessionEntry,

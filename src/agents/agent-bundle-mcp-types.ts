@@ -214,6 +214,7 @@ export type SessionMcpRuntimeManager = {
   acquire: (params: {
     sessionId: string;
     sessionKey?: string;
+    agentId?: string;
     workspaceDir: string;
     agentDir?: string;
     cfg?: OpenClawConfig;
@@ -247,6 +248,10 @@ export type SessionMcpRuntimeManager = {
     sessionId?: string;
     sessionKey?: string;
   }) => SessionMcpRuntime | undefined;
+  captureSessionRetirement: (params: {
+    sessionId?: string;
+    sessionKey?: string;
+  }) => { sessionId: string; retire: (assertCurrent: () => void) => Promise<void> } | undefined;
   disposeSession: (sessionId: string) => Promise<void>;
   /** Required retirement stays armed when a stopping run creates or reuses a runtime. */
   deferRetirement: (sessionId: string, opts?: { retainAcrossReuse?: boolean }) => boolean;

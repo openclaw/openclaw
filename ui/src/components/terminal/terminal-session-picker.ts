@@ -1,38 +1,142 @@
-import { html, nothing } from "lit";
-import { ref, type Ref } from "lit/directives/ref.js";
-import { t } from "../../i18n/index.ts";
-import { icons } from "../icons.ts";
-import type { TerminalSessionInfo } from "./terminal-connection.ts";
+import { createSignal, onSettled } from "solid-js";
+import { listen } from "../../lib/reactive/listener.ts";
+import type { TerminalGatewayClient, TerminalSessionInfo } from "./terminal-connection.ts";
 
-type TerminalSessionPickerProps = {
-  open: boolean;
-  hosted: boolean;
-  triggerRef: Ref<HTMLButtonElement>;
-  loading: boolean;
-  sessions: TerminalSessionInfo[];
-  currentSessionIds: ReadonlySet<string>;
-  onToggle: () => void;
-  onDismiss: (restoreFocus: boolean) => void;
-  onFocusOut: (event: FocusEvent) => void;
-  onRefresh: () => void;
-  onAttach: (sessionId: string, owner: TerminalSessionInfo["owner"]) => void;
+type PickerDependencies = {
+  client: () => TerminalGatewayClient | null;
+  available: () => boolean;
+  hosted: () => boolean;
+  connected: () => boolean;
+  currentSessionIds: () => ReadonlySet<string>;
+  list: () => Promise<TerminalSessionInfo[] | null>;
+  showError: (error: unknown) => void;
+  attach: (sessionId: string, agentOwned: boolean) => Promise<void>;
 };
 
-const TERMINAL_SESSION_PICKER_ID = "terminal-session-picker-dialog";
+export function createTerminalSessionPicker(deps: PickerDependencies) {
+  const [open, setOpen] = createSignal(false);
+  const [loading, setLoading] = createSignal(false);
+  const [sessions, setSessions] = createSignal<TerminalSessionInfo[]>([]);
+  let generation = 0;
+  let inlineTrigger: HTMLButtonElement | undefined;
+  let hostedTrigger: HTMLButtonElement | undefined;
+  const trigger = () => (deps.hosted() ? hostedTrigger : inlineTrigger);
+  let menu: HTMLDivElement | undefined;
+  let refresh: HTMLButtonElement | undefined;
 
-export function renderTerminalSessionPickerTrigger(props: TerminalSessionPickerProps) {
-  return html`<button
-    ${ref(props.triggerRef)}
-    class=${props.hosted ? "rail-header__action" : "rail-header__action tp-icon"}
-    type="button"
-    title=${props.hosted ? nothing : t("terminal.sessions")}
-    aria-label=${t("terminal.sessions")}
-    aria-expanded=${props.open ? "true" : "false"}
-    aria-haspopup="dialog"
-    aria-controls=${props.hosted ? nothing : TERMINAL_SESSION_PICKER_ID}
-    @click=${props.onToggle}
-    @focusout=${props.onFocusOut}
-  >
-    ${icons.server}
-  </button>`;
+  async function load() {
+    const request = ++generation;
+    const client = deps.client();
+    if (!client || !deps.available()) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    const isCurrent = () => request === generation && client === deps.client() && deps.available();
+    try {
+      const result = await deps.list();
+      if (isCurrent() && result !== null) {
+        setSessions(result);
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        setOpen(false);
+        trigger()?.focus();
+        deps.showError(error);
+      }
+    } finally {
+      if (isCurrent()) {
+        setLoading(false);
+      }
+    }
+  }
+
+  function dismiss(restoreFocus: boolean) {
+    setOpen(false);
+    if (restoreFocus) {
+      onSettled(() => trigger()?.focus());
+    }
+  }
+
+  function inside(target: EventTarget | null) {
+    return target instanceof Node && (target === trigger() || menu?.contains(target));
+  }
+
+  onSettled(() => {
+    const stop = listen(
+      document,
+      "pointerdown",
+      (event) => {
+        if (open() && !event.composedPath().some((node) => node === trigger() || node === menu)) {
+          dismiss(false);
+        }
+      },
+      true,
+    );
+    return () => {
+      generation += 1;
+      stop();
+    };
+  });
+
+  return {
+    get connected() {
+      return deps.connected();
+    },
+    get hosted() {
+      return deps.hosted();
+    },
+    get currentSessionIds() {
+      return deps.currentSessionIds();
+    },
+    open,
+    loading,
+    sessions,
+    triggerRef: (element: HTMLButtonElement) => {
+      inlineTrigger = element;
+    },
+    hostedTriggerRef: (element: HTMLButtonElement) => {
+      hostedTrigger = element;
+    },
+    menuRef: (element: HTMLDivElement) => {
+      menu = element;
+    },
+    refreshRef: (element: HTMLButtonElement) => {
+      refresh = element;
+    },
+    onToggle() {
+      if (open()) {
+        return dismiss(true);
+      }
+      setOpen(true);
+      void load();
+      onSettled(() => {
+        if (open()) {
+          refresh?.focus();
+        }
+      });
+    },
+    onDismiss: dismiss,
+    onFocusOut(event: FocusEvent) {
+      if (inside(event.relatedTarget)) {
+        return;
+      }
+      queueMicrotask(() => {
+        if (open() && !inside(document.activeElement)) {
+          dismiss(false);
+        }
+      });
+    },
+    onRefresh: () => void load(),
+    onAttach(sessionId: string, owner: TerminalSessionInfo["owner"]) {
+      setOpen(false);
+      void deps.attach(sessionId, owner?.startsWith("agent:") === true);
+    },
+    reset() {
+      generation += 1;
+      setOpen(false);
+      setLoading(false);
+      setSessions([]);
+    },
+  };
 }

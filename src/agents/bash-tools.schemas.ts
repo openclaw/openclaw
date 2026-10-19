@@ -1,6 +1,4 @@
 /**
- * TypeBox schemas for shell/process tools exposed to model providers.
- *
  * Keep these schemas provider-friendly: flat fields, string enums, and explicit
  * descriptions that match runtime validation.
  */
@@ -23,7 +21,6 @@ const PROCESS_TOOL_ACTIONS = [
   "remove",
 ] as const;
 
-/** Parameters accepted by the exec tool. */
 export const execSchema = Type.Object({
   title: executionTitleSchema(),
   command: Type.String({ description: "Shell command." }),
@@ -70,7 +67,7 @@ export const execSchema = Type.Object({
     }),
   ),
   host: optionalStringEnum(EXEC_TOOL_HOST_VALUES, {
-    description: "Omit/auto: inherit configured host.",
+    description: "Omit: named node or configured host. auto: configured host.",
   }),
   ask: Type.Optional(
     Type.String({
@@ -80,7 +77,7 @@ export const execSchema = Type.Object({
   ),
   node: Type.Optional(
     Type.String({
-      description: "Node id/name for host=node.",
+      description: "Node id/name; implies host=node if host is omitted. Other hosts conflict.",
     }),
   ),
 });
@@ -100,7 +97,7 @@ export function createExecSchema(
   return Type.Object({
     ...execSchema.properties,
     host: optionalStringEnum(hosts, {
-      description: `Omit/auto: inherit configured host (${configuredTarget === "auto" ? (sandboxAvailable ? "sandbox" : "gateway") : configuredTarget}).`,
+      description: `Omit: named node or configured host (${configuredTarget === "auto" ? (sandboxAvailable ? "sandbox" : "gateway") : configuredTarget}). auto: configured host.`,
     }),
   });
 }
@@ -118,7 +115,6 @@ export const nodeExecSchema = Type.Object({
   node: execSchema.properties.node,
 });
 
-/** Parameters accepted by the process-control tool. */
 export const processSchema = Type.Object({
   action: Type.String({
     enum: [...PROCESS_TOOL_ACTIONS],

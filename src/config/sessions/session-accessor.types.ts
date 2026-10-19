@@ -5,6 +5,7 @@ import type {
   InternalSessionTranscriptUpdate,
   SessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type {
   SessionTranscriptTurnMutation,
@@ -15,7 +16,7 @@ import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-en
 import type { SessionEntryCommitContext } from "./session-entry-commit-context.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
-import type { SessionEntryProjection } from "./session-entry-snapshots.js";
+import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
 import type { SessionSourceAssertion } from "./session-source-authority.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type {
@@ -91,8 +92,8 @@ export type SessionEntryListScope = Partial<
   sessionKeys?: readonly string[];
   /** Set false for readers that do not consume derived participant identities or counts. */
   includeParticipants?: boolean;
-  /** Validate the complete listing, retaining full cron-run entries for deletion guards. */
-  cronRetention?: true;
+  /** Page full cron-run entries for exact deletion guards without hydrating the store. */
+  cronRetention?: { afterSessionKey?: string; limit: number };
   /** Validate the complete listing, retaining full expired cron rows only for this logical owner. */
   expiredCronRuns?: { agentId: string; updatedBefore: number };
 };
@@ -292,6 +293,12 @@ export type SessionTranscriptVisibleMessageDeltaLimits = {
   maxBytes?: number;
   /** Maximum number of visible messages returned by this page. */
   maxMessages?: number;
+  /**
+   * Where fresh cursors begin: on a cursor-less read and in `reset` results.
+   * `"transcript"` (default) starts at the first active-path message;
+   * `"reset-window"` starts at the latest reset's retained tail.
+   */
+  start?: "transcript" | "reset-window";
 };
 
 /** One active-path message row selected from the materialized projection. */
@@ -305,7 +312,13 @@ export type SessionTranscriptVisibleMessageEventRow = SessionTranscriptEventRow 
 /** Generation-aware outcome for one bounded visible-message read. */
 export type SessionTranscriptVisibleMessageDeltaResult = SessionTranscriptDeltaResult<
   SessionTranscriptVisibleMessageEventRow,
-  "anchor_missing" | "anchor_moved" | "generation_mismatch" | "invalid_cursor" | "scope_mismatch"
+  | "anchor_missing"
+  | "anchor_moved"
+  | "generation_mismatch"
+  | "invalid_cursor"
+  | "scope_mismatch"
+  /** Reset-window cursors only: a newer same-session reset closed the drained window. */
+  | "session_reset"
 >;
 
 export type TranscriptMessageAppendOptions<TMessage> = {
@@ -319,7 +332,7 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   expectedTranscript?: SessionTranscriptContextVersion;
   /** Rebase a stale explicit parent when the current tail still descends from it. */
   appendIntent?: "active-branch";
-  /** Runtime config used for message redaction and transcript header metadata. */
+  /** Runtime config used for transcript header metadata. */
   config?: OpenClawConfig;
   /** Working directory recorded in a newly created transcript header. */
   cwd?: string;
@@ -335,9 +348,9 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   eventId?: string;
   /** Existing parent id owned by a caller with its own session tree. */
   parentId?: string | null;
-  /** @deprecated Use preparation.prepareMessage; removed in the next Plugin SDK major. */
+  /** @deprecated Use preparation.prepareMessage. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
-  /** @deprecated Use preparation.source; removed in the next Plugin SDK major. */
+  /** @deprecated Use preparation.source. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   beforeFreshMessageCommit?: () => void;
   /** Allow append without parent-link migration for large legacy linear transcripts. */
   useRawWhenLinear?: boolean;
@@ -346,7 +359,7 @@ export type TranscriptMessageAppendOptions<TMessage> = {
 export type TranscriptMessageAppendResult<TMessage> = {
   /** False when idempotency lookup found an existing transcript message. */
   appended: boolean;
-  /** Redacted message payload as persisted or replayed from the transcript. */
+  /** Prepared message payload as persisted or replayed from the transcript. */
   message: TMessage;
   /** Existing or newly generated transcript message id. */
   messageId: string;
@@ -399,14 +412,11 @@ export type LockedTranscriptMessageAppendOptions<TMessage> = Omit<
   TranscriptMessageAppendOptions<TMessage>,
   "prepareMessageAfterIdempotencyCheck"
 > & {
-  /** @deprecated Use preparation.prepareMessage; removed in the next Plugin SDK major. */
+  /** @deprecated Use preparation.prepareMessage. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
   /** Awaited after duplicate detection; undefined suppresses a fresh append. */
   prepareMessageAfterIdempotencyCheckAsync?: (message: TMessage) => Promise<TMessage | undefined>;
 };
-
-/** Canonical transcript identity owned by the transaction. */
-export type SessionTranscriptWriteTransactionContext = SessionTranscriptRuntimeTarget;
 
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
 
@@ -442,7 +452,7 @@ export type SessionTranscriptTurnPersistOptions = {
   /** Retained caller authority, with no same-database reads inside worker grants. */
   assertCurrent?: () => void;
   acceptedResultGuard?: { expectedWriterRunId: string | null; errorMessage: string };
-  /** Runtime config used for lock settings, redaction, and header metadata. */
+  /** Runtime config used for lock settings and header metadata. */
   config?: OpenClawConfig;
   /** Working directory recorded in a newly created transcript header. */
   cwd?: string;
@@ -711,22 +721,9 @@ export type ForkSessionEntryFromParentTargetResult =
 export type ForkSessionEntryFromParentTargetParams = {
   agentId?: string;
   commitGuard?: () => void;
-  decisionSkipPatch?: (params: {
-    decision: Extract<SessionParentForkDecision, { status: "skip" }>;
-    entry: SessionEntry;
-    parentEntry: SessionEntry;
-  }) => Partial<SessionEntry> | null;
   fallbackEntry?: SessionEntry;
   parentTarget: SessionLifecycleStoreTarget;
-  patch?: (params: {
-    entry: SessionEntry;
-    parentEntry: SessionEntry;
-    fork: ParentForkedSessionTranscript;
-    decision: Extract<SessionParentForkDecision, { status: "fork" }>;
-  }) => Partial<SessionEntry>;
   sessionTarget: SessionLifecycleStoreTarget;
-  skipForkWhen?: (entry: SessionEntry) => boolean;
-  skipPatch?: (entry: SessionEntry) => Partial<SessionEntry> | null;
   storePath: string;
 };
 
@@ -837,6 +834,8 @@ export type SessionEntryCreateWithTranscriptOptions = {
   onPhase?: (phase: SessionEntryCreationPhase) => void;
   /** Bind retained target facts to this creator's own placeholder publication. */
   bindCreation?: (operation: SessionEntryCreationOperation) => void;
+  /** Follow the selected creator execution's own database registration receipts. */
+  followRegistration?: AgentDatabaseRequestExecutionSource["onRegistryChange"];
   /** Protect the newly created row from maintenance during its initial write. */
   activeSessionKey?: string;
   /** Working directory stored in the initial transcript header. */

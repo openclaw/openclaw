@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,9 +9,9 @@ import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { SessionCatalogListLifetime } from "../gateway/server-methods/session-catalog-list-lifetime.js";
 import { listSessionCatalogProvider } from "../gateway/server-methods/session-catalog-provider-access.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
 import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { createPluginRegistry } from "./registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -41,43 +42,33 @@ async function registerCatalog(
   roots.push(root);
   const configPath = path.join(root, "openclaw.json");
   vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-  let source: OpenClawConfig =
-    initial === undefined
+  const configFor = (enabled?: boolean): OpenClawConfig =>
+    enabled === undefined
       ? {}
-      : {
-          plugins: {
-            entries: { [pluginId]: { config: { sessionCatalog: { enabled: initial } } } },
-          },
-        };
+      : { plugins: { entries: { [pluginId]: { config: { sessionCatalog: { enabled } } } } } };
+  const source = configFor(initial);
   if (configExists === "dangling") {
     await fs.symlink(path.join(root, "missing.json"), configPath);
   } else if (configExists === true) {
     await fs.writeFile(configPath, JSON.stringify(source));
   }
   const env = { HOME: root, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath };
-  const io = createConfigIO({
-    env,
-    homedir: () => root,
-    observe: false,
-    pluginValidation: "core-only",
-  });
+  const homedir = () => root;
+  const io = createConfigIO({ env, homedir, observe: false, pluginValidation: "core-only" });
   if (configExists === "fresh") {
     await io.writeConfigFile(source);
   }
   const snapshot = await io.readConfigFileSnapshot();
   expect(snapshot.exists).toBe(configExists === true || configExists === "fresh");
-  const manifest: PluginManifestRecord = {
+  const catalogProperties = {
+    enabled: { type: "boolean", default: true },
+    pageSize: { type: "integer", default: 10 },
+  };
+  const catalogSchema = { type: "object", default: {}, properties: catalogProperties };
+  const manifest = createPluginManifestRecordFixture({
     id: pluginId,
-    channels: [],
-    providers: [],
-    cliBackends: [],
-    hooks: [],
-    skills: [],
-    origin: "bundled",
     enabledByDefault: true,
     rootDir: root,
-    source: path.join(root, "index.js"),
-    manifestPath: path.join(root, "openclaw.plugin.json"),
     setup: {
       nativeSessionCatalog: {
         label: "Fixture",
@@ -87,20 +78,8 @@ async function registerCatalog(
           : {}),
       },
     },
-    configSchema: {
-      type: "object",
-      properties: {
-        sessionCatalog: {
-          type: "object",
-          default: {},
-          properties: {
-            enabled: { type: "boolean", default: true },
-            pageSize: { type: "integer", default: 10 },
-          },
-        },
-      },
-    },
-  };
+    configSchema: { type: "object", properties: { sessionCatalog: catalogSchema } },
+  });
   const pluginLocal = validatePluginSchemaValue({
     origin: "bundled",
     schema: manifest.configSchema!,
@@ -114,28 +93,19 @@ async function registerCatalog(
   });
   const validate = (input: OpenClawConfig) => {
     const validated = validateConfigObjectWithPlugins(
-      {
-        ...input,
-        plugins: { ...input.plugins, slots: { memory: "none" } },
-      },
+      { ...input, plugins: { ...input.plugins, slots: { memory: "none" } } },
       {
         env,
-        homedir: () => root,
+        homedir,
         pluginMetadataSnapshot: { manifestRegistry: { diagnostics: [], plugins: [manifest] } },
       },
     );
-    expect(validated.ok).toBe(true);
-    if (!validated.ok) {
-      throw new Error("Fixture configuration is invalid");
-    }
+    assert(validated.ok, "Fixture configuration is invalid");
     return validated.config;
   };
   let config = validate(snapshot.sourceConfig ?? source);
   expect(config.plugins?.entries?.[pluginId]?.config).toEqual({
-    sessionCatalog: {
-      ...(initial !== undefined ? { enabled: initial } : {}),
-      pageSize: 10,
-    },
+    sessionCatalog: { ...(initial !== undefined ? { enabled: initial } : {}), pageSize: 10 },
   });
   const registry = createPluginRegistry({
     runtime: { config: { current: () => config } } as PluginRuntime,
@@ -174,7 +144,6 @@ async function registerCatalog(
   return {
     dispose,
     instance: getPluginInstance(record)!,
-    registry: registry.registry,
     provider: registry.registry.sessionCatalogs[0]!.provider,
     node: registry.registry.nodeHostCommands[0]!.command,
     staticNode: registry.registry.nodeHostCommands[1]!.command,
@@ -183,15 +152,29 @@ async function registerCatalog(
     available,
     handle,
     staticHandle,
+    inRequestScope<T>(run: () => T) {
+      return withPluginRuntimeGatewayRequestScope(
+        { pluginRegistry: registry.registry, pluginId, isWebchatConnect: () => false },
+        run,
+      );
+    },
     async setPreference(enabled: boolean) {
-      source = {
-        plugins: { entries: { [pluginId]: { config: { sessionCatalog: { enabled } } } } },
-      };
-      await fs.writeFile(configPath, JSON.stringify(source));
+      await fs.writeFile(configPath, JSON.stringify(configFor(enabled)));
       const updated = await io.readConfigFileSnapshot();
       config = validate(updated.sourceConfig);
     },
   };
+}
+
+function expectCalls(count: number, ...mocks: { mock: { calls: unknown[][] } }[]) {
+  for (const mock of mocks) {
+    expect(mock).toHaveBeenCalledTimes(count);
+  }
+}
+
+async function expectNodeDisabled(state: Awaited<ReturnType<typeof registerCatalog>>) {
+  await expect(state.node.handle()).rejects.toThrow("discovery is disabled");
+  await expect(state.staticNode.handle()).rejects.toThrow("discovery is disabled");
 }
 
 describe("registered native catalog access", () => {
@@ -218,16 +201,14 @@ describe("registered native catalog access", () => {
       state.instance.lifecycle.onDispose(cleanup);
       let registrations = 0;
       let settled = false;
-      const pending = withPluginRuntimeGatewayRequestScope(
-        { pluginRegistry: state.registry, pluginId: "fixture", isWebchatConnect: () => false },
-        () =>
-          listSessionCatalogProvider(state.provider, {
-            waitUntil: () => {
-              if (++registrations === 2 && failure === "release registration") {
-                throw error;
-              }
-            },
-          }),
+      const pending = state.inRequestScope(() =>
+        listSessionCatalogProvider(state.provider, {
+          waitUntil: () => {
+            if (++registrations === 2 && failure === "release registration") {
+              throw error;
+            }
+          },
+        }),
       );
       const outcome = pending
         .catch((reason: unknown) => reason)
@@ -273,15 +254,11 @@ describe("registered native catalog access", () => {
     };
     state.instance.lifecycle.onDispose(cleanup);
     await expect(
-      withPluginRuntimeGatewayRequestScope(
-        { pluginRegistry: state.registry, pluginId: "fixture", isWebchatConnect: () => false },
-        () => listSessionCatalogProvider(state.provider, {}),
-      ),
+      state.inRequestScope(() => listSessionCatalogProvider(state.provider, {})),
     ).rejects.toThrow("reloaded or disabled");
     await state.dispose();
     expect(next).not.toHaveBeenCalled();
-    expect(close).toHaveBeenCalledOnce();
-    expect(cleanup).toHaveBeenCalledOnce();
+    expectCalls(1, close, cleanup);
     expect(state.instance.hasRetainedConsumers).toBe(false);
   });
 
@@ -295,28 +272,24 @@ describe("registered native catalog access", () => {
       const cleanup = vi.fn();
       let guardedPublication: () => void = () => {};
       const state = await registerCatalog(true, true, {
-        createListOperation: (params) => {
-          return {
-            async next() {
-              next();
-              params.waitUntil?.(publication.promise.then(() => guardedPublication()));
-              return { done: true, hosts: [] };
-            },
-            close,
-          };
-        },
+        createListOperation: (params) => ({
+          async next() {
+            next();
+            params.waitUntil?.(publication.promise.then(() => guardedPublication()));
+            return { done: true, hosts: [] };
+          },
+          close,
+        }),
       });
       state.instance.lifecycle.onDispose(cleanup);
       const published = vi.fn();
       guardedPublication = state.instance.wrap(published);
       const owner = new AbortController();
       const lifetime = new SessionCatalogListLifetime([owner.signal], [state.provider.id]);
-      const pending = withPluginRuntimeGatewayRequestScope(
-        { pluginRegistry: state.registry, pluginId: "fixture", isWebchatConnect: () => false },
-        () =>
-          lifetime.runProvider(undefined, (params) =>
-            listSessionCatalogProvider(state.provider, params),
-          ),
+      const pending = state.inRequestScope(() =>
+        lifetime.runProvider(undefined, (params) =>
+          listSessionCatalogProvider(state.provider, params),
+        ),
       );
       const outcome = pending.catch((error: unknown) => error);
       try {
@@ -330,10 +303,10 @@ describe("registered native catalog access", () => {
         expect(state.instance.hasRetainedConsumers).toBe(true);
         await vi.advanceTimersByTimeAsync(51);
         const timeout = (await disposal).errors[0];
-        expect(timeout).toBeInstanceOf(PluginInstanceDrainTimeoutError);
-        if (!(timeout instanceof PluginInstanceDrainTimeoutError)) {
-          throw new Error("Expected bounded logical retirement");
-        }
+        assert(
+          timeout instanceof PluginInstanceDrainTimeoutError,
+          "Expected bounded logical retirement",
+        );
         expect(timeout.forcedRetirement).toEqual({ activeCallCount: 0, retainedConsumerCount: 1 });
         expect(state.instance.lifecycle.signal.aborted).toBe(true);
         expect(state.instance.hasRetainedConsumers).toBe(true);
@@ -342,8 +315,7 @@ describe("registered native catalog access", () => {
         expect(published).not.toHaveBeenCalled();
         publication.resolve();
         await timeout.settled;
-        expect(published).toHaveBeenCalledOnce();
-        expect(cleanup).toHaveBeenCalledOnce();
+        expectCalls(1, published, cleanup);
         expect(state.instance.hasRetainedConsumers).toBe(false);
         expect(state.instance.lifecycle.signal.aborted).toBe(true);
       } finally {
@@ -379,9 +351,7 @@ describe("registered native catalog access", () => {
     await expect(enabled.next()).resolves.toEqual({ done: true, hosts: [] });
     enabled.close();
     enabled.close();
-    expect(createListOperation).toHaveBeenCalledOnce();
-    expect(next).toHaveBeenCalledOnce();
-    expect(close).toHaveBeenCalledOnce();
+    expectCalls(1, createListOperation, next, close);
     expect(state.list).not.toHaveBeenCalled();
   });
 
@@ -435,57 +405,35 @@ describe("registered native catalog access", () => {
         /reloaded|disabled/,
       );
       expect(state.list).toHaveBeenCalledTimes(enabled ? 1 : 0);
-      expect(state.available).not.toHaveBeenCalled();
-      expect(state.staticHandle).not.toHaveBeenCalled();
+      expectCalls(0, state.available, state.staticHandle);
     },
   );
 
-  it("requires opt-in for a new declared catalog after fresh configuration is written", async () => {
-    const state = await registerCatalog("fresh", undefined, { legacyDefaultEnabled: true });
-    await state.provider.list({});
-    expect(state.list).not.toHaveBeenCalled();
-    await expect(state.node.handle()).rejects.toThrow("discovery is disabled");
-    await expect(state.staticNode.handle()).rejects.toThrow("discovery is disabled");
-    await state.setPreference(true);
-    await state.provider.list({});
-    expect(state.list).toHaveBeenCalledOnce();
-  });
-  it("does not inherit a legacy opt-in from a dangling config link", async () => {
-    const state = await registerCatalog("dangling");
-    expect(await state.provider.list({})).toEqual([]);
-    await expect(state.node.handle()).rejects.toThrow("discovery is disabled");
-    await expect(state.staticNode.handle()).rejects.toThrow("discovery is disabled");
-    expect(state.list).not.toHaveBeenCalled();
-    expect(state.handle).not.toHaveBeenCalled();
-    expect(state.staticHandle).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
-    "blocks validated defaults from granting consent (file exists: %s)",
+  it.each(["fresh", "dangling", false, true] as const)(
+    "requires explicit consent despite validated defaults (config: %s)",
     async (exists) => {
-      const state = await registerCatalog(exists, exists ? false : undefined);
+      const state = await registerCatalog(
+        exists,
+        exists === true ? false : undefined,
+        exists === "fresh" ? { legacyDefaultEnabled: true } : {},
+      );
       expect(await state.provider.list({ agentId: "research" })).toEqual([]);
       await expect(state.provider.read({ hostId: "local", threadId: "thread" })).rejects.toThrow(
         "discovery is disabled",
       );
       expect(state.node.isAvailable?.({ config: {}, env: {} })).toBe(false);
-      await expect(state.node.handle()).rejects.toThrow("discovery is disabled");
-      await expect(state.staticNode.handle()).rejects.toThrow("discovery is disabled");
-      expect(state.list).not.toHaveBeenCalled();
-      expect(state.read).not.toHaveBeenCalled();
-      expect(state.available).not.toHaveBeenCalled();
-      expect(state.handle).not.toHaveBeenCalled();
-      expect(state.staticHandle).not.toHaveBeenCalled();
+      await expectNodeDisabled(state);
+      expectCalls(0, state.list, state.read, state.available, state.handle, state.staticHandle);
+      if (exists === "dangling") {
+        return;
+      }
       await state.setPreference(true);
       await state.provider.list({});
       await state.provider.read({ hostId: "local", threadId: "thread" });
       expect(state.node.isAvailable?.({ config: {}, env: {} })).toBe(true);
       await state.node.handle();
       await state.staticNode.handle();
-      expect(state.list).toHaveBeenCalledOnce();
-      expect(state.read).toHaveBeenCalledOnce();
-      expect(state.handle).toHaveBeenCalledOnce();
-      expect(state.staticHandle).toHaveBeenCalledOnce();
+      expectCalls(1, state.list, state.read, state.handle, state.staticHandle);
     },
   );
 
@@ -496,7 +444,6 @@ describe("registered native catalog access", () => {
     await state.setPreference(false);
     expect(await state.provider.list({})).toEqual([]);
     await expect(state.node.handle()).rejects.toThrow("discovery is disabled");
-    expect(state.list).toHaveBeenCalledOnce();
-    expect(state.handle).toHaveBeenCalledOnce();
+    expectCalls(1, state.list, state.handle);
   });
 });

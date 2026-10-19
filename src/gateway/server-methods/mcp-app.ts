@@ -120,7 +120,7 @@ function operationHandler(
     const cfg = context.getRuntimeConfig();
     const requesterId = resolveMcpAppRequesterId(client);
     const active = await resolveRequestedMcpAppView(options, { cfg, requesterId });
-    const read = retainSessionScopedRead(
+    const read = await retainSessionScopedRead(
       options,
       requireString(params, "sessionKey"),
       active.view.agentId,
@@ -199,7 +199,7 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
     const sessionKey = requireString(params, "sessionKey");
     const agentId = resolveMcpAppSessionOwner(params, context.getRuntimeConfig());
     const requesterId = resolveMcpAppRequesterId(client);
-    const read = retainSessionScopedRead(options, sessionKey, agentId);
+    const read = await retainSessionScopedRead(options, sessionKey, agentId);
     const assertRequestCurrent = () => {
       read?.assertCurrent();
       if (requesterId !== resolveMcpAppRequesterId(client)) {
@@ -276,7 +276,9 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
         if (sandboxPort === undefined) {
           throw new Error("MCP App sandbox listener is unavailable; restart the Gateway");
         }
-        const configuredOrigin = context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
+        const ingress = client?.remoteControlUiIngress;
+        const configuredOrigin =
+          ingress?.sandboxOrigin ?? context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
         let standalone: ReturnType<typeof createMcpAppStandaloneTicket> = undefined;
         try {
           standalone = createMcpAppStandaloneTicket({
@@ -294,7 +296,9 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
         }
         assertRequestCurrent();
         return {
-          sandboxUrl: buildMcpAppSandboxPath(view.csp),
+          sandboxUrl: ingress
+            ? new URL(buildMcpAppSandboxPath(view.csp), ingress.sandboxOrigin).href
+            : buildMcpAppSandboxPath(view.csp),
           sandboxPort,
           ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
           html: view.html,

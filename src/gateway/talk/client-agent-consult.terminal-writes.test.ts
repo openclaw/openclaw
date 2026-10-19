@@ -17,6 +17,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { captureSessionMutationRouting } from "../session-sharing-routing.js";
 import { createTalkClientAgentConsultRunner } from "./client-agent-consult.js";
 
 const core = vi.hoisted(() => vi.fn<typeof runEmbeddedAgent>());
@@ -51,14 +52,16 @@ it.each([false, true])(
       );
       writeContext.track(persistence);
       captured.resolve({ admitted, writeContext, persistence });
-      return { payloads: [{ text: "Answer" }], meta: { durationMs: 0 } };
+      return {
+        payloads: [{ text: "Answer" }],
+        meta: { durationMs: 0, terminalReply: { disposition: "visible", text: "Answer" } },
+      };
     });
     const controller = new AbortController();
     const sessionKey = `agent:main:talk-terminal-${abort}`;
     const runner = createTalkClientAgentConsultRunner({
       config,
       context: {
-        chatAbortControllers: new Map(),
         logGateway: createSubsystemLogger("test/talk-terminal-writes"),
       },
       sessionTarget: {
@@ -66,6 +69,9 @@ it.each([false, true])(
         sessionKey,
         canonicalKey: sessionKey,
         storePath: path.join(state.sessionsDir(), "sessions.json"),
+        assertCurrent: captureSessionMutationRouting(config, undefined, [
+          { agentId: "main", sessionKey },
+        ]),
       },
       getVoiceSessionId: () => "voice-session",
       initialItems: [],
@@ -95,16 +101,13 @@ it.each([false, true])(
       if (abort) {
         controller.abort();
         expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
-        expect(() => writeContext.run(() => writeContext.assertCurrent())).toThrow(
-          "Terminal write owner changed before commit",
-        );
-        commit.resolve();
-        await expect(persistence).rejects.toThrow("Terminal write owner changed before commit");
+      }
+      expect(settled).toBe(false);
+      commit.resolve();
+      await persistence;
+      if (abort) {
         await expect(run).rejects.toMatchObject({ name: "AbortError" });
       } else {
-        expect(settled).toBe(false);
-        commit.resolve();
-        await persistence;
         await expect(run).resolves.toEqual({ text: "Answer" });
       }
       expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();

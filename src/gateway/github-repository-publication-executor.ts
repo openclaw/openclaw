@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
@@ -36,7 +37,6 @@ import {
   readGitHubRepositoryPublicationBlob,
   type GitHubRepositoryPublicationSnapshot,
 } from "./github-repository-publication-snapshot.js";
-import type { RepositoryGitHubPublicationExecution } from "./github-repository-publication-store.js";
 import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
@@ -125,11 +125,12 @@ export async function prepareRepositoryGitHubPublicationTarget(
 
 /** GitHub receives only accepted normalized objects; the Gateway never fetches source history. */
 export async function executeRepositoryGitHubPublication(params: {
-  execution: RepositoryGitHubPublicationExecution | RepositoryGitHubPublicationExecutionAsync;
+  execution: RepositoryGitHubPublicationExecutionAsync;
   snapshot: GitHubRepositoryPublicationSnapshot;
   snapshotRoot: string;
   storePath: string;
   assertWorkspace: () => void;
+  readCurrentEntry: () => InternalSessionEntry | undefined;
   validateAuthority: () => boolean;
   assertWorkflowChangesAllowed: () => void;
   identity?: GitHubPublicationIdentityOwner;
@@ -345,7 +346,9 @@ export async function executeRepositoryGitHubPublication(params: {
       row,
       storePath: params.storePath,
       accountId: identity.account.accountId,
+      host: identity.host ?? resolveGitHubHost(),
       assertCurrent: assertPublicationAction,
+      readCurrentEntry: params.readCurrentEntry,
       description:
         row.body?.trim() || "Published by the Gateway from the accepted repository checkpoint.",
     });
@@ -475,7 +478,6 @@ export async function executeRepositoryGitHubPublication(params: {
     }
     let url = await findPullRequest();
     if (!url) {
-      const body = content.pullRequestBody();
       identity = await refreshIdentity();
       assertAction();
       await execution.recordEffect("pull_request");
@@ -489,13 +491,15 @@ export async function executeRepositoryGitHubPublication(params: {
         {
           env: identity.env,
           beforeRun: assertAction,
-          input: JSON.stringify({
-            title: content.title,
-            body,
-            head: pushOwner + ":" + branch,
-            base: baseBranch,
-            draft: true,
-          }),
+          input: () =>
+            JSON.stringify({
+              title: content.title,
+              body: content.pullRequestBody(),
+              head: pushOwner + ":" + branch,
+              base: baseBranch,
+              // Requests accepted before the choice was introduced created drafts.
+              draft: row.draft !== 0,
+            }),
         },
       );
       if (created.code === 0) {

@@ -13,7 +13,11 @@ export type GitWorktreeOperations = {
       requiredPaths: readonly string[];
       records: Array<Pick<ManagedWorktreeRecord, "id" | "path" | "repoRoot">>;
     };
-    output: { worktreeIds: string[]; complete: boolean };
+    output: {
+      worktreeIds: string[];
+      ownedPaths: Array<{ id: string; path: string }>;
+      complete: boolean;
+    };
   };
   "worktree.eviction-repositories": {
     input: { repoRoots: string[] };

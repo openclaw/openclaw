@@ -1,8 +1,3 @@
-/**
- * Shell execution helpers.
- *
- * Resolves platform shell commands and sanitizes binary output.
- */
 import fs from "node:fs";
 import path from "node:path";
 import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequences.js";
@@ -351,7 +346,10 @@ export function createStreamingBinaryOutputSanitizer(
 }
 
 function sanitizeStrippedBinaryOutput(text: string): string {
-  const scrubbed = text.replace(/[\p{Format}\p{Surrogate}]/gu, "");
+  // Joiners are part of valid words and emoji sequences, including filenames.
+  const scrubbed = text.replace(/[\p{Format}\p{Surrogate}]/gu, (character) =>
+    character === "\u200c" || character === "\u200d" ? character : "",
+  );
   return scrubbed.replace(/\p{Cc}/gu, (control) =>
     control === "\t" || control === "\n" || control === "\r"
       ? control

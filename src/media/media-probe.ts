@@ -206,7 +206,7 @@ export function toMediaProbeResult(result: PlaybackMediaProbeResult | null): Med
 async function probeMediaFile(
   filePath: string,
   kind: MediaProbeKind,
-  options: MediaProbeOptions = {},
+  options: MediaProbeOptions,
 ): Promise<MediaProbeResult> {
   try {
     const handle = await fs.open(filePath, "r");

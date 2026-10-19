@@ -48,7 +48,7 @@ export function parseJsonc(raw: string): JsoncParseResult {
     disallowComments: false,
     allowEmptyContent: true,
   });
-  const lineForOffset = createLineForOffset(raw);
+  const lineForOffset = createLineForOffset(parseSource);
   const diagnostics = errors.map((error) => toDiagnostic(error, lineForOffset, tree));
   let root: JsoncValue | null = null;
   if (tree && diagnostics.every((d) => d.severity !== "error")) {

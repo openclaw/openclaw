@@ -7,10 +7,15 @@ import {
   fetchThreadReplies,
   stripHtmlFromTeamsMessage,
 } from "./graph-thread.js";
+import type * as Graph from "./graph.js";
 import { fetchGraphJson } from "./graph.js";
 
-vi.mock("./graph.js", () => ({
+const fetchAllGraphPagesMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./graph.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof Graph>()),
   fetchGraphJson: vi.fn(),
+  fetchAllGraphPages: fetchAllGraphPagesMock,
 }));
 
 describe("stripHtmlFromTeamsMessage", () => {
@@ -84,18 +89,29 @@ describe("fetchChatMessageText", () => {
 
 describe("fetchThreadReplies", () => {
   beforeEach(() => {
-    vi.mocked(fetchGraphJson).mockReset();
+    fetchAllGraphPagesMock.mockReset();
   });
 
-  it("returns empty array when value is missing", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({});
-
-    const result = await fetchThreadReplies("tok", "g", "c", "m");
-    expect(result).toStrictEqual([]);
-    expect(fetchGraphJson).toHaveBeenCalledWith({
-      token: "tok",
-      path: "/teams/g/channels/c/messages/m/replies?$top=50",
+  it("rejects a page-capped result instead of returning an old prefix", async () => {
+    fetchAllGraphPagesMock.mockResolvedValueOnce({
+      items: [{ id: "old-reply" }],
+      truncated: true,
     });
+
+    await expect(fetchThreadReplies("tok", "g", "c", "m")).rejects.toThrow(
+      "MS Teams thread replies pagination did not reach the newest replies",
+    );
+  });
+
+  it("rejects an incomplete timestamp set when selecting a newest window", async () => {
+    fetchAllGraphPagesMock.mockResolvedValueOnce({
+      items: Array.from({ length: 51 }, (_, index) => ({ id: `reply-${index}` })),
+      truncated: false,
+    });
+
+    await expect(fetchThreadReplies("tok", "g", "c", "m")).rejects.toThrow(
+      "MS Teams thread replies have incomplete timestamps",
+    );
   });
 });
 

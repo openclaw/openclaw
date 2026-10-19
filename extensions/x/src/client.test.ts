@@ -17,14 +17,16 @@ const fixture = vi.hoisted(() => {
   let generation = 0;
   let stateDir = "synthetic-x-client:0";
   const state = { openKeyedStore: () => store, resolveStateDir: () => stateDir };
+  const logging = { getChildLogger: () => ({ warn: vi.fn() }) };
   return {
+    logging,
     nextTest: () => {
       stateDir = `synthetic-x-client:${++generation}`;
     },
     state,
     rows,
     store,
-    runtime: { state },
+    runtime: { state, logging },
     fetch: vi.fn<(input: string, init?: RequestInit) => Promise<Response>>(),
   };
 });
@@ -61,7 +63,7 @@ function config(overrides: Partial<XAccountConfig> = {}): OpenClawConfig {
 }
 
 function restartRuntime() {
-  fixture.runtime = { state: fixture.state };
+  fixture.runtime = { state: fixture.state, logging: fixture.logging };
 }
 
 function requestBody(init?: RequestInit): string {

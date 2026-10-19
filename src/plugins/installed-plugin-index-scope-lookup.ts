@@ -17,6 +17,8 @@ const PROVIDER_CONTRIBUTION_CONTRACTS = [
   "realtimeTranscriptionProviders",
   "realtimeVoiceProviders",
   "mediaUnderstandingProviders",
+  "transcriptSourceProviders",
+  // Retain legacy installed indexes until their next normal manifest rebuild.
   "meetingNotesSourceProviders",
   "imageGenerationProviders",
   "videoGenerationProviders",

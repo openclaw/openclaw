@@ -12,9 +12,10 @@ export abstract class MemorySyncTestHarness extends MemoryManagerSyncOps {
     throw new Error("Source sync harness does not own embedding providers");
   }
 
-  protected async indexFiles(items: MemoryIndexWorkItem[]): Promise<void> {
+  protected async indexFiles(items: MemoryIndexWorkItem[]): Promise<MemoryIndexWorkItem[]> {
     for (const item of items) {
       await this.indexFile(item.entry, item.source);
     }
+    return [];
   }
 }

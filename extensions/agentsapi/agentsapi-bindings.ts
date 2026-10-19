@@ -49,17 +49,6 @@ export function createAgentsApiBindings(
   const lifecycle = createNativeSessionBindingLifecycleV2(
     {
       lookup: state.lookup.bind(state),
-      assertLeaseCurrent(key, token) {
-        // Legacy SDK writers cannot publish revocation; only this final effect guard stays sync.
-        const raw = runtime.state.openSyncKeyedStore<StoredBinding>(stateOptions).lookup(key);
-        const current = readRecord(raw);
-        if (raw !== undefined && !current) {
-          throw invalidRow(key);
-        }
-        if (current?.lease?.token !== token || current.lease.expiresAt <= Date.now()) {
-          throw new Error(`Agents API binding lease lost: ${key}`);
-        }
-      },
       withCurrent(authority) {
         return runtime.state.openKeyedStoreV2<StoredBinding>(stateOptions, authority);
       },
@@ -175,7 +164,12 @@ export function createAgentsApiBindings(
                 });
                 assertMigrationCurrent();
               } else if (stored?.sessionId && stored.configFingerprint) {
-                binding = bindingSchema.parse(stored);
+                binding = {
+                  sessionId: stored.sessionId,
+                  configFingerprint: stored.configFingerprint,
+                  executorControllerPluginId: stored.executorControllerPluginId,
+                  executor: stored.executor,
+                };
               }
               return await run(binding, bind, assertLeaseCurrent);
             } finally {

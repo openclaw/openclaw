@@ -98,10 +98,6 @@ export function createFeishuThreadBindingManager(params: {
 }): FeishuThreadBindingManager {
   const accountId = normalizeAccountId(params.accountId);
   const { managersByAccountId, bindingsByAccountConversation } = getState();
-  const existing = managersByAccountId.get(accountId);
-  if (existing) {
-    return existing;
-  }
 
   const idleTimeoutMs = resolveThreadBindingIdleTimeoutMsForChannel({
     cfg: params.cfg,

@@ -1,4 +1,3 @@
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   normalizeOptionalTrimmedStringList,
@@ -15,8 +14,10 @@ import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { isRecord } from "../utils.js";
 import {
+  isPluginManifestOnboardingScope,
   normalizeManifestObjectList,
   normalizeNamedMetadataRecord,
+  normalizeProviderAssistantVisibility,
   omitUndefinedManifestFields,
   optionalManifestFields,
 } from "./manifest-capability-normalizers.js";
@@ -27,10 +28,8 @@ import type {
   PluginManifestChannelCommandDefaults,
   PluginManifestChannelConfig,
   PluginManifestCliCommand,
-  PluginManifestControlUi,
   PluginManifestDashboard,
   PluginManifestDashboardActionVerb,
-  PluginManifestOnboardingScope,
   PluginManifestProviderAuthChoice,
   PluginManifestQaRunner,
   PluginManifestSetup,
@@ -39,6 +38,8 @@ import type {
   PluginConfigUiHint,
 } from "./manifest-types.js";
 import { normalizeSetupPresentationHttpsUrl } from "./setup-presentation-url.js";
+
+export { normalizeManifestControlUi } from "./manifest-control-ui.js";
 
 export function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
   if (!isRecord(value)) {
@@ -275,42 +276,6 @@ export function normalizeManifestDashboard(value: unknown): DashboardManifestRes
   return Object.keys(dashboard).length > 0 ? { ok: true, dashboard } : { ok: true };
 }
 
-export function normalizeManifestControlUi(
-  value: unknown,
-): Result<PluginManifestControlUi | undefined, string> {
-  if (value === undefined) {
-    return ok(undefined);
-  }
-  if (!isRecord(value) || Object.keys(value).some((key) => key !== "entry" && key !== "styles")) {
-    return err("controlUi must contain only entry and optional styles");
-  }
-  const entry = typeof value.entry === "string" ? value.entry.replace(/^\.\//u, "") : "";
-  // A dedicated built directory prevents a declaration from publishing package sources.
-  const builtEntry = /^dist\/(?:[\w-][\w.-]*\/)+[\w-][\w.-]*\.m?js$/u;
-  if (entry.length > 512 || !builtEntry.test(entry)) {
-    return err("controlUi.entry must be a JavaScript file in a dedicated dist subdirectory");
-  }
-  if (value.styles !== undefined && (!Array.isArray(value.styles) || value.styles.length > 16)) {
-    return err("controlUi.styles must be an array of at most 16 stylesheets");
-  }
-  const assetPrefix = entry.slice(0, entry.lastIndexOf("/") + 1);
-  const styles: string[] = [];
-  for (const rawStyle of value.styles ?? []) {
-    const style = typeof rawStyle === "string" ? rawStyle.replace(/^\.\//u, "") : "";
-    if (
-      style.length > 512 ||
-      !style.startsWith(assetPrefix) ||
-      !/^(?:[\w-][\w.-]*\/)+[\w-][\w.-]*\.css$/u.test(style)
-    ) {
-      return err("controlUi.styles must contain CSS files under the entry's asset directory");
-    }
-    if (!styles.includes(style)) {
-      styles.push(style);
-    }
-  }
-  return ok({ entry, ...(styles.length > 0 ? { styles } : {}) });
-}
-
 function normalizeProviderChannelLogin(
   value: unknown,
 ): PluginManifestProviderAuthChoice["channelLogin"] | undefined {
@@ -339,8 +304,7 @@ export function normalizeProviderAuthChoices(
       return undefined;
     }
     const onboardingScopes = normalizeTrimmedStringList(entry.onboardingScopes).filter(
-      (scope): scope is PluginManifestOnboardingScope =>
-        scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
+      isPluginManifestOnboardingScope,
     );
     return omitUndefinedManifestFields<PluginManifestProviderAuthChoice>({
       provider,
@@ -358,12 +322,7 @@ export function normalizeProviderAuthChoices(
         typeof entry.assistantPriority === "number" && Number.isFinite(entry.assistantPriority)
           ? entry.assistantPriority
           : undefined,
-      assistantVisibility:
-        entry.assistantVisibility === "manual-only" ||
-        entry.assistantVisibility === "visible" ||
-        entry.assistantVisibility === "detected-only"
-          ? entry.assistantVisibility
-          : undefined,
+      assistantVisibility: normalizeProviderAssistantVisibility(entry.assistantVisibility),
       deprecatedChoiceIds: normalizeOptionalTrimmedStringList(entry.deprecatedChoiceIds),
       groupId: normalizeOptionalString(entry.groupId),
       groupLabel: normalizeOptionalString(entry.groupLabel),
@@ -402,6 +361,9 @@ export function normalizeConfigUiHints(
     const hint = { ...rawHint } as Record<string, unknown>;
     if ("presentation" in hint && hint.presentation !== "phone-number") {
       delete hint.presentation;
+    }
+    if ("multiline" in hint && typeof hint.multiline !== "boolean") {
+      delete hint.multiline;
     }
     normalized[hintPath] = hint as PluginConfigUiHint;
   }

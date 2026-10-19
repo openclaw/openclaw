@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import {
   readClosedTranscriptTurnInDatabase,
@@ -10,6 +9,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { ensureContextEngineTurnOutboxSchema } from "../../state/openclaw-agent-context-engine-turn-outbox-schema.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
@@ -42,18 +42,10 @@ type OutboxKernelParams<Type extends keyof ContextEngineTurnOutboxWorkerOperatio
 const RECOVERED_TURN_MAX_EVENTS = 20_000;
 const RECOVERED_TURN_MAX_BYTES = 8 * 1024 * 1024;
 
-function outboxEnqueueSequence() {
-  return /* kysely-allow-raw: SQLite's implicit rowid is the durable enqueue sequence for this table. */ sql<number>`context_engine_turn_outbox.rowid`;
-}
-
-function oldestOutboxEnqueueSequence() {
-  return /* kysely-allow-raw: Aggregate the closed implicit-rowid expression used for enqueue order. */ sql<number>`MIN(context_engine_turn_outbox.rowid)`;
-}
-
 function outboxPayloadRequiresAdvancement() {
   // Blocked rows are terminal audit evidence, not retryable work. Keep them
   // inspectable without letting them hold later same-session turns behind them.
-  return /* kysely-allow-raw: Payload state is owned by the closed outbox union above. */ sql<boolean>`json_extract(context_engine_turn_outbox.payload_json, '$.state') IS NOT 'blocked'`;
+  return /* kysely-allow-raw: NULL and unknown payload states retain their existing retry eligibility. */ sql<boolean>`context_engine_turn_outbox.payload_state IS DISTINCT FROM 'blocked'`;
 }
 
 function outboxDb(database: ContextEngineTurnOutboxConnection) {
@@ -116,6 +108,7 @@ function writeContextEngineTurnOutboxPayload(
             last_attempt_at: null,
             last_error: null,
             payload_json: payloadJson,
+            payload_state: params.payload.state,
           })
           .where("advancement_key", "=", advancementKey),
       );
@@ -136,6 +129,7 @@ function writeContextEngineTurnOutboxPayload(
         owner_plugin_id: params.ownerPluginId ?? null,
         session_id: admission.sessionId,
         payload_json: payloadJson,
+        payload_state: params.payload.state,
         created_at: Date.now(),
         last_attempt_at: null,
         last_error: null,
@@ -207,11 +201,7 @@ function discardContextEngineTurnIntent(params: OutboxKernelParams<"discardInten
       .where("advancement_key", "=", params.admission.logicalTurnId)
       .where("engine_id", "=", params.engineId)
       // Accepted work remains recoverable when publication or acknowledgment fails.
-      .where(
-        /* kysely-allow-raw: Closed outbox payload state. */ sql`json_extract(payload_json, '$.state')`,
-        "=",
-        "admitted",
-      )
+      .where("payload_state", "=", "admitted")
       .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null),
   );
   return result.numAffectedRows !== undefined && result.numAffectedRows > 0n;
@@ -284,7 +274,9 @@ export function recoverContextEngineTurnOutbox(params: {
       .where("engine_id", "=", params.engineId)
       .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null)
       .where("session_id", "=", params.sessionId)
-      .orderBy(outboxEnqueueSequence(), "asc"),
+      // Blocked rows are terminal; their outcome was logged once when the turn was blocked.
+      .where(outboxPayloadRequiresAdvancement())
+      .orderBy("enqueue_sequence", "asc"),
   ).rows;
   let pending = false;
   for (const row of rows) {
@@ -295,9 +287,6 @@ export function recoverContextEngineTurnOutbox(params: {
       continue;
     }
     if (payload.state === "blocked") {
-      params.warn(
-        `[context-engine] durable turn advancement is blocked: ${row.advancement_key}: transcript range is ${payload.failure}`,
-      );
       continue;
     }
     if (payload.state === "admitted") {
@@ -339,9 +328,7 @@ function listPendingContextEngineTurnSessions(
 ): string[] {
   const query = pendingContextEngineTurns(database, filter, filter.sessionId || undefined)
     .select("session_id")
-    // SQLite rowid preserves enqueue order among surviving pending rows.
-    // Use it instead of wall-clock timestamps, which can collide.
-    .select(oldestOutboxEnqueueSequence().as("oldest_enqueue_sequence"));
+    .select((eb) => eb.fn.min("enqueue_sequence").as("oldest_enqueue_sequence"));
   return executeSqliteQuerySync(
     database.db,
     query.groupBy("session_id").orderBy("oldest_enqueue_sequence", "asc").limit(filter.limit),
@@ -356,7 +343,7 @@ function readNextPendingContextEngineTurn(
     database.db,
     pendingContextEngineTurns(database, filter, filter.sessionId)
       .select(["advancement_key", "payload_json", "session_id"])
-      .orderBy(outboxEnqueueSequence(), "asc")
+      .orderBy("enqueue_sequence", "asc")
       .limit(1),
   );
 }
@@ -441,7 +428,7 @@ type OutboxOutput =
 
 /** Runs one outbox command's kernel on the borrowed connection. */
 export function executeContextEngineTurnOutboxCommand(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: OutboxCommand,
 ): OutboxOutput {
   const database = { db };

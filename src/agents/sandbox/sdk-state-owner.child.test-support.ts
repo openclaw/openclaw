@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGatewayLock, type GatewayLockHandle } from "../../infra/gateway-lock.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { registerSealedRuntime } from "../../infra/sealed-runtime-registry.js";
+import { setLoggerOverride } from "../../logging/logger.js";
 import { resolveSandboxContext } from "../../plugin-sdk/agent-harness-runtime.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
@@ -17,6 +18,8 @@ const root = process.env.OPENCLAW_HOME!;
 const control = path.join(root, "control");
 fs.mkdirSync(control, { recursive: true });
 registerSealedRuntime({ json5, resolveSecureTempRoot: () => control });
+// Diagnostic logs are outside the state tree checked for foreign-owner mutations.
+setLoggerOverride({ file: process.env.OPENCLAW_TEST_LOG_FILE });
 let callerSql = 0;
 const native = requireNodeSqlite();
 for (const method of ["prepare", "exec"] as const) {

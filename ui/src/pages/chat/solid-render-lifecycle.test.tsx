@@ -50,85 +50,50 @@ function mountPane(
   return { source, subscribe, release, read, lifecycle, present, view };
 }
 
-function frames() {
-  let id = 0;
-  const pending = new Map<number, FrameRequestCallback>();
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    pending.set(++id, callback);
-    return id;
+it("accepts after-commit registration during component setup", () => {
+  const observed: Array<string | null | undefined> = [];
+  mountPane(true, (lifecycle) => {
+    lifecycle.afterCommit(() => {
+      observed.push(document.querySelector("output")?.textContent);
+    });
   });
-  vi.stubGlobal("cancelAnimationFrame", (key: number) => pending.delete(key));
-  return {
-    pending,
-    run() {
-      const callbacks = Array.from(pending.values());
-      pending.clear();
-      for (const callback of callbacks) {
-        callback(0);
-      }
-    },
-  };
-}
+  expect(observed).toEqual(["initial"]);
+});
 
-it.each(["afterCommit", "afterLayout"] as const)(
-  "accepts %s registration during component setup",
-  (method) => {
-    const clock = frames();
-    const observed: Array<string | null | undefined> = [];
-    mountPane(true, (lifecycle) => {
-      lifecycle[method](() => {
-        observed.push(document.querySelector("output")?.textContent);
-      });
-    });
-    clock.run();
-    expect(observed).toEqual(["initial"]);
-  },
-);
-
-it.each(["afterCommit", "afterLayout"] as const)(
-  "releases %s resources when deferred work completes",
-  (method) => {
-    const clock = frames();
-    const { lifecycle, view } = mountPane();
-    const release = vi.fn();
-    let complete!: () => void;
-    const cancel = lifecycle[method]((done) => {
-      complete = done;
-      return release;
-    });
-    flush();
-    clock.run();
-    expect(release).not.toHaveBeenCalled();
-    complete();
-    complete();
-    cancel();
-    view.unmount();
-    expect(release).toHaveBeenCalledOnce();
-  },
-);
+it("releases after-commit resources when deferred work completes", () => {
+  const { lifecycle, view } = mountPane();
+  const release = vi.fn();
+  let complete!: () => void;
+  const cancel = lifecycle.afterCommit((done) => {
+    complete = done;
+    return release;
+  });
+  flush();
+  expect(release).not.toHaveBeenCalled();
+  complete();
+  complete();
+  cancel();
+  view.unmount();
+  expect(release).toHaveBeenCalledOnce();
+});
 
 it("runs batched callbacks after their DOM commit and fences reentrant requests", () => {
   const { source, view, lifecycle } = mountPane();
-  const observed: Array<[string | null, number]> = [];
-  const before = lifecycle.commitGeneration;
+  const observed: Array<string | null> = [];
   source.set({ text: "committed" });
   lifecycle.afterCommit(() => {
-    observed.push([view.container.textContent, lifecycle.commitGeneration]);
+    observed.push(view.container.textContent);
     source.set({ text: "next commit" });
     lifecycle.afterCommit(() => {
-      observed.push([view.container.textContent, lifecycle.commitGeneration]);
+      observed.push(view.container.textContent);
     });
   });
   lifecycle.afterCommit(() => {
-    observed.push([view.container.textContent, lifecycle.commitGeneration]);
+    observed.push(view.container.textContent);
   });
   expect(observed).toEqual([]);
   flush();
-  expect(observed).toEqual([
-    ["committed", before + 1],
-    ["committed", before + 1],
-    ["next commit", before + 2],
-  ]);
+  expect(observed).toEqual(["committed", "committed", "next commit"]);
 });
 
 it.each([true, false])(
@@ -144,7 +109,6 @@ it.each([true, false])(
     flush();
     expect(release).toHaveBeenCalledTimes(shown ? 1 : 0);
     const reads = read.mock.calls.length;
-    const generation = lifecycle.commitGeneration;
     const committed = vi.fn();
     lifecycle.afterCommit(committed);
     for (let count = 0; count < 5; count += 1) {
@@ -154,7 +118,6 @@ it.each([true, false])(
       flush();
     }
     expect(read).toHaveBeenCalledTimes(reads);
-    expect(lifecycle.commitGeneration).toBe(generation);
     expect(committed).not.toHaveBeenCalled();
     expect(view.container.textContent).toBe("initial");
     present(true);
@@ -162,7 +125,6 @@ it.each([true, false])(
     expect(read).toHaveBeenCalledTimes(reads + 1);
     expect(view.container.textContent).toBe("hidden 4");
     expect(view.container.querySelector("output")).toBe(output);
-    expect(lifecycle.commitGeneration).toBe(generation + 1);
     expect(committed).toHaveBeenCalledOnce();
     view.unmount();
     const retiredReads = read.mock.calls.length;
@@ -206,37 +168,4 @@ it("owns deferred cleanup until completion, cancellation, parking, or disposal",
   expect(neverRun).not.toHaveBeenCalled();
   expect(finished).toHaveBeenCalledOnce();
   expect(parked).toHaveBeenCalledOnce();
-});
-
-it("separates layout from commit and resumes parked layout requests after reveal", () => {
-  const clock = frames();
-  const { source, lifecycle, present, view } = mountPane();
-  const observed: string[] = [];
-  source.set({ text: "layout" });
-  lifecycle.afterCommit(() => {
-    observed.push(`commit: ${view.container.textContent}`);
-  });
-  lifecycle.afterLayout(() => {
-    observed.push(`layout: ${view.container.textContent}`);
-  });
-  flush();
-  expect(observed).toEqual(["commit: layout"]);
-  expect(clock.pending.size).toBe(1);
-  present(false);
-  flush();
-  expect(clock.pending.size).toBe(0);
-  clock.run();
-  expect(observed).toEqual(["commit: layout"]);
-  present(true);
-  flush();
-  clock.run();
-  expect(observed).toEqual(["commit: layout", "layout: layout"]);
-
-  const layoutCleanup = vi.fn();
-  lifecycle.afterLayout(() => layoutCleanup);
-  flush();
-  clock.run();
-  view.unmount();
-  expect(layoutCleanup).toHaveBeenCalledOnce();
-  expect(clock.pending.size).toBe(0);
 });

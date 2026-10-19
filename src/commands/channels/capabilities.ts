@@ -22,7 +22,7 @@ import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targ
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { ExpectedCliError } from "../../cli/failure-output.js";
 import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
-import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
@@ -68,7 +68,8 @@ async function runChannelCapabilitiesCheck<T>(params: {
   try {
     const result = await awaitWithinDeadline(
       async () => params.run(),
-      Date.now() + params.timeoutMs,
+      performance.now() + params.timeoutMs,
+      () => performance.now(),
     );
     return result === ABSOLUTE_DEADLINE_EXPIRED ? params.failure(undefined, true) : result;
   } catch (error) {
@@ -292,7 +293,10 @@ export async function channelsCapabilitiesCommand(
         runtime,
       });
       // The writer refreshes the prepared view used by probes after installation.
-      cfg = await resolveCapabilitiesRuntimeConfig(getRuntimeConfig(), runtime);
+      cfg = await resolveCapabilitiesRuntimeConfig(
+        await captureRuntimeConfigAsyncReader()(),
+        runtime,
+      );
     }
     selected = resolved.plugin ? [resolved.plugin] : [];
   }

@@ -260,6 +260,11 @@ export function mergeCatalogInlineModel(
     headers: inlineModel.headers ?? catalogModel.headers,
     contextWindow: inlineModel.contextWindow ?? catalogModel.contextWindow,
     contextTokens: inlineModel.contextTokens ?? catalogModel.contextTokens,
+    parameterCount:
+      inlineModel.parameterCount ??
+      (modelTransportRoutesMatch(catalogModel, inlineModel)
+        ? catalogModel.parameterCount
+        : undefined),
     compat,
     ...(mediaInput ? { mediaInput } : {}),
     ...(params ? { params } : {}),
@@ -335,10 +340,10 @@ export function clampModelMaxTokensToContextWindow(
   maxTokens: number | undefined,
   contextWindow: number | undefined,
 ): number | undefined {
-  if (typeof maxTokens !== "number" || !Number.isFinite(maxTokens)) {
+  if (maxTokens === undefined || !Number.isFinite(maxTokens)) {
     return undefined;
   }
-  return typeof contextWindow === "number" && Number.isFinite(contextWindow)
+  return contextWindow !== undefined && Number.isFinite(contextWindow)
     ? Math.min(maxTokens, contextWindow)
     : maxTokens;
 }
@@ -525,6 +530,13 @@ export function applyConfiguredProviderOverrides(params: {
     return undefined;
   }
   const contextWindow = metadataOverrideModel?.contextWindow ?? discoveredModel.contextWindow;
+  // An authored native window replaces its provenance; a prompt cap does not.
+  const { contextWindowSource: _syntheticContextWindowSource, ...discoveredWithoutSizeSource } =
+    discoveredModel;
+  const discoveredSizing =
+    metadataOverrideModel?.contextWindow !== undefined
+      ? discoveredWithoutSizeSource
+      : discoveredModel;
   const configuredMaxTokens = metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens;
   const resolvedMaxTokens = configuredMaxTokens ?? discoveredModel.maxTokens;
   const normalizedResolvedMaxTokens = clampModelMaxTokensToContextWindow(
@@ -588,7 +600,7 @@ export function applyConfiguredProviderOverrides(params: {
     attachModelProviderLocalService(
       attachModelProviderRequestTransport(
         {
-          ...discoveredModel,
+          ...discoveredSizing,
           provider: params.provider,
           api: requestConfig.api ?? "openai-responses",
           baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
@@ -601,6 +613,14 @@ export function applyConfiguredProviderOverrides(params: {
           }),
           contextWindow,
           contextTokens: metadataOverrideModel?.contextTokens ?? discoveredModel.contextTokens,
+          parameterCount:
+            metadataOverrideModel?.parameterCount ??
+            (modelTransportRoutesMatch(discoveredModel, resolvedTransport)
+              ? discoveredModel.parameterCount
+              : undefined) ??
+            (modelTransportRoutesMatch(catalogModel, resolvedTransport)
+              ? catalogModel.parameterCount
+              : undefined),
           ...(normalizedResolvedMaxTokens !== undefined
             ? {
                 maxTokens: normalizedResolvedMaxTokens,

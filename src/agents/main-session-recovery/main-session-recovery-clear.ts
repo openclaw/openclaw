@@ -1,5 +1,6 @@
 import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import type { MainSessionRecoveryTransitionResult } from "./main-session-recovery-types.js";
 
 type ForegroundClaims = NonNullable<
   NonNullable<SessionEntry["mainRestartRecovery"]>["foregroundClaims"]
@@ -64,17 +65,48 @@ export function buildMainSessionRecoverySettlementPatch(
   };
 }
 
-export function clearMainSessionRecoveryAfterAgentRun(
+export function buildMainSessionRecoveryAfterAgentRunPatch(
   entry: SessionEntry,
   clearForceSafeTools: boolean | undefined,
-): void {
+): Partial<SessionEntry> {
   if (entry.abortedLastRun === true) {
-    return;
+    return {};
   }
-  if (clearForceSafeTools) {
-    entry.restartRecoveryForceSafeTools = undefined;
-  }
-  Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
+  return {
+    ...(clearForceSafeTools ? { restartRecoveryForceSafeTools: undefined } : {}),
+    // Accepted queued turns retain independent claims. Their release owner clears
+    // the recovery cycle after the last claim, not a preceding model completion.
+    ...(entry.mainRestartRecovery?.foregroundClaims
+      ? {}
+      : buildMainSessionRecoveryClearPatch(entry)),
+  };
 }
 
 export type { MainRecoveryStateFields };
+
+export function interruptOwedMainSessionRecovery(
+  entry: SessionEntry,
+  now: number,
+): MainSessionRecoveryTransitionResult {
+  const state = entry.mainRestartRecovery;
+  if (
+    (entry.status !== undefined && entry.status !== "interrupted") ||
+    entry.abortedLastRun !== true ||
+    state?.reservation ||
+    state?.foregroundClaims ||
+    state?.tombstone
+  ) {
+    return { kind: "no_change" };
+  }
+  // An explicit interrupt supersedes a resend not yet dispatched. Record it like a
+  // stopped run, so it is neither replayed nor charged.
+  Object.assign(
+    entry,
+    buildMainSessionRecoveryClearPatch(entry),
+    buildRestartRecoveryClaimCleanupPatch({ entry, recordTerminalSource: true }),
+  );
+  entry.status = "killed";
+  entry.endedAt = now;
+  entry.updatedAt = now;
+  return { kind: "applied" };
+}

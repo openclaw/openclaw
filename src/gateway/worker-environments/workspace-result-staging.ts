@@ -169,6 +169,7 @@ async function stageWorkerWorkspaceResult(
     root: string;
     stagingRoot: string;
     stagedResultRef: string;
+    buildCacheInputs?: string[];
     assertCurrent?: () => void;
   },
 ): Promise<string> {
@@ -203,20 +204,33 @@ async function stageWorkerWorkspaceResult(
   }
 }
 
-export async function readStagedWorkerWorkspaceResult(root: string, stagedResultRef: string) {
-  const { objectsByPath, ...snapshot } = await loadStagedWorkspaceManifest(root, stagedResultRef);
+export async function readStagedWorkerWorkspaceResult(
+  root: string,
+  stagedResultRef: string,
+  buildCacheInputs?: string[],
+) {
+  const { objectsByPath, ...snapshot } = await loadStagedWorkspaceManifest(
+    root,
+    stagedResultRef,
+    undefined,
+    buildCacheInputs,
+  );
   const readEntries = () =>
     readStagedWorkspaceManifestEntries({ root, objectsByPath, entries: snapshot.changedEntries });
   return { ...snapshot, readEntries };
 }
 
 export async function withStagedWorkerWorkspaceResult<T>(
-  params: { root: string; stagedResultRef: string },
+  params: { root: string; stagedResultRef: string; buildCacheInputs?: string[] },
   use: (
     snapshot: Awaited<ReturnType<typeof readStagedWorkerWorkspaceResult>> & { stagingRoot: string },
   ) => Promise<T>,
 ): Promise<T> {
-  const snapshot = await readStagedWorkerWorkspaceResult(params.root, params.stagedResultRef);
+  const snapshot = await readStagedWorkerWorkspaceResult(
+    params.root,
+    params.stagedResultRef,
+    params.buildCacheInputs,
+  );
   return await withMaterializedWorkerWorkspaceResult(snapshot, use);
 }
 
@@ -277,6 +291,7 @@ export async function applyStagedWorkerWorkspaceResult(params: {
   stagedResultRef: string;
   expectedBaseManifestRef: string;
   alreadyAccepted?: boolean;
+  additionalPaths?: ReadonlySet<string>;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
   assertCurrent?: () => void;
   publishAcceptedManifest?: (
@@ -288,7 +303,7 @@ export async function applyStagedWorkerWorkspaceResult(params: {
     const staged = await readStagedWorkerWorkspaceResult(root, params.stagedResultRef);
     if (params.alreadyAccepted || staged.baseManifestRef !== params.expectedBaseManifestRef) {
       // An acceptance marker proves the mutations already ran even when omitted
-      // local nodes left the manifest ref unchanged. Re-snapshot; never replay.
+      // local nodes left the manifest ref unchanged. Inspect conflicts; never replay.
       // A base advance proves the same commit-before-acceptance crash window.
       const accepted = await inspectAcceptedWorkerWorkspace({
         root,
@@ -296,12 +311,14 @@ export async function applyStagedWorkerWorkspaceResult(params: {
         allowAdvancedLocalState: true,
         base: staged.base,
         current: staged.current,
+        additionalPaths: params.additionalPaths,
       });
       if (!accepted) {
         throw new Error("Cloud workspace staged result does not match the placement base");
       }
       params.assertCurrent?.();
-      await params.journal.commit(accepted.manifestRef);
+      // This snapshot can omit host paths published after the worker's baseline.
+      // Settlement must preserve the accepted digest for the next worker result.
       return {
         ...accepted,
         changed: staged.changed,
@@ -315,6 +332,7 @@ export async function applyStagedWorkerWorkspaceResult(params: {
         currentManifestRef: staged.currentManifestRef,
         base: staged.base,
         current: staged.current,
+        additionalPaths: params.additionalPaths,
         journal: params.journal,
         assertCurrent: params.assertCurrent,
         acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },
@@ -331,6 +349,7 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
   baseManifestRaw: string;
   currentManifestRaw: string;
   unchanged?: WorkerWorkspaceApplyResult;
+  additionalPaths?: ReadonlySet<string>;
   publishAcceptedManifest?: (
     accepted: Omit<WorkerWorkspaceApplyResult, "verifyLocalStable">,
   ) => Promise<void>;
@@ -369,6 +388,7 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
           root,
           stagedResultRef: candidateRef,
           expectedBaseManifestRef: params.request.baseManifestRef,
+          additionalPaths: params.additionalPaths,
           journal: params.request.journal,
           assertCurrent: params.request.assertCurrent,
           publishAcceptedManifest: params.publishAcceptedManifest,

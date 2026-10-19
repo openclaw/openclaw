@@ -1,12 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
-import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
+import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { prepareSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "./session-actor-storage-binding.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
-import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
-import type { IncognitoSessionFacts } from "./session-incognito-facts.types.js";
 import {
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
@@ -25,113 +25,33 @@ import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
-type SessionEntrySourceMetadata = NonNullable<
-  NonNullable<IncognitoSessionFacts["sharing"]>["entry"]
-> &
-  NonNullable<IncognitoSessionFacts["media"]> &
-  NonNullable<IncognitoSessionFacts["modelSelection"]>;
-
-const metadataFields: ReadonlySet<string> = new Set([
-  "sessionId",
-  "previousSessionId",
-  "updatedAt",
-  "createdAt",
-  "initializationPending",
-  "providerReview",
-  "mainRestartRecovery",
-  "modelSelectionLocked",
-  "pendingProjectGitUrl",
-  "pendingWorktree",
-  "lifecycleRevision",
-  "lifecycleRunId",
-  "activeWriterRunId",
-  "subagentRecovery",
-  "archivedAt",
-  "category",
-  "repositoryWorkspaceId",
-  "visibility",
-  "incognito",
-  "createdActor",
-  "owner",
-  "sandbox",
-  "spawnedBy",
-  "spawnDepth",
-  "parentSessionKey",
-  "sessionStartedAt",
-  "permissionMode",
-  "toolOverrides",
-  "execNode",
-  "sessionRoot",
-  "spawnedCwd",
-  "spawnedWorkspaceDir",
-  "worktree",
-  "worktreeId",
-  "projectId",
-  "pluginOwnerId",
-  "modelOverride",
-  "modelOverrideSource",
-  "providerOverride",
-  "modelOverrideRouteResolution",
-  "modelOverrideFallbackOriginProvider",
-  "modelOverrideFallbackOriginModel",
-  "agentRuntimeOverride",
-  "agentHarnessId",
-  "authProfileOverride",
-  "sandboxMode",
-  "nativeRuntimeConsent",
-] satisfies (keyof SessionEntrySourceMetadata)[]);
-
-function isMetadataField(
-  field: keyof SessionEntry,
-): field is keyof SessionEntrySourceMetadata & keyof SessionEntry {
-  return metadataFields.has(field);
-}
-
-/** Capture the selected actor once; current effect predicates read only its acknowledged metadata. */
-export function captureSessionEntryMetadataRead(scope: {
-  agentId?: string;
-  sessionKey: string;
-  storePath?: string;
-  env?: NodeJS.ProcessEnv;
-}) {
-  const binding = captureIncognitoSessionSource(scope);
-  if (!binding) {
+/** Capture the owner once; effect predicates read its current acknowledged entry. */
+export function captureSessionEntryMetadataRead(
+  scope: {
+    agentId?: string;
+    sessionKey: string;
+    storePath?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+  assertCallerCurrent: () => void,
+) {
+  const memory = captureSessionActorStorageOwner(scope, {
+    assertCurrent: assertCallerCurrent,
+    authorize: assertCallerCurrent,
+  });
+  if (!memory) {
     return undefined;
   }
   const assertCurrent = () => {
-    binding.admissionSignal?.throwIfAborted();
-    if ("kind" in binding) {
-      binding.assertCurrent();
-    } else {
-      binding.actor.assertReadable();
-    }
+    memory.authority.assertCurrent();
+    memory.owner?.assertCurrent();
+    memory.binding?.actor.assertReadable();
   };
   return {
     assertCurrent,
-    source:
-      "kind" in binding
-        ? undefined
-        : {
-            agentId: binding.actor.agentId,
-            path: binding.actor.path,
-            databaseIdentity: binding.actor.identity.incarnation,
-          },
-    readCurrent(): SessionEntrySourceMetadata | undefined {
+    readCurrent(): SessionEntry | undefined {
       assertCurrent();
-      if ("kind" in binding) {
-        return undefined;
-      }
-      const { sessions } = binding.actor;
-      const sharing = sessions.readSharing(scope.sessionKey)?.entry;
-      if (!sharing) {
-        return undefined;
-      }
-      return {
-        ...sharing,
-        subagentRecovery: sharing.subagentRecovery,
-        ...sessions.readMedia(scope.sessionKey),
-        ...sessions.readModelSelection(scope.sessionKey),
-      };
+      return readCapturedSessionActorEntry(memory, scope.sessionKey);
     },
   };
 }
@@ -142,6 +62,8 @@ export function captureSessionEntrySourceAssertion(params: {
   readSource?: CapturedSessionEntryReadSource;
   expected: Partial<SessionEntry> | undefined;
   fields: readonly (keyof SessionEntry)[];
+  /** Borrow the selecting reader's publication lifetime instead of selecting the same row again. */
+  preparedEntry?: ReturnType<typeof retainPreparedSessionEntryPredicate>;
   assertCurrent: () => void;
   assertHostCurrent?: () => void;
   prepareConversations?: (
@@ -153,26 +75,21 @@ export function captureSessionEntrySourceAssertion(params: {
   }>;
   refuse: () => never;
 }): PreparedSessionSourceAssertion {
-  const incognito = captureSessionEntryMetadataRead(params.scope);
+  const incognito = captureSessionEntryMetadataRead(params.scope, () =>
+    params.assertHostCurrent?.(),
+  );
   if (incognito) {
     if (params.prepareConversations) {
       throw new Error("Incognito conversation predicates require their actor preparation owner");
     }
-    const fields = params.fields.filter(isMetadataField);
-    if (fields.length !== params.fields.length) {
-      throw new Error("Incognito source predicates require published session metadata");
-    }
+    const fields = [...params.fields];
     const expected: Partial<SessionEntry> | undefined = params.expected
       ? structuredClone(
           Object.fromEntries(fields.map((field) => [field, params.expected?.[field]])),
         )
       : undefined;
-    const assertScopeCurrent = () => {
-      incognito.assertCurrent();
-      params.assertHostCurrent?.();
-    };
+    const assertScopeCurrent = () => incognito.assertCurrent();
     const assertCurrent = () => {
-      assertScopeCurrent();
       const current = incognito.readCurrent();
       if (
         (current === undefined) !== (expected === undefined) ||
@@ -188,28 +105,8 @@ export function captureSessionEntrySourceAssertion(params: {
         assertCurrent();
         return {
           assertCurrent,
-          checks: incognito.source
-            ? [
-                {
-                  predicate: {
-                    source: incognito.source,
-                    sessionKey: params.scope.sessionKey,
-                    fields,
-                    expected,
-                  },
-                  refuse: params.refuse,
-                },
-              ]
-            : [],
+          checks: [],
         };
-      },
-    });
-  }
-  if (isIncognitoSessionKey(params.scope.sessionKey)) {
-    return Object.assign(() => params.assertCurrent(), {
-      nativeSource: true,
-      async prepareSessionSource() {
-        return { nativeSource: true, checks: [], assertCurrent: params.assertCurrent };
       },
     });
   }
@@ -269,11 +166,19 @@ export function captureSessionEntrySourceAssertion(params: {
       };
       assertCaptured();
       const database = { agentId: source.agentId, path: source.path, env };
-      const native = params.prepareConversations
-        ? undefined
-        : getOpenClawAgentDatabaseIfOpen(database);
-      const revision = native && readSqliteNativeMutationRevision(native.db);
       const retained = retainSessionHistoryWorkerDatabase(database);
+      // Join receipt publication before dispatch so a newer write cannot certify an older read.
+      const predicate =
+        params.preparedEntry ??
+        retainPreparedSessionEntryPredicate({
+          databaseIdentity: identity.key,
+          sessionKey: scope.sessionKey,
+          entry: undefined,
+          matches: (_before, current) =>
+            (current === undefined) === (expected === undefined) &&
+            fields.every((field) => isDeepStrictEqual(current?.[field], expected?.[field])),
+        });
+      const revision = predicate.captureRevision();
       let active = true;
       let conversations:
         | Awaited<ReturnType<NonNullable<typeof params.prepareConversations>>>
@@ -282,37 +187,28 @@ export function captureSessionEntrySourceAssertion(params: {
         assertCaptured();
         retained.owner.assertCurrent();
         conversations?.assertCurrent();
-        if (
-          !active ||
-          (!params.prepareConversations &&
-            (getOpenClawAgentDatabaseIfOpen(database) !== native ||
-              (native &&
-                (native.db.isTransaction ||
-                  revision === undefined ||
-                  readSqliteNativeMutationRevision(native.db) !== revision))))
-        ) {
+        if (!active || !predicate.isCurrent()) {
           params.refuse();
         }
       };
       try {
-        const result = await retained.owner.readExactEntries({
-          sessionKeys: [scope.sessionKey],
-          projection: "full",
-          includeAuthorization: true,
-          env,
-        });
-        assertCurrent();
-        const entry = result.entries.find((row) => row.sessionKey === scope.sessionKey)?.entry;
-        if (
-          result.databaseIdentity?.identity !== source.databaseIdentity ||
-          result.databaseIdentity?.birthtime !== source.databaseBirthtime ||
-          (entry === undefined) !== (expected === undefined) ||
-          fields.some((field) => !isDeepStrictEqual(entry?.[field], expected?.[field]))
-        ) {
-          params.refuse();
+        if (!params.preparedEntry) {
+          const result = await retained.owner.readExactEntries({
+            sessionKeys: [scope.sessionKey],
+            projection: "full",
+            includeAuthorization: true,
+            env,
+          });
+          const entry = result.entries.find((row) => row.sessionKey === scope.sessionKey)?.entry;
+          if (
+            result.databaseIdentity?.identity !== source.databaseIdentity ||
+            result.databaseIdentity?.birthtime !== source.databaseBirthtime ||
+            !predicate.acknowledge(entry, revision)
+          ) {
+            params.refuse();
+          }
         }
-        // Complete alternative predicates are revalidated by the writer; unrelated native
-        // writes cannot revoke a still-matching branch through a whole-store revision.
+        assertCurrent();
         conversations = await params.prepareConversations?.(async (conversationRefs) => {
           if (conversationRefs.length === 0) {
             return new Map();
@@ -347,11 +243,17 @@ export function captureSessionEntrySourceAssertion(params: {
           ],
           release: () => {
             active = false;
+            if (!params.preparedEntry) {
+              predicate.release();
+            }
             retained.release();
           },
         };
       } catch (error) {
         active = false;
+        if (!params.preparedEntry) {
+          predicate.release();
+        }
         await releaseSessionSourceAuthorities([retained], [error]);
         throw error;
       }

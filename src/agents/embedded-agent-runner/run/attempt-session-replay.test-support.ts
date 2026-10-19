@@ -6,6 +6,7 @@ import {
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import { persistInternalSourceReply } from "../../../gateway/internal-source-reply-persistence.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { ImageContent } from "../../../llm/types.js";
 import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
@@ -31,7 +32,7 @@ import { SettingsManager } from "../../sessions/settings-manager.js";
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
   persistToolResultProjections,
 } from "../session-prompt-state.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
@@ -110,6 +111,7 @@ export async function withInterruptedTurn(
   }) => Promise<void>,
   options: {
     interruptedTurn?: boolean;
+    partialText?: string;
     toolProgress?: boolean;
     settledPrefix?: boolean;
     oversizedMetadata?: boolean;
@@ -117,6 +119,7 @@ export async function withInterruptedTurn(
     selectedOwner?: boolean;
     sharedStore?: boolean;
     admittedReceipt?: boolean;
+    sourceReply?: { final?: boolean; runId?: string };
   } = {},
 ) {
   await withOpenClawTestState({ label: "interrupted-keyed-replay" }, async (state) => {
@@ -197,13 +200,33 @@ export async function withInterruptedTurn(
         9_000,
       );
     }
+    if (options.sourceReply) {
+      await persistInternalSourceReply({
+        cfg: { session: { store: target.storePath } },
+        agentId,
+        sessionKey: target.sessionKey,
+        expectedSessionId: target.sessionId,
+        runId: options.sourceReply.runId ?? runId,
+        sourceReplyFinal: options.sourceReply.final,
+        payload: { text: "Still working after restart." },
+        idempotencyKey: `${runId}:progress`,
+      });
+      // The delivery sink appended outside the manager, as a live transcript update does.
+      await original.reloadPersistedTranscriptAsync();
+    }
     if (options.toolProgress) {
       await appendCompletedToolWork(original, runId);
     }
     if (options.interruptedTurn !== false) {
-      await original.appendMessageAsync(
-        createFailureMessage(testModel, createAgentRunRestartAbortError(), true),
-      );
+      await original.appendMessageAsync({
+        ...createFailureMessage(testModel, createAgentRunRestartAbortError(), true),
+        ...(options.partialText
+          ? {
+              content: [{ type: "text" as const, text: options.partialText }],
+              errorCode: "OPENCLAW_RESTART_ABORT",
+            }
+          : {}),
+      });
       await appendInterruptedTurnMessage([], async (event) => {
         if (event.type !== "message_end") {
           return;
@@ -368,7 +391,8 @@ export async function withReplaySession(
       sessionManager: prepared.sessionManager,
       setActiveSessionSystemPrompt: () => {},
     });
-    const promptState = getEmbeddedSessionPromptState(target.sessionId);
+    using promptStateLease = retainEmbeddedSessionPromptState(target.sessionId);
+    const promptState = promptStateLease.state;
     const submit = () =>
       submitEmbeddedAttemptPrompt({
         attempt,

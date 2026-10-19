@@ -1,5 +1,7 @@
+import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelMessageReplyPipeline,
+  createTypingCallbacks,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
@@ -8,7 +10,7 @@ import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
@@ -17,7 +19,7 @@ import { buildDiscordMessageProcessContext } from "./message-handler.context.js"
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import { formatDiscordReplySkip } from "./reply-delivery.js";
-import { createDiscordReplyTypingFeedback } from "./reply-typing-feedback.js";
+import { sendTyping } from "./typing.js";
 
 type DiscordMessageProcessContext = NonNullable<
   Awaited<ReturnType<typeof buildDiscordMessageProcessContext>>
@@ -88,15 +90,12 @@ export function createDiscordMessageReplyRuntime(params: {
   dispatchStartedAt: number;
   feedbackRest: RequestClient;
   deliveryRest: RequestClient;
-  onFinalReplyStart?: () => void;
-  onFinalReplyDelivered?: () => void;
 }) {
   const { ctx, processContext } = params;
   const {
     cfg,
     discordConfig,
     accountId,
-    token,
     guildHistories,
     historyLimit,
     textLimit,
@@ -108,16 +107,16 @@ export function createDiscordMessageReplyRuntime(params: {
   const deliverChannelId = replyPlan.deliverTarget.startsWith("channel:")
     ? replyPlan.deliverTarget.slice("channel:".length)
     : messageChannelId;
-  let typingFeedback: ReturnType<typeof createDiscordReplyTypingFeedback> | undefined;
+  let typingFeedback: ReturnType<typeof createTypingCallbacks> | undefined;
   const getTypingFeedback = () =>
-    (typingFeedback ??= createDiscordReplyTypingFeedback({
-      cfg,
-      token,
-      accountId,
-      channelId: deliverChannelId,
-      rest: params.feedbackRest,
-      log: logVerbose,
+    (typingFeedback ??= createTypingCallbacks({
+      start: () => sendTyping({ rest: params.feedbackRest, channelId: deliverChannelId }),
+      onStartError: (error) => {
+        logTypingFailure({ log: logVerbose, channel: "discord", target: deliverChannelId, error });
+      },
       keepaliveIntervalMs: params.shouldDisableCoreTypingKeepalive ? undefined : 0,
+      // Discord can keep long tool-heavy replies alive, but not forever.
+      maxDurationMs: 20 * 60_000,
     }));
 
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
@@ -170,7 +169,7 @@ export function createDiscordMessageReplyRuntime(params: {
     }
     try {
       const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
-      const sessionEntry = getSessionEntry({
+      const sessionEntry = await getSessionEntryAsync({
         agentId: route.agentId,
         sessionKey,
         storePath,
@@ -207,8 +206,6 @@ export function createDiscordMessageReplyRuntime(params: {
     deliveryRest: params.deliveryRest,
     deliverChannelId,
     replyReference: params.replyReference,
-    onFinalReplyStart: params.onFinalReplyStart,
-    onFinalReplyDelivered: params.onFinalReplyDelivered,
     log: logVerbose,
   });
   const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);

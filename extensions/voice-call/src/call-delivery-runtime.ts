@@ -1,4 +1,4 @@
-import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginLogger } from "openclaw/plugin-sdk/core";
 import {
@@ -110,7 +110,7 @@ export function createCallDeliveryRuntime(params: {
           idempotencyKey: message.idempotencyKey,
         },
         preparation: {
-          source: createNativeSessionBindingAuthority([], assertActive).assertLegacyCurrent,
+          source: createNativeSessionBindingScope(assertActive).assertLegacyCurrent,
         },
       });
       if (result.kind !== "result") {

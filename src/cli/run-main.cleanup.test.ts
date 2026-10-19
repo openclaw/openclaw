@@ -26,7 +26,12 @@ const dispatch = vi.hoisted(() => ({
 }));
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const installUnhandledRejectionHandlerMock = vi.hoisted(() => vi.fn());
-// Only bootstrap/dispatch are replaced; process entry, registry scopes and cleanup are real.
+// Bootstrap/dispatch and process identity are replaced; entry, registry scopes and cleanup are real.
+// mock-isolation: One Vitest process simulates both CLI and Gateway entries; subprocess tests own role immutability.
+vi.mock("../infra/database-engine/admission-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/database-engine/admission-scope.js")>()),
+  installDatabaseProcessRole: vi.fn(),
+}));
 vi.mock("./route.js", () => ({
   tryRouteCli: async () => {
     await dispatch.run();
@@ -34,7 +39,6 @@ vi.mock("./route.js", () => ({
   },
 }));
 vi.mock("../infra/is-main.js", () => ({ isMainModule: () => true }));
-vi.mock("../entry.esm-resolve-fast-path.js", () => ({ installDistEsmResolveFastPath() {} }));
 vi.mock("../entry.version-fast-path.js", () => ({ tryHandleRootVersionFastPath: () => false }));
 vi.mock("../entry.compile-cache.js", () => ({
   resolveEntryInstallRoot: () => process.cwd(),
@@ -61,6 +65,8 @@ vi.mock("./dotenv.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./dotenv.js")>()),
   loadCliDotEnv() {},
 }));
+// mock-isolation: These lifecycle fixtures replace storage startup; PG CLI tests cover selection.
+vi.mock("./database-engine-selection.js", () => ({ prepareCliDatabaseEngine: async () => {} }));
 vi.mock("../config/io.js", () => ({ readBestEffortConfig: async () => ({}) }));
 // mock-isolation: Synthetic proxy handles exercise CLI custody without changing process-wide routing or starting Proxyline.
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
@@ -176,6 +182,8 @@ let originalTitle: string;
 let originalListeners: ReturnType<typeof process.listeners>;
 
 beforeEach(async () => {
+  // Keep both executable entrypoints in this process; cache respawn has separate coverage.
+  vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", "1");
   vi.resetModules();
   registryApi = await import("../agents/harness/registry.js");
   runtime = await import("../plugins/runtime.js");
@@ -195,6 +203,7 @@ beforeEach(async () => {
   installUnhandledRejectionHandlerMock.mockClear();
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   process.argv = originalArgv;
   process.title = originalTitle;
   runtime.restoreActivePluginRegistrySnapshot(originalRegistrySnapshot);
@@ -339,28 +348,19 @@ describe("CLI process harness cleanup", () => {
     },
   );
 
-  it("installs the rejection handler before the direct Gateway fast path", async () => {
-    dispatch.run = async () => {
-      expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
-    };
-
-    const { runCli } = await import("./run-main.js");
-    await runCli(["node", "openclaw", "gateway"]);
-
-    expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
-  });
-
   it.each([undefined, "drained", "retained"] as const)(
     "uses the actual Gateway cleanup receipt (%s), not its command name",
     async (receipt) => {
       const { getGatewayRunRuntimeHooks } = await import("./gateway-cli/runtime-hooks.js");
       const { runCli } = await import("./run-main.js");
       dispatch.run = async () => {
+        expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
         if (receipt) {
           getGatewayRunRuntimeHooks().onProcessResourcesSettled?.(receipt);
         }
       };
       await runCli(["node", "openclaw", "gateway"]);
+      expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
       expect(dispatch.memoryClosed).toHaveBeenCalledTimes(receipt ? 0 : 1);
     },
   );

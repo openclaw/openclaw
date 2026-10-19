@@ -19,9 +19,10 @@ const recipient: ReefPeerIdentity = {
   keyEpoch: 1,
 };
 
-function rejection(peer: string, id: string, category = "guard_deny"): ReefDeliveryRejection {
+function rejection(value: number | string, category = "guard_deny"): ReefDeliveryRejection {
+  const id = typeof value === "number" ? `01JZ${String(value).padStart(22, "0")}` : value;
   return {
-    peer,
+    peer: "alice",
     id,
     recipient,
     textHash: "a".repeat(64),
@@ -31,7 +32,6 @@ function rejection(peer: string, id: string, category = "guard_deny"): ReefDeliv
       loadState: async () => undefined,
       reserve: async () => ({ kind: "reserved" }),
       complete: async () => true,
-      prepareOutboundDelivery: async () => undefined,
     },
   };
 }
@@ -46,23 +46,19 @@ function createNoticeStore() {
   const key = (value: ReefDeliveryRejection) => `${value.peer}:${value.id}`;
   const store: ConstructorParameters<typeof ReefReceiptNotifier>[1] = {
     loadState: ({ peer }) => {
-      let latest: ReefRejectionNoticeState | undefined;
-      for (const record of records.values()) {
-        if (record.peer !== peer) {
-          continue;
-        }
-        const hasResendAt =
-          latest?.lastResendAt !== undefined || record.state.lastResendAt !== undefined;
-        latest = {
-          lastRejectionAt: Math.max(latest?.lastRejectionAt ?? 0, record.state.lastRejectionAt),
-          ...(hasResendAt
-            ? {
-                lastResendAt: Math.max(latest?.lastResendAt ?? 0, record.state.lastResendAt ?? 0),
-              }
-            : {}),
-        };
+      const states = [...records.values()]
+        .filter((record) => record.peer === peer)
+        .map(({ state }) => state);
+      if (!states.length) {
+        return undefined;
       }
-      return latest;
+      const resends = states.flatMap(({ lastResendAt }) =>
+        lastResendAt === undefined ? [] : [lastResendAt],
+      );
+      return {
+        lastRejectionAt: Math.max(0, ...states.map(({ lastRejectionAt }) => lastRejectionAt)),
+        ...(resends.length ? { lastResendAt: Math.max(0, ...resends) } : {}),
+      };
     },
     reserve: (value, state) => {
       const existing = records.get(key(value));
@@ -88,9 +84,9 @@ function createNoticeStore() {
   return { records, store };
 }
 
-describe("createReefOwnerNoticeHandler", () => {
-  it("queues a generic owner notice in the peer session and wakes on request", async () => {
-    const runtime = createPluginRuntimeMock();
+it.each([true, false])("wakes only for a newly queued notice (queued: %s)", async (queued) => {
+  const runtime = createPluginRuntimeMock();
+  if (queued) {
     vi.mocked(runtime.channel.routing.resolveAgentRoute).mockReturnValue({
       agentId: "main",
       channel: "reef",
@@ -100,20 +96,16 @@ describe("createReefOwnerNoticeHandler", () => {
       lastRoutePolicy: "session",
       matchedBy: "default",
     });
-    vi.mocked(runtime.system.enqueueSystemEvent).mockReturnValue(true);
-    const notify = createReefOwnerNoticeHandler({
-      runtime,
-      cfg: {},
-      handle: "bob",
-    });
-
-    await notify({
-      text: "owner notice",
-      peer: "alice",
-      contextKey: "reef:owner:alice",
-      wakeAgent: true,
-    });
-
+  }
+  vi.mocked(runtime.system.enqueueSystemEvent).mockReturnValue(queued);
+  const notify = createReefOwnerNoticeHandler({ runtime, cfg: {}, handle: "bob" });
+  await notify({
+    text: "owner notice",
+    ...(queued ? { peer: "alice" } : {}),
+    contextKey: queued ? "reef:owner:alice" : "reef:owner:bob",
+    wakeAgent: true,
+  });
+  if (queued) {
     expect(runtime.system.enqueueSystemEvent).toHaveBeenCalledWith("owner notice", {
       sessionKey: "agent:main:reef:direct:alice",
       contextKey: "reef:owner:alice",
@@ -125,459 +117,259 @@ describe("createReefOwnerNoticeHandler", () => {
       agentId: "main",
       sessionKey: "agent:main:reef:direct:alice",
     });
-  });
-
-  it("does not wake when the generic notice is already queued", async () => {
-    const runtime = createPluginRuntimeMock();
-    vi.mocked(runtime.system.enqueueSystemEvent).mockReturnValue(false);
-    const notify = createReefOwnerNoticeHandler({
-      runtime,
-      cfg: {},
-      handle: "bob",
-    });
-
-    await notify({ text: "owner notice", contextKey: "reef:owner:bob", wakeAgent: true });
-
+  } else {
     expect(runtime.system.requestHeartbeat).not.toHaveBeenCalled();
-  });
+  }
 });
 
-describe("processReefInboxEntriesInOrder", () => {
-  it("advances the full batch when a receipt notice fails", async () => {
-    const order: string[] = [];
-    const onNoticeError = vi.fn();
-    const message = { id: "message", kind: "message" } as InboxEntry;
-    const receipt = { id: "receipt", kind: "receipt" } as InboxEntry;
-    const later = { id: "later", kind: "message" } as InboxEntry;
+it("advances the full batch when a receipt notice fails", async () => {
+  const order: string[] = [];
+  const onNoticeError = vi.fn();
+  const message = { id: "message", kind: "message" } as InboxEntry;
+  const receipt = { id: "receipt", kind: "receipt" } as InboxEntry;
+  const later = { id: "later", kind: "message" } as InboxEntry;
 
-    await processReefInboxEntriesInOrder({
-      entries: [message, receipt, later],
-      processEntries: async ([entry]) => {
-        order.push(`process:${entry!.id}`);
-        return entry === receipt ? [rejection("alice", entry.id)] : [];
-      },
-      notifyRejections: async ([deliveryRejection]) => {
-        order.push(`notice:${deliveryRejection?.id ?? "none"}`);
-        if (deliveryRejection?.id === receipt.id) {
-          throw new Error("notice failed");
-        }
-      },
-      onNoticeError,
-    });
-
-    expect(order).toEqual([
-      "process:message",
-      "notice:none",
-      "process:receipt",
-      "notice:receipt",
-      "process:later",
-      "notice:none",
-    ]);
-    expect(onNoticeError).toHaveBeenCalledOnce();
+  await processReefInboxEntriesInOrder({
+    entries: [message, receipt, later],
+    processEntries: async ([entry]) => {
+      order.push(`process:${entry!.id}`);
+      return entry === receipt ? [rejection(entry.id)] : [];
+    },
+    notifyRejections: async ([deliveryRejection]) => {
+      order.push(`notice:${deliveryRejection?.id ?? "none"}`);
+      if (deliveryRejection?.id === receipt.id) {
+        throw new Error("notice failed");
+      }
+    },
+    onNoticeError,
   });
+
+  expect(order).toEqual([
+    "process:message",
+    "notice:none",
+    "process:receipt",
+    "notice:receipt",
+    "process:later",
+    "notice:none",
+  ]);
+  expect(onNoticeError).toHaveBeenCalledOnce();
 });
 
 describe("ReefReceiptNotifier", () => {
   const schedulers: ReturnType<typeof createTestPluginServiceScheduler>[] = [];
-  function createScheduler() {
-    const scheduler = createTestPluginServiceScheduler();
-    schedulers.push(scheduler);
-    return scheduler;
+  function fixture() {
+    const notices = createNoticeStore();
+    const notify = vi.fn(consumeNotice);
+    const onError = vi.fn();
+    const clock = { now: 10_000 };
+    const start = (sink = notify) => {
+      const scheduler = createTestPluginServiceScheduler();
+      schedulers.push(scheduler);
+      const notifier = new ReefReceiptNotifier(sink, notices.store, {
+        scheduler,
+        now: () => clock.now,
+        onError,
+      });
+      return { notifier, scheduler };
+    };
+    return { notices, notify, onError, clock, start, ...start() };
   }
-  beforeEach(() => vi.useFakeTimers());
+  let f: ReturnType<typeof fixture>;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    f = fixture();
+  });
   afterEach(async () => {
     await Promise.all(schedulers.splice(0).map((scheduler) => scheduler.stop()));
     vi.useRealTimers();
   });
-  it("extends the resend cooldown from every rejection", async () => {
-    const notify = vi.fn(consumeNotice);
-    const notices = createNoticeStore();
-    let now = 10_000;
-    const notifier = new ReefReceiptNotifier(notify, notices.store, {
-      scheduler: createScheduler(),
-      now: () => now,
+  function expectResends(...allowed: boolean[]) {
+    expect(f.notify.mock.calls.map(([notice]) => notice.allowResend)).toEqual(allowed);
+  }
+  function expectStopOnly(index: number) {
+    expect(f.notify.mock.calls[index]![0]).toMatchObject({
+      text: expect.stringMatching(/Stop automatic retries/),
+      allowResend: false,
     });
-    const first = rejection("alice", "01JZ0000000000000000000105");
-    const second = rejection("alice", "01JZ0000000000000000000107");
-    const third = rejection("alice", "01JZ0000000000000000000108");
-    const later = rejection("alice", "01JZ0000000000000000000109");
+  }
+  function phase(pending: ReefDeliveryRejection) {
+    return f.notices.records.get(`${pending.peer}:${pending.id}`)?.phase;
+  }
 
-    await notifier.notifyRejections([first, first]);
-
-    expect(notify).toHaveBeenCalledOnce();
-    expect(notify.mock.calls[0]![0]).toMatchObject({
+  it("extends the resend cooldown from every rejection", async () => {
+    const first = rejection(105);
+    await f.notifier.notifyRejections([first, first]);
+    expect(f.notify).toHaveBeenCalledOnce();
+    expect(f.notify.mock.calls[0]![0]).toMatchObject({
       text: expect.stringMatching(/at most once.*stop and wait for owner guidance/i),
       peer: "alice",
       messageId: first.id,
       allowResend: true,
     });
-    now += 14 * 60 * 1_000;
-    await notifier.notifyRejections([second]);
-    expect(notify.mock.calls[1]![0]).toMatchObject({
-      text: expect.stringMatching(/Stop automatic retries/),
-      allowResend: false,
-    });
-
-    now += 2 * 60 * 1_000;
-    await notifier.notifyRejections([third]);
-    expect(notify.mock.calls[2]![0]).toMatchObject({ allowResend: false });
-
-    now += 15 * 60 * 1_000;
-    await notifier.notifyRejections([later]);
-    expect(notify.mock.calls[3]![0]).toMatchObject({ allowResend: true });
+    f.clock.now += 14 * 60_000;
+    await f.notifier.notifyRejections([rejection(107)]);
+    expectStopOnly(1);
+    f.clock.now += 2 * 60_000;
+    await f.notifier.notifyRejections([rejection(108)]);
+    expect(f.notify.mock.calls[2]![0]).toMatchObject({ allowResend: false });
+    f.clock.now += 15 * 60_000;
+    await f.notifier.notifyRejections([rejection(109)]);
+    expect(f.notify.mock.calls[3]![0]).toMatchObject({ allowResend: true });
   });
 
-  it("never grants a resend for non-guard rejection categories", async () => {
-    const notify = vi.fn(consumeNotice);
-    const notifier = new ReefReceiptNotifier(notify, createNoticeStore().store, {
-      scheduler: createScheduler(),
-      now: () => 10_000,
-    });
-
-    await notifier.notifyRejections([
-      rejection("alice", "01JZ0000000000000000000110", "deterministic_deny"),
-    ]);
-
-    expect(notify.mock.calls[0]![0]).toMatchObject({
-      text: expect.stringMatching(/Stop automatic retries/),
-      allowResend: false,
-    });
+  it.each([
+    { reason: "non-guard rejection", category: "deterministic_deny", textHash: "a".repeat(64) },
+    { reason: "missing send-time fingerprint", category: "guard_deny", textHash: undefined },
+  ])("never grants a resend for $reason", async ({ category, textHash }) => {
+    await f.notifier.notifyRejections([{ ...rejection(110, category), textHash }]);
+    expectStopOnly(0);
   });
 
-  it("never grants a resend without a send-time text fingerprint", async () => {
-    const notify = vi.fn(consumeNotice);
-    const notifier = new ReefReceiptNotifier(notify, createNoticeStore().store, {
-      scheduler: createScheduler(),
-      now: () => 10_000,
-    });
-    const pending = rejection("alice", "01JZ0000000000000000000130");
-
-    await notifier.notifyRejections([{ ...pending, textHash: undefined }]);
-
-    expect(notify.mock.calls[0]![0]).toMatchObject({
-      text: expect.stringMatching(/Stop automatic retries/),
-      allowResend: false,
-    });
-  });
-
-  it("keeps resend cooldowns across notifier recreation", async () => {
-    const notices = createNoticeStore();
-    const first = new ReefReceiptNotifier(consumeNotice, notices.store, {
-      scheduler: createScheduler(),
-      now: () => 10_000,
-    });
-    await first.notifyRejections([rejection("alice", "01JZ0000000000000000000105")]);
-
-    expect(notices.store.loadState(rejection("alice", "cooldown"))).toEqual({
-      lastRejectionAt: 10_000,
-      lastResendAt: 10_000,
-    });
-
-    const notify = vi.fn(consumeNotice);
-    const restarted = new ReefReceiptNotifier(notify, notices.store, {
-      scheduler: createScheduler(),
-      now: () => 11_000,
-    });
-    await restarted.notifyRejections([rejection("alice", "01JZ0000000000000000000107")]);
-
-    expect(notify.mock.calls[0]![0]).toMatchObject({ allowResend: false });
-  });
-
-  it("applies later recovered reservations before fresh items in the same batch", async () => {
-    const notices = createNoticeStore();
-    const recovered = rejection("alice", "01JZ0000000000000000000111");
+  it.each([
+    ["applies recovered reservations before fresh items", 11_000, false],
+    ["fails closed when recovered state cannot be loaded", 1_000_000, true],
+  ] as const)("%s", async (_name, now, loadFails) => {
+    const recovered = rejection(111);
     const reservedNotice = { lastRejectionAt: 10_000, lastResendAt: 10_000 };
-    await notices.store.reserve(recovered, reservedNotice);
-    const notify = vi.fn(consumeNotice);
-    const notifier = new ReefReceiptNotifier(notify, notices.store, {
-      scheduler: createScheduler(),
-      now: () => 11_000,
-    });
-
-    await notifier.notifyRejections([
-      rejection("alice", "01JZ0000000000000000000112"),
-      { ...recovered, reservedNotice },
-    ]);
-
-    expect(notify).toHaveBeenCalledTimes(2);
-    expect(notify.mock.calls[0]![0]).toMatchObject({ allowResend: false });
-    expect(notify.mock.calls[1]![0]).toMatchObject({ allowResend: false });
+    await f.notices.store.reserve(recovered, reservedNotice);
+    const loadError = new Error("state unavailable");
+    if (loadFails) {
+      vi.spyOn(f.notices.store, "loadState").mockImplementationOnce(() => {
+        throw loadError;
+      });
+    }
+    f.clock.now = now;
+    await f.notifier.notifyRejections([rejection(112), { ...recovered, reservedNotice }]);
+    if (loadFails) {
+      expect(f.onError).toHaveBeenCalledWith(loadError, recovered.id);
+    }
+    expectResends(false, false);
   });
 
   it("preserves the fresh resend cooldown when recovery starts during state loading", async () => {
-    const notices = createNoticeStore();
-    const recovered = rejection("alice", "01JZ0000000000000000000131");
+    const recovered = rejection(131);
     const reservedNotice = { lastRejectionAt: 10_000, lastResendAt: 10_000 };
-    await notices.store.reserve(recovered, reservedNotice);
-    const captured = await notices.store.loadState(rejection("alice", "cooldown"));
+    await f.notices.store.reserve(recovered, reservedNotice);
+    const captured = await f.notices.store.loadState(rejection("cooldown"));
     const loadStarted = createDeferred<void>();
     const loadFinished = createDeferred<ReefRejectionNoticeState | undefined>();
-    vi.spyOn(notices.store, "loadState").mockImplementationOnce(() => {
+    vi.spyOn(f.notices.store, "loadState").mockImplementationOnce(() => {
       loadStarted.resolve();
       return loadFinished.promise;
     });
-    const notify = vi.fn(consumeNotice);
-    let now = 1_000_000;
-    const notifier = new ReefReceiptNotifier(notify, notices.store, {
-      scheduler: createScheduler(),
-      now: () => now,
-    });
-    const fresh = rejection("alice", "01JZ0000000000000000000132");
-    const later = rejection("alice", "01JZ0000000000000000000133");
-
-    const freshNotification = notifier.notifyRejections([fresh]);
+    f.clock.now = 1_000_000;
+    const fresh = rejection(132);
+    const later = rejection(133);
+    const freshNotification = f.notifier.notifyRejections([fresh]);
     await loadStarted.promise;
-    const recoveredNotification = notifier.notifyRejections([{ ...recovered, reservedNotice }]);
+    const recoveredNotification = f.notifier.notifyRejections([{ ...recovered, reservedNotice }]);
     loadFinished.resolve(captured);
     await Promise.all([freshNotification, recoveredNotification]);
-    now += 1;
-    await notifier.notifyRejections([later]);
-
-    expect(
-      notify.mock.calls.map(([notice]) => ({
-        messageId: notice.messageId,
-        allowResend: notice.allowResend,
-      })),
-    ).toEqual([
-      { messageId: fresh.id, allowResend: true },
-      { messageId: recovered.id, allowResend: false },
-      { messageId: later.id, allowResend: false },
+    f.clock.now += 1;
+    await f.notifier.notifyRejections([later]);
+    expect(f.notify.mock.calls.map(([notice]) => [notice.messageId, notice.allowResend])).toEqual([
+      [fresh.id, true],
+      [recovered.id, false],
+      [later.id, false],
     ]);
-  });
-
-  it("fails closed when recovered cooldown state cannot be loaded", async () => {
-    const notices = createNoticeStore();
-    const recovered = rejection("alice", "01JZ0000000000000000000116");
-    const reservedNotice = { lastRejectionAt: 10_000, lastResendAt: 10_000 };
-    await notices.store.reserve(recovered, reservedNotice);
-    const loadError = new Error("state unavailable");
-    vi.spyOn(notices.store, "loadState").mockImplementationOnce(() => {
-      throw loadError;
-    });
-    const notify = vi.fn(consumeNotice);
-    const onError = vi.fn();
-    const notifier = new ReefReceiptNotifier(notify, notices.store, {
-      scheduler: createScheduler(),
-      now: () => 1_000_000,
-      onError,
-    });
-
-    await notifier.notifyRejections([
-      rejection("alice", "01JZ0000000000000000000117"),
-      { ...recovered, reservedNotice },
-    ]);
-
-    expect(onError).toHaveBeenCalledWith(loadError, recovered.id);
-    expect(notify).toHaveBeenCalledTimes(2);
-    expect(notify.mock.calls[0]![0]).toMatchObject({ allowResend: false });
-    expect(notify.mock.calls[1]![0]).toMatchObject({ allowResend: false });
   });
 
   it("keeps cached cooldown time monotonic after a backward clock adjustment", async () => {
-    const notices = createNoticeStore();
-    const previous = rejection("alice", "01JZ0000000000000000000113", "deterministic_deny");
-    await notices.store.reserve(previous, { lastRejectionAt: 1_000_000 });
-    await notices.store.complete(previous, { lastRejectionAt: 1_000_000 });
-    const notify = vi.fn(consumeNotice);
-    let now = 900_000;
-    const notifier = new ReefReceiptNotifier(notify, notices.store, {
-      scheduler: createScheduler(),
-      now: () => now,
-    });
-
-    await notifier.notifyRejections([rejection("alice", "01JZ0000000000000000000114")]);
-    now = 1_800_000;
-    await notifier.notifyRejections([rejection("alice", "01JZ0000000000000000000115")]);
-
-    expect(notify).toHaveBeenCalledTimes(2);
-    expect(notify.mock.calls[0]![0]).toMatchObject({ allowResend: false });
-    expect(notify.mock.calls[1]![0]).toMatchObject({ allowResend: false });
+    const previous = rejection(113, "deterministic_deny");
+    await f.notices.store.reserve(previous, { lastRejectionAt: 1_000_000 });
+    await f.notices.store.complete(previous, { lastRejectionAt: 1_000_000 });
+    f.clock.now = 900_000;
+    await f.notifier.notifyRejections([rejection(114)]);
+    f.clock.now = 1_800_000;
+    await f.notifier.notifyRejections([rejection(115)]);
+    expectResends(false, false);
   });
 
   it.each(["loadState", "reserve"] as const)(
-    "retries a fresh rejection after durable %s rejects",
+    "retries a fresh rejection on reconciliation after durable %s rejects",
     async (operation) => {
-      const notices = createNoticeStore();
       const stateError = new Error("state unavailable");
-      vi.spyOn(notices.store, operation).mockRejectedValueOnce(stateError);
-      const notify = vi.fn(consumeNotice);
-      const onError = vi.fn();
-      const notifier = new ReefReceiptNotifier(notify, notices.store, {
-        scheduler: createScheduler(),
-        onError,
-      });
-      const pending = rejection("alice", "01JZ0000000000000000000124");
-
-      await notifier.notifyRejections([pending]);
-      expect(notify).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(1);
-      await vi.advanceTimersByTimeAsync(1_000);
-
-      expect(onError).toHaveBeenCalledWith(stateError, pending.id);
-      expect(notify).toHaveBeenCalledOnce();
+      vi.spyOn(f.notices.store, operation).mockRejectedValueOnce(stateError);
+      const pending = rejection(124);
+      await f.notifier.notifyRejections([pending]);
+      expect(f.notify).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+      await f.notifier.notifyRejections([pending]);
+      expect(f.onError).toHaveBeenCalledWith(stateError, pending.id);
+      expect(f.notify).toHaveBeenCalledOnce();
     },
   );
 
   it("keeps a failed dispatch reserved and retries with stop-only guidance", async () => {
-    const notices = createNoticeStore();
-    const notify = vi.fn(consumeNotice).mockRejectedValueOnce(new Error("dispatch interrupted"));
-    const notifier = new ReefReceiptNotifier(notify, notices.store, {
-      scheduler: createScheduler(),
-      now: () => 10_000,
-    });
-    const pending = rejection("alice", "01JZ0000000000000000000109");
-
-    await notifier.notifyRejections([pending]);
-    expect(notices.records.get(`${pending.peer}:${pending.id}`)?.phase).toBe("reserved");
-    expect(vi.getTimerCount()).toBe(1);
-
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    expect(notify).toHaveBeenCalledTimes(2);
-    expect(notify.mock.calls[1]![0]).toMatchObject({
-      text: expect.stringMatching(/Stop automatic retries/),
-      allowResend: false,
-    });
-    expect(notices.records.get(`${pending.peer}:${pending.id}`)?.phase).toBe("consumed");
+    f.notify.mockRejectedValueOnce(new Error("dispatch interrupted"));
+    const pending = rejection(109);
+    await f.notifier.notifyRejections([pending]);
+    expect(phase(pending)).toBe("reserved");
+    expect(vi.getTimerCount()).toBe(0);
+    await f.notifier.notifyRejections([pending]);
+    expect(f.notify).toHaveBeenCalledTimes(2);
+    expectStopOnly(1);
+    expect(phase(pending)).toBe("consumed");
   });
 
-  it("keeps retrying recovery with bounded backoff until dispatch succeeds", async () => {
-    const notices = createNoticeStore();
-    const pending = rejection("alice", "01JZ0000000000000000000125");
-    const reservedNotice = { lastRejectionAt: 10_000, lastResendAt: 10_000 };
-    await notices.store.reserve(pending, reservedNotice);
-    const notify = vi
-      .fn(consumeNotice)
-      .mockRejectedValueOnce(new Error("dispatch unavailable"))
-      .mockRejectedValueOnce(new Error("dispatch still unavailable"));
-    const scheduler = createScheduler();
-    const schedule = vi.spyOn(scheduler, "schedule");
-    const notifier = new ReefReceiptNotifier(notify, notices.store, { scheduler });
-    const recovered = { ...pending, reservedNotice };
-
-    await notifier.notifyRejections([recovered]);
-    expect(schedule.mock.calls[0]?.[0]).toMatchObject({ delayMs: 1_000 });
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(notify).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(1_999);
-    expect(notify).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(1);
-
-    expect(notify).toHaveBeenCalledTimes(3);
-    expect(notify.mock.calls[2]![0]).toMatchObject({ allowResend: false });
-    expect(notices.records.get(`${pending.peer}:${pending.id}`)?.phase).toBe("consumed");
-  });
-
-  it("caps persistent retry delay and stops the old notifier after abort", async () => {
-    const notices = createNoticeStore();
-    const notify = vi.fn(consumeNotice).mockRejectedValue(new Error("dispatch unavailable"));
-    const scheduler = createScheduler();
-    const schedule = vi.spyOn(scheduler, "schedule");
-    const notifier = new ReefReceiptNotifier(notify, notices.store, { scheduler });
-
-    await notifier.notifyRejections([rejection("alice", "01JZ0000000000000000000126")]);
-    for (const delayMs of [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000]) {
-      await vi.advanceTimersByTimeAsync(delayMs);
-    }
-
-    expect(
-      schedule.mock.calls.map(([entry]) => ("delayMs" in entry ? entry.delayMs : undefined)),
-    ).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000]);
-    await scheduler.stop();
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(notify).toHaveBeenCalledTimes(8);
-    expect(schedule).toHaveBeenCalledTimes(8);
-  });
-
-  it("retries durable completion without dispatching the agent twice", async () => {
-    const notices = createNoticeStore();
-    const originalComplete = notices.store.complete.bind(notices.store);
-    const complete = vi
-      .spyOn(notices.store, "complete")
-      .mockRejectedValueOnce(new Error("state unavailable"));
-    complete.mockImplementation(originalComplete);
-    const notify = vi.fn(consumeNotice);
-    const notifier = new ReefReceiptNotifier(notify, notices.store, {
-      scheduler: createScheduler(),
-    });
-
-    await notifier.notifyRejections([rejection("alice", "01JZ0000000000000000000114")]);
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    expect(notify).toHaveBeenCalledOnce();
-    expect(complete).toHaveBeenCalledTimes(2);
+  it("does not retry a notice after the account stops", async () => {
+    f.notify.mockRejectedValue(new Error("dispatch unavailable"));
+    const pending = rejection(126);
+    await f.notifier.notifyRejections([pending]);
+    await f.scheduler.stop();
+    await f.notifier.notifyRejections([pending]);
+    expect(f.notify).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("recovers a crash after agent consumption without granting another resend", async () => {
-    const notices = createNoticeStore();
-    const complete = vi.spyOn(notices.store, "complete").mockImplementationOnce(() => {
+    const complete = vi.spyOn(f.notices.store, "complete").mockImplementationOnce(() => {
       throw new Error("process interrupted after dispatch");
     });
-    const firstNotify = vi.fn(consumeNotice);
-    const pending = rejection("alice", "01JZ0000000000000000000115");
-    const first = new ReefReceiptNotifier(firstNotify, notices.store, {
-      scheduler: createScheduler(),
-      now: () => 10_000,
-    });
-
-    await first.notifyRejections([pending]);
-    expect(firstNotify.mock.calls[0]![0]).toMatchObject({ allowResend: true });
-    expect(notices.records.get(`${pending.peer}:${pending.id}`)?.phase).toBe("reserved");
-
+    const pending = rejection(115);
+    await f.notifier.notifyRejections([pending]);
+    expect(f.notify.mock.calls[0]![0]).toMatchObject({ allowResend: true });
+    expect(phase(pending)).toBe("reserved");
     complete.mockRestore();
     const restartedNotify = vi.fn(consumeNotice);
-    const restarted = new ReefReceiptNotifier(restartedNotify, notices.store, {
-      scheduler: createScheduler(),
-      now: () => 11_000,
-    });
-    const reservedNotice = await notices.store.loadState(pending);
+    f.clock.now = 11_000;
+    const { notifier: restarted } = f.start(restartedNotify);
+    const reservedNotice = await f.notices.store.loadState(pending);
     expect(reservedNotice).toBeDefined();
     await restarted.notifyRejections([{ ...pending, reservedNotice: reservedNotice! }]);
-
     expect(restartedNotify.mock.calls[0]![0]).toMatchObject({ allowResend: false });
-    expect(notices.records.get(`${pending.peer}:${pending.id}`)?.phase).toBe("consumed");
+    expect(phase(pending)).toBe("consumed");
   });
 });
 
-describe("notifyOverdueReefDeliveries", () => {
-  function overdueStore(overdue: Array<{ peer: string; id: string; sentAt: number }>) {
-    const marked = new Set<string>();
-    return {
-      marked,
-      overdueOutboundDeliveries: vi.fn(() => overdue.filter((entry) => !marked.has(entry.id))),
-      markOutboundDeliveryOverdueNotified: vi.fn((_peer: string, id: string) => {
-        if (marked.has(id)) {
-          return false;
-        }
-        marked.add(id);
-        return true;
-      }),
-    };
-  }
-
-  it("does not mark a delivery notified when dispatch fails, so the next sweep retries", async () => {
-    const store = overdueStore([
-      { peer: "clawd", id: "01JZ0000000000000000000151", sentAt: Date.now() - 20 * 60_000 },
-    ]);
-    const failing = vi.fn(async () => {
-      throw new Error("enqueue failed");
-    });
-
-    await expect(
-      notifyOverdueReefDeliveries({ trust: store, ownerNotice: failing }),
-    ).rejects.toThrow("enqueue failed");
-    expect(store.markOutboundDeliveryOverdueNotified).not.toHaveBeenCalled();
-
-    const ownerNotice = vi.fn(
-      async (_notice: {
-        text: string;
-        peer?: string;
-        contextKey: string;
-        wakeAgent?: boolean;
-      }) => {},
-    );
-    await notifyOverdueReefDeliveries({ trust: store, ownerNotice });
-    expect(ownerNotice).toHaveBeenCalledOnce();
-    expect(store.marked.has("01JZ0000000000000000000151")).toBe(true);
+it("does not mark an overdue delivery notified until dispatch succeeds", async () => {
+  const marked = new Set<string>();
+  const entry = {
+    peer: "clawd",
+    id: "01JZ0000000000000000000151",
+    sentAt: Date.now() - 20 * 60_000,
+  };
+  const store = {
+    overdueOutboundDeliveries: vi.fn(() => (marked.has(entry.id) ? [] : [entry])),
+    markOutboundDeliveryOverdueNotified: vi.fn((_peer: string, id: string) => {
+      const fresh = !marked.has(id);
+      marked.add(id);
+      return fresh;
+    }),
+  };
+  const failing = vi.fn(async () => {
+    throw new Error("enqueue failed");
   });
+
+  await expect(notifyOverdueReefDeliveries({ trust: store, ownerNotice: failing })).rejects.toThrow(
+    "enqueue failed",
+  );
+  expect(store.markOutboundDeliveryOverdueNotified).not.toHaveBeenCalled();
+
+  const ownerNotice = vi.fn<Parameters<typeof notifyOverdueReefDeliveries>[0]["ownerNotice"]>(
+    async () => {},
+  );
+  await notifyOverdueReefDeliveries({ trust: store, ownerNotice });
+  expect(ownerNotice).toHaveBeenCalledOnce();
+  expect(marked.has(entry.id)).toBe(true);
 });

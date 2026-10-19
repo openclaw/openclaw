@@ -550,7 +550,9 @@ function prepareRuntime(artifacts) {
   writeJson(process.env.OPENCLAW_CONFIG_PATH, config);
   writeJson(path.join(artifacts, "dreaming-cron-runtime.json"), {
     before,
+    startedAtMs: Date.now(),
     frequency,
+    nextRunAtMs: scheduled.getTime(),
     storeKey: fixture.baselineRows[0].store_key,
     jobId: "dreaming-active-declared",
   });
@@ -581,6 +583,7 @@ function assertRuntimeCanonical(row, runtime) {
   assert.equal(definition.delivery.mode, "none");
   const state = JSON.parse(row.state_json);
   assert.equal(state.lastRunAtMs, JSON.parse(before.state_json).lastRunAtMs);
+  assert.equal(state.nextRunAtMs, runtime.nextRunAtMs);
   assert(
     state.nextRunAtMs > Date.now() + 24 * 60 * 60_000,
     "Dreaming must stay scheduled in the future",
@@ -607,6 +610,87 @@ async function waitRuntime(artifacts) {
     inspectRows(fixture.databasePath),
   );
   assert.fail("Canonical dreaming did not converge while an authored tagged row was retained");
+}
+
+// Worker mutations preserve untouched rows and retain ordinals even when they rewrite a job.
+export function assertRuntimePersistence(runtime, rows, heartbeatId) {
+  assert.deepEqual(
+    rows.map((row) => [row.store_key, row.job_id]),
+    runtime.before.rows.map((row) => [row.store_key, row.job_id]),
+    "Runtime changed cron row membership or order",
+  );
+  for (const [index, before] of runtime.before.rows.entries()) {
+    const row = rows[index];
+    if (
+      before.store_key !== runtime.storeKey ||
+      ![runtime.jobId, heartbeatId].includes(before.job_id)
+    ) {
+      assert.deepEqual(row, before, `Runtime changed retained cron row ${before.job_id}`);
+      continue;
+    }
+    assert.equal(row.sort_order, before.sort_order, `Runtime moved ${before.job_id}`);
+    const definition = JSON.parse(row.job_json);
+    const state = JSON.parse(row.state_json);
+    assert(
+      Number.isSafeInteger(state.scheduleActivatedAtMs) &&
+        state.scheduleActivatedAtMs >= runtime.startedAtMs &&
+        state.scheduleActivatedAtMs <= Date.now(),
+      `Runtime did not record schedule activation for ${before.job_id}`,
+    );
+    // Authored timestamps can be ahead of the wall clock; mutations must not regress them.
+    const updatedAt = Math.max(before.runtime_updated_at_ms, state.scheduleActivatedAtMs);
+    for (const field of ["updated_at", "runtime_updated_at_ms", "grant_definition_updated_at"]) {
+      assert.equal(row[field], updatedAt, `Runtime wrote incorrect ${field} for ${before.job_id}`);
+    }
+    const { enabled: _enabled, state: _state, ...grantDefinition } = definition;
+    const revision = `sha256:${createHash("sha256").update(stableJson(grantDefinition)).digest("base64url")}`;
+    assert.equal(row.grant_definition_revision, revision);
+    assert.equal(
+      row.grant_definition_generation,
+      before.grant_definition_generation + (revision === before.grant_definition_revision ? 0 : 1),
+      `Runtime wrote incorrect grant generation for ${before.job_id}`,
+    );
+    assert.deepEqual(JSON.parse(row.schedule_identity), {
+      version: 2,
+      enabled: definition.enabled,
+      schedule: definition.schedule,
+      hasTrigger: false,
+    });
+    assert.deepEqual(row, {
+      ...before,
+      description: definition.description ?? null,
+      enabled: definition.enabled ? 1 : 0,
+      job_json: row.job_json,
+      state_json: row.state_json,
+      schedule_identity: row.schedule_identity,
+      updated_at: updatedAt,
+      runtime_updated_at_ms: updatedAt,
+      grant_definition_updated_at: updatedAt,
+      grant_definition_revision: revision,
+      grant_definition_generation: row.grant_definition_generation,
+    });
+    if (before.job_id === heartbeatId) {
+      assert.equal(row.enabled, 0);
+      assert.deepEqual(definition, { ...JSON.parse(before.job_json), enabled: false });
+      assert.deepEqual(state, { scheduleActivatedAtMs: state.scheduleActivatedAtMs });
+    } else {
+      assert.notEqual(revision, before.grant_definition_revision);
+      assert.deepEqual(definition, {
+        ...JSON.parse(before.job_json),
+        description: row.description,
+        enabled: true,
+        schedule: { kind: "cron", expr: runtime.frequency, tz: "UTC" },
+        wakeMode: "now",
+      });
+      assert.deepEqual(state, {
+        ...JSON.parse(before.state_json),
+        consecutiveErrors: 0,
+        scheduleErrorCount: 0,
+        scheduleActivatedAtMs: state.scheduleActivatedAtMs,
+        nextRunAtMs: state.nextRunAtMs,
+      });
+    }
+  }
 }
 
 function assertRuntime(artifacts, gatewayLog) {
@@ -650,38 +734,7 @@ function assertRuntime(artifacts, gatewayLog) {
     0,
     "Runtime recreated a retired Workshop curator row",
   );
-  assert.deepEqual(
-    current.rows.map((row) => [row.store_key, row.job_id]),
-    runtime.before.rows.map((row) => [row.store_key, row.job_id]),
-    "Runtime changed cron row membership or order",
-  );
-  const activeRows = current.rows.filter((row) => row.store_key === runtime.storeKey);
-  for (const before of runtime.before.rows) {
-    // The active heartbeat belongs to its own config owner after explicit runtime enablement.
-    if (before.job_id === runtime.jobId || before.job_id === fixture.baselineRows[0].job_id) {
-      continue;
-    }
-    const row = current.rows.find(
-      (entry) => entry.store_key === before.store_key && entry.job_id === before.job_id,
-    );
-    if (before.store_key !== runtime.storeKey) {
-      assert.deepEqual(row, before, `Runtime changed inactive cron row ${before.job_id}`);
-      continue;
-    }
-    assert(row, `Runtime lost active cron row ${before.job_id}`);
-    // Enabled saves compact ordinals and project the retained runtime timestamp into config.
-    assert.deepEqual(
-      { ...row, job_json: JSON.parse(row.job_json) },
-      {
-        ...before,
-        sort_order: activeRows.findIndex((entry) => entry.job_id === before.job_id),
-        updated_at: before.runtime_updated_at_ms,
-        grant_definition_updated_at: before.runtime_updated_at_ms,
-        job_json: JSON.parse(before.job_json),
-      },
-      `Runtime changed authored cron row ${before.job_id}`,
-    );
-  }
+  assertRuntimePersistence(runtime, current.rows, fixture.baselineRows[0].job_id);
   assert.deepEqual(
     current.backups,
     runtime.before.backups,

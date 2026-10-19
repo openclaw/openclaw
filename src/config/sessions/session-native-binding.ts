@@ -10,7 +10,7 @@ import {
 } from "../../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
-import { pluginStatePublication } from "../../plugin-state/plugin-state-publication.js";
+import { beginPluginStatePublication } from "../../plugin-state/plugin-state-publication.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -181,6 +181,10 @@ export function runSessionNativeBindingWorkerOperation<
     // SAFETY: The exact executing command owns this closed receipt shape; identity and phases were checked above.
     return value as SessionNativeBindingReceipt;
   };
+  const publication = beginPluginStatePublication(
+    () => sharedSource.key,
+    state.assertPublicationCurrent ?? state.admission.assertCurrent,
+  );
   return runSessionEntryWorkerOperation<Candidate, Result>({
     ...params,
     assertCurrent: assertHeld,
@@ -227,22 +231,6 @@ export function runSessionNativeBindingWorkerOperation<
       },
       async settle(outcome, acknowledged) {
         const settlement = await admitted?.retained.settled;
-        if (readinessAuthorized) {
-          pluginStatePublication.invalidateEntries(
-            { identity: sharedSource.key, incarnation: operationId },
-            members.flatMap(({ participant }) =>
-              participant.binding
-                ? [
-                    {
-                      plugin_id: participant.binding.pluginId,
-                      namespace: participant.binding.namespace,
-                      entry_key: participant.binding.key,
-                    },
-                  ]
-                : [],
-            ),
-          );
-        }
         const receipt = readReceipt(admitted?.admission.committed?.facts);
         const completed =
           settlement?.kind === "completed" && admitted?.admission.settlement?.kind === "completed";
@@ -270,12 +258,22 @@ export function runSessionNativeBindingWorkerOperation<
         const committed = completed && acknowledged && receipt?.agent === "committed";
         const rolledBack =
           completed && receipt?.agent === "rolled-back" && !receipt.bindings.includes("deleted");
-        if (!committed && !rolledBack) {
+        let publicationFailure: { cause: unknown } | undefined;
+        if ((committed || rolledBack) && receipt.pluginState) {
+          try {
+            publication.install(receipt.pluginState);
+          } catch (cause) {
+            publicationFailure = { cause };
+          }
+        }
+        if ((!committed && !rolledBack) || publicationFailure) {
           const error = new SqliteWorkerError(
-            "Native binding settlement is unknown; this generation cannot be reused",
+            publicationFailure
+              ? "Native binding settlement could not publish current lease facts; this generation cannot be reused"
+              : "Native binding settlement is unknown; this generation cannot be reused",
             "outcome-unknown",
           );
-          error.cause = outcome.ok ? undefined : outcome.error;
+          error.cause = publicationFailure?.cause ?? (outcome.ok ? undefined : outcome.error);
           if (receipt?.compensationFailure) {
             const compensation = new Error("Native binding compensation failed");
             retainOpenClawStateWorkerErrorPayload(compensation, receipt.compensationFailure);
@@ -289,6 +287,7 @@ export function runSessionNativeBindingWorkerOperation<
             );
           }
           failure = error;
+          publication.finish("unknown");
           unresolved.add({
             source: agentSource,
             entries: params.entries,
@@ -324,5 +323,12 @@ export function runSessionNativeBindingWorkerOperation<
         }
       }
     },
-  });
+  })
+    .catch((error: unknown) => {
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        publication.finish("unknown");
+      }
+      throw error;
+    })
+    .finally(() => publication.finish("completed"));
 }

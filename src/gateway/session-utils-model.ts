@@ -7,7 +7,7 @@ import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metada
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
 import {
   findModelCatalogEntry,
@@ -75,8 +75,7 @@ function resolveGatewaySessionThinkingLevel(
       })
     : undefined;
   // Lightweight projections can omit the catalog or carry identity-only entries.
-  // Runtime/model patches normalize persisted state with authoritative metadata;
-  // projections must not reinterpret an already-validated level without it.
+  // Projections must not infer an execution clamp without authoritative metadata.
   if (
     !catalogEntry ||
     (params.providerPolicySource !== undefined &&
@@ -127,7 +126,8 @@ function resolveGatewayModelThinkingFacts(
   const thinkingPolicyProvider = params.thinkingPolicyProvider ?? params.provider;
   const policySource =
     typeof params.providerPolicySource === "object" ? "prepared" : params.providerPolicySource;
-  const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${normalizeLowercaseStringOrEmpty(thinkingPolicyProvider)}\0${String(params.configuredReasoning)}\0${policySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
+  // Config and catalog publications replace the context; partial rows reuse its model facts.
+  const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${normalizeLowercaseStringOrEmpty(thinkingPolicyProvider)}\0${policySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
     params.provider,
     params.model,
   )}`;
@@ -227,12 +227,16 @@ export function resolveGatewaySessionThinkingProjectionInternal(
     provider: params.provider,
     model: params.model,
     agentRuntime: thinkingRuntime,
+    configuredReasoning:
+      catalogEntry !== logicalEntry
+        ? (logicalEntry?.configuredReasoning ?? logicalEntry?.reasoning)
+        : undefined,
     modelCatalog: runtimeCatalog,
     rowContext: params.rowContext,
     providerPolicySource: params.providerPolicySource,
   });
   const storedThinkingLevel = normalizeThinkLevel(params.entry?.thinkingLevel);
-  const thinkingLevel = storedThinkingLevel
+  const effectiveThinkingLevel = storedThinkingLevel
     ? resolveGatewaySessionThinkingLevel(
         { ...params, modelCatalog: runtimeCatalog },
         thinkingProfile,
@@ -242,10 +246,19 @@ export function resolveGatewaySessionThinkingProjectionInternal(
   return {
     acpMeta,
     catalogEntry,
+    capacityCatalogEntry: logicalEntry
+      ? (params.rowContext?.selectModelCatalogRuntimeEntry ?? selectModelCatalogRuntimeEntry)({
+          entry: logicalEntry,
+          routeVariants: params.modelCatalogRouteVariants ?? [],
+          runtimeId: thinkingRuntime,
+          allowApiFallback: false,
+        }).entry
+      : undefined,
+    capacityRuntime: thinkingRuntime,
     agentRuntime,
     runtimeSelectionLocked,
-    thinkingLevel,
-    effectiveThinkingLevel: thinkingLevel ?? metadata.thinkingDefault,
+    thinkingLevel: storedThinkingLevel,
+    effectiveThinkingLevel: effectiveThinkingLevel ?? metadata.thinkingDefault,
     // Preserve the established serialized projection order for byte-stable responses.
     thinkingLevels: metadata.thinkingLevels,
     thinkingOptions: metadata.thinkingLevels.map((level) => level.label),
@@ -300,17 +313,20 @@ export function getSessionDefaults(
       })
     : undefined;
   const contextWindowProfile = resolveModelContextWindowProfile({ catalogEntry });
-  const resolvedContextTokens =
-    resolveContextTokensForModel({
-      cfg,
-      provider: resolved.provider,
-      model: resolved.model,
-      modelContextTokens: catalogEntry?.contextTokens,
-      modelContextWindow: contextWindowProfile.contextTokens,
-      allowAsyncLoad: false,
-    }) ?? DEFAULT_CONTEXT_TOKENS;
+  const resolvedContextTokens = resolveContextTokensForModel({
+    cfg,
+    provider: resolved.provider,
+    model: resolved.model,
+    modelContextTokens: catalogEntry?.contextTokens,
+    modelContextWindow: contextWindowProfile.contextTokens,
+    allowAsyncLoad: false,
+    allowCacheLookup: false,
+  });
   const contextTokens = contextWindowProfile.contextTokens
-    ? Math.min(resolvedContextTokens, contextWindowProfile.contextTokens)
+    ? Math.min(
+        resolvedContextTokens ?? contextWindowProfile.contextTokens,
+        contextWindowProfile.contextTokens,
+      )
     : resolvedContextTokens;
   const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
   const agentRuntime = projectWorkerPlacementAgentRuntime(
@@ -339,7 +355,7 @@ export function getSessionDefaults(
   return {
     modelProvider: displayModel.provider ?? resolved.provider,
     model: displayModel.model ?? resolved.model,
-    contextTokens,
+    contextTokens: contextTokens ?? null,
     contextWindow: contextWindowProfile.contextWindow,
     contextWindows: contextWindowProfile.contextWindows,
     contextWindowDefault: contextWindowProfile.contextWindowDefault,
@@ -511,29 +527,24 @@ export async function resolveGatewayModelSupportsImages(params: {
         ) {
           return true;
         }
-        if (claudeCliSupportsImages) {
-          return true;
-        }
-        if (
-          readOnly &&
-          !snapshot?.catalogComplete &&
-          (!snapshot ||
-            !isGatewayModelExplicitlyConfiguredTextOnly({
-              snapshot,
-              provider: params.provider,
-              model: params.model,
-            }))
-        ) {
-          continue;
-        }
-        return false;
       }
       if (claudeCliSupportsImages) {
         return true;
       }
-      if (readOnly && snapshot?.catalogComplete) {
-        return false;
+      if (
+        readOnly &&
+        !snapshot?.catalogComplete &&
+        (!modelEntry ||
+          !snapshot ||
+          !isGatewayModelExplicitlyConfiguredTextOnly({
+            snapshot,
+            provider: params.provider,
+            model: params.model,
+          }))
+      ) {
+        continue;
       }
+      return false;
     }
     return false;
   } catch {

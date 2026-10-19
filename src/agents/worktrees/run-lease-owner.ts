@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { isLockOwnerDefinitelyStale } from "../../infra/stale-lock-file.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { WorktreeRemovalContentionError } from "./errors.js";
@@ -33,7 +33,7 @@ type ScopeLeaseState = {
 };
 
 export function collectLiveRunLeases(
-  db: DatabaseSync,
+  db: EngineConnection,
   k: ReturnType<typeof getNodeSqliteKysely<WorktreeLeaseDatabase>>,
   scope: string,
   reapStale = true,
@@ -99,7 +99,7 @@ function inspectRunLeases(
 
 const WORKTREE_RUN_LEASE_SCOPE_PREFIX = "worktree-run:";
 
-export function readWorktreeRunLeaseStateInDatabase(db: DatabaseSync) {
+export function readWorktreeRunLeaseStateInDatabase(db: EngineConnection) {
   const k = getNodeSqliteKysely<WorktreeLeaseDatabase>(db);
   const rows = executeSqliteQuerySync(
     db,
@@ -122,7 +122,7 @@ export function readWorktreeRunLeaseStateInDatabase(db: DatabaseSync) {
   return { liveScopes: [...liveScopes], staleScopes: [...staleScopes] };
 }
 
-export function reapWorktreeRunLeasesInDatabase(db: DatabaseSync, scopes: string[]): void {
+export function reapWorktreeRunLeasesInDatabase(db: EngineConnection, scopes: string[]): void {
   const k = getNodeSqliteKysely<WorktreeLeaseDatabase>(db);
   for (const scope of scopes) {
     // Recheck current owners under the transaction; the sweep grants no delete authority.
@@ -136,7 +136,7 @@ export function worktreeRunLeaseScope(worktreeId: string): string {
 
 /** Removed exact snapshots retain exclusive lifecycle custody during destructive expiry. */
 export function assertRegistryMutationCustody(
-  db: DatabaseSync,
+  db: EngineConnection,
   k: ReturnType<typeof getNodeSqliteKysely<WorktreeLeaseDatabase>>,
   id: string,
   token?: string,

@@ -3,7 +3,7 @@ import {
   throwSqliteLifecycleErrors,
 } from "../../infra/sqlite-lifecycle-errors.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -48,7 +48,7 @@ export function prepareSessionColdSourceGuard(
     ? readDatabasePathIdentitySync(target.path).key
     : undefined;
   const isForeign = ({ source }: SessionSourcePredicate) =>
-    source.path !== target.path && `file:${String(source.databaseIdentity)}` !== targetIdentity;
+    source.path !== target.path && `file:${source.databaseIdentity}` !== targetIdentity;
   const readers = new Map<string, OpenClawAgentReadOnlyDatabaseHandle | undefined>();
   const close = () => {
     const errors: unknown[] = [];
@@ -64,7 +64,7 @@ export function prepareSessionColdSourceGuard(
   try {
     for (const predicate of sources.filter(isForeign)) {
       const { source } = predicate;
-      const key = String(source.databaseIdentity);
+      const key = source.databaseIdentity;
       if (!readers.has(key)) {
         const opened = openOpenClawAgentDatabaseReadOnly({
           agentId: source.agentId,
@@ -93,9 +93,9 @@ export function prepareSessionColdSourceGuard(
     const validation: SessionSourceValidation = { conversationMatches: [] };
     for (const [index, predicate] of sources.entries()) {
       const foreign = isForeign(predicate);
-      const foreignReader = readers.get(String(predicate.source.databaseIdentity));
+      const foreignReader = readers.get(predicate.source.databaseIdentity);
       const expected = {
-        key: `file:${String(predicate.source.databaseIdentity)}`,
+        key: `file:${predicate.source.databaseIdentity}`,
         birthtime: predicate.source.databaseBirthtime,
       };
       try {
@@ -116,7 +116,7 @@ export function prepareSessionColdSourceGuard(
       const readPredicate = () =>
         readSessionSourceValidation(reader, [predicate], undefined, foreign ? undefined : entries);
       const current = foreign
-        ? runSqliteDeferredTransactionSync(reader.db, () =>
+        ? runSqliteReadSnapshotSync(reader.db, () =>
             runSqliteReadOperationSync(reader.db, readPredicate),
           )
         : readPredicate();

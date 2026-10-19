@@ -130,7 +130,6 @@ export function snapshotEnvProperties(
 export type PublishedConfigRuntimeEnvChange = {
   before: EnvSnapshotEntry | undefined;
   after: EnvSnapshotEntry | undefined;
-  preparedBefore: EnvSnapshotEntry | undefined;
 };
 
 export function rollbackConfigRuntimeEnvChanges(

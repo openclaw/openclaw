@@ -4,6 +4,7 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { meetingTranscriptUtteranceQuery, utteranceFromRow } from "../transcripts/store-sqlite.js";
 import { transcriptSessionSelector, TranscriptsStore } from "../transcripts/store.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   LEGACY_UTTERANCE_INSERT_CHUNK_SIZE,
   readStagedMeetingTranscriptUtterances,
@@ -14,7 +15,7 @@ export async function verifyImportedMeetingTranscriptSnapshots(params: {
   store: TranscriptsStore;
   snapshots: LegacyMeetingTranscriptSnapshot[];
   stageDatabase: DatabaseSync;
-  database: DatabaseSync;
+  database: EngineConnection;
 }): Promise<void> {
   for (const snapshot of params.snapshots) {
     const session = await params.store.readSession(transcriptSessionSelector(snapshot.session));

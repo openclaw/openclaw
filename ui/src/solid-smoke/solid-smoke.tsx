@@ -1,22 +1,7 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Show, createMemo, createSignal } from "solid-js";
-import "../components/option-card.ts";
+import { OptionCard } from "../components/option-card.tsx";
 
-type OptionCardAttributes = SolidJSX.HTMLAttributes<
-  HTMLElementTagNameMap["openclaw-option-card"]
-> & {
-  "prop:props": HTMLElementTagNameMap["openclaw-option-card"]["props"];
-};
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-option-card": OptionCardAttributes;
-    }
-  }
-}
-
-// Deliberately outside the application entry graph: this is a compiler/interop fixture.
+// Deliberately outside the application entry graph: this is a compiler fixture.
 export function SolidSmoke() {
   const [count, setCount] = createSignal(0);
   const summary = createMemo(() => `Count: ${count()}`);
@@ -33,7 +18,7 @@ export function SolidSmoke() {
           <For each={entries()}>{(entry) => <li>Entry {entry}</li>}</For>
         </ul>
       </Show>
-      <openclaw-option-card prop:props={{ question: summary(), options: [] }} />
+      <OptionCard props={{ question: summary(), options: [] }} />
     </section>
   );
 }

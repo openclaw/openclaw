@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -719,7 +719,6 @@ const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
       "src/config/sessions/session-message-rewrite.worker.ts",
       "src/config/sessions/session-sharing-store.worker.ts",
       "src/config/sessions/session-transcript-projection-publication.worker.ts",
-      "src/config/sessions/session-transcript-stats.worker.ts",
       "src/gateway/worker-environments/transcript-commit.worker.ts",
       "src/infra/heartbeat-outcome-store.worker.ts",
       "src/infra/message-tool-run-outcome-store.worker.ts",

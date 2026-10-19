@@ -1,323 +1,213 @@
-import { beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
-import { projectUpstreamProviderCatalogModel } from "./provider-catalog-live-normalize.internal.js";
+import { assert, beforeEach, expect, it, vi, type MockedFunction } from "vitest";
+import { projectUpstreamProviderCatalogModel as projectUpstream } from "./provider-catalog-live-normalize.internal.js";
 import {
   clearLiveCatalogCacheForTests,
   getCachedUpstreamProviderCatalog,
   type LiveModelCatalogFetchGuard,
   type UpstreamProviderCatalog,
+  type UpstreamProviderCatalogModel,
 } from "./provider-catalog-live-runtime.js";
+import { listProviderCatalogSnapshotEntries } from "./provider-catalog-snapshot.internal.js";
 
-function buildFetchGuard(body: unknown): {
-  fetchGuard: MockedFunction<LiveModelCatalogFetchGuard>;
-  release: ReturnType<typeof vi.fn>;
-} {
+const endpoint = "https://models.opencode.ai/api.json";
+async function loadProvider(fetchGuard: LiveModelCatalogFetchGuard, providerId = "opencode") {
+  return getCachedUpstreamProviderCatalog({ endpoint, providerId, fetchGuard });
+}
+function makeProvider(
+  id = "opencode",
+  api = "https://opencode.ai/zen/v1",
+  npm?: string,
+): UpstreamProviderCatalog {
+  return { id, api, npm, models: {} };
+}
+function project(
+  model: UpstreamProviderCatalogModel,
+  provider = makeProvider(),
+  defaultBaseUrl?: string,
+) {
+  return projectUpstream({ providerId: provider.id, provider, model, defaultBaseUrl });
+}
+
+function buildFetchGuard(body: unknown) {
   const release = vi.fn(async () => undefined);
   const fetchGuard: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
     response: new Response(JSON.stringify(body)),
-    finalUrl: "https://models.opencode.ai/api.json",
+    finalUrl: endpoint,
     release,
   }));
   return { fetchGuard, release };
 }
 
-const UPSTREAM_TIER_COST = { input: 4, output: 12, cache_read: 1, cache_write: 2 };
-const UPSTREAM_CONTEXT_TIER = {
-  ...UPSTREAM_TIER_COST,
-  tier: { type: "context", size: 200_000 },
-};
+async function fetchedModel(
+  model: UpstreamProviderCatalogModel,
+  metadata = makeProvider("opencode", "https://opencode.ai/zen/v1", "@ai-sdk/openai-compatible"),
+) {
+  assert(model);
+  const { fetchGuard } = buildFetchGuard({
+    [metadata.id]: { ...metadata, models: { [model.id]: model } },
+  });
+  const provider = await loadProvider(fetchGuard, metadata.id);
+  assert(provider, "expected upstream provider");
+  const upstreamModel = provider.models[model.id];
+  assert(upstreamModel, "expected upstream provider model");
+  return project(upstreamModel, provider);
+}
 
-describe("shared upstream provider metadata catalogs", () => {
-  beforeEach(() => clearLiveCatalogCacheForTests());
+beforeEach(() => clearLiveCatalogCacheForTests());
 
-  it("lazily shares one anonymous upstream metadata download across provider ids", async () => {
-    const { fetchGuard, release } = buildFetchGuard({
-      opencode: { id: "opencode", api: "https://opencode.ai/zen/v1", models: {} },
-      "opencode-go": { id: "opencode-go", api: "https://opencode.ai/zen/go/v1", models: {} },
-    });
-    const endpoint = "https://models.opencode.ai/api.json";
-
-    expect(fetchGuard).not.toHaveBeenCalled();
-    const providers = await Promise.all([
-      getCachedUpstreamProviderCatalog({ endpoint, providerId: "missing", fetchGuard }),
-      getCachedUpstreamProviderCatalog({ endpoint, providerId: "opencode", fetchGuard }),
-      getCachedUpstreamProviderCatalog({ endpoint, providerId: "opencode-go", fetchGuard }),
-    ]);
-
-    expect(providers.map((provider) => provider?.id)).toEqual([
-      undefined,
-      "opencode",
-      "opencode-go",
-    ]);
-    expect(fetchGuard).toHaveBeenCalledTimes(1);
-    expect(fetchGuard.mock.calls[0]?.[0]).toMatchObject({
-      url: endpoint,
-      requireHttps: true,
-      timeoutMs: 15_000,
-      auditContext: "upstream-provider-catalog-discovery",
-    });
-    expect(
-      new Headers(fetchGuard.mock.calls[0]?.[0].init?.headers).get("authorization"),
-    ).toBeNull();
-    expect(release).toHaveBeenCalledTimes(1);
+it("lazily shares one anonymous upstream metadata download across provider ids", async () => {
+  const { fetchGuard, release } = buildFetchGuard({
+    opencode: { id: "opencode", api: "https://opencode.ai/zen/v1", models: {} },
+    "opencode-go": { id: "opencode-go", api: "https://opencode.ai/zen/go/v1", models: {} },
   });
 
-  it("accepts shared upstream feeds beyond the ordinary four-megabyte provider limit", async () => {
-    const { fetchGuard } = buildFetchGuard({
-      padding: "x".repeat(4 * 1024 * 1024),
-      opencode: { id: "opencode", models: {} },
-    });
-
-    await expect(
-      getCachedUpstreamProviderCatalog({
-        endpoint: "https://models.opencode.ai/api.json",
-        providerId: "opencode",
-        fetchGuard,
-      }),
-    ).resolves.toMatchObject({ id: "opencode" });
-  });
-
-  it("rejects shared upstream feeds beyond their separate eight-megabyte ceiling", async () => {
-    const { fetchGuard, release } = buildFetchGuard({
-      padding: "x".repeat(8 * 1024 * 1024),
-      opencode: { id: "opencode", models: {} },
-    });
-
-    await expect(
-      getCachedUpstreamProviderCatalog({
-        endpoint: "https://models.opencode.ai/api.json",
-        providerId: "opencode",
-        fetchGuard,
-      }),
-    ).rejects.toThrow("Live model catalog response exceeded 8388608 bytes");
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("contextualizes malformed upstream JSON while retaining its parser cause", async () => {
-    const release = vi.fn(async () => undefined);
-    const fetchGuard: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
-      response: new Response("{invalid json"),
-      finalUrl: "https://models.opencode.ai/api.json",
-      release,
-    }));
-
-    const error = await getCachedUpstreamProviderCatalog({
-      endpoint: "https://models.opencode.ai/api.json",
-      providerId: "opencode",
-      fetchGuard,
-    }).catch((cause: unknown) => cause);
-
-    expect(error).toMatchObject({
-      message: "upstream-provider-catalog: malformed JSON response",
-      cause: expect.any(SyntaxError) as unknown,
-    });
-    expect(release).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    ["object tiers", { tiers: {} }, false],
-    ["mixed tiers", { tiers: [null, UPSTREAM_CONTEXT_TIER] }, true],
-    [
-      "malformed tiers with legacy pricing",
-      { tiers: {}, context_over_200k: UPSTREAM_TIER_COST },
-      true,
-    ],
-    [
-      "modern tiers before legacy pricing",
-      {
-        tiers: [UPSTREAM_CONTEXT_TIER],
-        context_over_200k: { ...UPSTREAM_TIER_COST, input: 99 },
-      },
-      true,
-    ],
-  ] as const)(
-    "projects pricing, reasoning, tools, and modalities from %s JSON",
-    async (_name, pricing, hasTiers) => {
-      const { fetchGuard } = buildFetchGuard({
-        "opencode-go": {
-          id: "opencode-go",
-          api: "https://opencode.ai/zen/go/v1",
-          npm: "@ai-sdk/openai-compatible",
-          models: {
-            "frontier-model": {
-              id: "frontier-model",
-              name: "Frontier Model",
-              reasoning: true,
-              tool_call: true,
-              reasoning_options: [{ type: "effort", values: ["low", "high", "high", false] }],
-              modalities: { input: ["text", "image", "video"] },
-              provider: { npm: "@ai-sdk/openai" },
-              limit: { context: 1_000_000, input: 900_000, output: 128_000 },
-              cost: { input: 2, output: 6, cache_read: 0.5, cache_write: 1, ...pricing },
-            },
-          },
-        },
-      });
-      const provider = await getCachedUpstreamProviderCatalog({
-        endpoint: "https://models.opencode.ai/api.json",
-        providerId: "opencode-go",
-        fetchGuard,
-      });
-      const upstreamModel = provider?.models["frontier-model"];
-      if (!provider || !upstreamModel) {
-        throw new Error("expected upstream provider model");
-      }
-      const model = projectUpstreamProviderCatalogModel({
-        providerId: provider.id,
-        provider,
-        model: upstreamModel,
-      });
-
-      expect(model).toEqual({
-        id: "frontier-model",
-        name: "Frontier Model",
-        provider: "opencode-go",
-        api: "openai-responses",
-        baseUrl: "https://opencode.ai/zen/go/v1",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 1_000_000,
-        contextTokens: 900_000,
-        maxTokens: 128_000,
-        thinkingLevelMap: { off: null },
-        cost: {
-          input: 2,
-          output: 6,
-          cacheRead: 0.5,
-          cacheWrite: 1,
-          ...(hasTiers
-            ? {
-                tieredPricing: [
-                  { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 1, range: [0, 200_000] },
-                  { input: 4, output: 12, cacheRead: 1, cacheWrite: 2, range: [200_000] },
-                ],
-              }
-            : {}),
-        },
-        compat: {
-          supportsUsageInStreaming: true,
-          maxTokensField: "max_tokens",
-          supportsTools: true,
-          supportsReasoningEffort: true,
-          supportedReasoningEfforts: ["low", "high"],
-        },
-      });
-    },
+  expect(fetchGuard).not.toHaveBeenCalled();
+  const providers = await Promise.all(
+    ["missing", "opencode", "opencode-go"].map((id) => loadProvider(fetchGuard, id)),
   );
 
-  it.each([
-    { name: "omitted", options: undefined, efforts: undefined },
-    { name: "empty", options: [], efforts: [] },
-    {
-      name: "native null effort",
-      options: [{ type: "effort", values: [null, "high", null, "VendorExact"] }],
-      efforts: ["none", "high", "VendorExact"],
-    },
-  ])("preserves $name upstream reasoning controls", ({ options, efforts }) => {
-    for (const npm of ["@ai-sdk/openai-compatible", "@ai-sdk/openai"]) {
-      const provider: UpstreamProviderCatalog = {
-        id: "fixture-provider",
-        api: "https://models.example.test/v1",
-        npm,
-        models: {},
-      };
-      const model = projectUpstreamProviderCatalogModel({
-        providerId: provider.id,
-        provider,
-        model: {
-          id: "reasoning-fixture",
-          reasoning: true,
-          limit: { context: 128_000, output: 8192 },
-          ...(options === undefined ? {} : { reasoning_options: options }),
-        },
-      });
+  const ids = providers.map((provider) => provider?.id);
+  expect(ids).toEqual([undefined, "opencode", "opencode-go"]);
+  expect(fetchGuard).toHaveBeenCalledTimes(1);
+  expect(fetchGuard.mock.calls[0]?.[0]).toMatchObject({
+    url: endpoint,
+    requireHttps: true,
+    timeoutMs: 15_000,
+    auditContext: "upstream-provider-catalog-discovery",
+  });
+  expect(new Headers(fetchGuard.mock.calls[0]?.[0].init?.headers).get("authorization")).toBeNull();
+  expect(release).toHaveBeenCalledTimes(1);
+});
 
-      expect(model?.reasoning).toBe(true);
-      if (efforts === undefined) {
-        expect(model?.compat).not.toHaveProperty("supportsReasoningEffort");
-        expect(model?.compat).not.toHaveProperty("supportedReasoningEfforts");
-      } else {
-        expect(model?.compat).toMatchObject({
-          supportsReasoningEffort: efforts.length > 0,
-          supportedReasoningEfforts: efforts,
-        });
-      }
-      expect(model).not.toHaveProperty("thinkingLevelMap");
+it.each([4, 8])(
+  "bounds a %i MiB shared feed with its separate eight-megabyte ceiling",
+  async (size) => {
+    const { fetchGuard, release } = buildFetchGuard({
+      padding: "x".repeat(size * 1024 * 1024),
+      opencode: { id: "opencode", models: {} },
+    });
+    const loaded = loadProvider(fetchGuard);
+    if (size === 4) {
+      await expect(loaded).resolves.toMatchObject({ id: "opencode" });
+    } else {
+      await expect(loaded).rejects.toThrow("Live model catalog response exceeded 8388608 bytes");
     }
-  });
+    expect(release).toHaveBeenCalledTimes(1);
+  },
+);
 
-  it.each([
-    ["@ai-sdk/openai-compatible", "openai-completions", "https://opencode.ai/zen/v1"],
-    ["@ai-sdk/openai", "openai-responses", "https://opencode.ai/zen/v1"],
-    ["@ai-sdk/anthropic", "anthropic-messages", "https://opencode.ai/zen"],
-    ["@ai-sdk/google", "google-generative-ai", "https://opencode.ai/zen/v1"],
-    ["constructor", undefined, undefined],
-  ] as const)(
-    "projects only supported upstream %s transport from JSON",
-    async (npm, api, baseUrl) => {
-      const { fetchGuard } = buildFetchGuard({
-        opencode: {
-          id: "opencode",
-          api: "https://opencode.ai/zen/v1",
-          npm: "@ai-sdk/openai-compatible",
-          models: {
-            "opaque-preview-id": {
-              id: "opaque-preview-id",
-              name: "Opaque Preview",
-              provider: { npm },
-              limit: { context: 128_000, output: 8192 },
-            },
-          },
-        },
-      });
-      const provider = await getCachedUpstreamProviderCatalog({
-        endpoint: "https://models.opencode.ai/api.json",
-        providerId: "opencode",
-        fetchGuard,
-      });
-      const upstreamModel = provider?.models["opaque-preview-id"];
-      if (!provider || !upstreamModel) {
-        throw new Error("expected upstream provider model");
-      }
-      const model = projectUpstreamProviderCatalogModel({
-        providerId: provider.id,
-        provider,
-        model: upstreamModel,
-      });
-
-      if (api === undefined) {
-        expect(model).toBeUndefined();
-      } else {
-        expect(model).toMatchObject({ api, baseUrl });
-      }
+it("projects pricing, reasoning, tools, and modalities from object tiers JSON", async () => {
+  const model = await fetchedModel(
+    {
+      id: "frontier-model",
+      name: "Frontier Model",
+      parameterCount: 4_000_000_000,
+      reasoning: true,
+      tool_call: true,
+      reasoning_options: [{ type: "effort", values: ["low", "high", "high", false] }],
+      modalities: { input: ["text", "image", "video"] },
+      provider: { npm: "@ai-sdk/openai" },
+      limit: { context: 1_000_000, input: 900_000, output: 128_000 },
+      cost: { input: 2, output: 6, cache_read: 0.5, cache_write: 1, tiers: {} },
     },
+    makeProvider("opencode-go", "https://opencode.ai/zen/go/v1", "@ai-sdk/openai-compatible"),
   );
 
-  it("rejects upstream metadata that would redirect authenticated inference to another origin", () => {
-    const provider: UpstreamProviderCatalog = {
-      id: "opencode",
-      api: "https://opencode.ai/zen/v1",
-      models: {},
-    };
-    const model = {
+  expect(model).toEqual({
+    id: "frontier-model",
+    name: "Frontier Model",
+    parameterCount: 4_000_000_000,
+    provider: "opencode-go",
+    api: "openai-responses",
+    baseUrl: "https://opencode.ai/zen/go/v1",
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 1_000_000,
+    contextTokens: 900_000,
+    maxTokens: 128_000,
+    thinkingLevelMap: { off: null },
+    cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 1 },
+    compat: {
+      supportsUsageInStreaming: true,
+      maxTokensField: "max_tokens",
+      supportsTools: true,
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["low", "high"],
+    },
+  });
+  assert(model, "expected projected upstream model");
+  const snapshot = new Map([[model.id, { model }]]);
+  expect(listProviderCatalogSnapshotEntries(snapshot)[0]?.parameterCount).toBe(4_000_000_000);
+});
+
+it.each([
+  { name: "empty", options: [], efforts: [] },
+  {
+    name: "native null effort",
+    options: [{ type: "effort", values: [null, "high", null, "VendorExact"] }],
+    efforts: ["none", "high", "VendorExact"],
+  },
+])("preserves $name upstream reasoning controls", ({ options, efforts }) => {
+  for (const npm of ["@ai-sdk/openai-compatible", "@ai-sdk/openai"]) {
+    const provider = makeProvider("fixture-provider", "https://models.example.test/v1", npm);
+    const model = project(
+      {
+        id: "reasoning-fixture",
+        reasoning: true,
+        limit: { context: 128_000, output: 8192 },
+        reasoning_options: options,
+      },
+      provider,
+    );
+
+    expect(model).toMatchObject({
+      reasoning: true,
+      compat: {
+        supportsReasoningEffort: efforts.length > 0,
+        supportedReasoningEfforts: efforts,
+      },
+    });
+    expect(model).not.toHaveProperty("thinkingLevelMap");
+  }
+});
+
+it.each([
+  ["@ai-sdk/anthropic", "anthropic-messages", "https://opencode.ai/zen"],
+  ["constructor", undefined, undefined],
+] as const)(
+  "projects only supported upstream %s transport from JSON",
+  async (npm, api, baseUrl) => {
+    const model = await fetchedModel({
       id: "opaque-preview-id",
       name: "Opaque Preview",
+      provider: { npm },
       limit: { context: 128_000, output: 8192 },
-    };
+    });
 
-    expect(
-      projectUpstreamProviderCatalogModel({
-        providerId: provider.id,
-        provider,
-        model: { ...model, provider: { api: "https://attacker.example/v1" } },
-      }),
-    ).toBeUndefined();
-    expect(
-      projectUpstreamProviderCatalogModel({
-        providerId: provider.id,
-        provider: { ...provider, api: "https://attacker.example/v1" },
-        model,
-        defaultBaseUrl: "https://opencode.ai/zen/v1",
-      }),
-    ).toBeUndefined();
-  });
+    if (api === undefined) {
+      expect(model).toBeUndefined();
+    } else {
+      expect(model).toMatchObject({ api, baseUrl });
+    }
+  },
+);
+
+it("rejects upstream metadata that would redirect authenticated inference to another origin", () => {
+  const provider = makeProvider();
+  const model = {
+    id: "opaque-preview-id",
+    name: "Opaque Preview",
+    limit: { context: 128_000, output: 8192 },
+  };
+
+  expect(
+    project({ ...model, provider: { api: "https://attacker.example/v1" } }, provider),
+  ).toBeUndefined();
+  expect(
+    project(
+      model,
+      { ...provider, api: "https://attacker.example/v1" },
+      "https://opencode.ai/zen/v1",
+    ),
+  ).toBeUndefined();
 });

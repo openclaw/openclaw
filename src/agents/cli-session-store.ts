@@ -8,7 +8,8 @@ import {
 } from "../config/sessions/session-source-authority.js";
 import { formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { appendAgentRunFailure } from "./agent-run-result.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { appendAgentRunFailure, hasCommittedCliFinalReply } from "./agent-run-result.js";
 import {
   applyCliSessionBindingResult,
   assertCliSessionBindingResultCommitAllowed,
@@ -207,6 +208,12 @@ export async function settleCliSessionResult(
     await settle();
     return result;
   } catch (error) {
+    if (hasCommittedCliFinalReply(result)) {
+      createSubsystemLogger("agents/cli-runner").warn(
+        `CLI session continuity could not be saved after final reply commit: ${formatErrorMessageForDisplay(error)}`,
+      );
+      return result;
+    }
     const detail = redactSensitiveText(formatErrorMessageForDisplay(error), { mode: "tools" });
     const diagnostic = truncateUtf16Safe(
       `CLI session continuity could not be saved: ${detail}`,

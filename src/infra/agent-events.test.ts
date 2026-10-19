@@ -164,11 +164,8 @@ test("keeps audit-only events private and releases their terminal sequence state
     });
   }
   expect(shared).toEqual([]);
-  expect(audit.map((event) => [event.data.phase, event.seq])).toEqual([
-    ["start", 1],
-    ["end", 2],
-    ["start", 1],
-  ]);
+  expect(audit.map((event) => event.data.phase)).toEqual(["start", "end", "start"]);
+  expect(audit.map((event) => event.seq)).toEqual([1, 2, 1]);
   expect(audit[0]).toMatchObject({
     runId: "audit",
     sessionKey: "agent:main:acp:session",
@@ -233,8 +230,7 @@ test("drops stale explicit-generation events before shared listeners", () => {
   expect(
     emit("run", "lifecycle", { phase: "start", startedAt: 1_000 }, { lifecycleGeneration }),
   ).toBe(true);
-  expect(seen).toHaveLength(1);
-  expect(seen[0]).toMatchObject({ seq: 1, data: { phase: "start" } });
+  expect(seen).toMatchObject([{ seq: 1, data: { phase: "start" } }]);
 });
 
 test("rejects inherited stale ownership and cannot reclaim the admitted replacement", () => {
@@ -266,8 +262,7 @@ test("rejects inherited stale ownership and cannot reclaim the admitted replacem
   withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
     emit("run", "tool", { name: "current" }),
   );
-  expect(seen).toHaveLength(1);
-  expect(seen[0]).toMatchObject({ seq: 1, stream: "tool" });
+  expect(seen).toMatchObject([{ seq: 1, stream: "tool" }]);
 });
 
 test("shares operations across nested fallbacks but not separate admissions", async () => {
@@ -312,8 +307,7 @@ test("rejects lifecycle starts without a finite producer timestamp", () => {
   emit("missing", "lifecycle", { phase: "start" });
   emit("invalid", "lifecycle", { phase: "start", startedAt: Number.NaN });
   emit("valid", "lifecycle", { phase: "start", startedAt: 1_234 });
-  expect(seen).toHaveLength(1);
-  expect(seen[0]).toMatchObject({ runId: "valid", data: { phase: "start", startedAt: 1_234 } });
+  expect(seen).toMatchObject([{ runId: "valid", data: { phase: "start", startedAt: 1_234 } }]);
 });
 
 test("stamps each overlapping run's own start onto its terminal event", () => {
@@ -324,12 +318,9 @@ test("stamps each overlapping run's own start onto its terminal event", () => {
   emit("newer", "lifecycle", { phase: "start", startedAt: 2_000 });
   emit("older", "lifecycle", { phase: "error", endedAt: 3_000 });
   emit("newer", "lifecycle", { phase: "end", endedAt: 4_000 });
-  expect(seen.map((event) => [event.runId, event.data.phase, event.data.startedAt])).toEqual([
-    ["older", "start", 1_000],
-    ["newer", "start", 2_000],
-    ["older", "error", 1_000],
-    ["newer", "end", 2_000],
-  ]);
+  expect(seen.map((event) => event.runId)).toEqual(["older", "newer", "older", "newer"]);
+  expect(seen.map((event) => event.data.phase)).toEqual(["start", "start", "error", "end"]);
+  expect(seen.map((event) => event.data.startedAt)).toEqual([1_000, 2_000, 1_000, 2_000]);
 });
 
 test("does not invent or replace producer-owned lifecycle start timestamps", () => {
@@ -344,10 +335,13 @@ test("does not invent or replace producer-owned lifecycle start timestamps", () 
 });
 
 test("keeps hidden routing private while preserving lifecycle persistence identity", () => {
-  registerAgentRunContext("run", {
+  const privateRouting = {
     mainSessionRestartRecovery: true,
     projectSessionLifecycle: false,
     projectSessionMessages: false,
+  } as const;
+  registerAgentRunContext("run", {
+    ...privateRouting,
     sessionKey: "main",
     isControlUiVisible: false,
   });
@@ -356,44 +350,27 @@ test("keeps hidden routing private while preserving lifecycle persistence identi
   const data = { text: "private" };
   const assistantSource: AgentAssistantSourceReceipt = {};
   const assistantProjection = { itemId: "item", text: "display", replace: false };
-  emitAgentEventWithAssistantSourceIfCurrent(
-    { runId: "run", stream: "assistant", data, sessionKey: "main" },
-    assistantSource,
-    assistantProjection,
-  );
-  const native = {
-    runId: "run",
-    stream: "assistant",
-    data,
-    sessionKey: "main",
-    assistantSource,
-    assistantProjection,
-  };
+  const source = { runId: "run", stream: "assistant", data, sessionKey: "main" };
+  emitAgentEventWithAssistantSourceIfCurrent(source, assistantSource, assistantProjection);
+  const native = { ...source, assistantSource, assistantProjection };
   emitAgentEventIfCurrent(native);
   emit("run", "lifecycle", { phase: "start", startedAt: 1_234 }, { sessionKey: "main" });
   emit("run", "lifecycle", { phase: "error" });
   expect(received.map((event) => event.sessionKey)).toEqual([undefined, undefined, "main", "main"]);
   expect(received[0]?.assistantSource).toBe(assistantSource);
   expect(received[0]?.assistantProjection).toBe(assistantProjection);
-  expect({ ...received[0] }).not.toHaveProperty("assistantSource");
-  expect({ ...received[0] }).not.toHaveProperty("assistantProjection");
   expect(received[1]?.assistantSource).toBeUndefined();
   expect(received[1]?.assistantProjection).toBeUndefined();
-  expect({ ...received[1] }).not.toHaveProperty("assistantSource");
-  expect({ ...received[1] }).not.toHaveProperty("assistantProjection");
+  for (const key of ["assistantSource", "assistantProjection"]) {
+    expect({ ...received[0] }).not.toHaveProperty(key);
+    expect({ ...received[1] }).not.toHaveProperty(key);
+  }
   const event = received[2]!;
   expect(event).toMatchObject({
+    ...privateRouting,
     lifecycleGeneration: getAgentEventLifecycleGeneration(),
-    projectSessionLifecycle: false,
-    projectSessionMessages: false,
-    mainSessionRestartRecovery: true,
   });
-  expect(Object.keys(event)).not.toContain("lifecycleGeneration");
-  for (const key of [
-    "projectSessionLifecycle",
-    "projectSessionMessages",
-    "mainSessionRestartRecovery",
-  ]) {
+  for (const key of ["lifecycleGeneration", ...Object.keys(privateRouting)]) {
     expect(Object.keys(event)).not.toContain(key);
   }
 });
@@ -407,10 +384,8 @@ test("shares context, listeners, and sequences across duplicate module instances
   second.events.emitAgentEvent(event);
   first.events.emitAgentEvent(event);
   expect(second.registry.getAgentRunContext("run")?.sessionKey).toBe("session");
-  expect(seen.map(({ seq, sessionKey }) => ({ seq, sessionKey }))).toEqual([
-    { seq: 1, sessionKey: "session" },
-    { seq: 2, sessionKey: "session" },
-  ]);
+  expect(seen.map((received) => received.seq)).toEqual([1, 2]);
+  expect(seen.map((received) => received.sessionKey)).toEqual(["session", "session"]);
 });
 
 test("sweeps stale contexts and sequences without clearing active runs", () => {
@@ -428,10 +403,8 @@ test("sweeps stale contexts and sequences without clearing active runs", () => {
   const seen = captureEvents();
   emit("stale");
   emit("active");
-  expect(seen.map((event) => [event.runId, event.seq])).toEqual([
-    ["stale", 1],
-    ["active", 2],
-  ]);
+  expect(seen.map((event) => event.runId)).toEqual(["stale", "active"]);
+  expect(seen.map((event) => event.seq)).toEqual([1, 2]);
 });
 
 test("protects active queue leases while tracked and abandoned owners expire", () => {
@@ -525,7 +498,7 @@ test("filters by run and keeps a new subscription alive after a stale unsubscrib
   expect(seen).toEqual([1, 2, 4]);
 });
 
-test("visits a listener added by the last callback even when that callback throws", () => {
+test("starts new subscriptions on the next event even when their creator throws", () => {
   const order: string[] = [];
   onAgentEventForRun("run", () => {
     order.push("first");
@@ -533,7 +506,9 @@ test("visits a listener added by the last callback even when that callback throw
     throw new Error("listener failed after registering its successor");
   });
   emit("run");
-  expect(order).toEqual(["first", "late"]);
+  expect(order).toEqual(["first"]);
+  emit("run");
+  expect(order).toEqual(["first", "first", "late"]);
 });
 
 test.each(["global", "run"] as const)(
@@ -557,21 +532,7 @@ test.each(["global", "run"] as const)(
   },
 );
 
-test("keeps preserved listeners and additions live during reset", () => {
-  const order: string[] = [];
-  onAgentEventForRun("run", () => {
-    order.push("first");
-    resetAgentEventsForTest({ preserveListeners: true });
-    onAgentEvent(() => order.push("new-global"));
-    onAgentEventForRun("run", () => order.push("new-run"));
-  });
-  onAgentEvent(() => order.push("old-global"));
-  onAgentEventForRun("run", () => order.push("old-run"));
-  emit("run");
-  expect(order).toEqual(["first", "old-global", "old-run", "new-global", "new-run"]);
-});
-
-test("reselects a mutated run cohort without revisiting earlier registrations", () => {
+test("does not reroute an event when a callback changes its run id", () => {
   const order: string[] = [];
   onAgentEventForRun("b", () => order.push("earlier-b"));
   onAgentEventForRun("a", () => order.push("first-a"));
@@ -582,10 +543,10 @@ test("reselects a mutated run cohort without revisiting earlier registrations", 
   onAgentEventForRun("a", () => order.push("later-a"));
   onAgentEventForRun("b", () => order.push("later-b"));
   emit("a");
-  expect(order).toEqual(["first-a", "global", "later-b"]);
+  expect(order).toEqual(["first-a", "global", "later-a"]);
 });
 
-test("retains independent nested cursors while new callbacks join both emissions", () => {
+test("retains independent listener cohorts through nested emissions", () => {
   const order: string[] = [];
   onAgentEventForRun("run", (event) => {
     order.push(`first:${String(event.data.text)}`);
@@ -598,16 +559,7 @@ test("retains independent nested cursors while new callbacks join both emissions
   });
   onAgentEvent((event) => order.push(`global:${String(event.data.text)}`));
   emit("run", "assistant", { text: "outer" });
-  expect(order).toEqual([
-    "first:outer",
-    "first:inner",
-    "global:inner",
-    "new-run:inner",
-    "new-global:inner",
-    "global:outer",
-    "new-run:outer",
-    "new-global:outer",
-  ]);
+  expect(order).toEqual(["first:outer", "first:inner", "global:inner", "global:outer"]);
 });
 
 test("captures runtime delivery before listeners and independently for nested emissions", () => {

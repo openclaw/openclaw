@@ -20,6 +20,7 @@ import { isPathInside } from "../../infra/path-guards.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
+import { requiredWorkerWorkspaceReuseError } from "./session-create-required-worker.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
 type PreparedSessionCreateRoot = {
@@ -91,6 +92,7 @@ export function prepareSessionCreateFilesystemRoot(params: {
         cfg: params.cfg,
         agentId: params.targetAgentId,
         sessionKey: params.sessionKey ?? `agent:${params.targetAgentId}:dashboard:pending`,
+        preparedSessionEntry: null,
       });
       // Canonical paths admit workspace aliases while rejecting links that
       // resolve outside the selected agent's workspace.
@@ -145,6 +147,7 @@ export function prepareSessionForkFilesystemRoot(params: {
 > {
   const parent = params.parent;
   if (
+    parent.deviceFolder ||
     parent.worktree ||
     parent.repositoryWorkspaceId ||
     parent.execHost === "node" ||
@@ -177,4 +180,33 @@ export function prepareSessionForkFilesystemRoot(params: {
     ...(parent.spawnedWorkspaceDir ? { spawnedWorkspaceDir: root.value.sessionRoot } : {}),
     sessionRoot: root.value.sessionRoot,
   });
+}
+
+/** Existing sessions keep their accepted workspace source across keyed create retries. */
+export function sessionWorkspaceReuseError(
+  params: Pick<SessionsCreateParams, "deviceFolder" | "repository">,
+  automaticEmptyWorkspace: boolean,
+  existingTargetEntry: InternalSessionEntry | undefined,
+): ErrorShape | undefined {
+  const { deviceFolder, repository } = params;
+  if (existingTargetEntry?.deviceFolder && !deviceFolder) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "Device folder sessions require their original deviceFolder; continue the existing session or create a new one.",
+    );
+  }
+  const requiredError = requiredWorkerWorkspaceReuseError(
+    automaticEmptyWorkspace,
+    existingTargetEntry,
+  );
+  if (requiredError) {
+    return requiredError;
+  }
+  if (existingTargetEntry?.repositoryWorkspaceId && !repository) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "Repository sessions require their original repository source; dispatch the existing session to continue.",
+    );
+  }
+  return undefined;
 }

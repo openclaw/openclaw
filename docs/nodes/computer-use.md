@@ -52,6 +52,8 @@ The built-in tool uses the Gateway desktop from an agent run hosted by that Gate
 
 Tool discovery reads declared capabilities and recorded runtime health without starting a desktop or waiting for its helper. The first computer action probes the selected Gateway and binds to the resulting live provider generation. A declared action list alone does not mean the desktop is ready.
 
+Hosted agent turns reuse the Gateway's prepared node catalog and computer-provider declarations. Pairing and connection changes, command-policy updates, and provider/configuration changes update those owner-held facts before the next turn assembles its tool surface. Discovery remains bound to the agent's Gateway; a retired Gateway binding cannot borrow another Gateway's inventory.
+
 For RPC clients, `computer.status` with `probe: false` performs this passive read. `probe: true` prepares the computer and waits for readiness; omitting `probe` preserves that behavior for existing clients. Concurrent probes share preparation, and helper startup remains bounded by its one-minute timeout. Passive reads never extend the desktop's idle lifetime or retry a failed startup.
 
 ### Linux Gateway live proof

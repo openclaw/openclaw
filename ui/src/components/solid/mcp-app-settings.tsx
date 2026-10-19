@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { For, Show, createMemo, createStore } from "solid-js";
 import type { McpAppSettings } from "../../../../src/shared/mcp-app-extensions.js";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -7,26 +7,36 @@ registerMcpAppEnglish();
 
 export type McpAppSettingsView = {
   settings: McpAppSettings;
-  values: McpAppSettings["values"];
   busy: boolean;
-  onChange: (key: string, value: string | number | boolean) => void;
-  onSave: () => void;
+  onSave: (changes: McpAppSettings["values"]) => void;
   onTool: (name: string) => void;
 };
 
 export function McpAppSettingsForm(props: McpAppSettingsView) {
-  const hasChanges = () =>
-    Object.entries(props.values).some(([key, value]) => props.settings.values[key] !== value);
-  const rendered = () =>
-    new Set(
-      props.settings.layout?.flatMap((group) =>
-        group.items.flatMap((item) => (item.kind === "property" ? [item.property] : [])),
+  // Accepted settings replace the local draft; busy/notice updates preserve edits.
+  const [values, setValues] = createStore(() => ({ ...props.settings.values }), {});
+  const changes = createMemo(() =>
+    Object.fromEntries(
+      Object.entries(values).filter(([key, value]) => props.settings.values[key] !== value),
+    ),
+  );
+  const hasChanges = () => Object.keys(changes()).length > 0;
+  const change = (key: string, value: string | number | boolean) =>
+    setValues((draft) => {
+      draft[key] = value;
+    });
+  const rendered = createMemo(
+    () =>
+      new Set(
+        props.settings.layout?.flatMap((group) =>
+          group.items.flatMap((item) => (item.kind === "property" ? [item.property] : [])),
+        ),
       ),
-    );
+  );
   const field = (key: string) => (
     <Show when={props.settings.schema.properties[key]} keyed>
       {(schema) => {
-        const value = () => props.values[key];
+        const value = () => values[key];
         const required = () => props.settings.schema.required?.includes(key) ?? false;
         return (
           <label class="mcp-app-settings__field">
@@ -39,14 +49,14 @@ export function McpAppSettingsForm(props: McpAppSettingsView) {
                 type="checkbox"
                 checked={value() === true}
                 disabled={props.busy}
-                onChange={(event) => props.onChange(key, event.currentTarget.checked)}
+                onChange={(event) => change(key, event.currentTarget.checked)}
               />
             ) : schema.type === "string" && schema.enum ? (
               <select
                 value={String(value() ?? "")}
                 required={required()}
                 disabled={props.busy}
-                onChange={(event) => props.onChange(key, event.currentTarget.value)}
+                onChange={(event) => change(key, event.currentTarget.value)}
               >
                 <For each={schema.enum}>
                   {(option) => (
@@ -75,9 +85,9 @@ export function McpAppSettingsForm(props: McpAppSettingsView) {
                 onInput={(event) => {
                   const input = event.currentTarget;
                   if (schema.type === "string") {
-                    props.onChange(key, input.value);
+                    change(key, input.value);
                   } else if (Number.isFinite(input.valueAsNumber)) {
-                    props.onChange(key, input.valueAsNumber);
+                    change(key, input.valueAsNumber);
                   }
                 }}
               />
@@ -93,7 +103,7 @@ export function McpAppSettingsForm(props: McpAppSettingsView) {
       onSubmit={(event) => {
         event.preventDefault();
         if (hasChanges() && event.currentTarget.reportValidity()) {
-          props.onSave();
+          props.onSave(changes());
         }
       }}
     >

@@ -1,5 +1,9 @@
+import { prepareConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 // Keep Tool Search and Code Mode dependencies out of the lightweight harness lifecycle SDK.
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
+import { isLocalModelLeanEnabled } from "../agents/local-model-lean.js";
+import { withLegacySessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store-legacy.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 
 export { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 export { normalizeAgentToolResultMiddlewareRuntimeIds } from "../plugins/agent-tool-result-middleware.js";
@@ -50,13 +54,52 @@ export type AgentHarnessToolSurfaceRuntime = ReturnType<
 
 export type AgentHarnessToolSurfaceRuntimeParams = Omit<
   Parameters<typeof createAgentHarnessToolSurfaceRuntimeCore>[0],
-  "executeTool" | "disableToolSearch" | "forceCodeModeControls"
+  "executeTool" | "disableToolSearch" | "forceCodeModeControls" | "preparedToolOverrideAllowlist"
 > & {
   executeTool: NonNullable<OpenClawCodingToolsOptions["toolSearchCatalogExecutor"]>;
 };
 
+/** @deprecated Await createAgentHarnessToolSurfaceRuntimeAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function createAgentHarnessToolSurfaceRuntime(params: AgentHarnessToolSurfaceRuntimeParams) {
-  const runtime = createAgentHarnessToolSurfaceRuntimeCore(params);
+  warnPluginSdkDeprecation({
+    family: "agent-harness-tool-surface",
+    method: "createAgentHarnessToolSurfaceRuntime",
+    replacement: "createAgentHarnessToolSurfaceRuntimeAsync",
+  });
+  return projectToolSurfaceRuntime(
+    createAgentHarnessToolSurfaceRuntimeCore(params),
+    withLegacySessionCapabilityRead,
+  );
+}
+
+export async function createAgentHarnessToolSurfaceRuntimeAsync(
+  params: AgentHarnessToolSurfaceRuntimeParams,
+): Promise<AgentHarnessToolSurfaceRuntime> {
+  const profile = isLocalModelLeanEnabled(params)
+    ? await prepareConversationCapabilityProfile({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        modelProvider: params.modelProvider,
+        modelId: params.modelId,
+        runtimeToolAllowlist: params.runtimeToolAllowlist
+          ? [...params.runtimeToolAllowlist]
+          : undefined,
+        scheduledToolPolicy: params.scheduledToolPolicy,
+      })
+    : undefined;
+  return projectToolSurfaceRuntime(
+    createAgentHarnessToolSurfaceRuntimeCore({
+      ...params,
+      preparedToolOverrideAllowlist: profile?.policy.explicitToolOverrideAllowlist ?? [],
+    }),
+  );
+}
+
+function projectToolSurfaceRuntime(
+  runtime: ReturnType<typeof createAgentHarnessToolSurfaceRuntimeCore>,
+  withCapabilityRead: typeof withLegacySessionCapabilityRead = (read) => read(),
+) {
   const catalog: Pick<
     OpenClawCodingToolsOptions,
     "toolSearchCatalogExecutor" | "toolSearchCatalogRef"
@@ -80,10 +123,12 @@ export function createAgentHarnessToolSurfaceRuntime(params: AgentHarnessToolSur
         "hookContext" | "localModelLeanApplied"
       > = {},
     ) => {
-      const { tools: compacted, promptToolPolicy } = runtime.compactTools(tools, {
-        hookContext,
-        localModelLeanApplied,
-      });
+      const { tools: compacted, promptToolPolicy } = withCapabilityRead(() =>
+        runtime.compactTools(tools, {
+          hookContext,
+          localModelLeanApplied,
+        }),
+      );
       return { tools: compacted, promptToolPolicy };
     },
   };

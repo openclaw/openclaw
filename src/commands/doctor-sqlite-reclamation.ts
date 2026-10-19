@@ -166,7 +166,7 @@ export async function enableDoctorSqliteReclamation(params: {
         continue;
       }
       if (target.agentId !== undefined) {
-        invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(sqlitePath, params.env);
+        invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(sqlitePath);
       }
       params.log(`Enabling incremental SQLite reclamation once: ${sqlitePath}`);
       const result = compactDoctorSqliteFile({

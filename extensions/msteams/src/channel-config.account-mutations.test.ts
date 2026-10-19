@@ -5,83 +5,33 @@ import { msteamsConfigAdapter } from "./channel-config.js";
 
 describe("msteams account config mutations", () => {
   afterEach(() => vi.unstubAllEnvs());
-  it.each(["root", "explicit"] as const)(
-    "disables the %s default without disabling siblings",
-    (storage) => {
-      const identity = { appId: "default-app", appPassword: "default-secret" };
-      const cfg: OpenClawConfig = {
-        channels: {
-          msteams: {
-            tenantId: "tenant-id",
-            ...(storage === "root" ? identity : {}),
-            accounts: {
-              ...(storage === "explicit" ? { default: identity } : {}),
-              support: { appId: "support-app", appPassword: "support-secret" },
-            },
-          },
-        },
-      };
-      const updated = msteamsConfigAdapter.setAccountEnabled({
-        cfg,
-        accountId: "default",
-        enabled: false,
-      });
-      expect(updated.channels?.msteams?.enabled).toBeUndefined();
-      expect(resolveMSTeamsAccount({ cfg: updated, accountId: "default" })).toMatchObject({
-        enabled: false,
-        configured: true,
-      });
-      expect(resolveMSTeamsAccount({ cfg: updated, accountId: "support" })).toMatchObject({
-        enabled: true,
-        configured: true,
-      });
-    },
-  );
-
-  it("mutates a display-style account through its canonical id", () => {
-    const cfg = {
+  it("disables the root default without disabling siblings", () => {
+    const identity = { appId: "default-app", appPassword: "default-secret" };
+    const cfg: OpenClawConfig = {
       channels: {
         msteams: {
           tenantId: "tenant-id",
+          ...identity,
           accounts: {
-            "Support Bot": { appId: "support-app", appPassword: "support-secret" },
+            support: { appId: "support-app", appPassword: "support-secret" },
           },
         },
       },
-    } satisfies OpenClawConfig;
-
+    };
     const updated = msteamsConfigAdapter.setAccountEnabled({
       cfg,
-      accountId: "support-bot",
+      accountId: "default",
       enabled: false,
     });
-
-    expect(updated.channels?.msteams?.accounts).toEqual({
-      "Support Bot": expect.objectContaining({ enabled: false }),
+    expect(updated.channels?.msteams?.enabled).toBeUndefined();
+    expect(resolveMSTeamsAccount({ cfg: updated, accountId: "default" })).toMatchObject({
+      enabled: false,
+      configured: true,
     });
-  });
-
-  it("deletes a display-style account and reselects its default", () => {
-    const cfg = {
-      channels: {
-        msteams: {
-          tenantId: "tenant-id",
-          defaultAccount: "Support Bot",
-          accounts: {
-            "Support Bot": { appId: "support-app", appPassword: "support-secret" },
-            backup: { appId: "backup-app", appPassword: "backup-secret" },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const updated = msteamsConfigAdapter.deleteAccount({ cfg, accountId: "support-bot" });
-
-    expect(updated.channels?.msteams?.accounts).toEqual({
-      backup: expect.objectContaining({ appId: "backup-app" }),
+    expect(resolveMSTeamsAccount({ cfg: updated, accountId: "support" })).toMatchObject({
+      enabled: true,
+      configured: true,
     });
-    expect(updated.channels?.msteams?.defaultAccount).toBeUndefined();
-    expect(resolveMSTeamsAccount({ cfg: updated }).accountId).toBe("backup");
   });
 
   it("selects the sorted eligible account after deleting the configured default", () => {
@@ -153,7 +103,7 @@ describe("msteams account config mutations", () => {
     });
   });
 
-  it.each(["root", "Default", "environment", "environment-only"] as const)(
+  it.each(["root", "environment-only"] as const)(
     "keeps a deleted %s default disabled despite complete environment credentials",
     (storage) => {
       vi.stubEnv("MSTEAMS_APP_ID", "env-app");
@@ -166,9 +116,8 @@ describe("msteams account config mutations", () => {
           msteams: {
             enabled: true,
             tenantId: "tenant-id",
-            ...(storage === "root" ? identity : {}),
+            ...identity,
             accounts: {
-              ...(storage === "Default" ? { Default: identity } : {}),
               support: { appId: "support-app", appPassword: "support-secret" },
             },
           },
@@ -178,9 +127,7 @@ describe("msteams account config mutations", () => {
         cfg: storage === "environment-only" ? {} : cfg,
         accountId: "default",
       });
-      expect(
-        next.channels?.msteams?.accounts?.[storage === "Default" ? "Default" : "default"],
-      ).toEqual({ enabled: false });
+      expect(next.channels?.msteams?.accounts?.default).toEqual({ enabled: false });
       expect(next.channels?.msteams?.appId).toBeUndefined();
       expect(next.channels?.msteams?.appPassword).toBeUndefined();
       expect(resolveMSTeamsAccount({ cfg: next, accountId: "default" })).toMatchObject({

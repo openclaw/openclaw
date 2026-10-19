@@ -90,7 +90,10 @@ function normalizeIdentityLabel(label: string): string {
 }
 
 function parseIdentityLine(line: string): { label: string; value: string } | undefined {
-  const cleaned = line.trim().replace(/^\s*-\s*/, "");
+  const cleaned = line
+    .trim()
+    .replace(/^\s*-\s*/, "")
+    .replace(/^([*_`]+)([A-Za-z]+):\1/u, "$2:");
   const colonIndex = cleaned.indexOf(":");
   return colonIndex === -1
     ? undefined
@@ -100,6 +103,23 @@ function parseIdentityLine(line: string): { label: string; value: string } | und
       };
 }
 
+function stripIdentityValueDecoration(value: string): string {
+  let cleaned = value.trim();
+  for (;;) {
+    const paired = cleaned.match(/^(\*{1,2}|_{1,2}|`+)([\s\S]+)\1$/u);
+    const marker = paired?.[1];
+    const inner = paired?.[2];
+    if (!marker || inner === undefined) {
+      return cleaned;
+    }
+    cleaned = inner.trim();
+    // Code spans preserve their contents, including literal emphasis markers.
+    if (marker.startsWith("`")) {
+      return cleaned;
+    }
+  }
+}
+
 function parseIdentityMarkdown(content: string): AgentIdentityFile | null {
   const identity: AgentIdentityFile = {};
   for (const line of content.split(/\r?\n/)) {
@@ -107,7 +127,7 @@ function parseIdentityMarkdown(content: string): AgentIdentityFile | null {
     if (!parsed) {
       continue;
     }
-    const value = parsed.value.replace(/^[*_`\s]+|[*_`\s]+$/g, "").trim();
+    const value = stripIdentityValueDecoration(parsed.value);
     if (!value || IDENTITY_PLACEHOLDER_VALUES.has(normalizeIdentityValue(value))) {
       continue;
     }
@@ -224,11 +244,19 @@ export function readIdentityFileSnapshot(input: IdentityFileRead): IdentityFileS
       return { kind: "missing" };
     }
     try {
-      const { dev, ino, size, mtimeMs, ctimeMs } = opened.stat;
+      const { size, mtimeMs, ctimeMs } = opened.stat;
+      const { dev, ino } = opened.exactIdentity;
       if (size > MAX_IDENTITY_FILE_BYTES) {
         return { kind: "too-large" };
       }
-      const revision = JSON.stringify([opened.path, dev, ino, size, mtimeMs, ctimeMs]);
+      const revision = JSON.stringify([
+        opened.path,
+        String(dev),
+        String(ino),
+        size,
+        mtimeMs,
+        ctimeMs,
+      ]);
       if (revision === input.knownRevision) {
         return { kind: "unchanged" };
       }

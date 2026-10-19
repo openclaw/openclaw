@@ -10,25 +10,18 @@ type MockIngressInput = {
 };
 
 const mocks = vi.hoisted(() => ({
-  modernContextAvailable: true,
   agentContext:
     vi.fn<
       typeof import("openclaw/plugin-sdk/realtime-bootstrap-context").resolveRealtimeVoiceAgentContextInstructions
-    >(),
-  bootstrapContext:
-    vi.fn<
-      typeof import("openclaw/plugin-sdk/realtime-bootstrap-context").resolveRealtimeBootstrapContextInstructions
     >(),
   agentCommandFromIngress: vi.fn(async (_input: MockIngressInput) => ({
     payloads: [{ text: "spoken" }],
   })),
 }));
 
-vi.mock("openclaw/plugin-sdk/realtime-bootstrap-context", () => ({
-  get resolveRealtimeVoiceAgentContextInstructions() {
-    return mocks.modernContextAvailable ? mocks.agentContext : undefined;
-  },
-  resolveRealtimeBootstrapContextInstructions: mocks.bootstrapContext,
+vi.mock("openclaw/plugin-sdk/realtime-bootstrap-context", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/realtime-bootstrap-context")>()),
+  resolveRealtimeVoiceAgentContextInstructions: mocks.agentContext,
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -39,11 +32,9 @@ vi.mock("../runtime.js", () => ({
 
 import { resolveDiscordVoiceRealtimeAgentContext, runDiscordVoiceAgentTurn } from "./ingress.js";
 
-describe("Discord realtime context host compatibility", () => {
+describe("Discord realtime agent context", () => {
   beforeEach(() => {
-    mocks.modernContextAvailable = true;
     mocks.agentContext.mockReset().mockResolvedValue("Agent context: modern host instructions.");
-    mocks.bootstrapContext.mockReset().mockResolvedValue("Legacy host profile context.");
   });
 
   const resolveContext = (files?: readonly []) =>
@@ -64,41 +55,12 @@ describe("Discord realtime context host compatibility", () => {
       files: [],
       warn: expect.any(Function),
     });
-    expect(mocks.bootstrapContext).not.toHaveBeenCalled();
   });
 
   it("propagates modern composer failures without switching context owners", async () => {
     const error = new Error("modern context failed");
     mocks.agentContext.mockRejectedValueOnce(error);
     await expect(resolveContext()).rejects.toBe(error);
-    expect(mocks.bootstrapContext).not.toHaveBeenCalled();
-  });
-
-  it("uses the shipped profile resolver only when the modern composer is absent", async () => {
-    mocks.modernContextAvailable = false;
-    await expect(resolveContext()).resolves.toBe("Legacy host profile context.");
-    expect(mocks.bootstrapContext).toHaveBeenCalledWith({
-      config: {},
-      agentId: "main",
-      sessionKey: "agent:main:discord:voice:room",
-      files: undefined,
-      warn: expect.any(Function),
-    });
-    expect(mocks.agentContext).not.toHaveBeenCalled();
-  });
-
-  it("retains the shipped empty-files opt-out without reading profiles", async () => {
-    mocks.modernContextAvailable = false;
-    await expect(resolveContext([])).resolves.toBeUndefined();
-    expect(mocks.bootstrapContext).not.toHaveBeenCalled();
-    expect(mocks.agentContext).not.toHaveBeenCalled();
-  });
-
-  it("retains best-effort profile failures on the legacy host", async () => {
-    mocks.modernContextAvailable = false;
-    mocks.bootstrapContext.mockRejectedValueOnce(new Error("legacy profile failed"));
-    await expect(resolveContext()).resolves.toBeUndefined();
-    expect(mocks.bootstrapContext).toHaveBeenCalledOnce();
   });
 });
 

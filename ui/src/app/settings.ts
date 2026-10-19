@@ -19,6 +19,7 @@ import {
 import { normalizeChatSplitLayout } from "../pages/chat/split-layout-persistence.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { parseImportedCustomTheme } from "./custom-theme.ts";
+import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import { resolveProfileAppearanceProfileId } from "./server-prefs-profile.ts";
 import {
   loadBackgroundPreference,
@@ -137,13 +138,6 @@ type BooleanSettingKey = {
 }[keyof UiPreferences] &
   keyof PersistedUiSettings;
 
-function isViteDevPage(): boolean {
-  if (typeof document === "undefined") {
-    return false;
-  }
-  return Boolean(document.querySelector('script[src*="/@vite/client"]'));
-}
-
 function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const basePath = resolveControlUiPaths(location.pathname)[0];
@@ -152,7 +146,7 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   if (devGateway) {
     return { pageUrl, effectiveUrl: devGateway.gatewayUrl };
   }
-  if (!isViteDevPage()) {
+  if (isRemoteControlUiIngress() || globalThis.OPENCLAW_UI_DEV_SERVER !== true) {
     return { pageUrl, effectiveUrl: pageUrl };
   }
   // location.hostname already carries brackets for IPv6 literals; wrapping
@@ -236,10 +230,8 @@ export function profileNavigation(
   profileId: string,
 ): ProfileNavigation | null {
   const entry = asOptionalRecord(parsed?.navigationByProfile?.[profileId]);
-  const sidebarEntries = normalizeSidebarEntries(entry?.sidebarEntries);
-  return sidebarEntries
-    ? { sidebarEntries, navigationScope: entry?.navigationScope === "all" ? "all" : "mine" }
-    : null;
+  const railShortcuts = normalizeSidebarEntries(entry?.railShortcuts);
+  return railShortcuts ? { railShortcuts } : null;
 }
 
 function tokenSessionKeyForGateway(gatewayUrl: string): string {
@@ -385,7 +377,6 @@ export function loadUiPreferences(
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarAgentsMode: "chip",
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
-    navigationScope: "mine",
     sidebarLiveActivity: UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
     showAdvancedSettings: false,
     pinnedAgentIds: [],
@@ -420,17 +411,6 @@ export function loadUiPreferences(
     const parsedRecord = asOptionalRecord(parsed) ?? {};
     const profileId = resolveProfileAppearanceProfileId(gatewayUrl);
     const personalNavigation = profileId ? profileNavigation(parsed, profileId) : null;
-    const hasSidebarEntries = Boolean(profileId) || Object.hasOwn(parsedRecord, "sidebarEntries");
-    // One-time read of the retired route-only shape; all writes use sidebarEntries.
-    const migratedSidebarEntries = hasSidebarEntries
-      ? null
-      : Array.isArray(parsedRecord.sidebarPinnedRoutes)
-        ? normalizeSidebarEntries(
-            parsedRecord.sidebarPinnedRoutes.map((value) =>
-              typeof value === "string" ? `route:${value}` : value,
-            ),
-          )
-        : null;
     const booleanSetting = <K extends BooleanSettingKey>(key: K) => {
       const value = parsed[key];
       return typeof value === "boolean" ? value : defaults[key];
@@ -454,6 +434,9 @@ export function loadUiPreferences(
       chatShowTaskProgress: booleanSetting("chatShowTaskProgress"),
       chatCollapseTaskProgress: booleanSetting("chatCollapseTaskProgress"),
       chatBubbleSessionKeys: normalizeChatBubbleSessionKeys(parsed.chatBubbleSessionKeys),
+      chatBubbleDisabledSessionKeys: normalizeChatBubbleSessionKeys(
+        parsed.chatBubbleDisabledSessionKeys,
+      ),
       chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
       chatFollowUpMode: normalizeChatFollowUpModeOverride(parsed.chatFollowUpMode),
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
@@ -480,15 +463,8 @@ export function loadUiPreferences(
       sidebarPreTeamScope: normalizeSidebarPreTeamScope(parsed.sidebarPreTeamScope),
       sidebarCollapsedAgentIds: normalizeUniqueTrimmedStringList(parsed.sidebarCollapsedAgentIds),
       sidebarEntries: profileId
-        ? (personalNavigation?.sidebarEntries ?? defaults.sidebarEntries)
-        : (normalizeSidebarEntries(parsedRecord.sidebarEntries) ??
-          migratedSidebarEntries ??
-          defaults.sidebarEntries),
-      navigationScope: profileId
-        ? (personalNavigation?.navigationScope ?? "mine")
-        : parsed.navigationScope === "all"
-          ? "all"
-          : "mine",
+        ? (personalNavigation?.railShortcuts ?? defaults.sidebarEntries)
+        : (normalizeSidebarEntries(parsedRecord.railShortcuts) ?? defaults.sidebarEntries),
       sidebarLiveActivity: booleanSetting("sidebarLiveActivity"),
       chatMessageMaxWidth: normalizeChatMessageMaxWidth(parsed.chatMessageMaxWidth),
       showAdvancedSettings: booleanSetting("showAdvancedSettings"),
@@ -502,12 +478,6 @@ export function loadUiPreferences(
       ...(parsed.openLinksInControlUiBrowser === true ? { openLinksInControlUiBrowser: true } : {}),
       ...(parsed.openLinksExternally === true ? { openLinksExternally: true } : {}),
     };
-    if (migratedSidebarEntries !== null) {
-      saveSettings(
-        { ...settings, token: loadSessionToken(gatewayUrl) },
-        { selectGateway: !targetGatewayUrl },
-      );
-    }
     return settings;
   } catch {
     return defaults;
@@ -532,8 +502,7 @@ export function patchSettings(
   const next = { ...previous, ...patch };
   saveSettings(next, {
     selectGateway: options.selectGateway ?? patch.gatewayUrl !== undefined,
-    writeNavigation:
-      Object.hasOwn(patch, "sidebarEntries") || Object.hasOwn(patch, "navigationScope"),
+    writeNavigation: Object.hasOwn(patch, "sidebarEntries"),
   });
   settingsChangeListener?.(previous, next);
   return next;
@@ -576,13 +545,13 @@ export function saveSettings(
   }
   const profileId = resolveProfileAppearanceProfileId(next.gatewayUrl);
   const authoredNavigation = options.writeNavigation !== false;
-  const navigation = { sidebarEntries: next.sidebarEntries, navigationScope: next.navigationScope };
+  const navigation = { railShortcuts: next.sidebarEntries };
   const pendingNavigation = {
     ...(settingsFallback?.key === scopedKey ? settingsFallback.pendingNavigation : null),
     ...(profileId &&
     authoredNavigation &&
     JSON.stringify(navigation) !== JSON.stringify(profileNavigation(source?.parsed, profileId))
-      ? { [profileId]: navigation }
+      ? { [profileId]: { ...source?.parsed.navigationByProfile?.[profileId], ...navigation } }
       : {}),
   };
   const sessionsByGateway = Object.fromEntries(
@@ -615,28 +584,30 @@ export function saveSettings(
     chatShowTaskProgress: next.chatShowTaskProgress === false ? false : undefined,
     chatCollapseTaskProgress: next.chatCollapseTaskProgress === true ? true : undefined,
     chatBubbleSessionKeys: normalizeChatBubbleSessionKeys(next.chatBubbleSessionKeys),
+    chatBubbleDisabledSessionKeys: normalizeChatBubbleSessionKeys(
+      next.chatBubbleDisabledSessionKeys,
+    ),
     chatSendShortcut: next.chatSendShortcut === "modifier-enter" ? "modifier-enter" : undefined,
     chatFollowUpMode: normalizeChatFollowUpModeOverride(next.chatFollowUpMode),
     catalogOpenTarget: next.catalogOpenTarget === "terminal" ? "terminal" : undefined,
     realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId),
     realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId),
     composerHoldToRecord: next.composerHoldToRecord === false ? false : undefined,
-    talkCameraAutoEnable:
-      typeof next.talkCameraAutoEnable === "boolean" ? next.talkCameraAutoEnable : undefined,
+    talkCameraAutoEnable: next.talkCameraAutoEnable,
     chatSplitLayout: next.chatSplitLayout || undefined,
     // Right dock is the default; only the opt-in bottom dock persists.
     chatWorkspaceDock: next.chatWorkspaceDock === "bottom" ? "bottom" : undefined,
     boardSessionViews:
       next.boardSessionViews && Object.keys(next.boardSessionViews).length > 0
-        ? normalizeBoardSessionViews(next.boardSessionViews)
+        ? next.boardSessionViews
         : undefined,
     sidebarSessionLayouts:
       next.sidebarSessionLayouts && Object.keys(next.sidebarSessionLayouts).length > 0
-        ? normalizeSidebarSessionLayouts(next.sidebarSessionLayouts)
+        ? next.sidebarSessionLayouts
         : undefined,
     sidebarSessionActivePanels:
       next.sidebarSessionActivePanels && Object.keys(next.sidebarSessionActivePanels).length > 0
-        ? normalizeSidebarSessionActivePanels(next.sidebarSessionActivePanels)
+        ? next.sidebarSessionActivePanels
         : undefined,
     navWidth: next.navWidth, // Persist size, not visibility: shared localStorage leaks across tabs.
     sidebarAgentsMode: next.sidebarAgentsMode === "roster" ? "roster" : "chip",
@@ -644,11 +615,19 @@ export function saveSettings(
     sidebarCollapsedAgentIds: next.sidebarCollapsedAgentIds?.length
       ? normalizeUniqueTrimmedStringList(next.sidebarCollapsedAgentIds)
       : undefined,
-    sidebarEntries:
-      !profileId && authoredNavigation ? next.sidebarEntries : source?.parsed.sidebarEntries,
-    navigationScope:
-      !profileId && authoredNavigation ? next.navigationScope : source?.parsed.navigationScope,
-    navigationByProfile: { ...source?.parsed.navigationByProfile, ...pendingNavigation },
+    railShortcuts:
+      !profileId && authoredNavigation ? next.sidebarEntries : source?.parsed.railShortcuts,
+    sidebarEntries: source?.parsed.sidebarEntries,
+    sidebarPinnedRoutes: source?.parsed.sidebarPinnedRoutes,
+    navigationByProfile: {
+      ...source?.parsed.navigationByProfile,
+      ...Object.fromEntries(
+        Object.entries(pendingNavigation).map(([id, value]) => [
+          id,
+          { ...source?.parsed.navigationByProfile?.[id], ...value },
+        ]),
+      ),
+    },
     sidebarLiveActivity: next.sidebarLiveActivity === false ? false : undefined,
     chatMessageMaxWidth: normalizeChatMessageMaxWidth(next.chatMessageMaxWidth),
     showAdvancedSettings: next.showAdvancedSettings === true ? true : undefined,

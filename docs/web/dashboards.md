@@ -360,6 +360,10 @@ administrator browser path remains available under its existing rules.
 
 ## What widgets are allowed to do
 
+Revoking session access denies new dashboard writes. A write already in progress
+when access is revoked may still finish saving its widget or layout. Reading
+private content and using a widget's tools still require current access.
+
 Custom HTML and registered-source widgets that only render need no approval —
 they appear instantly, exactly like inline chat widgets, and their network access
 is fully disabled.

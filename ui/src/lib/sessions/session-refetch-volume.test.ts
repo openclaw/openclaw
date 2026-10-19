@@ -2,7 +2,7 @@
 import { expect, it, vi } from "vitest";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { SessionActivityController } from "../../pages/activity/session-activity-controller.ts";
+import { createSessionActivity } from "../../pages/activity/session-activity-owner.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createAgentCapability } from "../agents/index.ts";
@@ -75,12 +75,7 @@ it("bounds list reads across two viewers and three streaming sessions for three 
       },
     });
     const stop = store.subscribe(() => {});
-    const activity = new SessionActivityController({
-      addController() {},
-      removeController() {},
-      requestUpdate() {},
-      updateComplete: Promise.resolve(true),
-    });
+    const activity = createSessionActivity(() => {});
     void sessions.refresh({ agentId: "main", force: true });
     void activity.load(client, { personId: null, time: "all", query: "" });
     return { reads, sessions, store, activity, stop, source, client, agents };
@@ -146,7 +141,7 @@ it("bounds list reads across two viewers and three streaming sessions for three 
     for (const { sessions, activity, stop, agents } of viewers) {
       stop();
       sessions.dispose();
-      activity.hostDisconnected();
+      activity.dispose();
       agents.dispose();
     }
     vi.useRealTimers();

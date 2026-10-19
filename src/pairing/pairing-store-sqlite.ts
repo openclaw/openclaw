@@ -1,10 +1,11 @@
 // Internal SQLite persistence for channel pairing requests and allow entries.
-import type { DatabaseSync } from "node:sqlite";
+
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
@@ -70,7 +71,7 @@ export function normalizePersistedPairingRequest(value: unknown): PairingRequest
   return { id, code, createdAt, lastSeenAt, ...(meta ? { meta } : {}) };
 }
 
-function readChannelAllowRows(database: DatabaseSync, channel: PairingChannel) {
+function readChannelAllowRows(database: EngineConnection, channel: PairingChannel) {
   const db = getNodeSqliteKysely<PairingDatabase>(database);
   return executeSqliteQuerySync(
     database,
@@ -84,7 +85,7 @@ function readChannelAllowRows(database: DatabaseSync, channel: PairingChannel) {
   ).rows;
 }
 
-export function readChannelAllowEntries(database: DatabaseSync, channel: PairingChannel) {
+export function readChannelAllowEntries(database: EngineConnection, channel: PairingChannel) {
   const rows = readChannelAllowRows(database, channel);
   const allowFrom: Record<string, string[]> = {};
   for (const row of rows) {
@@ -100,7 +101,7 @@ export const pairingReadOperations = {
     // Match the native reader's refusal of inherited, non-array account keys.
     entries: (readChannelAllowEntries(db, input.channel)[input.accountId] ?? []).slice(),
   }),
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
 function normalizePairingRequestRows(rows: readonly PairingRequestRow[]): PairingRequest[] {
   return rows.flatMap((row) => {
@@ -127,7 +128,7 @@ function normalizePairingRequestRows(rows: readonly PairingRequestRow[]): Pairin
 }
 
 export function readChannelPairingRequests(
-  database: DatabaseSync,
+  database: EngineConnection,
   channel: PairingChannel,
 ): PairingRequestRecord[] {
   const db = getNodeSqliteKysely<PairingDatabase>(database);

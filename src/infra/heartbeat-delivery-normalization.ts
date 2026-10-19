@@ -4,14 +4,14 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { replaceGenericExternalRunFailureText } from "../agents/failover/user-copy.js";
+import type { ReplyCompletion } from "../agents/reply-completion.js";
 import type { HeartbeatTerminalToolFailure } from "../auto-reply/heartbeat-reply-payload.js";
 import {
   getHeartbeatToolNotificationText,
   type HeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
-import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
-import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
+import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { escapeRegExp } from "../utils.js";
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
@@ -65,7 +65,12 @@ function stripTrailingHeartbeatNotifyFalse(text: string): {
 function normalizeHeartbeatDelivery(
   source:
     | { response: HeartbeatToolResponse }
-    | { payload: ReplyPayload; ackMaxChars: number; mode: "heartbeat" | "message" },
+    | {
+        payload: ReplyPayload;
+        ackMaxChars: number;
+        mode: "heartbeat" | "message";
+        silent: boolean;
+      },
   responsePrefix: string | undefined,
 ): NormalizedHeartbeatDelivery {
   let finalText: string;
@@ -79,14 +84,13 @@ function normalizeHeartbeatDelivery(
     const { payload, mode, ackMaxChars } = source;
     const rawText = typeof payload.text === "string" ? payload.text : "";
     const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
-    const isSilentReply = isSilentReplyPayloadText(textForStrip);
-    const stripped = stripHeartbeatToken(isSilentReply ? "" : textForStrip, {
+    const stripped = stripHeartbeatToken(textForStrip, {
       mode,
       maxAckChars: ackMaxChars,
     });
     hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
     const notifyFalse = stripTrailingHeartbeatNotifyFalse(stripped.text);
-    silent = notifyFalse.silent || isSilentReply;
+    silent = notifyFalse.silent || source.silent;
     isInternalPlaceholderOnly = isStreamErrorFallbackPlaceholderOnly(notifyFalse.text);
     finalText =
       (stripped.shouldSkip && !hasMedia) || isInternalPlaceholderOnly ? "" : notifyFalse.text;
@@ -109,6 +113,7 @@ export function classifyHeartbeatAgentOutcome(params: {
     heartbeatToolResponse?: HeartbeatToolResponse;
     heartbeatTerminalToolFailure?: HeartbeatTerminalToolFailure;
     replyPayload?: ReplyPayload;
+    replyCompletion?: ReplyCompletion;
   };
   useHeartbeatFailureCopy: boolean;
   hasRelayableExecCompletion: boolean;
@@ -116,8 +121,13 @@ export function classifyHeartbeatAgentOutcome(params: {
   responsePrefix: string | undefined;
   ackMaxChars: number;
 }) {
-  const { agentRunFailed, heartbeatToolResponse, heartbeatTerminalToolFailure, replyPayload } =
-    params.agentRun;
+  const {
+    agentRunFailed,
+    heartbeatToolResponse,
+    heartbeatTerminalToolFailure,
+    replyPayload,
+    replyCompletion,
+  } = params.agentRun;
   const replyMetadata = replyPayload ? getReplyPayloadMetadata(replyPayload) : undefined;
   const hasExplicitFailure = Boolean(heartbeatTerminalToolFailure || agentRunFailed);
   const shouldSuppressSourceReply =
@@ -146,7 +156,13 @@ export function classifyHeartbeatAgentOutcome(params: {
     !hasExplicitFailure &&
     (!replyPayload || !hasOutboundReplyContent(replyPayload))
   ) {
-    return { kind: "ack", eventStatus: "ok-empty" } as const;
+    return replyCompletion?.outcome === "silent"
+      ? ({
+          kind: "ack",
+          eventStatus: "ok-token",
+          silent: params.hasRelayableExecCompletion,
+        } as const)
+      : ({ kind: "ack", eventStatus: "ok-empty" } as const);
   }
   const mode = params.hasRelayableExecCompletion ? "message" : "heartbeat";
   const normalized = normalizeHeartbeatDelivery(
@@ -156,6 +172,7 @@ export function classifyHeartbeatAgentOutcome(params: {
           payload: shouldSuppressSourceReply ? {} : (replyPayload ?? {}),
           ackMaxChars: params.ackMaxChars,
           mode,
+          silent: replyCompletion?.outcome === "silent",
         },
     params.responsePrefix,
   );
@@ -170,12 +187,14 @@ export function classifyHeartbeatAgentOutcome(params: {
     !shouldSuppressSourceReply &&
     (!heartbeatToolResponse || agentRunFailed) &&
     replyPayload !== undefined &&
-    hasOutboundReplyContent({
-      ...replyPayload,
-      text: undefined,
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    hasOutboundReplyContent(
+      copyReplyPayloadMetadata(replyPayload, {
+        ...replyPayload,
+        text: undefined,
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+      }),
+    );
   const shouldSkipMain =
     // A completed quiet turn also suppresses tool warnings and media; a later crash does not.
     (!agentRunFailed && heartbeatToolResponse?.notify === false) ||
@@ -198,7 +217,7 @@ export function classifyHeartbeatAgentOutcome(params: {
     // A heartbeat's canonical quiet reply still honors explicit showOk; event
     // relays and message-tool privacy retain their unconditional silence.
     const silent =
-      normalized.silent && !(mode === "heartbeat" && isSilentReplyPayloadText(replyPayload?.text));
+      normalized.silent && !(mode === "heartbeat" && replyCompletion?.outcome === "silent");
     return { kind: "ack", eventStatus: "ok-token", silent } as const;
   }
   return {

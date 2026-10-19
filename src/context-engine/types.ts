@@ -1,29 +1,23 @@
-// Context-engine public types define the pluggable context-management lifecycle.
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 
-// Result types
-
 export type AssembleResult = {
   /** Ordered messages to use as model context */
   messages: AgentMessage[];
-  /** Estimated total tokens in assembled context */
+  /** Engine estimate of assembled tokens; does not control host request admission. */
   estimatedTokens: number;
   /**
-   * Controls which token estimate the runner treats as authoritative for
-   * preemptive overflow prechecks. The returned `messages` are always the
-   * prompt sent to the model; this only affects the precheck's token comparison.
+   * Controls the history included in host token-pressure diagnostics.
+   * The returned `messages` remain the model context.
    *
-   * - "assembled": the generic precheck uses only the assembled prompt's estimate
-   *   unless the engine owns compaction; owning engines manage prompt admission.
-   * - "preassembly_may_overflow": the precheck takes the maximum of the
-   *   assembled estimate and the pre-assembly (unwindowed) session-history
-   *   estimate. Engines opt into this when their assembled view can hide an
-   *   overflow that would still affect the underlying transcript. This opt-in
-   *   keeps the generic precheck active even for engines that own compaction.
+   * - "assembled": diagnostics use the host's assembled prompt estimate.
+   * - "preassembly_may_overflow": diagnostics take the maximum of the host's
+   *   assembled and pre-assembly (unwindowed) history estimates. This maximum
+   *   does not block a fitting outgoing request.
    *
-   * Defaults to "assembled".
+   * Defaults to "assembled". Neither value disables host request admission
+   * checks for engines that own compaction.
    */
   promptAuthority?: "assembled" | "preassembly_may_overflow";
   /** Optional context-engine-provided instructions prepended to the runtime system prompt */
@@ -184,7 +178,13 @@ export type ContextEngineInfo = {
     currentTurnFence?: "before-current-turn-entry-v1";
     turnAdvancementIdempotency?: "atomic-idempotent-v1";
   };
-  /** True when the engine manages its own compaction lifecycle. */
+  /**
+   * True when the engine manages compaction instead of built-in auto-compaction.
+   * The embedded host checks every outgoing provider request, including the first,
+   * using matching measured current-run usage plus appended content when available,
+   * or a fresh estimate of the actual system prompt, messages, and tools otherwise.
+   * The engine's estimatedTokens never controls host request admission.
+   */
   ownsCompaction?: boolean;
   /**
    * Controls how turn-triggered maintenance should be executed.
@@ -248,7 +248,6 @@ type ContextEnginePromptCacheObservationChangeCode =
   | "compaction"
   | "pruning"
   | "runtimeContextCarrier"
-  | "imageCleanup"
   | "aggregateToolResultTruncation"
   | "cacheRetention"
   | "model"
@@ -509,6 +508,12 @@ export interface ContextEngine {
      * fires; engines should stop work and reject promptly when it aborts.
      */
     abortSignal?: AbortSignal;
+    /**
+     * Report meaningful compaction progress to refresh the host's idle window.
+     * Requires "onProgress" in info.acceptedHostParams. The same ten-window
+     * overall ceiling applies; reports after completion or abort have no effect.
+     */
+    onProgress?: () => void;
   }): Promise<CompactResult>;
 
   /**

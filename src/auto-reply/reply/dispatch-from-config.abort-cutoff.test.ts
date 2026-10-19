@@ -1,8 +1,8 @@
 // Stopped queued input must not become a missing-reply warning at finalization.
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { MISSING_REPLY_NOTICE_TEXT } from "../../agents/reply-completion.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { TemplateContext } from "../templating.js";
-import { buildNoVisibleReplyFallbackText } from "./dispatch-from-config.payloads.js";
 import { createDispatcher, emptyConfig } from "./dispatch-from-config.shared.test-harness.js";
 import {
   describe0BeforeEach0,
@@ -122,7 +122,9 @@ it.each([
   } else {
     expect(continueTurn).toHaveBeenCalledOnce();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({
-      text: buildNoVisibleReplyFallbackText(),
+      text: MISSING_REPLY_NOTICE_TEXT,
+      isError: true,
+      isStatusNotice: true,
     });
     expect(result.noVisibleReplyFallbackDelivered).toBe(true);
     expect(result.deliberateSilentTerminalReply).toBeUndefined();

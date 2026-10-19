@@ -46,13 +46,18 @@ afterAll(() => {
 function createDoctorRuntime(root: string) {
   const entryPath = fileURLToPath(doctorEntrypoint);
   const runtimeRoot = createBuiltRuntime(root, path.dirname(entryPath));
+  const compileCache = runtimeDirs.createTempDir("oc-doctor-cache-");
   // Keep package discovery and real UI checks inside the fixture.
   return (env: NodeJS.ProcessEnv, args: string[]) =>
     tempDirs.track(
       runtimeDirs.track(
-        runBuiltRuntime(runtimeRoot, env, args, DOCTOR_CHILD_TIMEOUT_MS, {
-          maxBuffer: 4 * 1024 * 1024,
-        }),
+        runBuiltRuntime(
+          runtimeRoot,
+          { ...env, NODE_DISABLE_COMPILE_CACHE: undefined, NODE_COMPILE_CACHE: compileCache },
+          args,
+          DOCTOR_CHILD_TIMEOUT_MS,
+          { maxBuffer: 4 * 1024 * 1024 },
+        ),
       ),
     );
 }
@@ -74,7 +79,6 @@ function runDoctor(params: {
       ...process.env,
       HOME: params.root,
       USERPROFILE: params.root,
-      NODE_DISABLE_COMPILE_CACHE: "1",
       NODE_ENV: undefined,
       OPENCLAW_CONFIG_PATH: params.configPath,
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",

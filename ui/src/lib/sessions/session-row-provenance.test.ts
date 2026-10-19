@@ -4,6 +4,32 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { createSessionRowProvenance } from "./session-row-provenance.ts";
 
 describe("session row provenance", () => {
+  it("retains omitted assistant enrichment but respects explicit clearing receipts", () => {
+    const provenance = createSessionRowProvenance();
+    const row: GatewaySessionRow = {
+      key: "agent:main:preview",
+      kind: "direct",
+      sessionId: "preview",
+      snapshotAt: 10,
+      lastAssistantMessage: { text: "Earlier reply", timestamp: 9 },
+    };
+    provenance.observeReadRow(row, 1);
+    const compact: GatewaySessionRow = {
+      key: row.key,
+      kind: "direct",
+      sessionId: "preview",
+      rowMode: "compact",
+      snapshotAt: 20,
+    };
+    provenance.observeReadRow(compact, 2);
+    const merged = provenance.mergeRow(row, compact);
+    expect(merged.lastAssistantMessage).toEqual({ text: "Earlier reply", timestamp: 9 });
+    const cleared = { ...compact, snapshotAt: 30 };
+    provenance.observeReadRow(cleared, 3);
+    provenance.observeClears(cleared, ["lastAssistantMessage"]);
+    expect(provenance.mergeRow(merged, cleared).lastAssistantMessage).toBeUndefined();
+  });
+
   it("retains the sampling time of an unchanged accepted row", () => {
     const provenance = createSessionRowProvenance();
     const row: GatewaySessionRow = {
@@ -28,6 +54,8 @@ describe("session row provenance", () => {
     ["compact-first", "compact"],
     ["descriptor-first", "dashboard"],
     ["compact-first", "dashboard"],
+    ["descriptor-first", "sidebar"],
+    ["compact-first", "sidebar"],
   ] as const)(
     "retains detail facts across %s %s reads and lets full reads clear them",
     (order, rowMode) => {
@@ -44,7 +72,7 @@ describe("session row provenance", () => {
         label: "Before",
         thinkingLevels: [{ id: "high", label: "High" }],
         toolOverrides: { webSearch: false },
-        ...(rowMode === "dashboard" ? { model: "test-model", totalTokens: 123 } : {}),
+        ...(rowMode !== "compact" ? { model: "test-model", totalTokens: 123 } : {}),
       };
       const compact: GatewaySessionRow = {
         ...identity,
@@ -62,7 +90,7 @@ describe("session row provenance", () => {
         label: "Current",
         thinkingLevels: [{ id: "high", label: "High" }],
         toolOverrides: { webSearch: false },
-        ...(rowMode === "dashboard" ? { model: "test-model", totalTokens: 123 } : {}),
+        ...(rowMode !== "compact" ? { model: "test-model", totalTokens: 123 } : {}),
       });
 
       const cleared: GatewaySessionRow = {

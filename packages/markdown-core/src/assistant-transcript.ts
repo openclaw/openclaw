@@ -84,20 +84,20 @@ function visibleTokenProjection(
   }
   if (token.type === "image") {
     return token.children && token.children.length > 0
-      ? visibleTokensProjection(token.children, options)
+      ? combineVisibleTokenProjections(
+          token.children.map((child) => visibleTokenProjection(child, options)),
+        )
       : { text: token.content, excludedRanges: [] };
   }
   return null;
 }
 
-function visibleTokensProjection(
-  tokens: readonly Token[],
-  options: AssistantTranscriptRoleMarkdownOptions,
+function combineVisibleTokenProjections(
+  projections: readonly (VisibleTokenProjection | null)[],
 ): VisibleTokenProjection {
   let text = "";
   const excludedRanges: VisibleTokenProjection["excludedRanges"] = [];
-  for (const token of tokens) {
-    const projection = visibleTokenProjection(token, options);
+  for (const projection of projections) {
     if (!projection) {
       continue;
     }
@@ -202,7 +202,8 @@ function annotateInlineChildren(
   preserveLinks: boolean,
   options: AssistantTranscriptRoleMarkdownOptions,
 ): Token[] {
-  const projection = visibleTokensProjection(children, options);
+  const tokenProjections = children.map((token) => visibleTokenProjection(token, options));
+  const projection = combineVisibleTokenProjections(tokenProjections);
   const spans = findAssistantTranscriptRoleHeaderSpans(projection.text, projection.excludedRanges);
   if (spans.length === 0) {
     return children;
@@ -211,8 +212,8 @@ function annotateInlineChildren(
   const result: Token[] = [];
   let visibleCursor = 0;
   let spanCursor = 0;
-  for (const token of children) {
-    const tokenProjection = visibleTokenProjection(token, options);
+  for (const [index, token] of children.entries()) {
+    const tokenProjection = tokenProjections[index];
     if (!tokenProjection) {
       result.push(token);
       continue;

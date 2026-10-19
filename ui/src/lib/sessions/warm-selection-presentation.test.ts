@@ -23,6 +23,7 @@ afterEach(async () => {
 });
 const mainQuery = {
   agentId: "main",
+  rowMode: "sidebar" as const,
   includeDerivedTitles: true,
   includeLastMessage: true,
   force: true,

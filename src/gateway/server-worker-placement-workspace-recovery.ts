@@ -7,6 +7,7 @@ import { recoverWorkerWorkspaceReconciliation } from "./worker-environments/work
 const workerPlacementLog = createSubsystemLogger("gateway/worker-placement");
 
 export async function recoverGatewayWorkerPlacementWorkspaces(params: {
+  isStopping?: () => boolean;
   placements: WorkerSessionPlacementStore;
   resolveWorkspace: (identity: {
     sessionId: string;
@@ -14,11 +15,17 @@ export async function recoverGatewayWorkerPlacementWorkspaces(params: {
     agentId: string;
   }) => Promise<WorkerSessionWorkspace>;
 }): Promise<void> {
+  if (params.isStopping?.()) {
+    return;
+  }
   const orphanedJournals = await params.placements.pruneOrphanedWorkspaceReconciliations();
   for (const owner of orphanedJournals) {
     workerPlacementLog.warn(`discarded orphaned cloud workspace journal for ${owner.sessionId}`);
   }
   for (const owner of await params.placements.listWorkspaceReconciliationOwners()) {
+    if (params.isStopping?.()) {
+      return;
+    }
     try {
       const placement = await params.placements.getWorkspaceReconciliationPlacement(owner);
       if (!placement) {
@@ -37,6 +44,9 @@ export async function recoverGatewayWorkerPlacementWorkspaces(params: {
       const journal = await params.placements.loadWorkspaceReconciliation(owner);
       if (!journal) {
         continue;
+      }
+      if (params.isStopping?.()) {
+        return;
       }
       // Recover before placement/environment reconciliation can reclaim the
       // owner; otherwise a crashed partial apply loses its final repair path.

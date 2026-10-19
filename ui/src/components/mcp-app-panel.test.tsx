@@ -1,4 +1,4 @@
-import { createRenderEffect, createSignal } from "solid-js";
+import { createRenderEffect, createSignal, onCleanup } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../app/context.ts";
@@ -10,30 +10,41 @@ import {
 } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { McpAppOpenDetail } from "./mcp-app-launch.ts";
-import type { McpAppViewProps } from "./mcp-app-view-controller.ts";
+import { registerMcpAppUnmountTarget } from "./mcp-app-unmount.ts";
+import type { McpAppViewProps } from "./mcp-app-view-types.ts";
 import { McpAppPanel } from "./solid/mcp-app-panel.tsx";
 
-// mock-isolation: Exercise panel retirement without registering the real iframe protocol view.
-vi.mock("./mcp-app-view-registration.ts", () => ({
-  McpAppView: (
-    props: Pick<McpAppViewProps, "sessionKey" | "agentId" | "viewId" | "title" | "deepLink">,
-  ) => {
-    const view = document.createElement("mcp-app-view");
-    createRenderEffect(
-      () => ({
-        sessionKey: props.sessionKey,
-        agentId: props.agentId,
-        viewId: props.viewId,
-        title: props.title,
-        deepLink: props.deepLink,
-      }),
-      (values) => {
-        Object.assign(view, values);
-      },
-    );
-    return view;
-  },
+const viewLoad = vi.hoisted(() => ({
+  ...Promise.withResolvers<void>(),
+  started: vi.fn(),
 }));
+
+// mock-isolation: Exercise panel retirement without registering the real iframe protocol view.
+vi.mock("./mcp-app-view-registration.ts", async () => {
+  viewLoad.started();
+  await viewLoad.promise;
+  return {
+    McpAppView: (
+      props: Pick<McpAppViewProps, "sessionKey" | "agentId" | "viewId" | "title" | "deepLink">,
+    ) => {
+      const view = document.createElement("mcp-app-view");
+      onCleanup(registerMcpAppUnmountTarget(view));
+      createRenderEffect(
+        () => ({
+          sessionKey: props.sessionKey,
+          agentId: props.agentId,
+          viewId: props.viewId,
+          title: props.title,
+          deepLink: props.deepLink,
+        }),
+        (values) => {
+          Object.assign(view, values);
+        },
+      );
+      return view;
+    },
+  };
+});
 
 it("retains the old app and its launch target until teardown finishes", async () => {
   const request = vi.fn(async (_method: string, params: { serverName: string }) => ({
@@ -59,9 +70,14 @@ it("retains the old app and its launch target until teardown finishes", async ()
   const { container } = mountSolid(() => <McpAppPanel launch={launch()} />, {
     wrapper: createSolidApplicationContextProvider(context).wrapper,
   });
+  await waitForSolid(() => expect(viewLoad.started).toHaveBeenCalledOnce());
+  const firstLaunch = launchFor("first");
+  setLaunch({ ...firstLaunch, deepLink: "/initial" });
+  flush();
+  viewLoad.resolve();
   await waitForSolid(() => expect(container.querySelector("mcp-app-view")).not.toBeNull());
   const first = container.querySelector("mcp-app-view")!;
-  const firstLaunch = launchFor("first");
+  expect(Reflect.get(first, "deepLink")).toBe("/initial");
   setLaunch({
     ...firstLaunch,
     deepLink: "/second",

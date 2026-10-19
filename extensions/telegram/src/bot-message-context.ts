@@ -98,6 +98,7 @@ export type TelegramMessageContext = {
 export const buildTelegramMessageContext = async ({
   nativeCommandNames,
   primaryCtx,
+  resolveDirectAvatar,
   allMedia,
   replyMedia = [],
   replyChain = [],
@@ -315,7 +316,7 @@ export const buildTelegramMessageContext = async ({
       mainSessionKey: route.mainSessionKey,
     }),
   };
-  const activationOverride = resolveGroupActivation({
+  const activationOverride = await resolveGroupActivation({
     sessionKey,
     agentId: route.agentId,
     cfg,
@@ -404,9 +405,6 @@ export const buildTelegramMessageContext = async ({
       });
       return null;
     }
-    logVerbose(
-      `telegram: using configured ACP binding for ${bindingMode.binding.record.conversation.conversationId} -> ${bindingMode.sessionKey}`,
-    );
   }
 
   // Send the first typing cue before expensive context/session construction,
@@ -420,6 +418,7 @@ export const buildTelegramMessageContext = async ({
 
   const { ctxPayload, skillFilter, turn } = await buildTelegramInboundContextPayload({
     ...inboundContext,
+    conversationAvatar: resolveDirectAvatar?.(primaryCtx, cfg),
     replyMedia,
     replyChain,
     promptContext,

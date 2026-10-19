@@ -1,4 +1,5 @@
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import type {
   ComputerUseCapabilityDescriptor,
   ComputerUseV2ActionName,
@@ -16,6 +17,8 @@ import {
   type ComputerToolTransport,
   SCREEN_SNAPSHOT_COMMAND,
 } from "./tools/computer-tool-shared.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+import { shouldUseInProcessGatewayTool } from "./tools/gateway.js";
 import { listNodes, type NodeListNode } from "./tools/nodes-utils.js";
 
 export type PreparedPairedComputerUse = {
@@ -28,6 +31,34 @@ export type PairedComputerUseAvailability = {
   cacheKey: string;
   prepared?: PreparedPairedComputerUse;
 };
+
+async function readLocalComputerNodes(context: GatewayRequestContext | undefined) {
+  if (!context) {
+    throw new Error("Gateway context is no longer available");
+  }
+  const { readKnownNodeCatalog } = await import("../gateway/node-catalog-read.js");
+  return (await readKnownNodeCatalog(context.nodeRegistry)).nodes;
+}
+
+async function readLocalComputerStatus(
+  context: GatewayRequestContext | undefined,
+): Promise<GatewayComputerStatus> {
+  if (!context) {
+    throw new Error("Gateway context is no longer available");
+  }
+  const status = await context.gatewayComputerService?.status({ probe: false });
+  if (!status?.configured) {
+    return { configured: false, available: false };
+  }
+  return status.available && status.computerUse
+    ? { configured: true, available: true, computerUse: status.computerUse }
+    : {
+        configured: true,
+        available: false,
+        computerUse: status.computerUse,
+        error: status.error,
+      };
+}
 
 /** Loads host and node inventory only when an ordinary computer tool can reach the model. */
 export async function loadPairedComputerUseAvailabilityForSurface(params: {
@@ -46,19 +77,26 @@ export async function loadPairedComputerUseAvailabilityForSurface(params: {
     return undefined;
   }
   const { signal } = params;
+  const inProcess = shouldUseInProcessGatewayTool({});
+  const context = inProcess
+    ? getGatewayToolCallerIdentity()?.gatewayContextResolver?.()
+    : undefined;
+  // Hosted discovery consumes its owners' prepared facts; execution still admits live authority.
   const [nodes, gateway] = await Promise.all([
-    listNodes({}, signal).catch(() => {
+    (inProcess ? readLocalComputerNodes(context) : listNodes({}, signal)).catch(() => {
       signal?.throwIfAborted();
       return [];
     }),
-    loadGatewayComputerStatus({}, signal).catch((error: unknown): GatewayComputerStatus => {
-      signal?.throwIfAborted();
-      return {
-        configured: true,
-        available: false,
-        error: error instanceof Error ? error.message : "Gateway computer discovery failed",
-      };
-    }),
+    (inProcess ? readLocalComputerStatus(context) : loadGatewayComputerStatus({}, signal)).catch(
+      (error: unknown): GatewayComputerStatus => {
+        signal?.throwIfAborted();
+        return {
+          configured: true,
+          available: false,
+          error: error instanceof Error ? error.message : "Gateway computer discovery failed",
+        };
+      },
+    ),
   ]);
   signal?.throwIfAborted();
   const eligible = nodes.filter(isEligibleComputerNode);

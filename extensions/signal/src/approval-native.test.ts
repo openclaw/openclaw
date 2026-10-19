@@ -11,10 +11,13 @@ import {
 const fixture = createNativeApprovalTestFixture({
   channel: "signal",
   capability: signalApprovalCapability,
-  buildConfig: ({ channel, approvals } = {}) => ({
-    channels: { signal: { enabled: true, ...channel } },
-    approvals,
-  }),
+  buildConfig: (options = {}) => {
+    const { channel, approvals } = options;
+    return {
+      channels: { signal: { enabled: true, ...channel } },
+      approvals,
+    };
+  },
 });
 const { buildConfig, buildExecRequest, buildTargetModeConfig, checks } = fixture;
 const { suppressLocalSessionPrompt } = createLocalApprovalPromptTestFixture({
@@ -24,17 +27,19 @@ const { suppressLocalSessionPrompt } = createLocalApprovalPromptTestFixture({
 });
 
 describe("signal approval capability", () => {
-  it("requires explicit approvers before delivering group-origin approvals", () => {
+  it("requires explicit approvers before delivering group-origin approvals", async () => {
     const cfg = buildConfig({ approvals: { exec: { enabled: true } } });
     const request = buildExecRequest("group:g1");
 
     expect(
-      signalApprovalCapability.native?.describeDeliveryCapabilities({
-        cfg,
-        accountId: "default",
-        approvalKind: "exec",
-        request,
-      }).enabled,
+      (
+        await signalApprovalCapability.nativeAsync?.describeDeliveryCapabilities({
+          cfg,
+          accountId: "default",
+          approvalKind: "exec",
+          request,
+        })
+      )?.enabled,
     ).toBe(false);
 
     const withApprover = buildConfig({
@@ -42,17 +47,19 @@ describe("signal approval capability", () => {
       approvals: { exec: { enabled: true } },
     });
     expect(
-      signalApprovalCapability.native?.describeDeliveryCapabilities({
-        cfg: withApprover,
-        accountId: "default",
-        approvalKind: "exec",
-        request,
-      }).enabled,
+      (
+        await signalApprovalCapability.nativeAsync?.describeDeliveryCapabilities({
+          cfg: withApprover,
+          accountId: "default",
+          approvalKind: "exec",
+          request,
+        })
+      )?.enabled,
     ).toBe(true);
   });
 
-  it("uses target-mode config for requestless availability without native runtime handling", () => {
-    checks.targetMode(
+  it("uses target-mode config for requestless availability without native runtime handling", async () => {
+    await checks.targetMode(
       buildTargetModeConfig("exec", [{ channel: "signal", to: "+15551230000" }], {
         channel: { allowFrom: ["+15551230000"] },
       }),

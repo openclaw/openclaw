@@ -41,6 +41,7 @@ export function createPluginRuntimeFacades(invokeSelectedRuntime: <T>(run: () =>
     ]),
     webSearch: createRuntimeFacade<PluginRuntime["webSearch"]>(invokeSelectedRuntime, [
       "listProviders",
+      "listProvidersAsync",
       "search",
     ]),
     tts: createRuntimeFacade<PluginRuntime["tts"]>(invokeSelectedRuntime, [
@@ -64,7 +65,9 @@ export function createPluginRuntimeFacades(invokeSelectedRuntime: <T>(run: () =>
     ),
     modelAuth: createRuntimeFacade<PluginRuntime["modelAuth"]>(invokeSelectedRuntime, [
       "ensureAuthProfileStore",
+      "ensureAuthProfileStoreAsync",
       "isProviderApiKeyConfigured",
+      "isProviderApiKeyConfiguredAsync",
       "getApiKeyForModel",
       "getRuntimeAuthForModel",
       "resolveApiKeyForProvider",

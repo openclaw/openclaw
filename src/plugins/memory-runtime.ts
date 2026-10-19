@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -396,7 +398,44 @@ export async function classifyActiveMemoryWorkspacePaths(
     !owner.runtime.classifyWorkspaceMemoryPaths ||
     (params.readSources !== undefined && !owner.runtime.supportsWorkspaceMemoryReadSources)
   ) {
-    return { status: "unsupported" };
+    // Workspace provenance belongs to the host even when the selected search
+    // plugin does not implement classification. Missing support must not hide USER.md.
+    const { normalizeMemoryArtifactRelativePath, readMemoryArtifactProvenance } =
+      await import("../memory/memory-artifact-provenance.js");
+    const workspaceRoot =
+      params.readSources === undefined
+        ? await fs.realpath(params.workspaceDir).catch(() => undefined)
+        : undefined;
+    const classifications = await Promise.all(
+      params.relativePaths.map(async (relativePath) => {
+        let sourcePath = params.readSources?.find(
+          (source) => source.relativePath === relativePath,
+        )?.canonicalRelativePath;
+        if (params.readSources === undefined && workspaceRoot) {
+          const filePath = await fs
+            .realpath(path.resolve(params.workspaceDir, relativePath))
+            .catch(() => undefined);
+          if (filePath) {
+            sourcePath = path.relative(workspaceRoot, filePath).replaceAll(path.sep, "/");
+          }
+        }
+        const memoryPath = sourcePath && normalizeMemoryArtifactRelativePath(sourcePath);
+        if (
+          !memoryPath ||
+          memoryPath.includes("\0") ||
+          memoryPath !== sourcePath ||
+          path.posix.normalize(memoryPath) !== memoryPath
+        ) {
+          return { relativePath, originClass: "untrusted" };
+        }
+        const provenance = await readMemoryArtifactProvenance({
+          workspaceDir: params.workspaceDir,
+          relativePath: memoryPath,
+        });
+        return { relativePath, originClass: provenance?.originClass ?? "agent" };
+      }),
+    );
+    return { status: "classified", classifications };
   }
   const classifications = await owner.runtime.classifyWorkspaceMemoryPaths(params);
   return { status: "classified", classifications };

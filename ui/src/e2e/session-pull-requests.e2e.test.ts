@@ -6,7 +6,7 @@ import {
   installMockGateway,
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
-import { openDetailsPullRequests } from "./chat-details.test-support.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -28,7 +28,7 @@ suite.define(() => {
         match: scope,
       });
       expect(first.params).toMatchObject(scope);
-      await openDetailsPullRequests(page);
+      await openChatDetails(page);
       await pauseVirtualClock(page);
       await page.clock.runFor(60_000);
       const declarations = await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, scope);

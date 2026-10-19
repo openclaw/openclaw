@@ -1,16 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
+import { captureRequesterOrigin } from "../../agents/requester-origin.js";
+import { createRestartRecoveryRequesterSource } from "../../agents/requester-run-recovery-source.js";
 import {
   buildRestartRecoveryClaimCleanupPatch,
+  getRestartRecoveryPendingFinalSourceRunId,
   hasRestartRecoverySourceClaim,
   hasRestartRecoveryTerminalRun,
   isMainRestartRecoveryCandidate,
   recordLifecycleFence,
 } from "../../config/sessions/restart-recovery-state.js";
-import type { RestartRecoveryBeforeAgentReplyState } from "../../config/sessions/restart-recovery-types.js";
 import { patchSessionEntryTarget } from "../../config/sessions/session-accessor.js";
 import { applySessionEntryTargetOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
@@ -41,67 +42,29 @@ import {
   isAgentRunStaleLifecycleError,
 } from "../../infra/agent-lifecycle-error.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
+import { isMainSessionRestartRecoveryInputProvenance } from "../../sessions/input-provenance.js";
+import type { AgentTurnRestartClaimCleanup } from "./agent-runner-completion.types.js";
 import type {
-  UserTurnTranscriptRecorder,
-  UserTurnTranscriptTarget,
-} from "../../sessions/user-turn-transcript.types.js";
-import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
-import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
+  ReplyAdmissionPatch,
+  ReplyRestartRecoveryClaimController,
+  ReplyRestartRecoveryClaimControllerParams,
+  ReplyRecoveryAdoption,
+} from "./restart-recovery-claim.types.js";
+import { readReplyAdmissionSession } from "./restart-recovery-placement.js";
 import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-source.js";
 
-type ReplyRestartRecoveryClaimController = {
-  admitUserTurn: (
-    recorder?: UserTurnTranscriptRecorder,
-  ) => Promise<"admitted" | "duplicate-source">;
-  beginBeforeAgentReply: () => Promise<boolean>;
-  checkpointBeforeAgentReply: (params: {
-    state?: RestartRecoveryBeforeAgentReplyState;
-    pendingFinalDelivery?: {
-      context?: DeliveryContext;
-      deliveries: NonNullable<SessionEntry["pendingFinalDelivery"]>["deliveries"];
-      intentId: string;
-      text: string;
-    };
-  }) => Promise<void>;
-  clear: () => Promise<void>;
-  isArmed: () => Promise<boolean>;
-};
-
-export function createReplyRestartRecoveryClaimController(params: {
-  agentId: string;
-  acquireSessionActor: () => Promise<
-    | {
-        actor: SessionActor;
-        target: SessionEntryTargetPatchScope;
-      }
-    | undefined
-  >;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-  inputProvenance?: InputProvenance;
-  admissionRunId?: unknown;
-  executionRunId?: string;
-  lifecycleGeneration: string | undefined;
-  getEntry: () => SessionEntry | undefined;
-  getSessionId: () => string;
-  isRestartAbort: () => boolean;
-  resolveDeliveryContext: (entry: SessionEntry | undefined) => DeliveryContext | undefined;
-  requesterAccountId?: unknown;
-  requesterSenderId?: unknown;
-  resolveUserTurnTarget?: (params: {
-    entry: SessionEntry;
-    sessionId: string;
-    sessionKey: string;
-    storePath: string;
-  }) => UserTurnTranscriptTarget | undefined;
-  sessionKey?: string;
-  setEntry: (entry: SessionEntry) => void;
-  sameChannelThreadRequired?: boolean;
-  sourceTurnId?: unknown;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  storePath?: string;
-}): ReplyRestartRecoveryClaimController {
-  let recoveryRunId = normalizeOptionalString(params.admissionRunId) ?? randomUUID();
+export function createReplyRestartRecoveryClaimController(
+  params: ReplyRestartRecoveryClaimControllerParams,
+): ReplyRestartRecoveryClaimController {
+  const requesterOrigin = captureRequesterOrigin({ requesterOrigin: params.requesterOrigin });
+  const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
+  // The retry shares delivery correlation with its parent, but owns one internal admission.
+  const strandedRetryRunId =
+    params.strandedReplyRetry === true && sourceTurnId
+      ? `stranded-reply-retry:${sourceTurnId}`
+      : undefined;
+  let recoveryRunId =
+    strandedRetryRunId ?? normalizeOptionalString(params.admissionRunId) ?? randomUUID();
   const executionRunId = params.executionRunId ?? recoveryRunId;
   const executionGeneration = params.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
   let recoverySourceRunId: string | undefined;
@@ -111,21 +74,7 @@ export function createReplyRestartRecoveryClaimController(params: {
   let confirmedArmed = false;
   let sessionActor: SessionActor | undefined;
   let readTarget: SessionEntryTargetPatchScope | undefined;
-  const recordReadTarget = (target: SessionEntryTargetPatchScope) => {
-    if (
-      readTarget &&
-      (readTarget.agentId !== target.agentId ||
-        readTarget.storePath !== target.storePath ||
-        readTarget.target.canonicalKey !== target.target.canonicalKey ||
-        readTarget.readSource?.agentId !== target.readSource?.agentId ||
-        readTarget.readSource?.path !== target.readSource?.path ||
-        readTarget.readSource?.databaseIdentity !== target.readSource?.databaseIdentity ||
-        readTarget.readSource?.databaseBirthtime !== target.readSource?.databaseBirthtime)
-    ) {
-      throw createRestartRecoveryClaimChangedError();
-    }
-    readTarget ??= target;
-  };
+  const recordReadTarget = (target: SessionEntryTargetPatchScope) => (readTarget ??= target);
   const preparedTarget = () => {
     if (!readTarget) {
       throw new Error("Restart recovery claim has no admitted session target");
@@ -185,7 +134,6 @@ export function createReplyRestartRecoveryClaimController(params: {
     if (actor) {
       return (actor.snapshot(readAuthority) ?? (await actor.read(readAuthority))).entry;
     }
-    // Native incognito retains the existing reader and its captured source.
     return readSessionEntryInWorker(
       { agentId: params.agentId, sessionKey, storePath: params.storePath },
       assertReadCurrent,
@@ -193,12 +141,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       recordReadTarget,
     );
   };
-  const adoptLifecycle = async (options: {
-    entry: SessionEntry;
-    patch: SessionTranscriptTurnLifecyclePatch;
-    validate?: (entry: SessionEntry | undefined) => boolean;
-    committed: (entry: SessionEntry) => void;
-  }): Promise<SessionEntry> => {
+  const adoptLifecycle = async (options: ReplyRecoveryAdoption): Promise<SessionEntry> => {
     const actor = await acquireActor();
     const sessionId = options.entry.sessionId;
     const expectedState = buildRestartRecoveryExpectedState(options.entry);
@@ -218,6 +161,7 @@ export function createReplyRestartRecoveryClaimController(params: {
     const assertCurrent = () => {
       assertClaimCurrent(sessionId);
       params.operatorAuthority?.assertCurrent();
+      options.writer?.assertCurrent?.();
     };
     if (!actor) {
       const committed = await patchSessionEntryTarget(
@@ -229,6 +173,7 @@ export function createReplyRestartRecoveryClaimController(params: {
         {
           skipMaintenance: true,
           takeCacheOwnership: true,
+          preserveActivity: options.patch.updatedAt === options.entry.updatedAt,
           workerGuard: { assertCurrent },
         },
       );
@@ -252,32 +197,38 @@ export function createReplyRestartRecoveryClaimController(params: {
         throw error;
       }
     };
-    const authority: SessionActorAuthority = {
-      assertCurrent: authorize,
-      authorize(stage, facts) {
-        authorize(stage, facts.entry);
-      },
-    };
     let committed: SessionEntry | undefined;
-    const outcome = await actor.adoptRun(
-      {
-        commandId: randomUUID(),
-        phaseId: "reply.restart-recovery",
-        sessionId,
-        expectedState,
-        lifecycle: options.patch,
-      },
-      authority,
-      {
-        committed(receipt) {
-          committed = receipt.receipt.postimage.entry;
-          if (!committed) {
-            throw new Error("Committed restart recovery adoption omitted its session");
-          }
-          options.committed(committed);
+    let pending: ReturnType<SessionActor["adoptRun"]>;
+    try {
+      pending = actor.adoptRun(
+        {
+          commandId: randomUUID(),
+          phaseId: "reply.restart-recovery",
+          sessionId,
+          expectedState,
+          lifecycle: options.patch,
+          runId: options.writer?.runId,
         },
-      },
-    );
+        {
+          assertCurrent: authorize,
+          authorize: (stage, facts) => authorize(stage, facts.entry),
+        },
+        {
+          committed(receipt) {
+            committed = receipt.receipt.postimage.entry;
+            if (!committed) {
+              throw new Error("Committed restart recovery adoption omitted its session");
+            }
+            options.committed(committed);
+          },
+        },
+      );
+    } catch (error) {
+      // Synchronous rejection precedes actor acceptance; no write can have started.
+      options.rolledBack?.();
+      throw error;
+    }
+    const outcome = await pending;
     if (outcome.kind === "committed") {
       if (outcome.failure && outcome.failure.origin !== "response") {
         throw Object.assign(new Error(outcome.failure.message), { name: outcome.failure.name });
@@ -290,22 +241,21 @@ export function createReplyRestartRecoveryClaimController(params: {
     if (outcome.kind === "unknown") {
       throw new SqliteWorkerError(outcome.error.message, "outcome-unknown");
     }
+    options.rolledBack?.();
     if (authorityFailure) {
       throw toErrorObject(authorityFailure, "Restart recovery authority rejected the operation");
     }
     throw Object.assign(new Error(outcome.error.message), { name: outcome.error.name });
   };
 
-  const persistAdmissionPatch = async (options: {
-    entry: SessionEntry;
-    patch: SessionTranscriptTurnLifecyclePatch;
-    recorder?: UserTurnTranscriptRecorder;
-    sessionId: string;
-    sessionKey: string;
-    storePath: string;
-  }): Promise<SessionEntry> => {
+  const persistAdmissionPatch = async (options: ReplyAdmissionPatch): Promise<SessionEntry> => {
     const expectedSessionState = buildRestartRecoveryExpectedState(options.entry);
-    if (options.recorder && !options.recorder.hasPersisted()) {
+    // A staged event remains durable while waiting for the execution lane. Promoting
+    // it here would let an earlier completion mistake the queued input for an orphan.
+    const pendingInternalInput =
+      params.inputProvenance?.kind === "internal_system" &&
+      options.recorder?.getPendingInputMessage?.() !== undefined;
+    if (options.recorder && !options.recorder.hasPersisted() && !pendingInternalInput) {
       bindUserTurnInputActor(options.recorder, {
         phase: "adoptRun",
         acquire: async () => {
@@ -349,17 +299,12 @@ export function createReplyRestartRecoveryClaimController(params: {
     const placementContext = pendingPlacementInput
       ? resolveSessionWorkerPlacementContext()
       : undefined;
-    const placementService = placementContext?.workerSessionPlacementService;
-    if (placementService && !placementService.prepareRuntimeRefresh) {
-      throw new Error("Worker placement observation service is unavailable");
-    }
-    const placementObservation = placementService?.prepareRuntimeRefresh
-      ? await placementService.prepareRuntimeRefresh(sessionId)
-      : undefined;
-    let entry: SessionEntry;
-    let stagedWorkerInput = false;
-    try {
-      const assertAdmissionCurrent = () => {
+    const sessionKey = params.sessionKey;
+    const { entry, stagedWorkerInput } = await readReplyAdmissionSession({
+      sessionId,
+      placementContext,
+      readEntry: () => readEntry(sessionKey),
+      assertCurrent: () => {
         assertReadCurrent();
         if (params.getSessionId() !== sessionId) {
           throw new Error("session changed before durable user-turn admission");
@@ -367,35 +312,19 @@ export function createReplyRestartRecoveryClaimController(params: {
         if (hasPendingPlacementInput() !== pendingPlacementInput) {
           throw new Error("pending user turn changed before durable user-turn admission");
         }
-        if (placementContext?.workerSessionPlacementService !== placementService) {
-          throw new Error("Worker placement service changed before durable user-turn admission");
-        }
-        placementObservation?.assertCurrent();
-      };
-      let current: SessionEntry | undefined;
-      try {
-        current = await readEntry(params.sessionKey);
-      } catch (error) {
-        assertAdmissionCurrent();
-        throw error;
-      }
-      assertAdmissionCurrent();
-      if (!current || current.sessionId !== sessionId) {
-        throw new Error("session changed before durable user-turn admission");
-      }
-      entry = current;
-      stagedWorkerInput = Boolean(
-        placementObservation?.placement && placementObservation.placement.state !== "local",
-      );
-    } finally {
-      // The observation selects admission; the claim writer owns its later durable guards.
-      placementObservation?.release();
-    }
-    const admissionRunId = normalizeOptionalString(params.admissionRunId);
-    const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
+      },
+    });
+    const admissionRunId = strandedRetryRunId ?? normalizeOptionalString(params.admissionRunId);
     const activeClaimRunId = normalizeOptionalString(entry.restartRecoveryDeliveryRunId);
     const isExactRecoveryClaim = admissionRunId && activeClaimRunId === admissionRunId;
-    if (sourceTurnId) {
+    if (
+      strandedRetryRunId &&
+      (activeClaimRunId === strandedRetryRunId ||
+        hasRestartRecoveryTerminalRun(entry, strandedRetryRunId))
+    ) {
+      return "duplicate-source";
+    }
+    if (sourceTurnId && !strandedRetryRunId) {
       if (hasRestartRecoveryTerminalRun(entry, sourceTurnId)) {
         return "duplicate-source";
       }
@@ -424,20 +353,68 @@ export function createReplyRestartRecoveryClaimController(params: {
       // Clear the retry verifier as the exact admitted claim crosses into execution.
       const preservesTerminalReceipt =
         entry.restartRecoveryDeliveryReceiptState === "terminal-pending";
+      const patch: SessionTranscriptTurnLifecyclePatch = {
+        lifecycleRunId: executionRunId,
+        lastRunId: undefined,
+        restartRecoveryBeforeAgentReplyState: undefined,
+        ...(preservesTerminalReceipt
+          ? {}
+          : {
+              restartRecoveryDeliveryReceiptState: undefined,
+              restartRecoveryDeliveryToolCallId: undefined,
+              restartRecoveryDeliveryRequestFingerprint: undefined,
+            }),
+        restartRecoverySourceIngress: entry.restartRecoverySourceIngress ?? "control-ui",
+        // Input acceptance already records activity; adoption only changes custody.
+        updatedAt: entry.updatedAt,
+      };
+      if (isMainRestartRecoveryCandidate(entry, params.sessionKey)) {
+        patch.restartRecoveryRuns = entry.restartRecoveryRuns;
+        recordLifecycleFence(patch, {
+          runId: executionRunId,
+          lifecycleGeneration: executionGeneration,
+        });
+      }
+      const admission = params.operationAdmission;
+      if (
+        sessionActor &&
+        admission &&
+        (!recorder || recorder.hasPersisted()) &&
+        !preservesTerminalReceipt &&
+        !entry.restartRecoveryBeforeAgentReplyState &&
+        !isMainSessionRestartRecoveryInputProvenance(params.inputProvenance)
+      ) {
+        // The accepted input already survives restart; track it for cancellation
+        // while the native capacity owner delays writer adoption.
+        recordAdmittedClaim(entry, admissionRunId);
+        // Preserve activity written while this input waits for capacity.
+        delete patch.updatedAt;
+        // A rejected outcome stays installed so fallback cannot replay an uncertain write.
+        let adoption: Promise<SessionEntry> | undefined;
+        admission.adoptInput = (writer) => {
+          if (!adoption) {
+            // Uncertain adoption must not clear a possibly committed claim.
+            tracked = false;
+            adoption = adoptLifecycle({
+              entry,
+              patch,
+              writer,
+              committed: (committed) => recordAdmittedClaim(committed, admissionRunId),
+              rolledBack: () => {
+                tracked = true;
+              },
+            }).then((committed) => {
+              admission.adoptInput = undefined;
+              return committed;
+            });
+          }
+          return adoption;
+        };
+        return "admitted";
+      }
       const adopted = await persistAdmissionPatch({
         entry,
-        patch: {
-          restartRecoveryBeforeAgentReplyState: undefined,
-          ...(preservesTerminalReceipt
-            ? {}
-            : {
-                restartRecoveryDeliveryReceiptState: undefined,
-                restartRecoveryDeliveryToolCallId: undefined,
-                restartRecoveryDeliveryRequestFingerprint: undefined,
-              }),
-          restartRecoverySourceIngress: entry.restartRecoverySourceIngress ?? "control-ui",
-          updatedAt: Date.now(),
-        },
+        patch,
         recorder,
         sessionId,
         sessionKey: params.sessionKey,
@@ -450,7 +427,7 @@ export function createReplyRestartRecoveryClaimController(params: {
     const deliveryContext = params.resolveDeliveryContext(entry);
     const recoverableDeliveryContext =
       deliveryContext && sourceTurnId ? deliveryContext : undefined;
-    if (recoverableDeliveryContext) {
+    if (recoverableDeliveryContext && !strandedRetryRunId) {
       const sourceMessage = recorder?.getPersistedMessage?.() ?? (await recorder?.resolveMessage());
       const persistedSourceTurnId = normalizeOptionalString(sourceMessage?.idempotencyKey);
       if (!recorder || persistedSourceTurnId !== sourceTurnId) {
@@ -466,6 +443,7 @@ export function createReplyRestartRecoveryClaimController(params: {
             sessionKey: params.sessionKey,
             sourceRunId: recoveryRunId,
             inputProvenance: params.inputProvenance,
+            requesterOrigin,
           })
         : undefined;
     if (
@@ -507,26 +485,38 @@ export function createReplyRestartRecoveryClaimController(params: {
         })
       : {};
     const transfersControlUiClaim = canTransferAbortedControlUiClaim && !recoverableDeliveryContext;
-    const hasDeliveryClaim = Boolean(
-      recoverableDeliveryContext || transfersControlUiClaim || operatorSource,
-    );
+    const claimSourceRunId =
+      transfersControlUiClaim || operatorSource
+        ? recoveryRunId
+        : recoverableDeliveryContext
+          ? sourceTurnId
+          : undefined;
     const patch: SessionTranscriptTurnLifecyclePatch = {
       ...retiredClaim,
       abortedLastRun: false,
       endedAt: undefined,
+      lifecycleRunId: executionRunId,
+      lastRunId: undefined,
       restartRecoveryBeforeAgentReplyState: undefined,
       restartRecoveryDeliveryReceiptState: undefined,
       restartRecoveryDeliveryToolCallId: undefined,
       restartRecoveryDeliveryContext: recoverableDeliveryContext,
       restartRecoveryDeliveryRequestFingerprint: undefined,
-      restartRecoveryDeliveryRunId: hasDeliveryClaim ? recoveryRunId : undefined,
-      restartRecoveryOperatorSource: operatorSource,
-      restartRecoveryDeliverySourceRunId:
-        transfersControlUiClaim || operatorSource
+      restartRecoveryDeliveryRunId:
+        recoverableDeliveryContext || transfersControlUiClaim || operatorSource
           ? recoveryRunId
-          : recoverableDeliveryContext
-            ? sourceTurnId
-            : undefined,
+          : undefined,
+      restartRecoveryOperatorSource: operatorSource,
+      restartRecoveryRequesterSource: claimSourceRunId
+        ? createRestartRecoveryRequesterSource({
+            requesterOrigin,
+            entry,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            sourceRunId: claimSourceRunId,
+          })
+        : undefined,
+      restartRecoveryDeliverySourceRunId: claimSourceRunId,
       restartRecoveryRequesterAccountId: transfersControlUiClaim
         ? undefined
         : normalizeOptionalString(params.requesterAccountId),
@@ -539,7 +529,9 @@ export function createReplyRestartRecoveryClaimController(params: {
         ? "channel"
         : transfersControlUiClaim
           ? "control-ui"
-          : operatorSource?.snapshot.sourceIngress,
+          : operatorSource && params.inputProvenance?.kind === "inter_session"
+            ? "internal"
+            : operatorSource?.snapshot.sourceIngress,
       restartRecoverySourceReplyDeliveryMode: transfersControlUiClaim
         ? undefined
         : params.sourceReplyDeliveryMode,
@@ -600,6 +592,10 @@ export function createReplyRestartRecoveryClaimController(params: {
                   ? { intentId: pendingFinalDelivery.intentId }
                   : {}),
                 deliveries: pendingFinalDelivery.deliveries,
+                sourceRunId: getRestartRecoveryPendingFinalSourceRunId(
+                  current,
+                  pendingFinalDelivery.context,
+                ),
                 ...(pendingFinalDelivery.context ? { context: pendingFinalDelivery.context } : {}),
               },
               // Hook-owned replies are already terminal. A restart may only deliver this
@@ -613,7 +609,7 @@ export function createReplyRestartRecoveryClaimController(params: {
     });
   };
 
-  const clear = async (): Promise<void> => {
+  const prepareClearOperation = (): AgentTurnRestartClaimCleanup["operation"] | undefined => {
     const lifecycleGeneration = params.lifecycleGeneration;
     if (
       !tracked ||
@@ -622,43 +618,47 @@ export function createReplyRestartRecoveryClaimController(params: {
       !lifecycleGeneration ||
       params.isRestartAbort()
     ) {
-      return;
+      return undefined;
     }
     const sessionId = params.getSessionId();
     if (sessionId !== trackedSessionId) {
+      return undefined;
+    }
+    return {
+      kind: "restart-claim-clear",
+      expected: { sessionId, lifecycleRevision: trackedLifecycleRevision },
+      sessionId,
+      recoveryRunId,
+      recoverySourceRunId,
+      executionRunId,
+      executionGeneration,
+      ...(strandedRetryRunId ? { terminalRunId: strandedRetryRunId } : {}),
+    };
+  };
+
+  const clear = async (): Promise<void> => {
+    const operation = prepareClearOperation();
+    if (!operation) {
       return;
     }
-    const expected = { sessionId, lifecycleRevision: trackedLifecycleRevision };
-    const persisted = await applySessionEntryTargetOperation(
-      preparedTarget(),
-      {
-        kind: "restart-claim-clear",
-        expected,
-        sessionId,
-        recoveryRunId,
-        recoverySourceRunId,
-        executionRunId,
-        executionGeneration,
-      },
-      {
-        // The worker owns row predicates; live host authority survives every admission wait.
-        workerGuard: {
-          assertCurrent: () => {
-            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-            if (params.isRestartAbort()) {
-              throw createAgentRunStaleLifecycleError();
-            }
-            if (params.getSessionId() !== sessionId) {
-              throw createRestartRecoveryClaimChangedError();
-            }
-          },
+    const persisted = await applySessionEntryTargetOperation(preparedTarget(), operation, {
+      // The worker owns row predicates; live host authority survives every admission wait.
+      workerGuard: {
+        assertCurrent: () => {
+          assertAgentRunLifecycleGenerationCurrent(executionGeneration);
+          if (params.isRestartAbort()) {
+            throw createAgentRunStaleLifecycleError();
+          }
+          if (params.getSessionId() !== operation.sessionId) {
+            throw createRestartRecoveryClaimChangedError();
+          }
         },
       },
-    );
+    });
     // A refused reduction returns the current row; it cannot retarget this run's cache.
     if (
-      persisted?.sessionId === expected.sessionId &&
-      persisted.lifecycleRevision === expected.lifecycleRevision
+      persisted?.sessionId === operation.sessionId &&
+      persisted.lifecycleRevision === trackedLifecycleRevision
     ) {
       params.setEntry(persisted);
     }
@@ -706,6 +706,7 @@ export function createReplyRestartRecoveryClaimController(params: {
   return {
     admitUserTurn,
     async beginBeforeAgentReply() {
+      await params.operationAdmission?.adoptInput?.();
       // `pending` records only the ambiguous plugin side-effect window. A
       // finished unhandled hook clears it so recovery can re-enter normally.
       await updateBeforeAgentReply(undefined, { state: "pending" });
@@ -713,6 +714,21 @@ export function createReplyRestartRecoveryClaimController(params: {
     },
     checkpointBeforeAgentReply: (checkpoint) => updateBeforeAgentReply("pending", checkpoint),
     clear,
+    prepareCompletionCleanup(entry) {
+      // Unknown provider outcomes retain their separate reconciliation boundary.
+      if (entry.restartRecoveryDeliveryReceiptState === "terminal-pending") {
+        return undefined;
+      }
+      const operation = prepareClearOperation();
+      return operation
+        ? {
+            operation,
+            committed() {
+              tracked = false;
+            },
+          }
+        : undefined;
+    },
     isArmed,
   };
 }

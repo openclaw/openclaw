@@ -1,14 +1,27 @@
 /** Tests authority policies on registered Gateway methods. */
 import { describe, expect, it } from "vitest";
+import { GATEWAY_EVENTS } from "./events.js";
 import {
   createCoreGatewayMethodDescriptors,
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
 } from "./methods/core-method-policy.js";
-import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
+import { listGatewayMethods } from "./server-methods-list.js";
 import { LEGACY_ADVERTISED_GATEWAY_METHODS } from "./server-methods-list.test-fixtures.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
 describe("listGatewayMethods", () => {
+  const voiceSelectionMethods = ["talk.voice.get", "talk.voice.set", "talk.voice.complete"];
+
+  it("advertises avatar generation with admin authority and inference throttling", () => {
+    expect(listGatewayMethods()).toContain("agents.avatar.generate");
+    expect(coreGatewayHandlers["agents.avatar.generate"]).toBeTypeOf("function");
+    expect(
+      createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
+        (descriptor) => descriptor.name === "agents.avatar.generate",
+      ),
+    ).toMatchObject({ scope: "operator.admin", since: "2026.10", controlPlaneWrite: true });
+  });
+
   it("advertises private backgrounds with personal read/write scopes", () => {
     const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
     for (const { name, scope } of [
@@ -20,6 +33,19 @@ describe("listGatewayMethods", () => {
       expect(coreGatewayHandlers[name]).toBeTypeOf("function");
       expect(descriptors.find((descriptor) => descriptor.name === name)).toMatchObject({ scope });
     }
+  });
+
+  it("appends the MCP event catalog with its current-train read policy", () => {
+    const advertised = listGatewayMethods();
+    expect(advertised.indexOf("mcp.events.list")).toBeGreaterThanOrEqual(
+      LEGACY_ADVERTISED_GATEWAY_METHODS.length,
+    );
+    expect(coreGatewayHandlers["mcp.events.list"]).toBeTypeOf("function");
+    expect(
+      createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
+        (descriptor) => descriptor.name === "mcp.events.list",
+      ),
+    ).toMatchObject({ scope: "operator.read", since: "2026.10" });
   });
 
   it("preserves the frozen legacy advertised method prefix", () => {
@@ -48,17 +74,71 @@ describe("listGatewayMethods", () => {
     }
   });
 
+  it("keeps Claw discovery and Add after model probing without retired task methods", () => {
+    const methods = listGatewayMethods();
+    expect(methods.some((method) => method.startsWith("tasks."))).toBe(false);
+    const clawMethods = [
+      "claws.catalog.search",
+      "claws.catalog.detail",
+      "claws.catalog.preview",
+      "claws.add.plan",
+      "claws.add.apply",
+    ];
+    let previous = methods.indexOf("models.probe");
+    for (const method of clawMethods) {
+      const index = methods.indexOf(method);
+      expect(index).toBeGreaterThan(previous);
+      previous = index;
+    }
+  });
+
+  it("advertises Control UI session pull request detection", () => {
+    expect(listGatewayMethods()).toContain("controlUi.sessionPullRequests.subscribe");
+    expect(listGatewayMethods()).toContain("controlUi.sessionPullRequests.checks");
+    expect(coreGatewayHandlers["controlUi.sessionPullRequests.checks"]).toBeTypeOf("function");
+    expect(GATEWAY_EVENTS).toContain("controlUi.sessionPullRequests.changed");
+  });
+
+  it("advertises session workspace reveal", () => {
+    expect(listGatewayMethods()).toContain("sessions.files.reveal");
+    expect(coreGatewayHandlers["sessions.files.reveal"]).toBeTypeOf("function");
+  });
+
+  it("advertises the versioned activity audit method", () => {
+    expect(listGatewayMethods()).toContain("audit.activity.list");
+    expect(coreGatewayHandlers["audit.activity.list"]).toBeTypeOf("function");
+    expect(listGatewayMethods()).toContain("audit.run.inspect");
+    expect(coreGatewayHandlers["audit.run.inspect"]).toBeTypeOf("function");
+  });
+
+  it.each(["update.hold", "update.runs.get", "update.runs.list"])("advertises %s", (method) => {
+    expect(listGatewayMethods()).toContain(method);
+    expect(coreGatewayHandlers[method]).toBeTypeOf("function");
+  });
+
+  it("keeps deprecated restart preflight compatibility read-only and advertised", () => {
+    const methods = listGatewayMethods();
+    const descriptor = createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
+      (candidate) => candidate.name === "gateway.restart.preflight",
+    );
+
+    expect(methods).toContain("gateway.restart.preflight");
+    expect(methods.indexOf("gateway.restart.preflight")).toBe(
+      methods.indexOf("gateway.restart.request") - 1,
+    );
+    expect(coreGatewayHandlers["gateway.restart.preflight"]).toBeTypeOf("function");
+    expect(descriptor).toMatchObject({
+      name: "gateway.restart.preflight",
+      scope: "operator.read",
+      since: "<=2026.7",
+    });
+    expect(descriptor?.controlPlaneWrite).toBeUndefined();
+  });
+
   it("classifies cron mutations as control-plane writes", () => {
     const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
 
-    for (const method of [
-      "cron.add",
-      "cron.update",
-      "cron.remove",
-      "cron.run",
-      "claws.monitors",
-      "claws.removalJournal",
-    ]) {
+    for (const method of ["cron.add", "cron.update", "cron.remove", "cron.run"]) {
       expect(descriptors.find((descriptor) => descriptor.name === method)).toMatchObject({
         name: method,
         scope: "operator.admin",
@@ -80,6 +160,51 @@ describe("listGatewayMethods", () => {
       scope: "operator.write",
       controlPlaneWrite: true,
     });
+  });
+
+  it("registers the hidden node protocol feature publication method", () => {
+    const descriptor = createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
+      (candidate) => candidate.name === "node.runnerInventory.update",
+    );
+
+    expect(coreGatewayHandlers["node.runnerInventory.update"]).toBeTypeOf("function");
+    expect(descriptor).toMatchObject({
+      name: "node.runnerInventory.update",
+      scope: "node",
+      advertise: false,
+    });
+  });
+
+  it("advertises session involvement and keeps plugin discovery after public sharing", () => {
+    const methods = listGatewayMethods();
+    expect(methods).toContain("sessions.setInvolvement");
+    expect(methods.indexOf("plugins.catalog.browse")).toBe(
+      methods.indexOf("session.publicShare.set") + 1,
+    );
+    expect(methods.indexOf("plugins.catalog.categories")).toBe(
+      methods.indexOf("plugins.catalog.browse") + 1,
+    );
+    expect(methods.indexOf("plugins.catalog.get")).toBe(
+      methods.indexOf("plugins.catalog.categories") + 1,
+    );
+  });
+
+  it("advertises API-key saving as an administrator control-plane write", () => {
+    expect(listGatewayMethods()).toContain("models.authSetApiKey");
+    expect(coreGatewayHandlers["models.authSetApiKey"]).toBeTypeOf("function");
+    expect(
+      createCoreGatewayMethodDescriptors(coreGatewayHandlers).find(
+        (descriptor) => descriptor.name === "models.authSetApiKey",
+      ),
+    ).toMatchObject({ scope: "operator.admin", controlPlaneWrite: true });
+  });
+
+  it("advertises and wires Talk voice selection", () => {
+    const methods = listGatewayMethods();
+    for (const method of voiceSelectionMethods) {
+      expect(methods).toContain(method);
+      expect(coreGatewayHandlers[method]).toBeTypeOf("function");
+    }
   });
 
   it("advertises and wires cloud worker environment methods with their required scopes", () => {

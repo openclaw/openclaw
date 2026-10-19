@@ -8,6 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
+  applyProviderAuthConfigPatch,
   type AuthProfileStore,
   buildTokenProfileId,
   listProfilesForProvider,
@@ -17,6 +18,7 @@ import {
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
 import { upsertAuthProfileWithLockOrThrow } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { applyProviderDefaultModel } from "openclaw/plugin-sdk/provider-setup";
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 
@@ -211,16 +213,23 @@ export function buildAnthropicAuthDoctorHint(params: {
 }
 
 export async function runAnthropicCliMigration(
-  ctx: ProviderAuthContext,
-): Promise<ProviderAuthResult> {
+  ctx: Pick<ProviderAuthContext, "config" | "env">,
+): Promise<ReturnType<typeof buildAnthropicCliMigrationResult>> {
   const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus({ env: ctx.env ?? process.env });
   if (authStatus.status !== "available") {
-    throw new Error(
-      [
-        "Claude CLI is not authenticated on this host.",
-        `Run ${formatCliCommand("claude auth login")} first, then re-run this setup.`,
-      ].join("\n"),
-    );
+    const error =
+      authStatus.status === "missing"
+        ? [
+            "Claude CLI is not authenticated on this host.",
+            `Run ${formatCliCommand("claude auth login")} first, then re-run this setup.`,
+          ]
+        : [
+            authStatus.status === "timeout"
+              ? `Could not verify the installed Claude CLI login within ${authStatus.timeoutMs / 1000} s.`
+              : "Could not verify the installed Claude CLI login.",
+            `Run ${formatCliCommand("claude auth status --json")}, then retry this setup.`,
+          ];
+    throw new Error(error.join("\n"));
   }
   return buildAnthropicCliMigrationResult(ctx.config);
 }
@@ -230,49 +239,9 @@ export async function runAnthropicCliMigrationNonInteractive(ctx: {
   runtime: ProviderAuthContext["runtime"];
   agentDir?: string;
 }): Promise<ProviderAuthContext["config"] | null> {
-  const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus();
-  if (authStatus.status !== "available") {
-    const error =
-      authStatus.status === "unreadable"
-        ? [
-            'Auth choice "anthropic-cli" could not verify the installed Claude CLI login.',
-            `Run ${formatCliCommand("claude auth status")}, then retry.`,
-          ]
-        : [
-            'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
-            `Run ${formatCliCommand("claude auth login")} first.`,
-          ];
-    throw new Error(error.join("\n"));
-  }
-
-  const result = buildAnthropicCliMigrationResult(ctx.config);
-  const currentDefaults = ctx.config.agents?.defaults;
-  const currentModel = currentDefaults?.model;
-  const currentFallbacks =
-    currentModel && typeof currentModel === "object" && "fallbacks" in currentModel
-      ? currentModel.fallbacks
-      : undefined;
-  const migratedModel = result.configPatch?.agents?.defaults?.model;
-  const migratedFallbacks =
-    migratedModel && typeof migratedModel === "object" && "fallbacks" in migratedModel
-      ? migratedModel.fallbacks
-      : undefined;
-  const nextFallbacks = Array.isArray(migratedFallbacks) ? migratedFallbacks : currentFallbacks;
-
-  return {
-    ...ctx.config,
-    ...result.configPatch,
-    agents: {
-      ...ctx.config.agents,
-      ...result.configPatch?.agents,
-      defaults: {
-        ...currentDefaults,
-        ...result.configPatch?.agents?.defaults,
-        model: {
-          ...(Array.isArray(nextFallbacks) ? { fallbacks: nextFallbacks } : {}),
-          primary: result.defaultModel,
-        },
-      },
-    },
-  };
+  const result = await runAnthropicCliMigration(ctx);
+  return applyProviderDefaultModel(
+    applyProviderAuthConfigPatch(ctx.config, result.configPatch, result),
+    result.defaultModel,
+  );
 }

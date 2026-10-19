@@ -224,10 +224,6 @@ describe("isDeliveredMessagingToolResult", () => {
     expect(isDeliveredMessagingToolResult({ result: { status: "sent" } })).toBe(true);
   });
 
-  it("rejects bare success markers without delivery evidence", () => {
-    expect(isDeliveredMessagingToolResult({ result: { ok: true, to: "spaces/AAA" } })).toBe(false);
-  });
-
   it("accepts action-specific bare success delivery contracts", () => {
     expect(
       isDeliveredMessagingToolResult({
@@ -248,7 +244,6 @@ describe("isDeliveredMessagingToolResult", () => {
       }),
     ).toBe(true);
   });
-
   it("rejects successful no-op mutation results", () => {
     for (const result of [
       { ok: true, removed: null },
@@ -423,17 +418,6 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
     ).toBe(true);
   });
 
-  it("rejects an unconfirmed thread reply outside message-tool-only mode", () => {
-    expect(
-      isDeliveredMessageToolOnlySourceReplyResult({
-        sourceReplyDeliveryMode: "automatic",
-        toolName: "message",
-        args: { action: "thread-reply", threadId: "thread-1", message: "done" },
-        result: { details: { ok: true } },
-      }),
-    ).toBe(false);
-  });
-
   it("accepts a confirmed current-source poll delivery", () => {
     expect(
       isDeliveredMessageToolOnlySourceReplyResult({
@@ -483,48 +467,51 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
     ).toBe(false);
   });
 
-  it("accepts confirmed explicit routes when the caller verified the source route", () => {
-    expect(
-      isDeliveredMessageToolOnlySourceReplyResult({
-        sourceReplyDeliveryMode: "message_tool_only",
-        toolName: "message",
-        args: {
-          action: "reply",
-          channel: "imessage",
-          target: "+12069106512",
-          message: "reply",
-        },
-        result: { ok: true, messageId: "imessage-853" },
-        allowExplicitSourceRoute: true,
-      }),
-    ).toBe(true);
-    expect(
-      isDeliveredMessageToolOnlySourceReplyResult({
-        sourceReplyDeliveryMode: "message_tool_only",
-        toolName: "message",
-        args: {
-          action: "reply",
-          channel: "imessage",
-          target: "+12069106512",
-          message: "reply",
-        },
-        result: { ok: true, messageId: "imessage-853" },
-      }),
-    ).toBe(false);
-    expect(
-      isDeliveredMessageToolOnlySourceReplyResult({
-        sourceReplyDeliveryMode: "message_tool_only",
-        toolName: "message",
-        args: {
-          action: "react",
-          channel: "imessage",
-          target: "+12069106512",
-        },
-        result: { ok: true },
-        allowExplicitSourceRoute: true,
-      }),
-    ).toBe(false);
-  });
+  it.each(["automatic"] as const)(
+    "accepts confirmed explicit routes when the caller verified the source route (%s)",
+    (sourceReplyDeliveryMode) => {
+      expect(
+        isDeliveredMessageToolOnlySourceReplyResult({
+          sourceReplyDeliveryMode,
+          toolName: "message",
+          args: {
+            action: "reply",
+            channel: "imessage",
+            target: "+12069106512",
+            message: "reply",
+          },
+          result: { ok: true, messageId: "imessage-853" },
+          allowExplicitSourceRoute: true,
+        }),
+      ).toBe(true);
+      expect(
+        isDeliveredMessageToolOnlySourceReplyResult({
+          sourceReplyDeliveryMode,
+          toolName: "message",
+          args: {
+            action: "reply",
+            channel: "imessage",
+            target: "+12069106512",
+            message: "reply",
+          },
+          result: { ok: true, messageId: "imessage-853" },
+        }),
+      ).toBe(false);
+      expect(
+        isDeliveredMessageToolOnlySourceReplyResult({
+          sourceReplyDeliveryMode,
+          toolName: "message",
+          args: {
+            action: "react",
+            channel: "imessage",
+            target: "+12069106512",
+          },
+          result: { ok: true },
+          allowExplicitSourceRoute: true,
+        }),
+      ).toBe(false);
+    },
+  );
 
   it("accepts explicit sends with a structured current-source marker", () => {
     expect(

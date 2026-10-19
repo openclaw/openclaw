@@ -187,7 +187,7 @@ describe("discoverAuthStorageFacts auth storage", () => {
           "openai:key": createApiKeyCredential("openai", "test-key"),
         }),
       );
-      const { authStorage } = discoverAuthStorageFacts(agentDir, {
+      const { authStorage } = await discoverAuthStorageFacts(agentDir, {
         skipExternalAuthProfiles: true,
         env: {},
         config: {
@@ -247,12 +247,12 @@ describe("discoverAuthStorageFacts auth storage", () => {
         }),
       );
 
-      const { authStorage: readOnlyStorage } = discoverAuthStorageFacts(agentDir, {
+      const { authStorage: readOnlyStorage } = await discoverAuthStorageFacts(agentDir, {
         readOnly: true,
         skipExternalAuthProfiles: true,
         env: {},
       });
-      const { authStorage: runtimeStorage } = discoverAuthStorageFacts(agentDir, {
+      const { authStorage: runtimeStorage } = await discoverAuthStorageFacts(agentDir, {
         skipExternalAuthProfiles: true,
         env: {},
       });
@@ -285,7 +285,7 @@ describe("discoverAuthStorageFacts auth storage", () => {
           }),
         );
 
-        const { authStorage: storage } = discoverAuthStorageFacts(agentDir, {
+        const { authStorage: storage } = await discoverAuthStorageFacts(agentDir, {
           inheritedAuthDir,
           skipExternalAuthProfiles: true,
           env: {},

@@ -13,12 +13,13 @@ import {
 } from "./session-cold-storage-source-guard.worker.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
+import { applyManualCompactInTransaction } from "./session-manual-compact-mutation.worker.js";
 import { selectManualCompactTranscriptLines } from "./session-manual-compact-selection.js";
-import { applyManualCompactInTransaction } from "./session-manual-compact.kernel.js";
 import type {
   SessionSourcePredicate,
   SessionSourceValidation,
 } from "./session-source-authority.js";
+import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 
 export type ManualCompactInput = {
   scope: ResolvedTranscriptScope;
@@ -37,7 +38,6 @@ export type ManualCompactValidation = {
 export type ManualCompactCommitted = {
   kind: "session-manual-compact";
   result: SessionTranscriptManualTrimResult;
-  projectionNeedsReconcile: boolean;
   publication?: SessionEntryReplacementPublication;
 };
 
@@ -86,7 +86,6 @@ export function compactManualTranscript(
       const candidate: ManualCompactCommitted = {
         kind: "session-manual-compact",
         result: selected.result,
-        projectionNeedsReconcile: false,
       };
       if (selected.result.compacted) {
         const identity = applyManualCompactInTransaction(
@@ -100,11 +99,10 @@ export function compactManualTranscript(
           },
           {
             scheduleProjectionReconcile: false,
-            onProjectionReconcileNeeded: () => {
-              candidate.projectionNeedsReconcile = true;
-            },
           },
         );
+        // Finish the retained projection before the next turn can use this generation.
+        reconcileSessionTranscriptIndexInTransaction(current.db, input.scope.sessionId);
         candidate.publication = prepareSessionEntryReplacementPublication(
           {
             ...identity,
@@ -119,8 +117,10 @@ export function compactManualTranscript(
         current,
         (stage, publication) => {
           context.admit(stage, publication);
-          // The target transaction pins same-store predicates; foreign owners can change at a host grant.
-          source.assertForeign();
+          if (stage === "commit") {
+            // The target transaction pins same-store predicates; check foreign owners at commit.
+            source.assertForeign();
+          }
         },
         candidate,
       );

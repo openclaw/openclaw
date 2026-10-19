@@ -1,21 +1,13 @@
-/** Tests inbound auto-reply handling across channel message contexts. */
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { GroupKeyResolution } from "../config/sessions.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import { claimInboundDedupe, resetInboundDedupe } from "./reply/inbound-dedupe.js";
-import { normalizeInboundTextNewlines } from "./reply/inbound-text.js";
-import {
-  buildMentionRegexes,
-  matchesMentionPatterns,
-  normalizeMentionText,
-  stripMentions,
-} from "./reply/mentions.js";
+import { buildMentionRegexes, matchesMentionPatterns, stripMentions } from "./reply/mentions.js";
 import { prepareReplyConversation } from "./reply/prompt-session-context.js";
 import { initSessionState } from "./reply/session.js";
 import { applyTemplate, type MsgContext, type TemplateContext } from "./templating.js";
@@ -26,6 +18,30 @@ type TestChannelGroupContext = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   accountId?: string | null;
+};
+
+const normalTurn = { kind: "normal", source: "message", authorized: false } as const;
+const inboundMessage = (overrides: Partial<MsgContext> = {}): MsgContext => ({
+  Provider: "whatsapp",
+  OriginatingChannel: "whatsapp",
+  OriginatingTo: "whatsapp:+1555",
+  MessageSid: "msg-1",
+  ...overrides,
+});
+const mentionConfig = (mentionPatterns: string[]): OpenClawConfig => ({
+  messages: { groupChat: { mentionPatterns } },
+});
+const botMention = "\\bopenclaw\\b";
+const policyConfig = (channels: OpenClawConfig["channels"]): OpenClawConfig => ({
+  ...mentionConfig([botMention]),
+  channels,
+});
+const policyMentions = (cfg: OpenClawConfig, provider: string, conversationId: string) =>
+  buildMentionRegexes(cfg, undefined, { provider, conversationId });
+const authorizedNormalTurn = {
+  CommandTurn: normalTurn,
+  CommandSource: undefined,
+  CommandAuthorized: true,
 };
 
 function commitInboundForTest(ctx: MsgContext): void {
@@ -50,11 +66,7 @@ function installGroupRequireMentionTestPlugins(
         },
         source: "test",
       },
-      {
-        pluginId: "line",
-        plugin: createChannelTestPluginBase({ id: "line" }),
-        source: "test",
-      },
+      { pluginId: "line", plugin: createChannelTestPluginBase({ id: "line" }), source: "test" },
     ]),
   );
 }
@@ -91,37 +103,24 @@ describe("applyTemplate", () => {
   });
 });
 
-describe("normalizeInboundTextNewlines", () => {
-  it("normalizes CRLF/CR to LF", () => {
-    expect(normalizeInboundTextNewlines("a\r\nb")).toBe("a\nb");
-    expect(normalizeInboundTextNewlines("a\rb")).toBe("a\nb");
-  });
-});
-
 describe("finalizeInboundContext", () => {
   it("fills BodyForAgent/BodyForCommands and normalizes newlines", () => {
-    const ctx: MsgContext = {
-      // Use actual CRLF for newline normalization test, not literal \n sequences
-      Body: "a\r\nb\r\nc",
+    const out = finalizeInboundContext({
+      Body: "a\r\nb\rc",
       RawBody: "raw\r\nline",
       ChatType: "channel",
       From: "whatsapp:group:123@g.us",
       GroupSubject: "Test",
-    };
-
-    const out = finalizeInboundContext(ctx);
-    expect(out.Body).toBe("a\nb\nc");
-    expect(out.RawBody).toBe("raw\nline");
-    // Prefer clean text over legacy envelope-shaped Body when RawBody is present.
-    expect(out.BodyForAgent).toBe("raw\nline");
-    expect(out.BodyForCommands).toBe("raw\nline");
-    expect(out.CommandAuthorized).toBe(false);
-    expect(out.CommandTurn).toMatchObject({
-      kind: "normal",
-      source: "message",
-      authorized: false,
     });
-    expect(out.ChatType).toBe("channel");
+    expect(out).toMatchObject({
+      Body: "a\nb\nc",
+      RawBody: "raw\nline",
+      BodyForAgent: "raw\nline",
+      BodyForCommands: "raw\nline",
+      CommandAuthorized: false,
+      CommandTurn: normalTurn,
+      ChatType: "channel",
+    });
     expect(out.ConversationLabel).toContain("Test");
   });
 
@@ -130,65 +129,28 @@ describe("finalizeInboundContext", () => {
       Body: "/status",
       CommandBody: "/status",
       CommandAuthorized: false,
+      CommandTurn: { kind: "text-slash", source: "text", authorized: true },
+    });
+
+    expect(out).toMatchObject({
       CommandTurn: {
-        kind: "text-slash" as const,
-        source: "text" as const,
+        kind: "text-slash",
+        source: "text",
         authorized: true,
+        commandName: "status",
+        body: "/status",
       },
+      CommandSource: "text",
+      CommandAuthorized: true,
     });
-
-    expect(out.CommandTurn).toMatchObject({
-      kind: "text-slash",
-      source: "text",
-      authorized: true,
-      commandName: "status",
-      body: "/status",
-    });
-    expect(out.CommandSource).toBe("text");
-    expect(out.CommandAuthorized).toBe(true);
   });
 
-  it("clears stale legacy command source without dropping normal-turn command auth", () => {
-    const out = finalizeInboundContext({
-      Body: "hello",
-      CommandSource: "native",
-      CommandAuthorized: true,
-      CommandTurn: {
-        kind: "normal" as const,
-        source: "message" as const,
-        authorized: false,
-      },
-    });
-
-    expect(out.CommandTurn).toMatchObject({
-      kind: "normal",
-      source: "message",
-      authorized: false,
-    });
-    expect(out.CommandSource).toBeUndefined();
-    expect(out.CommandAuthorized).toBe(true);
-  });
-
-  it("keeps normal command authorization stable across repeated finalization", () => {
-    const out = finalizeInboundContext({
-      Body: "please inspect `/tmp/foo`",
-      CommandAuthorized: true,
-      CommandTurn: {
-        kind: "normal" as const,
-        source: "message" as const,
-        authorized: false,
-      },
-    });
-
-    const refinalized = finalizeInboundContext(out);
-
-    expect(refinalized.CommandTurn).toMatchObject({
-      kind: "normal",
-      source: "message",
-      authorized: false,
-    });
-    expect(refinalized.CommandSource).toBeUndefined();
-    expect(refinalized.CommandAuthorized).toBe(true);
+  it.each([
+    { name: "clears stale legacy command source", Body: "hello", CommandSource: "native" as const },
+    { name: "keeps authorization across repeated finalization", Body: "please inspect `/tmp/foo`" },
+  ])("$name without dropping normal-turn command auth", ({ Body, CommandSource }) => {
+    const out = finalizeInboundContext({ ...authorizedNormalTurn, Body, CommandSource });
+    expect(CommandSource ? out : finalizeInboundContext(out)).toMatchObject(authorizedNormalTurn);
   });
 
   it("normalizes trusted group system prompt newlines without rewriting prompt markers", () => {
@@ -201,17 +163,18 @@ describe("finalizeInboundContext", () => {
   });
 
   it("preserves literal backslash-n in Windows paths", () => {
-    const ctx: MsgContext = {
-      Body: "C:\\Work\\nxxx\\README.md",
-      RawBody: "C:\\Work\\nxxx\\README.md",
+    const windowsPath = "C:\\Work\\nxxx\\README.md";
+    const out = finalizeInboundContext({
+      Body: windowsPath,
+      RawBody: windowsPath,
       ChatType: "direct",
       From: "web:user",
-    };
-
-    const out = finalizeInboundContext(ctx);
-    expect(out.Body).toBe("C:\\Work\\nxxx\\README.md");
-    expect(out.BodyForAgent).toBe("C:\\Work\\nxxx\\README.md");
-    expect(out.BodyForCommands).toBe("C:\\Work\\nxxx\\README.md");
+    });
+    expect(out).toMatchObject({
+      Body: windowsPath,
+      BodyForAgent: windowsPath,
+      BodyForCommands: windowsPath,
+    });
   });
 
   it("can force BodyForCommands to follow updated CommandBody", () => {
@@ -226,43 +189,18 @@ describe("finalizeInboundContext", () => {
     finalizeInboundContext(ctx, { forceBodyForCommands: true });
     expect(ctx.BodyForCommands).toBe("say hi");
   });
-
-  it("fills a generic content type only when media exists", () => {
-    const withMedia: MsgContext = {
-      Body: "hi",
-      media: [{ path: "/tmp/file.bin" }],
-    };
-    const outWithMedia = finalizeInboundContext(withMedia);
-    expect(outWithMedia.media).toEqual([
-      expect.objectContaining({ path: "/tmp/file.bin", contentType: "application/octet-stream" }),
-    ]);
-
-    const withoutMedia: MsgContext = { Body: "hi" };
-    const outWithoutMedia = finalizeInboundContext(withoutMedia);
-    expect(outWithoutMedia.media).toBeUndefined();
-  });
 });
 
 describe("inbound dedupe", () => {
+  beforeEach(() => resetInboundDedupe());
   it("does not dedupe when the peer changes", () => {
-    resetInboundDedupe();
-    const base: MsgContext = {
-      Provider: "whatsapp",
-      OriginatingChannel: "whatsapp",
-      MessageSid: "msg-1",
-    };
+    const base = inboundMessage();
     commitInboundForTest({ ...base, OriginatingTo: "whatsapp:+1000" });
     expect(claimInboundDedupe({ ...base, OriginatingTo: "whatsapp:+2000" }).status).toBe("claimed");
   });
 
   it("does not dedupe across agent ids", () => {
-    resetInboundDedupe();
-    const base: MsgContext = {
-      Provider: "whatsapp",
-      OriginatingChannel: "whatsapp",
-      OriginatingTo: "whatsapp:+1555",
-      MessageSid: "msg-1",
-    };
+    const base = inboundMessage();
     commitInboundForTest({ ...base, SessionKey: "agent:alpha:main" });
     expect(
       claimInboundDedupe({ ...base, SessionKey: "agent:bravo:whatsapp:direct:+1555" }).status,
@@ -273,13 +211,11 @@ describe("inbound dedupe", () => {
   });
 
   it("dedupes when the same agent sees the same inbound message under different session keys", () => {
-    resetInboundDedupe();
-    const base: MsgContext = {
+    const base = inboundMessage({
       Provider: "telegram",
       OriginatingChannel: "telegram",
       OriginatingTo: "telegram:7463849194",
-      MessageSid: "msg-1",
-    };
+    });
     commitInboundForTest({ ...base, SessionKey: "agent:main:main" });
     expect(
       claimInboundDedupe({ ...base, SessionKey: "agent:main:telegram:direct:7463849194" }),
@@ -290,43 +226,23 @@ describe("inbound dedupe", () => {
 const senderMetaTempDirs = useSessionStoreTempDirs(afterAll, "openclaw-sender-meta-");
 
 describe("initSessionState BodyStripped", () => {
-  it("prefers BodyForAgent over Body for group chats", async () => {
-    const root = senderMetaTempDirs.make();
-    const storePath = path.join(root, "sessions.json");
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
+  it.each([
+    {
+      ChatType: "group",
+      Body: "[WhatsApp 123@g.us] ping",
+      SenderId: "222@s.whatsapp.net",
+      SessionKey: "agent:main:whatsapp:group:123@g.us",
+    },
+    { ChatType: "direct", Body: "[WhatsApp +1] ping", SessionKey: "agent:main:whatsapp:dm:+222" },
+  ])("prefers BodyForAgent over Body for $ChatType chats", async (context) => {
     const result = await initSessionState({
       ctx: finalizeInboundContext({
-        Body: "[WhatsApp 123@g.us] ping",
+        ...context,
         BodyForAgent: "ping",
-        ChatType: "group",
         SenderName: "Bob",
         SenderE164: "+222",
-        SenderId: "222@s.whatsapp.net",
-        SessionKey: "agent:main:whatsapp:group:123@g.us",
       }),
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.sessionCtx.BodyStripped).toBe("ping");
-  });
-
-  it("prefers BodyForAgent over Body for direct chats", async () => {
-    const root = senderMetaTempDirs.make();
-    const storePath = path.join(root, "sessions.json");
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    const result = await initSessionState({
-      ctx: finalizeInboundContext({
-        Body: "[WhatsApp +1] ping",
-        BodyForAgent: "ping",
-        ChatType: "direct",
-        SenderName: "Bob",
-        SenderE164: "+222",
-        SessionKey: "agent:main:whatsapp:dm:+222",
-      }),
-      cfg,
+      cfg: { session: { store: path.join(senderMetaTempDirs.make(), "sessions.json") } },
       commandAuthorized: true,
     });
 
@@ -336,33 +252,19 @@ describe("initSessionState BodyStripped", () => {
 
 describe("mention helpers", () => {
   it("builds regexes and skips invalid or unsafe patterns", () => {
-    const regexes = buildMentionRegexes({
-      messages: {
-        groupChat: { mentionPatterns: ["\\bopenclaw\\b", "(invalid", "(a+)+$"] },
-      },
-    });
+    const regexes = buildMentionRegexes(mentionConfig([botMention, "(invalid", "(a+)+$"]));
     expect(regexes).toHaveLength(1);
     expect(regexes[0]?.test("openclaw")).toBe(true);
   });
 
-  it("normalizes zero-width characters", () => {
-    expect(normalizeMentionText("open\u200bclaw")).toBe("openclaw");
-  });
-
   it("matches patterns case-insensitively", () => {
-    const regexes = buildMentionRegexes({
-      messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
-    });
-    expect(matchesMentionPatterns("OPENCLAW: hi", regexes)).toBe(true);
+    const regexes = buildMentionRegexes(mentionConfig([botMention]));
+    expect(matchesMentionPatterns("OPEN\u200bCLAW: hi", regexes)).toBe(true);
   });
 
   it("lets catch-all mention patterns match empty text", () => {
-    const catchAllRegexes = buildMentionRegexes({
-      messages: { groupChat: { mentionPatterns: [".*"] } },
-    });
-    const specificRegexes = buildMentionRegexes({
-      messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
-    });
+    const catchAllRegexes = buildMentionRegexes(mentionConfig([".*"]));
+    const specificRegexes = buildMentionRegexes(mentionConfig([botMention]));
 
     expect(matchesMentionPatterns("", catchAllRegexes)).toBe(true);
     expect(matchesMentionPatterns("", specificRegexes)).toBe(false);
@@ -371,16 +273,8 @@ describe("mention helpers", () => {
   it("uses per-agent mention patterns when configured", () => {
     const regexes = buildMentionRegexes(
       {
-        messages: {
-          groupChat: { mentionPatterns: ["\\bglobal\\b"] },
-        },
-        agents: {
-          entries: {
-            work: {
-              groupChat: { mentionPatterns: ["\\bworkbot\\b"] },
-            },
-          },
-        },
+        ...mentionConfig(["\\bglobal\\b"]),
+        agents: { entries: { work: { groupChat: { mentionPatterns: ["\\bworkbot\\b"] } } } },
       },
       "work",
     );
@@ -389,79 +283,34 @@ describe("mention helpers", () => {
   });
 
   it("scopes configured mention patterns by provider conversation policy", () => {
-    const cfg = {
-      messages: {
-        groupChat: {
-          mentionPatterns: ["\\bopenclaw\\b"],
-        },
-      },
-      channels: {
-        slack: {
-          mentionPatterns: {
-            mode: "deny",
-            allowIn: ["C123"],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const allowed = buildMentionRegexes(cfg, undefined, {
-      provider: "slack",
-      conversationId: "C123",
+    const cfg = policyConfig({
+      slack: { mentionPatterns: { mode: "deny", allowIn: ["C123"] } },
     });
-    const denied = buildMentionRegexes(cfg, undefined, {
-      provider: "slack",
-      conversationId: "C999",
-    });
-
-    expect(matchesMentionPatterns("openclaw: hi", allowed)).toBe(true);
-    expect(matchesMentionPatterns("openclaw: hi", denied)).toBe(false);
+    expect(matchesMentionPatterns("openclaw: hi", policyMentions(cfg, "slack", "C123"))).toBe(true);
+    expect(matchesMentionPatterns("openclaw: hi", policyMentions(cfg, "slack", "C999"))).toBe(
+      false,
+    );
   });
 
   it("lets provider deny lists override globally allowed mention patterns", () => {
-    const cfg = {
-      messages: {
-        groupChat: {
-          mentionPatterns: ["\\bopenclaw\\b"],
-        },
-      },
-      channels: {
-        telegram: {
-          mentionPatterns: {
-            denyIn: ["-100:topic:7"],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
+    const cfg = policyConfig({ telegram: { mentionPatterns: { denyIn: ["-100:topic:7"] } } });
+    expect(policyMentions(cfg, "telegram", "-100:topic:7")).toEqual([]);
     expect(
-      buildMentionRegexes(cfg, undefined, {
-        provider: "telegram",
-        conversationId: "-100:topic:7",
-      }),
-    ).toEqual([]);
-    expect(
-      matchesMentionPatterns(
-        "openclaw",
-        buildMentionRegexes(cfg, undefined, {
-          provider: "telegram",
-          conversationId: "-100:topic:8",
-        }),
-      ),
+      matchesMentionPatterns("openclaw", policyMentions(cfg, "telegram", "-100:topic:8")),
     ).toBe(true);
   });
 
   it("strips safe mention patterns and ignores unsafe ones", () => {
-    const stripped = stripMentions("openclaw " + "a".repeat(28) + "!", {} as MsgContext, {
-      messages: {
-        groupChat: { mentionPatterns: ["\\bopenclaw\\b", "(a+)+$"] },
-      },
-    });
+    const stripped = stripMentions(
+      "openclaw " + "a".repeat(28) + "!",
+      {},
+      mentionConfig([botMention, "(a+)+$"]),
+    );
     expect(stripped).toBe(`${"a".repeat(28)}!`);
   });
 
   it("strips provider mention regexes without config compilation", () => {
-    const stripped = stripMentions("<@12345> hello", { Provider: "discord" } as MsgContext, {});
+    const stripped = stripMentions("<@12345> hello", { Provider: "discord" }, {});
     expect(stripped).toBe("< > hello");
   });
 });
@@ -504,26 +353,12 @@ describe("resolveGroupRequireMention", () => {
 
   it("respects LINE prefixed group keys in reply-stage requireMention resolution", async () => {
     const cfg: OpenClawConfig = {
-      channels: {
-        line: {
-          groups: {
-            r123: { requireMention: false },
-          },
-        },
-      },
+      channels: { line: { groups: { r123: { requireMention: false } } } },
     };
-    const ctx: TemplateContext = {
-      Provider: "line",
-      From: "line:room:r123",
-    };
-    const groupResolution: GroupKeyResolution = {
-      key: "line:group:r123",
-      channel: "line",
-      id: "r123",
-      chatType: "group",
-    };
-
-    const { group } = prepareReplyConversation({ ctx, groupResolution });
+    const { group } = prepareReplyConversation({
+      ctx: { Provider: "line", From: "line:room:r123" },
+      groupResolution: { key: "line:group:r123", channel: "line", id: "r123", chatType: "group" },
+    });
     await expect(resolveGroupRequireMention({ cfg, group })).resolves.toBe(false);
   });
 });

@@ -9,15 +9,6 @@ import type { CodexBindingWithCurrent } from "./session-binding.js";
 import type { CodexMirroredSessionHistoryTarget } from "./session-history.js";
 import type { SettledTurnMessages } from "./settled-turn-evidence.js";
 
-function freezeProjection(value: JsonValue): void {
-  if (value !== null && typeof value === "object") {
-    for (const child of Object.values(value)) {
-      freezeProjection(child);
-    }
-    Object.freeze(value);
-  }
-}
-
 type CodexSettledTurnSelection = {
   model: string;
   modelProvider?: string;
@@ -31,14 +22,10 @@ export class CodexSettledTurnContext {
   constructor(
     readonly data: JsonValue[],
     readonly selection: CodexSettledTurnSelection,
-  ) {
-    freezeProjection(data);
-    Object.freeze(selection);
-    Object.freeze(this);
-  }
+  ) {}
 }
 
-/** Verifies and freezes a complete replay projection while reading the active branch. */
+/** Verifies and captures a detached replay projection while reading the active branch. */
 export async function captureCodexSettledTurnFinalizationContext(
   params: CodexMirroredSessionHistoryTarget &
     SettledTurnMessages &

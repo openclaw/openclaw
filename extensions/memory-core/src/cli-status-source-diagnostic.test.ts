@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   firstWrittenJsonArg,
   spyRuntimeJson,
@@ -14,9 +15,9 @@ const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
 
 // mock-isolation: exercise CLI diagnostics without opening a native SQLite memory manager.
 vi.mock("./memory/index.js", () => ({ getMemorySearchManager }));
-vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>()),
-  getRuntimeConfig,
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  captureRuntimeConfigAsyncReader: () => async () => getRuntimeConfig(),
 }));
 vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-cli", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli")>()),
@@ -37,9 +38,10 @@ const cfg = {
   },
 };
 
-function mockManager() {
+function mockManager(results: MemorySearchResult[] = []) {
   getMemorySearchManager.mockResolvedValueOnce({
     manager: {
+      search: async () => results,
       status: () => ({
         backend: "builtin",
         provider: "none",
@@ -85,4 +87,34 @@ it("shows the excluded session source in human and JSON status", async () => {
   expect(firstWrittenJsonArg(json)).toEqual([
     expect.objectContaining({ excludedConfiguredSources: ["sessions"] }),
   ]);
+});
+
+it("reports recall recording failure without discarding search results", async () => {
+  const result = {
+    path: "MEMORY.md",
+    snippet: "The fixture uses a copper telescope.",
+    source: "memory" as const,
+    startLine: 1,
+    endLine: 1,
+    score: 0.91,
+  };
+  getRuntimeConfig.mockReturnValue({
+    ...cfg,
+    plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } },
+  });
+  mockManager([result]);
+  const promotion = await import("./short-term-promotion-record.js");
+  vi.spyOn(promotion, "recordShortTermRecalls").mockRejectedValueOnce(
+    new Error("fixture recall persistence failed"),
+  );
+  const json = spyRuntimeJson(defaultRuntime);
+  const program = new Command();
+  registerMemoryCli(program);
+
+  await program.parseAsync(["memory", "search", "telescope", "--json"], { from: "user" });
+
+  expect(firstWrittenJsonArg(json)).toEqual({
+    results: [result],
+    warning: "Memory recall recording failed: fixture recall persistence failed",
+  });
 });

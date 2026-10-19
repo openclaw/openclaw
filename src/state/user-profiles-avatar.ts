@@ -176,9 +176,6 @@ export function createProfileAvatarReader(
         ),
       );
       captured.admission.assertCurrent();
-      if (reply && (!reply.ok || reply.type !== "userProfiles.avatar.inspect")) {
-        throw new Error("Unexpected profile avatar inspection result");
-      }
       if (revision !== readUserProfileVersion()) {
         continue;
       }
@@ -212,16 +209,13 @@ export function createProfileAvatarReader(
             { context: captured, current: true, signal },
           ),
         );
-        if (result && (!result.ok || result.type !== "userProfiles.avatar.read")) {
-          throw new Error("Unexpected profile avatar materialization result");
-        }
         return isCurrent() ? result?.avatar : undefined;
       };
       const prepared: PreparedProfileAvatar = {
         ...snapshot,
         isCurrent,
         loadBytes() {
-          if (!isCurrent()) {
+          if (!isCurrent() || !snapshot.avatar) {
             return Promise.resolve(undefined);
           }
           return (bytes ??= readBytes().then(
@@ -243,10 +237,10 @@ export function createProfileAvatarReader(
       };
       if (
         row &&
-        snapshot.avatar &&
         snapshot.profile?.id === row.id &&
-        snapshot.avatar.sha256 === row.avatar_sha256 &&
-        snapshot.avatar.mime === row.avatar_mime
+        (snapshot.avatar
+          ? snapshot.avatar.sha256 === row.avatar_sha256 && snapshot.avatar.mime === row.avatar_mime
+          : row.has_avatar === 0)
       ) {
         cacheAvatar(row, prepared);
       }

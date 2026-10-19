@@ -1,11 +1,10 @@
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getSenderIdentity } from "../../identity.js";
-import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { jidToE164 } from "../../targets-runtime.js";
 
 export function resolvePeerId(msg: AdmittedWebInboundMessage) {
-  const admission = requireWhatsAppInboundAdmission(msg);
+  const admission = msg.admission;
   if (admission.conversation.kind === "group") {
     return admission.conversation.id;
   }

@@ -1,13 +1,15 @@
-import { nothing, render } from "lit";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { GitHubIdentityController } from "./github-identity-controller.ts";
-import { renderGitHubIdentity } from "./github-identity-view.ts";
-import { GitHubConnectionSetup } from "./github-identity-view.tsx";
+import type { GitHubAuthorizationState } from "./github-identity-shared.ts";
+import { GitHubConnectionSetup, GitHubIdentity } from "./github-identity-view.tsx";
+import {
+  createGitHubIdentityForTest,
+  githubIdentityViewFixture,
+} from "./github-identity.test-support.ts";
 
 const writeText = vi.fn<(text: string) => Promise<void>>();
 const fallback = vi.fn(() => true);
@@ -41,36 +43,34 @@ describe("GitHub identity view", () => {
   it("retires pending authorization-code copying only when its payload changes", async () => {
     const pending = createDeferred();
     writeText.mockReturnValueOnce(pending.promise);
-    const [revision, setRevision] = createSignal(0);
-    const controller = new GitHubIdentityController({ requestUpdate: vi.fn() });
-    controller.statusReadable = controller.authorizable = true;
-    vi.spyOn(controller, "connectionReady", "get").mockReturnValue(true);
-    let userCode = "first";
-    let phase: "code" | "pending" = "code";
-    vi.spyOn(controller, "authorization", "get").mockImplementation(() => ({
-      phase,
-      requestId: "github-device-test",
-      userCode,
-      verificationUri: "https://github.com/login/device",
-      expiresInMs: 60_000,
-      pollAfterMs: 5_000,
-      displayExpiresAtMs: 70_000,
-    }));
-    const readController = () => {
-      revision();
-      return controller;
-    };
-    const view = mountSolid(() => <GitHubConnectionSetup controller={readController()} />);
+    type AuthorizationCode = Extract<GitHubAuthorizationState, { userCode: string }>;
+    let updateAuthorization: (patch: Partial<AuthorizationCode>) => void = () => {};
+    const view = mountSolid(() => {
+      const [authorization, setAuthorization] = createSignal<AuthorizationCode>({
+        phase: "code",
+        requestId: "github-device-test",
+        userCode: "first",
+        verificationUri: "https://github.com/login/device",
+        expiresInMs: 60_000,
+        pollAfterMs: 5_000,
+        displayExpiresAtMs: 70_000,
+      });
+      updateAuthorization = (patch) => setAuthorization((value) => ({ ...value, ...patch }));
+      const fixture = githubIdentityViewFixture({ authorizable: true, connectionReady: true });
+      const identity = {
+        ...fixture,
+        read: () => ({ ...fixture.read(), authorization: authorization() }),
+      };
+      return <GitHubConnectionSetup identity={identity} />;
+    });
     const button = view.container.querySelector<HTMLButtonElement>(".github-device-code + button")!;
     button.click();
     expect(writeText).toHaveBeenCalledOnce();
-    phase = "pending";
-    setRevision(1);
+    updateAuthorization({ phase: "pending" });
     flush();
     expect(view.container.querySelector(".github-device-code + button")).toBe(button);
     expect(view.getByText("Waiting for approval…")).toBeTruthy();
-    userCode = "second";
-    setRevision(2);
+    updateAuthorization({ userCode: "second" });
     flush();
     const current = view.container.querySelector<HTMLButtonElement>(
       ".github-device-code + button",
@@ -87,34 +87,56 @@ describe("GitHub identity view", () => {
     expect(current.dataset.copyState).toBe("copied");
   });
 
-  it("keeps the Lit caller's focused PAT field across same-controller redraws", async () => {
-    const owner = document.body.appendChild(document.createElement("section"));
-    const onOpenConnections = vi.fn();
-    const controller = new GitHubIdentityController({ requestUpdate: () => redraw() });
-    controller.configurable = controller.patVisible = true;
-    const redraw = () => render(renderGitHubIdentity(controller, onOpenConnections), owner);
-    try {
-      redraw();
-      const bridge = owner.querySelector<SolidBridgeElement<object>>("openclaw-github-identity")!;
-      await bridge.updateComplete;
-      const input = owner.querySelector<HTMLInputElement>(".settings-secret input")!;
-      input.focus();
-      input.value = "synthetic-pat";
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      await bridge.updateComplete;
-      expect(controller.draft.token).toBe("synthetic-pat");
-      expect(owner.querySelector(".settings-secret input")).toBe(input);
-      expect(document.activeElement).toBe(input);
-      controller.busy = true;
-      redraw();
-      await bridge.updateComplete;
-      expect(input.disabled).toBe(true);
-      expect(input.value).toBe("synthetic-pat");
-      expect(owner.querySelector(".settings-secret input")).toBe(input);
-    } finally {
-      render(nothing, owner);
-      owner.remove();
-      await Promise.resolve();
-    }
+  it("keeps the focused PAT field across draft and mutation updates", async () => {
+    const stored = createDeferred<unknown>();
+    // SAFETY: this view test exercises only the browser client's request boundary.
+    const client = {
+      request: vi.fn(async (method: string) =>
+        method === "secrets.store.set" ? stored.promise : { ok: true },
+      ),
+    } as unknown as GatewayBrowserClient;
+    const identity = createGitHubIdentityForTest({
+      runExternalMutation: async () => ({
+        ok: false,
+        reason: "unavailable",
+        error: "Not dispatched in this view test.",
+      }),
+    });
+    identity.sync({
+      client,
+      connected: true,
+      permissionsReady: true,
+      clientRevision: 1,
+      target: {
+        kind: "shared",
+        scope: "agent",
+        agentId: "main",
+        config: {},
+        profileId: "profile-a",
+      },
+      statusReadable: true,
+      configurable: true,
+      authorizable: true,
+    });
+    identity.showPatFallback();
+    const view = mountSolid(() => (
+      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
+    ));
+    const input = view.container.querySelector<HTMLInputElement>(".settings-secret input")!;
+    input.focus();
+    input.value = "synthetic-pat";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(identity.read().draft.token).toBe("synthetic-pat");
+    expect(view.container.querySelector(".settings-secret input")).toBe(input);
+    expect(document.activeElement).toBe(input);
+    const saving = identity.configure();
+    flush();
+    expect(input.disabled).toBe(true);
+    expect(input.value).toBe("synthetic-pat");
+    expect(view.container.querySelector(".settings-secret input")).toBe(input);
+    identity.dispose();
+    stored.resolve({ ok: true });
+    await saving;
   });
 });

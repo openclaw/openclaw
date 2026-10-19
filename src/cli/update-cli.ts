@@ -96,7 +96,8 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
     .option("--timeout <seconds>", "Override per-phase repair deadlines in seconds")
     .option("--yes", "Skip confirmation prompts (non-interactive)", false)
     .option("--accept-capabilities", "Accept widened plugin capabilities", false)
-    .option("--no-restart", "Skip update activation; Doctor may restore a service it stops")
+    .option("--full-integrity-check", "Run full database integrity checks during migrations", false)
+    .option("--no-restart", "Skip updater restart (package Gateways may restart themselves)")
     .addHelpText(
       "after",
       () =>
@@ -129,6 +130,9 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
           acceptCapabilities:
             Boolean(opts.acceptCapabilities) ||
             Boolean(inheritOptionFromParent<boolean>(actionCommand, "acceptCapabilities")),
+          fullIntegrityCheck:
+            Boolean(opts.fullIntegrityCheck) ||
+            Boolean(inheritOptionFromParent<boolean>(actionCommand, "fullIntegrityCheck")),
           deferCompletionCache: hidden && process.env[POST_CORE_UPDATE_ENV]?.trim() === "1",
         });
       }),
@@ -155,7 +159,7 @@ export function registerUpdateCli(program: Command) {
         ["openclaw update --channel dev", "Switch to dev channel (git + npm)"],
         ["openclaw update --tag beta", "One-off update to a dist-tag or version"],
         ["openclaw update --dry-run", "Preview actions without changing anything"],
-        ["openclaw update --no-restart", "Update without restarting the service"],
+        ["openclaw update --no-restart", "Update without an updater-managed restart"],
         ["openclaw update --json", "Output result as JSON"],
         ["openclaw update --yes", "Non-interactive (accept downgrade prompts)"],
         ["openclaw update --accept-capabilities", "Accept reviewed plugin capability changes"],
@@ -216,6 +220,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           drainTimeout: opts.drainTimeout,
           yes: Boolean(opts.yes),
           acceptCapabilities: Boolean(opts.acceptCapabilities),
+          fullIntegrityCheck: Boolean(opts.fullIntegrityCheck),
           admission: opts.admission,
         });
       } catch (err) {
@@ -324,6 +329,31 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       await updateAdmitCommand(opts.context);
     });
 
+  for (const action of ["migrate", "restore", "finish"] as const) {
+    setCommandJsonMode(update.command(action, { hidden: true }), "output", () => true)
+      .description(`Internal externally supervised update ${action}`)
+      .requiredOption("--backup-root <path>", "Absolute recovery artifact prefix")
+      .action(
+        createUpdateLeafAction(async (opts, command) => {
+          const { updateMigrateCommand, updateRestoreCommand, updateFinishCommand } =
+            await import("./update-cli/update-command-migrate.js");
+          if (action === "migrate") {
+            await updateMigrateCommand(requiredUpdateLeafString(opts, "backupRoot"), {
+              fullIntegrityCheck: Boolean(
+                inheritOptionFromParent<boolean>(command, "fullIntegrityCheck"),
+              ),
+            });
+            return;
+          }
+          const execute = {
+            restore: updateRestoreCommand,
+            finish: updateFinishCommand,
+          }[action];
+          await execute(requiredUpdateLeafString(opts, "backupRoot"));
+        }),
+      );
+  }
+
   update
     .command("cleanup")
     .description("Retire verified update recovery originals after acknowledging rollback loss")
@@ -385,7 +415,8 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     .command("wizard")
     .description("Interactive update wizard")
     .option("--accept-capabilities", "Accept widened plugin capabilities", false)
-    .option("--timeout <seconds>", "Set a per-step deadline in seconds")
+    .option("--full-integrity-check", "Run full database integrity checks during migrations", false)
+    .option("--timeout <seconds>", "Set an overall update budget in seconds")
     .addHelpText(
       "after",
       `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}\n`,
@@ -399,6 +430,9 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           acceptCapabilities:
             Boolean(opts.acceptCapabilities) ||
             Boolean(inheritOptionFromParent<boolean>(command, "acceptCapabilities")),
+          fullIntegrityCheck:
+            Boolean(opts.fullIntegrityCheck) ||
+            Boolean(inheritOptionFromParent<boolean>(command, "fullIntegrityCheck")),
         });
       }),
     );

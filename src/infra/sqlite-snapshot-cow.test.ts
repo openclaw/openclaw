@@ -6,7 +6,10 @@ import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/
 import { readCloneFileMetadata } from "@openclaw/fs-safe/copy";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { prepareSqliteReadOnlyCopyInProcess } from "./sqlite-readonly-location.js";
+import {
+  prepareSqliteReadOnlyCopyInProcess,
+  prepareSqliteReadOnlyLocationSyncInProcess,
+} from "./sqlite-readonly-location.js";
 import { createVerifiedSqliteSnapshot, publishVerifiedSqliteFile } from "./sqlite-snapshot.js";
 import { readDatabasePathIdentity } from "./sqlite-worker-identity.js";
 
@@ -26,6 +29,47 @@ async function fixture() {
   }
   return { directory, sourcePath, bytes: await fs.readFile(sourcePath) };
 }
+
+it.each(["auto", "off"] as const)(
+  "keeps synchronous artifact-preserving snapshots independent with native copying %s",
+  async (mode) => {
+    const { directory, sourcePath, bytes } = await fixture();
+    const previous = getFsSafeNativeConfig();
+    try {
+      configureFsSafeNative({ mode });
+      const prepared = prepareSqliteReadOnlyLocationSyncInProcess(sourcePath, directory);
+      configureFsSafeNative(previous);
+      try {
+        expect(await fs.readFile(prepared.location)).toEqual(bytes);
+        const [source, copy] = await Promise.all(
+          [sourcePath, prepared.location].map((file) => fs.stat(file)),
+        );
+        expect(copy!.ino).not.toBe(source!.ino);
+        expect(copy!.nlink).toBe(1);
+        const metadata = await readCloneFileMetadata([sourcePath, prepared.location]);
+        if (metadata[0]) {
+          expect(metadata[1]?.cloneId).not.toBe(0n);
+          expect(metadata[1]?.cloneId === metadata[0].cloneId).toBe(mode === "auto");
+        }
+        const snapshot = new DatabaseSync(prepared.location);
+        try {
+          snapshot.exec("DELETE FROM payload");
+          expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
+            integrity_check: "ok",
+          });
+        } finally {
+          snapshot.close();
+        }
+        expect(await fs.readFile(sourcePath)).toEqual(bytes);
+      } finally {
+        expect(prepared.cleanup()).toBe(true);
+      }
+      expect(await fs.readdir(directory)).toEqual(["source.sqlite"]);
+    } finally {
+      configureFsSafeNative(previous);
+    }
+  },
+);
 
 it.each(["auto", "off"] as const)(
   "preserves independent recovery generations with native copying %s",
@@ -57,7 +101,7 @@ it.each(["auto", "off"] as const)(
       const restored = path.join(directory, "restored.sqlite");
       await publishVerifiedSqliteFile({
         sourcePath: paths[1]!,
-        sourceIdentity: await fs.stat(paths[1]!),
+        sourceIdentity: await fs.stat(paths[1]!, { bigint: true }),
         targetPath: restored,
         expectedContent: {
           sha256: createHash("sha256").update(bytes).digest("hex"),

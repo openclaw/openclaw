@@ -14,7 +14,7 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { labelRuntimeContextText } from "../../llm/types.js";
-import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
@@ -32,6 +32,7 @@ import {
   hasAgentDatabaseAdmissions,
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
+import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveUserPath } from "../../utils.js";
 import { isDeliverableMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
@@ -63,6 +64,8 @@ import type { AgentCommandOpts } from "./types.js";
 export type PreparedAgentCommandRuntimeContext = Readonly<{
   config: OpenClawConfig;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
+  /** One-shot creation fact from the isolated child's in-process launch owner. */
+  freshChild?: boolean;
 }>;
 
 export async function prepareAgentCommandExecution(
@@ -158,9 +161,10 @@ export async function prepareAgentCommandExecution(
     if (!hasAgentDatabaseAdmissions()) {
       recordAgentDatabaseAdmissions(await evaluateAgentDatabaseAdmissions(cfg));
     }
-    assertAgentDatabaseAdmitted(
-      agentIdOverride ?? resolveSessionAgentId({ sessionKey: explicitSessionKey, config: cfg }),
-    );
+    const admissionAgentId =
+      agentIdOverride ?? resolveSessionAgentId({ sessionKey: explicitSessionKey, config: cfg });
+    await waitForAgentDatabaseWriteAdmission(admissionAgentId, { signal: abortSignal });
+    assertAgentDatabaseAdmitted(admissionAgentId);
   }
   const agentCfg = cfg.agents?.defaults;
 
@@ -250,6 +254,8 @@ export async function prepareAgentCommandExecution(
   }
   const sessionStore: Record<string, InternalSessionEntry> =
     sessionKey && sessionEntryRaw ? { [sessionKey]: sessionEntryRaw } : {};
+  await waitForAgentDatabaseWriteAdmission(sessionAgentId, { signal: abortSignal });
+  assertPreparationCurrent();
   assertAgentDatabaseAdmitted(sessionAgentId);
   const outboundSession = buildOutboundSessionContext({
     cfg,
@@ -287,7 +293,7 @@ export async function prepareAgentCommandExecution(
   const preparedMetadataSnapshot = runtimeContext?.pluginGeneration.pluginMetadataSnapshot;
   const manifestMetadataSnapshot = pluginsEnabled
     ? (preparedMetadataSnapshot ??
-      resolvePluginMetadataSnapshot({ config: cfg, env: process.env, workspaceDir }))
+      (await resolvePluginMetadataSnapshotAsync({ config: cfg, env: process.env, workspaceDir })))
     : undefined;
   const modelManifestContext = {
     manifestPlugins: manifestMetadataSnapshot ?? [],
@@ -313,8 +319,9 @@ export async function prepareAgentCommandExecution(
     sessionKey,
     sessionEntry: sessionEntryRaw,
   });
-  const sessionStableReplyMode = resolveSessionStableReplyMode({
+  const sessionStableReplyMode = await resolveSessionStableReplyMode({
     cfg,
+    metadataSnapshot: manifestMetadataSnapshot,
     ctx: { CommandAuthorized: false },
     sessionEntry: sessionEntryRaw,
     sessionAgentId,

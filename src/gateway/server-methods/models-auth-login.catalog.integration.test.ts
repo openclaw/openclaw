@@ -183,13 +183,20 @@ it.for([false, true])(
           };
         };
         expect((await list()).ids).not.toContain("account-exclusive");
+        // A configured provider can queue this refresh behind startup discovery.
         await waitForCatalogPublication({
           signal,
           start: () => list(true),
           read: list,
-          ready: () => catalogWork.read().completedTasks > 0,
+          ready: ({ result }) => {
+            const { completedTasks, pendingTasks } = catalogWork.read();
+            return (
+              completedTasks > 0 &&
+              pendingTasks === 0 &&
+              !result.pendingProviders?.includes(provider)
+            );
+          },
         });
-        const beforeLoginWork = catalogWork.read();
         await client.request("models.authLogin", {
           sessionId: "fixture-login",
           agentId: "main",
@@ -240,7 +247,6 @@ it.for([false, true])(
           maxWorkers: 1,
           workersCreated: 1,
           pendingTasks: 0,
-          completedTasks: beforeLoginWork.completedTasks + 1,
         });
         responseDelay = 0;
         const manualRefresh = await list(true);

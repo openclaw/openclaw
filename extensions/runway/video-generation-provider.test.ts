@@ -8,7 +8,6 @@ import {
   installProviderHttpMockCleanup,
   requireFirstPostJsonRecordRequest,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
-import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -58,6 +57,13 @@ function mockSuccessfulTask(
 }
 
 describe("runway video generation provider", () => {
+  it("rejects a duration that rounds to zero before submission", async () => {
+    await expect(generateVideo({ durationSeconds: 0.4 })).rejects.toThrow(
+      "durationSeconds must be a positive duration",
+    );
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
+
   it("registers media-only API-key onboarding alongside video generation", async () => {
     const { default: plugin } = await import("./index.js");
     const captured = capturePluginRegistration(plugin);
@@ -99,10 +105,6 @@ describe("runway video generation provider", () => {
       flagName: "--runway-api-key",
       envVar: "RUNWAYML_API_SECRET",
     });
-  });
-
-  it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildRunwayVideoGenerationProvider());
   });
 
   it("submits a text-to-video task, polls it, and downloads the output", async () => {

@@ -464,6 +464,39 @@ describe("Teams action routing and authority", () => {
   });
 
   it.each([
+    { action: "react", params: { emoji: "like" }, mock: runtime.reactMessageMSTeams },
+    {
+      action: "react",
+      params: { emoji: "like", remove: true },
+      mock: runtime.unreactMessageMSTeams,
+    },
+    { action: "reactions", params: {}, mock: runtime.listReactionsMSTeams },
+  ] as const)(
+    "addresses the current channel reply for $action $params beneath its thread root",
+    async ({ action, params, mock }) => {
+      mock.mockResolvedValue({ ok: true, reactions: [] });
+      const base = current({
+        ChatType: "channel",
+        To: conversation,
+        NativeChannelId: graphTarget,
+        MessageThreadId: "root-1",
+      });
+      const context = {
+        ...base,
+        toolContext: { ...base.toolContext, currentMessageId: "reply-1" },
+      };
+
+      await run(action, params, context);
+      await run(action, { ...params, messageId: "other-1" }, context);
+
+      expect(mock.mock.calls.map(([call]) => [call.messageId, call.threadRootId])).toEqual([
+        ["reply-1", "root-1"],
+        ["other-1", undefined],
+      ]);
+    },
+  );
+
+  it.each([
     { action: "react", params: { to: "conversation:19:other@thread.tacv2", emoji: "like" } },
     { action: "delete", params: { to: conversation } },
   ] as const)(

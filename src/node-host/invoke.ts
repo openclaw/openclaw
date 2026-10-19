@@ -8,6 +8,10 @@ import {
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { validateSystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
+import {
+  McpSdkCompatibilityError,
+  toLegacyMcpCallToolResult,
+} from "../agents/mcp-sdk-compatibility.js";
 import { DEFAULT_ASK, DEFAULT_SECURITY } from "../infra/exec-approvals-config.js";
 import {
   analyzeArgvCommand,
@@ -64,11 +68,7 @@ import {
   buildSystemRunPrepareCoverageEnv,
 } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke, resolveEffectiveSystemRunExecPolicy } from "./invoke-system-run.js";
-import type {
-  NodeInvokeRequestPayload,
-  SkillBinsProvider,
-  SystemRunParams,
-} from "./invoke-types.js";
+import type { NodeInvokeRequestPayload, SystemRunParams } from "./invoke-types.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
 import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
@@ -77,6 +77,7 @@ import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contr
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
 import { preferMacAppExecHost } from "./runtime-manifest.js";
+import type { SkillBinsProvider } from "./runtime-skill-bins.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
 const MCP_ERROR_MESSAGE_MAX_CHARS = 1_024;
@@ -163,7 +164,7 @@ async function buildSystemRunAllowAlwaysCoverage(params: {
   return { ...coverage, complete: coverage.complete && complete };
 }
 
-export type { NodeInvokeRequestPayload, SkillBinsProvider } from "./invoke-types.js";
+export type { NodeInvokeRequestPayload } from "./invoke-types.js";
 
 function resolveExecSecurity(value?: string): ExecSecurity {
   return value === "deny" || value === "allowlist" || value === "full" ? value : DEFAULT_SECURITY;
@@ -243,6 +244,9 @@ function createNodeHostInvocationClient(
     return client;
   }
   return {
+    get serverCapabilities() {
+      return client.serverCapabilities;
+    },
     async request<T = Record<string, unknown>>(
       method: string,
       params?: unknown,
@@ -281,18 +285,10 @@ export async function handleInvoke(
     logWarn(
       `node host invoke failed (command=${frame.command ?? "unknown"}, id=${frame.id}): ${String(err)}`,
     );
-    try {
-      await createNodeInvokeResponder(invocationClient, frame).error(
-        "UNAVAILABLE",
-        "node invocation failed",
-      );
-    } catch (sendErr) {
-      // The caller intentionally detaches this promise. A failed result send is
-      // terminal for this request and must not surface as an unhandled rejection.
-      logWarn(
-        `node host invoke failure response could not be sent (id=${frame.id}): ${String(sendErr)}`,
-      );
-    }
+    await createNodeInvokeResponder(invocationClient, frame).error(
+      "UNAVAILABLE",
+      "node invocation failed",
+    );
   }
 }
 
@@ -330,8 +326,6 @@ async function dispatchInvoke(
       ? await invokeDeviceApps({
           paramsJSON: frame.paramsJSON,
           sharingEnabled: runtime.installedAppsSharingEnabled === true,
-          ...(runtime.installedAppsPlatform ? { platform: runtime.installedAppsPlatform } : {}),
-          ...(runtime.scanInstalledApps ? { scan: runtime.scanInstalledApps } : {}),
         })
       : undefined;
   if (result) {
@@ -684,9 +678,12 @@ async function handleMcpToolsCall(
       timeoutMs: frame.timeoutMs ?? undefined,
       ...(signal ? { signal } : {}),
     });
-    await response.send({ ok: true, payload: boundMcpToolResultPayload(result) });
+    await response.send({
+      ok: true,
+      payload: boundMcpToolResultPayload(toLegacyMcpCallToolResult(result)),
+    });
   } catch (error) {
-    if (error instanceof NodeHostMcpError) {
+    if (error instanceof NodeHostMcpError || error instanceof McpSdkCompatibilityError) {
       await response.error(error.code, error.message);
       return;
     }

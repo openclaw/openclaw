@@ -8,10 +8,11 @@ import {
   type SessionsDiffResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../config/io.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { loadCheckoutDiff } from "../../sessions/session-diff.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
 import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
+import { sessionFileWorkspaceMatches } from "./session-file-read-authority.js";
 import { loadRepositoryArtifactDiff } from "./session-repository-artifacts.js";
 import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
@@ -28,7 +29,7 @@ export async function loadSessionDiff(
   let returnedFileCount = 0;
   using timing =
     context &&
-    startSlowRequestDiagnostics<"resolve" | "git" | "response">(
+    startSlowRequestDiagnostics<"resolve" | "repository" | "managedBase" | "git" | "response">(
       context.logGateway,
       "slow session checkout diff",
       "sessions.diff",
@@ -44,7 +45,7 @@ export async function loadSessionDiff(
     deletions: 0,
     ...(unavailableReason ? { unavailableReason } : {}),
   });
-  return withSessionFileRoot(
+  return await withSessionFileRoot(
     { ...params, projection: ["sessionDiffBaseline"] },
     context?.getRuntimeConfig() ?? getRuntimeConfig(),
     async (loaded, assertSourceCurrent) => {
@@ -59,7 +60,12 @@ export async function loadSessionDiff(
       if (!entry?.sessionId || !storePath || !agentId) {
         return empty("unknown_session");
       }
-      const repository = await resolveRepositoryWorkspaceAccess({ ...loaded, agentId }, context);
+      timing?.mark("repository");
+      using repository = await resolveRepositoryWorkspaceAccess(
+        { ...loaded, agentId },
+        context,
+        assertCurrent,
+      );
       assertCurrent();
       if (repository) {
         if (repository.kind === "stored") {
@@ -73,6 +79,7 @@ export async function loadSessionDiff(
         const result = await repository.inspect("diff", {
           scope: params.scope ?? "all",
           commit: params.commit,
+          summaryOnly: params.summaryOnly,
           baseCommit: repository.repository.baseCommit,
         });
         assertCurrent();
@@ -85,9 +92,27 @@ export async function loadSessionDiff(
       if (!cwd) {
         return empty(checkoutPending ? undefined : "unknown_session");
       }
+      timing?.mark("managedBase");
+      const managedBase = entry.worktree?.id
+        ? await (
+            await import("../worker-environments/local-workspace-review.js")
+          ).readLocalWorkspaceReviewBase({
+            agentId,
+            sessionKey: loaded.canonicalKey,
+            entry,
+            cwd,
+            assertCurrent,
+          })
+        : undefined;
+      assertCurrent();
       worktreeCount = 1;
       timing?.mark("git");
-      const input = { cwd, sessionKey: params.sessionKey };
+      const input = {
+        cwd,
+        sessionKey: params.sessionKey,
+        baseCommit: managedBase?.baseCommit,
+        summaryOnly: params.summaryOnly,
+      };
       let result: SessionsDiffResult;
       if (params.scope === "commit") {
         if (!params.commit) {
@@ -103,6 +128,7 @@ export async function loadSessionDiff(
         });
       }
       assertCurrent();
+      managedBase?.assertCurrent();
       returnedFileCount = result.files.length;
       timing?.mark("response");
       return result;
@@ -113,6 +139,12 @@ export async function loadSessionDiff(
 export const sessionsDiffHandlers: GatewayRequestHandlers = {
   "sessions.diff": async (options) => {
     const { params, respond, context } = options;
+    using timing = startSlowRequestDiagnostics<"scopedRead" | "load" | "send">(
+      context.logGateway,
+      "slow session diff request",
+      "sessions.diff.request",
+      "scopedRead",
+    );
     if (!assertValidParams(params, validateSessionsDiffParams, "sessions.diff", respond)) {
       return;
     }
@@ -137,17 +169,16 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const read =
-      requestedAgent.agentId &&
-      captureIncognitoSessionSource({
-        sessionKey: params.sessionKey,
-        agentId: requestedAgent.agentId,
-      })
-        ? retainSessionScopedRead(options, params.sessionKey, requestedAgent.agentId, {
-            requireMaterialized: true,
-          })
-        : undefined;
+    const read = requestedAgent.agentId
+      ? await retainSessionScopedRead(options, params.sessionKey, requestedAgent.agentId, {
+          requireMaterialized: true,
+          entryMatches: (previous, current) =>
+            !hasSessionReadAccessChanged(previous, current) &&
+            sessionFileWorkspaceMatches(previous, current),
+        })
+      : undefined;
     try {
+      timing?.mark("load");
       const result = await loadSessionDiff(
         {
           ...params,
@@ -157,6 +188,7 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
         () => read?.assertCurrent(),
       );
       read?.assertCurrent();
+      timing?.mark("send");
       respond(true, result);
     } finally {
       read?.release();

@@ -16,7 +16,7 @@ import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-res
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../config/config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
@@ -46,6 +46,11 @@ import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "./command
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { editorTheme, tuiTheme as theme } from "./theme/theme.js";
+import {
+  createTuiProgramStatusReporter,
+  isTuiBusyActivityStatus,
+  type TuiRunOutcome,
+} from "./tui-activity-status.js";
 import { createTuiAuthChildOwner } from "./tui-auth-child.js";
 import { createTuiAutocompleteProvider } from "./tui-autocomplete.js";
 import type { TuiBackend } from "./tui-backend.js";
@@ -470,19 +475,6 @@ export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
   stopTuiSafely(() => tui.stop());
 }
 
-const TUI_BUSY_ACTIVITY_STATUSES = new Set([
-  "sending",
-  "waiting",
-  "streaming",
-  "running",
-  "finishing context",
-  "starting up",
-]);
-
-export function isTuiBusyActivityStatus(status: string): boolean {
-  return TUI_BUSY_ACTIVITY_STATUSES.has(status);
-}
-
 export function resolveTuiToolsToggleActivityStatus(params: {
   currentStatus: string;
   toolsExpanded: boolean;
@@ -574,8 +566,11 @@ export async function withEmbeddedTuiStateLock<T>(
     });
     return await run(signalBridge.signal);
   } finally {
-    await stateLock?.release();
-    signalBridge.dispose();
+    try {
+      await stateLock?.release();
+    } finally {
+      signalBridge.dispose();
+    }
   }
 }
 
@@ -588,7 +583,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
 async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
-  const config = opts.config ?? getRuntimeConfig({ skipPluginValidation: !isLocalMode });
+  const config =
+    opts.config ??
+    (await captureRuntimeConfigAsyncReader({ skipPluginValidation: !isLocalMode })());
   const cliInvocation = resolveCurrentOpenClawCliInvocation([]);
   const resolveUsableCwd = () => tryProcessCwd() ?? cliInvocation.cwd;
   const initialSessionInput = (opts.session ?? "").trim();
@@ -723,6 +720,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   }
 
   const tui = new TuiMainScreen(new TuiProcessTerminal());
+  const programStatus = createTuiProgramStatusReporter(tui.terminal);
   const dedupeBackspace = createBackspaceDeduper();
   tui.addInputListener((data) => {
     const next = dedupeBackspace(data);
@@ -1025,11 +1023,16 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     statusLoader = null;
   };
 
-  const renderStatus = () => {
+  const renderStatus = (runOutcome?: TuiRunOutcome) => {
     if (exitRequested) {
       return;
     }
     const isBusy = isTuiBusyActivityStatus(state.activityStatus);
+    programStatus.update({
+      activityStatus: state.activityStatus,
+      isConnected: state.isConnected,
+      runOutcome,
+    });
     if (isBusy) {
       if (!statusStartedAt || lastActivityStatus !== state.activityStatus) {
         statusStartedAt = Date.now();
@@ -1069,9 +1072,9 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     }
   };
 
-  const setActivityStatus = (text: string) => {
+  const setActivityStatus = (text: string, runOutcome?: TuiRunOutcome) => {
     state.activityStatus = text;
-    renderStatus();
+    renderStatus(runOutcome);
   };
 
   const withTuiSuspended = async <T>(work: () => Promise<T>): Promise<T> => {
@@ -1131,7 +1134,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
             if (result.exitCode === 0 && !result.signal) {
               tuiAuthLog.info(`auth child finished: ${outcome}`);
               if (!codexBin) {
-                reloadSharedAuthStoreOwnership();
+                await reloadSharedAuthStoreOwnership();
                 // The auth child persisted outside this process. Invalidate the
                 // published generation so retained local runtimes rebuild from it.
                 clearRuntimeAuthProfileStoreSnapshots();
@@ -1229,6 +1232,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   const {
     refreshAgents,
     refreshSessionInfo,
+    applySessionEventRow,
     applySessionInfoFromPatch,
     applySessionMutationResult,
     loadHistory: loadHistorySnapshot,
@@ -1305,6 +1309,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     setActivityStatus,
     updateFooter,
     refreshSessionInfo,
+    applySessionEventRow,
     loadHistory,
     noteLocalRunId: localRunIds.note,
     isLocalRunId: localRunIds.has,

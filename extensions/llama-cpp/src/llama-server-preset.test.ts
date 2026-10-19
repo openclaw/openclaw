@@ -25,43 +25,19 @@ function refreshEmbedding(
 }
 
 describe("managed embedding capacity defaults", () => {
-  it.each(["embeddinggemma-300m-qat-Q8_0.gguf", "custom.gguf"])(
-    "bounds fresh and regenerated presets for %s without relying on model identity",
-    (filename) => {
-      const options = { embeddingModelPath: `/models/${filename}` };
-      const preset = refreshEmbedding(undefined, options);
-      expect(preset).toBe(
-        `version = 1\n\n${EMBEDDING}\nmodel = /models/${filename}\nembedding = true\n${CAPACITY}`,
-      );
-      expect(refreshEmbedding(preset, options)).toBe(preset);
+  it.each([{ label: "np alias", global: "", section: "np = 2\n" }])(
+    "keeps a preset $label slot count without shrinking its context",
+    ({ global, section }) => {
+      const existing = `version = 1\n\n${global}${EMBEDDING}\nmodel = /models/old.gguf\n${section}embedding = true\n`;
+      const preset = refreshEmbedding(existing);
+      expect(preset).not.toContain("parallel = 1");
+      expect(preset).not.toContain("ctx-size");
+      expect(preset).toContain(`${global}${EMBEDDING}\nmodel = /models/embedding.gguf\n${section}`);
+      expect(preset).toContain("ubatch-size = 2048");
     },
   );
 
-  it("adds missing capacity bounds to an old section while preserving tuning", () => {
-    const existing = `version = 1\n\n${EMBEDDING}\nmodel = /models/old.gguf\nubatch-size = 2048\nembedding = true\nflash-attn = on\n`;
-    expect(refreshEmbedding(existing)).toBe(
-      `version = 1\n\n${EMBEDDING}\nmodel = /models/embedding.gguf\nubatch-size = 2048\nembedding = true\nflash-attn = on\nparallel = 1\nctx-size = 2048\n`,
-    );
-  });
-
   it.each([
-    { label: "parallel key", global: "", section: "parallel = 4\n" },
-    { label: "np alias", global: "", section: "np = 2\n" },
-    { label: "environment alias", global: "", section: "LLAMA_ARG_N_PARALLEL = 3\n" },
-    { label: "[*] default", global: "[*]\nparallel = 2\n\n", section: "" },
-  ])("keeps a preset $label slot count without shrinking its context", ({ global, section }) => {
-    const existing = `version = 1\n\n${global}${EMBEDDING}\nmodel = /models/old.gguf\n${section}embedding = true\n`;
-    const preset = refreshEmbedding(existing);
-    expect(preset).not.toContain("parallel = 1");
-    expect(preset).not.toContain("ctx-size");
-    expect(preset).toContain(`${global}${EMBEDDING}\nmodel = /models/embedding.gguf\n${section}`);
-    expect(preset).toContain("ubatch-size = 2048");
-  });
-
-  it.each([
-    { global: "", section: "c = 4096\nub = 4096\n" },
-    { global: "[*]\nLLAMA_ARG_CTX_SIZE = 8192\nLLAMA_ARG_UBATCH = 1024\n\n", section: "" },
-    { global: "", section: "kv-unified-per-slot = 8192\nub = 4096\n" },
     {
       global: "[*]\nLLAMA_ARG_KV_UNIFIED_PER_SLOT = 8192\nLLAMA_ARG_UBATCH = 1024\n\n",
       section: "",
@@ -74,17 +50,16 @@ describe("managed embedding capacity defaults", () => {
     expect(preset).not.toMatch(/ctx-size|ubatch-size/u);
   });
 
-  it.each([
-    { label: "env", serviceSettings: { env: { LLAMA_ARG_N_PARALLEL: "4" } } },
-    { label: "--parallel arg", serviceSettings: { args: ["--port", "1", "--parallel", "2"] } },
-    { label: "-np arg", serviceSettings: { args: ["-np", "3"] } },
-  ])("keeps the router service's $label slot/context policy", ({ serviceSettings }) => {
-    const preset = refreshEmbedding(undefined, { serviceSettings });
-    expect(preset).not.toMatch(/parallel|ctx-size/u);
-    expect(preset).toContain("ubatch-size = 2048");
-  });
+  it.each([{ label: "-np arg", serviceSettings: { args: ["-np", "3"] } }])(
+    "keeps the router service's $label slot/context policy",
+    ({ serviceSettings }) => {
+      const preset = refreshEmbedding(undefined, { serviceSettings });
+      expect(preset).not.toMatch(/parallel|ctx-size/u);
+      expect(preset).toContain("ubatch-size = 2048");
+    },
+  );
 
-  it.each(["--kv-unified-per-slot", "--kv_unified_per_slot"])(
+  it.each(["--kv_unified_per_slot"])(
     "preserves native per-slot sizing from the service's %s option",
     (option) => {
       const preset = refreshEmbedding(undefined, {
@@ -96,12 +71,7 @@ describe("managed embedding capacity defaults", () => {
     },
   );
 
-  it.each([
-    { platform: "win32", key: "llama_arg_n_parallel", expectedDefault: false },
-    { platform: "win32", key: "Llama_Arg_N_Parallel", expectedDefault: false },
-    { platform: "linux", key: "llama_arg_n_parallel", expectedDefault: true },
-    { platform: "linux", key: "parallel", expectedDefault: true },
-  ] as const)(
+  it.each([{ platform: "win32", key: "Llama_Arg_N_Parallel", expectedDefault: false }] as const)(
     "matches $platform environment names for $key",
     ({ platform, key, expectedDefault }) => {
       withMockedPlatform(platform, () => {

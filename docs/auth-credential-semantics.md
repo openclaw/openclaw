@@ -121,6 +121,10 @@ closing that scope; retained callbacks cannot write after it closes.
 Each catalog request carries the Gateway's committed shared-store ownership. A
 reused worker installs that fact before reading credentials, so the first login's
 empty-store relocation cannot leave discovery attached to the legacy location.
+Catalog preparation carries the persisted-store inspection result and selected
+display path with the credential view. Labels reuse that source selection for the
+request; the next refresh observes committed changes. External credential refresh
+and the final credential authority check remain unchanged.
 Temporary probe stores wait for their database work and shared-registry removal
 before deleting credential files. If disposal fails, cleanup retains the directory
 and reports its location.
@@ -146,13 +150,16 @@ cache, and applies the requesting client's profile-identity visibility.
 File-backed external CLI bootstrap health stays with its reader's freshness
 lifecycle because external login can change without a Gateway publication.
 
-Repeated model resolution reuses persisted auth rows while the owning database's
-write generation and file identity remain unchanged. Committed auth writes and
-runtime snapshot reloads invalidate those rows immediately. Database, WAL, and
-journal identities are checked at most once per 100 ms on warm cache hits; the
-first read at or after that interval detects changes from other processes.
-Hits do not extend this freshness window. Cache misses still check identity
-before and after reading rows. Scoped overlays, migration refusals,
+Repeated model resolution reuses deeply frozen persisted auth rows while the
+auth publication revision and owning database identity remain unchanged.
+Committed auth writes, unclassified database writes, and runtime snapshot reloads
+invalidate those rows immediately. Writes certified as session-only preserve
+the same immutable rows without reading or freezing them again. Each request
+retains its own live read authority; cache reuse cannot revive a revoked reader.
+An auth read prepared before an agent database exists stays empty if the first
+session creates that database. A later read observes the new file; replacement
+of an already captured file still invalidates its read.
+Scoped overlays, migration refusals,
 and personal-account selection still run on each request. Isolated agent scopes
 and private database snapshots do not share this cache. Gateway cache misses reuse
 a read-only child whose lifetime ends at shutdown; each read reacquires its source

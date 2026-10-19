@@ -124,19 +124,20 @@ whose working directory differs from the attempt may pass
 bounded action fact while keeping identity and policy authority closure-bound. The closure
 binds the host-resolved run, sandbox, requester, route, and approval identity;
 plugins must not reconstruct those fields or retain the capability after the
-attempt returns. Calls made after attempt settlement fail closed.
+attempt returns. Calls made after attempt settlement are rejected.
 
 When supplied, `assertNativeSubagentSpawnAllowed()` must run at native spawn
-admission. It rejects ambiguous participant identity; direct the model to
-`sessions_spawn` with the requester's verified `requester_profile.id` as `user`. Bundled native hook admission may return a synchronous
-guard, which the relay rechecks after awaited preparation immediately before allow;
-a returned reason becomes a model-visible refusal.
-The participant check uses existing native model admission, including its default
-optional mode. When native admission is disabled or unavailable, solo Codex turns
-keep native delegation, and another person's input queues as a follow-up when native
-spawn remains available. Threads whose effective policy already disables native
-delegation still permit cross-profile steering.
-If a fallback attempt already includes several people and native spawn remains available without hook admission, Codex refuses the attempt and asks the sender to send the request again as a new message so it runs as its own turn.
+admission. It checks the current incumbent execution's authority. Native delegation
+keeps that execution's requester even after another person steers the turn; it does
+not select a person from the conversation. Bundled native hook admission may return
+a synchronous guard, which the relay rechecks after awaited preparation immediately
+before allow; a returned reason becomes a model-visible refusal.
+
+Native hook availability does not itself restrict collaborative steering. Existing
+model, workspace, cancellation, and source-authority checks still govern native work.
+Explicit participant selection on `sessions_spawn` is separate: it carries the
+selected authenticated requester into a new admission while retaining the parent
+execution as initiator.
 
 Backend handles can declare `supportsCrossProfileSteering: false` when steering
 must stay with the turn owner's operator profile; omitting the field permits
@@ -145,8 +146,8 @@ message injection, including question answers delivered through that path.
 
 For independently retained native work, call the optional
 `retainSourceAuthority()` while the host capability is active. When an operator
-source exists, the returned `assertCurrent`, optional `signal`, and idempotent
-`release` retain that original source independently of foreground completion.
+source exists, the returned `assertCurrent`, optional `signal`, and
+`release` (safe to repeat) retain that original source independently of foreground completion.
 The method returns `undefined` for a run without an operator source. It supplies
 neither new tool permission nor a replacement foreground capability. Bind it to
 the exact resources admitted through the existing native policy path, recheck it
@@ -178,8 +179,8 @@ Older hosts without this capability provide only the current attempt's
 
 When trajectory capture has a valid host-owned session target,
 `params.hostCapabilities.trajectory` provides closure-bound `recordEvent(...)`
-and `flush()` operations. The host adds session attribution, bounds and redacts
-event data, and persists it through the canonical trajectory store. Treat the
+and `flush()` operations. The host adds session attribution, bounds event data,
+and persists it through the shared trajectory store without secret masking. Treat the
 capability as optional, send only structured non-secret facts, and await
 `flush()` before the attempt settles; do not infer storage paths or create a
 plugin-side fallback when the capability is absent.

@@ -907,7 +907,7 @@ private actor TestChatTransportState {
     }
 }
 
-private final class TestChatTransport: @unchecked Sendable, OpenClawChatTransport {
+final class TestChatTransport: @unchecked Sendable, OpenClawChatTransport {
     private let state = TestChatTransportState()
     private let historyResponses: [OpenClawChatHistoryPayload]
     private let sessionsResponses: [OpenClawChatSessionsListResponse]
@@ -1435,7 +1435,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.continuation.yield(evt)
     }
 
-    func waitForState(_ isSatisfied: @escaping @Sendable (isolated TestChatTransportState) -> Bool) async {
+    fileprivate func waitForState(_ isSatisfied: @escaping @Sendable (isolated TestChatTransportState) -> Bool) async {
         await self.state.wait(until: isSatisfied)
     }
 
@@ -2556,10 +2556,10 @@ struct ChatViewModelTests {
         await viewModel.refreshSwarmCapability()
         #expect(viewModel.activeSwarmGroups.isEmpty)
 
-        await viewModel.handleTransportEvent(.chatMetadataChanged)?.value
+        await viewModel.handleTransportEvent(.chatMetadataChanged())?.value
         #expect(!viewModel.activeSwarmGroups.isEmpty)
 
-        await viewModel.handleTransportEvent(.chatMetadataChanged)?.value
+        await viewModel.handleTransportEvent(.chatMetadataChanged())?.value
         #expect(viewModel.activeSwarmGroups.isEmpty)
     }
 
@@ -2652,6 +2652,57 @@ struct ChatViewModelTests {
             break
         }
         #expect(await transport.listSessionsQueries().count == 1)
+    }
+
+    @Test(arguments: ["lifecycle", "subagent-status"]) @MainActor
+    func `finished helper clears parent wait without reopening the sidebar`(reason: String) async {
+        var parent = sessionEntry(key: "main", updatedAt: 1, hasActiveRun: true, activeRunIds: ["parent-run"])
+        parent.status = "running"
+        parent.hasActiveSubagentRun = true
+        var helper = sessionEntry(
+            key: "agent:main:subagent:helper",
+            updatedAt: 1,
+            hasActiveRun: true,
+            activeRunIds: ["helper-run"])
+        helper.status = "running"
+        helper.parentSessionKey = parent.key
+        var waiting = parent
+        waiting.updatedAt = 2
+        waiting.hasActiveRun = false
+        waiting.activeRunIds = []
+        waiting.status = "done"
+        var idle = waiting
+        idle.updatedAt = 3
+        // Ordinary parents omit this field once their last descendant finishes.
+        idle.hasActiveSubagentRun = nil
+        var finished = helper
+        finished.updatedAt = 3
+        finished.status = "done"
+        finished.hasActiveRun = false
+        finished.activeRunIds = []
+        let transport = TestChatTransport(
+            historyResponses: [],
+            sessionsResponses: [sessionsResponse([waiting, helper]), sessionsResponse([idle, finished])])
+        let viewModel = OpenClawChatViewModel(sessionKey: parent.key, transport: transport)
+        viewModel.sessions = [parent, helper]
+        #expect(viewModel.subagentWait == nil)
+
+        await viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: parent.key,
+            reason: "lifecycle",
+            phase: "end",
+            runId: "parent-run",
+            session: waiting)))?.value
+        #expect(viewModel.subagentWait?.child?.key == helper.key)
+
+        await viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: helper.key,
+            parentSessionKey: parent.key,
+            reason: reason,
+            phase: reason == "lifecycle" ? "end" : nil,
+            runId: "helper-run",
+            session: finished)))?.value
+        #expect(viewModel.subagentWait == nil)
     }
 
     @Test @MainActor func `global Swarm activity follows the selected agent owner`() async {
@@ -9405,6 +9456,43 @@ struct ChatViewModelTests {
         #expect(vm.canSend)
     }
 
+    @Test(arguments: [
+        (#"{"modelCatalogChanged":false,"authChanged":false}"#, false),
+        (#"{"agentId":"other","modelCatalogChanged":true}"#, false),
+        (#"{"agentId":"main","modelCatalogChanged":true}"#, true),
+        (#"{"modelCatalogChanged":false,"authChanged":true}"#, true),
+        (#"{"agentId":"other","modelCatalogChanged":false,"modelSelectionChanged":true}"#, true),
+        ("{}", true),
+    ])
+    @MainActor func `metadata publications reload only the affected model catalog`(
+        payload: String,
+        reloads: Bool) async throws
+    {
+        let unavailable = modelChoice(
+            id: "fixture",
+            name: "Fixture",
+            available: false,
+            unavailableReason: "missing-auth")
+        let available = modelChoice(id: "fixture", name: "Fixture", available: true)
+        let (transport, vm) = await makeViewModel(
+            sessionKey: "agent:main:main",
+            historyResponses: [historyPayload()],
+            modelResponses: [[unavailable], [available]],
+            modelAvailabilityIsSessionScoped: true)
+        await vm.fetchModels()
+
+        let frame = try JSONDecoder().decode(
+            EventFrame.self,
+            from: Data("""
+            {"type":"event","event":"chat.metadata.changed","payload":\(payload)}
+            """.utf8))
+        let event = try #require(OpenClawChatGatewayPayloadCodec.event(from: frame))
+        await vm.handleTransportEvent(event)?.value
+
+        #expect(await transport.modelAgentIDs().count == (reloads ? 2 : 1))
+        #expect(vm.modelChoices == (reloads ? [available] : [unavailable]))
+    }
+
     @Test @MainActor func `metadata refresh and sequence recovery replace the selected model gate`() async throws {
         let unavailable = modelChoice(
             id: "claude-opus-4-6",
@@ -9433,7 +9521,7 @@ struct ChatViewModelTests {
         vm.input = "hello"
         #expect(!vm.canSend)
 
-        await vm.handleTransportEvent(.chatMetadataChanged)?.value
+        await vm.handleTransportEvent(.chatMetadataChanged())?.value
         #expect(await MainActor.run { vm.modelChoices.first?.available == true })
         #expect(vm.canSend)
 
@@ -9470,7 +9558,7 @@ struct ChatViewModelTests {
         vm.handleTransportEvent(.seqGap)
         await transport.waitForState { $0.modelAgentIDs.count >= 2 }
         #expect(await transport.modelAgentIDs().count >= 2)
-        let metadata = vm.handleTransportEvent(.chatMetadataChanged)
+        let metadata = vm.handleTransportEvent(.chatMetadataChanged())
         await sequenceRecoveryGate.open()
         await metadata?.value
         #expect(await MainActor.run { vm.modelChoices.first?.available == true })

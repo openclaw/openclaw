@@ -14,7 +14,7 @@ import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
 import type { GatewayNodeWorkerBundleInstall } from "./node-worker-bundle-installer.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
-import type { WorkerPreparationArtifacts } from "./preparation-identity.js";
+import type { WorkerPreparationArtifacts } from "./preparation-identity.schema.js";
 import type { createWorkerProjectPreparation } from "./project-preparation.js";
 import type { WorkerSshIdentityResolver } from "./ssh.js";
 import type { WorkerEnvironmentState } from "./state.js";
@@ -64,7 +64,7 @@ export type WorkerProviderLifecycleInputOptions = {
   prepareNodeArtifacts?: (
     profileSnapshot: WorkerProfile,
     signal?: AbortSignal,
-  ) => Promise<{ artifacts: WorkerPreparationArtifacts; assertCurrent: () => void }>;
+  ) => Promise<{ artifacts: WorkerPreparationArtifacts }>;
   registerPreparedWorkspace?: (params: {
     record: WorkerEnvironmentRecord;
     deviceId: string;

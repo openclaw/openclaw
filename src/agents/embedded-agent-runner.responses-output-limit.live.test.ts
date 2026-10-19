@@ -18,7 +18,11 @@ import {
   type ContextEngineLogicalTurnLease,
 } from "./harness/context-engine-logical-turn.js";
 import { shellQuoteArgs } from "./harness/native-hook-relay-utils.js";
-import { isLiveTestEnabled, logLiveProgress } from "./live-test-helpers.js";
+import {
+  isLiveTestEnabled,
+  logLiveProgress,
+  useLiveTestRuntimeConfig,
+} from "./live-test-helpers.js";
 import { SessionManager } from "./sessions/session-manager.js";
 
 const describeLive =
@@ -116,6 +120,7 @@ describeLive("embedded Responses output-limit recovery live", () => {
         plugins: { allow: ["openai"], slots: { memory: "none" } },
       } satisfies OpenClawConfig;
       await state.writeConfig(config);
+      using _ = useLiveTestRuntimeConfig(config);
       const sessionManager = SessionManager.inMemory(state.workspaceDir);
       const events: EmbeddedAgentEvent[] = [];
       const requests: ResponseCreateParamsStreaming[] = [];
@@ -257,7 +262,6 @@ describeLive("embedded Responses output-limit recovery live", () => {
         expect(failures).toEqual([
           expect.objectContaining({
             stopReason: "error",
-            usage: expect.objectContaining({ output: 256 }),
             diagnostics: expect.arrayContaining([
               expect.objectContaining({
                 type: "openai_responses_terminal",
@@ -269,6 +273,13 @@ describeLive("embedded Responses output-limit recovery live", () => {
             ]),
           }),
         ]);
+        // OpenAI can report a few tokens past max_output_tokens on a truncated response (260 for 256).
+        const [failure] = failures;
+        if (failure?.role !== "assistant") {
+          throw new Error("Expected one incomplete assistant tool-call failure");
+        }
+        expect(failure.usage.output).toBeGreaterThanOrEqual(256);
+        expect(failure.usage.output).toBeLessThanOrEqual(256 + 32);
         expect(
           messages.filter(
             (message) => message.role === "toolResult" && message.toolName === "exec",

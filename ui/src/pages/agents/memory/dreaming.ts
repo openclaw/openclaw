@@ -123,7 +123,6 @@ export type DreamingResourceKey =
   | "dreamDiary"
   | "wikiImportInsights"
   | "wikiOverview";
-type DreamingResourceRequest = { agentId: string };
 
 export type DreamingState = {
   client: GatewayBrowserClient | null;
@@ -131,13 +130,10 @@ export type DreamingState = {
   hello: GatewayHelloOk | null;
   configSnapshot: ConfigSnapshot | null;
   selectedAgentId: string | null;
-  resourceRequests: Partial<Record<DreamingResourceKey, DreamingResourceRequest>>;
-  dreamingStatusAgentId?: string | null;
   dreamingStatusLoading: boolean;
   dreamingStatusError: string | null;
   dreamingStatus: DreamingStatus | null;
   dreamingModeSaving: boolean;
-  dreamDiaryAgentId?: string | null;
   dreamDiaryLoading: boolean;
   dreamDiaryActionLoading: boolean;
   dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null;
@@ -145,11 +141,9 @@ export type DreamingState = {
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
-  wikiImportInsightsAgentId?: string | null;
   wikiImportInsightsLoading: boolean;
   wikiImportInsightsError: string | null;
   wikiImportInsights: WikiImportInsights | null;
-  wikiOverviewAgentId?: string | null;
   wikiOverviewLoading: boolean;
   wikiOverviewError: string | null;
   wikiOverview: WikiOverview | null;
@@ -167,7 +161,6 @@ export function createDreamingState(
     hello: initial.hello ?? null,
     configSnapshot: initial.configSnapshot ?? null,
     selectedAgentId: initial.selectedAgentId ?? null,
-    resourceRequests: {},
     dreamingStatusLoading: false,
     dreamingStatusError: null,
     dreamingStatus: null,
@@ -314,7 +307,6 @@ type DreamingResourcePayloads = {
 
 type DreamingResourceSpec<Key extends DreamingResourceKey> = {
   method: string;
-  clear: (state: DreamingState) => void;
   apply: (state: DreamingState, payload: DreamingResourcePayloads[Key]) => void;
 };
 
@@ -323,19 +315,12 @@ const DREAMING_RESOURCES: {
 } = {
   dreamingStatus: {
     method: "doctor.memory.status",
-    clear: (state) => {
-      state.dreamingStatus = null;
-    },
     apply: (state, payload) => {
       state.dreamingStatus = payload.dreaming ?? null;
     },
   },
   dreamDiary: {
     method: "doctor.memory.dreamDiary",
-    clear: (state) => {
-      state.dreamDiaryPath = null;
-      state.dreamDiaryContent = null;
-    },
     apply: (state, payload) => {
       state.dreamDiaryPath = payload.path;
       state.dreamDiaryContent = payload.found ? (payload.content ?? "") : null;
@@ -343,18 +328,12 @@ const DREAMING_RESOURCES: {
   },
   wikiImportInsights: {
     method: "wiki.importInsights",
-    clear: (state) => {
-      state.wikiImportInsights = null;
-    },
     apply: (state, payload) => {
       state.wikiImportInsights = payload;
     },
   },
   wikiOverview: {
     method: "wiki.overview",
-    clear: (state) => {
-      state.wikiOverview = null;
-    },
     apply: (state, payload) => {
       state.wikiOverview = payload;
     },
@@ -376,7 +355,6 @@ async function loadDreamingResourceSpec<Key extends DreamingResourceKey>(
   const agentId = resolveSelectedAgentId(state);
   const loadingKey: `${Key}Loading` = `${key}Loading`;
   const errorKey: `${Key}Error` = `${key}Error`;
-  const agentKey: `${Key}AgentId` = `${key}AgentId`;
   if (!agentId) {
     return;
   }
@@ -384,58 +362,48 @@ async function loadDreamingResourceSpec<Key extends DreamingResourceKey>(
   if (!client || !state.connected) {
     return;
   }
-  if (state[agentKey] !== agentId) {
-    spec.clear(state);
-  }
   if (
     (key === "wikiImportInsights" || key === "wikiOverview") &&
     !canCallMemoryWikiMethod(state, spec.method)
   ) {
-    delete state.resourceRequests[key];
     state[loadingKey] = false;
     state[errorKey] = null;
-    spec.clear(state);
+    if (key === "wikiImportInsights") {
+      state.wikiImportInsights = null;
+    } else {
+      state.wikiOverview = null;
+    }
     return;
   }
 
-  const active = state.resourceRequests[key];
-  if (active?.agentId === agentId && state[loadingKey]) {
+  if (state[loadingKey]) {
     return;
   }
 
-  // Request identity, not agent identity, rejects stale A -> B -> A completions.
-  const request: DreamingResourceRequest = { agentId };
-  state.resourceRequests[key] = request;
   state[loadingKey] = true;
   state[errorKey] = null;
+  // The Memory owner replaces this state when its agent or connection epoch changes.
   try {
     const payload = await client.request<DreamingResourcePayloads[Key]>(spec.method, { agentId });
-    if (state.resourceRequests[key] !== request || resolveSelectedAgentId(state) !== agentId) {
-      return;
-    }
     spec.apply(state, payload);
-    state[agentKey] = agentId;
   } catch (error) {
-    if (state.resourceRequests[key] === request && resolveSelectedAgentId(state) === agentId) {
-      state[errorKey] = formatUiError(error);
-    }
+    state[errorKey] = formatUiError(error);
   } finally {
-    if (state.resourceRequests[key] === request) {
-      delete state.resourceRequests[key];
-      state[loadingKey] = false;
-    }
+    state[loadingKey] = false;
   }
 }
 
 export async function runDreamDiaryAction(
   state: DreamingState,
   method: DreamDiaryActionMethod,
+  isCurrent: () => boolean = () => true,
 ): Promise<boolean> {
   const client = state.client;
   const agentId = resolveSelectedAgentId(state);
   if (
     !client ||
     !agentId ||
+    !isCurrent() ||
     !canCallDreamingMethod(state, method, "operator.write") ||
     state.dreamDiaryActionLoading
   ) {
@@ -448,13 +416,10 @@ export async function runDreamDiaryAction(
   state.dreamDiaryActionArchivePath = null;
   try {
     const payload = await client.request<DoctorMemoryDreamActionPayload>(method, { agentId });
-    if (
-      method !== "doctor.memory.resetGroundedShortTerm" &&
-      method !== "doctor.memory.repairDreamingArtifacts"
-    ) {
-      await loadDreamingResource(state, "dreamDiary");
+    if (!isCurrent()) {
+      return false;
     }
-    await loadDreamingResource(state, "dreamingStatus");
+    // Keep the confirmed receipt if a follow-up read is interrupted.
     state.dreamDiaryActionArchivePath =
       method === "doctor.memory.repairDreamingArtifacts"
         ? (normalizeTrimmedString(payload?.archiveDir) ?? null)
@@ -463,8 +428,24 @@ export async function runDreamDiaryAction(
       kind: "success",
       text: buildDreamDiaryActionSuccessMessage(method, payload),
     };
+    if (
+      method !== "doctor.memory.resetGroundedShortTerm" &&
+      method !== "doctor.memory.repairDreamingArtifacts"
+    ) {
+      await loadDreamingResource(state, "dreamDiary");
+    }
+    if (!isCurrent()) {
+      return false;
+    }
+    await loadDreamingResource(state, "dreamingStatus");
+    if (!isCurrent()) {
+      return false;
+    }
     return true;
   } catch (err) {
+    if (!isCurrent()) {
+      return false;
+    }
     const message = formatUiError(err);
     state.dreamingStatusError = message;
     state.lastError = message;
@@ -472,7 +453,9 @@ export async function runDreamDiaryAction(
     state.dreamDiaryActionMessage = { kind: "error", text: message };
     return false;
   } finally {
-    state.dreamDiaryActionLoading = false;
+    if (isCurrent()) {
+      state.dreamDiaryActionLoading = false;
+    }
   }
 }
 
@@ -571,12 +554,17 @@ export async function updateDreamingEnabled(
       note: "Dreaming settings updated from the Dreaming tab.",
       canDispatch,
     });
+    if (!canDispatch()) {
+      return false;
+    }
     if (!updated) {
       state.dreamingStatusError =
         config.state.lastError ?? state.lastError ?? t("dreaming.actions.updateFailed");
     }
   } finally {
-    state.dreamingModeSaving = false;
+    if (canDispatch()) {
+      state.dreamingModeSaving = false;
+    }
   }
   if (updated && state.dreamingStatus) {
     state.dreamingStatus = {

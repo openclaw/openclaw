@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
@@ -105,6 +105,11 @@ suite.define(() => {
       await composer.fill("");
       await waitForSettledFormControls(page, [{ locator: composer, value: "" }]);
       await expect.poll(() => draft.count()).toBe(0);
+      // Opening Home collapses the desktop list while keeping the rail available.
+      await page
+        .locator(".sidebar-rail")
+        .getByRole("button", { name: "Sessions", exact: true })
+        .click();
       await secondRow.getByRole("link").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));
       await expect.poll(() => draft.count()).toBe(0);

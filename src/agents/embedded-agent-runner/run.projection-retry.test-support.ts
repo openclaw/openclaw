@@ -35,6 +35,8 @@ describe("runEmbeddedAgent transcript projection retry", () => {
     resetSharedRunIntegrationHarnessMocks();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "run.projection-retry" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(async () => {
@@ -68,11 +70,18 @@ describe("runEmbeddedAgent transcript projection retry", () => {
     );
     const controller = new AbortController();
     const originalWaitForProjection = reconcile.waitForSessionTranscriptProjection;
+    let compactionFinished = false;
     let ownedProjectionSettled = false;
+    let ownedProjectionSignal: AbortSignal | undefined;
     const waitForProjection = vi
       .spyOn(reconcile, "waitForSessionTranscriptProjection")
       .mockImplementation(async (scope, abortSignal) => {
         await originalWaitForProjection(scope, abortSignal);
+        // The foreground startup barrier cannot settle a later compaction.
+        if (!compactionFinished) {
+          return;
+        }
+        ownedProjectionSignal = abortSignal;
         expect(
           agentDatabase
             .openOpenClawAgentDatabase(databaseOptions)
@@ -104,6 +113,7 @@ describe("runEmbeddedAgent transcript projection retry", () => {
           return makeAttemptResult({ sessionIdUsed: sessionId });
         });
       mockedCompactDirect.mockImplementationOnce(async () => {
+        expect(ownedProjectionSettled).toBe(false);
         const database = agentDatabase.openOpenClawAgentDatabase(databaseOptions);
         database.db
           .prepare(
@@ -121,6 +131,7 @@ describe("runEmbeddedAgent transcript projection retry", () => {
           ...databaseOptions,
           preferredSessionId: sessionId,
         });
+        compactionFinished = true;
         return makeCompactionSuccess({
           summary: "compacted before projection retry",
           tokensBefore: 160_000,
@@ -139,7 +150,6 @@ describe("runEmbeddedAgent transcript projection retry", () => {
       });
 
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-      expect(waitForProjection).toHaveBeenCalledOnce();
       expect(waitForProjection).toHaveBeenCalledWith(
         { ...sessionTarget, expectedWriterRunId: "run-owned-projection-retry" },
         expect.any(AbortSignal),
@@ -155,7 +165,7 @@ describe("runEmbeddedAgent transcript projection retry", () => {
       ).toBe(1);
       const cancellation = new Error("caller stopped projection work");
       controller.abort(cancellation);
-      expect(waitForProjection.mock.calls[0]?.[1]?.reason).toBe(cancellation);
+      expect(ownedProjectionSignal?.reason).toBe(cancellation);
     } finally {
       waitForProjection.mockRestore();
       await reconcile.waitForSessionTranscriptIndexReconcile(databaseOptions);

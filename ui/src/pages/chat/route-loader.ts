@@ -614,7 +614,7 @@ export async function loadSessionPage(
     }
     if (result.creation || context.placementStartup.get(result.sessionKey)?.initialTurn) {
       // Startup owns a display-only view even if an interrupted temporary session is cleaned up.
-      await import("./pending-session-create.ts");
+      await import("./pending-session-create.tsx");
       signal.throwIfAborted();
     }
   }

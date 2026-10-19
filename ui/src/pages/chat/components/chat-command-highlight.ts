@@ -1,7 +1,3 @@
-import { html } from "lit";
-
-// ── Command syntax highlighting ──
-
 type CommandToken = { text: string; cls: "name" | "flag" | "str" | "num" | "op" | "plain" | "ws" };
 
 export const COMMAND_HIGHLIGHT_MAX_CHARS = 2_000;
@@ -59,15 +55,4 @@ export function tokenizeCommand(command: string): CommandToken[] {
     index = end;
   }
   return tokens;
-}
-
-export function renderHighlightedCommand(command: string) {
-  if (command.length > COMMAND_HIGHLIGHT_MAX_CHARS) {
-    return html`${command}`;
-  }
-  return html`${tokenizeCommand(command).map((token) =>
-    token.cls === "ws" || token.cls === "plain"
-      ? html`${token.text}`
-      : html`<span class="chat-cmd--${token.cls}">${token.text}</span>`,
-  )}`;
 }

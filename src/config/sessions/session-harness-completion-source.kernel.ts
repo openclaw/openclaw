@@ -1,6 +1,8 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  readSqliteDatabaseScopedWriteToken,
+  sqliteSessionIdWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
-import { normalizeInputProvenance } from "../../sessions/input-provenance.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
 import { everySessionTranscriptUserInputFrom } from "./session-accessor.sqlite-active-events.js";
@@ -10,13 +12,14 @@ import {
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { createHarnessCompletionInputPredicate } from "./session-harness-completion-input.js";
 import type { HarnessCompletionSourceSnapshot } from "./session-harness-completion-source.types.js";
 import { encodeSessionTranscriptWorkerError } from "./session-history-worker-errors.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import type { SessionEntry } from "./types.js";
 
 /** Exact source lookup is independent of the display tail used to choose recovery policy. */
-export function readAdmittedHarnessCompletionInput(params: {
+export function readAdmittedHarnessCompletionInputFromSqlite(params: {
   claim: HarnessCompletionRecovery;
   entry: SessionEntry;
   storePath: string;
@@ -29,51 +32,10 @@ export function readAdmittedHarnessCompletionInput(params: {
     sessionId: params.entry.sessionId,
     storePath: params.storePath,
   };
-  const priorRunIds = (params.entry.restartRecoveryRuns ?? [])
-    .filter((run) => Boolean(run.lifecycleGeneration))
-    .map((run) => run.runId);
-  const claim = params.claim;
-  const allowedRunIds = new Set([params.operationalRunId, ...priorRunIds].filter(Boolean));
-  let sourceChecked = false;
   return everySessionTranscriptUserInputFrom(
     scope,
     `${params.claim.sourceRunId}:user`,
-    (message) => {
-      const record = asOptionalRecord(message);
-      const provenance = normalizeInputProvenance(record?.provenance);
-      const annotatedRunId = asOptionalRecord(record?.["__openclaw"])?.runId;
-      if (!sourceChecked) {
-        sourceChecked = true;
-        return (
-          record?.role === "user" &&
-          record.idempotencyKey === `${claim.sourceRunId}:user` &&
-          annotatedRunId === claim.sourceRunId &&
-          provenance?.kind === "inter_session" &&
-          provenance.sourceChannel === "internal" &&
-          ["agent_harness_task", "agent_harness_completion"].includes(
-            provenance.sourceTool ?? "",
-          ) &&
-          provenance.sourceSessionKey === claim.taskRunId
-        );
-      }
-      if (record?.role !== "user") {
-        return true;
-      }
-      // The recorder commits the exact input key before native mirroring adds
-      // runId. A present annotation must agree with this admitted recovery input.
-      const runId =
-        typeof record.idempotencyKey === "string"
-          ? [...allowedRunIds].find((id) => record.idempotencyKey === `${id}:user`)
-          : annotatedRunId;
-      return (
-        typeof runId === "string" &&
-        allowedRunIds.has(runId) &&
-        (annotatedRunId == null || annotatedRunId === runId) &&
-        provenance?.kind === "internal_system" &&
-        provenance.sourceTool === "main_session_restart_recovery" &&
-        provenance.sourceSessionKey === claim.requesterSessionKey
-      );
-    },
+    createHarnessCompletionInputPredicate(params),
     params.projection,
   );
 }
@@ -85,6 +47,10 @@ export function readHarnessCompletionSourceInDatabase(
   mode: "admission" | "committed" = "admission",
 ): HarnessCompletionSourceSnapshot {
   return runSqliteReadSnapshotSync(database.db, () => {
+    const writeToken = readSqliteDatabaseScopedWriteToken(database.db, [
+      claim.requesterSessionKey,
+      sqliteSessionIdWriteScope(claim.sessionId),
+    ]);
     const entry = readExactSessionEntryRow(
       database,
       claim.requesterSessionKey,
@@ -95,7 +61,7 @@ export function readHarnessCompletionSourceInDatabase(
       !entry ||
       (mode === "admission" && entry.restartRecoveryDeliveryRunId === claim.sourceRunId)
     ) {
-      return { entry, validInput: true };
+      return { entry, validInput: true, writeToken };
     }
     const resolved = {
       agentId: claim.requesterAgentId,
@@ -106,7 +72,7 @@ export function readHarnessCompletionSourceInDatabase(
     try {
       const snapshot = readCurrentProjectionSnapshot(database, resolved, (projection) => ({
         entry,
-        validInput: readAdmittedHarnessCompletionInput({
+        validInput: readAdmittedHarnessCompletionInputFromSqlite({
           claim,
           entry,
           storePath: database.path,
@@ -114,6 +80,7 @@ export function readHarnessCompletionSourceInDatabase(
           projection,
         }),
         version: readTranscriptContextVersionInTransaction(database, entry.sessionId),
+        writeToken,
       }));
       if (snapshot.kind !== "value") {
         throw new SessionTranscriptProjectionUnavailableError(entry.sessionId);
@@ -125,7 +92,7 @@ export function readHarnessCompletionSourceInDatabase(
         throw error;
       }
       // Main evaluates the earlier live-admission refusal before exposing a later read error.
-      return { entry, validInput: false, readError };
+      return { entry, validInput: false, readError, writeToken };
     }
   });
 }

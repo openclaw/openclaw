@@ -35,7 +35,7 @@ OpenClaw bundles it as the `together` provider.
       agents: {
         defaults: {
           model: {
-            primary: "together/moonshotai/Kimi-K2.6",
+            primary: "together/zai-org/GLM-5.2",
           },
         },
       },
@@ -54,33 +54,46 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 ```
 
 <Note>
-Onboarding sets Together's recommended chat model,
-`together/moonshotai/Kimi-K2.6`, as the default.
+Onboarding sets `together/zai-org/GLM-5.2` as the default chat model.
 </Note>
 
 ## Built-in catalog
 
 Cost is USD per million tokens.
 
-| Model ref                                          | Name                         | Input       | Context | Max output | Cost (in/out) | Notes           |
-| -------------------------------------------------- | ---------------------------- | ----------- | ------- | ---------- | ------------- | --------------- |
-| `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` | Llama 3.3 70B Instruct Turbo | text        | 131,072 | 8,192      | 1.04 / 1.04   | General model   |
-| `together/moonshotai/Kimi-K2.6`                    | Kimi K2.6 FP4                | text, image | 262,144 | 32,768     | 1.20 / 4.50   | Default model   |
-| `together/deepseek-ai/DeepSeek-V4-Pro`             | DeepSeek V4 Pro              | text        | 512,000 | 384,000    | 1.74 / 3.48   | Reasoning model |
-| `together/zai-org/GLM-5.2`                         | GLM 5.2 FP4                  | text        | 262,144 | 131,072    | 1.40 / 4.40   | Reasoning model |
+| Model ref                                          | Name                         | Input | Context | Max output | Cost (in/out) | Notes         |
+| -------------------------------------------------- | ---------------------------- | ----- | ------- | ---------- | ------------- | ------------- |
+| `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` | Llama 3.3 70B Instruct Turbo | text  | 131,072 | 8,192      | 1.04 / 1.04   | General model |
+| `together/zai-org/GLM-5.2`                         | GLM 5.2 FP4                  | text  | 262,144 | 131,072    | 1.40 / 4.40   | Default model |
 
 ## Video generation
 
 The bundled `together` plugin also registers video generation through the
 shared `video_generate` tool.
 
-| Property             | Value                                                                                     |
-| -------------------- | ----------------------------------------------------------------------------------------- |
-| Default video model  | `Wan-AI/Wan2.2-T2V-A14B`                                                                  |
-| Other models         | `Wan-AI/Wan2.2-I2V-A14B`, `minimax/hailuo-02`, `kwaivgI/kling-2.1-master`                 |
-| Modes                | text-to-video; image-to-video only with `Wan-AI/Wan2.2-I2V-A14B` (single reference image) |
-| Duration             | 1-10 seconds                                                                              |
-| Supported parameters | `size` (parsed as `<width>x<height>`); `aspectRatio`/`resolution` are not read            |
+| Property             | Value                                                                                  |
+| -------------------- | -------------------------------------------------------------------------------------- |
+| Default video model  | `Wan-AI/wan2.7-t2v`                                                                    |
+| Other models         | `Wan-AI/wan2.7-i2v`, `minimax/hailuo-02`                                               |
+| Modes                | text-to-video; image-to-video only with `Wan-AI/wan2.7-i2v` (single first-frame image) |
+| Duration             | Wan 2.7: 2-10 seconds in OpenClaw; Hailuo duration support is model-specific           |
+| Supported parameters | `size` (see below); `aspectRatio`/`resolution` are not read                            |
+
+For Wan 2.7, OpenClaw translates `size` into Together's `resolution` and `ratio`
+fields. Supported sizes follow [Together's Wan 2.7 guide](https://docs.together.ai/docs/wan2.7-quickstart):
+
+| Aspect ratio | 720P size  | 1080P size  |
+| ------------ | ---------- | ----------- |
+| 16:9         | `1280x720` | `1920x1080` |
+| 9:16         | `720x1280` | `1080x1920` |
+| 1:1          | `960x960`  | `1440x1440` |
+| 4:3          | `1104x832` | `1648x1248` |
+| 3:4          | `832x1104` | `1248x1648` |
+
+Other Wan sizes are rejected before submission. Omit `size` to use Together's
+defaults. Hailuo continues to receive pixel `width` and `height` from `size`.
+Wan image input is sent as `media.frame_images` with `frame: "first"`, not as a
+style reference in `media.reference_images`.
 
 To use Together as the default video provider:
 
@@ -90,7 +103,7 @@ To use Together as the default video provider:
     defaults: {
       mediaModels: {
         video: {
-          primary: "together/Wan-AI/Wan2.2-T2V-A14B",
+          primary: "together/Wan-AI/wan2.7-t2v",
         },
       },
     },

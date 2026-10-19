@@ -9,7 +9,10 @@ import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { readRuntimePromptImageFactIndexes } from "../../media/runtime-prompt-image-provenance.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
-import { mergePreparedUserTurnMessageForRuntime } from "../../sessions/user-turn-transcript.message.js";
+import {
+  mergePreparedUserTurnMessageForRuntime,
+  readModelPromptProjection,
+} from "../../sessions/user-turn-transcript.message.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
@@ -373,9 +376,13 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         });
       const replayPersistedTurn = persistedUserIndex >= 0;
       const persistedUser = this.agent.state.messages[persistedUserIndex];
-      if (!replayPersistedCarrier && persistedUser?.role === "user") {
+      if (
+        !replayPersistedCarrier &&
+        persistedUser?.role === "user" &&
+        readModelPromptProjection(persistedUser) === undefined
+      ) {
         // Transient replay still consumes freshly resolved text/images. Preserve
-        // admission facts in place; a recorded carrier pair must keep its signed prefix.
+        // admission facts; captured prompts and carrier pairs keep their original prefix.
         const runtimeUser = this.createUserMessage(expandedText, currentImages, persistedUser);
         this.agent.state.messages = this.agent.state.messages.with(persistedUserIndex, runtimeUser);
       }

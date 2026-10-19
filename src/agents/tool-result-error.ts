@@ -1,10 +1,11 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { formatErrorMessage } from "../infra/errors.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import {
   truncateSanitizedExternalContent,
   wrapExternalContent,
 } from "../security/external-content.js";
+import { attachInternalToolResultContentSource } from "./runtime/internal-hooks.js";
 import { isTrustedToolInputError } from "./tool-input-error.js";
 
 export {
@@ -107,27 +108,7 @@ export function readToolResultStatus(result: unknown): string | undefined {
 }
 
 export function isToolResultError(result: unknown): boolean {
-  const details = readToolResultDetails(result);
-  const normalized = readToolResultStatus(result);
-  const ok = details ? readToolErrorField(details, "ok") : undefined;
-  const success = details ? readToolErrorField(details, "success") : undefined;
-  const explicitlySuccessful = ok === true || success === true;
-  if (ok === false || success === false) {
-    return true;
-  }
-  if (TOOL_RESULT_FAILURE_STATUSES.has(normalized ?? "") && !explicitlySuccessful) {
-    return true;
-  }
-  const timedOut = details ? readToolErrorField(details, "timedOut") : undefined;
-  const error = details ? readToolErrorField(details, "error") : undefined;
-  if (timedOut === true || Boolean(error)) {
-    return true;
-  }
-  if (normalized === "completed") {
-    return false;
-  }
-  const exitCode = details ? readToolErrorField(details, "exitCode") : undefined;
-  return typeof exitCode === "number" && Number.isFinite(exitCode) && exitCode !== 0;
+  return resolveToolResultFailureKind(result) !== undefined;
 }
 
 export type ToolResultFailureKind = "blocked" | "cancelled" | "failed" | "timed_out";
@@ -151,7 +132,7 @@ export function isTrustedToolExecutionPreflightError(error: unknown): boolean {
   return isTrustedSecretSurfaceUnavailableError(error) || isTrustedToolInputError(error);
 }
 
-/** Format a redacted tool error without allowing hostile getters to escape observability. */
+/** Format a tool error without allowing hostile getters to escape observability. */
 export function formatToolExecutionErrorMessage(error: unknown, fallback: string): string {
   try {
     return formatErrorMessage(error) || fallback;
@@ -205,6 +186,8 @@ export function protectNetworkToolExecutionError(
     // Hostile reflection must never replace the already-protected network error.
   }
   protectedNetworkToolErrors.add(protectedError);
+  // Dispatchers rethrow this error under their own tool; keep its network origin for turn taint.
+  attachInternalToolResultContentSource(protectedError, "network");
   if (timedOut) {
     protectedNetworkToolTimeoutErrors.add(protectedError);
   }
@@ -213,17 +196,31 @@ export function protectNetworkToolExecutionError(
 
 /** Classify a resolved structured tool result through the shared terminal contract. */
 export function resolveToolResultFailureKind(result: unknown): ToolResultFailureKind | undefined {
-  if (!isToolResultError(result)) {
+  const details = readToolResultDetails(result);
+  if (!details) {
     return undefined;
   }
-  const statusKind = TOOL_RESULT_FAILURE_STATUSES.get(readToolResultStatus(result) ?? "");
+  const status = normalizeOptionalLowercaseString(readToolErrorField(details, "status"));
+  const statusKind = TOOL_RESULT_FAILURE_STATUSES.get(status ?? "");
+  const ok = readToolErrorField(details, "ok");
+  const success = readToolErrorField(details, "success");
+  const timedOut = readToolErrorField(details, "timedOut") === true;
+  const exitCode = readToolErrorField(details, "exitCode");
+  if (
+    ok !== false &&
+    success !== false &&
+    (!statusKind || ok === true || success === true) &&
+    !timedOut &&
+    !readToolErrorField(details, "error") &&
+    (status === "completed" ||
+      typeof exitCode !== "number" ||
+      !Number.isFinite(exitCode) ||
+      exitCode === 0)
+  ) {
+    return undefined;
+  }
   if (statusKind === "blocked") {
     return "blocked";
   }
-  const details = readToolResultDetails(result);
-  const timedOut = details ? readToolErrorField(details, "timedOut") : undefined;
-  if (timedOut === true || statusKind === "timed_out") {
-    return "timed_out";
-  }
-  return statusKind ?? "failed";
+  return timedOut ? "timed_out" : (statusKind ?? "failed");
 }

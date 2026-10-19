@@ -2,6 +2,14 @@ import { execFile } from "node:child_process";
 import { setImmediate } from "node:timers/promises";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
+import {
+  emitDiagnosticEvent,
+  emitTrustedDiagnosticEvent,
+  onDiagnosticEvent,
+  onInternalDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
+  onTrustedToolExecutionEvent,
+} from "../infra/diagnostic-events.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { PluginHostCleanupResult } from "./host-hook-cleanup.types.js";
@@ -12,6 +20,57 @@ import { disposePluginRegistryInstances, waitForPluginRegistryRetirement } from 
 import { createPluginRecord } from "./status.test-helpers.js";
 
 it.each([
+  {
+    subscribe: onDiagnosticEvent,
+    emit: () => emitDiagnosticEvent({ type: "message.queued", source: "fixture" }),
+  },
+  {
+    subscribe: onInternalDiagnosticEvent,
+    emit: () => emitDiagnosticEvent({ type: "message.queued", source: "fixture" }),
+  },
+  {
+    subscribe: onTrustedInternalDiagnosticEvent,
+    emit: () => emitTrustedDiagnosticEvent({ type: "message.queued", source: "fixture" }),
+  },
+  {
+    subscribe: onTrustedToolExecutionEvent,
+    emit: () =>
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.started",
+        runId: "fixture",
+        toolName: "fixture",
+        toolCallId: "fixture",
+      }),
+  },
+])(
+  "owns $subscribe.name subscriptions through early unsubscribe and disposal",
+  async ({ subscribe, emit }) => {
+    const instance = new PluginInstance("diagnostic-owner");
+    let early = 0;
+    let active = 0;
+    const unsubscribe = instance.run(() => subscribe(() => early++));
+    instance.run(() => subscribe(() => active++));
+    const resume = createDeferredCore();
+    let late: Promise<() => void> | undefined;
+    instance.run(() => {
+      late = resume.promise.then(() => subscribe(() => active++));
+    });
+    emit();
+    expect([early, active]).toEqual([1, 1]);
+    unsubscribe();
+    unsubscribe();
+    emit();
+    expect([early, active]).toEqual([1, 2]);
+    await instance.dispose();
+    resume.resolve();
+    await expect(late).rejects.toThrow("retiring");
+    emit();
+    expect([early, active]).toEqual([1, 2]);
+  },
+);
+
+it.each([
+  { mode: "diagnostics", name: "collects retired diagnostic subscribers across plugin reloads" },
   { mode: "loader", name: "releases the predecessor of a live replacement registry" },
   { mode: "registry", name: "releases successors while a retired registry remains reachable" },
   {

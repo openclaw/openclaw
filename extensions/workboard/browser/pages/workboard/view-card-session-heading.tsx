@@ -7,7 +7,7 @@ import { cardAgentLabel } from "./agent-filter.ts";
 import {
   OpenSessionCardAction,
   StartExecutionButton,
-  StopCardAction,
+  CardAction,
   type getCardActionState,
 } from "./view-card-actions.tsx";
 import { formatLifecycle, renderLifecycleIcon, type WorkboardProps } from "./view-helpers.tsx";
@@ -76,7 +76,12 @@ export function CardSessionHeading(props: {
         props.action.writable &&
         props.action.linkedSessionKey &&
         props.action.live ? (
-          <StopCardAction workboard={props.workboard} card={props.card} busy={props.action.busy} />
+          <CardAction
+            kind="stop"
+            workboard={props.workboard}
+            card={props.card}
+            busy={props.action.busy}
+          />
         ) : undefined}
         <OpenSessionCardAction
           workboard={props.workboard}

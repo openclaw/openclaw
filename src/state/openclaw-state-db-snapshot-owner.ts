@@ -1,4 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { registerLiveSqliteSnapshotOwner } from "../infra/sqlite-live-snapshot.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
@@ -10,6 +12,9 @@ function createOpenClawStateSnapshotOwnerRegistry() {
       database: OpenClawStateDatabase,
       getCurrent: () => OpenClawStateDatabase | undefined,
     ): void {
+      if (isPostgresSqlConnection(database.db)) {
+        return;
+      }
       releases.set(
         database.db,
         registerLiveSqliteSnapshotOwner({
@@ -24,7 +29,10 @@ function createOpenClawStateSnapshotOwnerRegistry() {
         }),
       );
     },
-    release(database: DatabaseSync): void {
+    release(database: EngineConnection): void {
+      if (isPostgresSqlConnection(database)) {
+        return;
+      }
       releases.get(database)?.();
       releases.delete(database);
     },

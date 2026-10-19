@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertAcpSessionMeta } from "../acp/runtime/session-meta-write.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { buildStatusCommandOverviewRows } from "../commands/status-overview-rows.ts";
 import { collectStatusLocalSnapshot } from "../commands/status.agent-local.js";
 import { createStatusCommandOverviewRowsParams } from "../commands/status.test-support.ts";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -15,12 +18,15 @@ import {
 import { readSessionStoreSummaryReadOnly } from "../config/sessions/session-accessor.sqlite-summary.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { spyOnSessionStoreSummaries } from "../config/sessions/session-store-summary.test-support.js";
+import type { SessionAcpMeta } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
 import { getStatusSummary } from "../status/summary.js";
+import { statusSummaryRuntime } from "../status/summary.runtime.js";
 import {
   createDirectOutboundTestAdapter,
   createOutboundTestPlugin,
@@ -71,6 +77,53 @@ describe("getStatusSummary read-only session access", () => {
     if (previousRegistry) {
       setActivePluginRegistry(previousRegistry);
     }
+  });
+
+  it("refreshes batched status metadata after ACP updates and removal", async () => {
+    await withOpenClawTestState(
+      { scenario: "minimal", label: "status-acp-batch" },
+      async (state) => {
+        const cfg: OpenClawConfig = {
+          agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+        };
+        await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
+        const meta: SessionAcpMeta = {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "first",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 100,
+        };
+        const scopes = ["main", "research"].map((agentId) => ({
+          cfg,
+          agentId,
+          sessionKey: `agent:${agentId}:acp:status`,
+          skipMaintenance: true,
+        }));
+        const candidates = [];
+        for (const scope of scopes) {
+          const entry = expectDefined(
+            await upsertAcpSessionMeta({ ...scope, mutate: () => meta }),
+            "seeded ACP session",
+          );
+          candidates.push({ sessionKey: scope.sessionKey, entry });
+        }
+        const before = await statusSummaryRuntime.readSessionRuntimeMetadata(cfg, candidates);
+        expect(before.map((entry) => entry?.runtimeSessionName)).toEqual(["first", "first"]);
+
+        await upsertAcpSessionMeta({
+          ...scopes[0]!,
+          mutate: () => ({ ...meta, runtimeSessionName: "updated" }),
+        });
+        await upsertAcpSessionMeta({ ...scopes[1]!, mutate: () => null });
+
+        const after = await statusSummaryRuntime.readSessionRuntimeMetadata(cfg, candidates);
+        expect(after.map((entry) => entry?.runtimeSessionName ?? null)).toEqual(["updated", null]);
+        expect(before.map((entry) => entry?.runtimeSessionName)).toEqual(["first", "first"]);
+      },
+    );
   });
 
   it("does not create the heartbeat session database while checking its route", async () => {
@@ -158,7 +211,7 @@ describe("getStatusSummary read-only session access", () => {
           expect(readSummary).toHaveBeenCalledTimes(uniquePaths.length);
 
           readSummary.mockClear();
-          const { agentStatus: local } = await collectStatusLocalSnapshot(config);
+          const local = (await collectStatusLocalSnapshot(config)).publish();
           expect(local.totalSessions).toBe(2);
           expect(
             local.agents.map((agent) => [

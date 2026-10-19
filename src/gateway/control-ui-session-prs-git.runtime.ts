@@ -1,11 +1,22 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import nodePath from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { resolveExecutablePath } from "../infra/executable-path.js";
 import { GitCommandTimeoutError, requireGitCommandOutput } from "../infra/git-exec.js";
 import type { GitReadOperations } from "../infra/git-read-operations.js";
-import { readGitHead, readGitMetadataPrefix, readGitRefs } from "../infra/git-root.js";
-import { canReadGitFilesystemRefs } from "../infra/git-worker-context.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  readGitHead,
+  readGitMetadataDirectories,
+  readGitMetadataPrefix,
+  readGitRefs,
+} from "../infra/git-root.js";
+import {
+  canReadGitFilesystemRefs,
+  gitFilesystemEnvironmentRevision,
+} from "../infra/git-worker-context.js";
+import type { GitWorkerOperations } from "../infra/git-worker-contract.js";
 import {
   gitOutput,
   isAncestor,
@@ -16,12 +27,10 @@ import {
 } from "./control-ui-session-prs-landing.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 
-const log = createSubsystemLogger("git/branch-facts");
-
 /** Observe only this checkout's refs; snapshot publication does not change PR facts. */
 export async function readCheckoutGitRevision({
   root,
-  includeIndex,
+  scope,
   branch,
   defaultBranch,
 }: GitReadOperations["checkout.revision"]["input"]): Promise<string | null> {
@@ -29,6 +38,9 @@ export async function readCheckoutGitRevision({
     return null;
   }
   try {
+    if (scope === "diff") {
+      return await readCheckoutDiffRevision(root);
+    }
     const head = readGitHead(root, { maxDepth: 1 });
     const checkout = readCheckoutHead(root);
     const defaultRef = readDefaultRef(checkout);
@@ -36,7 +48,7 @@ export async function readCheckoutGitRevision({
       !head ||
       !checkout ||
       checkout.branch === undefined ||
-      (!includeIndex && defaultRef === undefined)
+      (scope === "context" && defaultRef === undefined)
     ) {
       return null;
     }
@@ -46,11 +58,13 @@ export async function readCheckoutGitRevision({
       nodePath.join(checkout.refsBase, "config"),
       nodePath.join(gitDir, "config.worktree"),
     ];
+    if (scope === "worktree") {
+      paths.push(nodePath.join(gitDir, "index"));
+    }
     const replacements = nodePath.join(checkout.refsBase, "refs/replace");
     let packedReplacements: string[] = [];
-    if (includeIndex) {
+    if (scope !== "context") {
       paths.push(
-        nodePath.join(gitDir, "index"),
         nodePath.join(checkout.refsBase, "shallow"),
         nodePath.join(checkout.refsBase, "info/grafts"),
       );
@@ -72,16 +86,20 @@ export async function readCheckoutGitRevision({
     }
     const selectedBranch = branch ?? checkout.branch;
     const selectedDefault = defaultBranch ? `origin/${defaultBranch}` : defaultRef;
-    const tips = await readRemoteRevisions(
-      root,
-      [
-        ...(selectedBranch ? [`refs/remotes/origin/${selectedBranch}`] : []),
-        ...(selectedDefault ? [`refs/remotes/${selectedDefault}`] : []),
-      ],
-      checkout,
-    );
+    const tips =
+      scope !== "context"
+        ? await readRemoteRevisions(
+            root,
+            [
+              ...(selectedBranch ? [`refs/remotes/origin/${selectedBranch}`] : []),
+              ...(selectedDefault ? [`refs/remotes/${selectedDefault}`] : []),
+            ],
+            checkout,
+          )
+        : [];
     return JSON.stringify([
-      checkout,
+      // Context exposes branch names and remote configuration, not commit IDs.
+      scope !== "context" ? checkout : { branch: checkout.branch, refsBase: checkout.refsBase },
       defaultRef,
       [...tips],
       packedReplacements,
@@ -103,6 +121,216 @@ export async function readCheckoutGitRevision({
   } catch {
     return null;
   }
+}
+
+type GitInstallationFiles = { revision: string; config: string[]; attributes: string[] };
+// One installation per worker; environment or executable replacement retires its discovery.
+let gitInstallationFiles:
+  | { key: string; promise: Promise<GitInstallationFiles | null> }
+  | undefined;
+
+async function readGitInstallationFiles(
+  root: string,
+  environment: string,
+): Promise<GitInstallationFiles | null> {
+  const executable = resolveExecutablePath("git", { cwd: root, useCache: false });
+  if (!executable) {
+    return null;
+  }
+  const binary = fs.realpathSync(executable);
+  const stat = fs.statSync(binary, { bigint: true });
+  const key = JSON.stringify([
+    environment,
+    binary,
+    ...[stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String),
+  ]);
+  if (gitInstallationFiles?.key !== key) {
+    const promise = Promise.allSettled(
+      ["GIT_CONFIG_SYSTEM", "GIT_ATTR_SYSTEM"].map(async (variable) => {
+        const result = await runPullRequestGit(root, ["var", variable], {
+          maxOutputBytes: 64 * 1024,
+          terminateOnOutputLimit: true,
+        });
+        // Known disabled paths have no diagnostics; older Git reports unknown variables.
+        if (
+          result.termination === "exit" &&
+          result.code === 1 &&
+          !result.stdout.trim() &&
+          !result.stderr.trim()
+        ) {
+          return [];
+        }
+        const paths = result.stdout.replace(/\n$/, "").split("\n").filter(Boolean);
+        return result.termination === "exit" &&
+          result.code === 0 &&
+          !result.stdoutTruncatedBytes &&
+          paths.every((file) => nodePath.isAbsolute(file))
+          ? paths
+          : null;
+      }),
+    )
+      .then((probes) => {
+        const [config, attributes] = probes.map((probe) => {
+          if (probe.status === "rejected") {
+            throw probe.reason;
+          }
+          return probe.value;
+        });
+        return config && attributes ? { revision: key, config, attributes } : null;
+      })
+      .catch((error: unknown) => {
+        if (gitInstallationFiles?.key === key) {
+          gitInstallationFiles = undefined;
+        }
+        throw error;
+      });
+    gitInstallationFiles = { key, promise };
+  }
+  return await gitInstallationFiles.promise;
+}
+
+/** External editors own these files; bounded metadata scans avoid Git on unchanged polls. */
+async function readCheckoutDiffRevision(root: string): Promise<string | null> {
+  const environment = createHash("sha256")
+    .update(
+      JSON.stringify(
+        Object.entries(process.env)
+          .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
+          .toSorted(([left], [right]) => left.localeCompare(right)),
+      ),
+    )
+    .digest("hex");
+  // Reused workers may have an older environment; Windows path translation retains native reads.
+  if (
+    environment !== gitFilesystemEnvironmentRevision() ||
+    process.platform === "win32" ||
+    fs.realpathSync(root) !== root
+  ) {
+    return null;
+  }
+  const directories = readGitMetadataDirectories(root);
+  if (!directories) {
+    return null;
+  }
+  const { gitDir, commonDir } = directories;
+  const hash = createHash("sha256").update(environment);
+  let remaining = 10_000;
+  const observe = (file: string, allowSymlink = false) => {
+    if (--remaining < 0) {
+      throw new Error("Checkout diff revision exceeds its metadata budget");
+    }
+    const stat = fs.lstatSync(file, { bigint: true, throwIfNoEntry: false });
+    if (stat?.isSymbolicLink() && !allowSymlink) {
+      throw new Error("Indirect Git metadata requires a fresh diff");
+    }
+    hash.update(
+      JSON.stringify([
+        file,
+        ...(stat
+          ? [stat.dev, stat.ino, stat.mode, stat.nlink, stat.size, stat.mtimeNs, stat.ctimeNs].map(
+              String,
+            )
+          : []),
+      ]),
+    );
+    return stat;
+  };
+  const names = (directory: string) => {
+    const handle = fs.opendirSync(directory);
+    const entries: string[] = [];
+    try {
+      for (let entry; (entry = handle.readSync());) {
+        if (entries.length >= remaining) {
+          throw new Error("Checkout diff revision exceeds its metadata budget");
+        }
+        entries.push(entry.name);
+      }
+    } finally {
+      handle.closeSync();
+    }
+    return entries.toSorted();
+  };
+  const walk = (directory: string, tree = false) => {
+    if (!observe(directory, tree)?.isDirectory()) {
+      return;
+    }
+    for (const name of names(directory)) {
+      const file = nodePath.join(directory, name);
+      if (tree && name === ".git") {
+        if (directory !== root) {
+          throw new Error("Nested repositories require a fresh diff");
+        }
+      } else {
+        walk(file, tree);
+      }
+    }
+  };
+  walk(root, true);
+  for (const file of directories.paths) {
+    observe(file);
+  }
+  const home = process.env.HOME ?? os.homedir();
+  const xdg = process.env.XDG_CONFIG_HOME ?? nodePath.join(home, ".config");
+  const installation = await readGitInstallationFiles(root, environment);
+  if (!installation) {
+    return null;
+  }
+  hash.update(installation.revision);
+  const configFiles = [
+    nodePath.join(commonDir, "config"),
+    nodePath.join(gitDir, "config.worktree"),
+    ...(process.env.GIT_CONFIG_GLOBAL
+      ? [process.env.GIT_CONFIG_GLOBAL]
+      : [nodePath.join(home, ".gitconfig"), nodePath.join(xdg, "git/config")]),
+    ...installation.config,
+  ];
+  for (const file of configFiles) {
+    if (!nodePath.isAbsolute(file)) {
+      return null;
+    }
+    if (file === os.devNull) {
+      continue;
+    }
+    const stat = observe(file);
+    if (
+      stat &&
+      (!stat.isFile() ||
+        stat.size > 65_536n ||
+        /\[\s*(?:include|filter)|(?:attributesfile|excludesfile|worktree|orderfile)\s*=/i.test(
+          readGitMetadataPrefix(file, 65_536),
+        ))
+    ) {
+      return null;
+    }
+  }
+  for (const file of ["attributes", "ignore"]) {
+    observe(nodePath.join(xdg, "git", file));
+  }
+  for (const file of installation.attributes) {
+    observe(file);
+  }
+  for (const directory of new Set([gitDir, commonDir])) {
+    if (observe(nodePath.join(directory, "reftable"))) {
+      return null;
+    }
+    for (const file of ["HEAD", "index", "commondir", "packed-refs", "shallow"]) {
+      observe(nodePath.join(directory, file));
+    }
+    for (const child of ["refs", "info"]) {
+      walk(nodePath.join(directory, child));
+    }
+  }
+  // Object IDs are immutable; directory stamps capture newly hydrated loose objects/packs.
+  const objects = nodePath.join(commonDir, "objects");
+  if (observe(nodePath.join(objects, "info/alternates"))) {
+    return null;
+  }
+  if (observe(objects)?.isDirectory()) {
+    for (const child of names(objects)) {
+      observe(nodePath.join(objects, child));
+    }
+  }
+  return hash.digest("hex");
 }
 
 function readDefaultRef(head: ReturnType<typeof readCheckoutHead>): string | null | undefined {
@@ -314,33 +542,36 @@ async function diffStatsAgainst(
   }
 }
 
-export async function readPullRequestBranchFacts(
-  input: GitReadOperations["pull-request.branch-facts"]["input"],
-): Promise<GitReadOperations["pull-request.branch-facts"]["output"]> {
-  try {
-    const landing = await resolveBranchLanding(input.root, input);
-    const stats = landing.statsBase
-      ? await diffStatsAgainst(input.root, landing.statsBase, input.refreshIndex === true)
-      : null;
-    // The diff validates equal recorded tips without a separate ancestry probe.
-    // Missing objects must still retain the unknown-comparison fallback.
-    const noPushedChanges =
-      stats !== null &&
+export async function readPullRequestBranchComparison(
+  input: GitWorkerOperations["pull-request.branch-comparison"]["input"],
+): Promise<GitWorkerOperations["pull-request.branch-comparison"]["output"]> {
+  const landing = await resolveBranchLanding(input.root, input);
+  const creatable =
+    (!landing.hasLandedPullRequest || landing.provenNewPushedWork) &&
+    Boolean(input.defaultBranch) &&
+    landing.pushedSha !== null &&
+    (!landing.defaultSha ||
+      !(await isAncestor(input.root, landing.pushedSha, landing.defaultSha, () => {
+        landing.complete = false;
+      })));
+  return {
+    complete: landing.complete,
+    statsBase: landing.statsBase,
+    equalPushedTips:
       landing.defaultSha !== null &&
       landing.defaultSha === landing.pushedSha &&
-      landing.statsBase === landing.defaultSha;
-    const creatable =
-      (!landing.hasLandedPullRequest || landing.provenNewPushedWork) &&
-      !noPushedChanges &&
-      Boolean(input.defaultBranch) &&
-      landing.pushedSha !== null &&
-      (!landing.defaultSha ||
-        !(await isAncestor(input.root, landing.pushedSha, landing.defaultSha)));
-    return !creatable && !(stats && stats.changedFiles > 0) ? undefined : { creatable, stats };
-  } catch {
-    log.warn(
-      "PR comparison unavailable; fetch repository history and retry. Dependent comparisons skipped.",
-    );
-    return { creatable: false, stats: null };
-  }
+      landing.statsBase === landing.defaultSha,
+    creatable,
+  };
+}
+
+export async function readPullRequestBranchFacts(
+  input: GitWorkerOperations["pull-request.branch-facts"]["input"],
+): Promise<GitReadOperations["pull-request.branch-facts"]["output"]> {
+  const { comparison } = input;
+  const stats = comparison.statsBase
+    ? await diffStatsAgainst(input.root, comparison.statsBase, input.refreshIndex === true)
+    : null;
+  const creatable = comparison.creatable && !(stats !== null && comparison.equalPushedTips);
+  return !creatable && !(stats && stats.changedFiles > 0) ? undefined : { creatable, stats };
 }

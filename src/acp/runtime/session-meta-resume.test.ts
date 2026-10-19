@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
+import { migratePortableIdentityColumnsV22 } from "../../state/openclaw-state-db-schema-v22-columns.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
@@ -9,29 +10,49 @@ import { buildAcpDatabaseSessionKey, upsertAcpSessionMetaRow } from "./session-m
 import { readAcpSessionCommand } from "./session-meta-read.worker.js";
 import { bindAcpSessionMeta } from "./session-meta-write.kernel.js";
 
-it("matches randomized identities using index searches, including malformed and non-string identities", () => {
+it("matches migrated string identities using index searches, including malformed and non-string identities", () => {
   const db = new DatabaseSync(":memory:");
   try {
-    db.exec(
-      extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "acp_sessions", {
-        endMarker: "CREATE TABLE IF NOT EXISTS acp_replay_sessions",
-        includeEndMarker: false,
-      }),
-    );
+    const schema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "acp_sessions", {
+      endMarker: "CREATE TABLE IF NOT EXISTS acp_replay_sessions",
+      includeEndMarker: false,
+    });
+    db.exec(schema);
     let random = 485;
     const next = () => (random = (Math.imul(random, 1664525) + 1013904223) >>> 0);
-    const fixtures = Array.from({ length: 128 }, (_, i) => ({
-      sessionKey: `agent:coder:acp:${String(i).padStart(3, "0")}`,
-      agentId: next() % 7 === 0 ? "other" : "coder",
-      backend: next() % 5 === 0 ? "other" : " FIXTURE ",
-      identity:
-        i === 0
-          ? "malformed"
-          : JSON.stringify({
-              agentSessionId: i === 1 ? 42 : `\u00a0 id-${next() % 17}\t`,
-              acpxSessionId: `id-${next() % 19}`,
-            }),
-    }));
+    const fixtures = Array.from({ length: 128 }, (_, i) => {
+      const agentId = next() % 7 === 0 ? "other" : "coder";
+      const backend = next() % 5 === 0 ? "other" : " FIXTURE ";
+      const first = `id-${next() % 17}`;
+      const second = `id-${next() % 19}`;
+      return {
+        sessionKey: `agent:coder:acp:${String(i).padStart(3, "0")}`,
+        agentId,
+        backend,
+        identity:
+          i === 0
+            ? "malformed"
+            : JSON.stringify({
+                agentSessionId: i === 1 ? 42 : `\u00a0 ${first}\t`,
+                acpxSessionId: second,
+              }),
+        matches: i === 0 ? [] : i === 1 ? [second] : [first, second],
+      };
+    });
+    fixtures.push(
+      ...[
+        { identity: '{"agentSessionId":" first ","agentSessionId":"last"}', matches: ["first"] },
+        { identity: '{"agentSessionId":true,"agentSessionId":"last"}', matches: [] },
+        { identity: '{"agentSessionId":42,"acpxSessionId":"42"}', matches: ["42"] },
+        { identity: '{"agentSessionId":"nul\\u0000tail"}', matches: ["nul\u0000tail"] },
+      ].map((fixture, index) => ({
+        identity: fixture.identity,
+        matches: fixture.matches,
+        sessionKey: `agent:coder:acp:extra-${index}`,
+        agentId: "coder",
+        backend: "fixture",
+      })),
+    );
     for (const fixture of fixtures.toReversed()) {
       upsertAcpSessionMetaRow(db, {
         ...bindAcpSessionMeta({
@@ -50,6 +71,8 @@ it("matches randomized identities using index searches, including malformed and 
         identity_json: fixture.identity,
       });
     }
+    migratePortableIdentityColumnsV22(db, 21);
+    db.exec(schema);
     let selectSql = "";
     const prepare = db.prepare.bind(db);
     const spy = vi.spyOn(db, "prepare").mockImplementation((query) => {
@@ -61,6 +84,10 @@ it("matches randomized identities using index searches, including malformed and 
     try {
       for (const resumeSessionId of [
         "42",
+        "first",
+        "last",
+        "1",
+        "nul\u0000tail",
         "absent",
         ...Array.from({ length: 19 }, (_, i) => `id-${i}`),
       ]) {
@@ -69,15 +96,7 @@ it("matches randomized identities using index searches, including malformed and 
             if (fixture.agentId !== "coder" || fixture.backend.trim().toLowerCase() !== "fixture") {
               return false;
             }
-            let identity: { agentSessionId?: unknown; acpxSessionId?: unknown };
-            try {
-              identity = JSON.parse(fixture.identity);
-            } catch {
-              return false;
-            }
-            return [identity.agentSessionId, identity.acpxSessionId].some(
-              (id) => typeof id === "string" && id.trim() === resumeSessionId,
-            );
+            return fixture.matches.includes(resumeSessionId);
           })
           .map(({ sessionKey }) => ({
             sessionKey,
@@ -99,7 +118,7 @@ it("matches randomized identities using index searches, including malformed and 
     }
     const plan = db
       .prepare(`EXPLAIN QUERY PLAN ${selectSql}`)
-      .all("absent", "text", "absent", "text")
+      .all("absent", "absent")
       .map((row) => row.detail);
     expect(
       plan.filter((detail) => String(detail).includes("SEARCH acp_sessions USING INDEX")),

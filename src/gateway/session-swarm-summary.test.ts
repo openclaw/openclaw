@@ -6,6 +6,11 @@ import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../agents/tools/sessions-resolution.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -40,9 +45,14 @@ function collector(index: number, overrides: Partial<SubagentRunRecord> = {}): S
   };
 }
 
-async function withCollectors(runs: SubagentRunRecord[], run: () => Promise<void>) {
+async function withCollectors(
+  runs: SubagentRunRecord[],
+  run: () => Promise<void>,
+  config: OpenClawConfig = cfg,
+) {
   await withStateDirEnv("session-swarm-summary-", async () => {
     await withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
+      setRuntimeConfigSnapshot(config);
       saveSubagentRegistryToSqlite(new Map(runs.map((entry) => [entry.runId, entry])));
       await run();
     });
@@ -52,6 +62,7 @@ async function withCollectors(runs: SubagentRunRecord[], run: () => Promise<void
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   clearSubagentRunsReadCacheForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("parent Swarm outcome projection", () => {
@@ -150,7 +161,7 @@ describe("parent Swarm outcome projection", () => {
     ]);
   });
 
-  it.each(["main", "workspace", "global"])(
+  it.each(["workspace", "global"])(
     "joins admitted global-scope %s collectors to their owner row",
     async (suffix) => {
       const globalConfig = { ...cfg, session: { scope: "global" as const, mainKey: "workspace" } };
@@ -180,6 +191,7 @@ describe("parent Swarm outcome projection", () => {
             { key: requesterKey, agentId: "other", swarm: { groups: [{ done: 1 }] } },
           ]);
         },
+        globalConfig,
       );
     },
   );

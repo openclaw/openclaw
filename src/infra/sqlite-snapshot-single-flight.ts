@@ -112,7 +112,13 @@ function createFlight(
       cleanup.service();
       const removed = cleanup.read();
       if (removed.status === "fulfilled") {
-        settled.resolve(outcome.value);
+        if (removed.value) {
+          settled.resolve(outcome.value);
+        } else {
+          settled.reject(
+            new SqliteSnapshotCleanupError("SQLite orphan snapshot cleanup did not complete"),
+          );
+        }
       } else if (removed.status === "rejected") {
         settled.reject(removed.error);
       }
@@ -147,12 +153,11 @@ function releaseSnapshot(
   flight: SnapshotFlight,
   base: PreparedSnapshot,
 ): RetainedOperation<boolean> {
-  return flatMapRetainedOperation(base.startCleanup(), (removed) => {
-    if (!removed) {
-      throw new SqliteSnapshotCleanupError("SQLite snapshot lease cleanup did not complete");
-    }
-    return mapRetainedOperation(flight.closeProducer(), () => true);
-  });
+  // Strict bases throw with their cause. A best-effort refusal has already warned and left
+  // the bytes with the cleanup registry, so the producer stays open and the read succeeds.
+  return flatMapRetainedOperation(base.startCleanup(), (removed) =>
+    removed ? mapRetainedOperation(flight.closeProducer(), () => true) : completed(false),
+  );
 }
 
 function leaseFlight(flight: SnapshotFlight, base: PreparedSnapshot): PreparedSnapshot {
@@ -172,9 +177,11 @@ function leaseFlight(flight: SnapshotFlight, base: PreparedSnapshot): PreparedSn
   return {
     location: base.location,
     cleanupRoot: base.cleanupRoot,
+    privateFamily: base.privateFamily,
     cleanup() {
       if (released) {
-        return cleanup ? cleanup.read().status === "fulfilled" : true;
+        const outcome = cleanup?.read();
+        return !outcome || (outcome.status === "fulfilled" && outcome.value);
       }
       if (flight.references > 1) {
         releaseReference();
@@ -272,7 +279,14 @@ function startSnapshotFlight(
       const outcome = retained.operation.read();
       closing ??=
         outcome.status === "fulfilled"
-          ? mapRetainedOperation(outcome.value.startCleanup(), () => undefined)
+          ? mapRetainedOperation(outcome.value.startCleanup(), (removed) => {
+              // Closing discharges producer custody, which a retained cleanup refusal never did.
+              if (!removed) {
+                throw new SqliteSnapshotCleanupError(
+                  "SQLite snapshot lease cleanup did not complete",
+                );
+              }
+            })
           : selected.references === 0
             ? selected.closeProducer()
             : completed(undefined);

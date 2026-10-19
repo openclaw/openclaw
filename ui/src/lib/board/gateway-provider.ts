@@ -270,6 +270,7 @@ export class GatewayBoardProvider implements BoardProvider {
   }
 
   private subscribe(client: BoardGatewayClient): void {
+    // Gateway event subscriptions return teardown; this is not a native DOM listener.
     this.unsubscribe = client.addEventListener((event) => {
       if (this.disposed || client !== this.client) {
         return;
@@ -404,8 +405,8 @@ export class GatewayBoardProvider implements BoardProvider {
         }
         if (
           error instanceof GatewayProtocolRequestError &&
-          error.gatewayCode === "UNAVAILABLE" &&
-          !error.retryable
+          (error.gatewayCode === "FORBIDDEN" ||
+            (error.gatewayCode === "UNAVAILABLE" && !error.retryable))
         ) {
           // A definitive rejection consumes this refresh. Only a newer event,
           // connection generation, or explicit refresh can request another one.

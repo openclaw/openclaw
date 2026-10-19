@@ -1,5 +1,6 @@
 import { Value } from "typebox/value";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { TerminalSessionManager } from "../../gateway/terminal/session-manager.js";
 import {
@@ -32,7 +33,10 @@ const approvalMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./in-process-gateway.js", () => ({ getInProcessGatewayToolContext }));
-vi.mock("../../gateway/session-utils-store.js", () => ({ loadGatewaySessionEntryReadOnly }));
+// mock-isolation: terminal ownership tests supply entry facts without opening session databases.
+vi.mock("../../gateway/session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: loadGatewaySessionEntryReadOnly,
+}));
 vi.mock("../bash-tools.exec-approval-request.js", () => ({
   registerExecApprovalRequestForHostOrThrow: approvalMocks.register,
   resolveRegisteredExecApprovalDecision: approvalMocks.decide,
@@ -97,6 +101,10 @@ describe("terminal tool", () => {
     approvalMocks.register.mockClear();
     approvalMocks.decide.mockReset();
     approvalMocks.decide.mockResolvedValue("allow-once");
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
   });
 
   it("exposes existing-session controls but never shell creation behind the owner-only gate", () => {
@@ -279,7 +287,7 @@ describe("terminal tool", () => {
         { action: "close", sessionId },
       ]) {
         await expect(tool.execute(params.action, params)).rejects.toThrow(
-          "Terminal session unavailable. Use action=list to find a shared terminal or ask the operator to open one in this chat.",
+          "Terminal session unavailable. Use action=list to find a terminal the operator opened in this chat. This tool cannot open one; run your own commands with exec when available, otherwise ask the operator to open a terminal.",
         );
       }
     }
@@ -341,15 +349,17 @@ describe("terminal tool", () => {
 
   it("rejects terminal input when the authoritative persisted session is missing", async () => {
     const { backend, manager, sessionId } = await openAgentTerminal();
+    setRuntimeConfigSnapshot({});
     const tool = makeTool(manager, { execSession: undefined });
 
     await expect(
       tool.execute("missing-session-input", { action: "input", sessionId, data: "echo unsafe\r" }),
     ).rejects.toThrow("Terminal session unavailable");
 
-    expect(loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith(agentOwner.agentSessionKey, {
+    expect(loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      key: agentOwner.agentSessionKey,
       agentId: agentOwner.agentId,
-      clone: false,
     });
     expect(backend.writes).toEqual([]);
     expect(approvalMocks.register).not.toHaveBeenCalled();

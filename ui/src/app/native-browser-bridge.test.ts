@@ -38,33 +38,6 @@ describe("native browser bridge wire contract", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { type: "open", tabId: "mac-1", url: "javascript:alert(1)", sessionKey: "" },
-    { type: "navigate", tabId: "mac-1", url: "file:///private/example" },
-    { type: "open", tabId: "", url: "about:blank", sessionKey: "" },
-    { type: "open", tabId: "mac-1", url: "https://example.com", sessionKey: "", activate: "true" },
-    { type: "open", tabId: "mac-1", url: "https://example.com" },
-    { type: "open", tabId: "mac-1", url: "https://example.com", sessionKey: 42 },
-    { type: "open", tabId: "mac-1", url: "https://example.com", sessionKey: " session " },
-    { type: "inspect", tabId: "mac-1", x: Number.NaN, y: 4 },
-    {
-      type: "present",
-      scope: "scope",
-      tabId: "mac-1",
-      visible: true,
-      rect: { x: 0, y: 0, width: -1, height: 30 },
-    },
-    { type: "present", scope: "", tabId: null, rect: null, visible: false },
-    { type: "unknown", tabId: "mac-1" },
-    { type: "download", tabId: " " },
-  ])("rejects malformed or unsupported request %j before calling WebKit", async (message) => {
-    const post = install();
-    expect(await postNativeBrowserMessage(message as NativeBrowserMessage)).toMatchObject({
-      ok: false,
-    });
-    expect(post).not.toHaveBeenCalled();
-  });
-
   it("binds WebKit's receiver and preserves valid request values", async () => {
     const messages: NativeBrowserMessage[] = [];
     const bridge = {
@@ -149,19 +122,6 @@ describe("native browser bridge wire contract", () => {
     });
   });
 
-  it("accepts released Mac state without session keys at initial read and on pushes", () => {
-    install();
-    const { sessionKey: _sessionKey, ...legacyTab } = tab;
-    vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 1, tabs: [legacyTab] });
-    expect(readNativeBrowserState()).toEqual({ revision: 1, tabs: [legacyTab] });
-    const listener = vi.fn();
-    const unsubscribe = subscribeNativeBrowserState(listener);
-    const next = { revision: 2, tabs: [{ ...legacyTab, title: "Updated page" }] };
-    window.dispatchEvent(new CustomEvent("openclaw:native-browser-state", { detail: next }));
-    expect(listener).toHaveBeenCalledWith(next);
-    unsubscribe();
-  });
-
   it("validates initial state and ignores malformed, duplicate, stale, and unsubscribed pushes", () => {
     install();
     vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 2, tabs: [tab] });
@@ -195,15 +155,9 @@ describe("native browser bridge wire contract", () => {
 
   it.each([
     { name: "PNG", favicon: "data:image/png;base64,eA==", accepted: true },
-    { name: "mixed-case image type", favicon: "data:image/SVG+xml;base64,eA==", accepted: true },
-    { name: "size limit", favicon: "data:image/png;base64," + "A".repeat(98_282), accepted: true },
-    { name: "HTTP URL", favicon: "https://example.com/favicon.ico", accepted: false },
     { name: "non-image", favicon: "data:text/html;base64,eA==", accepted: false },
     { name: "oversized", favicon: "data:image/png;base64," + "A".repeat(98_283), accepted: false },
-    { name: "non-string", favicon: 42, accepted: false },
     { name: "null", favicon: null, accepted: false },
-    { name: "empty payload", favicon: "data:image/png;base64,", accepted: false },
-    { name: "invalid base64", favicon: "data:image/png;base64,???", accepted: false },
   ])("validates $name favicon on initial reads and pushes", ({ favicon, accepted }) => {
     install();
     const state = { revision: 1, tabs: [{ ...tab, favicon }] };

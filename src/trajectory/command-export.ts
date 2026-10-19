@@ -3,6 +3,7 @@ import path from "node:path";
 import { pathScope } from "@openclaw/fs-safe/advanced";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import { root } from "../infra/fs-safe.js";
+import { isPathStrictlyInside } from "../infra/path-guards.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
 
 // CLI-facing trajectory export wrapper: resolves safe workspace-local paths,
@@ -42,7 +43,7 @@ async function resolveTrajectoryCommandOutputDir(params: {
   const resolvedBase = path.resolve(baseDir);
   const outputDir = path.resolve(resolvedBase, raw);
   const relative = path.relative(resolvedBase, outputDir);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (!isPathStrictlyInside(resolvedBase, outputDir)) {
     throw new Error("Output path must stay inside the workspace trajectory exports directory");
   }
   // Prefix with `./` so normalized literal `~/...` names do not expand to HOME.

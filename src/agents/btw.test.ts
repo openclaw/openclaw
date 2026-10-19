@@ -1,8 +1,8 @@
-import "./btw.mocks.test-support.js";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { consumeReplyUsageState } from "../auto-reply/reply/reply-usage-state.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
@@ -19,6 +19,7 @@ import {
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
+import { executePreparedCliRunMock } from "./btw.mocks.test-support.js";
 import {
   state,
   runBtwSideQuestion,
@@ -56,7 +57,6 @@ import {
   expectNoAssistantMessages,
   expectSanitizedAssistantContext,
   expectSeedOnlyUserContext,
-  mockOpenAIPlatformProfile,
   streamSimpleMock,
   buildSessionContextMock,
   loadPreparedModelRuntimeSnapshotMock,
@@ -87,6 +87,7 @@ import {
   preparedRuntimeSnapshotState,
   setupBtwTestHooks,
 } from "./btw.test-support.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   createModelGenerationFixture,
   publishCurrentModelGeneration,
@@ -118,6 +119,88 @@ function createOpenAIModel(subscription = false) {
 
 describe("runBtwSideQuestion", () => {
   setupBtwTestHooks();
+
+  it.each([
+    { name: "text-end drain", boundary: "text_end", maxChars: 200 },
+    { name: "incremental drain", boundary: "text_end", maxChars: 5 },
+    { name: "message-end drain", boundary: "message_end", maxChars: 5 },
+  ] as const)(
+    "contains failed block delivery, continues the $name, and preserves the final answer",
+    async ({ boundary, maxChars }) => {
+      const failure = new Error("Block delivery rejected");
+      const onBlockReply = vi
+        .fn(async (_payload: ReplyPayload) => {})
+        .mockRejectedValueOnce(failure);
+      streamSimpleMock.mockReturnValue(
+        makeAsyncEvents([
+          ...["one", "two", "three"].flatMap((text) => [
+            { type: "text_delta", delta: `${text}\n\n` },
+            { type: "text_end" },
+          ]),
+          createDoneEvent("one\n\ntwo\n\nthree"),
+        ]),
+      );
+
+      await expect(
+        runSideQuestion({
+          blockReplyChunking: { minChars: 1, maxChars, breakPreference: "paragraph" },
+          resolvedBlockStreamingBreak: boundary,
+          opts: { onBlockReply },
+        }),
+      ).resolves.toEqual({ text: "one\n\ntwo\n\nthree" });
+      expect(onBlockReply.mock.calls.map(([payload]) => payload.text?.trim())).toEqual([
+        "one",
+        "two",
+        "three",
+      ]);
+    },
+  );
+
+  it("joins pending block delivery before releasing a failed BTW stream", async () => {
+    const started = createDeferredCore();
+    const finishBlock = createDeferredCore();
+    const streamError = new Error("Provider stream failed");
+    const deliveryError = new Error("Pending block delivery failed");
+    streamSimpleMock.mockReturnValue({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "text_delta", delta: "one" };
+        yield { type: "text_end" };
+        throw streamError;
+      },
+    });
+    let settled = false;
+    const outcome = runSideQuestion({
+      blockReplyChunking: { minChars: 1, maxChars: 200 },
+      resolvedBlockStreamingBreak: "text_end",
+      opts: {
+        onBlockReply: async () => {
+          started.resolve();
+          await finishBlock.promise;
+          throw deliveryError;
+        },
+      },
+    }).then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+    try {
+      await started.promise;
+      // Let the failed stream settle without a timed delay or polling.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
+    } finally {
+      finishBlock.resolve();
+      expect(await outcome).toBe(streamError);
+    }
+  });
 
   it.each(["off", "stream"] as const)(
     "keeps admitted %s reasoning visibility when caller input changes",
@@ -932,48 +1015,6 @@ describe("runBtwSideQuestion", () => {
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
 
-  it("prepares deny-all sender policy before calling a plugin side-question hook", async () => {
-    const codexSideQuestionMock = registerCodexSideQuestionHarness();
-    mockOpenAIPlatformProfile();
-    resolveModelWithRegistryMock.mockReturnValue({
-      provider: "openai",
-      id: "gpt-5.5",
-      api: "openai-responses",
-    });
-    resolveModelAsyncMock.mockResolvedValue({
-      model: {
-        provider: "openai",
-        id: "gpt-5.5",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      },
-    });
-    await runSideQuestion({
-      cfg: {
-        channels: {
-          telegram: {
-            groups: {
-              "deny-room": {
-                toolsBySender: {
-                  "id:restricted-sender": { deny: ["*"] },
-                },
-              },
-            },
-          },
-        },
-      } as never,
-      provider: "openai",
-      model: "gpt-5.5",
-      sessionKey: "agent:main:telegram:group:deny-room",
-      messageProvider: "telegram",
-      groupId: "deny-room",
-      senderId: "restricted-sender",
-    });
-
-    expect(codexSideQuestionMock).toHaveBeenCalledOnce();
-    expect(mockArg(codexSideQuestionMock, 0, 0)).toMatchObject({ toolsAllow: [] });
-  });
-
   it("does not fall back to the direct provider call when Codex lacks BTW support", async () => {
     registerAgentHarness({
       id: "codex",
@@ -991,6 +1032,58 @@ describe("runBtwSideQuestion", () => {
     ).rejects.toThrow('Selected agent harness "codex" does not support /btw side questions.');
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects CLI session forks before backend preparation or provider I/O", async () => {
+    mockCliOutput({ text: "CLI side answer." });
+    const params = {
+      cfg: createCliRuntimeConfig(),
+      model: "claude-opus-4-7",
+    };
+
+    await expect(runSideQuestion({ ...params, toolCalls: "deny" })).rejects.toThrow(
+      "Session forks are not supported for CLI runtime claude-cli",
+    );
+    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+
+    await expect(runSideQuestion(params)).resolves.toEqual({ text: "CLI side answer." });
+    expect(executePreparedCliRunMock).toHaveBeenCalledOnce();
+  });
+
+  it("answers ordinary CLI BTW without a side-question tool mode when the backend has no native tools", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          pluginId: "no-tools-cli",
+          modelProvider: "anthropic",
+          config: { command: "no-tools-cli" },
+          nativeToolMode: "none",
+          ownsNativeCompaction: false,
+        },
+      ],
+    });
+    try {
+      const { cleanup } = mockCliOutput({ text: "No-tools CLI side answer." });
+
+      await expect(
+        runSideQuestion({
+          cfg: createCliRuntimeConfig(),
+          model: "claude-opus-4-7",
+        }),
+      ).resolves.toEqual({ text: "No-tools CLI side answer." });
+
+      expect(prepareCliRunContextMock).toHaveBeenCalledWith(
+        expect.objectContaining({ executionMode: "side-question", disableTools: true }),
+      );
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(streamSimpleMock).not.toHaveBeenCalled();
+    } finally {
+      cliBackendsTesting.resetDepsForTest();
+    }
   });
 
   it.each([

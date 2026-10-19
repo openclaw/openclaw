@@ -171,7 +171,6 @@ export async function streamSignalUnixEvents(params: {
     params.abortSignal,
   );
   const id = randomUUID();
-  let subscribed = false;
   let subscription: number | undefined;
   try {
     connection.socket.write(
@@ -192,7 +191,6 @@ export async function streamSignalUnixEvents(params: {
           throw new Error("Signal UNIX RPC returned invalid receive subscription");
         }
         subscription = value;
-        subscribed = true;
         connection.ready();
         params.onStreamOpen?.();
         continue;
@@ -215,7 +213,7 @@ export async function streamSignalUnixEvents(params: {
       }
       await params.onEvent({ event: "receive", data: JSON.stringify(payload) });
     }
-    if (!subscribed) {
+    if (subscription === undefined) {
       throw new Error("Signal UNIX RPC closed before receive subscription");
     }
   } finally {

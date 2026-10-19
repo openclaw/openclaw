@@ -60,6 +60,11 @@ export async function drainGatewayActiveWork({
         }
 
         reportDrainSnapshot(initialSnapshot);
+        if (request.interruptAfterDrain) {
+          logger.info("external restart owner already drained; interrupting remaining work");
+          runtime.abortActiveCronTaskRuns();
+          return;
+        }
         const remainingDrainTimeoutMs =
           restartDrainDeadlineAt === undefined
             ? undefined
@@ -78,7 +83,7 @@ export async function drainGatewayActiveWork({
         recordWarning(warning);
         logger.warn(warning);
         // Connection work can retain cron cleanup; cancel before close joins it.
-        runtime.abortActiveCronTaskRuns("Gateway restarting.");
+        runtime.abortActiveCronTaskRuns();
       },
       () => [
         ["activeWork", activeWorkAtDrainStart],
@@ -102,8 +107,8 @@ export async function drainGatewayActiveWork({
         logger.warn(
           `gateway active-work drain timeout reached; proceeding with shutdown: ${formatGatewayDrainCounts(activeWorkDrain.snapshot)}`,
         );
-        runtime.abortEmbeddedAgentRun(undefined, { mode: "all" });
-        runtime.abortActiveCronTaskRuns("Gateway stopping.");
+        // The server shutdown owner records task custody before canceling runs.
+        runtime.abortActiveCronTaskRuns();
       }
     } catch (err) {
       logger.warn(
@@ -121,7 +126,7 @@ function createGatewayDrainReporter(
   drainTimeoutMs: number | undefined,
   runtime: Pick<
     typeof import("./lifecycle.runtime.js"),
-    "listActiveEmbeddedRunSessionIds" | "getDiagnosticSessionActivitySnapshot"
+    "listActiveSessionRunIds" | "getDiagnosticSessionActivitySnapshot"
   >,
   logger: Pick<SubsystemLogger, "info" | "warn">,
   recordCounts: (counts: string) => void,
@@ -145,7 +150,7 @@ function createGatewayDrainReporter(
         const requestTimeoutMs = Math.max(
           0,
           ...runtime
-            .listActiveEmbeddedRunSessionIds()
+            .listActiveSessionRunIds()
             .map(
               (sessionId) =>
                 runtime.getDiagnosticSessionActivitySnapshot({ sessionId })

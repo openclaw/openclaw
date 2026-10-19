@@ -2,8 +2,10 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 import { UpdateRunRecordSchema as WireRunSchema } from "../../packages/gateway-protocol/src/schema/update-runs.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -114,6 +116,101 @@ beforeEach(async () => {
 });
 
 describe("durable update capture receipts", () => {
+  it.each(["unreadable-state", "active-mutation", "rollback-state-unverified"])(
+    "retains %s through a 10.2/10.3-compatible record and diagnostic compaction",
+    (dataAtRisk) => {
+      const recovery = {
+        serviceRestartSafe: false,
+        reason: "runtime-verification-failed",
+        packageRollbackVerified: false,
+        dataAtRisk,
+      } as const;
+      const input = { ...record(), verification: { recovery } };
+      for (let index = 0; index < 120; index++) {
+        upsertStep(input, {
+          step: `finalize:fixture:${index}`,
+          status: "completed",
+          detail: "diagnostic ".repeat(45),
+        });
+      }
+      persistRun(ownedDatabase(), input, { env });
+      const row = storedRow();
+      // v2026.10.2 and v2026.10.3 share this strict unsafe-recovery schema.
+      const shippedVerification = z.object({
+        recovery: z.strictObject({
+          serviceRestartSafe: z.literal(false),
+          packageRollbackVerified: z.boolean().optional(),
+          reason: z.enum([
+            "source-rollback-failed",
+            "state-migration-started",
+            "manager-unavailable",
+            "deps-install-failed",
+            "build-failed",
+            "rollback-checkout-dirty",
+            "runtime-verification-failed",
+          ]),
+        }),
+      });
+      expect(shippedVerification.parse(JSON.parse(String(row?.verification_json)))).toEqual({
+        recovery: {
+          serviceRestartSafe: false,
+          reason: "runtime-verification-failed",
+          packageRollbackVerified: false,
+        },
+      });
+      const shippedSteps = z
+        .array(
+          z.object({
+            failureFacts: z
+              .array(z.object({ check: z.string().max(128), code: z.string().max(80) }))
+              .max(5)
+              .optional(),
+          }),
+        )
+        .max(128);
+      expect(shippedSteps.parse(JSON.parse(String(row?.steps_json)))).toContainEqual({
+        failureFacts: [{ check: "update-recovery", code: dataAtRisk }],
+      });
+      expect(Buffer.byteLength(String(row?.steps_json))).toBeLessThanOrEqual(16 * 1024);
+      ownedDatabase().close();
+      database = new (requireNodeSqlite().DatabaseSync)(
+        path.join(root, "state", "receipts.sqlite"),
+      );
+      const recovered = expectDefined(
+        readUpdateRunRecord(ownedDatabase(), input.runId),
+        "persisted update recovery",
+      );
+      const published = toPublicUpdateRun(recovered);
+      expect(Value.Check(WireRunSchema, published)).toBe(true);
+      expect(published.verification.recovery).toEqual({
+        serviceRestartSafe: false,
+        reason: "runtime-verification-failed",
+        packageRollbackVerified: false,
+      });
+      expect(recovered.verification.recovery).toEqual(recovery);
+      mutateRunInTransaction(
+        ownedDatabase(),
+        input.runId,
+        (run) => {
+          run.verification.recovery = { serviceRestartSafe: true, version: "2026.10.3" };
+        },
+        { env },
+      );
+      const repaired = mutateRunInTransaction(
+        ownedDatabase(),
+        input.runId,
+        (run) => {
+          run.verification.recovery = {
+            serviceRestartSafe: false,
+            reason: "runtime-verification-failed",
+          };
+        },
+        { env },
+      );
+      expect(repaired.verification.recovery).not.toHaveProperty("dataAtRisk");
+    },
+  );
+
   it("keeps database recovery locations when later diagnostics exhaust the history budget", () => {
     const summaries = [
       {

@@ -31,7 +31,9 @@ vi.mock("./config-write-flow.js", async (importOriginal) => ({
 vi.mock("../../secrets/runtime.js", () => ({
   prepareSecretsRuntimeSnapshot: async ({ config }: { config: OpenClawConfig }) => ({ config }),
 }));
-vi.mock("../../config/runtime-schema.js", () => ({
+vi.mock("../../config/runtime-schema.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/runtime-schema.js")>()),
+  loadGatewayConfigRedactionHints: () => undefined,
   loadGatewayRuntimeConfigSchema: () => ({ schema: {}, uiHints: undefined }),
 }));
 

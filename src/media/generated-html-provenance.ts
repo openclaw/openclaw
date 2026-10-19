@@ -10,10 +10,6 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import {
-  hydrateOpenClawStateWorkerError,
-  retainOpenClawStateWorkerErrorPayload,
-} from "../state/openclaw-state-worker-error.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import type {
   GeneratedHtmlProvenanceOperations,
@@ -33,14 +29,6 @@ export async function readGeneratedHtmlProvenance(
   context.admission.assertCurrent();
   if (!reply) {
     return undefined;
-  }
-  if (!reply.ok) {
-    const error = new Error(reply.message);
-    retainOpenClawStateWorkerErrorPayload(error, reply.error);
-    throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
-  }
-  if (reply.type !== command.type) {
-    throw new Error("Unexpected generated HTML provenance reply");
   }
   return reply;
 }
@@ -105,9 +93,8 @@ export async function pruneGeneratedHtmlProvenance(
   if (stale.length === 0) {
     return;
   }
-  const removed = await writeGeneratedHtmlProvenance(context, {
+  await writeGeneratedHtmlProvenance(context, {
     type: "generatedHtmlProvenance.prune",
     input: stale,
   });
-  logVerbose(`trusted-html prune removed ${removed} stale marker(s)`);
 }

@@ -1,4 +1,3 @@
-/** Shared image-generation request, provider, capability, and result contracts. */
 import type { MediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -135,6 +134,8 @@ export type ImageGenerationProvider = {
   defaultTimeoutMs?: number;
   models?: string[];
   capabilities: ImageGenerationProviderCapabilities;
+  /** @deprecated Use isConfiguredAsync so credential reads run in the database worker. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   isConfigured?: (ctx: ImageGenerationProviderConfiguredContext) => boolean;
+  isConfiguredAsync?: (ctx: ImageGenerationProviderConfiguredContext) => Promise<boolean>;
   generateImage: (req: ImageGenerationRequest) => Promise<ImageGenerationResult>;
 };

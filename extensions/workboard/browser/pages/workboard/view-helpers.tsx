@@ -57,6 +57,14 @@ export type WorkboardProps = {
   onRequestUpdate?: () => void;
 };
 
+export function workboardViewState(owner: () => Pick<WorkboardProps, "host" | "revision">) {
+  return () => {
+    const props = owner();
+    void props.revision;
+    return getWorkboardState(props.host);
+  };
+}
+
 const eventLabelKeys: Record<WorkboardEvent["kind"], string> = {
   created: "workboard.eventCreated",
   edited: "workboard.eventEdited",

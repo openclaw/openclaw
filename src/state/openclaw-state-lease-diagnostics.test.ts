@@ -1,6 +1,7 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
@@ -9,16 +10,16 @@ import {
   withSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
-import { withLeaseWriteTransaction } from "./openclaw-state-lease-storage.js";
+import { releaseOpenClawStateLease } from "./openclaw-state-lease-storage.js";
 import {
   acquireOpenClawStateLeaseInTransaction,
   readOpenClawStateLease,
-  releaseOpenClawStateLeaseInTransaction,
 } from "./openclaw-state-lease-store.js";
 import { executeOpenClawStateLeaseCommand } from "./openclaw-state-lease-worker.js";
 
@@ -70,15 +71,16 @@ it.each(["native", "existing", "worker"] as const)(
               ),
             ),
           )
-        : withLeaseWriteTransaction(
-            {
+        : releaseOpenClawStateLease({
+            ...identity,
+            leaseLabel: "state lease",
+            operationLabel: "test.lease.release",
+            database: {
               scope: "shared",
               schemaPolicy: kind === "existing" ? "existing" : undefined,
               options: { env, path: database.path },
             },
-            "test.lease.release",
-            (db) => releaseOpenClawStateLeaseInTransaction(db, identity),
-          );
+          });
     try {
       peer.exec("BEGIN IMMEDIATE");
       warn.mockClear();
@@ -94,10 +96,96 @@ it.each(["native", "existing", "worker"] as const)(
       );
       peer.exec("ROLLBACK");
       release();
-      expect(readOpenClawStateLease(database.db, identity)).toBeUndefined();
+      expect(readOpenClawStateLease(peer, identity)).toBeUndefined();
     } finally {
       admission.finish();
       peer.close();
+      await closeOpenClawStateDatabaseAsync();
+    }
+  },
+);
+
+it.each(["released", "admission-refused", "identity-mismatch", "replacement-owner"] as const)(
+  "settles worker lease release at its final admission (%s)",
+  async (outcome) => {
+    const env = { OPENCLAW_STATE_DIR: dirs.make("lease-release-admission-") };
+    const database = openOpenClawStateDatabase({ env });
+    const db = requireNativeSqliteDatabase(database.db);
+    const identity = { scope: "synthetic", key: "release", owner: "original-owner" };
+    runOpenClawStateWriteTransaction(
+      ({ db: connection }) => acquireOpenClawStateLeaseInTransaction(connection, identity, 30_000),
+      { database, env },
+    );
+    let databaseIdentity = readDatabasePathIdentitySync(database.path).key;
+    if (outcome === "identity-mismatch") {
+      const otherPath = path.join(dirs.make("lease-other-file-"), "state.sqlite");
+      const other = new DatabaseSync(otherPath);
+      other.close();
+      databaseIdentity = readDatabasePathIdentitySync(otherPath).key;
+    }
+    const refused = new Error("Lease cleanup owner refused its final grant");
+    const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+      if (request.stage === "commit") {
+        if (outcome === "admission-refused") {
+          throw refused;
+        }
+        if (outcome === "replacement-owner") {
+          db.prepare("UPDATE state_leases SET owner = ? WHERE scope = ? AND lease_key = ?").run(
+            "replacement-owner",
+            identity.scope,
+            identity.key,
+          );
+        }
+      }
+      grant();
+    });
+    vi.spyOn(Atomics, "wait").mockImplementation(() => {
+      admission.service();
+      return "ok";
+    });
+    const deletes = trackSqliteStatementExecutions(db, ["release"], (sql) =>
+      /^delete from "state_leases"(?:\s|$)/i.test(sql) ? "release" : null,
+    );
+    const exec = vi.spyOn(db, "exec");
+    const release = () =>
+      runWithSqliteWorkerStateContext({ environment: env }, () =>
+        withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+          executeOpenClawStateLeaseCommand(
+            {
+              type: "stateLease.release",
+              input: { identity, operationLabel: "test.lease.release", databaseIdentity },
+            },
+            database,
+          ),
+        ),
+      );
+    try {
+      if (outcome === "admission-refused") {
+        expect(release).toThrow("SQLite transaction admission was refused");
+        expect(admission.failure).toBe(refused);
+      } else if (outcome === "identity-mismatch") {
+        expect(release).toThrow("SQLite database file identity changed before existing-only open");
+      } else {
+        release();
+      }
+      expect(deletes.counts.release).toBe(
+        outcome === "admission-refused" || outcome === "identity-mismatch" ? 0 : 1,
+      );
+      expect(
+        exec.mock.calls.filter(([sql]) =>
+          /^(?:BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i.test(sql),
+        ),
+      ).toEqual([]);
+      expect(readOpenClawStateLease(db, identity)?.owner).toBe(
+        outcome === "released"
+          ? undefined
+          : outcome === "replacement-owner"
+            ? "replacement-owner"
+            : identity.owner,
+      );
+    } finally {
+      deletes.restore();
+      admission.finish();
       await closeOpenClawStateDatabaseAsync();
     }
   },

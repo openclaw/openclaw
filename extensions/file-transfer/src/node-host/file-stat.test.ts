@@ -1,5 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFileTransferNodeInvokePolicy } from "../shared/node-invoke-policy.js";
@@ -13,9 +17,14 @@ let file: string;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(async () => {
+  setRuntimeConfigSnapshot({});
   directory = await fs.realpath(tempDirs.make("file-stat-test-"));
   file = path.join(directory, "AGENTS.md");
   await fs.writeFile(file, "workspace instructions");
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });
 
 describe("file.stat", () => {
@@ -72,10 +81,13 @@ describe("file.stat", () => {
         params: { path: target, followSymlinks: true, preflightOnly: true },
         pluginConfig: { nodes: { "node-1": { allowReadPaths: [target], ask: "off" } } },
       });
-      invokeNode.mockImplementation(async ({ params } = {}) => ({
-        ok: true,
-        payload: await handleFileStat(params as Parameters<typeof handleFileStat>[0]),
-      }));
+      invokeNode.mockImplementation(async (options = {}) => {
+        const { params } = options;
+        return {
+          ok: true,
+          payload: await handleFileStat(params as Parameters<typeof handleFileStat>[0]),
+        };
+      });
       const result = await createFileTransferNodeInvokePolicy().handle(ctx);
       expect(result).toMatchObject({
         ok: true,

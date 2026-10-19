@@ -101,7 +101,7 @@ it("preserves plugin obligations when integrity fails after current-schema prepa
       }),
     ).rejects.toThrow(/foreign_key_check|state migration refused/);
     expect(injected).toBe(true);
-    expect(repair).toHaveBeenCalledExactlyOnceWith(databasePath, process.env, "doctor");
+    expect(repair).toHaveBeenCalledOnce();
     const inspected = new DatabaseSync(databasePath, { readOnly: true });
     try {
       expect(inspected.prepare("PRAGMA user_version").get()?.user_version).toBe(

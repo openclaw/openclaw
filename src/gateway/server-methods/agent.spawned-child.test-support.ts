@@ -1,5 +1,4 @@
 import path from "node:path";
-import { vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
@@ -9,11 +8,14 @@ import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { resolveAgentTestConfig } from "./agent.mocks.test-utils.js";
+import { settleAgentSubagentWakeRoots } from "./agent.subagent-registry.mocks.test-support.js";
 import {
   type AgentHandlerArgs,
   getAgentTestMocks,
@@ -29,6 +31,15 @@ export const confirmedAcpMeta: SessionAcpMeta = {
   state: "idle",
   lastActivityAt: Date.now(),
 };
+
+export function mockGlobalSessionAgentRoster() {
+  const mocks = getAgentTestMocks();
+  mocks.listAgentIds.mockReturnValue(["main", "work"]);
+  mocks.loadConfigReturn = {
+    agents: { entries: { main: {}, work: {} } },
+    session: { scope: "global" },
+  };
+}
 
 export function nativeSubagentClient(): AgentHandlerArgs["client"] {
   const baseClient = requireValue(backendGatewayClient(), "expected backend client");
@@ -71,6 +82,7 @@ export function createPluginSubagentTestLifetime(params: {
       cleanup[Symbol.dispose]();
       await work.drain();
       await resetSubagentRegistryForTests({ persist: false });
+      await settleSubagentRegistryPersistenceWork(settleAgentSubagentWakeRoots);
       await cleanupSessionStateForTest({ stateDir: params.root });
     },
   };
@@ -106,15 +118,15 @@ export async function withPluginSubagentTestState(
 ): Promise<void> {
   const state = await createOpenClawTestState({ prefix, layout: "state-only" });
   try {
+    setRuntimeConfigSnapshot(resolveAgentTestConfig());
     await resetSubagentRegistryForTests({ persist: false });
     await run(state);
   } finally {
     // Stop producers, then join admitted work before deleting storage. A failed join retains it.
     await resetSubagentRegistryForTests({ persist: false });
-    await vi.dynamicImportSettled();
-    await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-    await settleSubagentRegistryPersistenceWork();
+    await settleSubagentRegistryPersistenceWork(settleAgentSubagentWakeRoots);
     await resetSubagentRegistryForTests({ persist: false });
+    await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
     await state.cleanup();
   }
 }

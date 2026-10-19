@@ -10,11 +10,10 @@ import {
   resolveRuntimeWorkerUrl,
   WorkerTaskPool,
 } from "openclaw/plugin-sdk/process-runtime";
-import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
-import {
-  runCodexHistoryWorkerInput,
-  type CodexHistoryWorkerInput,
-  type CodexHistoryWorkerResult,
+import { codexHistoryWorkerEntrypoint } from "./session-history-worker-entrypoint.js";
+import type {
+  CodexHistoryWorkerInput,
+  CodexHistoryWorkerResult,
 } from "./session-history.worker.js";
 import {
   codexHistoryRejectionReason,
@@ -28,16 +27,6 @@ import {
 } from "./src/app-server/session-history.js";
 import type { SettledTurnMessages } from "./src/app-server/settled-turn-evidence.js";
 import { projectVerifiedSettledCodexMessages } from "./src/app-server/settled-turn-evidence.js";
-
-const codexHistoryWorkerEntrypoint = {
-  currentModuleUrl: import.meta.url,
-  sourceWorkerName: "session-history.worker",
-  distWorkerPath: "extensions/codex/session-history.worker.js",
-  package: {
-    name: "@openclaw/codex",
-    distWorkerPath: "session-history.worker.js",
-  },
-} as const;
 
 const sourceWorkerUrl = resolveRuntimeWorkerUrl(codexHistoryWorkerEntrypoint);
 const sourceNeedsBuiltFallback =
@@ -54,8 +43,6 @@ const historyReads = new WorkerTaskPool<CodexHistoryWorkerInput, CodexHistoryWor
       })
     : sourceWorkerUrl,
   workerClass: "reader",
-  // Published plugin supports older hosts that only understand numeric sizing.
-  maxWorkers: 1,
 });
 
 export async function projectCodexSettledHistoryInWorker(
@@ -116,10 +103,7 @@ export async function projectCodexSettledHistoryInWorker(
             physicalSource,
             evidence,
           };
-          // Legacy process-held incognito cannot be reopened in another worker.
-          const result = isIncognitoSessionKey(captured.sessionKey)
-            ? await runCodexHistoryWorkerInput(input)
-            : await historyReads.run(input, { timeoutMs: 60_000, signal });
+          const result = await historyReads.run(input, { timeoutMs: 60_000, signal });
           return { value: result.result, version: result.version };
         },
         signal,

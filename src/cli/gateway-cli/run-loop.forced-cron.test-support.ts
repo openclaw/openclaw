@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { CronService } from "../../cron/service.js";
+import { getSuspensionVisibleCronTaskRunCount } from "../../cron/service/active-run-cancellation.js";
 import { GatewayConnectionWork } from "../../gateway/server-connection-work.js";
 import { drainGatewayCron } from "../../gateway/server-cron-drain.js";
 import { runGatewayCloseSteps } from "../../gateway/server-shutdown.js";
@@ -21,7 +23,9 @@ const cleanupMayFinish = createDeferredCore();
 let starts = 0;
 process.on("message", (message) => {
   if (message === "inspect") {
-    trace(`held:starts=${starts}:pending=${connectionWork.hasPendingWork}`);
+    trace(
+      `held:starts=${starts}:connectionPending=${connectionWork.hasPendingWork}:cronPending=${getSuspensionVisibleCronTaskRunCount()}`,
+    );
   } else if (message === "release") {
     cleanupMayFinish.resolve();
   }
@@ -45,7 +49,8 @@ const cron = new CronService({
       trace("cron-started");
       if (!force) {
         await cancelled.promise;
-        trace(`cron-cancelled:${String(abortSignal.reason)}`);
+        assert(isAgentRunRestartAbortReason(abortSignal.reason));
+        trace("cron-cancelled:restart");
       }
       await cleanupMayFinish.promise;
       if (force) {
@@ -108,6 +113,7 @@ const code = await runGatewayLoop({
               settlements: [cron.waitForIdle()],
               logger: { warn: (...args) => assert.fail(JSON.stringify(args)) },
             });
+            assert.equal(getSuspensionVisibleCronTaskRunCount(), 0);
             trace("close-completed");
           },
           onError: (message) => {

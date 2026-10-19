@@ -12,8 +12,10 @@ export type UsageAccumulator = {
   cacheWrite1h: number;
   reasoningTokens: number;
   total: number;
+  usageReport?: NormalizedUsage["usageReport"];
   /** Undefined means unobserved; any missing call price makes the complete sum unavailable. */
   cost: NormalizedUsage["cost"] | "unavailable";
+  costStatus?: NormalizedUsage["costStatus"];
   /** Counts every attempt, including retries. */
   assistantTurns: number;
   /** Omitted until an attempt reports a tool-search/code-mode catalog. */
@@ -36,9 +38,21 @@ export const mergeUsageIntoAccumulator = (
   target: UsageAccumulator,
   usage: NormalizedUsage | undefined,
 ) => {
+  if (usage?.costStatus) {
+    target.costStatus = usage.costStatus;
+    if (usage.costStatus === "unavailable") {
+      target.cost = "unavailable";
+    }
+  }
+  if (usage?.usageReport?.state === "unavailable") {
+    target.usageReport = usage.usageReport;
+    target.cost = "unavailable";
+    return;
+  }
   if (!hasBillableUsage(usage)) {
     return;
   }
+  target.usageReport ??= usage.usageReport;
   const callTotal =
     usage.total ??
     (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
@@ -98,23 +112,30 @@ export const mergeAttemptRunStatsIntoAccumulator = (
 };
 
 export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | undefined => {
+  if (usage.usageReport?.state === "unavailable") {
+    return { usageReport: { state: "unavailable" }, contextUsage: { state: "unavailable" } };
+  }
   const hasUsage =
     USAGE_COST_COMPONENTS.some((key) => usage[key] > 0) ||
     usage.reasoningTokens > 0 ||
     usage.total > 0;
   const cost = usage.cost === "unavailable" ? undefined : usage.cost;
-  if (!hasUsage && !cost) {
+  if (!usage.usageReport && !hasUsage && !cost) {
     return undefined;
   }
   const derivedTotal = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
   return {
-    input: usage.input || undefined,
-    output: usage.output || undefined,
+    ...(usage.usageReport ? { usageReport: usage.usageReport } : {}),
+    input: usage.usageReport ? usage.input : usage.input || undefined,
+    output: usage.usageReport ? usage.output : usage.output || undefined,
     cacheRead: usage.cacheReadReported ? usage.cacheRead : usage.cacheRead || undefined,
     cacheWrite: usage.cacheWriteReported ? usage.cacheWrite : usage.cacheWrite || undefined,
     ...(usage.cacheWrite1h > 0 ? { cacheWrite1h: usage.cacheWrite1h } : {}),
     ...(usage.reasoningTokens > 0 ? { reasoningTokens: usage.reasoningTokens } : {}),
-    total: usage.total || derivedTotal || undefined,
+    total: usage.usageReport ? usage.total : usage.total || derivedTotal || undefined,
     ...(cost ? { cost: { ...cost } } : {}),
+    ...(usage.costStatus
+      ? { costStatus: usage.cost === "unavailable" ? "unavailable" : "complete" }
+      : {}),
   };
 };

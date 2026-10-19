@@ -1,8 +1,4 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
@@ -10,318 +6,176 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { openSidebarPinMenu } from "./sidebar-customization.test-support.ts";
+import {
+  installPreferenceServer,
+  expectCount,
+  seedStorage,
+} from "./sidebar-assertions.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Stable navigation preference upgrade" });
+const suite = createControlUiE2eSuite({ name: "Rail shortcut storage upgrade" });
+const legacyEntries = ["route:agents-home", "plugin:reports/daily", "session:agent:main:planning"];
+const sessions = [
+  { key: "agent:main:planning", kind: "direct" as const, label: "Planning", pinned: true },
+];
+const appearance = {
+  theme: "claw",
+  themeMode: "dark",
+  navWidth: 333,
+  textScale: 110,
+  realtimeTalkInputDeviceId: "synthetic-microphone",
+  pinnedAgentIds: ["research"],
+};
 
 suite.define(() => {
   it.each([false, true])(
-    "imports stable navigation without overwriting an explicit-empty profile (%s)",
-    async (hasProfilePins) => {
-      await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
+    "ignores the Team-seeded sidebar identity without writing preferences (saved=%s)",
+    async (saved) => {
+      await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
         const key = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
-        // v2026.9.9 (bcfc88812a35), ui/src/app/settings.ts saveSettings:
-        // top-level sidebarEntries in the Gateway-scoped v1 record; no navigationScope.
         const stable = {
           gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
-          sidebarEntries: ["route:usage", "route:cron"],
-          theme: "claw",
-          themeMode: "dark",
-          navWidth: 333,
-          textScale: 110,
-          realtimeTalkInputDeviceId: "synthetic-microphone",
-          pinnedAgentIds: ["research"],
+          ...appearance,
+          sidebarEntries: legacyEntries,
+          sidebarPinnedRoutes: ["agents-home", "dashboards", "systems", "usage"],
+          navigationByProfile: { alex: { sidebarEntries: legacyEntries } },
         };
-        await page.addInitScript(
-          ({ key: storageKey, stable: persisted }) =>
-            localStorage.setItem(storageKey, JSON.stringify(persisted)),
-          { key, stable },
-        );
-        const migrated = ["route:systems", "route:usage", "session:agent:main:legacy-plan"];
-        const appearance = { "ui.themeMode": "dark" };
-        const finalEntries = { ...appearance, "ui.sidebarEntries": hasProfilePins ? [] : migrated };
-        const legacySession = {
-          key: "agent:main:legacy-plan",
-          kind: "direct" as const,
-          label: "Planning",
-          pinned: true,
-          owner: { actor: { type: "human" as const, id: "alex", label: "Alex" } },
-        };
+        await seedStorage(page, { [key]: JSON.stringify(stable) });
         const gateway = await installMockGateway(page, {
-          heldMethods: ["connect"],
-          sessions: [legacySession],
+          assistantName: "Atlas",
+          sessions,
           presenceUsers: [{ id: "alex", name: "Alex", self: true }],
+          controlUiTabs: [{ id: "daily", label: "Reports", pluginId: "reports", icon: "plug" }],
           featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get", "users.prefs.set"],
           methodResponses: {
-            "sessions.list": {
-              cases: [
-                {
-                  match: { pinned: true },
-                  response: {
-                    ts: 1,
-                    path: "",
-                    defaults: {},
-                    count: 1,
-                    totalCount: 1,
-                    offset: 0,
-                    hasMore: false,
-                    nextOffset: null,
-                    sessions: [legacySession],
-                  },
-                },
-              ],
-            },
             "config.get": {
-              config: { ui: { prefs: { sidebarEntries: ["route:systems", "route:usage"] } } },
+              config: { ui: { prefs: { sidebarEntries: legacyEntries } } },
               hash: "legacy-navigation",
+            },
+            "users.prefs.get": {
+              status: "ok",
+              entries: saved
+                ? { "ui.themeMode": "dark", "ui.sidebarEntries": legacyEntries }
+                : { "ui.themeMode": "dark" },
             },
           },
         });
         await page.goto(suite.server.baseUrl + "chat");
-        await gateway.waitForRequest("connect");
-        // One wire fixture owns preference state regardless of concurrent read order.
-        await page.evaluate(
-          (initial) => {
-            const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
-            const values: Record<string, unknown> = { ...initial };
-            mock.setRequestHandler("users.prefs.get", ({ respond }) =>
-              respond({ status: "ok", entries: values }),
-            );
-            mock.setRequestHandler("users.prefs.set", ({ params, respond }) => {
-              if (
-                !params ||
-                typeof params !== "object" ||
-                !("entries" in params) ||
-                !params.entries ||
-                typeof params.entries !== "object"
-              ) {
-                throw new Error("Expected profile preference entries");
-              }
-              Object.assign(values, params.entries);
-              respond({ status: "ok" });
-            });
-          },
-          hasProfilePins ? finalEntries : appearance,
-        );
-        await gateway.resolveDeferred("connect");
         await gateway.waitForRequest("users.prefs.get");
-        if (!hasProfilePins) {
-          const migration = await gateway.waitForRequest("users.prefs.set");
-          expect(migration.params).toEqual({
-            entries: { "ui.sidebarEntries": migrated },
-            expectedEntries: { "ui.sidebarEntries": null },
-          });
-        }
-        const pins = page.locator("openclaw-app-sidebar .sidebar-rail__pin");
-        await expect
-          .poll(() =>
-            pins.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-sidebar-entry"))),
-          )
-          .toEqual(hasProfilePins ? [] : migrated);
-        const writes = await gateway.getRequests("users.prefs.set");
-        if (hasProfilePins) {
-          expect(writes).toEqual([]);
-          expect(await gateway.getRequests("sessions.list", { pinned: true })).toEqual([]);
-        } else {
-          expect(writes).toHaveLength(1);
-          expect(writes[0]!.params).toEqual({
-            entries: { "ui.sidebarEntries": migrated },
-            expectedEntries: { "ui.sidebarEntries": null },
-          });
-          expect(await gateway.getRequests("sessions.list", { pinned: true })).toHaveLength(1);
-        }
+        await page.locator('[data-session-key="agent:main:planning"]').first().waitFor();
+        const pins = page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-rail__pin");
+        await expectCount(pins, 0);
+        expect(await gateway.getRequests("users.prefs.set")).toEqual([]);
+        expect(await gateway.getRequests("sessions.list", { pinned: true })).toEqual([]);
         expect(
           await page.evaluate(
             (storageKey) => JSON.parse(localStorage.getItem(storageKey) ?? "{}"),
             key,
           ),
-        ).toMatchObject({
-          theme: stable.theme,
-          themeMode: stable.themeMode,
-          navWidth: stable.navWidth,
-          textScale: stable.textScale,
-          realtimeTalkInputDeviceId: stable.realtimeTalkInputDeviceId,
-          pinnedAgentIds: stable.pinnedAgentIds,
-        });
+        ).toMatchObject(appearance);
         expect(await gateway.getRequests("config.patch")).toEqual([]);
         expect(await gateway.getRequests("sessions.patch")).toEqual([]);
       });
     },
   );
 
+  it("ignores stable browser sidebar order and pins, then retains a dragged shortcut after reload", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ context, page }) => {
+      const key = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
+      await seedStorage(
+        page,
+        {
+          [key]: JSON.stringify({
+            sidebarEntries: legacyEntries,
+            sidebarPinnedRoutes: ["agents-home", "dashboards", "systems", "usage"],
+          }),
+        },
+        "legacy-browser-seeded",
+      );
+      const gateway = await installMockGateway(page, { sessions });
+      await page.goto(suite.server.baseUrl + "chat");
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const rail = sidebar.locator(".sidebar-rail__pins");
+      const source = sidebar.locator('[data-session-key="agent:main:planning"]').first();
+      await source.waitFor();
+      expect(await rail.locator(".sidebar-rail__pin").count()).toBe(0);
+      const sibling = await context.newPage();
+      const siblingShortcut = sibling
+        .locator(".sidebar-rail")
+        .getByRole("link", { name: "Planning", exact: true });
+      await installMockGateway(sibling, { sessions });
+      await sibling.goto(suite.server.baseUrl + "chat");
+      await sibling.locator('[data-session-key="agent:main:planning"]').first().waitFor();
+      expect(await sibling.locator(".sidebar-rail__pin").count()).toBe(0);
+      await source.dragTo(rail, { targetPosition: { x: 20, y: 80 } });
+      const shortcut = rail.getByRole("link", { name: "Planning", exact: true });
+      await shortcut.waitFor();
+      await siblingShortcut.waitFor();
+      await expect
+        .poll(() =>
+          page.evaluate(
+            (storageKey) => JSON.parse(localStorage.getItem(storageKey) ?? "{}").railShortcuts,
+            key,
+          ),
+        )
+        .toEqual(["session:agent:main:planning"]);
+      expect(await gateway.getRequests("users.prefs.set")).toEqual([]);
+      await page.reload();
+      await shortcut.waitFor();
+      expect(await rail.locator(".sidebar-rail__pin").count()).toBe(1);
+      await sibling.reload();
+      await siblingShortcut.waitFor();
+    });
+  });
+
   it.each(["recorded", "missing", "corrupt", "fresh-confirmed"] as const)(
-    "replays v2026.9.9 pending shortcuts without stranding appearance (baseline=%s)",
+    "discards legacy pending sidebar replay while preserving appearance (%s)",
     async (baseline) => {
-      const hasBaseline = baseline === "recorded";
       await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
-        const gatewayUrl = controlUiBundledGatewayUrl(suite.server.baseUrl);
         const storageKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
-        const scope = gatewayUrl + ":profile:alex";
+        const scope = controlUiBundledGatewayUrl(suite.server.baseUrl) + ":profile:alex";
         const pendingKey = "openclaw.control.serverPrefs.pending.v1:" + scope;
         const lastSeenKey = "openclaw.control.serverPrefs.v1:" + scope;
-        const desired = ["route:plugins"];
-        const remote = ["route:usage", "route:cron"];
-        await page.addInitScript(
-          ({
-            gatewayUrl: targetGatewayUrl,
-            storageKey: settingsStorageKey,
-            pendingKey: pendingStorageKey,
-            lastSeenKey: confirmedStorageKey,
-            baseline: baselineKind,
-            desired: localPins,
-          }) => {
-            if (sessionStorage.getItem("stable-outbox-seeded")) {
-              return;
-            }
-            sessionStorage.setItem("stable-outbox-seeded", "true");
-            // Literal persisted outputs from v2026.9.9: no sidebarEntriesBase field.
-            localStorage.setItem(
-              settingsStorageKey,
-              JSON.stringify({
-                gatewayUrl: targetGatewayUrl,
-                sidebarEntries: localPins,
-                theme: "claw",
-                themeMode: "dark",
-                accent: "#ff0000",
-              }),
-            );
-            localStorage.setItem(
-              pendingStorageKey,
-              JSON.stringify({ sidebarEntries: localPins, accent: "#ff0000" }),
-            );
-            if (baselineKind === "recorded") {
-              localStorage.setItem(
-                confirmedStorageKey,
-                JSON.stringify({ sidebarEntries: ["route:usage"] }),
-              );
-            }
-            if (baselineKind === "corrupt") {
-              localStorage.setItem(confirmedStorageKey, "{");
-            }
-            if (baselineKind === "fresh-confirmed") {
-              localStorage.setItem(
-                confirmedStorageKey,
-                JSON.stringify({
-                  sidebarEntries: ["route:usage", "route:cron"],
-                  navigationConfirmation: { sidebarEntries: "fresh-read" },
-                }),
-              );
-            }
-          },
-          { gatewayUrl, storageKey, pendingKey, lastSeenKey, baseline, desired },
-        );
+        const stored = {
+          [storageKey]: JSON.stringify({ sidebarEntries: ["route:plugins"], themeMode: "dark" }),
+          [pendingKey]: JSON.stringify({ sidebarEntries: ["route:plugins"], accent: "#ff0000" }),
+        };
+        if (baseline !== "missing") {
+          stored[lastSeenKey] =
+            baseline === "corrupt"
+              ? "{"
+              : JSON.stringify({
+                  sidebarEntries: ["route:usage"],
+                  ...(baseline === "fresh-confirmed"
+                    ? { navigationConfirmation: { sidebarEntries: "fresh-read" } }
+                    : {}),
+                });
+        }
+        await seedStorage(page, stored);
         const gateway = await installMockGateway(page, {
           heldMethods: ["connect"],
+          sessions,
           presenceUsers: [{ id: "alex", name: "Alex", self: true }],
           featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get", "users.prefs.set"],
-          methodResponses: {
-            "config.get": { config: { ui: { prefs: {} } }, hash: "stable-outbox-upgrade" },
-          },
         });
         await page.goto(suite.server.baseUrl + "chat");
         await gateway.waitForRequest("connect");
-        const installPreferences = (initial: Record<string, unknown>) =>
-          page.evaluate((initialValues) => {
-            const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
-            const values: Record<string, unknown> = { ...initialValues };
-            mock.setRequestHandler("users.prefs.get", ({ respond }) =>
-              respond({ status: "ok", entries: values }),
-            );
-            mock.setRequestHandler("users.prefs.set", ({ params, respond }) => {
-              const request = params as {
-                entries: Record<string, unknown>;
-                expectedEntries?: Record<string, unknown>;
-              };
-              if (
-                Object.entries(request.expectedEntries ?? {}).some(
-                  ([key, value]) => JSON.stringify(values[key] ?? null) !== JSON.stringify(value),
-                )
-              ) {
-                respond({ status: "conflict" });
-                return;
-              }
-              Object.assign(values, request.entries);
-              respond({ status: "ok" });
-            });
-          }, initial);
-        await installPreferences({ "ui.sidebarEntries": remote, "ui.themeMode": "dark" });
+        await installPreferenceServer(page, {
+          "ui.sidebarEntries": legacyEntries,
+          "ui.themeMode": "dark",
+        });
         await gateway.resolveDeferred("connect");
-        await gateway.waitForRequest("users.prefs.get");
-        const pins = page.locator("openclaw-app-sidebar .sidebar-rail__pin");
-        if (!hasBaseline) {
-          await expect
-            .poll(() =>
-              pins.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-sidebar-entry"))),
-            )
-            .toEqual(desired);
-        }
+        await page.locator('[data-session-key="agent:main:planning"]').first().waitFor();
         await expect
           .poll(async () =>
             (await gateway.getRequests("users.prefs.set")).map((request) => request.params),
           )
-          .toEqual([
-            ...(hasBaseline
-              ? [
-                  {
-                    entries: { "ui.sidebarEntries": ["route:cron", "route:plugins"] },
-                    expectedEntries: { "ui.sidebarEntries": remote },
-                  },
-                ]
-              : []),
-            { entries: { "ui.accent": "#ff0000" } },
-          ]);
+          .toEqual([{ entries: { "ui.accent": "#ff0000" } }]);
+        expect(await page.locator(".sidebar-rail__pin").count()).toBe(0);
         await expect
           .poll(() =>
-            pins.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-sidebar-entry"))),
+            page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "null"), pendingKey),
           )
-          .toEqual(hasBaseline ? ["route:cron", "route:plugins"] : desired);
-        expect(await page.evaluate((key) => localStorage.getItem(key), pendingKey)).toBeNull();
-        if (!hasBaseline) {
-          const recovery = page.getByText(
-            "Shortcuts are saved only on this device because their previous sync state is missing. Edit a shortcut to sync again.",
-            { exact: true },
-          );
-          await recovery.waitFor();
-          if (baseline === "missing" && process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              page.locator(".shell"),
-              [pins.first(), recovery],
-              { animations: "disabled" },
-            );
-            await writeFile(path.join(suite.artifactDir, "missing-baseline.png"), frame.png);
-          }
-        }
-        expect(await gateway.getRequests("config.patch")).toEqual([]);
-        expect(await gateway.getRequests("sessions.patch")).toEqual([]);
-        await page.reload();
-        await gateway.waitForRequest("connect");
-        const savedPins = hasBaseline ? ["route:cron", "route:plugins"] : remote;
-        await installPreferences({
-          "ui.sidebarEntries": savedPins,
-          "ui.accent": "#ff0000",
-          "ui.themeMode": "dark",
-        });
-        await gateway.resolveDeferred("connect");
-        await gateway.waitForRequest("users.prefs.get");
-        await expect
-          .poll(() =>
-            pins.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-sidebar-entry"))),
-          )
-          .toEqual(hasBaseline ? savedPins : desired);
-        expect(await gateway.getRequests("users.prefs.set")).toEqual([]);
-        if (!hasBaseline) {
-          const menu = await openSidebarPinMenu(page, "route:plugins");
-          await menu.getByRole("menuitem", { name: "Unpin", exact: true }).click();
-          const recoveryWrite = await gateway.waitForRequest("users.prefs.set");
-          expect(recoveryWrite.params).toEqual({
-            entries: { "ui.sidebarEntries": remote },
-            expectedEntries: { "ui.sidebarEntries": remote },
-          });
-          await expect
-            .poll(() => page.evaluate((key) => localStorage.getItem(key), pendingKey))
-            .toBeNull();
-        }
+          .toBeNull();
       });
     },
   );

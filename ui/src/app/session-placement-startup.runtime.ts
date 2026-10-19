@@ -29,6 +29,7 @@ import {
   capturePlacementStartupConnection,
   type ApplicationPlacementStartupRuntime,
   type ApplicationPlacementStartupDependencies,
+  type ApplicationPlacementStartupStatus,
 } from "./session-placement-startup.ts";
 
 registerNewSessionSetupEnglish();
@@ -72,6 +73,7 @@ type PlacementStartupEntry = {
   readonly createdAt: number;
   readonly scope: GatewayConnectionScope;
   readonly retainsConnection: () => boolean;
+  readonly abort: AbortController;
 };
 
 export default function createApplicationPlacementStartupRuntime(
@@ -103,6 +105,7 @@ export default function createApplicationPlacementStartupRuntime(
     const snapshot = params.gateway.snapshot;
     return Boolean(
       entry.retainsConnection() &&
+      !entry.abort.signal.aborted &&
       connection.isCurrent(entry.scope) &&
       snapshot.client?.recoveryScopeReady,
     );
@@ -127,6 +130,7 @@ export default function createApplicationPlacementStartupRuntime(
       return;
     }
     entries.delete(found.key);
+    entry.abort.abort();
     if (notify) {
       publish();
     }
@@ -181,6 +185,7 @@ export default function createApplicationPlacementStartupRuntime(
       persistRecovery: entry.persistRecovery,
       cleanupOnCancellation: () => !entry.persistRecovery && entry.work.kind !== "paused",
       mode,
+      signal: entry.abort.signal,
       isLifecycleCurrent: () => lifecycleCurrent(entry),
       ownsRecovery: () => ownsRecovery(entry),
       clearRecovery: () =>
@@ -302,6 +307,7 @@ export default function createApplicationPlacementStartupRuntime(
         existing?.owner.messageId === owner.messageId ? existing.createdAt : input.createdAt,
       scope,
       retainsConnection: capturePlacementStartupConnection(params.gateway, owner),
+      abort: new AbortController(),
     };
     entries.set(owner.sessionKey, entry);
     publish();
@@ -321,6 +327,11 @@ export default function createApplicationPlacementStartupRuntime(
     snapshot: ApplicationPlacementStartupDependencies["gateway"]["snapshot"],
   ) => {
     connection.transition(snapshot);
+    for (const entry of entries.values()) {
+      if (!lifecycleCurrent(entry)) {
+        entry.abort.abort();
+      }
+    }
     if (snapshot.phase !== "connected") {
       return;
     }
@@ -379,11 +390,14 @@ export default function createApplicationPlacementStartupRuntime(
             : entry.work.recovery.phase === "sending"
               ? "sending"
               : "pending";
+      let startStatus: ApplicationPlacementStartupStatus["startStatus"];
       if (phase === "pending") {
         const row = params.sessions.state.result?.sessions.find((candidate: GatewaySessionRow) =>
           areUiSessionKeysEquivalent(candidate.key, entry.owner.sessionKey),
         );
         const placementState = row?.placement?.state;
+        startStatus =
+          row?.placement?.state === "provisioning" ? row.placement.startStatus : undefined;
         if (placementState && isStartupPlacementPhase(placementState)) {
           phase = placementState;
         }
@@ -392,6 +406,7 @@ export default function createApplicationPlacementStartupRuntime(
         sessionKey: entry.owner.sessionKey,
         targetKind: entry.work.recovery.target.kind,
         phase,
+        ...(startStatus ? { startStatus } : {}),
         startedAt: entry.createdAt,
         initialTurn: buildPlacementStartupInitialTurn({
           recovery: entry.work.recovery,
@@ -468,6 +483,9 @@ export default function createApplicationPlacementStartupRuntime(
     subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       connection.dispose();
+      for (const entry of entries.values()) {
+        entry.abort.abort();
+      }
       entries.clear();
       listeners.clear();
     },

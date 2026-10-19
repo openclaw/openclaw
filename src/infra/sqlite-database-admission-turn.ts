@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
@@ -93,20 +94,28 @@ export function runWithSqliteDatabaseAdmissionTurn<T>(
   locations: readonly string[],
   operation: () => Promise<T>,
   families: readonly string[] = [],
+  signal?: AbortSignal,
 ): Promise<T> {
   const turn = reserveAdmissionTurn(locations, families);
   if (!turn) {
     return operation();
   }
-  return turn.ready.then(() => {
-    const scope: AdmissionTurnScope = { active: true };
-    return current.run(scope, async () => {
-      try {
-        return await operation();
-      } finally {
-        scope.active = false;
-        turn.release();
-      }
-    });
-  });
+  return racePromiseWithAbortSignal(turn.ready, signal, (aborted) => aborted.reason).then(
+    () => {
+      const scope: AdmissionTurnScope = { active: true };
+      return current.run(scope, async () => {
+        try {
+          return await operation();
+        } finally {
+          scope.active = false;
+          turn.release();
+        }
+      });
+    },
+    (error: unknown) => {
+      // A cancelled waiter still carries its predecessors for later reservations.
+      void turn.ready.then(turn.release);
+      throw error;
+    },
+  );
 }

@@ -1,20 +1,10 @@
-// Boundary test: unlike service.test.ts this file does NOT mock @opentelemetry/api, so
-// real SDK-generated span ids flow through the recorders.
-//
-// It exists because the mocked suite makes every span report back the same trace id the
-// test feeds in, collapsing the diagnostic and OTel id spaces into one value. That hides
-// a parent lookup keyed by one id space and queried with the other.
-//
-// Trace cases use the OPENCLAW_OTEL_PRELOADED seam to retain this file's tracer provider.
-// Collector-boundary cases run owned mode, which now composes private providers and never
-// registers global SDK state; teardown still restores the preloaded globals for trace cases.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { context, diag, DiagLogLevel, metrics, propagation, trace } from "@opentelemetry/api";
-import { logs } from "@opentelemetry/api-logs";
+import { context, diag, DiagLogLevel, metrics, trace } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { resourceFromAttributes } from "@opentelemetry/resources";
+import { AggregationTemporality, MeterProvider, MetricReader } from "@opentelemetry/sdk-metrics";
 import { BasicTracerProvider, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
@@ -31,6 +21,7 @@ import { startLocalOtlpReceiver } from "../../../test/e2e/qa-lab/runtime/otel-te
 import { createDiagnosticsOtelService } from "./service.js";
 import { installRealOtelSdkTestHarness, PRELOAD_ENV } from "./service.real-sdk.test-support.js";
 import {
+  clearOtelGlobals,
   createOtelContext,
   emitRealSdkSignals,
   startOtelService,
@@ -38,186 +29,220 @@ import {
 } from "./service.test-helpers.js";
 
 const sdk = installRealOtelSdkTestHarness();
+const collector = "https://collector.example.com/otlp";
 
 const emit = (event: Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0]) =>
   emitTrustedDiagnosticEventWithPrivateData(event, {});
 
-function spanNamed(spans: ReadableSpan[], name: string) {
-  return spans.find((span) => span.name === name);
-}
+const spanNamed = (spans: ReadableSpan[], name: string) => spans.find((span) => span.name === name);
 
 function captureOtelDiagnostics(): string[] {
   const messages: string[] = [];
-  const capture = (...args: unknown[]) => {
-    messages.push(args.map((value) => String(value)).join(" "));
-  };
+  const capture = (...args: unknown[]) => messages.push(args.map(String).join(" "));
+  const ignore = () => {};
   diag.setLogger(
-    {
-      debug: () => {},
-      error: capture,
-      info: () => {},
-      verbose: () => {},
-      warn: capture,
-    },
+    { debug: ignore, error: capture, info: ignore, verbose: ignore, warn: capture },
     { logLevel: DiagLogLevel.ALL, suppressOverrideMessage: true },
   );
   return messages;
 }
 
 function releasePreloadedOtelGlobals() {
-  context.disable();
-  logs.disable();
-  metrics.disable();
-  propagation.disable();
-  trace.disable();
+  clearOtelGlobals();
   process.env[PRELOAD_ENV] = "0";
 }
 
-test.each([
-  {
-    label: "signal-qualified path with trailing slash",
-    source: "config",
-    suffix: "/api/public/otel/v1/traces/",
-    expected: [
-      "/api/public/otel/v1/traces",
-      "/api/public/otel/v1/metrics",
-      "/api/public/otel/v1/logs",
-    ],
-  },
-  {
-    label: "custom path with query slash",
-    source: "environment",
-    suffix: "/api/public/otel/?tenant=team/",
-    expected: [
-      "/api/public/otel/v1/traces?tenant=team/",
-      "/api/public/otel/v1/metrics?tenant=team/",
-      "/api/public/otel/v1/logs?tenant=team/",
-    ],
-  },
-  {
-    label: "signal path with query slash",
-    source: "config",
-    suffix: "/api/public/otel/v1/traces/?tenant=team/",
-    expected: [
-      "/api/public/otel/v1/traces/?tenant=team/",
-      "/api/public/otel/v1/metrics?tenant=team/",
-      "/api/public/otel/v1/logs?tenant=team/",
-    ],
-  },
-])(
-  "routes real exporters from a shared $label endpoint in $source",
-  async ({ suffix, expected, source }) => {
-    const receiver = await startOtlpReceiver();
-    releasePreloadedOtelGlobals();
-    const { service, ctx } = await startOtelService({
-      endpoint: `${receiver.endpoint}${suffix}`,
-      traces: true,
-      metrics: true,
-      logs: true,
-      configure: (serviceContext) => {
-        if (source === "environment") {
-          delete serviceContext.config.diagnostics!.otel!.endpoint;
-          process.env.OTEL_EXPORTER_OTLP_ENDPOINT = `${receiver.endpoint}${suffix}`;
-        }
-      },
-    });
+async function collectSignals(
+  configure: (ctx: ReturnType<typeof createOtelContext>, endpoint: string) => void,
+  flags = { traces: true, metrics: true, logs: true },
+) {
+  const receiver = await startOtlpReceiver();
+  releasePreloadedOtelGlobals();
+  const { service, ctx } = await startOtelService({
+    endpoint: receiver.endpoint,
+    ...flags,
+    configure: (serviceContext) => configure(serviceContext, receiver.endpoint),
+  });
+  try {
+    await emitRealSdkSignals();
+  } finally {
+    await service.stop?.(ctx);
+    await receiver.close();
+  }
+  return { requests: receiver.requests, ctx };
+}
 
+const completed = { outcome: "completed", durationMs: 80 } as const;
+const runBase = { runId: "run-otlp", provider: "openai", model: "gpt-5.6-luna" };
+
+function completeTool(
+  parent: Parameters<typeof createChildDiagnosticTraceContext>[0],
+  toolName: string,
+  durationMs: number,
+  started = false,
+) {
+  const tool = { runId: runBase.runId, toolName, trace: createChildDiagnosticTraceContext(parent) };
+  if (started) {
+    emit({ type: "tool.execution.started", ...tool });
+  }
+  emit({ type: "tool.execution.completed", ...tool, durationMs });
+}
+
+function startTurn(parent?: Parameters<typeof createChildDiagnosticTraceContext>[0]) {
+  const message = {
+    channel: parent ? "web" : "telegram",
+    trace: parent ? createChildDiagnosticTraceContext(parent) : createDiagnosticTraceContext(),
+  };
+  const harness = {
+    ...runBase,
+    harnessId: parent ? "openclaw" : "claude-cli",
+    trace: createChildDiagnosticTraceContext(message.trace),
+  };
+  const run = { ...runBase, trace: createChildDiagnosticTraceContext(harness.trace) };
+  emit({ type: "message.dispatch.started", ...message, source: parent ? "http" : "webhook" });
+  emit({ type: "harness.run.started", ...harness });
+  emit({ type: "run.started", ...run });
+  return { message, harness, run };
+}
+
+function endTurn({ message, harness, run }: ReturnType<typeof startTurn>) {
+  emit({ type: "run.completed", ...run, ...completed, durationMs: 60 });
+  emit({ type: "harness.run.completed", ...harness, ...completed, durationMs: 70 });
+  emit({ type: "message.processed", ...message, ...completed });
+}
+
+test("bounds tool metric series across collections while preserving span parameter lengths", async () => {
+  const reader = new (class extends MetricReader {
+    protected async onForceFlush() {}
+    protected async onShutdown() {}
+  })({ aggregationTemporalitySelector: () => AggregationTemporality.CUMULATIVE });
+  const provider = new MeterProvider({ readers: [reader] });
+  metrics.disable();
+  metrics.setGlobalMeterProvider(provider);
+  try {
+    const { service, ctx } = await startOtelService({ traces: true, metrics: true });
     try {
-      await emitRealSdkSignals();
-      await service.stop?.(ctx);
-
-      expect(new Set(receiver.requests.map((request) => request.url))).toEqual(new Set(expected));
+      for (const iteration of [1, 2]) {
+        for (const paramsSummary of [
+          { kind: "string", length: iteration * 3 },
+          { kind: "array", length: iteration * 5 },
+        ] as const) {
+          const tool = { toolName: "read", paramsSummary };
+          emit({ type: "tool.execution.completed", ...tool, durationMs: 17 });
+          emit({
+            type: "tool.execution.blocked",
+            ...tool,
+            deniedReason: "policy",
+            reason: "Blocked by synthetic policy",
+          });
+        }
+        await waitForDiagnosticEventsDrained();
+        const { resourceMetrics } = await reader.collect();
+        if (iteration === 2) {
+          const exported = resourceMetrics.scopeMetrics.flatMap((scope) => scope.metrics);
+          for (const suffix of ["duration_ms", "blocked"]) {
+            const points = exported.find(
+              (metric) => metric.descriptor.name === `openclaw.tool.execution.${suffix}`,
+            )?.dataPoints;
+            expect(points).toHaveLength(2);
+            expect(
+              points?.map((point) => point.attributes["openclaw.tool.params.kind"]).toSorted(),
+            ).toEqual(["array", "string"]);
+            for (const point of points ?? []) {
+              expect(point.attributes).not.toHaveProperty("openclaw.tool.params.length");
+              expect(typeof point.value === "number" ? point.value : point.value.count).toBe(2);
+            }
+          }
+        }
+      }
+      await sdk.provider.forceFlush();
       expect(
-        receiver.requests.every(
-          (request) =>
-            request.method === "POST" && request.contentType === "application/x-protobuf",
-        ),
-      ).toBe(true);
+        sdk.exporter
+          .getFinishedSpans()
+          .map((span) => span.attributes["openclaw.tool.params.length"])
+          .toSorted((a, b) => Number(a) - Number(b)),
+      ).toEqual([3, 3, 5, 5, 6, 6, 10, 10]);
     } finally {
       await service.stop?.(ctx);
-      await receiver.close();
+    }
+  } finally {
+    await provider.shutdown();
+  }
+});
+
+test.each([
+  ["config", "/v1/traces/", "traces metrics logs"],
+  ["environment", "/?tenant=team/", "traces?tenant=team/ metrics?tenant=team/ logs?tenant=team/"],
+  [
+    "config",
+    "/v1/traces/?tenant=team/",
+    "traces/?tenant=team/ metrics?tenant=team/ logs?tenant=team/",
+  ],
+] as const)(
+  "routes real exporters from %s endpoint %s",
+  async (source, suffix, expected) => {
+    const { requests } = await collectSignals((ctx, endpoint) => {
+      const otel = ctx.config.diagnostics!.otel!;
+      otel.endpoint = `${endpoint}/api/public/otel${suffix}`;
+      if (source === "environment") {
+        process.env.OTEL_EXPORTER_OTLP_ENDPOINT = otel.endpoint;
+        delete otel.endpoint;
+      }
+    });
+    expect(new Set(requests.map((request) => request.url))).toEqual(
+      new Set(expected.split(" ").map((signal) => `/api/public/otel/v1/${signal}`)),
+    );
+    for (const request of requests) {
+      expect(request).toMatchObject({ method: "POST", contentType: "application/x-protobuf" });
     }
   },
   30_000,
 );
 
 test("merges exporter headers with config and required protobuf precedence", async () => {
-  const receiver = await startOtlpReceiver();
-  releasePreloadedOtelGlobals();
   process.env.OTEL_EXPORTER_OTLP_HEADERS =
     "x-env-only=env-value,x-precedence=env-value,content-type=text/plain";
-  const { service, ctx } = await startOtelService({
-    endpoint: receiver.endpoint,
-    traces: true,
-    metrics: true,
-    logs: true,
-    configure: (serviceContext) => {
-      const otel = serviceContext.config.diagnostics!.otel!;
-      otel.tracesEndpoint = `${receiver.endpoint}/custom-traces?tenant=red`;
-      otel.metricsEndpoint = `${receiver.endpoint}/custom-metrics/`;
-      otel.logsEndpoint = `${receiver.endpoint}/v1/traces`;
-      otel.headers = {
-        "content-type": "application/json",
-        "x-config-only": "config-value",
-        "x-precedence": "config-value",
-      };
-    },
+  const { requests } = await collectSignals((ctx, endpoint) => {
+    const otel = ctx.config.diagnostics!.otel!;
+    otel.tracesEndpoint = `${endpoint}/custom-traces?tenant=red`;
+    otel.metricsEndpoint = `${endpoint}/custom-metrics/`;
+    otel.logsEndpoint = `${endpoint}/v1/traces`;
+    otel.headers = {
+      "content-type": "application/json",
+      "x-config-only": "config-value",
+      "x-precedence": "config-value",
+    };
   });
-
-  try {
-    await emitRealSdkSignals();
-    await service.stop?.(ctx);
-
-    expect(new Set(receiver.requests.map((request) => request.url))).toEqual(
-      new Set(["/custom-traces?tenant=red", "/custom-metrics/", "/v1/traces"]),
-    );
-    expect(
-      receiver.requests.every((request) => {
-        return (
-          request.method === "POST" &&
-          request.headers["content-type"] === "application/x-protobuf" &&
-          request.headers["x-config-only"] === "config-value" &&
-          request.headers["x-env-only"] === "env-value" &&
-          request.headers["x-precedence"] === "config-value"
-        );
-      }),
-    ).toBe(true);
-  } finally {
-    await service.stop?.(ctx);
-    await receiver.close();
+  expect(new Set(requests.map((request) => request.url))).toEqual(
+    new Set(["/custom-traces?tenant=red", "/custom-metrics/", "/v1/traces"]),
+  );
+  for (const request of requests) {
+    expect(request).toMatchObject({
+      method: "POST",
+      headers: {
+        "content-type": "application/x-protobuf",
+        "x-config-only": "config-value",
+        "x-env-only": "env-value",
+        "x-precedence": "config-value",
+      },
+    });
   }
 }, 30_000);
 
 test("does not auto-enable rejected traces when metrics start the real SDK", async () => {
-  const receiver = await startOtlpReceiver();
-  releasePreloadedOtelGlobals();
   process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf";
   process.env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = "grpc";
   process.env.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL = "http/protobuf";
-  const { service, ctx } = await startOtelService({
-    endpoint: receiver.endpoint,
-    traces: true,
-    metrics: true,
-    logs: false,
-    configure: (serviceContext) => {
+  const { requests, ctx } = await collectSignals(
+    (serviceContext) => {
       delete serviceContext.config.diagnostics!.otel!.protocol;
     },
-  });
-
-  try {
-    await emitRealSdkSignals();
-    await service.stop?.(ctx);
-
-    expect(new Set(receiver.requests.map((request) => request.url))).toEqual(
-      new Set(["/v1/metrics"]),
-    );
-    expect(ctx.logger.warn).toHaveBeenCalledWith(
-      "diagnostics-otel: unsupported traces protocol grpc; OTLP export disabled",
-    );
-  } finally {
-    await service.stop?.(ctx);
-    await receiver.close();
-  }
+    { traces: true, metrics: true, logs: false },
+  );
+  expect(new Set(requests.map((request) => request.url))).toEqual(new Set(["/v1/metrics"]));
+  expect(ctx.logger.warn).toHaveBeenCalledWith(
+    "diagnostics-otel: unsupported traces protocol grpc; OTLP export disabled",
+  );
 }, 30_000);
 
 test("propagates the exported model span across two OTLP services with one rooted trace", async () => {
@@ -229,11 +254,7 @@ test("propagates the exported model span across two OTLP services with one roote
   const peerProvider = new BasicTracerProvider({
     resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: "openclaw-otel-peer" }),
     spanProcessors: [
-      new SimpleSpanProcessor(
-        new OTLPTraceExporter({
-          url: `${endpoint}/v1/traces`,
-        }),
-      ),
+      new SimpleSpanProcessor(new OTLPTraceExporter({ url: `${endpoint}/v1/traces` })),
     ],
   });
   const peerTracer = peerProvider.getTracer("openclaw-otel-peer");
@@ -256,25 +277,10 @@ test("propagates the exported model span across two OTLP services with one roote
   });
 
   try {
-    const messageTrace = createChildDiagnosticTraceContext(inboundParent);
-    const harnessTrace = createChildDiagnosticTraceContext(messageTrace);
-    const runTrace = createChildDiagnosticTraceContext(harnessTrace);
-    const toolTrace = createChildDiagnosticTraceContext(runTrace);
-    const base = { runId: "run-live-bridge", provider: "openai", model: "gpt-5.6-luna" };
-    const harnessBase = { ...base, harnessId: "openclaw" };
-
-    emit({
-      type: "message.dispatch.started",
-      channel: "web",
-      source: "http",
-      trace: messageTrace,
-    });
-    emit({ type: "harness.run.started", ...harnessBase, trace: harnessTrace });
-    emit({ type: "run.started", ...base, trace: runTrace });
-    const outboundTraceparent = runModelCallAndCaptureTraceparent({
-      ...base,
+    const turn = startTurn(inboundParent);
+    const outboundTraceparent = await runModelCallAndCaptureTraceparent({
+      ...turn.run,
       callId: "call-live-bridge",
-      trace: runTrace,
     });
     const outboundContext = parseDiagnosticTraceparent(outboundTraceparent);
     expect(outboundContext).toBeDefined();
@@ -290,56 +296,21 @@ test("propagates the exported model span across two OTLP services with one roote
     );
     peerCallback.end();
 
-    emit({
-      type: "tool.execution.started",
-      runId: base.runId,
-      toolName: "http",
-      trace: toolTrace,
-    });
-    emit({
-      type: "tool.execution.completed",
-      runId: base.runId,
-      toolName: "http",
-      durationMs: 10,
-      trace: toolTrace,
-    });
-    emit({
-      type: "run.completed",
-      ...base,
-      outcome: "completed",
-      durationMs: 60,
-      trace: runTrace,
-    });
-    emit({
-      type: "harness.run.completed",
-      ...harnessBase,
-      outcome: "completed",
-      durationMs: 70,
-      trace: harnessTrace,
-    });
-    emit({
-      type: "message.processed",
-      channel: "web",
-      outcome: "completed",
-      durationMs: 80,
-      trace: messageTrace,
-    });
+    completeTool(turn.run.trace, "http", 10, true);
+    endTurn(turn);
     await waitForDiagnosticEventsDrained();
     peerRoot.end();
     await service.stop?.(ctx);
     await peerProvider.shutdown();
 
-    const spans = receiver.capturedSpans.filter((span) =>
-      [
-        "peer.request",
-        "peer.callback",
-        "openclaw.message.processed",
-        "openclaw.harness.run",
-        "openclaw.run",
-        "openclaw.model.call",
-        "openclaw.tool.execution",
-      ].includes(span.name),
-    );
+    const names = new Set([
+      "peer.request",
+      "peer.callback",
+      ...["message.processed", "harness.run", "run", "model.call", "tool.execution"].map(
+        (name) => `openclaw.${name}`,
+      ),
+    ]);
+    const spans = receiver.capturedSpans.filter((span) => names.has(span.name));
     const spanIds = new Set(spans.map((span) => span.spanId));
     const roots = spans.filter((span) => !span.parentSpanId);
     const modelSpan = spans.find((span) => span.name === "openclaw.model.call");
@@ -348,11 +319,9 @@ test("propagates the exported model span across two OTLP services with one roote
     expect(new Set(spans.map((span) => span.traceId)).size).toBe(1);
     expect(roots.map((span) => span.name)).toEqual(["peer.request"]);
     expect(spans.every((span) => !span.parentSpanId || spanIds.has(span.parentSpanId))).toBe(true);
-    expect(outboundContext?.traceId).toBe(modelSpan?.traceId);
-    expect(outboundContext?.spanId).toBe(modelSpan?.spanId);
-    expect(spans.find((span) => span.name === "peer.callback")?.parentSpanId).toBe(
-      modelSpan?.spanId,
-    );
+    const { traceId, spanId } = modelSpan ?? {};
+    expect(outboundContext).toMatchObject({ traceId, spanId });
+    expect(spans.find((span) => span.name === "peer.callback")?.parentSpanId).toBe(spanId);
   } finally {
     peerRoot.end();
     await service.stop?.(ctx);
@@ -364,57 +333,25 @@ test("propagates the exported model span across two OTLP services with one roote
 test("keeps a whole turn on one trace when children arrive after their parent ended", async () => {
   const { service, ctx } = await startOtelService({ traces: true });
 
-  const messageTrace = createDiagnosticTraceContext();
-  const harnessTrace = createChildDiagnosticTraceContext(messageTrace);
-  const runTrace = createChildDiagnosticTraceContext(harnessTrace);
-  const base = { runId: "run-otlp-1", provider: "openai", model: "gpt-5.6-luna" };
-  const harnessBase = { ...base, harnessId: "claude-cli" };
-
-  emit({
-    type: "message.dispatch.started",
-    channel: "telegram",
-    source: "webhook",
-    trace: messageTrace,
-  });
-  emit({ type: "harness.run.started", ...harnessBase, trace: harnessTrace });
-  emit({ type: "run.started", ...base, trace: runTrace });
+  const { message, harness, run } = startTurn();
   emit({
     type: "model.call.completed",
-    ...base,
+    ...runBase,
     callId: "call-1",
     durationMs: 1_200,
-    trace: createChildDiagnosticTraceContext(runTrace),
+    trace: createChildDiagnosticTraceContext(run.trace),
   });
   await waitForDiagnosticEventsDrained();
 
-  // Each lifecycle span below ends, then receives a straggler. Those stragglers must join
-  // the same trace instead of each minting a fresh single-span trace.
-  emit({
-    type: "run.completed",
-    ...base,
-    outcome: "completed",
-    durationMs: 9_000,
-    trace: runTrace,
-  });
-  emit({
-    type: "tool.execution.completed",
-    runId: base.runId,
-    toolName: "write",
-    durationMs: 120,
-    trace: createChildDiagnosticTraceContext(runTrace),
-  });
-  emit({
-    type: "harness.run.completed",
-    ...harnessBase,
-    outcome: "completed",
-    durationMs: 9_500,
-    trace: harnessTrace,
-  });
+  // End each parent before its straggler: these must not create fresh traces.
+  emit({ type: "run.completed", ...run, ...completed, durationMs: 9_000 });
+  completeTool(run.trace, "write", 120);
+  emit({ type: "harness.run.completed", ...harness, ...completed, durationMs: 9_500 });
   emit({
     type: "context.assembled",
-    ...base,
+    ...runBase,
     sessionKey: "session-key",
-    channel: "telegram",
+    channel: message.channel,
     trigger: "message",
     messageCount: 3,
     historyTextChars: 100,
@@ -423,60 +360,44 @@ test("keeps a whole turn on one trace when children arrive after their parent en
     systemPromptChars: 50,
     promptChars: 150,
     promptImages: 0,
-    trace: createChildDiagnosticTraceContext(harnessTrace),
+    trace: createChildDiagnosticTraceContext(harness.trace),
   });
-  emit({
-    type: "message.processed",
-    channel: "telegram",
-    outcome: "completed",
-    durationMs: 10_000,
-    trace: messageTrace,
-  });
+  emit({ type: "message.processed", ...message, ...completed, durationMs: 10_000 });
   emit({
     type: "model.usage",
-    ...base,
+    ...runBase,
     usage: { input: 10, output: 5, total: 15 },
     durationMs: 30,
-    trace: createChildDiagnosticTraceContext(messageTrace),
+    trace: createChildDiagnosticTraceContext(message.trace),
   });
   await waitForDiagnosticEventsDrained();
   await service.stop?.(ctx);
 
   const spans = sdk.exporter.getFinishedSpans();
   const messageSpan = spanNamed(spans, "openclaw.message.processed");
-  const harnessSpan = spanNamed(spans, "openclaw.harness.run");
-  const runSpan = spanNamed(spans, "openclaw.run");
-
   expect(spans).toHaveLength(7);
   expect(new Set(spans.map((span) => span.spanContext().traceId)).size).toBe(1);
-  // A turn with no exported ancestor starts a fresh OTel root rather than reusing the
-  // diagnostic trace id. Spans parented from an upstream traceparent do adopt it.
-  expect(messageSpan?.spanContext().traceId).not.toBe(messageTrace.traceId);
+  expect(messageSpan?.spanContext().traceId).not.toBe(message.trace.traceId);
   expect(messageSpan?.parentSpanContext).toBeUndefined();
-  expect(harnessSpan?.parentSpanContext?.spanId).toBe(messageSpan?.spanContext().spanId);
-  expect(runSpan?.parentSpanContext?.spanId).toBe(harnessSpan?.spanContext().spanId);
-  // Stragglers land on the lifecycle span that owned them, not on a new root.
-  expect(spanNamed(spans, "openclaw.tool.execution")?.parentSpanContext?.spanId).toBe(
-    runSpan?.spanContext().spanId,
-  );
-  expect(spanNamed(spans, "openclaw.context.assembled")?.parentSpanContext?.spanId).toBe(
-    harnessSpan?.spanContext().spanId,
-  );
-  expect(spanNamed(spans, "openclaw.model.usage")?.parentSpanContext?.spanId).toBe(
-    messageSpan?.spanContext().spanId,
-  );
+  const id = (name: string) => spanNamed(spans, `openclaw.${name}`)?.spanContext().spanId;
+  expect(
+    Object.fromEntries(spans.map((span) => [span.name, span.parentSpanContext?.spanId])),
+  ).toMatchObject({
+    "openclaw.harness.run": id("message.processed"),
+    "openclaw.run": id("harness.run"),
+    "openclaw.tool.execution": id("run"),
+    "openclaw.context.assembled": id("harness.run"),
+    "openclaw.model.usage": id("message.processed"),
+  });
 }, 30_000);
 
-// An aborted turn ends the harness span via harness.run.error and never emits
-// run.completed, so that error path is the only thing a late child can attach to.
 test("keeps a late child on the trace when the turn ended in harness.run.error", async () => {
   const { service, ctx } = await startOtelService({ traces: true });
 
   const harnessTrace = createDiagnosticTraceContext();
-  const base = { runId: "run-err-1", provider: "openai", model: "gpt-5.6-luna" };
-  const harnessBase = { ...base, harnessId: "openclaw" };
+  const harnessBase = { ...runBase, harnessId: "openclaw", trace: harnessTrace };
 
-  emit({ type: "harness.run.started", ...harnessBase, trace: harnessTrace });
+  emit({ type: "harness.run.started", ...harnessBase });
   await waitForDiagnosticEventsDrained();
 
   emit({
@@ -485,16 +406,8 @@ test("keeps a late child on the trace when the turn ended in harness.run.error",
     phase: "send",
     errorCategory: "aborted",
     durationMs: 4_000,
-    trace: harnessTrace,
   });
-  // The killed child process settles after the harness span already ended.
-  emit({
-    type: "tool.execution.completed",
-    runId: base.runId,
-    toolName: "bash",
-    durationMs: 200,
-    trace: createChildDiagnosticTraceContext(harnessTrace),
-  });
+  completeTool(harnessTrace, "bash", 200);
   await waitForDiagnosticEventsDrained();
   await service.stop?.(ctx);
 
@@ -508,14 +421,10 @@ test("keeps a late child on the trace when the turn ended in harness.run.error",
   expect(toolSpan?.parentSpanContext?.spanId).toBe(harnessSpan?.spanContext().spanId);
 }, 30_000);
 
-// Regression guard: when nothing this process exported can be resolved as the parent, the
-// span must stay a root. Pointing at an unexported span id breaks waterfalls and makes
-// parent-id-keyed backends drop the observation.
 test("leaves exec spans parentless rather than naming a span nobody exported", async () => {
   const { service, ctx } = await startOtelService({ traces: true });
 
-  // No harness.run.started or run.started, so activeTrustedSpans is empty - the state an
-  // operator lands in when traces are enabled mid-turn.
+  // Tracing enabled mid-turn: no exported ancestor exists.
   const requestScope = createDiagnosticTraceContext();
   const { emitDiagnosticEventWithTrustedTraceContext } =
     await import("openclaw/plugin-sdk/plugin-test-runtime");
@@ -536,101 +445,83 @@ test("leaves exec spans parentless rather than naming a span nobody exported", a
   expect(execSpan?.parentSpanContext).toBeUndefined();
 }, 30_000);
 
-test.each(["Unicode-prefixed signal environment", "path-concatenated shared environment"])(
+test.each(["signal", "shared"])(
   "rejects malformed collector %s before the real SDK can expose credentials",
   async (source) => {
     process.env[PRELOAD_ENV] = "0";
     const credential = "qa-otel-traces-endpoint-password-sentinel";
-    const malformedEndpoint = source.startsWith("Unicode-prefixed")
+    const signal = source === "signal";
+    const malformedEndpoint = signal
       ? `\u00a0https://operator:${credential}@collector.example.com/otlp`
       : `https://operator:${credential}@collector.example.com: `;
-    const configuredEndpoint = "https://collector.example.com/otlp";
-    if (source.endsWith("signal environment")) {
-      process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = malformedEndpoint;
-    } else if (source.endsWith("shared environment")) {
-      process.env.OTEL_EXPORTER_OTLP_ENDPOINT = malformedEndpoint;
-    }
-
-    const diagnostics = captureOtelDiagnostics();
-    const ctx = createOtelContext(configuredEndpoint, { traces: true });
-    if (source.endsWith("signal environment")) {
+    process.env[`OTEL_EXPORTER_OTLP_${signal ? "TRACES_" : ""}ENDPOINT`] = malformedEndpoint;
+    const ctx = createOtelContext(collector, { traces: true });
+    if (signal) {
       ctx.config.diagnostics!.otel!.tracesEndpoint = "https://signal.example.com/otlp";
     }
-    ctx.internalDiagnostics!.emit = () => {};
-    const service = createDiagnosticsOtelService();
-    let failure: unknown;
-    try {
-      await service.start(ctx);
-    } catch (error) {
-      failure = error;
-    } finally {
-      await service.stop?.(ctx);
-    }
-
-    expect(diagnostics.join("\n")).not.toContain(credential);
-    expect(failure).toBeInstanceOf(Error);
-    const startupError = failure as Error;
-    expect(startupError.message).toBe(
+    await expectSafeStartupFailure(
+      ctx,
+      credential,
       "Configured OpenTelemetry collector endpoint is invalid; check the collector URL",
     );
-    expect(startupError.stack).not.toContain(credential);
-    expect(startupError).not.toHaveProperty("cause");
-    expect(JSON.stringify(vi.mocked(ctx.logger.error).mock.calls)).not.toContain(credential);
-    expect(JSON.stringify(vi.mocked(ctx.logger.warn).mock.calls)).not.toContain(credential);
   },
 );
 
 test.each([
-  {
-    disabledSignal: "metrics",
-    envKey: "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
-    flags: { traces: true, metrics: false, logs: false },
-  },
-  {
-    disabledSignal: "traces",
-    envKey: "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-    flags: { traces: false, metrics: true, logs: false },
-  },
-  {
-    disabledSignal: "stdout-only logs",
-    envKey: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-    flags: { traces: true, metrics: false, logs: true, logsExporter: "stdout" },
-  },
-] as const)(
-  "does not auto-create an undeclared $disabledSignal OTLP exporter",
-  async ({ disabledSignal, envKey, flags }) => {
-    process.env[PRELOAD_ENV] = "0";
-    const credential = `qa-otel-${disabledSignal.replaceAll(" ", "-")}-disabled-password`;
-    process.env[envKey] = `https://operator:${credential}@[`;
-    const diagnostics = captureOtelDiagnostics();
-    const ctx = createOtelContext("https://collector.example.com/otlp", flags);
-    ctx.internalDiagnostics!.emit = () => {};
-    const service = createDiagnosticsOtelService();
-
-    try {
-      await service.start(ctx);
-      expect(diagnostics.join("\n")).not.toContain(credential);
-    } finally {
-      await service.stop?.(ctx);
-    }
-  },
-);
+  ["METRICS", { traces: true, metrics: false, logs: false }],
+  ["TRACES", { traces: false, metrics: true, logs: false }],
+  ["LOGS", { traces: true, metrics: false, logs: true, logsExporter: "stdout" }],
+] as const)("does not auto-create an undeclared %s OTLP exporter", async (signal, flags) => {
+  process.env[PRELOAD_ENV] = "0";
+  const credential = `qa-otel-${signal}-disabled-password`;
+  process.env[`OTEL_EXPORTER_OTLP_${signal}_ENDPOINT`] = `https://operator:${credential}@[`;
+  const diagnostics = captureOtelDiagnostics();
+  const ctx = createOtelContext(collector, flags);
+  await withService(ctx, (service) => service.start(ctx));
+  expect(diagnostics.join("\n")).not.toContain(credential);
+});
 
 const UNREADABLE_TLS_ERROR =
   "Configured OpenTelemetry TLS root certificate file is missing, empty, or unreadable; refusing insecure export";
 
-async function expectRejectedTlsStart(
-  message = UNREADABLE_TLS_ERROR,
-  endpoint = "https://collector.example.com/otlp",
-) {
+async function expectRejectedTlsStart(message = UNREADABLE_TLS_ERROR, endpoint = collector) {
   process.env[PRELOAD_ENV] = "0";
   const ctx = createOtelContext(endpoint, { traces: true });
+  await withService(ctx, (service) => expect(service.start(ctx)).rejects.toThrow(message));
+}
+
+async function withService<T>(
+  ctx: ReturnType<typeof createOtelContext>,
+  run: (service: ReturnType<typeof createDiagnosticsOtelService>) => T | Promise<T>,
+) {
   ctx.internalDiagnostics!.emit = () => {};
   const service = createDiagnosticsOtelService();
   try {
-    await expect(service.start(ctx)).rejects.toThrow(message);
+    return await run(service);
   } finally {
     await service.stop?.(ctx);
+  }
+}
+
+async function expectSafeStartupFailure(
+  ctx: ReturnType<typeof createOtelContext>,
+  sentinel: string,
+  message: string,
+) {
+  const diagnostics = captureOtelDiagnostics();
+  const failure = await withService(ctx, (service) =>
+    Promise.resolve()
+      .then(() => service.start(ctx))
+      .catch((error: unknown) => error),
+  );
+  expect(failure).toBeInstanceOf(Error);
+  const startupError = failure as Error;
+  expect(startupError.message).toBe(message);
+  expect(startupError.stack).not.toContain(sentinel);
+  expect(startupError).not.toHaveProperty("cause");
+  expect(diagnostics.join("\n")).not.toContain(sentinel);
+  for (const logger of [ctx.logger.error, ctx.logger.warn]) {
+    expect(JSON.stringify(vi.mocked(logger).mock.calls)).not.toContain(sentinel);
   }
 }
 
@@ -638,32 +529,26 @@ test("refuses an unreadable TLS file without exposing its path through the real 
   process.env[PRELOAD_ENV] = "0";
   const pathSentinel = "qa-otel-traces-certificate-file-sentinel";
   process.env.OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE = `/definitely-missing/${pathSentinel}.pem`;
-  const diagnostics = captureOtelDiagnostics();
-  const ctx = createOtelContext("https://collector.example.com/otlp", { traces: true });
-  ctx.internalDiagnostics!.emit = () => {};
-  const service = createDiagnosticsOtelService();
-  let failure: unknown;
-  try {
-    await service.start(ctx);
-  } catch (error) {
-    failure = error;
-  } finally {
-    await service.stop?.(ctx);
-  }
-  expect(failure).toBeInstanceOf(Error);
-  const startupError = failure as Error;
-  expect(startupError.message).toBe(UNREADABLE_TLS_ERROR);
-  expect(startupError.stack).not.toContain(pathSentinel);
-  expect(startupError).not.toHaveProperty("cause");
-  expect(diagnostics.join("\n")).not.toContain(pathSentinel);
-  expect(JSON.stringify(vi.mocked(ctx.logger.error).mock.calls)).not.toContain(pathSentinel);
-  expect(JSON.stringify(vi.mocked(ctx.logger.warn).mock.calls)).not.toContain(pathSentinel);
+  await expectSafeStartupFailure(
+    createOtelContext(collector, { traces: true }),
+    pathSentinel,
+    UNREADABLE_TLS_ERROR,
+  );
 });
 
-test("refuses invalid TLS material before the real default exporter is constructed", async () => {
-  process.env.OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE =
-    "/definitely-missing/qa-otel-default-root.pem";
-  await expectRejectedTlsStart(UNREADABLE_TLS_ERROR, "");
+test.each([
+  ["/definitely-missing/qa-otel-default-root.pem", ""],
+  [` ${process.execPath} `, collector],
+])("rejects unreadable TLS path %s with endpoint %s", async (certificate, endpoint) => {
+  process.env.OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE = certificate;
+  await expectRejectedTlsStart(UNREADABLE_TLS_ERROR, endpoint);
+});
+
+test("rejects the real exporter when only the mTLS client certificate is configured", async () => {
+  process.env.OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE = process.execPath;
+  await expectRejectedTlsStart(
+    "Configured OpenTelemetry mTLS requires both a client certificate and private key; refusing insecure export",
+  );
 });
 
 test("rejects an empty TLS certificate before the SDK can silently downgrade trust", async () => {
@@ -676,16 +561,4 @@ test("rejects an empty TLS certificate before the SDK can silently downgrade tru
   } finally {
     rmSync(certDir, { force: true, recursive: true });
   }
-});
-
-test("rejects the raw whitespace-padded TLS certificate path the SDK cannot read", async () => {
-  process.env.OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE = ` ${process.execPath} `;
-  await expectRejectedTlsStart();
-});
-
-test("rejects the real exporter when only the mTLS client certificate is configured", async () => {
-  process.env.OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE = process.execPath;
-  await expectRejectedTlsStart(
-    "Configured OpenTelemetry mTLS requires both a client certificate and private key; refusing insecure export",
-  );
 });

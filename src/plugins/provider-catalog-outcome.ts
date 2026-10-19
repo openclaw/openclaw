@@ -20,4 +20,13 @@ export type ProviderCatalogOutcome = {
    * rows; never projected publicly. Subscription routes for other ids are not entitled.
    */
   listedModelIds?: readonly string[];
+  /** Private successful server listing for config advisories, independent of entitlement. */
+  modelIdCatalog?: {
+    baseUrl: string;
+    modelIds: readonly string[];
+    /** Provider-owned matching data, such as variant aliases omitted from picker rows. */
+    aliases?: readonly string[];
+  };
+  /** Advisory only: configured ids absent from this successful server listing; never eligibility. */
+  unlistedConfiguredModelIds?: readonly string[];
 };

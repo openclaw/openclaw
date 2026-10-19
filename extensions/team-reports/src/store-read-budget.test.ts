@@ -9,9 +9,12 @@ import { createSqliteWorkerBackend } from "./store.worker.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it("reopens with admitted persistent schema while creating fresh connection scratch", () => {
+it("reopens with live admitted persistent schema while creating fresh connection scratch", () => {
   const directory = tempDirs.make("team-reports-schema-admission-");
   const databasePath = path.join(directory, "reports.sqlite");
+  // Warm admission lasts only while a native connection remains open.
+  using owner = sqliteRuntime.openNodeSqliteDatabase(databasePath);
+  expect(owner.isOpen).toBe(true);
   const open = sqliteRuntime.openNodeSqliteDatabase;
   const schemaStatements: string[] = [];
   vi.spyOn(sqliteRuntime, "openNodeSqliteDatabase").mockImplementation((...args) => {

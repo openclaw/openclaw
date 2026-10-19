@@ -47,29 +47,7 @@ const SVG_TAGS = [
   "stop",
   "pattern",
 ];
-const SVG_ATTRIBUTES = [
-  "id",
-  "xmlns",
-  "viewBox",
-  "width",
-  "height",
-  "x",
-  "y",
-  "dx",
-  "dy",
-  "x1",
-  "y1",
-  "x2",
-  "y2",
-  "cx",
-  "cy",
-  "r",
-  "rx",
-  "ry",
-  "d",
-  "points",
-  "transform",
-  "preserveAspectRatio",
+const SVG_PRESENTATION_ATTRIBUTES = [
   "fill",
   "fill-opacity",
   "fill-rule",
@@ -94,6 +72,31 @@ const SVG_ATTRIBUTES = [
   "word-spacing",
   "visibility",
   "display",
+];
+const SVG_ATTRIBUTES = [
+  "id",
+  "xmlns",
+  "viewBox",
+  "width",
+  "height",
+  "x",
+  "y",
+  "dx",
+  "dy",
+  "x1",
+  "y1",
+  "x2",
+  "y2",
+  "cx",
+  "cy",
+  "r",
+  "rx",
+  "ry",
+  "d",
+  "points",
+  "transform",
+  "preserveAspectRatio",
+  ...SVG_PRESENTATION_ATTRIBUTES,
   "markerWidth",
   "markerHeight",
   "refX",
@@ -282,7 +285,11 @@ function createMermaidFrame(): MermaidFrame {
     loaded = true;
     // The frame has an opaque origin. Only this exact window receives the port;
     // all subsequent diagram data travels on that private channel.
-    frame.contentWindow?.postMessage({ type: "openclaw:mermaid-init" }, "*", [channel.port2]);
+    frame.contentWindow?.postMessage(
+      { type: "openclaw:mermaid-init", presentationAttributes: SVG_PRESENTATION_ATTRIBUTES },
+      "*",
+      [channel.port2],
+    );
   });
   frame.setAttribute("sandbox", "allow-scripts");
   frame.setAttribute("aria-hidden", "true");

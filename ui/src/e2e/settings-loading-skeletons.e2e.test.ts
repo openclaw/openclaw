@@ -101,7 +101,7 @@ suite.define(() => {
       await gateway.deferNext("models.authStatus");
       const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
-      await agentPicker.locator('wa-dropdown-item[aria-label="Reviewer"]').click();
+      await agentPicker.getByRole("menuitemradio", { name: "Reviewer", exact: true }).click();
       await expect
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Reviewer");
@@ -132,21 +132,6 @@ suite.define(() => {
         routeId: "channels",
       });
       await captureLoadingState(page.locator(".settings-page").first(), "channels-pairing");
-    });
-  });
-
-  it("renders the Secrets initial load as a skeleton", async () => {
-    await withPage(async (page) => {
-      await installMockGateway(page, {
-        featureMethods: ["secrets.store.list"],
-        heldMethods: ["secrets.store.list"],
-      });
-      await page.goto(`${suite.server.baseUrl}settings/secrets`);
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/secrets",
-        routeId: "secrets",
-      });
-      await captureLoadingState(page.locator(".settings-page").first(), "secrets");
     });
   });
 

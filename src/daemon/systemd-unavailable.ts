@@ -1,7 +1,9 @@
-/** Classifies systemd/systemctl unavailable errors into user-facing categories. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { redactSensitiveText } from "../logging/redact.js";
+import type { ExecResult } from "./exec-file.js";
 import { getServiceInspectionClock } from "./service-inspection-budget.js";
 import type { ServiceInspectionReason } from "./service-inspection-error.js";
+import { formatServiceInspectionDetail } from "./service-runtime.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 
 /** Failed user routes alone cannot distinguish a missing manager from a missing session bus. */
@@ -82,4 +84,12 @@ export function classifySystemdUnavailableDetail(detail?: string): SystemdUnavai
     return "generic_unavailable";
   }
   return null;
+}
+
+export function formatSystemdProbeFailure(probe: string, result: ExecResult): string {
+  const detail = formatServiceInspectionDetail(
+    redactSensitiveText(result.stderr.split(/\r?\n/, 1)[0] ?? "", { mode: "tools" }),
+    60,
+  );
+  return `${probe}: ${result.termination === "exit" ? `exit ${result.code}` : result.termination}; ${detail || "no stderr"}`;
 }

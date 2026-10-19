@@ -16,17 +16,14 @@ import {
   createColdPluginFixture,
   isColdPluginRuntimeLoaded,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import {
   setupSessionCreateTestHarness,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
 import type { GatewaySessionCommitResult } from "./session-create-service.types.js";
-import {
-  agentDiscoveryMock,
-  embeddedRunMock,
-  testState,
-  writeSessionStore,
-} from "./test-helpers.js";
+import { agentDiscoveryMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   createCompactedSessionFixture,
   sessionStoreEntry,
@@ -281,7 +278,16 @@ async function seedSizedForkParent(dir: string, entry: Parameters<typeof session
   });
 }
 
-test.each([
+test.each<{
+  name: string;
+  model: string;
+  provider: string;
+  tokens: number;
+  window?: number;
+  limit?: string;
+  nativeCatalog?: "missing" | "unknown";
+  configuredTokens?: number;
+}>([
   {
     name: "provider-scoped fallback",
     model: "unresolved-model",
@@ -314,9 +320,36 @@ test.each([
     window: 200_000,
     limit: "300000/200000 tokens",
   },
+  {
+    name: "missing native capacity beside API inventory",
+    model: "gpt-native",
+    provider: "openai",
+    tokens: 150_000,
+    window: 1_000_000,
+    nativeCatalog: "missing",
+    limit: "150000/100000 tokens",
+  },
+  {
+    name: "unknown native capacity beside warm API capacity",
+    model: "gpt-native",
+    provider: "openai",
+    tokens: 150_000,
+    window: 1_000_000,
+    nativeCatalog: "unknown",
+    limit: "150000/100000 tokens",
+  },
+  {
+    name: "authored capacity for a native runtime",
+    model: "gpt-native",
+    provider: "openai",
+    tokens: 150_000,
+    window: 1_000_000,
+    nativeCatalog: "unknown",
+    configuredTokens: 200_000,
+  },
 ])(
   "sessions.create enforces fork capacity: $name",
-  async ({ model, provider, tokens, window, limit }) => {
+  async ({ model, provider, tokens, window, limit, nativeCatalog, configuredTokens }) => {
     const { dir } = await createSessionStoreDir();
     testState.sessionConfig = { scope: "per-sender" };
     resetContextWindowCacheForTest();
@@ -352,16 +385,34 @@ test.each([
         },
       ];
     }
-    const inherited = !window || model === "gpt-large";
+    if (nativeCatalog) {
+      replaceDiscoveredContextTokenCache(
+        await prepareDiscoveredContextTokenCache({
+          modelCatalog: { entries: agentDiscoveryMock.models },
+        }),
+      );
+      if (nativeCatalog === "unknown") {
+        agentDiscoveryMock.models.push({
+          id: model,
+          name: model,
+          provider,
+          nativeRuntime: "codex",
+        });
+      }
+    }
+    const inherited = !window || model === "gpt-large" || Boolean(nativeCatalog);
     await seedSizedForkParent(dir, {
       totalTokens: tokens,
       ...(inherited ? { providerOverride: provider, modelOverride: model } : {}),
+      ...(nativeCatalog ? { agentRuntimeOverride: "codex" } : {}),
       ...(!window ? { modelOverrideSource: "user" } : {}),
     });
     const cfg = {
       ...getRuntimeConfig(),
       models: {
-        providers: { openai: { models: [{ id: model, contextTokens: 1_000_000 }] } },
+        providers: {
+          openai: { models: [{ id: model, contextTokens: configuredTokens ?? 1_000_000 }] },
+        },
       },
     };
     const created = await directSessionReq(
@@ -373,7 +424,7 @@ test.each([
         ...(!inherited ? { model: `${provider}/${model}` } : {}),
         ...(selectable ? { contextWindow: "200k" } : {}),
       },
-      selectable ? { context: { getRuntimeConfig: () => cfg } } : undefined,
+      selectable || configuredTokens ? { context: { getRuntimeConfig: () => cfg } } : undefined,
     );
     expect(created.ok, JSON.stringify(created.error)).toBe(limit === undefined);
     if (limit) {
@@ -418,7 +469,19 @@ test.each([undefined, "last-completed"] as const)(
         },
       ],
     });
-    embeddedRunMock.activeIds.add(parentSessionId);
+    const parentOperation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: parentSessionId,
+      agentId: "main",
+      resetTriggered: false,
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey: "agent:main:main",
+        incarnation: parentSessionId,
+        agentId: "main",
+      }),
+    });
+    parentOperation.setPhase("running");
     try {
       const created = await directSessionReq<{ key: string; sessionId: string }>(
         "sessions.create",
@@ -460,7 +523,7 @@ test.each([undefined, "last-completed"] as const)(
         expect.objectContaining({ role: "assistant", stopReason: "stop" }),
       ]);
     } finally {
-      embeddedRunMock.activeIds.delete(parentSessionId);
+      parentOperation.complete();
       testState.sessionConfig = undefined;
     }
   },

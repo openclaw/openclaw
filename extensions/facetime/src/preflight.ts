@@ -81,7 +81,7 @@ function parseCoreAudioDevices(systemProfilerOutput: string): CoreAudioDevicePro
       const items = record["_items"];
       return Array.isArray(items) ? items : [record];
     });
-    const devices = deviceEntries.flatMap((entry): CoreAudioDeviceProfile[] => {
+    return deviceEntries.flatMap((entry): CoreAudioDeviceProfile[] => {
       const record = asRecord(entry);
       const name = record["_name"];
       return typeof name === "string"
@@ -93,21 +93,9 @@ function parseCoreAudioDevices(systemProfilerOutput: string): CoreAudioDevicePro
           ]
         : [];
     });
-    if (devices.length > 0) {
-      return devices;
-    }
   } catch {
-    // Older test fixtures and unusual system_profiler failures can still
-    // provide the human-readable device list without transport metadata.
+    return [];
   }
-  const devices: CoreAudioDeviceProfile[] = [];
-  for (const line of systemProfilerOutput.split(/\r?\n/u)) {
-    const match = line.match(/^\s{8}(.+):\s*$/u);
-    if (match?.[1]) {
-      devices.push({ name: match[1].trim(), virtual: false });
-    }
-  }
-  return [...new Map(devices.map((device) => [device.name, device])).values()];
 }
 
 function findPhysicalOutputProblem(

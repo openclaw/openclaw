@@ -3,6 +3,8 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
+import { expect } from "vitest";
 import { parse } from "yaml";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
@@ -10,11 +12,11 @@ import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
 export const CHECKOUT_V6 = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 export const CACHE_V5 = "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
 export const CACHE_SAVE_V5 = "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
-export const SETUP_GO_V6 = "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e";
+export const SETUP_GO_V6 = "actions/setup-go@90ad2b35f69faf97585ad74d28fa006d2739b7af";
 export const UPLOAD_ARTIFACT_V7 =
-  "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+  "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9";
 export const DOWNLOAD_ARTIFACT_V8 =
-  "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
+  "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333";
 export const MANTIS_GITHUB_APP_CLIENT_ID = "Iv23liPJCozR0uHm6P7G";
 const SETUP_ANDROID_TOOLCHAIN_ACTION = ".github/actions/setup-android-toolchain/action.yml";
 export const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
@@ -22,6 +24,30 @@ export const AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC =
   "::error title=ambiguous main push::github.event.before is zero; refusing to infer a diff base for a created or recreated main branch.";
 export const testNodeExecPath = resolveTestNodeExecPath();
 export const TSX_IMPORT = import.meta.resolve("tsx");
+
+export function expectIncludes(actual: unknown, values: readonly unknown[], message?: string) {
+  for (const value of values) {
+    expect(actual, message).toContain(value);
+  }
+}
+
+export function expectExcludes(actual: unknown, values: readonly unknown[], message?: string) {
+  for (const value of values) {
+    expect(actual, message).not.toContain(value);
+  }
+}
+
+export function evaluateWorkflow(
+  expression: unknown,
+  context: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
+) {
+  return evaluateWorkflowExpression(expression, {
+    eventName: "pull_request",
+    repository: "openclaw/openclaw",
+    runAttempt: 1,
+    ...context,
+  });
+}
 
 export type WorkflowStep = {
   "continue-on-error"?: boolean;
@@ -35,11 +61,18 @@ export type WorkflowStep = {
   "working-directory"?: string;
 };
 
-export const readCiWorkflow = (() => {
-  // The checked-in workflow is fixed for this suite; clones keep fixture mutations local.
-  const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
-  return () => structuredClone(workflow);
-})();
+export const readCiWorkflow = () => readWorkflow(".github/workflows/ci.yml");
+
+export function requiredWorkflowStep<T extends readonly { name?: string }[]>(
+  steps: T,
+  name: string,
+): T[number];
+export function requiredWorkflowStep(steps: readonly { name?: string }[], name: string) {
+  return expectDefined(
+    steps.find((step) => step.name === name),
+    name,
+  );
+}
 
 export function evaluateWorkflowExpression(
   expression: unknown,
@@ -55,6 +88,8 @@ export function evaluateWorkflowExpression(
     eventName:
       | "pull_request"
       | "pull_request_target"
+      | "pull_request_review"
+      | "pull_request_review_comment"
       | "issue_comment"
       | "issues"
       | "push"
@@ -81,8 +116,8 @@ export function evaluateWorkflowExpression(
     >;
     jobResults?: Record<string, string>;
     preflightResult?: string;
-    failFastOutputs?: Record<string, string>;
-    failFastResult?: string;
+    failureReportOutputs?: Record<string, string>;
+    failureReportResult?: string;
     pullRequestNumber?: number;
     ref?: string;
     resolveTargetOutputs?: Record<string, string>;
@@ -101,6 +136,8 @@ export function evaluateWorkflowExpression(
     ciShape?: "default" | "main";
     ciOnPush?: string;
     includeAndroid?: boolean;
+    inputs?: Record<string, unknown>;
+    runnerTemp?: string;
     runnerEnvironment?: "" | "github-hosted" | "self-hosted";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
@@ -114,6 +151,7 @@ export function evaluateWorkflowExpression(
     >;
     targetContextRef?: string;
     targetRef?: string;
+    testRuntimePolicy?: string;
     useGithubHostedRunners?: boolean;
     workflow?: string;
     workflowSha?: string;
@@ -166,6 +204,8 @@ export function evaluateWorkflowExpression(
       actor: context.actor ?? "",
       event_name: context.eventName,
       repository: context.repository,
+      repository_owner: context.repository.split("/")[0],
+      server_url: "https://github.com",
       ref: context.ref ?? "refs/heads/main",
       run_attempt: context.runAttempt,
       run_id: context.runId,
@@ -204,22 +244,35 @@ export function evaluateWorkflowExpression(
       validation_tier: context.validationTier ?? "full",
       target_context_ref: context.targetContextRef ?? "",
       target_ref: context.targetRef ?? "",
+      test_runtime_policy: context.testRuntimePolicy ?? "",
       use_github_hosted_runners: context.useGithubHostedRunners ?? false,
       run_windows_ci: context.runWindowsCi ?? false,
       skip_defender_exclusions: context.skipDefenderExclusions ?? false,
       windows_ci_replay: context.windowsCiReplay ?? "",
+      ...context.inputs,
     },
     env: context.env ?? {},
     secrets: context.secrets ?? {},
     matrix: context.matrix ?? {},
-    runner: { environment: context.runnerEnvironment ?? "" },
+    runner: { environment: context.runnerEnvironment ?? "", temp: context.runnerTemp ?? "" },
     steps: {
       runner_profile: { outputs: { node_runner_backend: "" } },
       qualification_dispatch: { outputs: { eligible: "false" } },
       ...context.steps,
     },
     needs: {
-      ...context.additionalNeeds,
+      ...Object.fromEntries(
+        Object.entries(context.additionalNeeds ?? {}).map(([name, need]) => [
+          name,
+          {
+            ...need,
+            // Actions resolves missing output properties to an empty string.
+            outputs: new Proxy(need.outputs, {
+              get: (outputs, key: string) => outputs[key] ?? "",
+            }),
+          },
+        ]),
+      ),
       resolve_target: { outputs: context.resolveTargetOutputs ?? {} },
       "checks-baseline-ratchets": {
         result: context.jobResults?.["checks-baseline-ratchets"] ?? "success",
@@ -236,9 +289,14 @@ export function evaluateWorkflowExpression(
           ...context.preflightOutputs,
         },
       },
-      "pr-fail-fast": {
-        result: context.failFastResult ?? "success",
-        outputs: { failure_job_id: "", failure_run_attempt: "", ...context.failFastOutputs },
+      "pr-failure-report": {
+        result: context.failureReportResult ?? "success",
+        outputs: {
+          failure_job_id: "",
+          summary_json: "",
+          failures_json: "",
+          ...context.failureReportOutputs,
+        },
       },
     },
     vars: {
@@ -263,6 +321,16 @@ export function evaluateWorkflowRunner(
         ...context,
       })
     : selector;
+}
+
+export function evaluateWorkflowCondition(
+  condition: string,
+  context: Parameters<typeof evaluateWorkflowExpression>[1],
+) {
+  return evaluateWorkflowExpression(
+    condition.trim().startsWith("${{") ? condition : `\${{ ${condition} }}`,
+    context,
+  );
 }
 
 export function quoteShell(value: string): string {
@@ -328,23 +396,32 @@ export function runWorkflowShellScript(
 }
 
 export function readAndroidToolchainAction() {
-  return parse(readFileSync(SETUP_ANDROID_TOOLCHAIN_ACTION, "utf8"));
+  return readWorkflow(SETUP_ANDROID_TOOLCHAIN_ACTION);
 }
 
 export function readBuildArtifactsTestboxWorkflow() {
-  return parse(readFileSync(".github/workflows/ci-build-artifacts-testbox.yml", "utf8"));
+  return readWorkflow(".github/workflows/ci-build-artifacts-testbox.yml");
 }
 
 export function readMaturityScorecardWorkflow() {
-  return parse(readFileSync(MATURITY_SCORECARD_WORKFLOW, "utf8"));
+  return readWorkflow(MATURITY_SCORECARD_WORKFLOW);
 }
 
 export function readReleaseChecksWorkflow() {
-  return parse(readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"));
+  return readWorkflow(".github/workflows/openclaw-release-checks.yml");
 }
 
+const parsedWorkflows = new Map<string, { source: string; workflow: ReturnType<typeof parse> }>();
 export function readWorkflow(filePath: string) {
-  return parse(readFileSync(filePath, "utf8"));
+  const absolutePath = path.resolve(filePath);
+  const source = readFileSync(absolutePath, "utf8");
+  let cached = parsedWorkflows.get(absolutePath);
+  if (cached?.source !== source) {
+    cached = { source, workflow: parse(source) };
+    parsedWorkflows.set(absolutePath, cached);
+  }
+  // Reuse parsing, not mutable fixtures; changed files still invalidate the cache.
+  return structuredClone(cached.workflow);
 }
 
 export function readTrackedText(relativePath: string): string {

@@ -174,8 +174,20 @@ export function resolveNewSessionSubmitBlock(
   ) {
     return { gate: "preference-restore", reason: t("newSession.restoringPreferences") };
   }
+  const agents = snapshot.context?.agents.state;
+  const rosterBlock = (): NewSessionSubmitBlock => ({
+    gate: "agents",
+    reason: t(
+      agents?.agentsError
+        ? "newSession.agentDefaultsUnavailable"
+        : "newSession.loadingAgentDefaults",
+    ),
+  });
   if (kind === "session" && !gateway.placementPolicyReady) {
-    return { gate: "cloud", reason: t("newSession.placementNotReady") };
+    // The policy arrives with the agent roster; a loaded roster leaves only a runner to wait for.
+    return agents?.agentsList
+      ? { gate: "cloud", reason: t("newSession.placementNotReady") }
+      : rosterBlock();
   }
   if (
     kind === "session" &&
@@ -246,8 +258,8 @@ export function resolveNewSessionSubmitBlock(
       };
     }
   }
-  if (place.folderSubmissionBlocked()) {
-    return { gate: "folder", reason: t("newSession.checkingPlace") };
+  if (place.suggestedCloudProfile.pending) {
+    return { gate: "cloud", reason: t("newSession.placementNotReady") };
   }
   if (pendingPlacementActive) {
     const retryReady = Boolean(
@@ -264,15 +276,26 @@ export function resolveNewSessionSubmitBlock(
       ? emptyDraftBlock(draft, kind, pendingPlacementActive)
       : { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
   }
-  if (!snapshot.context?.agents.state.agentsList) {
+  if (place.folderSubmissionBlocked()) {
     return {
-      gate: "agents",
-      reason: t(
-        snapshot.context?.agents.state.agentsError
-          ? "newSession.agentDefaultsUnavailable"
-          : "newSession.loadingAgentDefaults",
-      ),
+      gate: "folder",
+      reason:
+        (place.deviceFolder && place.deviceFolderRuntimeUnsupportedReason) ||
+        place.currentCheckoutUnavailableReason ||
+        t(
+          place.deviceFolder
+            ? place.deviceFolderAvailable
+              ? "newSession.deviceFolderPathRequired"
+              : "newSession.deviceFolderUnavailable"
+            : "newSession.checkingPlace",
+        ),
     };
+  }
+  if (place.deviceFolder && draft.attachmentDraft.attachments.length > 0) {
+    return { gate: "folder", reason: t("newSession.deviceFolderAttachmentsUnsupported") };
+  }
+  if (!agents?.agentsList) {
+    return rosterBlock();
   }
   const placementTarget = resolveDraftSessionPlacement(draft.pendingPlacement, place);
   const cloudProfileId = placementTarget?.kind === "profile" ? placementTarget.profileId : "";

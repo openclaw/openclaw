@@ -162,7 +162,7 @@
             "mediaInput": {
               "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
             },
-            "cost": { "input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5 },
+            "cost": { "input": 2, "output": 10, "cacheRead": 0.1, "cacheWrite": 2.5 },
             "contextWindow": 1000000,
             "contextWindows": [
               { "id": "200k", "label": "200K", "contextWindow": 200000 },
@@ -291,6 +291,9 @@
         "liteLLM": {
           "provider": "anthropic"
         }
+      },
+      "claude-cli": {
+        "priceAs": "anthropic"
       }
     }
   },

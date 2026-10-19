@@ -55,6 +55,13 @@ export type MemoryCliSearchResult = {
   action?: string;
 };
 
+/** Indexed-memory search response shared by the Gateway and browser presentation. */
+export type MemorySearchResponse = MemoryCliSearchResult & {
+  agentId: string;
+  provider: string;
+  searchMode: "hybrid" | "fts-only";
+};
+
 export type MemoryCliSearchOutcome =
   | MemoryCliSearchResult
   | { agentId: string; status: "disabled" }
@@ -437,11 +444,25 @@ export interface MemorySearchManager {
     limit?: number;
   }): Promise<MemorySearchResult[]>;
   readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
+  /** @deprecated Prefer statusAsync when available to keep storage reads off the caller thread. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   status(): MemoryProviderStatus;
+  /** Set includeCounts to false for query-path facts without database diagnostics. */
+  statusAsync?(options?: { includeCounts?: boolean }): Promise<MemoryProviderStatus>;
   sync?(params?: MemorySyncParams): Promise<void>;
   getCachedEmbeddingAvailability?(): MemoryEmbeddingProbeResult | null;
   probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;
   probeVectorStoreAvailability?(): Promise<boolean>;
   probeVectorAvailability(): Promise<boolean>;
   close?(): Promise<void>;
+}
+
+/** Preserve synchronous third-party managers while built-in status reads run in their worker. */
+export async function readMemorySearchManagerStatus<Status>(
+  manager: {
+    status(): Status;
+    statusAsync?(options?: { includeCounts?: boolean }): Promise<Status>;
+  },
+  options?: { includeCounts?: boolean },
+): Promise<Status> {
+  return manager.statusAsync ? manager.statusAsync(options) : manager.status();
 }

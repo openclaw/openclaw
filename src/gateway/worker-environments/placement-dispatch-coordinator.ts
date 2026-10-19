@@ -1,7 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { composePlacementAuthorization } from "./placement-authorization.js";
+import {
+  composePlacementAuthorization,
+  type WorkerPlacementAuthorization,
+} from "./placement-authorization.js";
 import type {
   WorkerDispatchPlacement,
   WorkerProvisioningDispatchPlacement,
@@ -57,7 +60,12 @@ export function coordinateWorkerPlacementDispatch(
     Parameters<typeof ensureWorkerSessionPlacement>[0],
     "placements" | "environments" | "redispatchPlacement"
   > & { warn: (message: string) => void },
-): WorkerPlacementDispatchService & {
+): Omit<WorkerPlacementDispatchService, "resumeProvisioning"> & {
+  resumeProvisioning(
+    placement: WorkerProvisioningDispatchPlacement,
+    reconcileEnvironmentCore: Parameters<WorkerPlacementDispatchService["resumeProvisioning"]>[1],
+    signal?: AbortSignal,
+  ): ReturnType<WorkerPlacementDispatchService["resumeProvisioning"]>;
   ensurePlacement(
     params: Omit<
       Parameters<typeof ensureWorkerSessionPlacement>[0],
@@ -69,8 +77,6 @@ export function coordinateWorkerPlacementDispatch(
       | "waitForInitialPlacement"
     >,
   ): ReturnType<typeof ensureWorkerSessionPlacement>;
-  /** Wait for interrupted session work to release its turn claim. */
-  awaitTurnClaimRelease(sessionId: string, wait: () => Promise<void>): Promise<void>;
   isPlacementOperationInFlight(sessionId: string): boolean;
   hasPendingPlacementLifecycleOperation(sessionId: string): boolean;
   getPendingDeviceDispatchCount(deviceId: string, excludeSessionId?: string): number;
@@ -118,10 +124,13 @@ export function coordinateWorkerPlacementDispatch(
         if (!wait || sessionIds.length !== 1) {
           return false;
         }
-        // Result recovery may release the claim a lifecycle operation is awaiting.
-        // Its durable result owner already serializes writes; it needs no queue handoff.
-        await run("results-only");
-        return true;
+        if (operationsInFlight.has(sessionIds[0]!)) {
+          // Result recovery may release the claim a lifecycle operation is awaiting.
+          // Its durable result owner already serializes writes; it needs no queue handoff.
+          await run("results-only");
+          return true;
+        }
+        // A preceding recovery owns completion; targeted callers must await its receipt.
       }
       const admission = reserveSessions(sessionIds);
       // Only recovery units enter here. Environment reconciliation stays outside admission
@@ -205,6 +214,33 @@ export function coordinateWorkerPlacementDispatch(
       })(),
     );
   };
+  const runAfterStops = async <T>(
+    request: Parameters<WorkerPlacementDispatchAdmission>[0],
+    run: (authorize: WorkerPlacementAuthorization, signal?: AbortSignal) => Promise<T>,
+    authorize?: WorkerPlacementAuthorization,
+    callerSignal?: AbortSignal,
+  ): Promise<T> => {
+    // Capture only earlier Stops. A later Stop must drain this work, not precede it.
+    const predecessors = pendingOperations(request.sessionId).filter(
+      (pending) => pending.kind === "reclaim",
+    );
+    await racePromiseWithAbortSignal(
+      Promise.allSettled(predecessors.map((pending) => pending.operation)),
+      callerSignal,
+    );
+    return await admitDispatch(
+      request,
+      (signal, assertSessionCurrent) =>
+        runSessionOperation(request.sessionId, signal, () =>
+          run(
+            composePlacementAuthorization(authorize, () => assertSessionCurrent?.()),
+            signal,
+          ),
+        ),
+      authorize,
+      callerSignal,
+    );
+  };
   const coordinator: ReturnType<typeof coordinateWorkerPlacementDispatch> = {
     async ensurePlacement(params) {
       if (!sessionPreparation) {
@@ -217,6 +253,8 @@ export function coordinateWorkerPlacementDispatch(
         waitForInitialPlacement: coordinator.waitForInitialPlacement,
         startDispatch: async (request, onTransition, authorize, signal) => {
           const started = createDeferredCore<WorkerDispatchPlacement>();
+          const requestedHandoff = createDeferredCore();
+          const releaseAuthority = params.retainDispatch?.();
           const operation = coordinator.dispatch(
             request,
             (placement) => {
@@ -225,7 +263,13 @@ export function coordinateWorkerPlacementDispatch(
             },
             authorize,
             signal,
+            (dispatchSignal) =>
+              racePromiseWithAbortSignal(requestedHandoff.promise, dispatchSignal),
           );
+          // The requested acknowledgment can precede the final provider effect.
+          if (releaseAuthority) {
+            void operation.then(releaseAuthority, releaseAuthority);
+          }
           void operation.catch((error: unknown) => {
             try {
               sessionPreparation.warn("Worker setup failed: " + String(error));
@@ -233,12 +277,15 @@ export function coordinateWorkerPlacementDispatch(
               /* Reporting cannot replace durable setup failure. */
             }
           });
-          return await Promise.race([started.promise, operation]);
+          try {
+            await Promise.race([started.promise, operation]);
+            return { release: () => requestedHandoff.resolve() };
+          } catch (error) {
+            requestedHandoff.resolve();
+            throw error;
+          }
         },
       });
-    },
-    async awaitTurnClaimRelease(_sessionId, wait) {
-      await wait();
     },
     isPlacementOperationInFlight: (sessionId) => operationsInFlight.has(sessionId),
     hasPendingPlacementLifecycleOperation: (sessionId) =>
@@ -325,7 +372,7 @@ export function coordinateWorkerPlacementDispatch(
         }
       }
     },
-    dispatch: async (request, onTransition, authorize, callerSignal) => {
+    dispatch: async (request, onTransition, authorize, callerSignal, awaitRequestedHandoff) => {
       callerSignal?.throwIfAborted();
       const inFlight = pendingOperations(request.sessionId).find(
         (pending) => pending.kind === "dispatch",
@@ -339,33 +386,19 @@ export function coordinateWorkerPlacementDispatch(
           callerSignal,
         );
       }
-      // Capture only earlier Stops. A later Stop must drain this dispatch, not precede it.
-      const predecessors = pendingOperations(request.sessionId).filter(
-        (pending) => pending.kind === "reclaim",
+      const tracked = trackPlacementOperation(
+        (report) =>
+          runAfterStops(
+            request,
+            (current, signal) =>
+              service.dispatch(request, report, current, signal, awaitRequestedHandoff),
+            authorize,
+            callerSignal,
+          ),
+        onTransition,
       );
-      const tracked = trackPlacementOperation(async (report) => {
-        await racePromiseWithAbortSignal(
-          Promise.allSettled(predecessors.map((pending) => pending.operation)),
-          callerSignal,
-        );
-        return await admitDispatch(
-          request,
-          (signal, assertSessionCurrent) =>
-            runSessionOperation(request.sessionId, signal, () =>
-              service.dispatch(
-                request,
-                report,
-                composePlacementAuthorization(authorize, () => assertSessionCurrent?.()),
-                signal,
-              ),
-            ),
-          authorize,
-          callerSignal,
-        );
-      }, onTransition);
-      const { operation } = tracked;
       registerOperation({ kind: "dispatch", request, ...tracked });
-      return await operation;
+      return await tracked.operation;
     },
     forceDestroyEnvironment: async (environmentId, onCleanupError) => {
       const sessionIds = new Set(await service.readEnvironmentSessionIds(environmentId));
@@ -397,28 +430,17 @@ export function coordinateWorkerPlacementDispatch(
         }
         return await joinOperation(inFlight.operation, authorize);
       }
-      const predecessors = pendingOperations(request.sessionId).filter(
-        (pending) => pending.kind === "reclaim",
+      const tracked = trackPlacementOperation(
+        (report) =>
+          runAfterStops(
+            request,
+            (current, signal) => service.move(request, report, current, signal),
+            authorize,
+          ),
+        onTransition,
       );
-      const tracked = trackPlacementOperation(async (report) => {
-        await Promise.allSettled(predecessors.map((pending) => pending.operation));
-        return await admitDispatch(
-          request,
-          (signal, assertSessionCurrent) =>
-            runSessionOperation(request.sessionId, signal, () =>
-              service.move(
-                request,
-                report,
-                composePlacementAuthorization(authorize, () => assertSessionCurrent?.()),
-                signal,
-              ),
-            ),
-          authorize,
-        );
-      }, onTransition);
-      const { operation } = tracked;
       registerOperation({ kind: "move", request, ...tracked });
-      return await operation;
+      return await tracked.operation;
     },
     reclaim: async (request, authorize, beforeDrain) => {
       // Preparation can need targeted recovery to release a turn claim. Enqueue only
@@ -461,19 +483,19 @@ export function coordinateWorkerPlacementDispatch(
           report,
         ),
       );
-      const { operation } = tracked;
       registerOperation({ kind: "reclaim", request, ...tracked });
-      return await operation;
+      return await tracked.operation;
     },
     getEnvironmentAttachedSessionIds: (environmentId) =>
       service.getEnvironmentAttachedSessionIds(environmentId),
     readEnvironmentSessionIds: (environmentId) => service.readEnvironmentSessionIds(environmentId),
+    isInterruptedTurn: service.isInterruptedTurn,
     reconcile: (mode) => runReconciliation(() => service.reconcile(mode, tryRecovery)),
     reconcileActive: (environmentId) =>
       environmentId === undefined
         ? runReconciliation(() => service.reconcileActive(undefined, tryRecovery))
         : runReconciliation(() => service.reconcileActive(environmentId, waitRecovery), false),
-    resumeProvisioning: (placement, reconcileEnvironmentCore) => {
+    resumeProvisioning: (placement, reconcileEnvironmentCore, callerSignal) => {
       const inFlight = pendingOperations(placement.sessionId).find(
         (pending) => pending.kind === "recovery" && isDeepStrictEqual(pending.request, placement),
       );
@@ -490,7 +512,7 @@ export function coordinateWorkerPlacementDispatch(
       let providerSettlement = Promise.resolve();
       let providerPending = false;
       const tracked = trackPlacementOperation(async (report) => {
-        await admission.ready;
+        await racePromiseWithAbortSignal(admission.ready, callerSignal);
         return await service.resumeProvisioning(
           placement,
           async (signal) => {
@@ -507,26 +529,31 @@ export function coordinateWorkerPlacementDispatch(
           },
           report,
           (runRecovery) =>
-            admitDispatch(placement, async (signal, assertSessionCurrent) => {
-              try {
-                signal?.throwIfAborted();
-                assertSessionCurrent?.();
-                const recovered = await runRecovery(signal);
-                assertSessionCurrent?.();
-                if (providerPending) {
-                  foreground.resolve(recovered);
+            admitDispatch(
+              placement,
+              async (signal, assertSessionCurrent) => {
+                try {
+                  signal?.throwIfAborted();
+                  assertSessionCurrent?.();
+                  const recovered = await runRecovery(signal);
+                  assertSessionCurrent?.();
+                  if (providerPending) {
+                    foreground.resolve(recovered);
+                  }
+                  return recovered;
+                } catch (error) {
+                  if (providerPending) {
+                    foreground.reject(error);
+                  }
+                  throw error;
+                } finally {
+                  // Foreground timeout does not release this session's provider ownership.
+                  await providerSettlement;
                 }
-                return recovered;
-              } catch (error) {
-                if (providerPending) {
-                  foreground.reject(error);
-                }
-                throw error;
-              } finally {
-                // Foreground timeout does not release this session's provider ownership.
-                await providerSettlement;
-              }
-            }),
+              },
+              undefined,
+              callerSignal,
+            ),
         );
       });
       void admission.hold(tracked.operation);

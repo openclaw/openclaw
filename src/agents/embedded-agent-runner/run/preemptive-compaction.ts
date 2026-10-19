@@ -14,7 +14,6 @@ import {
   estimateRenderedPromptTokens,
   estimateToolSchemaTokens,
 } from "../../sessions/context-token-pressure.js";
-import { log } from "../logger.js";
 import type { MeasuredRequestContext } from "../prompt-cache-request-observer.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
@@ -254,23 +253,17 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   };
 }
 
-/** Check the projected foreground request; persisted usage alone cannot bind its prefix. */
-export function checkMidTurnPrecheck(params: {
+/** Price the projected foreground request; persisted usage alone cannot bind its prefix. */
+export function resolveProjectedRequestPressure(params: {
   context: Parameters<StreamFn>[1];
   previousRequest?: MeasuredRequestContext;
   contextTokenBudget: number;
   reserveTokens: number;
   toolResultMaxChars?: number;
   replay?: CompactionReplayPressureContext;
-  onPrecheck: (request: MidTurnPrecheckRequest) => void;
-}): void {
+}) {
   const { context, previousRequest } = params;
-  const anchor =
-    previousRequest &&
-    Number.isFinite(previousRequest.contextTokens) &&
-    previousRequest.contextTokens > 0
-      ? previousRequest
-      : undefined;
+  const anchor = previousRequest && previousRequest.contextTokens > 0 ? previousRequest : undefined;
   const messages = context.messages;
   // Measured completion occupancy includes opaque reasoning. Its async fragments
   // share either identity; unrelated synthetic assistants remain fresh content.
@@ -286,17 +279,9 @@ export function checkMidTurnPrecheck(params: {
             ),
         )
     : messages;
-  const estimate = createFreshLlmBoundaryTokenEstimator(anchor ? {} : context);
-  // Without a matching prefix, estimate current text but retain measured output:
-  // opaque reasoning can survive a system/tool change without visible token text.
-  const unanchoredCompletionTokens = anchor
-    ? 0
-    : messages.reduce((total, message) => {
-        const usage = message.role === "assistant" ? message.usage?.contextUsage : undefined;
-        const completion =
-          usage?.state === "available" ? usage.totalTokens - usage.promptTokens : 0;
-        return total + (Number.isFinite(completion) ? Math.max(0, completion) : 0);
-      }, 0);
+  const estimate = createFreshLlmBoundaryTokenEstimator(
+    anchor ? {} : { ...context, retainCompletionUsage: true },
+  );
   const precheck = shouldPreemptivelyCompactBeforePrompt({
     ...params,
     messages,
@@ -308,7 +293,6 @@ export function checkMidTurnPrecheck(params: {
     llmBoundaryTokenPressure: {
       estimatedPromptTokens:
         (anchor?.contextTokens ?? 0) +
-        unanchoredCompletionTokens +
         estimate({
           messages: appended,
           prompt: "",
@@ -316,14 +300,16 @@ export function checkMidTurnPrecheck(params: {
       source: anchor ? "provider_context_usage" : "transcript_estimate",
     },
   });
-  const decision = precheck.compactionReplay ?? precheck;
-  log.debug(
-    `[context-overflow-midturn-precheck] provider-bound check route=${decision.route} ` +
-      `messages=${messages.length} pressureSource=${decision.pressureSource} ` +
-      `estimatedPromptTokens=${decision.estimatedPromptTokens} ` +
-      `promptBudgetBeforeReserve=${decision.promptBudgetBeforeReserve} ` +
-      `overflowTokens=${decision.overflowTokens}`,
-  );
+  return precheck.compactionReplay ?? precheck;
+}
+
+/** Stop before a projected foreground request that no longer fits its budget. */
+export function checkMidTurnPrecheck(
+  params: Parameters<typeof resolveProjectedRequestPressure>[0] & {
+    onPrecheck: (request: MidTurnPrecheckRequest) => void;
+  },
+): void {
+  const decision = resolveProjectedRequestPressure(params);
   if (decision.route !== "fits") {
     const request = { ...decision, route: decision.route };
     params.onPrecheck(request);

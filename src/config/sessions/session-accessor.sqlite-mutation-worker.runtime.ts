@@ -1,8 +1,7 @@
 import { on, once } from "node:events";
-import type { DatabaseSync } from "node:sqlite";
 import type { MessagePort } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync-cache-state.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
 import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle.js";
 import { onSqliteWalCheckpoint } from "../../infra/sqlite-wal-checkpoint.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
@@ -31,7 +30,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import type { CanonicalSessionValidationResult } from "./session-accessor.sqlite-contract.js";
-import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   markSqliteReclamationSettled,
@@ -133,7 +131,7 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
       0,
       data.plan.databaseOptions,
       async (openedDatabase) => {
-        let transactionDatabase: DatabaseSync | undefined;
+        let transactionDatabase: EngineConnection | undefined;
         try {
           return mutateSessionColdTranscriptInWorker(
             data.plan,
@@ -207,7 +205,7 @@ export async function runReclamationWorkerPort(
 ): Promise<{ cleanupWarnings: string[]; settled: boolean }> {
   let reclaimSqliteSessionInTransaction: typeof import("./session-accessor.sqlite-reclamation.js").reclaimSqliteSessionInTransaction;
   let claim: OpenClawAgentDatabaseClaim | undefined;
-  let retainedDatabase: DatabaseSync | undefined;
+  let retainedDatabase: EngineConnection | undefined;
   let lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined;
   let operationId = pooledTask?.operationId ?? 0;
   let failureCleanup: Awaited<ReturnType<typeof settleReclamationDatabase>> | undefined;
@@ -285,7 +283,7 @@ export async function runReclamationWorkerPort(
               request.type === "canonical-validation" &&
               !request.initializeCanonicalValidation
             ) {
-              const prepare = (database: { agentId: string; db: DatabaseSync }) => {
+              const prepare = (database: { agentId: string; db: EngineConnection }) => {
                 const batch = canonical.readPendingCanonicalSessionValidationBatch(
                   database,
                   request,
@@ -359,13 +357,6 @@ export async function runReclamationWorkerPort(
                   // Deferred periodic work outside this synchronous page unit still needs its relay.
                   checkpointResultOwnedByRequest =
                     request.type === "reclaim" && request.plan.kind === "maintenance-pages";
-                  const authorizeCommit = () => {
-                    // The parent admitted this operation through its FIFO. Recheck
-                    // actual session ownership here, without a second host round trip.
-                    if (request.type === "reclaim") {
-                      assertSessionSubagentRunsCurrent(request.plan, options.env);
-                    }
-                  };
                   const reclaimed =
                     request.type === "canonical-validation"
                       ? runOpenClawAgentWriteTransaction(
@@ -392,7 +383,6 @@ export async function runReclamationWorkerPort(
                             }
                             const hasMore =
                               canonical.hasPendingCanonicalSessionValidation(transactionDatabase);
-                            authorizeCommit();
                             if (!hasMore) {
                               recordOpenClawAgentCanonicalValidation(transactionDatabase);
                               if (!markOpenClawAgentCanonicalValidation(transactionDatabase)) {
@@ -413,7 +403,6 @@ export async function runReclamationWorkerPort(
                           { ...request.plan, databaseOptions: options },
                           {
                             beforeMutation: currentClaim.assertCurrent,
-                            onCommit: authorizeCommit,
                           },
                         );
                   // Warm results must not revive proof invalidated by the parent between requests.
@@ -423,7 +412,7 @@ export async function runReclamationWorkerPort(
                   return reclaimed;
                 } finally {
                   checkpointResultOwnedByRequest = false;
-                  clearNodeSqliteKyselyCacheForDatabase(database.db);
+                  clearNodeSqliteKyselyCacheForDatabase(sqlPublicationAnchor(database.db));
                 }
               },
               assertExpectedSource,
@@ -457,16 +446,6 @@ export async function runReclamationWorkerPort(
       );
       if (response.type === "closed") {
         port.postMessage(response);
-        if (pooledTask) {
-          const [release]: unknown[] = await once(port, "message");
-          if (
-            !isRecord(release) ||
-            release.type !== "release" ||
-            release.operationId !== operationId
-          ) {
-            throw new Error("Canonical validation task received an invalid close release");
-          }
-        }
         port.close();
         return response;
       }

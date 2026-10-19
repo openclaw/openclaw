@@ -1,13 +1,13 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../../infra/errno.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 import {
   enqueueGitRefMutation,
   executeGitCommand,
   normalizeGitPathForFilesystem,
   requireGitCommandOutput,
 } from "../../infra/git-exec.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -20,6 +20,7 @@ import { estimateWorktreeGitBytes } from "./capacity.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import { commandError, listGitWorktrees, requireGit, runGit } from "./git.js";
+import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 import type { CreateManagedWorktreeParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
@@ -35,8 +36,8 @@ type ResolvedWorktreeBase = {
 
 type RemoteDefaultAttempt = {
   pending: Promise<ResolvedWorktreeBase & { branch: string }>;
-  ownerInvalidated: boolean;
   forwarded?: boolean;
+  refreshedAt?: number;
 };
 type RemoteDefaultPreparation = { borrowers: number; attempt?: RemoteDefaultAttempt };
 export type WorktreeBasePreparation = (options: {
@@ -48,6 +49,7 @@ export type WorktreeBasePreparation = (options: {
 const remoteDefaults = resolveGlobalMap<string, RemoteDefaultPreparation>(
   Symbol.for("openclaw.worktreeRemoteDefaults"),
 );
+const BASE_FRESHNESS_MS = 30_000;
 
 export class InvalidWorktreeBaseRefError extends Error {
   constructor(options?: ErrorOptions) {
@@ -168,14 +170,16 @@ export async function withWorktreeBasePreparation<T>(
       process.platform === "win32" ? directory.toLowerCase() : directory,
     ),
   );
-  const shared: RemoteDefaultPreparation = remoteDefaults.get(key) ?? { borrowers: 0 };
+  const cached = remoteDefaults.get(key);
+  const shared: RemoteDefaultPreparation =
+    cached &&
+    ((cached.borrowers > 0 && cached.attempt?.refreshedAt === undefined) ||
+      Date.now() - (cached.attempt?.refreshedAt ?? -Infinity) < BASE_FRESHNESS_MS)
+      ? cached
+      : { borrowers: 0 };
   shared.borrowers++;
   remoteDefaults.set(key, shared);
-  const forget = () => {
-    if (remoteDefaults.get(key) === shared) {
-      remoteDefaults.delete(key);
-    }
-  };
+  pruneMapToMaxSize(remoteDefaults, 32);
   let active = true;
   const resolutions: Promise<ResolvedWorktreeBase>[] = [];
   const resolve: WorktreeBasePreparation = async ({
@@ -194,86 +198,66 @@ export async function withWorktreeBasePreparation<T>(
       },
       env: { GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" },
     };
-    const owned = (attempt: RemoteDefaultAttempt, pending: RemoteDefaultAttempt["pending"]) =>
+    const settled = (attempt: RemoteDefaultAttempt, pending: RemoteDefaultAttempt["pending"]) =>
       pending.catch((error: unknown) => {
+        attempt.refreshedAt = undefined;
         if (hasWorktreeUnknownOutcome(error)) {
           throw error;
         }
         if (readCommandProcessFailure(error)?.cleanup === "uncertain") {
           throw new CommandProcessCleanupError({ cause: error });
         }
-        // Record authority while its scope is live; later borrowers outlive this caller.
-        try {
-          options.beforeRun();
-        } catch {
-          attempt.ownerInvalidated = true;
-        }
         throw error;
       });
-    for (;;) {
-      options.beforeRun();
-      let attempt = shared.attempt;
-      if (!attempt) {
-        const started: RemoteDefaultAttempt = {
-          ownerInvalidated: false,
-          pending: fetchRemoteDefault(repository.repoRoot, options).then(async (base) => {
-            // The creation cohort shares hydration before any checkout, including local main.
-            const preparationKey = randomUUID();
-            await estimateWorktreeGitBytes(repository.repoRoot, base.commit, {
+    options.beforeRun();
+    let attempt = shared.attempt;
+    if (!attempt) {
+      const started: RemoteDefaultAttempt = {
+        pending: timeWorktreePreparationPhase("baseRefresh", () =>
+          fetchRemoteDefault(repository.repoRoot, options),
+        ).then(async (base) => {
+          // Immutable commits share hydration across refreshes while the Git worker lives.
+          const preparationKey = base.commit;
+          await timeWorktreePreparationPhase("baseHydration", () =>
+            estimateWorktreeGitBytes(repository.repoRoot, base.commit, {
               signal,
               assertCurrent: options.beforeRun,
               preparationKey,
-            });
-            base.preparationKey = preparationKey;
-            options.beforeRun();
-            return base;
-          }),
-        };
-        started.pending = owned(started, started.pending);
-        shared.attempt = attempt = started;
-      }
-      if (localDefault === "fast-forward" && !attempt.forwarded) {
-        attempt.forwarded = true;
-        attempt.pending = owned(
-          attempt,
-          attempt.pending.then(async (base) => {
-            const warning = await fastForwardLocalDefault(
-              repository,
-              base.branch,
-              base.commit,
-              options,
-            );
-            return warning
-              ? {
-                  ...base,
-                  warning: [base.warning, redactSensitiveText(warning)].filter(Boolean).join("\n"),
-                }
-              : base;
-          }),
-        );
-      }
-      let selected: Awaited<typeof attempt.pending>;
-      try {
-        selected = await attempt.pending;
-      } catch (error) {
-        // Unconfirmed native work retains recovery custody even after this caller is revoked.
-        if (hasWorktreeUnknownOutcome(error)) {
-          throw error;
-        }
-        options.beforeRun();
-        // A canceled owner settles its process before a live borrower retries with its own guard.
-        if (attempt.ownerInvalidated) {
-          if (shared.attempt === attempt) {
-            shared.attempt = undefined;
+            }),
+          );
+          base.preparationKey = preparationKey;
+          options.beforeRun();
+          if (base.fetchSucceeded) {
+            started.refreshedAt = Date.now();
           }
-          continue;
-        }
-        throw error;
-      }
-      options.beforeRun();
-      const { branch: _branch, ...base } = selected;
-      return base;
+          return base;
+        }),
+      };
+      started.pending = settled(started, started.pending);
+      attempt = shared.attempt = started;
     }
+    if (localDefault === "fast-forward" && !attempt.forwarded) {
+      attempt.forwarded = true;
+      attempt.pending = settled(
+        attempt,
+        attempt.pending.then(async (base) => {
+          const warning = await timeWorktreePreparationPhase("baseFastForward", () =>
+            fastForwardLocalDefault(repository, base.branch, base.commit, options),
+          );
+          return warning
+            ? {
+                ...base,
+                warning: [base.warning, redactSensitiveText(warning)].filter(Boolean).join("\n"),
+              }
+            : base;
+        }),
+      );
+    }
+    // A canceled creator fails its cohort; the next creation starts fresh after settlement.
+    const selected = await timeWorktreePreparationPhase("baseWait", () => attempt.pending);
+    options.beforeRun();
+    const { branch: _branch, ...base } = selected;
+    return base;
   };
   try {
     return await run((options) => {
@@ -284,8 +268,12 @@ export async function withWorktreeBasePreparation<T>(
   } finally {
     active = false;
     await Promise.allSettled(resolutions);
-    if (--shared.borrowers === 0) {
-      forget();
+    if (
+      --shared.borrowers === 0 &&
+      !shared.attempt?.refreshedAt &&
+      remoteDefaults.get(key) === shared
+    ) {
+      remoteDefaults.delete(key);
     }
   }
 }
@@ -380,12 +368,9 @@ async function assertWorktreeGitOperationsIdle(
 ): Promise<void> {
   try {
     const worktreesDir = path.join(commonDir, "worktrees");
-    const worktrees = await fs.readdir(worktreesDir).catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return [];
-      }
-      throw error;
-    });
+    const worktrees = await fs
+      .readdir(worktreesDir)
+      .catch((error: unknown) => ignoreMissingPath(error) ?? []);
     const busy = () =>
       new LocalDefaultBusyError(
         "Local default retained: finish or abort the Git rebase, am, or bisect operation reserving it before advancing it.",
@@ -395,12 +380,7 @@ async function assertWorktreeGitOperationsIdle(
       throw busy();
     }
     const read = async (directory: string, name: string) =>
-      await fs.readFile(path.join(directory, name), "utf8").catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
+      await fs.readFile(path.join(directory, name), "utf8").catch(ignoreMissingPath);
     // Rebase exec can reattach HEAD; reservations cannot be inferred from detached status.
     // Read only reservation files, with bounded I/O and no per-worktree directory listing.
     const checked = await runTasksWithConcurrency({

@@ -51,6 +51,12 @@ If the worker inventory has already retired when shutdown starts, the Gateway
 still drains its retained worker tunnels and workspace transfers. Inventory
 retirement alone does not fail shutdown; other cleanup failures still do.
 
+While the Gateway is running, a temporary state-database read-admission seal
+pauses worker inventory access. After the same database is admitted again, the
+next reconciliation reloads the inventory and resumes worker maintenance without
+a Gateway restart. Closed stores stay closed during shutdown, and database
+replacement or corruption still requires recovery through the database owner.
+
 If work still ignores cancellation at the shutdown deadline under systemd or launchd,
 a native service stop or supervisor-owned restart logs
 the remaining work categories and pending owners (including command lanes and
@@ -63,8 +69,10 @@ An explicit server-close failure retains exit status `1`, including when final
 provider cleanup crosses the native shutdown deadline.
 
 Admission-close logs name the shutdown trigger, for example `stop (SIGTERM)` or
-`restart (SIGUSR2: config reload: gateway.bind)`. A signal alone does not identify
-its sender: Node does not expose the sender PID or command. Three occurrences of
+`restart (SIGUSR2: config reload: gateway.bind)`. Process failures retain their
+cause, for example `stop (process exit: unhandled rejection)`, while host lifeline
+closure is reported only when the hosting process closes its lifeline. A signal
+alone does not identify its sender: Node does not expose the sender PID or command. Three occurrences of
 the same signal within five minutes in one process, or three recorded plain
 SIGTERM/SIGINT stops across process lifetimes, produce a hint to check
 `openclaw gateway status --deep` for another supervisor. Deep local status shows
@@ -234,11 +242,22 @@ External supervisor implementations should also apply these acceptance rules:
 ### Gateway profiling
 
 - `OPENCLAW_GATEWAY_STARTUP_TRACE=1` logs phase timings during startup, including per-phase `eventLoopMax` delay and plugin lookup-table timings (installed-index, manifest registry, startup planning, owner-map work). The `process.bootstrap` breakdown includes earlier CLI imports, configuration, database admission, session inventory, and workspace readiness. Each bootstrap step records its process-relative `start`, duration, call count, and available fleet counts; repeated calls aggregate under one name. The `ready` trace repeats the step names and totals in `bootstrapSteps`. Nested steps overlap, so their durations should not be added together.
+- `sidecars.worker-environments` gates readiness on placement recovery. Its `github-ready`, `workspaces`, `active`, and `publications` sub-spans distinguish publication admission, local workspace journal recovery, active placement/environment reconciliation, and publication recovery. Worker runtime assembly happens earlier; worker installation artifacts are prepared on demand.
+- `cli.bootstrap.admission.state-snapshot` includes config recovery, database/session/workspace readiness, plugin validation, and device identity, as well as acquiring and releasing the read snapshot. It is not a database-copy timer. Plugin config and database readiness overlap. `admission.plugin-config` reports metadata-owner timings and plugin counts; `admission.plugin-metadata-completion` measures completion of the metadata snapshot. Existing `cli.command.config.snapshot.read.*` spans break down config I/O and validation.
 - `OPENCLAW_GATEWAY_RESTART_TRACE=1` logs `restart trace:` lines for restart signal handling, active-work drain, shutdown phases, next start, ready timing, and memory metrics. Ordinary stops also start a fresh trace with `stop.signal.received` and `stop.drain` timing. Named shutdown steps and coarse close phases emit `.begin` before waiting, then a duration when they settle; an unmatched begin identifies an entered phase that has not settled. These phases do not time every nested cleanup operation individually.
 - `OPENCLAW_DIAGNOSTICS=timeline` with `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH=<path>` writes a best-effort JSONL startup diagnostics timeline for external QA harnesses (equivalent to config `diagnostics.flags: ["timeline"]`; the path is still env-only). Add `OPENCLAW_DIAGNOSTICS_EVENT_LOOP=1` to include event-loop samples.
 - `pnpm build` then `pnpm test:startup:gateway -- --runs 5 --warmup 1` benchmarks Gateway startup against the built CLI entry: first process output, `/healthz`, `/readyz`, startup trace timings, event-loop delay, and plugin lookup-table timing.
 - `pnpm build` then `pnpm test:restart:gateway -- --case skipChannels --runs 1 --restarts 5` benchmarks in-process restart on macOS or Linux (not supported on Windows; restart requires `SIGUSR2`). Uses `SIGUSR2`, enables both traces in the child process, and records next `/healthz`, next `/readyz`, downtime, ready timing, CPU, RSS, and restart trace metrics.
+- Session projection warming overlaps transport setup after session admission and request-context preparation. Readiness still waits for initial session materialization and interrupted-turn recovery; a listener can be live while those gates remain pending. Update canaries continue to defer session catalogs until activation.
 - `/healthz` is liveness; `/readyz` is usable readiness. Treat trace lines and benchmark output as owner-attribution signal, not a complete performance conclusion from one span or sample.
+
+For persistent startup tracing, set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` in the
+global `~/.openclaw/.env` file (`%USERPROFILE%\.openclaw\.env` on Windows),
+or use the config `env.vars` block. See [Environment variables](/help/environment).
+An existing startup-trace assignment in the service definition, including
+`set "OPENCLAW_GATEWAY_STARTUP_TRACE=1"` in Windows `gateway.cmd`, also survives
+`openclaw gateway install --force` and service repair. Generated service values
+remain authoritative; arbitrary `OPENCLAW_*` script edits are not preserved.
 
 Without tracing, stops and restarts report nonzero active-work category counts at
 the first drain snapshot and at most once every 30 seconds while still pending.

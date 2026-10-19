@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import type { HeapProfiler, Profiler } from "node:inspector";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { WorkerMessageMetric } from "../../src/infra/worker-message-metrics.ts";
 import type { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
 
 export const GATEWAY_PROFILE_CHANNEL = "openclaw-gateway-bench-profile";
@@ -33,12 +34,20 @@ export type GatewayResourceSnapshot = GatewayCpuUsageSnapshot & {
 
 export type GatewayBenchCommand =
   | GatewayProfileCommand
+  | {
+      channel: typeof GATEWAY_PROFILE_CHANNEL;
+      kind: "diagnostics";
+      action: "start" | "stop";
+      captureId?: string;
+    }
   | { channel: typeof GATEWAY_PROFILE_CHANNEL; kind: "cpu-usage"; action: "sample" }
   | {
       channel: typeof GATEWAY_PROFILE_CHANNEL;
       kind: "resource-usage";
       action: "sample";
       initial?: boolean;
+      collectGarbage?: boolean;
+      snapshotPath?: string;
     };
 
 type GatewayProfileReply = {
@@ -48,6 +57,8 @@ type GatewayProfileReply = {
   error?: string;
   cpuUsage?: GatewayCpuUsageSnapshot;
   resources?: GatewayResourceSnapshot;
+  diagnostics?: ReturnType<ReturnType<typeof startGatewayBenchDiagnostics>>;
+  captureId?: string;
 };
 
 export type GatewayCpuUsage = Omit<ReturnType<typeof measureGatewayCpuUsage>, "cpuEnvironment"> &
@@ -58,13 +69,20 @@ export type GatewayCpuProfile = ReturnType<typeof readGatewayCpuProfile>;
 type GatewayProfileArtifacts = {
   diagnosticsPath?: string;
   diagnostics?: ReturnType<ReturnType<typeof startGatewayBenchDiagnostics>>;
+  workerMessages?: WorkerMessageMetric[];
 };
 
 function readProfileArtifacts(profilePath: string): GatewayProfileArtifacts {
   const diagnosticsPath = `${profilePath}.diagnostics.json`;
-  return existsSync(diagnosticsPath)
-    ? { diagnosticsPath, diagnostics: JSON.parse(readFileSync(diagnosticsPath, "utf8")) }
-    : {};
+  const workerMessagesPath = `${profilePath}.worker-messages.json`;
+  return {
+    ...(existsSync(diagnosticsPath)
+      ? { diagnosticsPath, diagnostics: JSON.parse(readFileSync(diagnosticsPath, "utf8")) }
+      : {}),
+    ...(existsSync(workerMessagesPath)
+      ? { workerMessages: JSON.parse(readFileSync(workerMessagesPath, "utf8")) }
+      : {}),
+  };
 }
 
 export async function controlGatewayProfile(
@@ -83,6 +101,28 @@ export async function controlGatewayProfile(
   });
 }
 
+/** Lightweight main-isolate diagnostics, without CPU or allocation sampling. */
+export async function startGatewayDiagnostics(child: ChildProcess, captureId?: string) {
+  await sendGatewayBenchCommand(child, {
+    channel: GATEWAY_PROFILE_CHANNEL,
+    kind: "diagnostics",
+    action: "start",
+    captureId,
+  });
+  return async () => {
+    const reply = await sendGatewayBenchCommand(child, {
+      channel: GATEWAY_PROFILE_CHANNEL,
+      kind: "diagnostics",
+      action: "stop",
+      captureId,
+    });
+    if (!reply.diagnostics) {
+      throw new Error("Gateway did not report diagnostics");
+    }
+    return reply.diagnostics;
+  };
+}
+
 export async function readGatewayCpuUsage(child: ChildProcess): Promise<GatewayCpuUsageSnapshot> {
   const reply = await sendGatewayBenchCommand(child, {
     channel: GATEWAY_PROFILE_CHANNEL,
@@ -98,7 +138,7 @@ export async function readGatewayCpuUsage(child: ChildProcess): Promise<GatewayC
 /** Samples the Gateway itself, not the controller or its descendants. */
 export async function readGatewayResources(
   child: ChildProcess,
-  options: { initial?: boolean } = {},
+  options: { initial?: boolean; collectGarbage?: boolean; snapshotPath?: string } = {},
 ): Promise<GatewayResourceSnapshot> {
   const reply = await sendGatewayBenchCommand(child, {
     channel: GATEWAY_PROFILE_CHANNEL,
@@ -166,7 +206,8 @@ async function sendGatewayBenchCommand(
       if (
         message?.channel !== GATEWAY_PROFILE_CHANNEL ||
         message.kind !== kind ||
-        message.action !== action
+        message.action !== action ||
+        (command.kind === "diagnostics" && message.captureId !== command.captureId)
       ) {
         return;
       }
@@ -233,5 +274,44 @@ export function readGatewayHeapProfile(profilePath: string) {
     includesCollectedObjects: true as const,
     sampledAllocatedBytes,
     topAllocationSites: sites.toSorted((a, b) => b.sampledBytes - a.sampledBytes).slice(0, 20),
+  };
+}
+
+/** Brackets completed operations; sampling and GC accounting run only in the owned child. */
+export async function measureGatewayAllocations(
+  child: ChildProcess,
+  profilePath: string,
+  operationCount: number,
+  workload: () => Promise<void>,
+) {
+  if (!Number.isSafeInteger(operationCount) || operationCount < 1) {
+    throw new Error("Allocation measurement needs a positive operation count");
+  }
+  const before = await readGatewayResources(child);
+  await controlGatewayProfile(child, "heap", "start", profilePath);
+  try {
+    await workload();
+  } finally {
+    await controlGatewayProfile(child, "heap", "stop", profilePath);
+  }
+  const after = await readGatewayResources(child);
+  const heap = readGatewayHeapProfile(profilePath);
+  if (!heap.diagnostics || heap.diagnostics.collectionErrors > 0) {
+    throw new Error("Allocation measurement has incomplete diagnostic accounting");
+  }
+  const gcMs = heap.diagnostics.gc.durationMs?.total ?? 0;
+  return {
+    scope: "main-isolate",
+    runtime: after.runtime,
+    operationCount,
+    ...heap,
+    estimatedAllocatedBytesPerOperation: heap.sampledAllocatedBytes / operationCount,
+    gcMs,
+    gcMsPerOperation: gcMs / operationCount,
+    gcCount: heap.diagnostics.gc.durationMs?.count ?? 0,
+    // Live heap and RSS deltas are context, never an allocation estimate.
+    heapUsedDeltaBytes: after.memory.heapUsed - before.memory.heapUsed,
+    rssDeltaBytes: after.memory.rss - before.memory.rss,
+    cpu: measureGatewayCpuUsage(before, after),
   };
 }

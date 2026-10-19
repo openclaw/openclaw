@@ -69,3 +69,5 @@ export type GitHubPublicationSourceFacts = {
   >;
   connection?: UserGitHubConnectionAuthority;
 };
+
+export type GitHubPublicationSessionFacts = Pick<GitHubPublicationSourceFacts, "entry" | "members">;

@@ -1,5 +1,5 @@
 import { hash } from "node:crypto";
-import { serializeModelRequestBody } from "@openclaw/ai/internal/openai";
+import { serializeModelRequestBody } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../../../packages/ai/src/host.js";
@@ -21,6 +21,9 @@ import {
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
 
 const originalHost = getAiTransportHost();
+const digest = (value: unknown) => hash("sha256", JSON.stringify(value));
+const fieldDigests = (fields: Record<string, unknown>) =>
+  Object.fromEntries(Object.entries(fields).map(([name, value]) => [name, digest(value)]));
 afterEach(() => {
   configureAiTransportHost(originalHost);
   resetDiagnosticEventsForTest();
@@ -52,10 +55,15 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
         : []),
     ],
   }));
-  const replacement = {
+  const parameters = {
     model: model.id,
-    messages,
+    prompt_cache_key: "private-affinity",
+    previous_response_id: "private-response",
     stream: true,
+  };
+  const replacement = {
+    ...parameters,
+    messages,
     tools: [...allowedTools, { type: "function", function: { name: "hidden" } }],
   };
   const expectedPayload = { ...replacement, tools: allowedTools };
@@ -77,7 +85,18 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
   let wire: string | undefined;
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     wire = await new Request(input, init).text();
-    return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+    return new Response(sse, {
+      headers: {
+        "content-type": "text/event-stream",
+        "openai-processing-ms": "12.5",
+        "openai-model": "private-model",
+        "openai-organization": "private-account",
+        "x-openai-route": "private-route",
+        "x-openai-region": "private-region",
+        "x-request-id": "private-request",
+        "set-cookie": "private-cookie",
+      },
+    });
   });
   configureAiTransportHost({ ...originalHost, buildModelFetch: () => fetchMock });
   const state: ProviderPromptState = {};
@@ -137,33 +156,47 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
       scopeDigest: expect.any(String),
       digest: hash("sha256", expectedWire),
       byteWeight: 614_400,
+      wire: {
+        requestBytes: 614_400,
+        prefixBytes: 4096,
+        prefixHash: hash("sha256", Buffer.from(expectedWire).subarray(0, 4096)),
+        cacheKeyPresent: true,
+        cacheKeyHash: hash("sha256", '"private-affinity"').slice(0, 16),
+        previousResponseIdPresent: true,
+        modelHash: digest(model.id).slice(0, 16),
+        routeHash: hash("sha256", model.baseUrl).slice(0, 16),
+        attempts: 1,
+        retried: false,
+        response: {
+          status: 200,
+          headers: {
+            "openai-processing-ms": 12.5,
+            "openai-model": hash("sha256", "private-model").slice(0, 16),
+            "openai-organization": hash("sha256", "private-account").slice(0, 16),
+            "x-openai-route": hash("sha256", "private-route").slice(0, 16),
+            "x-openai-region": hash("sha256", "private-region").slice(0, 16),
+            "x-request-id": hash("sha256", "private-request").slice(0, 16),
+          },
+        },
+      },
       cachePrefix: {
         system: hash("sha256", "{}"),
-        tools: hash("sha256", JSON.stringify({ tools: allowedTools })),
-        messages: messages.map((message, index) => {
-          const digest = hash("sha256", JSON.stringify(message));
-          return index < 32
-            ? {
-                digest,
-                fields: {
-                  role: hash("sha256", JSON.stringify(message.role)),
-                  content: hash("sha256", JSON.stringify(message.content)),
-                },
-              }
-            : { digest };
-        }),
+        tools: digest({ tools: allowedTools }),
+        messages: messages.map((message, index) =>
+          index < 32
+            ? { digest: digest(message), fields: fieldDigests(message) }
+            : { digest: digest(message) },
+        ),
         messageField: "messages",
         messageCount: 100,
         parameters: {
-          digest: hash("sha256", JSON.stringify({ model: model.id, stream: true })),
-          fields: {
-            model: hash("sha256", JSON.stringify(model.id)),
-            stream: hash("sha256", "true"),
-          },
+          digest: digest(parameters),
+          fields: fieldDigests(parameters),
         },
-        continuation: false,
+        continuation: true,
       },
     });
+    expect(JSON.stringify(state)).not.toContain("private-");
     expect(await completed.promise).toMatchObject({ requestPayloadBytes: 614_400 });
 
     markLastProviderPromptContextRejected(state);

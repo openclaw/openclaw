@@ -4,6 +4,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { encodeSessionArchiveContent } from "../config/sessions/archive-compression.js";
 import {
   formatSqliteSessionFileMarker,
@@ -17,8 +21,8 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
-import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
-import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
+import { readSessionColdTranscript as readCold } from "../config/sessions/session-cold-storage-state.js";
+import { runSessionColdStorageMaintenance as maintainCold } from "../config/sessions/session-cold-storage.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
@@ -34,10 +38,10 @@ import {
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
-import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
+import { readSessionCostUsageRollupRows as readRollups } from "./session-cost-usage-cache.test-support.js";
 import {
-  listUsageCountedTranscriptStats,
-  resolveUsageCostTranscriptFile,
+  listUsageCountedTranscriptStats as listTranscripts,
+  resolveUsageCostTranscriptFile as resolveTranscript,
 } from "./session-cost-usage-collection.test-support.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
 import { decodeUsageCostRollupEnvelope } from "./session-cost-usage-rollup-codec.js";
@@ -45,20 +49,35 @@ import {
   discoverAllSessions,
   loadCostUsageSummary,
   loadCostUsageSummaryFromCache,
-  loadSessionCostSummariesFromCache,
-  loadSessionCostSummary,
+  loadSessionCostSummariesFromCache as cachedSessions,
+  loadSessionCostSummary as sessionSummary,
   loadSessionLogs,
-  loadSessionUsageTimeSeries,
+  loadSessionUsageTimeSeries as timeSeries,
   resolveUsageSessionSource,
 } from "./session-cost-usage.js";
 
-const totalUsage = (agentId: string, scopedConfig = config) =>
-  loadCostUsageSummary({
-    agentId,
-    config: scopedConfig,
-    startMs: 0,
-    endMs: Date.now() + 86_400_000,
+const usageRange = (agentId: string, scopedConfig = config) => ({
+  agentId,
+  config: scopedConfig,
+  startMs: 0,
+  endMs: Date.now() + 86_400_000,
+});
+const expectTotal = async (agentId: string, tokens: number, scopedConfig = config) =>
+  expect(await loadCostUsageSummary(usageRange(agentId, scopedConfig))).toMatchObject({
+    totals: { totalTokens: tokens },
   });
+const expectDiscovery = async (agentId: string, sessionId: string, sessionFile: string) =>
+  expect(await discoverAllSessions({ agentId })).toEqual([
+    expect.objectContaining({ sessionId, sessionFile }),
+  ]);
+async function withWork(run: (work: AsyncWorkScope) => Promise<void>) {
+  const work = new AsyncWorkScope();
+  try {
+    await run(work);
+  } finally {
+    await work.drain();
+  }
+}
 
 const archiveTime = Date.UTC(2026, 7, 26, 12);
 const archiveStamp = "2026-08-26T12-00-00.000Z";
@@ -102,56 +121,80 @@ function transcript(tokens = 17): SessionManager {
   return manager;
 }
 
-function serialize(manager: SessionManager): string {
-  return (
-    [manager.getHeader(), ...manager.getEntries()]
-      .map((entry) => JSON.stringify(entry))
-      .join("\n") + "\n"
-  );
-}
-
-async function writeArchive(params: {
-  state: OpenClawTestState;
-  manager: SessionManager;
-  reason?: "reset" | "deleted";
-  agentId?: string;
-  mtime?: number;
-  generated?: boolean;
-}): Promise<string> {
-  const content = serialize(params.manager);
-  const encoded = encodeSessionArchiveContent(content);
-  const directory = params.state.sessionsDir(params.agentId);
-  await fs.mkdir(directory, { recursive: true });
-  const fileName = `${params.manager.getSessionId()}.jsonl.${params.reason ?? "reset"}.${archiveStamp}${params.generated ? `.${generation}` : ""}${encoded.suffix}`;
-  const filePath = path.join(directory, fileName);
-  await fs.writeFile(filePath, encoded.bytes);
-  const mtime = new Date(params.mtime ?? archiveTime);
-  await fs.utimes(filePath, mtime, mtime);
-  return filePath;
-}
-
-async function cachedTotal(agentId: string) {
-  return await loadCostUsageSummaryFromCache({
-    agentId,
-    config,
-    startMs: 0,
-    endMs: Date.now() + 86_400_000,
-    requestRefresh: false,
-  });
-}
+const serialize = (manager: SessionManager) =>
+  [manager.getHeader(), ...manager.getEntries()].map((entry) => JSON.stringify(entry)).join("\n") +
+  "\n";
 
 describe("usage archive identity", () => {
   let state: OpenClawTestState;
+  const main = { agentId: "main", config };
+
+  async function writeArchive(
+    manager: SessionManager,
+    {
+      reason = "reset",
+      agentId,
+      mtime = archiveTime,
+      generated = false,
+    }: {
+      reason?: "reset" | "deleted";
+      agentId?: string;
+      mtime?: number;
+      generated?: boolean;
+    } = {},
+  ) {
+    const encoded = encodeSessionArchiveContent(serialize(manager));
+    const directory = state.sessionsDir(agentId);
+    await fs.mkdir(directory, { recursive: true });
+    const suffix = `${reason}.${archiveStamp}${generated ? `.${generation}` : ""}${encoded.suffix}`;
+    const filePath = path.join(directory, `${manager.getSessionId()}.jsonl.${suffix}`);
+    await fs.writeFile(filePath, encoded.bytes);
+    await fs.utimes(filePath, new Date(mtime), new Date(mtime));
+    return filePath;
+  }
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "usage-archive-identity" });
     await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    await state.cleanup();
+    try {
+      await state.cleanup();
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
+
+  const scopeFor = (
+    sessionId: string,
+    storePath = path.join(state.sessionsDir(), "sessions.json"),
+  ) => ({
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath,
+  });
+  const seed = async (
+    scope: ReturnType<typeof scopeFor>,
+    tokens: number,
+    touchSessionEntry?: boolean,
+    updatedAt = archiveTime,
+  ) => {
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ message: assistant(tokens) }],
+      touchSessionEntry,
+    });
+  };
+  const usageLookup = (sessionFile: string) => ({ ...main, sessionFile });
+  const archiveFixture = async (options: Parameters<typeof writeArchive>[1] = {}) => {
+    const manager = transcript();
+    const sessionFile = await writeArchive(manager, options);
+    return { manager, sessionFile, sessionId: manager.getSessionId() };
+  };
 
   it("uses explicit usage artifacts and validates canonical targets in the worker", async () => {
     const root = state.statePath();
@@ -176,18 +219,11 @@ describe("usage archive identity", () => {
     expect(await resolve({ ...historicalInput, sessionFile: foreign })).toBeUndefined();
     expect(await resolve({ sessionFile: stale })).toBeUndefined();
     expect(await resolve({ sessionFile: marker })).toBe(marker);
-    const historicalPath = {
-      sessionEntry: { sessionFile: artifact, sessionId, updatedAt: 1 },
-    };
+    const historicalPath = { sessionEntry: { sessionFile: artifact, sessionId, updatedAt: 1 } };
     expect(await resolve({ sessionId, ...historicalPath })).toBe(
       path.join(sessionsDir, `${sessionId}.jsonl`),
     );
-    const sessionTarget = {
-      agentId: "main",
-      sessionId,
-      sessionKey: "agent:main:cost",
-      storePath,
-    };
+    const sessionTarget = { agentId: "main", sessionId, sessionKey: "agent:main:cost", storePath };
     const mismatchedTarget = { ...sessionTarget, sessionKey: "agent:main:other-cost" };
     await upsertSessionEntryCore(mismatchedTarget, {
       sessionId: "other-session",
@@ -197,18 +233,15 @@ describe("usage archive identity", () => {
     });
     const sql = observeMainThreadSql();
     try {
-      expect(
-        await resolve({ sessionTarget: { ...sessionTarget, sessionKey: "agent:other:cost" } }),
-      ).toBeUndefined();
-      expect(await resolve({ sessionTarget: mismatchedTarget })).toBeUndefined();
-      expect(await resolve({ sessionId: "other-session", sessionTarget })).toBeUndefined();
-      expect(await resolve({ agentId: "other", sessionTarget })).toBeUndefined();
-      expect(
-        await resolve({
-          sessionFile: marker,
-          sessionTarget: { ...sessionTarget, sessionKey: " " },
-        }),
-      ).toBeUndefined();
+      for (const params of [
+        { sessionTarget: { ...sessionTarget, sessionKey: "agent:other:cost" } },
+        { sessionTarget: mismatchedTarget },
+        { sessionId: "other-session", sessionTarget },
+        { agentId: "other", sessionTarget },
+        { sessionFile: marker, sessionTarget: { ...sessionTarget, sessionKey: " " } },
+      ]) {
+        expect(await resolve(params)).toBeUndefined();
+      }
       expect(await resolve({ sessionId: "   ", sessionFile: artifact, sessionTarget })).toBe(
         `sqlite:main:${sessionId}:${fsSync.realpathSync(path.join(root, "openclaw-agent.sqlite"))}`,
       );
@@ -237,15 +270,12 @@ describe("usage archive identity", () => {
       }),
     ).rejects.toThrow();
     expect(await fs.readFile(unreadable, "utf8")).toBe("not a SQLite database");
-    const work = new AsyncWorkScope();
     const cancelled = new Error("usage request closed");
-    try {
+    await withWork(async (work) => {
       const resolving = work.track(() => resolve({ sessionTarget }));
       work.beginClose(cancelled);
       await expect(resolving).rejects.toBe(cancelled);
-    } finally {
-      await work.drain();
-    }
+    });
   });
 
   it("keeps symlinked shared-store usage with its logical agent before and after archival", async () => {
@@ -253,11 +283,9 @@ describe("usage archive identity", () => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
     await fs.mkdir(path.dirname(storePath), { recursive: true });
     await fs.symlink(database.path, storePath);
-    const scopedConfig = {
-      ...config,
-      session: { store: storePath },
-    };
+    const scopedConfig = { ...config, session: { store: storePath } };
     await state.writeConfig(scopedConfig);
+    setRuntimeConfigSnapshot(scopedConfig);
     const fixtures = [
       { agentId: "main", sessionId: "main-usage", tokens: 17 },
       { agentId: "ops", sessionId: `usage-${"x".repeat(300)}`, tokens: 29 },
@@ -268,10 +296,7 @@ describe("usage archive identity", () => {
         sessionKey: `agent:${fixture.agentId}:usage`,
         storePath,
       };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: archiveTime });
-      await persistSessionTranscriptTurn(scope, {
-        messages: [{ message: assistant(fixture.tokens) }],
-      });
+      await seed(scope, fixture.tokens);
     }
     for (const archived of [false, true]) {
       if (archived) {
@@ -286,16 +311,14 @@ describe("usage archive identity", () => {
         }
       }
       for (const { agentId, sessionId, tokens } of fixtures) {
-        const files = await listUsageCountedTranscriptStats(agentId);
+        const files = await listTranscripts(agentId);
         expect(files).toEqual([
           expect.objectContaining({ sessionId, kind: archived ? "jsonl" : "sqlite" }),
         ]);
         if (!archived) {
           expect(parseSqliteSessionFileMarker(files[0]?.filePath)).toMatchObject({ agentId });
         }
-        expect(await totalUsage(agentId, scopedConfig)).toMatchObject({
-          totals: { totalTokens: tokens },
-        });
+        await expectTotal(agentId, tokens, scopedConfig);
       }
     }
     const legacy = transcript(11);
@@ -305,54 +328,38 @@ describe("usage archive identity", () => {
     );
     await fs.writeFile(legacyPath, serialize(legacy));
     for (const { agentId, sessionId, tokens } of fixtures) {
-      const files = await listUsageCountedTranscriptStats(agentId);
+      const files = await listTranscripts(agentId);
       expect(files).toHaveLength(2);
       expect(new Set(files.map((file) => file.sessionId))).toEqual(
         new Set([sessionId, legacy.getSessionId()]),
       );
-      expect(await totalUsage(agentId, scopedConfig)).toMatchObject({
-        totals: { totalTokens: tokens + 11 },
-      });
+      await expectTotal(agentId, tokens + 11, scopedConfig);
     }
   });
 
   it("refreshes retained rollups in a request-configured store", async () => {
     const storePath = state.statePath("custom.sqlite");
     const scopedConfig = { ...config, session: { store: storePath } };
-    const scope = {
-      agentId: "main",
-      sessionId: "refresh-usage",
-      sessionKey: "agent:main:refresh-usage",
-      storePath,
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: archiveTime });
-    await persistSessionTranscriptTurn(scope, { messages: [{ message: assistant(17) }] });
+    const scope = scopeFor("refresh-usage", storePath);
+    await seed(scope, 17);
     const params = { agentId: "main", config: scopedConfig, startMs: 0, endMs: Date.now() };
     expect(await loadCostUsageSummary(params)).toMatchObject({
       totals: { totalTokens: 17 },
       cacheStatus: { status: "fresh" },
     });
     await persistSessionTranscriptTurn(scope, { messages: [{ message: assistant(29) }] });
-    const work = new AsyncWorkScope();
-    try {
+    await withWork(async (work) => {
       await work.track(() => loadCostUsageSummaryFromCache(params));
       await work.runWhenIdle(() => undefined);
       expect(
         await loadCostUsageSummaryFromCache({ ...params, requestRefresh: false }),
       ).toMatchObject({ totals: { totalTokens: 46 }, cacheStatus: { status: "fresh" } });
-      expect(readSessionCostUsageRollupRows("main")).toHaveLength(1);
-    } finally {
-      await work.drain();
-    }
+      expect(readRollups("main")).toHaveLength(1);
+    });
   });
 
   it("keeps cold usage inventory cheap, restores for scanning, and reports a missing archive", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "cold-usage",
-      sessionKey: "agent:main:cold-usage",
-      storePath: path.join(state.sessionsDir(), "sessions.json"),
-    };
+    const scope = scopeFor("cold-usage");
     const coldConfig = {
       ...config,
       agents: { entries: { [scope.agentId]: {} } },
@@ -381,120 +388,68 @@ describe("usage archive identity", () => {
         { agentId: "main", env: state.env },
       );
     };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: archiveTime });
-    await persistSessionTranscriptTurn(scope, {
-      messages: [{ message: assistant(17) }],
-      touchSessionEntry: false,
-    });
+    await seed(scope, 17, false);
     const hotScope = { ...scope, sessionId: "hot-usage", sessionKey: "agent:main:hot-usage" };
-    await upsertSessionEntryCore(hotScope, {
-      sessionId: hotScope.sessionId,
-      updatedAt: Date.now(),
-    });
-    await persistSessionTranscriptTurn(hotScope, { messages: [{ message: assistant(19) }] });
+    await seed(hotScope, 19, undefined, Date.now());
     await replaceSessionEntry(scope, { sessionId: "current-usage", updatedAt: Date.now() });
     await ageTranscript(scope);
-    await loadSessionCostSummary({
-      agentId: "main",
-      config,
-      sessionFile: formatSqliteSessionFileMarker(hotScope),
-    });
-    const before = (await listUsageCountedTranscriptStats("main")).find(
-      (file) => file.sessionId === scope.sessionId,
-    )!;
-    expect(await runSessionColdStorageMaintenance({ config: coldConfig })).toMatchObject({
+    await sessionSummary(usageLookup(formatSqliteSessionFileMarker(hotScope)));
+    const inventoryFor = async (sessionId: string) =>
+      (await listTranscripts("main")).find((file) => file.sessionId === sessionId);
+    const before = (await inventoryFor(scope.sessionId))!;
+    expect(await maintainCold({ config: coldConfig })).toMatchObject({
       archivedTranscripts: 1,
       externalizedTranscripts: 0,
     });
-    expect(
-      (await listUsageCountedTranscriptStats("main")).find(
-        (file) => file.sessionId === scope.sessionId,
-      ),
-    ).toEqual(before);
+    expect(await inventoryFor(scope.sessionId)).toEqual(before);
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeDefined();
+    expect(readCold(database.db, scope.sessionId)).toBeDefined();
     const sessions = [
       before.filePath,
       formatSqliteSessionFileMarker(hotScope),
       formatSqliteSessionFileMarker(hotScope),
       formatSqliteSessionFileMarker({ ...scope, sessionId: "absent" }),
     ].map((sessionFile) => ({ sessionFile }));
-    expect(
-      await loadSessionCostSummariesFromCache({
-        agentId: "main",
-        config,
-        sessions,
-        requestRefresh: false,
-      }),
-    ).toMatchObject({
+    expect(await cachedSessions({ ...main, sessions, requestRefresh: false })).toMatchObject({
       summaries: [null, { totalTokens: 19 }, { totalTokens: 19 }, null],
       cacheStatus: { cachedFiles: 2, pendingFiles: 2 },
     });
-    expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeDefined();
-    expect(await totalUsage("main")).toMatchObject({ totals: { totalTokens: 36 } });
-    expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeUndefined();
-    const rollups = readSessionCostUsageRollupRows("main");
-    const missingScope = {
-      ...scope,
-      sessionKey: "agent:main:missing-usage",
-      sessionId: "missing-usage",
-    };
-    await upsertSessionEntryCore(missingScope, {
-      sessionId: missingScope.sessionId,
-      updatedAt: archiveTime,
-    });
-    await persistSessionTranscriptTurn(missingScope, {
-      messages: [{ message: assistant(19) }],
-      touchSessionEntry: false,
-    });
+    expect(readCold(database.db, scope.sessionId)).toBeDefined();
+    await expectTotal("main", 36);
+    expect(readCold(database.db, scope.sessionId)).toBeUndefined();
+    const rollups = readRollups("main");
+    const missingScope = scopeFor("missing-usage", scope.storePath);
+    await seed(missingScope, 19, false);
     await ageTranscript(missingScope);
     const missingFile = expectDefined(
-      (await listUsageCountedTranscriptStats("main")).find(
-        (file) => file.sessionId === missingScope.sessionId,
-      ),
+      await inventoryFor(missingScope.sessionId),
       "missing archive inventory",
     );
-    expect(await runSessionColdStorageMaintenance({ config: coldConfig })).toMatchObject({
+    expect(await maintainCold({ config: coldConfig })).toMatchObject({
       archivedTranscripts: 1,
       externalizedTranscripts: 0,
     });
-    const archive = expectDefined(
-      readSessionColdTranscript(database.db, missingScope.sessionId),
-      "cold archive",
-    );
+    const archive = expectDefined(readCold(database.db, missingScope.sessionId), "cold archive");
     await fs.unlink(resolveSessionColdArchivePath(database.path, archive.archive_name));
     await expect(
       loadSessionLogs({ agentId: "main", sessionFile: missingFile.filePath }),
     ).rejects.toThrow(/missing|unreadable/);
-    expect(readSessionCostUsageRollupRows("main")).toEqual(rollups);
-    expect(readSessionColdTranscript(database.db, missingScope.sessionId)).toBeDefined();
+    expect(readRollups("main")).toEqual(rollups);
+    expect(readCold(database.db, missingScope.sessionId)).toBeDefined();
   });
 
   it("discovers and reads compressed deleted archives for a non-main agent", async ({ signal }) => {
     const agentId = "worker";
-    const manager = transcript();
-    const sessionId = manager.getSessionId();
-    const sessionFile = await writeArchive({
-      state,
-      manager,
+    const { manager, sessionId, sessionFile } = await archiveFixture({
       reason: "deleted",
       agentId,
       generated: true,
     });
     const sourceStats = await fs.stat(sessionFile);
     const sessions = await discoverAllSessions({ agentId });
-    expect(sessions).toEqual([
-      {
-        sessionId,
-        sessionFile,
-        mtime: sourceStats.mtimeMs,
-      },
-    ]);
+    expect(sessions).toEqual([{ sessionId, sessionFile, mtime: sourceStats.mtimeMs }]);
 
-    const resolved = expectDefined(
-      await resolveUsageCostTranscriptFile(sessionFile),
-      "resolved archive",
-    );
+    const resolved = expectDefined(await resolveTranscript(sessionFile), "resolved archive");
     expect(resolved).toMatchObject({
       size: Buffer.byteLength(serialize(manager)),
       mtimeMs: sourceStats.mtimeMs,
@@ -502,12 +457,11 @@ describe("usage archive identity", () => {
     expect(resolved.filePath).not.toBe(sessionFile);
 
     const cacheLookup = { agentId, config, sessions: [{ sessionId, sessionFile }] };
-    expect(readSessionCostUsageRollupRows(agentId)).toEqual([]);
-    const work = new AsyncWorkScope();
-    try {
+    expect(readRollups(agentId)).toEqual([]);
+    await withWork(async (work) => {
       expect(
         await racePromiseWithAbortSignal(
-          work.track(() => loadSessionCostSummariesFromCache(cacheLookup)),
+          work.track(() => cachedSessions(cacheLookup)),
           signal,
         ),
       ).toMatchObject({
@@ -518,13 +472,9 @@ describe("usage archive identity", () => {
         work.runWhenIdle(() => undefined),
         signal,
       );
-      expect(readSessionCostUsageRollupRows(agentId)).toHaveLength(1);
-    } finally {
-      await work.drain();
-    }
-    expect(
-      await loadSessionCostSummariesFromCache({ ...cacheLookup, requestRefresh: false }),
-    ).toMatchObject({
+      expect(readRollups(agentId)).toHaveLength(1);
+    });
+    expect(await cachedSessions({ ...cacheLookup, requestRefresh: false })).toMatchObject({
       summaries: [{ sessionId, sessionFile, totalTokens: 17 }],
       cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0 },
     });
@@ -534,157 +484,127 @@ describe("usage archive identity", () => {
       sessionId: expectDefined(sessions[0], "discovered archive").sessionId,
       config,
     };
-    const summary = await loadSessionCostSummary(lookup);
+    const summary = await sessionSummary(lookup);
     expect(summary).toMatchObject({ sessionFile, totalTokens: 17 });
     expect(await loadSessionLogs(lookup)).toEqual([
       expect.objectContaining({ role: "user", content: "retained archive prompt" }),
       expect.objectContaining({ role: "assistant", tokens: 17 }),
     ]);
-    expect(await loadSessionUsageTimeSeries(lookup)).toMatchObject({
+    expect(await timeSeries(lookup)).toMatchObject({
       sessionId,
       points: [expect.objectContaining({ totalTokens: 17, cumulativeTokens: 17 })],
     });
-    const firstRows = readSessionCostUsageRollupRows(agentId);
+    const firstRows = readRollups(agentId);
     expect(firstRows.map((row) => row.key)).toEqual([resolved.filePath]);
   });
 
-  {
-    it("excludes a compressed archive copy of SQLite only in its owning agent", async () => {
-      const manager = transcript(100);
-      const sessionId = manager.getSessionId();
-      const sessionKey = "agent:main:main";
-      const storePath = path.join(state.sessionsDir(), "sessions.json");
-      await upsertSessionEntryCore(
-        { sessionKey, storePath },
-        { sessionId, updatedAt: archiveTime },
-      );
-      await persistSessionTranscriptTurn(
-        { agentId: "main", sessionId, sessionKey, storePath },
-        { messages: [{ message: assistant(17) }], touchSessionEntry: false },
-      );
-      const mainArchive = await writeArchive({ state, manager });
-      const workerArchive = await writeArchive({ state, manager, agentId: "worker" });
-      const readFile = vi.spyOn(fsSync, "readFileSync");
-      try {
-        await listUsageCountedTranscriptStats("main");
-        expect(readFile.mock.calls.filter(([file]) => file === mainArchive)).toEqual([]);
-      } finally {
-        readFile.mockRestore();
-      }
+  it("excludes a compressed archive copy of SQLite only in its owning agent", async () => {
+    const manager = transcript(100);
+    const sessionId = manager.getSessionId();
+    await seed({ ...scopeFor(sessionId), sessionKey: "agent:main:main" }, 17, false);
+    const mainArchive = await writeArchive(manager);
+    const workerArchive = await writeArchive(manager, { agentId: "worker" });
+    const readFile = vi.spyOn(fsSync, "readFileSync");
+    try {
+      await listTranscripts("main");
+      expect(readFile.mock.calls.filter(([file]) => file === mainArchive)).toEqual([]);
+    } finally {
+      readFile.mockRestore();
+    }
 
-      const sessions = await discoverAllSessions({ agentId: "main" });
-      expect.soft(sessions).toHaveLength(1);
-      expect.soft(sessions[0]).toMatchObject({
-        sessionId,
-        sessionFile: expect.stringContaining(`sqlite:main:${sessionId}:`),
-      });
-      const lookup = {
-        agentId: "main",
-        sessionFile: expectDefined(sessions[0], "SQLite session").sessionFile,
-        config,
-      };
-      expect(await loadSessionCostSummary(lookup)).toMatchObject({ totalTokens: 17 });
-      expect(await loadSessionUsageTimeSeries(lookup)).toMatchObject({
-        points: [{ input: 16, output: 1, totalTokens: 17 }],
-      });
-      expect(await loadSessionLogs(lookup)).toEqual([
-        expect.objectContaining({ role: "assistant", tokens: 17, cost: 0.017 }),
-      ]);
-      expect(await totalUsage("main")).toMatchObject({ totals: { totalTokens: 17 } });
-      expect(await discoverAllSessions({ agentId: "worker" })).toEqual([
-        expect.objectContaining({ sessionId, sessionFile: workerArchive }),
-      ]);
-      expect(await totalUsage("worker")).toMatchObject({ totals: { totalTokens: 100 } });
+    const sessions = await discoverAllSessions({ agentId: "main" });
+    expect.soft(sessions).toHaveLength(1);
+    expect.soft(sessions[0]).toMatchObject({
+      sessionId,
+      sessionFile: expect.stringContaining(`sqlite:main:${sessionId}:`),
     });
-
-    it("keeps newest-archive and primary precedence with compressed archives", async () => {
-      const manager = transcript();
-      const sessionId = manager.getSessionId();
-      await writeArchive({ state, manager, reason: "reset" });
-      const newestArchive = await writeArchive({
-        state,
-        manager,
-        reason: "deleted",
-        mtime: archiveTime + 1000,
-      });
-      expect(await discoverAllSessions({ agentId: "main" })).toEqual([
-        expect.objectContaining({ sessionId, sessionFile: newestArchive }),
-      ]);
-      const primary = path.join(state.sessionsDir(), `${sessionId}.jsonl`);
-      await fs.writeFile(primary, serialize(manager));
-      await fs.utimes(primary, new Date(archiveTime - 1000), new Date(archiveTime - 1000));
-      expect(await discoverAllSessions({ agentId: "main" })).toEqual([
-        expect.objectContaining({ sessionId, sessionFile: primary }),
-      ]);
+    const lookup = usageLookup(expectDefined(sessions[0], "SQLite session").sessionFile);
+    expect(await sessionSummary(lookup)).toMatchObject({ totalTokens: 17 });
+    expect(await timeSeries(lookup)).toMatchObject({
+      points: [{ input: 16, output: 1, totalTokens: 17 }],
     });
-  }
+    expect(await loadSessionLogs(lookup)).toEqual([
+      expect.objectContaining({ role: "assistant", tokens: 17, cost: 0.017 }),
+    ]);
+    await expectTotal("main", 17);
+    await expectDiscovery("worker", sessionId, workerArchive);
+    await expectTotal("worker", 100);
+  });
 
-  it("replaces compressed read bytes without changing the durable session identity", async () => {
+  it("keeps newest-archive and primary precedence with compressed archives", async () => {
     const manager = transcript();
     const sessionId = manager.getSessionId();
-    const sessionFile = await writeArchive({ state, manager });
-    const lookup = { agentId: "main", sessionId, sessionFile, config };
-    expect(await loadSessionCostSummary(lookup)).toMatchObject({ totalTokens: 17 });
-    const original = expectDefined(
-      await resolveUsageCostTranscriptFile(sessionFile),
-      "original archive",
-    );
-    const originalRows = readSessionCostUsageRollupRows("main");
+    await writeArchive(manager);
+    const newestArchive = await writeArchive(manager, {
+      reason: "deleted",
+      mtime: archiveTime + 1000,
+    });
+    await expectDiscovery("main", sessionId, newestArchive);
+    const primary = path.join(state.sessionsDir(), `${sessionId}.jsonl`);
+    await fs.writeFile(primary, serialize(manager));
+    await fs.utimes(primary, new Date(archiveTime - 1000), new Date(archiveTime - 1000));
+    await expectDiscovery("main", sessionId, primary);
+  });
+  it("replaces compressed read bytes without changing the durable session identity", async () => {
+    const { manager, sessionId, sessionFile } = await archiveFixture();
+    const lookup = { ...usageLookup(sessionFile), sessionId };
+    expect(await sessionSummary(lookup)).toMatchObject({ totalTokens: 17 });
+    const original = expectDefined(await resolveTranscript(sessionFile), "original archive");
+    const originalRows = readRollups("main");
     expect(originalRows.map((row) => row.key)).toEqual([original.filePath]);
 
     manager.appendMessage(assistant(29));
-    expect(await writeArchive({ state, manager, mtime: archiveTime + 2000 })).toBe(sessionFile);
-    const replacement = expectDefined(
-      await resolveUsageCostTranscriptFile(sessionFile),
-      "replacement archive",
-    );
+    expect(await writeArchive(manager, { mtime: archiveTime + 2000 })).toBe(sessionFile);
+    const replacement = expectDefined(await resolveTranscript(sessionFile), "replacement archive");
     expect(replacement.filePath).not.toBe(original.filePath);
     expect(await discoverAllSessions({ agentId: "main" })).toEqual([
       expect.objectContaining({ sessionId, sessionFile, mtime: archiveTime + 2000 }),
     ]);
-    expect(await refreshCostUsageCacheForAgent({ agentId: "main", config })).toBe("refreshed");
-    expect(await loadSessionCostSummary(lookup)).toMatchObject({ sessionFile, totalTokens: 46 });
-    expect(await cachedTotal("main")).toMatchObject({
+    expect(await refreshCostUsageCacheForAgent(main)).toBe("refreshed");
+    expect(await sessionSummary(lookup)).toMatchObject({ sessionFile, totalTokens: 46 });
+    expect(
+      await loadCostUsageSummaryFromCache({ ...usageRange("main"), requestRefresh: false }),
+    ).toMatchObject({
       totals: { totalTokens: 46 },
       cacheStatus: { status: "fresh" },
     });
-    const rows = readSessionCostUsageRollupRows("main");
+    const rows = readRollups("main");
     expect(rows.map((row) => row.key)).toEqual([replacement.filePath]);
     const fingerprint = await resolveUsageCostPricingFingerprint(config, state.agentDir());
     const rollup = expectDefined(
       rows.find((row) => row.key === replacement.filePath),
       "replacement archive rollup",
     );
+    const size = Buffer.byteLength(serialize(manager));
     expect(decodeUsageCostRollupEnvelope(rollup.valueJson, fingerprint)?.checkpoint).toMatchObject({
       kind: "jsonl",
-      parsedOffset: Buffer.byteLength(serialize(manager)),
-      observedSize: Buffer.byteLength(serialize(manager)),
+      parsedOffset: size,
+      observedSize: size,
       observedMtimeMs: archiveTime + 2000,
     });
-    expect(await loadSessionUsageTimeSeries(lookup)).toMatchObject({
+    expect(await timeSeries(lookup)).toMatchObject({
       points: [
         expect.objectContaining({ totalTokens: 17 }),
         expect.objectContaining({ totalTokens: 29, cumulativeTokens: 46 }),
       ],
     });
     expect(await loadSessionLogs(lookup)).toHaveLength(3);
-    expect(await loadSessionCostSummary(lookup)).toMatchObject({ totalTokens: 46 });
-    expect(readSessionCostUsageRollupRows("main")).toEqual(rows);
+    expect(await sessionSummary(lookup)).toMatchObject({ totalTokens: 46 });
+    expect(readRollups("main")).toEqual(rows);
   });
 
   it("preserves rollups when a compressed source becomes unreadable", async () => {
-    const manager = transcript();
-    const sessionFile = await writeArchive({ state, manager });
-    await loadSessionCostSummary({ agentId: "main", sessionFile, config });
-    const rows = readSessionCostUsageRollupRows("main");
+    const { manager, sessionFile } = await archiveFixture();
+    await sessionSummary(usageLookup(sessionFile));
+    const rows = readRollups("main");
     expect(rows).toHaveLength(1);
     await fs.writeFile(sessionFile, "not a zstd frame");
 
-    await expect(resolveUsageCostTranscriptFile(sessionFile)).resolves.toBeUndefined();
+    await expect(resolveTranscript(sessionFile)).resolves.toBeUndefined();
     expect(await discoverAllSessions({ agentId: "main" })).toMatchObject([
       { sessionId: manager.getSessionId(), sessionFile },
     ]);
-    await expect(refreshCostUsageCacheForAgent({ agentId: "main", config })).rejects.toThrow();
-    expect(readSessionCostUsageRollupRows("main")).toEqual(rows);
+    await expect(refreshCostUsageCacheForAgent(main)).rejects.toThrow();
+    expect(readRollups("main")).toEqual(rows);
   });
 });

@@ -4,7 +4,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../agents/main-session-recovery/main-session-recovery-admission.js";
 import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
@@ -17,27 +16,23 @@ import {
   mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
 } from "../agents/subagents/registry/subagent-registry-persistence.js";
+import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { isSameSubagentRun } from "../agents/subagents/registry/subagent-run-generation.js";
-import { clearFollowupQueue, getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
+  persistSessionTranscriptTurn,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
-import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
-import {
-  beginSessionWorkAdmission,
-  getSessionWorkAdmissionOwnerRelease,
-} from "../sessions/session-lifecycle-admission.js";
+import { getRpcSource } from "../sessions/session-controller.rpc-sources.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { countPendingQueueItems } from "../utils/queue-helpers.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
@@ -45,7 +40,7 @@ import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 it(
-  "queues WebChat behind recovery and keeps child context out of a reset parent",
+  "admits startup resends as mailbox inputs ahead of same-session WebChat and keeps child context out of a reset parent",
   { timeout: 90_000 },
   async () => {
     const token = "startup-recovery-webchat-token";
@@ -68,6 +63,9 @@ it(
     const canceledMessage = "Cancel this queued browser turn.";
     const survivorMessage = "Run this browser turn after recovery.";
     const afterResetMessage = "Resume only the work created after this reset.";
+    const secondSessionKey = "agent:main:second";
+    const secondSessionId = "startup-recovery-second-session";
+    const secondRecoveryMessage = "Finish the second interrupted job.";
     const originalChildMarker = "recovery-child-before-reset";
     const currentChildMarker = "recovery-child-after-reset";
     const batchChildMarker = "saved-batch-child";
@@ -99,7 +97,9 @@ it(
       return prompts[0] ?? "";
     };
     const recoveryGate = createDeferred();
+    const secondRecoveryGate = createDeferred();
     const targetRequests: string[] = [];
+    const secondRequests: string[] = [];
     const batchRequests: string[] = [];
     let holdRecovery = false;
     let providerRequestCount = 0;
@@ -126,6 +126,10 @@ it(
         ) {
           targetRequests.push(body);
         }
+        if (!isTitleRequest && body.includes(secondRecoveryMessage)) {
+          secondRequests.push(body);
+          await secondRecoveryGate.promise;
+        }
         if (!isTitleRequest && body.includes(afterResetMessage)) {
           afterResetRequest.resolve(body);
         }
@@ -143,20 +147,9 @@ it(
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     let recovery: ReturnType<typeof recoverRestartAbortedMainSessions> | undefined;
-    let replacementOwner: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    const startupRecoveryStop = new AbortController();
     let gatewayContext: GatewayRequestContext | undefined;
     let requestExecution: Awaited<ReturnType<typeof observeGatewayRunExecution>> | undefined;
-    const followupDrains: Promise<unknown>[] = [];
-    const runDetached = gatewayWorkAdmission.runWithGatewayDetachedWorkContinuation;
-    const drainSpy = vi
-      .spyOn(gatewayWorkAdmission, "runWithGatewayDetachedWorkContinuation")
-      .mockImplementation((run, origin) => {
-        const pending = runDetached(run, origin);
-        if (origin === "session:followup-drain") {
-          followupDrains.push(pending);
-        }
-        return pending;
-      });
 
     try {
       const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
@@ -172,6 +165,26 @@ it(
             role: "user",
             content: recoveryMessage,
             idempotencyKey: "startup-recovery-source:user",
+          },
+        },
+      );
+      await replaceSessionEntry(
+        { storePath, sessionKey: secondSessionKey },
+        { sessionId: secondSessionId, updatedAt: Date.now() + 60_000, status: "done" },
+      );
+      await appendTranscriptMessage(
+        {
+          agentId: "main",
+          sessionId: secondSessionId,
+          sessionKey: secondSessionKey,
+          storePath,
+        },
+        {
+          cwd: state.workspaceDir,
+          message: {
+            role: "user",
+            content: secondRecoveryMessage,
+            idempotencyKey: "startup-recovery-second-source:user",
           },
         },
       );
@@ -192,7 +205,8 @@ it(
           defaults: {
             workspace: state.workspaceDir,
             skipBootstrap: true,
-            maxConcurrent: 1,
+            // Each recovered session uses its own controller and the shared execution capacity.
+            maxConcurrent: 2,
             model: { primary: provider.modelRef },
             models: {
               [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
@@ -252,6 +266,16 @@ it(
           mainRestartRecovery: { cycleId: "before-reset", revision: 1, chargedAttempts: 0 },
         },
       );
+      await replaceSessionEntry(
+        { storePath, sessionKey: secondSessionKey },
+        {
+          sessionId: secondSessionId,
+          updatedAt: Date.now() - 10_000,
+          status: "interrupted",
+          abortedLastRun: true,
+          mainRestartRecovery: { cycleId: "second-session", revision: 1, chargedAttempts: 0 },
+        },
+      );
       clearSessionStoreCacheForTest();
       const addRecoveryChild = async (
         marker: string,
@@ -264,6 +288,8 @@ it(
         const child = createSubagentRunRecord({
           runId: marker,
           childSessionKey: `agent:main:subagent:${marker}`,
+          childAgentId: "main",
+          childSessionIdentity: { sessionId: `session-${marker}` },
           requesterSessionKey: sessionKey,
           requesterAgentId: "main",
           requesterStorePath: resolvePhysicalSessionStorePath({
@@ -299,29 +325,25 @@ it(
         throw new Error("Gateway recovery runtime is unavailable");
       }
       holdRecovery = true;
+      // The startup scheduler passes its stop signal to recovery admission.
       recovery = recoverRestartAbortedMainSessions({
         cfg,
         stateDir: state.stateDir,
         gatewayRuntime: recoveryRuntime,
+        signal: startupRecoveryStop.signal,
       });
       await vi.waitFor(() => expect(targetRequests).toHaveLength(1), { timeout: 30_000 });
       expect(readRecoveryPrompt(targetRequests[0] ?? "").includes(originalChildMarker)).toBe(true);
-      const initialOwner = getSessionWorkAdmissionOwnerRelease({
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-        owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
-      });
-      expect(initialOwner).toBeInstanceOf(Promise);
-      if (!initialOwner) {
-        throw new Error("startup recovery did not own the main session");
-      }
+      const resendRunId = loadSessionEntryReadOnly({
+        storePath,
+        sessionKey,
+      })?.restartRecoveryDeliveryRunId;
+      const resendSource = getRpcSource(expectDefined(resendRunId, "resend run id"));
+      // The resend is the session's selected mailbox input, not a side owner.
+      expect(resendSource?.input.claim).toBeDefined();
 
       const canceledRunId = "webchat-canceled-during-recovery";
       const survivorRunId = "webchat-survives-recovery";
-      const expectedQueuedMessages = new Map([
-        [canceledRunId, canceledMessage],
-        [survivorRunId, survivorMessage],
-      ]);
       const sendQueuedTurn = async (runId: string, message: string) => {
         await expect(
           client.request("chat.send", {
@@ -343,60 +365,85 @@ it(
           providerStarted: false,
         });
       };
-      const readInFlightRunIds = () =>
-        [...(getExistingFollowupQueue(sessionKey)?.inFlight ?? [])].map((item) => item.messageId);
-      // Hold the cancellation target in flight before queueing the survivor.
-      // Insertion starts the drain, which reserves the queue head before yielding to I/O.
+      // Hold the cancellation target in controller custody before queueing the survivor.
       await sendQueuedTurn(canceledRunId, canceledMessage);
-      expect(readInFlightRunIds()).toEqual([canceledRunId]);
+      await vi.waitFor(() => {
+        expect(getRpcSource(canceledRunId)).toBeDefined();
+      });
+      const canceledSource = getRpcSource(canceledRunId)!;
       await sendQueuedTurn(survivorRunId, survivorMessage);
-      const followupQueue = getExistingFollowupQueue(sessionKey);
-      // Active sources remain in items while the drain holds them in flight.
-      expect(
-        new Map(followupQueue?.items.map(({ messageId, prompt }) => [messageId, prompt])),
-      ).toEqual(expectedQueuedMessages);
-      expect(followupQueue?.items.map((item) => item.messageId)).toEqual([
-        canceledRunId,
-        survivorRunId,
-      ]);
-      expect(readInFlightRunIds()).toEqual([canceledRunId]);
-      expect(countPendingQueueItems(followupQueue?.items ?? [], followupQueue?.inFlight)).toBe(1);
-      expect(targetRequests).toHaveLength(1);
-      replacementOwner = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-        owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
-        assertAllowed: () => {},
+      await vi.waitFor(() => {
+        expect(getRpcSource(canceledRunId)).toBe(canceledSource);
+        expect(getRpcSource(survivorRunId)).toBeDefined();
       });
-
-      recoveryGate.resolve();
-      await expect(recovery).resolves.toMatchObject({ started: 1, failed: 0 });
-      await initialOwner;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      const survivorSource = getRpcSource(survivorRunId)!;
+      expect(survivorSource.input.mailbox).toBe(resendSource?.input.mailbox);
+      expect(survivorSource.input.sequence).toBeGreaterThan(resendSource!.input.sequence);
+      expect(survivorSource.input.claim).toBeUndefined();
       expect(targetRequests).toHaveLength(1);
       await expect(
         client.request("chat.abort", { sessionKey, runId: canceledRunId }),
       ).resolves.toMatchObject({ aborted: true, runIds: [canceledRunId] });
       await vi.waitFor(() => {
-        const queue = getExistingFollowupQueue(sessionKey);
-        const queued = new Set([...(queue?.items ?? []), ...(queue?.inFlight ?? [])]);
-        expect(Array.from(queued, (item) => item.messageId)).toEqual([survivorRunId]);
+        expect(canceledSource.input.abortSignal.aborted).toBe(true);
+        expect(getRpcSource(survivorRunId)).toBeDefined();
       });
 
-      replacementOwner.release();
+      recoveryGate.resolve();
+      await expect(recovery).resolves.toMatchObject({ started: 2, failed: 0 });
+      await vi.waitFor(() => expect(secondRequests).toHaveLength(1), { timeout: 30_000 });
+      const secondResendRunId = expectDefined(
+        loadSessionEntryReadOnly({ storePath, sessionKey: secondSessionKey })
+          ?.restartRecoveryDeliveryRunId,
+        "second resend run id",
+      );
+      const secondResendSource = expectDefined(
+        getRpcSource(secondResendRunId),
+        "second resend controller source",
+      );
+      const secondTarget = expectDefined(secondResendSource.input.target, "second resend target");
+      expect(secondTarget).toMatchObject({
+        sessionKey: secondSessionKey,
+        agentId: "main",
+        incarnation: secondSessionId,
+      });
+      expect(
+        resolvePhysicalSessionStorePath({
+          agentId: "main",
+          sessionKey: secondSessionKey,
+          storePath: secondTarget.storeScope,
+        }),
+      ).toBe(
+        resolvePhysicalSessionStorePath({
+          agentId: "main",
+          sessionKey: secondSessionKey,
+          storePath,
+        }),
+      );
+      expect(secondResendSource.input.claim).toBeDefined();
+      expect(secondResendSource.input.mailbox).not.toBe(resendSource?.input.mailbox);
+      secondRecoveryGate.resolve();
+      await expect(
+        client.request("agent.wait", { runId: resendRunId, timeoutMs: 30_000 }),
+      ).resolves.toMatchObject({ status: "ok" });
       await vi.waitFor(() => expect(targetRequests).toHaveLength(2), { timeout: 30_000 });
       expect(targetRequests[1]).toContain(survivorMessage);
       expect(targetRequests[1]).not.toContain(canceledMessage);
-      // Provider arrival precedes the detached drain's final queue deletion.
-      for (const drain of followupDrains) {
-        await drain;
-      }
-      expect(getExistingFollowupQueue(sessionKey)).toBeUndefined();
       await expect(
         client.request("agent.wait", { runId: survivorRunId, timeoutMs: 30_000 }),
       ).resolves.toMatchObject({ status: "ok" });
+      await vi.waitFor(() => expect(getRpcSource(survivorRunId)).toBeUndefined());
+      // The sweep reports admission; join this exact resend before inspecting its durable result.
+      await expect(
+        client.request("agent.wait", { runId: secondResendRunId, timeoutMs: 30_000 }),
+      ).resolves.toMatchObject({ status: "ok" });
+      await secondResendSource.input.settlement.promise;
+      expect(loadSessionEntryReadOnly({ storePath, sessionKey: secondSessionKey })).toMatchObject({
+        abortedLastRun: false,
+        status: "done",
+      });
+      // Each resend and the surviving WebChat turn executed exactly once.
+      expect(secondRequests).toHaveLength(1);
       expect(targetRequests).toHaveLength(2);
 
       const beforeReset = loadSessionEntryReadOnly({ storePath, sessionKey });
@@ -485,7 +532,10 @@ it(
                 currentBatch(batch);
               },
               onCommitted: () => {},
-              onPublished: () => onPublished(currentBatch(batch)),
+              onPublished: () => {
+                const published = currentBatch(batch);
+                onPublished?.(published);
+              },
             });
             expect(result.publication).toBe("published");
           },
@@ -513,12 +563,16 @@ it(
               },
             });
             expect(result.publication).toBe("published");
-            onCommitted?.();
+            await onCommitted?.();
           },
         });
       let batchChild = await addRecoveryChild(batchChildMarker, {
         expectsCompletionMessage: true,
-        completion: { required: true, resultText: "saved interrupted batch result" },
+        completion: {
+          required: true,
+          resultText: "saved interrupted batch result",
+          terminalReply: { disposition: "visible", text: "saved interrupted batch result" },
+        },
         delivery: { status: "delivered" },
         requesterSettleWake: {
           status: "pending",
@@ -529,6 +583,37 @@ it(
           rearmGeneration: 1,
         },
       });
+      const batchChildSessionId = expectDefined(
+        batchChild.childSessionIdentity?.sessionId,
+        "saved batch child session id",
+      );
+      const batchChildScope = {
+        agentId: "main",
+        sessionKey: batchChild.childSessionKey,
+        sessionId: batchChildSessionId,
+        storePath,
+      };
+      await replaceSessionEntry(batchChildScope, {
+        sessionId: batchChildSessionId,
+        updatedAt: Date.now(),
+      });
+      await persistSessionTranscriptTurn(batchChildScope, {
+        config: cfg,
+        runId: batchChild.runId,
+        expectedSessionId: batchChildSessionId,
+        touchSessionEntry: false,
+        updateMode: "none",
+        messages: [
+          {
+            message: {
+              role: "assistant",
+              phase: "final_answer",
+              stopReason: "stop",
+              content: [{ type: "text", text: "saved interrupted batch result" }],
+            },
+          },
+        ],
+      });
       batchChild = await reloadSavedBatch(batchChild);
       expect(await wakeSavedBatch(batchChild)).toBe(true);
       expect(batchRequests).toHaveLength(1);
@@ -538,7 +623,10 @@ it(
       expect(subagentRuns.get(batchChild.runId)?.requesterSettleWake).toBeUndefined();
 
       batchChild = await reloadSavedBatch({
-        ...expectDefined(subagentRuns.get(batchChild.runId), "settled batch child"),
+        ...expectDefined(
+          loadSubagentRegistryFromSqlite().get(batchChild.runId),
+          "settled batch child",
+        ),
         requesterSettleWake: {
           status: "pending",
           attemptCount: 0,
@@ -551,16 +639,18 @@ it(
       const fixtureHistory = structuredClone(batchChild);
       await client.request("sessions.reset", { key: sessionKey });
       const revokedTransition = vi.fn();
+      const revokedCompletion = vi.fn();
       expect(
         await maybeWakeRequesterAfterAllChildrenSettled({
           isSourceCurrent: () => true,
           requesterSessionKey: sessionKey,
           settledEntry: batchChild,
           transitionBatch: revokedTransition,
-          completeBatch: vi.fn(),
+          completeBatch: revokedCompletion,
         }),
       ).toBe(false);
       expect(revokedTransition).not.toHaveBeenCalled();
+      expect(revokedCompletion).not.toHaveBeenCalled();
       expect(batchRequests).toHaveLength(1);
       const resetBatchParent = loadSessionEntryReadOnly({ storePath, sessionKey });
       expect(resetBatchParent?.sessionId).toBe(fixtureHistory.completionRequesterSessionId);
@@ -579,11 +669,11 @@ it(
       expect(staleBatchPrompt).not.toContain("parent recovery required");
     } finally {
       recoveryGate.resolve();
-      replacementOwner?.release();
+      secondRecoveryGate.resolve();
+      startupRecoveryStop.abort();
       if (recovery) {
         await Promise.allSettled([recovery]);
       }
-      clearFollowupQueue(sessionKey);
       if (gateway) {
         await disconnectGatewayClient(gateway.client).catch(() => undefined);
         await gateway.server.close().catch(() => undefined);
@@ -595,8 +685,6 @@ it(
         });
       }
       await requestExecution?.restore();
-      await Promise.allSettled(followupDrains);
-      drainSpy.mockRestore();
       subagentRuns.delete(originalChildMarker);
       subagentRuns.delete(currentChildMarker);
       subagentRuns.delete(batchChildMarker);

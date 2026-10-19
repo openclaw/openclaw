@@ -1000,8 +1000,6 @@ export class NodeRegistry {
         sessionCapsCeiling.has(capability),
       );
     }
-    this.refreshSessionPolicy(node);
-
     if ("permissions" in surface) {
       node.permissions =
         surface.permissions === undefined
@@ -1019,9 +1017,14 @@ export class NodeRegistry {
       }
     }
 
+    const previousPairingGeneration = node.pairingGeneration;
     if (generationTransition) {
-      const previousPairingGeneration = node.pairingGeneration;
+      // Policy refresh can synchronously notify readers of this committed surface.
       node.pairingGeneration = generationTransition.nextPairingGeneration;
+    }
+    this.refreshSessionPolicy(node);
+
+    if (generationTransition) {
       // Runner declarations are pairing-generation facts. Retire the old
       // declaration so the live process must publish for its promoted generation.
       settleNodeRegistryPairingGenerationChange({
@@ -1099,7 +1102,11 @@ export class NodeRegistry {
     runId?: string;
     sessionKey: string;
     terminal: boolean;
-  }): Pick<PendingSystemRunEvent, "invocationDeliveryContext"> | null {
+  }):
+    | (Pick<PendingSystemRunEvent, "invocationDeliveryContext"> & {
+        holdNotice?: (notify: () => void) => void;
+      })
+    | null {
     if (!params.connId || !params.sessionKey) {
       return null;
     }
@@ -1123,11 +1130,35 @@ export class NodeRegistry {
     if (match === null) {
       return null;
     }
-    const source = this.authorizedSystemRunEvents.get(match)?.invocationDeliveryContext;
+    const event = this.authorizedSystemRunEvents.get(match);
+    const source = event?.invocationDeliveryContext;
+    let waiting: PendingInvoke | undefined;
     if (params.terminal) {
       this.authorizedSystemRunEvents.delete(match);
+      // The node reports completion before its result; a still-waiting caller receives that output.
+      waiting = [...this.pendingInvokes.values()].find(
+        (pending) =>
+          pending.nodeId === params.nodeId &&
+          pending.connId === connId &&
+          pending.systemRunEvent?.runId === event?.runId,
+      );
     }
-    return source ? { invocationDeliveryContext: { ...source } } : {};
+    return {
+      ...(source ? { invocationDeliveryContext: { ...source } } : {}),
+      ...(waiting
+        ? {
+            holdNotice: (notify: () => void) => {
+              const resolve = waiting.resolve;
+              waiting.resolve = (value) => {
+                resolve(value);
+                if (!value.ok) {
+                  notify();
+                }
+              };
+            },
+          }
+        : {}),
+    };
   }
 
   private rememberAuthorizedSystemRunEvent(
@@ -1307,7 +1338,9 @@ export class NodeRegistry {
     if (eventTransport) {
       return eventTransport.send(event, payload);
     }
-    return sendNodeWebSocketEvent(node.client.socket, () => serializeNodeEvent(event, payload));
+    return sendNodeWebSocketEvent(node.client.socket, event, () =>
+      serializeNodeEvent(event, payload),
+    );
   }
 
   private sendEventRawInternal(
@@ -1332,7 +1365,7 @@ export class NodeRegistry {
     if (eventTransport) {
       return eventTransport.sendRaw(event, payloadJSON);
     }
-    return sendNodeWebSocketEvent(node.client.socket, () => {
+    return sendNodeWebSocketEvent(node.client.socket, event, () => {
       const payloadFragment = payloadJSON ? `,"payload":${payloadJSON.json}` : "";
       return `{"type":"event","event":${JSON.stringify(event)}${payloadFragment}}`;
     });

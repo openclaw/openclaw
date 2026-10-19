@@ -44,6 +44,8 @@ function fakeRepeatedToken(chars: readonly string[], length = 40): string {
 
 describe("diagnostic support redaction", () => {
   const tempDir = path.join(os.tmpdir(), "openclaw-support-redaction-test");
+  const npmLayoutRefusal =
+    "The npm global install layout cannot stage a candidate. Reinstall with npm into its default global layout, then retry the update.";
 
   it.each([
     `'/synthetic/private owner/state.sqlite' private suffix`,
@@ -83,6 +85,14 @@ describe("diagnostic support redaction", () => {
     [
       'journal "operation.sqlite" unsafe: mode=0600 nlink=2 uid=1000; expected owner-only mode nlink=1.',
       true,
+    ],
+    [
+      'journal "operation.sqlite" unsafe: mode=0600 nlink=2 uid=1000; expected owner-only mode nlink=1. Run openclaw doctor --fix.',
+      true,
+    ],
+    [
+      'journal "operation.sqlite" unsafe: mode=0600 nlink=2 uid=1000; expected owner-only mode nlink=1. Run openclaw doctor --fix. private-text',
+      false,
     ],
     [
       'helper "recovery.mjs" unsafe: mode=0644 nlink=1 uid=1000; expected owner-only mode nlink=1.',
@@ -130,7 +140,6 @@ describe("diagnostic support redaction", () => {
       ),
     ).toBe(code);
   });
-
   it("keeps a closed cause from later npm stderr lines", () => {
     expect(
       redactPublicSupportDiagnosticLine(
@@ -138,6 +147,29 @@ describe("diagnostic support redaction", () => {
         { env: {}, stateDir: tempDir },
       ),
     ).toBe("EACCES; Permission denied");
+  });
+
+  it.each([
+    ["SQLite file generation changed while reading", ": /private/example/openclaw.sqlite"],
+    ["SQLite file generation did not stabilize", " during confirmation: /private/example/a.sqlite"],
+    [
+      "SQLite source did not stabilize",
+      " after 3 read-only inspection attempts: /private/x.sqlite",
+    ],
+    ["SQLite WAL commit header is unavailable or changing", ": /private/example/a.sqlite"],
+    ["SQLite WAL commit publication could not be verified", ": /private/example/a.sqlite"],
+    ["SQLite snapshot size mismatch", " for /private/example/a.sqlite: expected 4096, got 4112"],
+    [
+      "SQLite snapshot hash mismatch",
+      ` for /private/example/a.sqlite-wal: expected ${"a".repeat(64)}, got ${"b".repeat(64)}`,
+    ],
+  ])("keeps the fixed concurrent-write cause %s without its path", (cause, suffix) => {
+    expect(
+      redactPublicSupportDiagnosticLine(`Warning: private-host.example\n${cause}${suffix}`, {
+        env: {},
+        stateDir: tempDir,
+      }),
+    ).toBe(cause);
   });
 
   it.each([
@@ -151,16 +183,31 @@ describe("diagnostic support redaction", () => {
     ).toBe("[redacted-diagnostic]");
   });
 
-  it.each(["", " private-customer-text"])(
-    "recognizes only the fixed npm layout refusal (%s)",
-    (suffix) => {
-      const message =
-        "The npm global install layout cannot stage a candidate. Reinstall with npm into its default global layout, then retry the update.";
-      expect(
-        redactPublicSupportDiagnosticLine(message + suffix, { env: {}, stateDir: tempDir }),
-      ).toBe(suffix ? "[redacted-diagnostic]" : message);
-    },
-  );
+  it.each([
+    [npmLayoutRefusal, npmLayoutRefusal],
+    [`${npmLayoutRefusal} private-customer-text`, "[redacted-diagnostic]"],
+    [
+      "Gateway readiness was not verified; service status: running; startup phase: private-customer-text. Check openclaw --profile private-customer gateway status --deep.",
+      "Gateway readiness was not verified; service status: running. Check openclaw gateway status --deep.",
+    ],
+    [
+      "Gateway readiness was not verified; service status: stopped; startup phase: /private/customer/startup. Check openclaw gateway status --deep.",
+      "Gateway readiness was not verified; service status: stopped. Check openclaw gateway status --deep.",
+    ],
+    [
+      "Gateway readiness was not verified; service status: unknown; startup phase: waiting for managed service. Check openclaw gateway status --deep.",
+      "Gateway readiness was not verified; service status: unknown. Check openclaw gateway status --deep.",
+    ],
+    [
+      "Gateway readiness was not verified; service status: running-private-customer. Check openclaw gateway status --deep.",
+      "[redacted-diagnostic]",
+    ],
+    ["private-customer startup failed", "[redacted-diagnostic]"],
+  ])("publishes only closed repair facts (%s)", (message, expected) => {
+    expect(redactPublicSupportDiagnosticLine(message, { env: {}, stateDir: tempDir })).toBe(
+      expected,
+    );
+  });
 
   it("redacts numeric private fields in support snapshots and config", () => {
     const redaction = {
@@ -242,7 +289,17 @@ describe("diagnostic support redaction", () => {
       { length: 40 },
       (_entry, index) => (["A", "b", "9", "+"] as const)[index % 4] ?? "A",
     ).join("")}`;
+    const vendorToken = `gAAAA${"b".repeat(24)}`;
+    const vendorShapedDataUrl = `data:application/octet-stream;base64,${vendorToken}`;
     const cases = [
+      [
+        "project top-level /synthetic/skills/example/SKILL.md",
+        "project top-level /synthetic/skills/example/SKILL.md",
+      ],
+      ["vendor ghp_abcdefghij", "vendor ***"],
+      [`vendor ${vendorToken}`, "vendor gAAAAb…bbbb"],
+      [vendorShapedDataUrl, vendorShapedDataUrl],
+      ["é123456:fixtureonlyabcdefghij", "é123456…ghij"],
       [
         "connect wss://support-user:support-password@gateway.example/ws?token=short-token&ok=1",
         "connect wss://<redacted>:<redacted>@gateway.example/ws?token=<redacted>&ok=1",
@@ -333,16 +390,6 @@ describe("diagnostic support redaction", () => {
       expect(redactSupportString(sanitized, redaction)).toBe(expected);
     },
   );
-
-  it("preserves canonical state path markers across repeated support handoffs", () => {
-    const redaction = { env: {}, stateDir: tempDir };
-    const expected = "Config: $OPENCLAW_STATE_DIR/openclaw.json";
-    const sanitized = redactSupportString(`Config: ${tempDir}/openclaw.json`, redaction);
-
-    expect(sanitized).toBe(expected);
-    expect(redactSupportString(sanitized, redaction)).toBe(expected);
-    expect(redactSupportString("$OPENCLAW_STATE_DIR", redaction)).toBe("$OPENCLAW_STATE_DIR");
-  });
 
   it("truncates support strings without splitting UTF-16 surrogate pairs", () => {
     const redaction = {

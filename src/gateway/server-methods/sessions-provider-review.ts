@@ -12,9 +12,9 @@ import {
 } from "../../sessions/provider-review.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import {
-  resolveSessionMutationAuthorization,
-  resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -41,18 +41,22 @@ export const sessionProviderReviewHandlers: GatewayRequestHandlers = {
       }
       let acknowledgment: ProviderReviewAcknowledgment | undefined;
       let handedOff = false;
+      let releaseAuthorization: (() => void) | undefined;
       try {
         if (isIncognitoSessionKey(params.sessionKey)) {
           throw new Error("Provider review cannot be continued in an incognito session");
         }
         const authorization = options.sessionMutationAuthorization
           ? { authorization: options.sessionMutationAuthorization, error: null }
-          : resolveSessionMutationAuthorization({
+          : await resolveSessionMutationAuthorizationAsync({
               client,
               method: "sessions.providerReview.continue",
               requestParams: params,
               context,
             });
+        if (!options.sessionMutationAuthorization) {
+          releaseAuthorization = authorization.authorization?.release;
+        }
         if (authorization.error) {
           respond(false, undefined, authorization.error);
           return;
@@ -63,7 +67,7 @@ export const sessionProviderReviewHandlers: GatewayRequestHandlers = {
           respond(false, undefined, requested.error);
           return;
         }
-        const target = resolveSessionSharingTarget({
+        const target = await resolveSessionSharingTargetAsync({
           cfg,
           sessionKey: params.sessionKey,
           agentId: requested.agentId,
@@ -137,6 +141,7 @@ export const sessionProviderReviewHandlers: GatewayRequestHandlers = {
           );
         }
       } finally {
+        releaseAuthorization?.();
         if (acknowledgment && !handedOff) {
           retireProviderReviewAcknowledgment(acknowledgment);
         }

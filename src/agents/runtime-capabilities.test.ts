@@ -15,6 +15,7 @@ describe("collectRuntimeChannelCapabilities", () => {
     const capabilities = collectRuntimeChannelCapabilities({
       channel: "discord",
       accountId: "default",
+      requester: { currentChannelId: "channel:parent" },
       cfg: {
         session: {
           threadBindings: {
@@ -31,6 +32,7 @@ describe("collectRuntimeChannelCapabilities", () => {
     const capabilities = collectRuntimeChannelCapabilities({
       channel: "discord",
       accountId: "default",
+      requester: { currentChannelId: "channel:parent" },
       cfg: {
         session: {
           threadBindings: {
@@ -41,5 +43,22 @@ describe("collectRuntimeChannelCapabilities", () => {
     });
 
     expect(capabilities).toBeUndefined();
+  });
+
+  it.each([
+    undefined,
+    { currentChannelId: " " },
+    {
+      currentChannelId: "channel:caller-selected",
+      currentConversationOrigin: "caller-token" as const,
+    },
+  ])("omits thread-bound capabilities without a trusted current conversation (%j)", (requester) => {
+    expect(
+      collectRuntimeChannelCapabilities({
+        channel: "discord",
+        cfg: { session: { threadBindings: { spawnSessions: true } } },
+        requester,
+      }),
+    ).toBeUndefined();
   });
 });

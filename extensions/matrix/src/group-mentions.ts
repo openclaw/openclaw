@@ -17,9 +17,12 @@ function resolveMatrixGroupScope(params: ChannelGroupContext) {
   const tree = buildMatrixRoomScopeTree(matrixConfig.groups ?? matrixConfig.rooms);
   const roomId = normalizeMatrixResolvableTarget(params.groupId ?? "");
   const groupChannel = normalizeMatrixResolvableTarget(params.groupChannel ?? "");
+  // Core may fall back to the display name; only recover the same room ID's casing.
+  const aliases =
+    roomId && groupChannel.toLowerCase() === roomId.toLowerCase() ? [groupChannel] : [];
   return {
     tree,
-    path: resolveMatrixRoomScopePath({ tree, roomId, aliases: groupChannel ? [groupChannel] : [] }),
+    path: resolveMatrixRoomScopePath({ tree, roomId, aliases }),
   };
 }
 

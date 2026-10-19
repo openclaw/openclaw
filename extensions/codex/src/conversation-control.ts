@@ -2,6 +2,7 @@ import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
   applyModelOverrideWithAuthProfileCompatibility,
   ModelSelectionLockedError,
+  prepareAuthProfileProvider,
 } from "openclaw/plugin-sdk/model-session-runtime";
 import {
   getSessionEntryAsync,
@@ -73,6 +74,7 @@ export async function stopCodexConversationTurn(params: {
   identity: CodexAppServerBindingIdentity;
   binding: CodexAppServerThreadBinding | undefined;
   assertCurrent: () => void;
+  assertCurrentAsync?: () => Promise<void>;
 }): Promise<{ stopped: boolean; message: string }> {
   const active = readCodexConversationActiveTurn(params.identity);
   if (!active) {
@@ -88,7 +90,15 @@ export async function stopCodexConversationTurn(params: {
   await active.client.request(
     "turn/interrupt",
     { threadId: active.threadId, turnId: active.turnId },
-    { timeoutMs: active.requestTimeoutMs, assertCurrent: params.assertCurrent },
+    {
+      timeoutMs: active.requestTimeoutMs,
+      assertCurrent: params.assertCurrent,
+      withCurrent: async (write) => {
+        await params.assertCurrentAsync?.();
+        params.assertCurrent();
+        write();
+      },
+    },
   );
   return { stopped: true, message: "Codex stop requested." };
 }
@@ -98,6 +108,7 @@ export async function steerCodexConversationTurn(params: {
   binding: CodexAppServerThreadBinding | undefined;
   message: string;
   assertCurrent: () => void;
+  assertCurrentAsync?: () => Promise<void>;
 }): Promise<{ steered: boolean; message: string }> {
   const active = readCodexConversationActiveTurn(params.identity);
   const text = params.message.trim();
@@ -121,7 +132,15 @@ export async function steerCodexConversationTurn(params: {
       expectedTurnId: active.turnId,
       input: [{ type: "text", text, text_elements: [] }],
     },
-    { timeoutMs: active.requestTimeoutMs, assertCurrent: params.assertCurrent },
+    {
+      timeoutMs: active.requestTimeoutMs,
+      assertCurrent: params.assertCurrent,
+      withCurrent: async (write) => {
+        await params.assertCurrentAsync?.();
+        params.assertCurrent();
+        write();
+      },
+    },
   );
   return { steered: true, message: "Sent steer message to Codex." };
 }
@@ -135,9 +154,11 @@ export async function setCodexConversationModel(input: {
   config?: CodexAppServerBindingLookup["config"];
   storePath?: string;
   assertCurrent: () => void;
+  assertCurrentAsync?: () => Promise<void>;
   assertCommitAllowed?: SessionEntrySourceAuthority;
 }): Promise<string> {
   const params = { ...input };
+  await params.assertCurrentAsync?.();
   const model = params.model.trim();
   if (!model) {
     return "Usage: /codex model <model>";
@@ -149,7 +170,7 @@ export async function setCodexConversationModel(input: {
   if (binding.connectionScope === "supervision") {
     throw new ModelSelectionLockedError();
   }
-  const modelProvider = resolveThreadRequestModelProvider({
+  const modelProvider = await resolveThreadRequestModelProvider({
     authProfileId: binding.authProfileId,
     modelProvider: resolveCodexBindingModelProviderFallback({
       bindingModel: binding.model,
@@ -158,13 +179,13 @@ export async function setCodexConversationModel(input: {
     }),
     ...lookup,
   });
-  const modelSelection = resolveCodexAppServerRequestModelSelection({
+  const modelSelection = await resolveCodexAppServerRequestModelSelection({
     model,
     modelProvider,
     authProfileId: binding.authProfileId,
     ...lookup,
   });
-  const nextModelProvider = normalizeCodexAppServerBindingModelProvider({
+  const nextModelProvider = await normalizeCodexAppServerBindingModelProvider({
     authProfileId: binding.authProfileId,
     modelProvider: modelSelection.modelProvider,
     ...lookup,
@@ -190,14 +211,20 @@ export async function setCodexConversationModel(input: {
       authority: params.assertCommitAllowed
         ? { kind: "source", source: params.assertCommitAllowed }
         : { kind: "host", assertCurrent: params.assertCurrent },
-      prepare: (entry) => {
+      prepare: async (entry) => {
         if (entry.sessionId !== identity.sessionId) {
           throw new Error("Codex session changed while applying the model selection.");
         }
+        const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, identity.agentId);
+        const profileId = entry.authProfileOverride?.trim();
+        const recordedProvider = profileId
+          ? await prepareAuthProfileProvider({ agentDir, profileId })
+          : undefined;
         applyModelOverrideWithAuthProfileCompatibility({
           cfg: params.config ?? {},
-          agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, identity.agentId),
+          agentDir,
           entry,
+          recordedProvider,
           currentProvider: binding.modelProvider ?? "openai",
           selection: { provider: nextModelProvider ?? "openai", model: nextModel },
           markLiveSwitchPending: true,
@@ -369,14 +396,17 @@ export function buildCodexConversationAgentLookup(params: {
   };
 }
 
-export function resolveThreadRequestModelProvider(
+export async function resolveThreadRequestModelProvider(
   params: CodexAppServerAuthProfileLookup & { modelProvider?: string },
-): string | undefined {
+): Promise<string | undefined> {
   const modelProvider = params.modelProvider?.trim();
   if (!modelProvider || modelProvider.toLowerCase() === "codex") {
     return undefined;
   }
-  if (isCodexAppServerNativeAuthProfile(params) && modelProvider.toLowerCase() === "openai") {
+  if (
+    modelProvider.toLowerCase() === "openai" &&
+    (await isCodexAppServerNativeAuthProfile(params))
+  ) {
     return undefined;
   }
   return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;

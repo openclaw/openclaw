@@ -71,14 +71,11 @@ import {
   resolveSessionEntryResetFreshness,
   resolveSessionEntryResetFreshnessAsync,
 } from "../../config/sessions/entry-freshness.js";
-import {
-  readSessionUpdatedAtCore,
-  recordInboundSessionMeta,
-} from "../../config/sessions/session-accessor.js";
+import { recordInboundSessionMeta } from "../../config/sessions/session-accessor.js";
 import { readSessionUpdatedAtInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import { readRemoteMediaBuffer, saveRemoteMedia, saveResponseMedia } from "../../media/fetch.js";
-import { saveMediaBuffer } from "../../media/store.js";
+import { deleteMediaBuffer, saveMediaBuffer } from "../../media/store.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
@@ -91,6 +88,7 @@ import {
   type PublicChannelTurnParams,
 } from "../../plugin-sdk/reply-options.js";
 import {
+  readSessionUpdatedAt,
   updateLastRoute,
   updateLastRouteWithAuthority,
 } from "../../plugin-sdk/session-store-runtime.js";
@@ -160,7 +158,7 @@ export function createRuntimeChannel(options?: {
   } satisfies PluginRuntime["channel"]["inbound"];
   const sessionRuntime = {
     resolveStorePath: resolveSessionStorePathCore,
-    readSessionUpdatedAt: readSessionUpdatedAtCore,
+    readSessionUpdatedAt,
     readSessionUpdatedAtAsync: readSessionUpdatedAtInWorker,
     // Plugin runtime property names are a shipped contract; the implementations
     // route through the session accessor boundary.
@@ -224,6 +222,7 @@ export function createRuntimeChannel(options?: {
       saveRemoteMedia,
       saveResponseMedia,
       saveMediaBuffer,
+      deleteMediaBuffer,
     },
     activity: {
       record: recordChannelActivity,

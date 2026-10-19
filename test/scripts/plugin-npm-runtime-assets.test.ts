@@ -84,6 +84,23 @@ function createAssetFixture(
 }
 
 describe("selected plugin runtime assets", () => {
+  it("builds package assets against the packed tree's tsconfig, not release tooling's", async () => {
+    const fixture = createAssetFixture({ generated: true });
+    fs.writeFileSync(path.join(fixture.packageDir, fixture.source), "selected asset");
+    vi.stubEnv("TSX_TSCONFIG_PATH", "/release-tooling/tsconfig.json");
+    const runner = vi.spyOn(managedCommands, "runManagedCommand").mockResolvedValueOnce(0);
+    try {
+      await buildPluginNpmRuntime({ ...fixture, logLevel: "silent" });
+      const env = runner.mock.calls[0]?.[0].env;
+      expect(env).toBeDefined();
+      expect(env).not.toHaveProperty("TSX_TSCONFIG_PATH");
+      expect(env?.PATH).toBe(process.env.PATH);
+    } finally {
+      runner.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("awaits bounded asset execution before publishing package assets", async () => {
     const fixture = createAssetFixture({ generated: true });
     fs.writeFileSync(path.join(fixture.packageDir, fixture.source), "previous source asset");

@@ -146,17 +146,6 @@ export async function setupSkills(
     }
   }
   const candidateInstallable = installable;
-  const readinessBySkillName = new Map<string, SkillInstallReadiness>();
-  for (const skill of candidateInstallable) {
-    // Onboarding intentionally executes only the primary recipe below. Keep
-    // readiness aligned with that recipe instead of silently changing methods.
-    const primaryInstall = skill.install[0];
-    if (!primaryInstall) {
-      continue;
-    }
-    const readiness = await resolveKindReadinessOnce(primaryInstall.kind);
-    readinessBySkillName.set(skill.name, readiness);
-  }
   let next: OpenClawConfig = cfg;
   if (candidateInstallable.length === 0 && missing.length === 0) {
     await prompter.note(
@@ -192,8 +181,12 @@ export async function setupSkills(
     const selectedReadySkills: typeof selectedSkills = [];
     const selectedSkippedInstallable: SkippedInstall[] = [];
     for (const skill of selectedSkills) {
-      const readiness = readinessBySkillName.get(skill.name);
-      if (readiness?.ready !== false) {
+      const primaryInstall = skill.install[0];
+      if (!primaryInstall) {
+        continue;
+      }
+      const readiness = await resolveKindReadinessOnce(primaryInstall.kind);
+      if (readiness.ready) {
         selectedReadySkills.push(skill);
       } else {
         selectedSkippedInstallable.push({ skill, reason: readiness.reason });

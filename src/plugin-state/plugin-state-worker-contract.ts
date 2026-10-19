@@ -11,12 +11,12 @@ import type {
 } from "./plugin-state-store.comparison.worker.js";
 import type { PluginStateSequencedJournalParams } from "./plugin-state-store.journal.js";
 import type { PluginStateReadRow } from "./plugin-state-store.kernel.js";
-import type { PluginStateMoveEntriesParams } from "./plugin-state-store.mutations.js";
-import type { PluginStateKeyRangeParams } from "./plugin-state-store.reads.js";
+import type { PluginStateMoveEntriesParams } from "./plugin-state-store.moves.worker.js";
 import type { PluginStateRegisterEntryParams } from "./plugin-state-store.retention.js";
 import type {
   PluginStateCompareResult,
   PluginStateEntry,
+  PluginStateKeyRangeParams,
   PluginStateObservation,
   PluginStateStoreErrorCode,
   PluginStateStoreOperation,
@@ -90,7 +90,6 @@ export type PluginStateWorkerRequests = {
     input: Namespace & { processId: number; selection: RuntimeHealthClearSelection };
     output: void;
   };
-  "pluginState.sweep": { input: undefined; output: number };
 };
 
 export type PluginStateWorkerOperations = {
@@ -103,6 +102,35 @@ export type PluginStateWorkerOperations = {
     output: Result<PluginStateWorkerRequests[Request]["output"], PluginStateWorkerFailure>;
   };
 };
+
+type PluginStateReadType =
+  | "pluginState.lookup"
+  | "pluginState.lookupMany"
+  | "pluginState.entries"
+  | "pluginState.entriesInKeyRange"
+  | "pluginState.count";
+
+export type PluginStateWriteOperations = Omit<PluginStateWorkerOperations, PluginStateReadType>;
+
+export type PluginStateReadCommand = SqliteWorkerCommand<
+  Pick<PluginStateWorkerOperations, PluginStateReadType>
+>;
+export type PluginStateReadResult = {
+  type: PluginStateReadType;
+  result: PluginStateWorkerOperations[PluginStateReadType]["output"];
+};
+
+export function isPluginStateReadCommand(command: {
+  type: PropertyKey;
+}): command is PluginStateReadCommand {
+  return (
+    command.type === "pluginState.lookup" ||
+    command.type === "pluginState.lookupMany" ||
+    command.type === "pluginState.entries" ||
+    command.type === "pluginState.entriesInKeyRange" ||
+    command.type === "pluginState.count"
+  );
+}
 
 export const pluginStateWorkerOperations = {
   "pluginState.executeOperation": {
@@ -205,11 +233,6 @@ export const pluginStateWorkerOperations = {
     code: "PLUGIN_STATE_WRITE_FAILED",
     message: "Failed to clear runtime health records.",
   },
-  "pluginState.sweep": {
-    operation: "sweep",
-    code: "PLUGIN_STATE_WRITE_FAILED",
-    message: "Failed to sweep expired plugin state entries.",
-  },
 } as const satisfies Record<
   keyof PluginStateWorkerOperations,
   {
@@ -223,6 +246,8 @@ export const pluginStateWorkerOperations = {
 export function isPluginStateWorkerCommand(command: {
   type: string;
   input: unknown;
-}): command is SqliteWorkerCommand<PluginStateWorkerOperations> {
-  return Object.hasOwn(pluginStateWorkerOperations, command.type);
+}): command is SqliteWorkerCommand<PluginStateWriteOperations> {
+  return (
+    !isPluginStateReadCommand(command) && Object.hasOwn(pluginStateWorkerOperations, command.type)
+  );
 }

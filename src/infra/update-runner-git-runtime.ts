@@ -290,6 +290,19 @@ export async function prepareGitRuntimePromotion(
       throw new AggregateError(failures, "Git runtime backup cleanup did not finish.");
     }
   };
+  const filter = (source: string, destination: string) => {
+    if (
+      process.platform === "win32" &&
+      fsSync.lstatSync(source).isSymbolicLink() &&
+      fsSync.statSync(source).isDirectory()
+    ) {
+      // Windows junctions avoid native copy recursion and privileged directory symlinks.
+      const target = path.resolve(path.dirname(source), fsSync.readlinkSync(source));
+      fsSync.symlinkSync(target, destination, "junction");
+      return false;
+    }
+    return !disposableCaches.has(source);
+  };
   try {
     for (const { sourceRoot, destinationRoot: destination } of roots) {
       // .artifacts may point at another volume. A sibling of each destination
@@ -305,8 +318,7 @@ export async function prepareGitRuntimePromotion(
         recursive: true,
         preserveTimestamps: true,
         verbatimSymlinks: true,
-        // An unused filter prevents Node from using its native directory-copy path.
-        filter: disposableCaches.size > 0 ? (source) => !disposableCaches.has(source) : undefined,
+        filter: process.platform === "win32" || disposableCaches.size > 0 ? filter : undefined,
       });
       assertDestination?.(destination);
       await relocateRuntimeTree(candidate, sourceRoot, destination, relocations);
@@ -369,17 +381,6 @@ export async function prepareGitRuntimePromotion(
     // A completed effect must leave rollback custody before a later guard can fail.
     promoted.pop();
     assertCurrent();
-    assertDestination?.(entry.destination);
-    assertParents(entry);
-    if (
-      entry.previous &&
-      !sameRuntimeIdentity(
-        entry.identities?.previous,
-        fsSync.lstatSync(entry.destination, { bigint: true }),
-      )
-    ) {
-      throw new Error(`Restored Git runtime identity changed: ${entry.destination}`);
-    }
   };
   return {
     backupRoot: staged[0]?.temporary ?? root,
@@ -396,9 +397,6 @@ export async function prepareGitRuntimePromotion(
     }),
     async activate() {
       try {
-        for (const entry of staged) {
-          assertDestination?.(entry.destination);
-        }
         for (const entry of staged) {
           assertDestination?.(entry.destination);
           const parent = path.dirname(entry.destination);
@@ -429,7 +427,6 @@ export async function prepareGitRuntimePromotion(
             await fs.rename(path.join(entry.temporary, "candidate"), entry.destination);
             entry.activated = true;
           } catch (error) {
-            restoreStarted = true;
             if (hasCommandProcessCleanupError(error)) {
               throw error;
             }
@@ -452,9 +449,6 @@ export async function prepareGitRuntimePromotion(
     },
     async restore(assertCurrent = () => {}) {
       restoreStarted = true;
-      for (const entry of promoted) {
-        assertRetainedEntry(entry, assertCurrent);
-      }
       for (const entry of promoted.toReversed()) {
         await restoreEntry(entry, assertCurrent);
       }

@@ -6,6 +6,7 @@ import {
   parseStrictNonNegativeInteger,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { isTruthyEnvValue } from "./env.js";
@@ -73,10 +74,13 @@ export class ClawHubRequestError extends Error {
 }
 
 /** Resolves the configured ClawHub base URL, falling back to the default public host. */
-export function resolveClawHubBaseUrl(baseUrl?: string): string {
+export function resolveClawHubBaseUrl(
+  baseUrl?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const envValue =
-    normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_URL) ||
-    normalizeOptionalString(process.env.CLAWHUB_URL) ||
+    normalizeOptionalString(env.OPENCLAW_CLAWHUB_URL) ||
+    normalizeOptionalString(env.CLAWHUB_URL) ||
     DEFAULT_CLAWHUB_URL;
   const value = (normalizeOptionalString(baseUrl) || envValue).replace(/\/+$/, "");
   return value || DEFAULT_CLAWHUB_URL;
@@ -170,6 +174,10 @@ export async function resolveClawHubAuthToken(): Promise<string | undefined> {
       return extractTokenFromClawHubConfig(JSON.parse(raw));
     } catch (error) {
       if (!isErrno(error) || error.code !== "ENOENT") {
+        // Parser errors can include token bytes; keep this warning content-free.
+        console.warn(
+          "ClawHub sign-in configuration could not be loaded; repair it or sign in again. Continuing without a saved token.",
+        );
         return undefined;
       }
     }
@@ -458,7 +466,7 @@ export function readRequiredClawHubStringArrayField(
   context: string,
 ): string[] {
   const value = source[field];
-  if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+  if (isStringArray(value)) {
     return value;
   }
   throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a string array.`);

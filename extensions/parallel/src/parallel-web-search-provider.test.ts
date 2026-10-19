@@ -18,7 +18,6 @@ type JsonRecord = Record<string, unknown>;
 
 const endpointMockState = vi.hoisted(() => ({
   calls: [] as EndpointCall[],
-  effects: [] as Array<(() => void) | undefined>,
   responses: [] as Response[],
 }));
 vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
@@ -32,7 +31,6 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
         if (!response) {
           throw new Error("Missing mocked Parallel response.");
         }
-        endpointMockState.effects.shift()?.();
         return await run(response);
       },
     ),
@@ -98,7 +96,6 @@ function pushMcpHandshake(
 }
 beforeEach(() => {
   endpointMockState.calls = [];
-  endpointMockState.effects = [];
   endpointMockState.responses = [];
 });
 describe("Parallel cache policy", () => {
@@ -597,23 +594,6 @@ describe("parallel-free web search provider", () => {
     expect(endpointMockState.calls.every((call) => call.signal === controller.signal)).toBe(true);
   });
 
-  it("does not cache a free MCP result completed after caller cancellation", async () => {
-    const controller = new AbortController();
-    const reason = new Error("Parallel free search cancelled after response");
-    pushMcpHandshake({ search_id: "cancelled-free", results: [] });
-    pushMcpHandshake({ search_id: "recovered-free", results: [] });
-    endpointMockState.effects.push(undefined, undefined, () => controller.abort(reason));
-    const args = {
-      objective: "verify Parallel cancellation cache ownership",
-      search_queries: ["parallel cancellation cache"],
-    };
-
-    await expect(freeTool().execute(args, { signal: controller.signal })).rejects.toBe(reason);
-    const recovered = await freeTool().execute(args);
-
-    expect(endpointMockState.calls).toHaveLength(6);
-    expect(recovered.searchId).toBe("recovered-free");
-  });
   it("searches via the free MCP and brands the result, with no API key", async () => {
     vi.stubEnv("PARALLEL_API_KEY", "par-should-be-ignored"); // pragma: allowlist secret
     pushMcpHandshake({

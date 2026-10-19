@@ -2,7 +2,6 @@ import type { AgentHarness, AgentHarnessNativeCompaction } from "../agents/harne
 import type { GatewayMethodDescriptor } from "../gateway/methods/descriptor.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
-import type { HookEntry } from "../hooks/types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { AgentExecutorController } from "./agent-executor-controller.types.js";
 import type {
@@ -16,6 +15,7 @@ import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationSource } from "./config-activation-shared.js";
 import type { EmbeddingProviderAdapter } from "./embedding-provider-types.js";
 import type { PluginGatewayAccessPolicy } from "./gateway-access-policy.types.js";
+import type { HookRunnerRegistry } from "./hook-registry.types.js";
 import type {
   PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
@@ -117,6 +117,7 @@ export type PluginToolRegistration = PluginRegistrationOwner & {
   names: string[];
   declaredNames?: ReadonlySet<string>;
   optional: boolean;
+  workspaceAccess?: boolean | "execute";
   /** Loader-owned provenance. Missing values are conservative legacy registrations. */
   origin?: PluginOrigin;
 };
@@ -227,13 +228,7 @@ type PluginAgentHarnessRegistration = PluginRegistrationOwner & {
   nativeCompaction?: AgentHarnessNativeCompaction;
 };
 
-type PluginHookRegistration = {
-  pluginId: string;
-  entry: HookEntry;
-  events: string[];
-  source: string;
-  rootDir?: string;
-};
+type PluginHookRegistration = HookRunnerRegistry["hooks"][number];
 
 export type PluginServiceRegistration = PluginRegistrationOwner & {
   readonly id: string;

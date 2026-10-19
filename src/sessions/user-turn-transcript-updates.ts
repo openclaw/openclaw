@@ -1,8 +1,13 @@
-import { redactTranscriptText } from "../agents/transcript-redact-text.js";
 import { publishTranscriptUpdate } from "../config/sessions/session-accessor.sqlite-events.js";
-import { rewritePreparedTranscriptMessageAtAnchor } from "../config/sessions/session-message-rewrite.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isUserMessage, readModelPromptProjection } from "./user-turn-transcript.message.js";
+import {
+  capturePreparedTranscriptModelPromptProjection,
+  rewritePreparedTranscriptMessageAtAnchor,
+} from "../config/sessions/session-message-rewrite.js";
+import {
+  isUserMessage,
+  prepareModelPromptProjection,
+  readModelPromptProjection,
+} from "./user-turn-transcript.message.js";
 import {
   normalizePersistedSteerTargetRunId,
   rewritePersistedSteerTargetRunId,
@@ -49,7 +54,6 @@ export async function capturePersistedModelPromptProjection(params: {
   admission: UserTurnTranscriptAdmissionReceipt;
   message: PersistedUserTurnMessage;
   text: string;
-  config?: OpenClawConfig;
   assertCurrent: () => void;
   assertWritable: () => void;
   onCommitted: (
@@ -58,46 +62,23 @@ export async function capturePersistedModelPromptProjection(params: {
   ) => void;
 }): Promise<PersistedUserTurnMessage> {
   params.assertCurrent();
-  const text = redactTranscriptText(params.text, params.config);
-  const requireMatchingProjection = (candidate: PersistedUserTurnMessage) => {
-    const existing = readModelPromptProjection(candidate);
-    if (existing !== undefined && existing !== text) {
-      throw new Error("A captured user-turn model prompt projection cannot be changed");
-    }
-    return existing !== undefined;
-  };
-  if (requireMatchingProjection(params.message)) {
+  if (readModelPromptProjection(params.message) !== undefined) {
+    prepareModelPromptProjection(params.message, params.text);
     return params.message;
   }
   params.assertWritable();
-  let captured: PersistedUserTurnMessage | undefined;
-  const rewritten = await rewritePreparedTranscriptMessageAtAnchor(
+  const rewritten = await capturePreparedTranscriptModelPromptProjection(
     params.admission,
-    (candidate) => {
-      if (!isUserMessage(candidate)) {
-        throw new Error("Model prompt projection lost its canonical user turn");
-      }
-      if (requireMatchingProjection(candidate)) {
-        captured = candidate;
-        return undefined;
-      }
-      return {
-        ...candidate,
-        __openclaw: {
-          ...candidate["__openclaw"],
-          modelPromptProjection: { version: 1, text },
-        },
-      };
-    },
-    { active: "sequence", assertCurrent: params.assertWritable },
+    params.text,
+    params.assertWritable,
   );
   params.assertCurrent();
   if (!rewritten) {
-    if (!captured) {
-      throw new Error("Model prompt projection lost its canonical user turn");
-    }
-    params.onCommitted(params.admission, captured);
-    return captured;
+    throw new Error("Model prompt projection lost its canonical user turn");
+  }
+  if (rewritten.unchanged) {
+    params.onCommitted(params.admission, rewritten.message);
+    return rewritten.message;
   }
   const admission = { ...params.admission, generation: rewritten.generation };
   params.onCommitted(admission, rewritten.message);

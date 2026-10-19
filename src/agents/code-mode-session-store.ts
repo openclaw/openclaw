@@ -223,16 +223,19 @@ export function createCodeModeSessionStoreAccess(ctx: ToolSearchToolContext, sig
             );
           }
           const entries = leaf === null ? [] : full.getBranch(leaf);
-          if (leaf !== null && entries.at(-1)?.id !== leaf) {
-            throw new Error(
-              "Code Mode session store could not replay the active transcript branch; retry in a new reply.",
-            );
-          }
           return replay(entries);
         });
       }
       return replay(manager.getBranch());
-    })();
+    })().catch((error: unknown) => {
+      if (error instanceof TypeError || error instanceof RangeError) {
+        throw new Error(
+          "Code Mode session store replay failed; repair the session before using store/load.",
+          { cause: error },
+        );
+      }
+      throw error;
+    });
     const current = await active.projection;
     assertCell();
     return current;

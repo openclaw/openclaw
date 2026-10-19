@@ -33,10 +33,8 @@ import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { ensureTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
-import {
-  attachSessionEntrySnapshots,
-  sessionEntrySnapshotColumns,
-} from "./session-entry-snapshots.js";
+import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
+import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
@@ -160,13 +158,20 @@ export async function ensureSqliteTranscriptGenerationsForCanonicalRepair(
 ): Promise<void> {
   const byDatabase = new Map<
     string,
-    { resolved: ReturnType<typeof resolveSqliteStoreScope>; sources: typeof sources }
+    {
+      resolved: ReturnType<typeof resolveSqliteStoreScope>;
+      sources: Array<(typeof sources)[number]>;
+    }
   >();
   for (const source of sources) {
     const resolved = resolveSqliteStoreScope(source.storePath, { agentId: source.agentId });
     const key = `${resolved.path ?? source.storePath}\0${resolved.databaseAgentId ?? resolved.agentId}`;
-    const grouped = byDatabase.get(key) ?? { resolved, sources: [] };
-    byDatabase.set(key, { ...grouped, sources: [...grouped.sources, source] });
+    const grouped = byDatabase.get(key);
+    if (grouped) {
+      grouped.sources.push(source);
+    } else {
+      byDatabase.set(key, { resolved, sources: [source] });
+    }
   }
   for (const group of byDatabase.values()) {
     await runExclusiveSqliteSessionWrite(

@@ -1,7 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createMemo, For } from "solid-js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+
+registerSessionOrganizationEnglish();
 
 type CategoryCellProps = {
   loading: boolean;
@@ -25,14 +28,11 @@ export function CategoryCell(props: CategoryCellProps & { row: GatewaySessionRow
         title={props.groupWriteDisabledReason ?? undefined}
         aria-label={t("sessionsView.moveToGroup")}
         class="session-group-select"
-        onChange={(e: Event) => {
+        onChange={(e) => {
           if (props.groupWriteDisabledReason) {
             return;
           }
           const select = e.currentTarget;
-          if (!(select instanceof HTMLSelectElement)) {
-            return;
-          }
           if (select.options[select.selectedIndex]?.dataset.action === "create") {
             // The page prompts for a name and patches; restore until the refresh lands.
             select.value = current();

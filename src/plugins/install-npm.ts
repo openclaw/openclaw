@@ -150,12 +150,7 @@ export async function installPluginFromNpmSpec(
       Object.assign(npmResolution, compatibleResolution, {
         resolvedAt: npmResolution.resolvedAt,
       });
-      compatibilityError = validateNpmResolutionCompatibility({
-        runtime,
-        parsedSpec,
-        expectedPluginId,
-        resolution: npmResolution,
-      });
+      compatibilityError = null;
     }
   }
   if (compatibilityError) {
@@ -229,10 +224,8 @@ export async function installPluginFromNpmSpec(
       trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
       config: params.config,
       packageName: parsedSpec.name,
-      dependencySpec: resolveManagedNpmRootDependencySpec({
-        parsedSpec,
-        resolution: npmResolution,
-      }),
+      prepareDependencySpec: async () =>
+        resolveManagedNpmRootDependencySpec({ parsedSpec, resolution: npmResolution }),
       displaySpec: spec,
       installPolicyRequest: {
         kind: "plugin-npm",

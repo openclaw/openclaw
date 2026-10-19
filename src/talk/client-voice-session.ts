@@ -6,7 +6,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { appendExpectedSessionTranscriptTurn } from "../config/sessions/session-accessor.sqlite-transcript-turn.js";
 import type { SessionTranscriptWriteScope } from "../config/sessions/session-accessor.types.js";
-import { isNativeSessionEntryRead } from "../config/sessions/session-entry-read-request.js";
+import {
+  acquireSessionActorStorage,
+  runWithSessionActorStorage,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
@@ -23,6 +26,7 @@ import {
   readDatabasePathIdentitySync,
 } from "../infra/sqlite-worker-identity.js";
 import { captureGatewayRootWorkReleaseObserver } from "../process/gateway-work-admission.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import {
@@ -303,6 +307,7 @@ function appendVoiceTranscript(
     entryId: string;
     role: "user" | "assistant";
     text: string;
+    providerOwned?: boolean;
     timestamp?: number;
     config?: OpenClawConfig;
   },
@@ -363,6 +368,7 @@ function appendVoiceTranscript(
                   text: normalized.text,
                   timestamp,
                   provider: record.provider ?? "realtime",
+                  providerOwned: normalized.providerOwned,
                 }),
                 now: timestamp,
               };
@@ -400,7 +406,6 @@ function appendVoiceTranscript(
                   message: appended.message,
                   messageId: appended.messageId,
                 });
-                assertFresh();
               }
 
               if (!workerTranscript) {
@@ -415,7 +420,47 @@ function appendVoiceTranscript(
                 });
               }
             };
-            const nativeTranscript = isNativeSessionEntryRead(sessionTarget, normalized.agentId);
+            const memory = await acquireSessionActorStorage(sessionTarget, {
+              lifetime: {
+                assertCurrent: writer.assertCurrent,
+                assertReadable: writer.assertCurrent,
+              },
+              authority: { assertCurrent: writer.assertCurrent, authorize() {} },
+            });
+            if (memory || isIncognitoSessionKey(sessionTarget.sessionKey)) {
+              if (!memory) {
+                throw new Error(`agent session not found (${normalized.sessionKey})`);
+              }
+              try {
+                await runWithSessionActorStorage(memory, async () => {
+                  const entry = memory.actor.snapshot(memory.authority)?.entry;
+                  if (!entry?.sessionId) {
+                    throw new Error(`agent session not found (${normalized.sessionKey})`);
+                  }
+                  const record = await writer.mutate(reservation);
+                  const assertFresh = () => {
+                    writer.assertCurrent();
+                    const current = memory.actor.snapshot(memory.authority)?.entry;
+                    if (
+                      current?.sessionId !== entry.sessionId ||
+                      current.lifecycleRevision !== entry.lifecycleRevision
+                    ) {
+                      throw new Error("agent session changed before voice transcript append");
+                    }
+                  };
+                  await appendReserved(
+                    record,
+                    entry,
+                    { ...sessionTarget, storePath: memory.path },
+                    assertFresh,
+                    false,
+                  );
+                });
+              } finally {
+                await memory.actor.release();
+              }
+              return;
+            }
             const transcriptStore = resolveUnsuffixedSqliteTargetFromSessionStorePath(
               sessionTarget.storePath ||
                 resolveOpenClawAgentSqlitePath({
@@ -424,7 +469,6 @@ function appendVoiceTranscript(
                 }),
             );
             const sharesVoiceStore =
-              !nativeTranscript &&
               (transcriptStore.agentId || transcriptStore.shared) &&
               transcriptStore.path === writer.options.path;
             if (sharesVoiceStore) {
@@ -444,7 +488,7 @@ function appendVoiceTranscript(
                 true,
               );
             } else {
-              // Custom and native incognito transcripts keep their separately selected source.
+              // Custom transcripts keep their separately selected durable source.
               await withSessionEntryReadOnlyInWorker(
                 sessionTarget,
                 writer.assertCurrent,
@@ -475,8 +519,7 @@ function appendVoiceTranscript(
                         );
                       }
                     },
-                    !nativeTranscript &&
-                      physicalSource?.key === writer.identity.key &&
+                    physicalSource?.key === writer.identity.key &&
                       physicalSource.birthtime === writer.identity.birthtime,
                   );
                 },

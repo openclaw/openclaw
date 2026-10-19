@@ -84,7 +84,7 @@ async function installNativeHost(page: Page) {
 }
 
 function gatewayRow(page: Page, id: string): Locator {
-  return page.locator(`wa-dropdown-item[value="gateway:${encodeURIComponent(id)}"]`);
+  return page.locator(`[data-value="gateway:${encodeURIComponent(id)}"]`);
 }
 
 async function assertSelectionUnchanged(page: Page) {
@@ -135,12 +135,18 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         expect((await gateway.getRequests("connect")).length).toBeGreaterThan(0);
         await page.locator(".sidebar-identity-card").click();
+        const switcher = page.locator('[data-value="command:gateways"]');
+        await switcher.click();
+        await page.getByRole("menu", { name: "Team", exact: true }).waitFor({ state: "visible" });
+        const currentHealth = switcher.locator(".sidebar-gateway-health");
         const teamHealth = gatewayRow(page, "profile:team").locator(".sidebar-gateway-health");
         await expect.poll(() => teamHealth.getAttribute("data-health")).toBe("ok");
         expect(await teamHealth.getAttribute("aria-label")).toBe("Connected");
+        await expect.poll(() => currentHealth.getAttribute("data-health")).toBe("ok");
         const identity = page.locator(".sidebar-identity-card");
         expect(await identity.locator(".sidebar-gateway-health").count()).toBe(0);
-        await expect.poll(() => identity.locator(".gateway-status__label").count()).toBe(0);
+        await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("connected");
+        await page.locator(".sidebar-shell__footer .gateway-status").waitFor({ state: "detached" });
         await assertSelectionUnchanged(page);
         await page.mouse.move(1100, 850);
         if (proof) {
@@ -154,6 +160,14 @@ suite.define(() => {
         await gateway.setOnline(false);
         await expect.poll(() => teamHealth.getAttribute("data-health")).toBe("error");
         expect(await teamHealth.getAttribute("aria-label")).toBe("Unreachable");
+        await expect.poll(() => currentHealth.getAttribute("data-health")).toBe("error");
+        await expect
+          .poll(() => identity.getAttribute("data-connection-status"))
+          .toBe("reconnecting");
+        await page
+          .locator(".sidebar-shell__footer .gateway-status")
+          .getByRole("button", { name: "Reconnecting… — Retry now", exact: true })
+          .waitFor();
         await assertSelectionUnchanged(page);
         if (proof) {
           await page.screenshot({
@@ -167,9 +181,11 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         await expect.poll(() => teamHealth.getAttribute("data-health")).toBe("ok");
         expect(await teamHealth.getAttribute("aria-label")).toBe("Connected");
+        await expect.poll(() => currentHealth.getAttribute("data-health")).toBe("ok");
         await assertSelectionUnchanged(page);
         expect(await identity.locator(".sidebar-gateway-health").count()).toBe(0);
-        await expect.poll(() => identity.locator(".gateway-status__label").count()).toBe(0);
+        await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("connected");
+        await page.locator(".sidebar-shell__footer .gateway-status").waitFor({ state: "detached" });
         const reportedHealth = await page.evaluate(() => {
           const reports = Reflect.get(window, "nativeHealthReports") as Array<{ health: string }>;
           return reports.map((report) => report.health);

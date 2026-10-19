@@ -28,134 +28,116 @@ async function verifyMatrixQaParticipants(
   );
 }
 
-export async function runMatrixQaE2eeDeviceSasVerificationScenario(
+export function runMatrixQaE2eeDeviceSasVerificationScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
+  return runMatrixQaE2eeDeviceVerificationScenario(context, "sas");
+}
+
+export function runMatrixQaE2eeQrVerificationScenario(
+  context: MatrixQaScenarioContext,
+): Promise<MatrixQaScenarioExecution> {
+  return runMatrixQaE2eeDeviceVerificationScenario(context, "qr");
+}
+
+async function runMatrixQaE2eeDeviceVerificationScenario(
+  context: MatrixQaScenarioContext,
+  method: "sas" | "qr",
+): Promise<MatrixQaScenarioExecution> {
+  const label = method === "sas" ? "device SAS verification" : "QR verification";
   requireMatrixQaPassword(context, "driver");
   requireMatrixQaPassword(context, "observer");
   if (!context.observerDeviceId) {
-    throw new Error("Matrix E2EE observer device id is required for device SAS verification");
+    throw new Error(`Matrix E2EE observer device id is required for ${label}`);
   }
   if (!context.driverDeviceId) {
-    throw new Error("Matrix E2EE driver device id is required for device SAS verification");
+    throw new Error(`Matrix E2EE driver device id is required for ${label}`);
   }
   const observerDeviceId = context.observerDeviceId;
   const driverDeviceId = context.driverDeviceId;
   return await withMatrixQaE2eeDriverAndObserver(
     context,
-    "matrix-e2ee-device-sas-verification",
+    method === "sas" ? "matrix-e2ee-device-sas-verification" : "matrix-e2ee-qr-verification",
     async ({ driver, observer }) => {
       await verifyMatrixQaParticipants(driver, observer);
-      const result = await completeMatrixQaSasVerification({
-        initiator: driver,
-        recipient: observer,
-        recipientUserId: context.observerUserId,
-        request: {
-          deviceId: observerDeviceId,
-          userId: context.observerUserId,
-        },
-        timeoutMs: context.timeoutMs,
-      });
-      const driverTrust = await assertMatrixQaPeerDeviceTrusted({
-        client: driver,
-        deviceId: observerDeviceId,
-        label: "driver",
-        timeoutMs: context.timeoutMs,
-        userId: context.observerUserId,
-      });
-      const observerTrust = await assertMatrixQaPeerDeviceTrusted({
-        client: observer,
-        deviceId: driverDeviceId,
-        label: "observer",
-        timeoutMs: context.timeoutMs,
-        userId: context.driverUserId,
-      });
-      return {
-        artifacts: {
-          completedVerificationIds: [result.completedInitiator.id, result.completedRecipient.id],
-          currentDeviceId: driverDeviceId,
-          driverTrustsObserverDevice: driverTrust.verified,
-          observerTrustsDriverDevice: observerTrust.verified,
-          sasEmoji: result.sasEmoji,
-          secondaryDeviceId: observerDeviceId,
-        },
-        details: [
+      let completedVerificationIds: string[];
+      let methodArtifacts:
+        | { currentDeviceId: string; sasEmoji: string[] }
+        | { identityVerificationCompleted: boolean; qrBytes: number };
+      let leadingDetails: string[];
+      let finalDetail: string;
+      if (method === "sas") {
+        const result = await completeMatrixQaSasVerification({
+          initiator: driver,
+          recipient: observer,
+          recipientUserId: context.observerUserId,
+          request: { deviceId: observerDeviceId, userId: context.observerUserId },
+          timeoutMs: context.timeoutMs,
+        });
+        completedVerificationIds = [result.completedInitiator.id, result.completedRecipient.id];
+        methodArtifacts = { currentDeviceId: driverDeviceId, sasEmoji: result.sasEmoji };
+        leadingDetails = [
           "driver-to-observer device verification completed with real SAS",
           `initiator transaction: ${result.completedInitiator.transactionId ?? "<none>"}`,
           `recipient transaction: ${result.completedRecipient.transactionId ?? "<none>"}`,
-          `driver trusts observer device: ${driverTrust.verified ? "yes" : "no"}`,
-          `observer trusts driver device: ${observerTrust.verified ? "yes" : "no"}`,
-          `emoji: ${result.sasEmoji.join(", ")}`,
-        ].join("\n"),
-      };
-    },
-  );
-}
-
-export async function runMatrixQaE2eeQrVerificationScenario(
-  context: MatrixQaScenarioContext,
-): Promise<MatrixQaScenarioExecution> {
-  requireMatrixQaPassword(context, "driver");
-  requireMatrixQaPassword(context, "observer");
-  if (!context.observerDeviceId) {
-    throw new Error("Matrix E2EE observer device id is required for QR verification");
-  }
-  if (!context.driverDeviceId) {
-    throw new Error("Matrix E2EE driver device id is required for QR verification");
-  }
-  const observerDeviceId = context.observerDeviceId;
-  const driverDeviceId = context.driverDeviceId;
-  return await withMatrixQaE2eeDriverAndObserver(
-    context,
-    "matrix-e2ee-qr-verification",
-    async ({ driver, observer }) => {
-      await verifyMatrixQaParticipants(driver, observer);
-      const initiated = await driver.requestVerification({
-        deviceId: observerDeviceId,
-        userId: context.observerUserId,
-      });
-      const incoming = await waitForMatrixQaVerificationSummary({
-        client: observer,
-        label: "QR recipient request",
-        predicate: (summary) =>
-          !summary.initiatedByMe && sameMatrixQaVerificationTransaction(summary, initiated),
-        timeoutMs: context.timeoutMs,
-      });
-      if (incoming.canAccept) {
-        await observer.acceptVerification(incoming.id);
+        ];
+        finalDetail = `emoji: ${result.sasEmoji.join(", ")}`;
+      } else {
+        const initiated = await driver.requestVerification({
+          deviceId: observerDeviceId,
+          userId: context.observerUserId,
+        });
+        const incoming = await waitForMatrixQaVerificationSummary({
+          client: observer,
+          label: "QR recipient request",
+          predicate: (summary) =>
+            !summary.initiatedByMe && sameMatrixQaVerificationTransaction(summary, initiated),
+          timeoutMs: context.timeoutMs,
+        });
+        if (incoming.canAccept) {
+          await observer.acceptVerification(incoming.id);
+        }
+        await waitForMatrixQaVerificationSummary({
+          client: driver,
+          label: "QR request ready",
+          predicate: (summary) =>
+            sameMatrixQaVerificationTransaction(summary, initiated) &&
+            summary.phaseName === "ready",
+          timeoutMs: context.timeoutMs,
+        });
+        const qr = await driver.generateVerificationQr(initiated.id);
+        await observer.scanVerificationQr(incoming.id, qr.qrDataBase64);
+        const reciprocate = await waitForMatrixQaVerificationSummary({
+          client: driver,
+          label: "QR reciprocate",
+          predicate: (summary) =>
+            sameMatrixQaVerificationTransaction(summary, initiated) && summary.hasReciprocateQr,
+          timeoutMs: context.timeoutMs,
+        });
+        await driver.confirmVerificationReciprocateQr(reciprocate.id);
+        const qrByteCount = Buffer.from(qr.qrDataBase64, "base64").byteLength;
+        const completedDriver = await waitForMatrixQaVerificationSummary({
+          client: driver,
+          label: "QR driver complete",
+          predicate: (summary) =>
+            sameMatrixQaVerificationTransaction(summary, initiated) && summary.completed,
+          timeoutMs: context.timeoutMs,
+        });
+        const completedObserver = await waitForMatrixQaVerificationSummary({
+          client: observer,
+          label: "QR observer complete",
+          predicate: (summary) =>
+            sameMatrixQaVerificationTransaction(summary, completedDriver) && summary.completed,
+          timeoutMs: context.timeoutMs,
+        });
+        completedVerificationIds = [completedDriver.id, completedObserver.id];
+        methodArtifacts = { identityVerificationCompleted: true, qrBytes: qrByteCount };
+        leadingDetails = [
+          "driver-to-observer QR verification completed through real QR scan",
+          `transaction: ${completedDriver.transactionId ?? "<none>"}`,
+        ];
+        finalDetail = `qr bytes: ${qrByteCount}`;
       }
-      await waitForMatrixQaVerificationSummary({
-        client: driver,
-        label: "QR request ready",
-        predicate: (summary) =>
-          sameMatrixQaVerificationTransaction(summary, initiated) && summary.phaseName === "ready",
-        timeoutMs: context.timeoutMs,
-      });
-      const qr = await driver.generateVerificationQr(initiated.id);
-      await observer.scanVerificationQr(incoming.id, qr.qrDataBase64);
-      const reciprocate = await waitForMatrixQaVerificationSummary({
-        client: driver,
-        label: "QR reciprocate",
-        predicate: (summary) =>
-          sameMatrixQaVerificationTransaction(summary, initiated) && summary.hasReciprocateQr,
-        timeoutMs: context.timeoutMs,
-      });
-      await driver.confirmVerificationReciprocateQr(reciprocate.id);
-      const qrByteCount = Buffer.from(qr.qrDataBase64, "base64").byteLength;
-      const completedDriver = await waitForMatrixQaVerificationSummary({
-        client: driver,
-        label: "QR driver complete",
-        predicate: (summary) =>
-          sameMatrixQaVerificationTransaction(summary, initiated) && summary.completed,
-        timeoutMs: context.timeoutMs,
-      });
-      const completedObserver = await waitForMatrixQaVerificationSummary({
-        client: observer,
-        label: "QR observer complete",
-        predicate: (summary) =>
-          sameMatrixQaVerificationTransaction(summary, completedDriver) && summary.completed,
-        timeoutMs: context.timeoutMs,
-      });
       const driverTrust = await assertMatrixQaPeerDeviceTrusted({
         client: driver,
         deviceId: observerDeviceId,
@@ -172,19 +154,17 @@ export async function runMatrixQaE2eeQrVerificationScenario(
       });
       return {
         artifacts: {
-          completedVerificationIds: [completedDriver.id, completedObserver.id],
+          completedVerificationIds,
+          ...methodArtifacts,
           driverTrustsObserverDevice: driverTrust.verified,
-          identityVerificationCompleted: true,
           observerTrustsDriverDevice: observerTrust.verified,
-          qrBytes: qrByteCount,
           secondaryDeviceId: observerDeviceId,
         },
         details: [
-          "driver-to-observer QR verification completed through real QR scan",
-          `transaction: ${completedDriver.transactionId ?? "<none>"}`,
+          ...leadingDetails,
           `driver trusts observer device: ${driverTrust.verified ? "yes" : "no"}`,
           `observer trusts driver device: ${observerTrust.verified ? "yes" : "no"}`,
-          `qr bytes: ${qrByteCount}`,
+          finalDetail,
         ].join("\n"),
       };
     },

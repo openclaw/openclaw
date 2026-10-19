@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -38,6 +39,7 @@ type GitWorkerRuntime = Partial<Record<(typeof POOL_OWNERS)[number], GitPool>> &
 const MAX_PENDING_OPERATIONS = 128;
 const WORKER_PHASE_TIMEOUT_MS = 30 * 60_000;
 const log = createSubsystemLogger("git/worker");
+const operationDiagnostics = channel("openclaw.git.operation");
 const SPAWN_OPERATIONS = {
   "repository.identities": "repository.identities",
   "repository.branches": "repository.branches",
@@ -46,6 +48,7 @@ const SPAWN_OPERATIONS = {
   "checkout.diff": "checkout.diff",
   "checkout.baseline": "checkout.baseline",
   "pull-request.branch-facts": "pull-request.branch-facts",
+  "pull-request.branch-comparison": "pull-request.branch-facts",
   "worktree.snapshot": "worktree.snapshot",
   "worktree.snapshot-verify-exact": "worktree.snapshot",
   "worktree.cleanup-inspection": "worktree.cleanup",
@@ -139,8 +142,9 @@ function poolFor(
     // Overlay retains three maximum-size manifests plus its decoded result.
     workerOptions:
       owner === "workspace" ? { resourceLimits: { maxOldGenerationSizeMb: 1024 } } : undefined,
+    // Discovery refreshes and PR polls can leave readers idle for just over a minute.
+    idleTimeoutMs: owner === "reads" ? 120_000 : undefined,
     sharedCompute: owner === "workspace",
-    idleTimeoutMs: 30_000,
   }));
 }
 
@@ -198,9 +202,9 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
       ? createHash("sha256")
           .update(
             JSON.stringify(
-              Object.entries(baseEnv).filter(([key]) =>
-                /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key),
-              ),
+              Object.entries(baseEnv)
+                .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
+                .toSorted(([left], [right]) => left.localeCompare(right)),
             ),
           )
           .digest("hex")
@@ -220,10 +224,12 @@ async function executeOperation(
   baseEnv: NodeJS.ProcessEnv,
   options: GitWorkerOperationOptions,
 ): Promise<GitWorkerResult> {
+  const observedAt = operationDiagnostics.hasSubscribers ? performance.now() : undefined;
   const contentRoot =
     command.type === "checkout.diff" || command.type === "checkout.baseline"
       ? command.input.cwd
-      : command.type === "pull-request.branch-facts"
+      : command.type === "pull-request.branch-facts" ||
+          command.type === "pull-request.branch-comparison"
         ? command.input.root
         : undefined;
   const contentRead = contentRoot !== undefined;
@@ -249,6 +255,12 @@ async function executeOperation(
     contentRoot !== undefined
       ? startGitOperationTiming("content-read", log, () => ({
           operation: command.type,
+          ...(command.type === "checkout.diff"
+            ? {
+                scope: command.input.scope ?? "all",
+                summaryOnly: command.input.summaryOnly === true,
+              }
+            : {}),
           checkoutId: createHash("sha256")
             .update(path.resolve(contentRoot))
             .digest("hex")
@@ -453,6 +465,13 @@ async function executeOperation(
       cleanupSucceeded = true;
     } finally {
       timing?.finish(cleanupSucceeded ? outcome : "threw");
+      if (observedAt !== undefined) {
+        operationDiagnostics.publish({
+          operation: command.type,
+          outcome: cleanupSucceeded && outcome === "returned" ? "ok" : "error",
+          elapsedMs: performance.now() - observedAt,
+        });
+      }
     }
   }
 }

@@ -48,11 +48,12 @@ describePosix("PR worktree interruption", () => {
       expect(existsSync(f.worktree)).toBe(false);
       expect(existsSync(join(f.canonical, ".git", "worktrees", "pr-42"))).toBe(false);
       expectProvisionLeaseReleased(f);
-      const lock = f.git(f.canonical, "rev-parse", "refs/openclaw/pr-operation-locks/42");
-      // Only this fixture's joined failed operation is recovered by exact owner.
+      // The failed operation joined and drained, so its supervisor released the lock.
+      expect(interrupted.stderr).toContain(
+        "Released the operation lock for PR #42 after exit code",
+      );
+      expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
       delete f.env.NODE_OPTIONS;
-      const recovered = f.run("recover", lock);
-      expect(recovered.status, recovered.stderr).toBe(0);
       const retried = f.run();
       expect(retried.status, retried.stderr).toBe(0);
       expectProvisionSeed(f);

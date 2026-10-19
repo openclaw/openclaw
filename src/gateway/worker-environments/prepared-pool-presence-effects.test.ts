@@ -156,7 +156,6 @@ describe("presence demand at private preparation effects", () => {
           return demand;
         },
       },
-      executeInference: async () => ({ type: "error", reason: "cancelled", message: "Fixture" }),
       now: () => pool.nowMs,
     });
     const preparation = pool.service.setHumanPresence(true);

@@ -11,6 +11,7 @@ import { resolveContextEngine } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
@@ -26,7 +27,7 @@ import {
   isBenignCompactionSkipReason,
   isBenignCompactionSkipResult,
 } from "../embedded-agent-runner/compact-reasons.js";
-import type { QueuedCompactionHostOptions } from "../embedded-agent-runner/compact.queued-execution.js";
+import type { QueuedCompactionHostOptions } from "../embedded-agent-runner/compact.types.js";
 import {
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
@@ -417,9 +418,17 @@ export async function runCliTurnCompactionLifecycle(
     assertActive();
     const sessionFile = params.sessionKey;
     const settingsManager = createPreparedEmbeddedAgentSettingsManager({
+      sessionId: params.sessionId,
       cwd: params.cwd ?? params.workspaceDir,
       agentDir: params.agentDir,
       cfg: params.cfg,
+      pluginMetadataSnapshot:
+        params.pluginGeneration?.pluginMetadataSnapshot ??
+        getCurrentPluginMetadataSnapshot({
+          config: params.cfg,
+          env: process.env,
+          workspaceDir: params.workspaceDir,
+        }),
       contextTokenBudget,
     });
     assertActive();

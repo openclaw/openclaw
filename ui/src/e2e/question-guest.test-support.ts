@@ -4,6 +4,7 @@ import { GatewayClientRequestError } from "../../../packages/gateway-client/src/
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import type { AgentQuestionDispatcher } from "../../../src/agents/harness/gateway-question-dispatch.js";
 import { createAskUserTool } from "../../../src/agents/tools/ask-user-tool.js";
+import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../../src/gateway/agent-runtime-approval-authority.js";
@@ -18,7 +19,13 @@ import { createSecretStoreWriteService } from "../../../src/gateway/server-metho
 import type { GatewayClient, RespondFn } from "../../../src/gateway/server-methods/types.js";
 import { GatewayClientRegistry } from "../../../src/gateway/server/client-registry.js";
 import type { GatewayWsClient } from "../../../src/gateway/server/ws-types.js";
-import { canReceiveSessionEvent } from "../../../src/gateway/session-sharing.js";
+import { bindSessionRowProjection } from "../../../src/gateway/session-row-projection-access.js";
+import { createSessionRowProjection } from "../../../src/gateway/session-row-projection.js";
+import {
+  canReceiveSessionEvent,
+  prepareProjectedSessionSharing,
+} from "../../../src/gateway/session-sharing.js";
+import { resolveSessionStoreIdentity } from "../../../src/gateway/session-store-key.js";
 import {
   claimAgentRunDelegatedAuthority,
   clearAgentRunContext,
@@ -48,6 +55,7 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       },
     },
   };
+  setRuntimeConfigSnapshot(cfg);
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey: guestQuestionSessionKey },
     {
@@ -70,7 +78,6 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
   const unregister = registerAgentRunDelegatedAuthorityClosedHandler((authority) =>
     manager.cancelClosedAuthorities(authority.operationalRunInstance),
   );
-  const frames: unknown[] = [];
   let delivery = Promise.resolve();
   let deliveryError: Error | undefined;
   const socket = Object.assign(new EventEmitter(), {
@@ -85,7 +92,6 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
     ) {
       const callback = typeof options === "function" ? options : onSent;
       const frame: unknown = JSON.parse(wire.toString());
-      frames.push(frame);
       delivery = delivery
         .then(() => deliver(frame))
         .then(
@@ -147,11 +153,36 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       },
     },
   };
+  const projection = await createSessionRowProjection({ cfg });
+  await projection.ensureMaterialized();
   const clients = new GatewayClientRegistry([browser]);
   const { broadcast } = createGatewayBroadcaster({
     clients,
     canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
-      canReceiveSessionEvent({ cfg, client, sessionKeys, agentId, event, payload }),
+      canReceiveSessionEvent({
+        cfg,
+        client,
+        sessionKeys,
+        agentId,
+        event,
+        payload,
+        prepared: {
+          sharing: prepareProjectedSessionSharing({
+            cfg,
+            client,
+            isMember: (target, identityId) =>
+              projection.hasMembership(target.storePath, target.storeKey, identityId),
+          }),
+          target: (key, targetAgentId) => {
+            const { agentId: ownerAgentId } = resolveSessionStoreIdentity({
+              cfg,
+              sessionKey: key,
+              agentId: targetAgentId,
+            });
+            return projection.sharingTarget({ key, agentId: ownerAgentId });
+          },
+        },
+      }),
   });
   const context = createDirectChatContext({
     broadcast,
@@ -159,6 +190,7 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
     validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     getRuntimeConfig: () => cfg,
   });
+  bindSessionRowProjection(context, () => projection);
   const handlers = createQuestionHandlers(
     manager,
     createSecretStoreWriteService({ reloadSecrets: async () => ({ warningCount: 0 }) }),
@@ -220,7 +252,6 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
     profileId: profile.id,
     registration: registration.promise,
     requests,
-    frames,
     flushEvents,
     request: (method: string, params: unknown) => request(browser, method, params),
     ask: (toolCallId: string, signal?: AbortSignal) =>
@@ -242,16 +273,20 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
     disconnect: () => clients.delete(browser),
     reconnect: () => clients.add(browser),
     async close() {
-      clients.clear();
-      source.abort();
-      releaseAgentRunDelegatedAuthority(requesterAuthority);
-      unregister();
-      manager.close();
-      await manager.drain();
-      await scheduler.stop();
-      clearAgentRunContext(runId);
-      operator.release();
-      await flushEvents();
+      try {
+        clients.clear();
+        source.abort();
+        releaseAgentRunDelegatedAuthority(requesterAuthority);
+        unregister();
+        manager.close();
+        await manager.drain();
+        await scheduler.stop();
+        clearAgentRunContext(runId);
+        operator.release();
+        await flushEvents();
+      } finally {
+        projection.dispose();
+      }
     },
   };
 }

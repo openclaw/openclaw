@@ -8,6 +8,7 @@ import type {
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
 } from "../../plugins/cli-backend.types.js";
+import * as execDefaults from "../exec-defaults.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
   closeCliLiveSession,
@@ -29,6 +30,23 @@ vi.mock("../tools/gateway.js", () => ({
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 const activeSessions = new Set<CliBackendLiveSessionHandle>();
+
+async function runTurn<T>(
+  context: PreparedCliRunContext,
+  action: (execution: CliBackendExecuteContext) => T,
+  options: Parameters<typeof runPlugin>[2] = {},
+) {
+  let value: Awaited<T> | undefined;
+  await runPlugin(
+    context,
+    async function* (execution) {
+      value = await action(execution);
+      yield SUCCESS_RESULT;
+    },
+    options,
+  );
+  return value;
+}
 
 function registerOwnerSession(context: PreparedCliRunContext, generation: string) {
   const capability = createCliLiveSessionCapability({
@@ -60,14 +78,9 @@ async function startBlockedRun(options: {
   const started = createDeferred();
   const run = runPlugin(
     context,
-    async function* ({ abortSignal }) {
-      if (!abortSignal) {
-        throw new Error("Host execution did not expose its abort signal.");
-      }
+    async function* (execution) {
       started.resolve();
-      await new Promise<never>((_, reject) => {
-        abortSignal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-      });
+      await waitUntilAborted(execution);
       yield SUCCESS_RESULT;
     },
     {
@@ -94,6 +107,8 @@ afterEach(() => {
 
 describe("plugin-owned CLI execution host boundary", () => {
   it("streams plugin events through the canonical host output boundary", async () => {
+    // Exercise stream translation independently of cold policy-worker startup time.
+    vi.useFakeTimers({ toFake: ["Date"] });
     const { context } = await createExecution();
     context.systemPrompt = `  Follow host policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}Keep credentials private.  `;
     context.promptContext = {
@@ -134,6 +149,48 @@ describe("plugin-owned CLI execution host boundary", () => {
         requestUserInput: expect.any(Function),
       }),
     );
+  });
+
+  it("does not disclose private context when history access changes during permission preparation", async () => {
+    const { context } = await createExecution();
+    context.promptContext = { prependContext: "private conversation history" };
+    let historyReadable = true;
+    context.cliHistoryWriter = {
+      target: {
+        agentId: "main",
+        sessionId: "sdk-session",
+        sessionKey: "agent:main:main",
+        storePath: "/synthetic/sessions.sqlite",
+      },
+      runId: "history-owner",
+      authFingerprint: "a".repeat(64),
+      assertCurrent() {},
+      async assertReadable() {
+        if (!historyReadable) {
+          throw new Error("Private history account changed");
+        }
+      },
+    };
+    const preparingPermission = createDeferred();
+    const releasePermission = createDeferred();
+    const resolvePermission = execDefaults.resolveExecDefaultsAsync;
+    vi.spyOn(execDefaults, "resolveExecDefaultsAsync").mockImplementationOnce(async (...args) => {
+      preparingPermission.resolve();
+      await releasePermission.promise;
+      return resolvePermission(...args);
+    });
+    const execute = vi.fn(async function* () {
+      yield SUCCESS_RESULT;
+    });
+    const result = runPlugin(context, execute).catch((error: unknown) => error);
+    try {
+      await preparingPermission.promise;
+      historyReadable = false;
+    } finally {
+      releasePermission.resolve();
+    }
+    expect(await result).toEqual(new Error("Private history account changed"));
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -191,10 +248,8 @@ describe("plugin-owned CLI execution host boundary", () => {
         }
         throw new Error(`Unexpected Gateway method: ${method}`);
       });
-      let result: unknown;
-
-      await runPlugin(context, async function* (execution) {
-        result = await execution.requestUserInput({
+      const result = await runTurn(context, (execution) =>
+        execution.requestUserInput({
           toolName: "AskUserQuestion",
           toolCallId: "claude-question",
           questions: [
@@ -206,9 +261,8 @@ describe("plugin-owned CLI execution host boundary", () => {
               options: [{ label: "A" }, { label: "B" }],
             },
           ],
-        });
-        yield SUCCESS_RESULT;
-      });
+        }),
+      );
 
       expect(result).toEqual(
         revoked
@@ -280,11 +334,10 @@ describe("plugin-owned CLI execution host boundary", () => {
     expect(await observed).toEqual(new Error("caller revoked"));
     expect(session.close).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
-    await runPlugin(
+    await runTurn(
       successor.context,
-      async function* (execution) {
+      (execution) => {
         expect(execution.liveSession?.current()).toBe(session.handle);
-        yield SUCCESS_RESULT;
       },
       { liveSession: true },
     );
@@ -295,11 +348,10 @@ describe("plugin-owned CLI execution host boundary", () => {
     reseed.context.openClawHistoryPrompt = "Previously recorded bounded conversation.";
     const reseededSession = registerOwnerSession(reseed.context, "old-reseed-session");
 
-    await runPlugin(
+    await runTurn(
       reseed.context,
-      async function* (execution) {
+      (execution) => {
         expect(execution.liveSession?.current()).toBeUndefined();
-        yield SUCCESS_RESULT;
       },
       { liveSession: true, forceNewSession: true },
     );
@@ -310,22 +362,15 @@ describe("plugin-owned CLI execution host boundary", () => {
       resumeArgs: ["--resume", "{sessionId}"],
     });
     const resumeSession = registerOwnerSession(resumeCapable.context, "resume-capable-session");
-    await runPlugin(
-      resumeCapable.context,
-      async function* () {
-        yield SUCCESS_RESULT;
-      },
-      { liveSession: true, useResume: false },
-    );
+    await runTurn(resumeCapable.context, () => {}, { liveSession: true, useResume: false });
     expect(resumeSession.close).toHaveBeenCalledWith("restart");
 
     const noResume = await createExecution({ runId: "plugin-no-resume-warm", resumeArgs: [] });
     const reusableSession = registerOwnerSession(noResume.context, "no-resume-session");
-    await runPlugin(
+    await runTurn(
       noResume.context,
-      async function* (execution) {
+      (execution) => {
         expect(execution.liveSession?.current()).toBe(reusableSession.handle);
-        yield SUCCESS_RESULT;
       },
       { liveSession: true, useResume: false },
     );
@@ -516,15 +561,12 @@ describe("plugin-owned CLI execution host boundary", () => {
       config: { tools: { exec: { security: "allowlist", ask: "off" } } },
       nativeTools: ["Read"],
     });
-    let decision: CliBackendToolPermissionResult | undefined;
-
-    await runPlugin(context, async function* (execution) {
-      decision = await requestNativeTool(execution, "Read", {
+    const decision = await runTurn(context, (execution) =>
+      requestNativeTool(execution, "Read", {
         file_path: "/tmp/example.png",
         nested: { source: "exact" },
-      });
-      yield SUCCESS_RESULT;
-    });
+      }),
+    );
 
     expect(decision?.behavior).toBe("deny");
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
@@ -534,10 +576,9 @@ describe("plugin-owned CLI execution host boundary", () => {
     const { context } = await createExecution({ nativeTools: ["Read"] });
     const decisions: CliBackendToolPermissionResult[] = [];
 
-    await runPlugin(context, async function* (execution) {
+    await runTurn(context, async (execution) => {
       decisions.push(await requestNativeTool(execution, "   "));
       decisions.push(await requestNativeTool(execution, "Bash"));
-      yield SUCCESS_RESULT;
     });
 
     expect(decisions).toEqual([
@@ -564,9 +605,9 @@ describe("plugin-owned CLI execution host boundary", () => {
     registerOwnerSession(first.context, "original-live-process");
 
     const runApprovedTurn = async (context: PreparedCliRunContext, repeat: boolean) => {
-      await runPlugin(
+      await runTurn(
         context,
-        async function* (execution) {
+        async (execution) => {
           const handle = execution.liveSession?.current();
           if (!handle) {
             throw new Error("Expected a registered live process");
@@ -580,7 +621,6 @@ describe("plugin-owned CLI execution host boundary", () => {
               requestNativeTool(execution, "WebFetch", { url: "https://example.com/next" }),
             ).resolves.toMatchObject({ behavior: "allow" });
           }
-          yield SUCCESS_RESULT;
         },
         { liveSession: true },
       );
@@ -601,11 +641,10 @@ describe("plugin-owned CLI execution host boundary", () => {
       runId: "plugin-approval-restricted",
       sessionEntry: { sessionId: "sdk-session", updatedAt: 1, permissionMode: "read-only" },
     });
-    await runPlugin(restricted.context, async function* (execution) {
+    await runTurn(restricted.context, async (execution) => {
       await expect(
         requestNativeTool(execution, "WebFetch", { url: "https://example.com/restricted" }),
       ).resolves.toMatchObject({ behavior: "deny" });
-      yield SUCCESS_RESULT;
     });
     expect(mockCallGatewayTool).toHaveBeenCalledOnce();
 
@@ -642,16 +681,14 @@ describe("plugin-owned CLI execution host boundary", () => {
         }
         return { id: "approval-closed", decision: "allow-once" };
       });
-      let decision: CliBackendToolPermissionResult | undefined;
-
-      await runPlugin(context, async function* (execution) {
-        decision = await requestNativeTool(execution, "WebFetch", { url: "https://example.com" });
-        yield SUCCESS_RESULT;
-      });
-
-      expect(decision).toEqual(
-        expect.objectContaining({ behavior: "deny", message: expect.stringContaining("closed") }),
+      const decision = await runTurn(context, (execution) =>
+        requestNativeTool(execution, "WebFetch", { url: "https://example.com" }),
       );
+
+      expect(decision).toMatchObject({
+        behavior: "deny",
+        message: expect.stringContaining("closed"),
+      });
     },
   );
 
@@ -696,21 +733,17 @@ describe("plugin-owned CLI execution host boundary", () => {
 
   it("fences a retained permission callback as soon as its turn finishes", async () => {
     const { context } = await createExecution();
-    let requestToolPermission: CliBackendExecuteContext["requestToolPermission"] | undefined;
-
-    await runPlugin(context, async function* (execution) {
-      requestToolPermission = execution.requestToolPermission;
-      yield SUCCESS_RESULT;
-    });
+    const requestToolPermission = await runTurn(
+      context,
+      (execution) => execution.requestToolPermission,
+    );
 
     await expect(
       requestToolPermission?.({ toolName: "Bash", toolInput: { command: "echo stale" } }),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        behavior: "deny",
-        message: expect.stringContaining("no longer active"),
-      }),
-    );
+    ).resolves.toMatchObject({
+      behavior: "deny",
+      message: expect.stringContaining("no longer active"),
+    });
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 

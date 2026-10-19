@@ -8,7 +8,10 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayProtocolRequestError } from "../../packages/gateway-client/src/protocol-request.js";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import * as gatewayCallRuntime from "../gateway/call.js";
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -309,6 +312,78 @@ describe("waitForAgentRun", () => {
     const result = await waitForAgentRun({ runId: "run-source-reply", timeoutMs: 500 });
 
     expect(result.sourceReplyDelivered).toBe(entry.expected);
+  });
+
+  it.each(["gateway-restarting", "gateway-suspending", undefined])(
+    "keeps a %s observation refusal retryable without reclassifying terminal run text",
+    async (reason) => {
+      const message = "agent.wait unavailable during gateway maintenance";
+      callGatewayMock.mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "UNAVAILABLE",
+          message,
+          retryable: true,
+          ...(reason ? { details: { reason } } : {}),
+        }),
+      );
+      expect(await waitForAgentRun({ runId: "running-child", timeoutMs: 500 })).toEqual({
+        status: "error",
+        error: message,
+        retryableTransportError: true,
+      });
+      callGatewayMock.mockResolvedValueOnce({
+        status: "error",
+        error: message,
+        startedAt: 100,
+        endedAt: 200,
+      });
+      const terminal = await waitForAgentRun({ runId: "failed-child", timeoutMs: 500 });
+      expect(terminal).toMatchObject({
+        status: "error",
+        error: message,
+        endedAt: 200,
+      });
+      expect(terminal.retryableTransportError).toBeUndefined();
+    },
+  );
+
+  it.each([
+    {
+      name: "a protocol observation refusal",
+      draining: false,
+      cause: new GatewayProtocolRequestError({
+        code: "UNAVAILABLE",
+        message: "agent.wait unavailable during gateway suspension",
+        retryable: true,
+      }),
+      retryable: true,
+    },
+    {
+      name: "a closed instance's refusal during restart drain",
+      draining: true,
+      cause: new GatewayDispatchUnavailableError("agent.wait", false),
+      retryable: true,
+    },
+    {
+      name: "a closed instance's refusal outside restart drain",
+      draining: false,
+      cause: new GatewayDispatchUnavailableError("agent.wait", false),
+      retryable: false,
+    },
+  ])("classifies $name without inferring a terminal run", async (entry) => {
+    resetGatewayWorkAdmission();
+    if (entry.draining) {
+      markGatewayRestartDraining("stop (SIGTERM)");
+    }
+    try {
+      callGatewayMock.mockRejectedValueOnce(entry.cause);
+      const result = await waitForAgentRun({ runId: "run-observed", timeoutMs: 500 });
+      expect(result.status).toBe("error");
+      expect(result.error).toBe(entry.cause.message);
+      expect(result.retryableTransportError).toBe(entry.retryable ? true : undefined);
+    } finally {
+      resetGatewayWorkAdmission();
+    }
   });
 
   it("normalizes blocked ok waits to errors", async () => {

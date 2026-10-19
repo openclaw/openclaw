@@ -1,7 +1,6 @@
 import type { SkillsWorkshopUndoResult } from "@openclaw/gateway-protocol";
 import { createSignal, For, onCleanup, Show } from "solid-js";
 import type { SkillWorkshopChangeNotice } from "../../../../../src/shared/skill-workshop-change-notice.js";
-import { toolIcons } from "../../../components/icons-tools.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
@@ -9,7 +8,7 @@ import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../../../lib/sessions/session-key.ts";
-import { defineSolidBridge, LitContent } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import "../../../styles/chat/skill-learned-notice.css";
 
 type UndoState = "idle" | "pending" | "done" | { error: string };
@@ -84,7 +83,7 @@ export const ChatSkillLearnedNotice = defineSolidBridge<{
             >
               <div class="chat-skill-notice__line">
                 <span class="chat-skill-notice__icon" aria-hidden="true">
-                  <LitContent render={() => toolIcons.lightbulb} />
+                  <Icon name="lightbulb" />
                 </span>
                 <span class="chat-skill-notice__label">{t("chat.skillLearned.label")}</span>
                 <For each={notice.skills}>

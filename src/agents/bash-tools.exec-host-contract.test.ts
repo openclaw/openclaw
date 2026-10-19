@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
-import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
+import {
+  applyCodeModeCatalog,
+  buildCodeModeCatalogPrompt,
+  createCodeModeTools,
+} from "./code-mode.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
 import {
   createToolSearchCatalogRef,
@@ -57,12 +61,12 @@ describe.each(["agent:main:main", "agent:main:subagent:child"])(
           });
           const catalogRef = createToolSearchCatalogRef();
           const ctx = { catalogRef, sessionKey, config: { tools: { codeMode: true } } };
-          const { tools } = applyCodeModeCatalog({
+          applyCodeModeCatalog({
             ...ctx,
             tools: [...createCodeModeTools(ctx), direct!],
           });
           const signature = `host?: ${hosts.map((host) => JSON.stringify(host)).join(" | ")}`;
-          expect(tools[0]!.description).toContain(signature);
+          expect(buildCodeModeCatalogPrompt(ctx, catalogRef.current!.entries)).toContain(signature);
           const described = await new ToolSearchRuntime(
             ctx,
             resolveToolSearchConfig(ctx.config),

@@ -59,7 +59,7 @@ export function createManagedHandoffLeaseRows(
   processes: Parameters<typeof isBorrowedLegacyHandoffParentCurrent>[2],
 ) {
   const { databasePath } = options;
-  const rowReader = createSqliteQueryCache((db) =>
+  const rowReader = createSqliteQueryCache((db: HandoffDatabase) =>
     prepareSqliteQueryTakeFirstSync<string, LeaseRow>(db, (parameter) =>
       leaseQueries(db)
         .selectFrom("managed_update_handoffs")

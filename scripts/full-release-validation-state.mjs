@@ -36,6 +36,8 @@ import {
   classifyReleaseSnapshot,
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
+  isReleaseGhServerError,
+  readReleaseJobListing,
   releasePlanGateFailures,
   MAX_RELEASE_ARTIFACT_BYTES,
   serializeReleaseArtifact,
@@ -136,7 +138,11 @@ async function runGh(args, options = {}) {
       if (options.signal?.aborted) {
         throw options.signal.reason ?? error;
       }
-      if (attempt === attempts || classifyReleaseGhTransportError(error) !== "transient") {
+      if (
+        attempt === attempts ||
+        (options.smallerPageFallback && isReleaseGhServerError(error)) ||
+        classifyReleaseGhTransportError(error) !== "transient"
+      ) {
         throw error;
       }
       const delay = releaseGhRetryDelayMs(attempt, ghRetryDeadline, performance.now());
@@ -156,18 +162,19 @@ async function githubJson(path, signal) {
 }
 
 async function githubAttemptJobs(runId, runAttempt, signal) {
-  return (
-    await runGh(
+  const output = await readReleaseJobListing((perPage, { smallerPageFallback }) =>
+    runGh(
       [
         "api",
         "--paginate",
-        `repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
+        `repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=${perPage}`,
         "--jq",
         ".jobs[] | @json",
       ],
-      { signal },
-    )
-  )
+      { signal, smallerPageFallback },
+    ),
+  );
+  return output
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line));

@@ -6,17 +6,19 @@ import type { AssistantMessage } from "../../../llm/types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
+import { isSmallModel } from "../../../shared/model-param-b.js";
 import {
   assertOperatorModelAllowed,
   readRunOperatorAuthority,
 } from "../../admitted-run-context.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../embedded-agent-helpers/turns.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
+import { setInternalRepetitionGuard } from "../../runtime/internal-hooks.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
-import { wrapStreamFnCodeModeSource } from "../../transcript-code-mode-source.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
@@ -111,7 +113,7 @@ export function installEmbeddedAttemptStreamGuards(
 ) {
   const { attempt } = input;
   const {
-    agentSession: { activeSession: session, codeModeExecToolNames },
+    agentSession: { activeSession: session },
     anthropicPayloadLogger,
     cacheTrace,
     contextGuards,
@@ -127,6 +129,7 @@ export function installEmbeddedAttemptStreamGuards(
       providerTextTransforms,
     },
   } = input.prepared.sessionRuntime;
+  setInternalRepetitionGuard(session.agent, isSmallModel);
   const { liveAllowedToolNames, replayAllowedToolNames } =
     input.prepared.toolCatalog.toolSearchRunPlan;
   const installStreamWrapper = <Args extends unknown[]>(
@@ -195,8 +198,15 @@ export function installEmbeddedAttemptStreamGuards(
     }
   };
   const providerPromptState = getProviderPromptState(attempt.runId);
+  // Turn facts attribute a prefix change to the kind of turn that caused it.
+  const turnFacts =
+    `trigger=${attempt.trigger ?? "unknown"} ` +
+    `provenance=${attempt.inputProvenance?.kind ?? "none"}${attempt.inputProvenance?.sourceTool ? `:${attempt.inputProvenance.sourceTool}` : ""} ` +
+    `replyMode=${attempt.sourceReplyDeliveryMode ?? "unset"} ` +
+    `senderIsOwner=${attempt.senderIsOwner ?? "unset"}`;
   const cacheObserver = createPromptCacheRequestObserver(
     {
+      turn: turnFacts,
       sessionId: attempt.sessionId,
       sessionKey: attempt.sessionKey,
       promptCacheKey: attempt.promptCacheKey,
@@ -209,11 +219,14 @@ export function installEmbeddedAttemptStreamGuards(
         const changes =
           observation.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
           observation.dropCause;
-        log.warn(
+        log[observation.dropCause?.startsWith("unattributed:") ? "debug" : "warn"](
           `[prompt-cache] cache read dropped ${observation.previousCacheRead} -> ${observation.cacheRead} ` +
             `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}; ` +
             `requestGapMs=${observation.requestGapMs ?? "unknown"} promptTokens=${observation.promptTokens ?? "unknown"} ` +
-            `providerPrefix=${observation.providerPrefix ?? "unavailable"}`,
+            `responseId=${observation.responseId ?? "unknown"} sessionId=${attempt.sessionId} ` +
+            `${turnFacts} ` +
+            `providerPrefix=${observation.providerPrefix ?? "unavailable"} ` +
+            `requests=${JSON.stringify(observation.requests)}`,
         );
       }
       cacheTrace?.recordStage("cache:result", { options: { ...observation } });
@@ -388,13 +401,15 @@ export function installEmbeddedAttemptStreamGuards(
       } as typeof options);
     };
   }
-  let diagnosticModelCallSeq = 0;
+  const modelCallSequence = (attempt.modelCallSequence ??= { value: 0 });
+  const firstModelCallNumber = modelCallSequence.value + 1;
   let modelResponseTerminal = false;
   let activeModelCallId: string | undefined;
   installStreamWrapper(wrapStreamFnWithDiagnosticModelCallEvents, {
     config: attempt.config,
     runId: attempt.runId,
     agentId: sessionAgentId,
+    priority: resolveModelCallUrgency(attempt) === "foreground" ? "interactive" : "background",
     ...(attempt.sessionKey && { sessionKey: attempt.sessionKey }),
     ...(attempt.sessionId && { sessionId: attempt.sessionId }),
     provider: attempt.provider,
@@ -415,8 +430,10 @@ export function installEmbeddedAttemptStreamGuards(
       : {}),
     trace: input.diagnostics.runTrace,
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
-    nextCallId: () => `${attempt.runId}:model:${(diagnosticModelCallSeq += 1)}`,
+    nextCallId: () => `${attempt.runId}:model:${(modelCallSequence.value += 1)}`,
     ownerGeneration: callbacks.diagnosticOwner.generation,
+    diagnosticOwner: callbacks.diagnosticOwner,
+    onAgentEvent: attempt.onAgentEvent,
     onSucceeded: contextGuards.recordCacheTouch,
     onTerminal: () => {
       modelResponseTerminal = true;
@@ -429,6 +446,10 @@ export function installEmbeddedAttemptStreamGuards(
     onStarted: (callId) => {
       activeModelCallId = callId;
       modelResponseTerminal = false;
+      if (modelCallSequence.value === firstModelCallNumber) {
+        input.setup.prepStages.mark("model-dispatch");
+        input.setup.emitPrepStageSummary("model-dispatch");
+      }
       attempt.onExecutionPhase?.({
         phase: "model_call_started",
         provider: attempt.provider,
@@ -438,26 +459,23 @@ export function installEmbeddedAttemptStreamGuards(
     },
     suppressPluginHooks: attempt.operation === "settled-tool-finalization",
   });
-  if (codeModeExecToolNames?.size) {
-    installStreamWrapper(wrapStreamFnCodeModeSource, codeModeExecToolNames);
-  }
   return {
-    onModelRequest: (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
+    /** Returns the measured predecessor that may anchor this exact request's pressure. */
+    onModelRequest: async (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
       const previous = cacheObserver.getContextUsage();
-      const request = cacheObserver.onModelRequest(...args);
-      if (request.requestIndex > 1) {
-        contextGuards.checkMidTurnPrecheck({
-          context: args[1],
-          previousRequest:
-            previous?.requestIndex === request.requestIndex - 1 &&
-            request.prefixUnchanged &&
-            (request.changes ?? []).every(
-              ({ code }) => code === "pruning" || code === "aggregateToolResultTruncation",
-            )
-              ? previous
-              : undefined,
-        });
+      const request = await cacheObserver.onModelRequest(...args);
+      const previousRequest =
+        previous?.requestIndex === request.requestIndex - 1 &&
+        request.prefixUnchanged &&
+        (request.changes ?? []).every(
+          ({ code }) => code === "pruning" || code === "aggregateToolResultTruncation",
+        )
+          ? previous
+          : undefined;
+      if (input.activeContextEngine?.info.ownsCompaction || request.requestIndex > 1) {
+        contextGuards.checkMidTurnPrecheck({ context: args[1], previousRequest });
       }
+      return previousRequest;
     },
     onModelUsage: (
       usage: NormalizedUsage | undefined,

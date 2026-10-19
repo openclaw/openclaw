@@ -41,7 +41,7 @@ function createSentMessageCache(accountId: string) {
         ? PERSISTENT_NAMESPACE
         : `${PERSISTENT_NAMESPACE}.account.v1.${accountDigest}`,
       maxEntries: PERSISTENT_MAX_ENTRIES,
-      openStore: (options) => getOptionalMSTeamsRuntime()?.state.openKeyedStore(options),
+      openStore: (options) => getOptionalMSTeamsRuntime()?.state.openKeyedStoreV2(options),
       logError: createPluginStateErrorReporter(
         getOptionalMSTeamsRuntime,
         "msteams",

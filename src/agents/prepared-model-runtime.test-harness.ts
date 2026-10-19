@@ -56,6 +56,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     getOAuthProviders: vi.fn(() => []),
   },
   modelRegistry: {
+    getProviderMetadataOwners: () => undefined,
     fork: vi.fn((authStorage: AuthStorage) => ({ authStorage })),
     getAll: vi.fn<() => ModelCatalogSnapshot["entries"]>(() => []),
     find: vi.fn(() => null),
@@ -91,7 +92,6 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
       routeVariants: [],
     }),
   ),
-  catalogHookRows: new Map<string, Set<string>>(),
   runtimeSyntheticAuthProviderRefs: [] as string[],
   resolveNativeModelPrimary: vi.fn<typeof import("./agent-scope.js").resolveNativeModelPrimary>(
     () => undefined,
@@ -128,7 +128,8 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   resolvePluginMetadataSnapshotAsync: async () => preparedModelRuntimeMocks.pluginMetadataSnapshot,
 }));
 
-vi.mock("./prepared-model-catalog-worker.js", () => ({
+vi.mock("./prepared-model-catalog-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./prepared-model-catalog-worker.js")>()),
   createPreparedModelCatalogWorker: (
     ...factoryArgs: Parameters<typeof preparedModelRuntimeMocks.createPreparedModelCatalogWorker>
   ) => {
@@ -152,7 +153,6 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
           modelCatalog: catalog,
           runtimeModels: new Map(),
           providerExpiries: new Map(),
-          hookRows: preparedModelRuntimeMocks.catalogHookRows,
           configuredRuntimeModels: factoryArgs[0].agentFacts.configuredRuntimeModels,
         };
       },
@@ -180,6 +180,7 @@ vi.mock("./agent-auth-discovery.js", () => ({
     preparedModelRuntimeMocks.resolveAmbientCredentials(...args),
 }));
 
+// mock-isolation: Prepared-runtime fixtures own credential and model state independently of real stores.
 vi.mock("./agent-model-discovery.js", () => ({
   discoverAuthStorageFacts: (...args: unknown[]) => {
     if ((args[1] as { skipCredentials?: boolean } | undefined)?.skipCredentials === true) {
@@ -211,7 +212,7 @@ vi.mock("./agent-model-discovery.js", () => ({
   },
   discoverAuthStorage: (...args: unknown[]) =>
     preparedModelRuntimeMocks.discoverAuthStorage(...args) ?? preparedModelRuntimeMocks.authStorage,
-  discoverModels: (...args: unknown[]) => {
+  discoverModelsAsync: async (...args: unknown[]) => {
     preparedModelRuntimeMocks.discoverModels(...args);
     return preparedModelRuntimeMocks.modelRegistry;
   },
@@ -554,7 +555,6 @@ export async function resetPreparedModelRuntimeHarness(state: OpenClawTestState)
     routeVariants: [],
   });
   preparedModelRuntimeMocks.runtimeSyntheticAuthProviderRefs = [];
-  preparedModelRuntimeMocks.catalogHookRows = new Map();
   preparedModelRuntimeMocks.resolveNativeModelPrimary.mockReset().mockReturnValue(undefined);
   preparedModelRuntimeMocks.resolveAmbientCredentials.mockReset().mockReturnValue({});
   preparedModelRuntimeMocks.resolveStaticCatalogModel.mockReset().mockReturnValue(undefined);

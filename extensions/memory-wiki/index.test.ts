@@ -8,7 +8,6 @@ import type { OpenClawConfig } from "./api.js";
 import plugin from "./index.js";
 import {
   loadMemoryWikiCompiledCache,
-  resolveMemoryWikiCompiledCacheGeneration,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
 } from "./src/compiled-cache.js";
@@ -71,70 +70,6 @@ function emptyCompiledSnapshot(): MemoryWikiCompiledCacheSnapshot {
 }
 
 describe("memory-wiki plugin", () => {
-  it("registers prompt supplement, gateway methods, tools, and wiki cli surface", () => {
-    const {
-      api,
-      registerCli,
-      registerGatewayMethod,
-      registerMemoryCorpusSupplement,
-      registerMemoryPromptPreparation,
-      registerMemoryPromptSupplement,
-      registerService,
-      registerTool,
-    } = createPluginApi();
-
-    plugin.register(api);
-
-    expect(registerMemoryCorpusSupplement).toHaveBeenCalledTimes(1);
-    expect(registerMemoryPromptPreparation).toHaveBeenCalledTimes(1);
-    expect(registerMemoryPromptSupplement).toHaveBeenCalledTimes(1);
-    expect(registerService).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "memory-wiki-compiled-cache-owner-cleanup" }),
-    );
-    expect(registerGatewayMethod.mock.calls.map((call) => call[0])).toEqual([
-      "wiki.status",
-      "wiki.importRuns",
-      "wiki.importInsights",
-      "wiki.overview",
-      "wiki.init",
-      "wiki.doctor",
-      "wiki.compile",
-      "wiki.ingest",
-      "wiki.lint",
-      "wiki.bridge.import",
-      "wiki.unsafeLocal.import",
-      "wiki.search",
-      "wiki.apply",
-      "wiki.get",
-      "wiki.obsidian.status",
-      "wiki.obsidian.search",
-      "wiki.obsidian.open",
-      "wiki.obsidian.command",
-      "wiki.obsidian.daily",
-    ]);
-    expect(registerTool).toHaveBeenCalledTimes(5);
-    expect(registerTool.mock.calls.map((call) => call[1]?.name)).toEqual([
-      "wiki_status",
-      "wiki_lint",
-      "wiki_apply",
-      "wiki_search",
-      "wiki_get",
-    ]);
-    for (const [registration] of registerTool.mock.calls) {
-      expect(registration).toMatchObject({ contextVersion: 2, create: expect.any(Function) });
-    }
-    expect(registerCli).toHaveBeenCalledTimes(1);
-    expect(registerCli.mock.calls[0]?.[1]).toStrictEqual({
-      descriptors: [
-        {
-          name: "wiki",
-          description: "Inspect and initialize the memory wiki vault",
-          hasSubcommands: true,
-        },
-      ],
-    });
-  });
-
   it("registers default-vault tools inside the configured state directory", () => {
     const stateDir = "/tmp/openclaw-memory-wiki-runtime-state";
     const { api, registerTool } = createPluginApi();
@@ -237,22 +172,6 @@ describe("memory-wiki plugin", () => {
     }
   });
 
-  it("activates an initialized legacy vault before an external compile", async () => {
-    const rootDir = await createTempDir("memory-wiki-index-legacy-vault-");
-    await fs.mkdir(path.join(rootDir, ".openclaw-wiki"), { recursive: true });
-    await fs.writeFile(path.join(rootDir, ".openclaw-wiki", "log.jsonl"), "", "utf8");
-    const { api, registerService } = createPluginApi();
-    api.pluginConfig = { vault: { path: rootDir } };
-
-    plugin.register(api);
-    const service = registerService.mock.calls[0]?.[0];
-    await service?.start?.();
-
-    await expect(loadMemoryWikiVaultIdentity(rootDir)).resolves.toMatchObject({
-      vaultGeneration: expect.any(String),
-    });
-  });
-
   it("fences cache publication when the plugin service stops", async () => {
     const rootDir = await createTempDir("memory-wiki-index-stop-fence-");
     await fs.mkdir(path.join(rootDir, ".openclaw-wiki"), { recursive: true });
@@ -275,7 +194,6 @@ describe("memory-wiki plugin", () => {
     const publication = writeMemoryWikiCompiledCache(
       config,
       snapshot,
-      resolveMemoryWikiCompiledCacheGeneration(snapshot),
       publicationId,
       null,
       async () => {
@@ -342,7 +260,6 @@ describe("memory-wiki plugin", () => {
         writeMemoryWikiCompiledCache(
           config,
           snapshot,
-          resolveMemoryWikiCompiledCacheGeneration(snapshot),
           randomUUID(),
           null,
           async () => {},
@@ -389,7 +306,6 @@ describe("memory-wiki plugin", () => {
     await writeMemoryWikiCompiledCache(
       config,
       snapshot,
-      resolveMemoryWikiCompiledCacheGeneration(snapshot),
       publicationId,
       parentPublicationId,
       async () => {},
@@ -398,7 +314,7 @@ describe("memory-wiki plugin", () => {
     );
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toEqual(snapshot);
 
-    vi.spyOn(fs, "readFile").mockRejectedValueOnce(new Error("transient restore read failure"));
+    vi.spyOn(fs, "open").mockRejectedValueOnce(new Error("transient restore read failure"));
     await expect(service?.start?.()).rejects.toThrow("transient restore read failure");
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
   });

@@ -1,6 +1,6 @@
 import { isSqliteTranscriptMutationConflict } from "../../../config/sessions/session-mutation-conflict-error.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import { formatAssistantErrorText } from "../../embedded-agent-helpers.js";
+import { formatAssistantErrorText } from "../../embedded-agent-helpers/error-text.js";
 import { normalizeUsage, type UsageLike } from "../../usage.js";
 import { hasOutboundDeliveryEvidence } from "../delivery-evidence.js";
 import { log } from "../logger.js";
@@ -34,7 +34,7 @@ import {
   hasCompletedModelProgressForIdleBreaker,
   normalizeEmbeddedRunAttemptResult,
 } from "./run-attempt-result.js";
-import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import {
   isEmbeddedRunTerminalAbort,

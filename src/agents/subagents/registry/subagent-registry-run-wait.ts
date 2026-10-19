@@ -48,6 +48,7 @@ const WAIT_TIMEOUT_DEADLINE_SKEW_MS = 250;
 
 export type SubagentManagerOptions = {
   runs: Map<string, SubagentRunRecord>;
+  getChildSessionCandidates: (childSessionKey: string) => Iterable<SubagentRunRecord>;
   getRunsForChildSession: (
     childSessionKey: string,
     childAgentId?: string,
@@ -374,7 +375,7 @@ export abstract class SubagentWaitManager {
       if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
         return;
       }
-      let current = this.options.runs.get(runId);
+      const current = this.options.runs.get(runId);
       if (!current || !isSameSubagentRunOwner(current, waitedEntry)) {
         return;
       }
@@ -384,13 +385,6 @@ export abstract class SubagentWaitManager {
         childSessionKey: current.childSessionKey,
         error,
       });
-      if (
-        !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
-        !isSameSubagentRunOwner(this.options.runs.get(runId), current)
-      ) {
-        return;
-      }
-      current = currentEntry();
       if (
         typeof current.execution.endedAt === "number" &&
         !current.cleanupCompletedAt &&

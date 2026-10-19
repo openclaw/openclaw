@@ -20,6 +20,7 @@ import {
   parseTerminalToolCallArguments,
   transportAbortError,
 } from "../transports/transport-stream-shared.js";
+import { streamFragmentError } from "../transports/transport-utils.js";
 import type {
   AssistantMessage,
   Context,
@@ -35,6 +36,8 @@ import {
   type GoogleInteractionsRequestBody,
 } from "./google-interactions-request.js";
 import type { GoogleApiType, GoogleProviderOptions } from "./google-shared.js";
+
+let toolCallCounter = 0;
 
 export function resolveGoogleInteractionsApiKey<T extends GoogleApiType>(
   model: Model<T>,
@@ -78,9 +81,8 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
   output: AssistantMessage;
   options?: GoogleProviderOptions;
   context: Context;
-  nextToolCallId: (name: string) => string;
 }): Promise<void> {
-  const { stream, model, output, options, context, nextToolCallId } = params;
+  const { stream, model, output, options, context } = params;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
   try {
@@ -109,7 +111,6 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
 
     const googleClientHeaders = resolveGoogleApiClientHeaders({
       baseUrl,
-      api: "google-generative-ai",
       model,
     });
 
@@ -167,8 +168,7 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
     const decoder = new TextDecoder();
     let buffer = "";
 
-    type StreamingToolCall = ToolCall & { partialJson?: string };
-    let currentBlock: TextContent | ThinkingContent | StreamingToolCall | null = null;
+    let currentBlock: TextContent | ThinkingContent | ToolCall | null = null;
     let currentBlockIndex = -1;
     let latestThoughtSignature: string | undefined;
     let latestUsage: Record<string, unknown> | undefined;
@@ -259,9 +259,9 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
       endCurrentBlock();
       currentBlockIndex = output.content.length;
       const name = readStringField(source, "name") ?? "tool";
-      const toolCall: StreamingToolCall = {
+      const toolCall: ToolCall = {
         type: "toolCall",
-        id: readStringField(source, "id") ?? nextToolCallId(name),
+        id: readStringField(source, "id") ?? `${name}_${Date.now()}_${++toolCallCounter}`,
         name,
         arguments: args,
         partialJson: Object.keys(args).length > 0 ? JSON.stringify(args) : "",
@@ -279,20 +279,27 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
     let sawCompletion = false;
     while (!streamDone) {
       const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const frames = buffer.split(/(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/);
+      buffer = frames.pop() ?? "";
       if (done) {
-        break;
+        // Preserve the existing newline-terminated final event at EOF.
+        if (/[\r\n]$/.test(buffer)) {
+          frames.push(buffer);
+        }
+        streamDone = true;
       }
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith("data:")) {
+      for (const frame of frames) {
+        const dataStr = frame
+          .split(/\r\n|\r|\n/)
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5))
+          .join("\n")
+          .trim();
+        if (!dataStr) {
           continue;
         }
-        const dataStr = trimmed.slice(5).trim();
         if (dataStr === "[DONE]") {
           streamDone = true;
           break;
@@ -301,8 +308,8 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
         let event: Record<string, unknown>;
         try {
           event = asRecord(parseJsonPreservingUnsafeIntegers(dataStr));
-        } catch {
-          continue;
+        } catch (error) {
+          throw streamFragmentError(error);
         }
 
         const eventType = event.event_type || event.type;
@@ -421,6 +428,13 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
           );
 
           output.usage = {
+            usageReport: {
+              state:
+                typeof usage.total_input_tokens === "number" &&
+                typeof usage.total_output_tokens === "number"
+                  ? "available"
+                  : "unavailable",
+            },
             input: Math.max(0, promptTokens - cacheRead) + toolUseTokens,
             output: outputTokens,
             cacheRead,
@@ -477,8 +491,9 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
   } catch (error) {
     const failure = options?.signal?.aborted ? transportAbortError(options.signal) : error;
     for (const block of output.content) {
-      // SAFETY: Streaming tool blocks extend the terminal content type with this buffer.
-      delete (block as { partialJson?: string }).partialJson;
+      if (block.type === "toolCall") {
+        delete block.partialJson;
+      }
     }
     failTransportStream({ stream, output, signal: options?.signal, error: failure });
   } finally {

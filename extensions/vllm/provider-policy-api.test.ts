@@ -30,7 +30,7 @@ describe("vLLM provider thinking policy", () => {
         resolveThinkingProfile({
           provider: "vllm",
           modelId: "qwen3:8b",
-          ...(source === "model" ? { thinkingLevelMap: mapping } : {}),
+          ...(source === "model" ? { thinkingLevelMap: { ...mapping, off: null } } : {}),
           compat: {
             thinkingFormat: "qwen-chat-template",
             supportedReasoningEfforts: [" LOW ", "HIGH"],
@@ -71,18 +71,28 @@ describe("vLLM provider thinking policy", () => {
     });
   });
 
-  it("exposes a binary profile for vLLM Nemotron 3 reasoning models", () => {
-    expect(
-      resolveThinkingProfile({
-        provider: "vllm",
-        modelId: "nemotron-3-super",
-        reasoning: true,
-      }),
-    ).toEqual({
-      levels: [{ id: "off" }, { id: "low", label: "on" }],
-      defaultLevel: "off",
-    });
-  });
+  it.each(["nemotron-3-super", "yk_nemotron-3-super"])(
+    "exposes a binary profile for %s",
+    (modelId) => {
+      expect(
+        resolveThinkingProfile({
+          provider: "vllm",
+          modelId,
+          reasoning: true,
+        }),
+      ).toEqual({
+        levels: [{ id: "off" }, { id: "low", label: "on" }],
+        defaultLevel: "off",
+      });
+    },
+  );
+
+  it.each(["yk_nemotron-3-super", "yk_deepseek_v4"])(
+    "respects explicitly disabled reasoning for %s",
+    (modelId) => {
+      expect(resolveThinkingProfile({ provider: "vllm", modelId, reasoning: false })).toBeNull();
+    },
+  );
 
   it("does not flatten unconfigured or non-reasoning vLLM models", () => {
     expect(

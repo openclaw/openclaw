@@ -1,12 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as processLineage from "../process/supervisor/inherited-process-lineage.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import {
@@ -22,6 +25,61 @@ beforeAll(async () => {
 afterAll(async () => {
   await receipts.close();
 });
+
+it.skipIf(process.platform === "win32")(
+  "prepares the same session after removing an unavailable process-group server",
+  async () => {
+    // Exercise the real two-process owner used by macOS and portable workers.
+    vi.spyOn(processLineage, "getInheritedNativeProcessOwner").mockReturnValue(undefined);
+    mockProcessPlatform("darwin");
+    const workspaceDir = tempDirs.make("bundle-mcp-missing-command-");
+    const manager = createSessionMcpRuntimeManager();
+    const params = {
+      sessionId: "missing-command-recovery",
+      sessionKey: "agent:test:missing-command-recovery",
+      workspaceDir,
+      manifestRegistry: { plugins: [] },
+    };
+    const cfg = {
+      plugins: { enabled: false },
+      mcp: { servers: { missing: { command: path.join(workspaceDir, "absent-executable") } } },
+    };
+    let release: (() => void) | undefined;
+    try {
+      const original = await manager.acquire({ ...params, cfg });
+      release = original.releaseLease;
+      const catalog = await original.runtime.getCatalog();
+      expect(catalog.diagnostics).toEqual([
+        expect.objectContaining({
+          serverName: "missing",
+          message: expect.stringContaining("ENOENT"),
+        }),
+      ]);
+      release();
+      release = undefined;
+
+      const removed = { plugins: { enabled: false }, mcp: { servers: {} } };
+      await manager.reloadConfig({ cfg: removed, manifestRegistry: params.manifestRegistry });
+      const next = await manager.acquire({ ...params, cfg: removed });
+      release = next.releaseLease;
+      const prepared = await materializeBundleMcpToolsForRun(next);
+      release = undefined;
+      try {
+        expect(prepared.tools).toEqual([]);
+        expect(prepared.diagnostics ?? []).toEqual([]);
+      } finally {
+        await prepared.dispose();
+      }
+    } finally {
+      release?.();
+      try {
+        await manager.disposeAll();
+      } finally {
+        vi.restoreAllMocks();
+      }
+    }
+  },
+);
 
 it("reconnects after an MCP child process exits", async ({ signal }) => {
   const tempDir = tempDirs.make("bundle-mcp-child-exit-");

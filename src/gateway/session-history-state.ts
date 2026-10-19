@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import type {
   PaginatedSessionHistory,
   SessionHistoryMessage,
@@ -25,10 +26,7 @@ import {
   createPreparedSessionHistorySubagentProjection,
   readSessionHistorySubagentLookup,
 } from "./session-history-delta-visibility.js";
-import {
-  readSessionHistorySnapshotKernel,
-  type IncognitoSessionHistoryReader,
-} from "./session-history-snapshot.js";
+import { readSessionHistorySnapshotKernel } from "./session-history-snapshot.js";
 import {
   buildPaginatedSessionHistory,
   readChatHistoryMessageSeq as resolveMessageSeq,
@@ -37,6 +35,7 @@ import {
   readTranscriptMessageIdempotencyKey,
   attachOpenClawTranscriptMeta,
 } from "./session-transcript-entry-message.js";
+import { createSessionActorTranscriptReader } from "./session-transcript-memory-reader.js";
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
 import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 import * as sessionTranscriptReaders from "./session-transcript-readers.js";
@@ -49,21 +48,21 @@ type InlineSessionHistoryAppend = {
 
 export async function readSessionHistorySnapshotAsync(
   params: SessionHistoryReadParams,
-  suppliedIncognito?: IncognitoSessionHistoryReader,
 ): Promise<SessionHistorySnapshot> {
-  const incognito =
-    suppliedIncognito ??
-    sessionTranscriptReaders.captureIncognitoSessionHistoryReader(params.target);
-  if (incognito) {
-    const reader = incognito;
-    return reader.consume(params.target, async () => {
-      const snapshot = await reader.http(params);
-      const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
-        snapshot.history.messages,
-      );
-      const messages = projectForwardedMessages(snapshot.history.messages, resolveCronJobName);
-      return { ...snapshot, history: { ...snapshot.history, items: messages, messages } };
+  const memory = captureSessionActorTranscriptRead(params.target);
+  if (memory) {
+    const snapshot = await readSessionHistorySnapshotKernel(params, {
+      readers: createSessionActorTranscriptReader(memory),
+      readOnly: true,
+      resolveCurrentUserProfileDisplay,
+      resolveCronJobName: () => undefined,
     });
+    const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+      snapshot.history.messages,
+    );
+    const messages = projectForwardedMessages(snapshot.history.messages, resolveCronJobName);
+    memory.assertCurrent();
+    return { ...snapshot, history: { ...snapshot.history, items: messages, messages } };
   }
   if (
     !params.target.storePath ||
@@ -122,12 +121,10 @@ export class SessionHistorySseState {
   private turnBoundaryPending: boolean;
   private assistantErrorPending: boolean;
   private transcriptPath: string | undefined;
-  private readonly incognito?: IncognitoSessionHistoryReader;
 
   static fromSnapshot(
     params: SessionHistoryReadParams & {
       snapshot: SessionHistorySnapshot;
-      incognito?: IncognitoSessionHistoryReader;
     },
   ): SessionHistorySseState {
     return new SessionHistorySseState(params);
@@ -136,12 +133,8 @@ export class SessionHistorySseState {
   private constructor(
     params: SessionHistoryReadParams & {
       snapshot: SessionHistorySnapshot;
-      incognito?: IncognitoSessionHistoryReader;
     },
   ) {
-    this.incognito =
-      params.incognito ??
-      sessionTranscriptReaders.captureIncognitoSessionHistoryReader(params.target);
     this.target = params.target;
     this.maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
     this.limit = params.limit;
@@ -178,16 +171,6 @@ export class SessionHistorySseState {
     messageId?: string;
     messageSeq?: number;
   }): Promise<() => InlineSessionHistoryAppend | null> {
-    return this.incognito
-      ? this.incognito.consume(this.target, () => this.prepareOwnedInlineMessage(update))
-      : this.prepareOwnedInlineMessage(update);
-  }
-
-  private async prepareOwnedInlineMessage(update: {
-    message: unknown;
-    messageId?: string;
-    messageSeq?: number;
-  }): Promise<() => InlineSessionHistoryAppend | null> {
     if (this.limit !== undefined || this.cursor !== undefined) {
       return () => null;
     }
@@ -202,15 +185,13 @@ export class SessionHistorySseState {
       ...(idempotencyKey ? { idempotencyKey } : {}),
       seq: messageSeq,
     });
-    let subagentCoordination: SubagentCoordinationDisplayResolver | undefined =
-      this.incognito?.readers.subagentCoordination;
+    const memory = captureSessionActorTranscriptRead(this.target);
+    const readers = memory && createSessionActorTranscriptReader(memory);
+    let subagentCoordination: SubagentCoordinationDisplayResolver | undefined;
     const lookup = readSessionHistorySubagentLookup(message);
-    if (this.incognito && lookup) {
-      // Shared ACP visibility custody ends with the prepared history operation.
-      return () => {
-        this.incognito?.assertCurrent();
-        return { shouldRefresh: true };
-      };
+    if (readers && lookup) {
+      await readers.prepareVisibility([message]);
+      subagentCoordination = readers.subagentCoordination;
     }
     if (
       lookup &&
@@ -235,7 +216,7 @@ export class SessionHistorySseState {
     ]);
     // The stream queue retains ordering; its publisher reauthorizes before applying this transition.
     return () => {
-      this.incognito?.assertCurrent();
+      memory?.assertCurrent();
       return this.appendInlineMessage(
         message,
         messageSeq,
@@ -333,15 +314,12 @@ export class SessionHistorySseState {
   }
 
   async refreshAsync(): Promise<PaginatedSessionHistory> {
-    const snapshot = await readSessionHistorySnapshotAsync(
-      {
-        target: this.target,
-        maxChars: this.maxChars,
-        limit: this.limit,
-        cursor: this.cursor,
-      },
-      this.incognito,
-    );
+    const snapshot = await readSessionHistorySnapshotAsync({
+      target: this.target,
+      maxChars: this.maxChars,
+      limit: this.limit,
+      cursor: this.cursor,
+    });
     if (snapshot.history.windowReset) {
       this.cursor = undefined;
     }

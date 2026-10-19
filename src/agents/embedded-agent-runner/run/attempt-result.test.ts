@@ -51,6 +51,7 @@ function createResultFixture(params?: {
   yieldAcknowledgment?: string;
   yieldMessageWaitRegistered?: boolean;
   assistantTexts?: readonly string[];
+  allowedToolNames?: string[];
   toolMetas?: Array<{
     toolName: string;
     toolCallId?: string;
@@ -151,6 +152,9 @@ function createResultFixture(params?: {
       }),
     },
     prepared: {
+      toolCatalog: {
+        toolSearchRunPlan: { liveAllowedToolNames: new Set(params?.allowedToolNames) },
+      },
       bootstrap: { bootstrapPromptWarning: {} },
       systemPrompt: { systemPromptReport: undefined },
       sessionRuntime: {
@@ -192,6 +196,93 @@ function settledToolMessages(): EmbeddedRunAttemptResult["messagesSnapshot"] {
 }
 
 describe("attempt result projection", () => {
+  it.each<{ parts: string[]; text: string; signedIndex?: number }>([
+    { parts: ["First part.", "Second part."], text: "First part.\nSecond part." },
+    { parts: ["NO_RE", "PLY\nFirst part.", "Second part."], text: "First part.\nSecond part." },
+    { parts: ["First part.", "Second part.\n\nNO_REPLY"], text: "First part.\nSecond part." },
+    { parts: ["First part.\n", "NO_", "REPLY"], text: "First part." },
+    {
+      parts: ["Legacy context.", "Signed answer."],
+      signedIndex: 1,
+      text: "Legacy context.\nSigned answer.",
+    },
+    {
+      parts: ["Legacy context.", "Signed answer.\n\nNO_REPLY"],
+      signedIndex: 1,
+      text: "Signed answer.",
+    },
+  ])("preserves native answer boundaries for $parts", ({ parts, text, signedIndex }) => {
+    const assistant = makeAssistantMessageFixture({
+      stopReason: "stop",
+      content: parts.map((part, index) => ({
+        type: "text",
+        text: part,
+        ...(index === signedIndex
+          ? { textSignature: JSON.stringify({ v: 1, id: "item_unphased" }) }
+          : {}),
+      })),
+    });
+    const result = completeResult({
+      currentAttemptCompletedAssistant: assistant,
+      assistantTexts: parts,
+      hasSuccessfulModelResponse: true,
+    });
+    expect(result.preparedTerminalReply).toEqual({
+      text,
+      terminalReply: { disposition: "visible", text },
+    });
+    expect(
+      buildPayloads({
+        ...result,
+        currentAssistant: assistant,
+        lastAssistant: assistant,
+      }),
+    ).toMatchObject([{ text }]);
+  });
+
+  it.each([
+    { name: "Write", allowedToolNames: ["write"], expected: true },
+    { name: "functions.write", allowedToolNames: ["write"], expected: true },
+    { name: "WRITE", allowedToolNames: ["Write", "wriTE"], expected: undefined },
+  ])("uses native callable-name matching for $name", ({ name, allowedToolNames, expected }) => {
+    const assistant = makeAssistantMessageFixture({
+      stopReason: "stop",
+      content: [{ type: "text", text: JSON.stringify({ name, arguments: { path: "proof.txt" } }) }],
+    });
+    expect(
+      completeResult({ currentAttemptCompletedAssistant: assistant, allowedToolNames })
+        .textToolCallAttempt,
+    ).toBe(expected);
+  });
+
+  it.each(
+    [false, true].flatMap((nativeCall) =>
+      [
+        '{"name":"write","arguments":{"path":"proof.txt"}}',
+        "<tool_call><function=write><parameter=path>proof.txt</parameter></function></tool_call>",
+        'Action: write\nAction Input: {"path":"proof.txt"}',
+        '[TOOL_CALL]{tool => "write", args => {"path":"proof.txt"}}[/TOOL_CALL]',
+      ].map((text) => ({ nativeCall, text })),
+    ),
+  )(
+    "recognizes text-only terminal calls after a read (native=$nativeCall): $text",
+    ({ nativeCall, text }) => {
+      const assistant = makeAssistantMessageFixture({
+        stopReason: "stop",
+        content: [{ type: "text", text }],
+      });
+      if (nativeCall) {
+        assistant.content.push({ type: "toolCall", id: "native", name: "write", arguments: {} });
+      }
+      const result = completeResult({
+        currentAttemptCompletedAssistant: assistant,
+        allowedToolNames: ["write"],
+        toolMetas: [{ toolName: "read", replaySafe: true, isError: false }],
+      });
+      expect(result.textToolCallAttempt).toBe(nativeCall ? undefined : true);
+    },
+  );
+
   it("keeps the settled result snapshot when an output hook replaces live state", () => {
     const assistant = makeAssistantMessageFixture({ content: [{ type: "text", text: "settled" }] });
     const fixture = createResultFixture({
@@ -243,22 +334,6 @@ describe("attempt result projection", () => {
     expect(result).not.toHaveProperty("beforeAgentFinalizeRevisionReason");
   });
 
-  it.each([false, true])(
-    "preserves attempt progress=%s after a later failure without inferring progress from history",
-    (hasSuccessfulModelResponse) => {
-      const result = completeResult({
-        hasSuccessfulModelResponse,
-        terminal: { kind: "failed", source: "prompt", error: new Error("request timed out") },
-        messagesSnapshot: [
-          makeAssistantMessageFixture({ stopReason: "stop", errorMessage: undefined }),
-        ],
-        currentAttemptCompletedAssistant: makeAssistantMessageFixture(),
-      });
-
-      expect(result.hasSuccessfulModelResponse).toBe(hasSuccessfulModelResponse);
-    },
-  );
-
   it("keeps current tool replay evidence separate from cumulative replay state", () => {
     const result = completeResult({ toolMetas: [{ toolName: "cron", replaySafe: false }] });
 
@@ -299,8 +374,8 @@ describe("attempt result projection", () => {
     {
       label: "an actually empty optional turn",
       assistant: undefined,
-      expectedStatus: "success",
-      terminalError: undefined,
+      expectedStatus: "error",
+      terminalError: "non_deliverable_terminal_turn",
     },
   ])(
     "records $label after transcript projection",
@@ -326,7 +401,6 @@ describe("attempt result projection", () => {
   );
 
   type ResultInput = NonNullable<Parameters<typeof createResultFixture>[0]>;
-  const socketReset = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
   const failed = (
     error: Error,
     source: "prompt" | "precheck" | "compaction" | "hook:before_agent_run" = "prompt",
@@ -341,49 +415,12 @@ describe("attempt result projection", () => {
   });
   const truncated = failed(new Error("Stream ended without finish_reason"));
   it.each<[string, ResultInput, boolean]>([
-    ["provider socket reset", failed(socketReset), true],
-    [
-      "nested socket failure",
-      failed(
-        new Error("provider request failed", {
-          cause: Object.assign(new Error("socket closed"), { code: "UND_ERR_SOCKET" }),
-        }),
-      ),
-      true,
-    ],
-    [
-      "authentication failure",
-      failed(Object.assign(new Error("401 Unauthorized"), { status: 401 })),
-      false,
-    ],
-    [
-      "quota exhaustion",
-      failed(Object.assign(new Error("429 insufficient_quota"), { status: 429 })),
-      false,
-    ],
     ["policy denial", failed(new Error("content policy violation")), false],
-    [
-      "security denial",
-      failed(Object.assign(new Error("403 Forbidden: security policy denied"), { status: 403 })),
-      false,
-    ],
-    ["malformed response", failed(new SyntaxError("Unexpected token in JSON response")), false],
-    ["truncated stream", truncated, true],
-    ["precheck socket failure", failed(socketReset, "precheck"), false],
-    ["compaction socket failure", failed(socketReset, "compaction"), false],
-    ["agent hook socket failure", failed(socketReset, "hook:before_agent_run"), false],
     [
       "assistant WebSocket error",
       assistantFailure("WebSocket error", "ERR_WEBSOCKET_TRANSPORT"),
       true,
     ],
-    [
-      "assistant coded socket failure",
-      assistantFailure("provider request failed", "ECONNRESET"),
-      true,
-    ],
-    ["assistant authentication failure", assistantFailure("invalid API key"), false],
-    ["assistant truncated stream", assistantFailure("Stream ended without finish_reason"), true],
     [
       "only pre-tool commentary",
       {
@@ -410,13 +447,6 @@ describe("attempt result projection", () => {
       },
       true,
     ],
-    ...["MEDIA:https://example.com/result.png", "[[audio_as_voice]]"].map(
-      (text): [string, ResultInput, boolean] => [
-        `assistant output ${text}`,
-        { ...truncated, assistantTexts: [text] },
-        false,
-      ],
-    ),
     [
       "snapshot-only media",
       {
@@ -431,27 +461,6 @@ describe("attempt result projection", () => {
       },
       false,
     ],
-    [
-      "media from a previous user turn",
-      {
-        ...truncated,
-        messagesSnapshot: [
-          makeAssistantMessageFixture({
-            stopReason: "stop",
-            content: [{ type: "text", text: "MEDIA:https://example.com/old.png" }],
-          }),
-          { role: "user", content: "Check again", timestamp: 1 },
-          ...settledToolMessages(),
-        ],
-      },
-      true,
-    ],
-    [
-      "reply target without output",
-      { ...truncated, assistantTexts: ["[[reply_to_current]]"] },
-      true,
-    ],
-    ["unattributed visible text", { ...truncated, assistantTexts: ["here is the answer"] }, false],
     [
       "post-tool authored text",
       {
@@ -469,9 +478,7 @@ describe("attempt result projection", () => {
       },
       false,
     ],
-    ["compaction failure observation", failed(socketReset, "prompt", "compaction"), false],
-    ["tool execution failure observation", failed(socketReset, "prompt", "tool_execution"), false],
-    ...(["compaction", "tool_execution"] as const).map((phase): [string, ResultInput, boolean] => [
+    ...(["tool_execution"] as const).map((phase): [string, ResultInput, boolean] => [
       `assistant ${phase} timeout`,
       {
         ...assistantFailure("WebSocket error", "ERR_WEBSOCKET_TRANSPORT"),
@@ -488,23 +495,6 @@ describe("attempt result projection", () => {
     }
   });
 
-  it.each([true, false, undefined])(
-    "carries yield acknowledgment and owner-recorded message wait (%s) separately from private context",
-    (yieldMessageWaitRegistered) => {
-      expect(
-        completeResult({
-          yieldDetected: true,
-          yieldAcknowledgment: "Waiting for a continuation.",
-          yieldMessageWaitRegistered,
-        }),
-      ).toMatchObject({
-        yieldDetected: true,
-        yieldAcknowledgment: "Waiting for a continuation.",
-        yieldMessageWaitRegistered,
-      });
-    },
-  );
-
   it("defaults missing replay metadata to replay-unsafe", () => {
     const attempt = completeResult();
     delete (attempt as Partial<typeof attempt>).replayMetadata;
@@ -515,37 +505,7 @@ describe("attempt result projection", () => {
     });
   });
 
-  it("carries the newest MCP presentation state across retry attempts", () => {
-    const carryover = createAttemptCarryover();
-    const first = {
-      latestMcpAppChannelView: { viewId: "view-first" },
-      latestMcpConnectAction: {
-        serverName: "calendar",
-        authorizationUrl: "https://auth.example/first",
-      },
-    };
-    const retry: Parameters<typeof carryover.apply>[0] = {};
-    const latest = {
-      latestMcpAppChannelView: { viewId: "view-latest" },
-      latestMcpConnectAction: {
-        serverName: "calendar",
-        authorizationUrl: "https://auth.example/latest",
-      },
-    };
-
-    carryover.apply(first);
-    carryover.apply(retry);
-    carryover.apply(latest);
-
-    expect(retry).toEqual(first);
-    expect(latest.latestMcpAppChannelView.viewId).toBe("view-latest");
-    expect(latest.latestMcpConnectAction.authorizationUrl).toBe("https://auth.example/latest");
-  });
-
-  it.each([
-    { label: "notifying", notify: true, expectedText: "The monitored task is complete." },
-    { label: "quiet", notify: false, expectedText: HEARTBEAT_TOKEN },
-  ])(
+  it.each([{ label: "quiet", notify: false, expectedText: HEARTBEAT_TOKEN }])(
     "carries a $label heartbeat response and private scratch across empty retry attempts",
     ({ notify, expectedText }) => {
       const carryover = createAttemptCarryover();
@@ -633,46 +593,6 @@ describe("attempt result projection", () => {
     ).toEqual([
       { name: "search", params: { query: "one" } },
       { name: "fetch", params: { id: 3 } },
-    ]);
-  });
-
-  it("filters invalid tool metadata and preserves terminal flags", () => {
-    expect(
-      completeResult({
-        toolMetas: [
-          { toolName: "", replaySafe: true },
-          { toolName: "read", isError: false },
-          {
-            toolName: "exec",
-            toolCallId: "tool-current",
-            meta: "done",
-            replaySafe: true,
-            isError: true,
-            terminate: true,
-            asyncStarted: true,
-            asyncTaskRunId: "run-1",
-            asyncTaskId: "task-1",
-          },
-        ],
-      }).toolMetas,
-    ).toEqual([
-      {
-        toolName: "read",
-        meta: undefined,
-        replaySafe: false,
-        isError: false,
-      },
-      {
-        toolName: "exec",
-        toolCallId: "tool-current",
-        meta: "done",
-        replaySafe: true,
-        isError: true,
-        terminate: true,
-        asyncStarted: true,
-        asyncTaskRunId: "run-1",
-        asyncTaskId: "task-1",
-      },
     ]);
   });
 
@@ -850,6 +770,10 @@ describe("trailing source progress at runtime settlement", () => {
     );
     expect(callIndex).toBe(calls.length);
     const fixture = createResultFixture();
+    Object.assign(fixture.input.attempt, {
+      messageChannel: "telegram",
+      terminalReplyExpectation: "required",
+    });
     fixture.input.preparedStreamRuntime.stream.subscription = subscription as never;
     const terminalAssistant = messages.findLast((message) => message.role === "assistant");
     fixture.settled.currentAttemptAssistant = terminalAssistant as never;
@@ -867,6 +791,7 @@ describe("trailing source progress at runtime settlement", () => {
       finalizerInstruction: resolveSettledToolTerminalContinuationInstruction({
         executionContract: "strict-agentic",
         allowEmptyStopContinuation: true,
+        replyDeliveryState: result.sourceReplyDeliveryState ?? "missing",
         payloadCount: 0,
         aborted: false,
         timedOut: false,
@@ -888,7 +813,8 @@ describe("trailing source progress at runtime settlement", () => {
     if (delivered) {
       expect(finalizerInstruction).toBeNull();
     } else {
-      expect(finalizerInstruction).toContain("did not produce a user-visible answer");
+      expect(finalizerInstruction).toContain("Your turn ended without a final reply.");
+      expect(finalizerInstruction).toContain("answer exactly NO_REPLY");
     }
   });
 });

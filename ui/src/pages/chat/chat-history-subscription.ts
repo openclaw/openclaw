@@ -150,7 +150,6 @@ async function synchronizeSelectedSessionMessageSubscription(
     (previousSubscription?.agentId ?? null) !== nextSubscriptionAgentId;
   if (selectedAgentChanged) {
     state.chatSessionApprovalQueue = [];
-    state.requestUpdate?.();
   }
   const paneRequests = chatHistoryRequests(state);
   const generation = ++paneRequests.subscriptionGeneration;
@@ -181,7 +180,6 @@ async function synchronizeSelectedSessionMessageSubscription(
     ) {
       setChatHistoryLoad(state, { phase: "idle" });
     }
-    state.requestUpdate?.();
   };
   const publishError = (error: unknown) => {
     const message = formatChatHistoryLoadError(error);
@@ -200,7 +198,6 @@ async function synchronizeSelectedSessionMessageSubscription(
       message,
       retryable: isRetryableChatReadError(error, "sessions.messages.subscribe"),
     });
-    state.requestUpdate?.();
   };
   const subscribe = async () => {
     let attempt = 0;
@@ -213,8 +210,6 @@ async function synchronizeSelectedSessionMessageSubscription(
             : {}),
         });
       } catch (error) {
-        // A timeout is retryable only after the shared lease owner has completed
-        // its compensation. Aggregate compensation failures remain explicit failures.
         if (!isCurrent() || !isRetryableChatReadError(error, "sessions.messages.subscribe")) {
           throw error;
         }

@@ -86,9 +86,8 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
   slot: Slot<Input, Output>;
   options: Pick<WorkerTaskPoolOptions<Output>, "workerUrl" | "workerOptions" | "prepareWorker">;
   host: WorkerTaskHost;
-  bootstrapError: () => Error | undefined;
   runInContext: <T>(operation: () => T) => T;
-  unavailableError: (message: string) => Error;
+  unavailableError: (message: string, cause?: unknown) => Error;
   onStarted: (worker: WorkerLifecycle) => void;
   onMessage: (message: unknown) => void;
   onFailure: (error: Error, nativeFailure?: true) => void;
@@ -116,14 +115,6 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
       ...options.workerOptions,
       ...prepared?.options,
     };
-    // Preparation and option getters can synchronously close the task.
-    if (slot.retiring) {
-      throw params.unavailableError("worker creation closed during preparation");
-    }
-    const bootstrapError = params.bootstrapError();
-    if (bootstrapError) {
-      throw bootstrapError;
-    }
     if (params.host.requiresReady) {
       slot.ready = false;
     }
@@ -171,8 +162,12 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
       params.onMessage(message);
     }
   });
-  worker.on("error", (error) => params.onFailure(params.unavailableError(String(error)), true));
-  worker.on("messageerror", (error) => params.onFailure(params.unavailableError(String(error))));
+  worker.on("error", (error) =>
+    params.onFailure(params.unavailableError(String(error), error), true),
+  );
+  worker.on("messageerror", (error) =>
+    params.onFailure(params.unavailableError(String(error), error)),
+  );
   worker.once("exit", (code) => {
     releaseWorkerNativeSectionsOnExit(slot.nativeSections);
     const wasCounted = counted;

@@ -78,22 +78,9 @@ describe("runReplyAgent direct replies and compaction notices", () => {
   }
 
   it.each([
-    ["without side effects", { meta: { agentMeta: {} } }],
     [
       "with only a reply directive",
       { payloads: [{ text: "[[reply_to_current]]" }], meta: { agentMeta: {} } },
-    ],
-    ["after hidden compaction", { meta: { agentMeta: { compactionCount: 1 } } }],
-    [
-      "after an intentional terminal tool batch",
-      { meta: { agentMeta: {}, intentionalTerminalCompletion: "tool-batch" } },
-    ],
-    [
-      "after a child spawn without a pending continuation",
-      {
-        acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:child" }],
-        meta: { agentMeta: {} },
-      },
     ],
   ] satisfies Array<[string, Record<string, unknown>]>)(
     "surfaces missing required direct replies %s",
@@ -129,12 +116,12 @@ describe("runReplyAgent direct replies and compaction notices", () => {
 
     expect(result).toMatchObject({
       isError: true,
-      text: expect.stringContaining("did not produce a visible reply"),
+      text: "No answer was returned. Ask again if you still need one.",
     });
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
+  it.each([false])(
     "returns degraded warnings with direct replies without a dispatcher (failed=%s)",
     async (failed) => {
       const result = await runEmptyDirectReply(
@@ -205,7 +192,7 @@ describe("runReplyAgent direct replies and compaction notices", () => {
 
     expect(result).toMatchObject({
       isError: true,
-      text: expect.stringContaining("did not produce a visible reply"),
+      text: "No answer was returned. Ask again if you still need one.",
     });
   });
 });

@@ -79,9 +79,6 @@ export type GatewayWorkerEnvironmentRuntime = {
 const loadWorkerEnvironmentRuntimeModule = createLazyRuntimeModule(
   () => import("./worker-environments/runtime.js"),
 );
-const loadWorkerInferenceRuntimeModule = createLazyRuntimeModule(
-  () => import("./worker-environments/inference-runtime.js"),
-);
 const loadWorkerSessionToolExecutorModule = createLazyRuntimeModule(
   () => import("./worker-environments/worker-session-tool-executor.js"),
 );
@@ -178,13 +175,13 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore, {
     // Claims loaded before this Gateway acquired the state lock remain usable only by
     // workspace recovery. Worker authority is minted from claims created in this lifecycle.
-    rejectExistingWorkerClaims: true,
+    recoveryPlacements: await params.startup.placementStore.listAsync(),
   });
   const workerEnvironmentLog = params.log.child("worker-environments");
-  const listRetainedBundleHashes = () =>
+  const listRetainedBundleHashes = async () =>
     listRetainedWorkerBundleHashes({
       environments: params.startup.store.list(),
-      placements: params.startup.placementStore.list(),
+      placements: await params.startup.placementStore.listAsync(),
     });
   let workerBundleProducer: WorkerBundleProducer | undefined;
   let workerNpmArtifact: Promise<WorkerNpmArtifact> | undefined;
@@ -342,7 +339,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
             executionMode: mode,
           }),
         });
-        // Reload owns a new inventory; active enrollments pin their old artifact until closure.
+        // Reload selects a new producer; overlapping enrollment may retry after retirement.
         if (generation) {
           retireBootstrapProducer(generation.producer);
         }
@@ -350,19 +347,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
         bootstrapProducers.set(mode, generation);
       }
     }
-    const artifact = await generation.producer.prepare(signal);
-    return {
-      artifact,
-      assertCurrent: () => {
-        if (
-          bootstrapProducers.get(mode) !== generation ||
-          params.getPluginRegistry() !== generation.registry ||
-          getGatewayPluginMetadataSnapshot() !== generation.metadata
-        ) {
-          throw new Error("Worker preparation artifact generation changed");
-        }
-      },
-    };
+    return generation.producer.prepare(signal);
   };
   const nodeWorkerBundleRetention: NodeWorkerBundleRetention = {
     isEnvironmentOwnedNode,
@@ -374,8 +359,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     getLocalTlsFingerprint: () => params.resolveGatewayContext()?.gatewayTlsFingerprint,
     resolveAvailability: deviceRuntime.resolveAvailability,
     transfer: nodeBootstrapTransfer,
-    prepareArtifact: async (record, signal) =>
-      (await prepareNodeArtifact(record.profileSnapshot, signal)).artifact,
+    prepareArtifact: async (record, signal) => prepareNodeArtifact(record.profileSnapshot, signal),
   });
   let createGatewayTools: NonNullable<
     WorkerEnvironmentServiceOptions["createGatewayTools"]
@@ -452,45 +436,36 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     ensureNodeWorkerBundle: nodeWorkerBundleInstaller,
     prepareNodeBootstrap: nodeEnrollment.prepare,
     prepareNodeArtifacts: async (profileSnapshot, signal) => {
-      const pin = new AbortController();
-      try {
-        const preparationSignal = signal ? AbortSignal.any([signal, pin.signal]) : pin.signal;
-        // Cancellation releases the caller; the producers retain their shared work.
-        const [bootstrapResult, bundleResult] = await racePromiseWithAbortSignal(
-          Promise.allSettled([
-            prepareNodeArtifact(profileSnapshot, preparationSignal),
-            prepareInstallation("bundle", preparationSignal),
-          ]),
-          signal,
-        );
-        signal?.throwIfAborted();
-        if (bootstrapResult.status === "rejected") {
-          throw bootstrapResult.reason;
-        }
-        if (bundleResult.status === "rejected") {
-          throw bundleResult.reason;
-        }
-        const preparedBootstrap = bootstrapResult.value;
-        const bootstrap = preparedBootstrap.artifact;
-        const bundle = bundleResult.value;
-        preparedBootstrap.assertCurrent();
-        if (bundle.install !== "bundle") {
-          throw new Error("Worker preparation requires a bundle artifact");
-        }
-        return {
-          artifacts: {
-            nodeBootstrapSha256: bootstrap.tarballSha256,
-            enabledPluginIds: [...bootstrap.enabledPluginIds],
-            workerBundleHash: bundle.bundleHash,
-            workerArchiveSha256: bundle.tarballSha256,
-            openclawVersion: bundle.openclawVersion,
-            protocolFeatures: [...bundle.protocolFeatures],
-          },
-          assertCurrent: preparedBootstrap.assertCurrent,
-        };
-      } finally {
-        pin.abort();
+      // Cancellation releases the caller; the producers retain their shared work.
+      const [bootstrapResult, bundleResult] = await racePromiseWithAbortSignal(
+        Promise.allSettled([
+          prepareNodeArtifact(profileSnapshot, signal),
+          prepareInstallation("bundle", signal),
+        ]),
+        signal,
+      );
+      signal?.throwIfAborted();
+      if (bootstrapResult.status === "rejected") {
+        throw bootstrapResult.reason;
       }
+      if (bundleResult.status === "rejected") {
+        throw bundleResult.reason;
+      }
+      const bootstrap = bootstrapResult.value;
+      const bundle = bundleResult.value;
+      if (bundle.install !== "bundle") {
+        throw new Error("Worker preparation requires a bundle artifact");
+      }
+      return {
+        artifacts: {
+          nodeBootstrapSha256: bootstrap.tarballSha256,
+          enabledPluginIds: [...bootstrap.enabledPluginIds],
+          workerBundleHash: bundle.bundleHash,
+          workerArchiveSha256: bundle.tarballSha256,
+          openclawVersion: bundle.openclawVersion,
+          protocolFeatures: [...bundle.protocolFeatures],
+        },
+      };
     },
     ...preparedWorkspaces,
     prepareNodeEnrollment: nodeEnrollment.begin,
@@ -528,10 +503,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     applyTranscriptCommit: createWorkerTranscriptCommitter({
       getConfig: getRuntimeConfig,
     }).commit,
-    executeInference: async (inferenceParams) => {
-      const workerInferenceRuntime = await loadWorkerInferenceRuntimeModule();
-      return await workerInferenceRuntime.executeWorkerInference(inferenceParams);
-    },
     placementStore: placementGate,
     createGatewayTools: (request) => createGatewayTools(request),
     liveEvents: workerLiveEvents,

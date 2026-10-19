@@ -8,18 +8,19 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { readUserProfileAliasRevision } from "./user-profile-events.js";
-import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
+import { readUserProfileSnapshotSync } from "./user-profile-list-item.test-support.js";
+import { prepareUserProfileCatalog, readUserProfileAliases } from "./user-profile-list.js";
 import { syncGitHubIdentity } from "./user-profile-writes.worker.js";
 import { repairMergedGatewayOwnerProfile } from "./user-profiles-owner-migration.js";
 import { mergeOwnerIntoPerson, profileState } from "./user-profiles-owner.test-support.js";
-import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForTailscaleIdentity,
-  readUserProfileAliases,
-} from "./user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForTailscaleIdentity } from "./user-profiles.js";
 
+const catalogReleases: Array<() => void> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
+    for (const release of catalogReleases.splice(0)) {
+      release();
+    }
     closeOpenClawStateDatabaseForTest();
     cleanup();
   });
@@ -32,7 +33,7 @@ function stateOptions() {
 describe("Doctor gateway owner repair", () => {
   it.each(["tombstone", "person", "missing"])(
     "reports then repairs a merged owner with its identity targeting %s once",
-    (identityTarget) => {
+    async (identityTarget) => {
       const options = stateOptions();
       const owner = ensureGatewayOwnerProfile("Local Owner", options);
       const person = mergeOwnerIntoPerson(owner.id, options);
@@ -56,6 +57,7 @@ describe("Doctor gateway owner repair", () => {
       );
       const before = profileState(options);
       const aliasRevision = readUserProfileAliasRevision();
+      catalogReleases.push((await prepareUserProfileCatalog(options)).release);
       expect(readUserProfileAliases(owner.id, options)).toEqual(new Set([owner.id, person.id]));
       expect(readUserProfileAliases(person.id, options)).toEqual(new Set([owner.id, person.id]));
 

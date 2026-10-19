@@ -3,7 +3,8 @@ import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildExecApprovalCustomId, parseExecApprovalData } from "../approval-custom-id.js";
-import { parseCustomId, type ButtonInteraction, type ComponentData } from "../internal/discord.js";
+import { parseCustomId } from "../internal/components.base.js";
+import type { BaseComponentInteraction, ComponentData } from "../internal/discord.js";
 
 const resolveApprovalOverGatewayMock = vi.hoisted(() => vi.fn());
 
@@ -35,10 +36,10 @@ function buildConfig(
 }
 
 function createInteraction(
-  overrides?: Partial<ButtonInteraction>,
+  overrides?: Partial<BaseComponentInteraction>,
   approvalKind: Parameters<typeof buildExecApprovalCustomId>[1] = "exec",
   approvalId = "abc",
-): ButtonInteraction {
+): BaseComponentInteraction {
   return {
     userId: "123",
     reply: vi.fn(),
@@ -58,7 +59,7 @@ function createInteraction(
     editReply: vi.fn(),
     followUp: vi.fn(),
     ...overrides,
-  } as unknown as ButtonInteraction;
+  } as unknown as BaseComponentInteraction;
 }
 
 function createApprovalResolution(params?: {
@@ -236,7 +237,7 @@ describe("discord exec approval monitor helpers", () => {
     expect(interaction["editReply"]).toHaveBeenCalledTimes(1);
     const terminalPayload = editReply.mock.calls[0]?.[0];
     expect(JSON.stringify(terminalPayload)).toContain("Approval already resolved");
-    expect(JSON.stringify(terminalPayload)).toContain("Canonical result: **Denied**");
+    expect(JSON.stringify(terminalPayload)).toContain("Recorded result: **Denied**");
     expect(JSON.stringify(terminalPayload)).not.toContain("execapproval");
     expect(interaction["followUp"]).toHaveBeenCalledWith({
       content: "This approval was already resolved: Denied.",

@@ -1,6 +1,9 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  definePluginEntry,
+  type OpenClawPluginServiceContextV2,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { parseTeamReportsConfig, resolveTeamReportsConfig } from "./src/config.js";
 import { registerTeamReportsGatewayMethods } from "./src/gateway-methods.js";
 import { createTeamReportsHttpHandler } from "./src/http.js";
@@ -22,22 +25,9 @@ export default definePluginEntry({
     );
     let scheduler: TeamReportsScheduler | undefined;
     let store: TeamReportsStore | undefined;
-    let generation = 0;
-    let retired = false;
-    let stopping: Promise<void> | undefined;
-    let startingStore: Promise<void> | undefined;
-    const stop = () => {
-      generation++;
-      const current = scheduler;
-      scheduler = undefined;
-      store = undefined;
-      const pendingStart = startingStore;
-      return (stopping ??= (async () => {
-        await pendingStart?.catch(() => undefined);
-        await current?.stop();
-      })());
-    };
-    const requireScheduler = () => {
+    let readiness: Promise<void> | undefined;
+    const requireScheduler = async () => {
+      await readiness;
       if (!scheduler) {
         throw new Error(
           "Team Reports service is not running; check plugin configuration and reload the plugin",
@@ -45,7 +35,8 @@ export default definePluginEntry({
       }
       return scheduler;
     };
-    const requireStore = () => {
+    const requireStore = async () => {
+      await readiness;
       if (!store) {
         throw new Error("Team Reports storage is unavailable; check service status");
       }
@@ -56,91 +47,71 @@ export default definePluginEntry({
       id: "team-reports",
       apiVersion: 2,
       async start(ctx) {
-        if (retired) {
-          throw new Error("Team Reports runtime has been retired");
-        }
-        const currentGeneration = ++generation;
-        await stopping;
-        if (retired || currentGeneration !== generation) {
-          return;
-        }
-        stopping = undefined;
-        const config = parseTeamReportsConfig(
-          ctx.config.plugins?.entries?.["team-reports"]?.config ?? api.pluginConfig,
-          ctx.config.gateway?.controlUi?.basePath,
-        );
-        const resolved = await resolveTeamReportsConfig(config, ctx.config);
-        if (retired || currentGeneration !== generation) {
-          return;
-        }
-        const policy = ctx.config.plugins?.entries?.["team-reports"]?.llm;
-        const summaryOptions = { ...config.summaries };
-        if (policy?.allowModelOverride !== true) {
-          delete summaryOptions.model;
-        }
-        startingStore = (async () => {
-          if (!api.runtimeSource) {
-            throw new Error(
-              "Team Reports requires an OpenClaw host with runtime entrypoint metadata",
-            );
-          }
-          const nextStore = await createTeamReportsStore({
-            stateDir: ctx.stateDir,
-            workerModuleUrl: new URL(
-              `./src/store.worker${path.extname(api.runtimeSource)}`,
-              pathToFileURL(api.runtimeSource),
-            ),
-          });
-          if (retired || currentGeneration !== generation) {
-            await nextStore.close();
-            return;
-          }
-          const runner = new TeamReportsRunner(
-            new URL(
-              `./src/run.worker${path.extname(api.runtimeSource)}`,
-              pathToFileURL(api.runtimeSource),
-            ),
+        readiness = initialize(ctx);
+        void readiness.catch(() => {
+          const failure = new Error(
+            "Team Reports initialization failed; check plugin configuration and database access",
           );
-          const nextScheduler = new TeamReportsScheduler({
-            config: { ...config, summaries: summaryOptions },
-            resolved,
-            store: nextStore,
-            llm: { complete: (params) => api.runtime.llm.complete(params) },
-            context: ctx,
-            runReports: (params) => runner.run(params),
-            closeRunner: () => runner.close(),
-          });
-          try {
-            await nextScheduler.start();
-            if (retired || currentGeneration !== generation) {
-              await nextScheduler.stop();
-              return;
-            }
-            store = nextStore;
-            scheduler = nextScheduler;
-          } catch (error) {
-            await nextScheduler.stop();
-            throw error;
-          }
-        })();
-        await startingStore;
+          ctx.serviceHealth?.reportFailure(failure);
+          ctx.logger.error(failure.message);
+        });
       },
-      stop,
-    });
-    api.lifecycle.registerRuntimeLifecycle({
-      id: "team-reports-service",
-      cleanup: ({ reason, sessionKey, runId }) => {
-        if (
-          sessionKey === undefined &&
-          runId === undefined &&
-          (reason === "disable" || reason === "restart")
-        ) {
-          retired = true;
-          return stop();
-        }
-        return undefined;
+      async stop(ctx) {
+        ctx.scheduler.beginClose();
+        await readiness?.catch(() => {});
+        readiness = undefined;
+        const current = scheduler;
+        scheduler = undefined;
+        store = undefined;
+        await current?.stop();
       },
     });
+
+    async function initialize(ctx: OpenClawPluginServiceContextV2) {
+      const config = parseTeamReportsConfig(
+        ctx.config.plugins?.entries?.["team-reports"]?.config ?? api.pluginConfig,
+        ctx.config.gateway?.controlUi?.basePath,
+      );
+      const resolved = await resolveTeamReportsConfig(config, ctx.config);
+      const policy = ctx.config.plugins?.entries?.["team-reports"]?.llm;
+      const summaryOptions = { ...config.summaries };
+      if (policy?.allowModelOverride !== true) {
+        delete summaryOptions.model;
+      }
+      if (!api.runtimeSource) {
+        throw new Error("Team Reports requires an OpenClaw host with runtime entrypoint metadata");
+      }
+      const nextStore = await createTeamReportsStore({
+        stateDir: ctx.stateDir,
+        workerModuleUrl: new URL(
+          `./src/store.worker${path.extname(api.runtimeSource)}`,
+          pathToFileURL(api.runtimeSource),
+        ),
+      });
+      const runner = new TeamReportsRunner(
+        new URL(
+          `./src/run.worker${path.extname(api.runtimeSource)}`,
+          pathToFileURL(api.runtimeSource),
+        ),
+      );
+      const nextScheduler = new TeamReportsScheduler({
+        config: { ...config, summaries: summaryOptions },
+        resolved,
+        store: nextStore,
+        llm: { complete: (params) => api.runtime.llm.complete(params) },
+        context: ctx,
+        runReports: (params) => runner.run(params),
+        closeRunner: () => runner.close(),
+      });
+      try {
+        await nextScheduler.start();
+        store = nextStore;
+        scheduler = nextScheduler;
+      } catch (error) {
+        await nextScheduler.stop();
+        throw error;
+      }
+    }
     api.registerHttpRoute({
       path: initial.basePath,
       match: "prefix",
@@ -158,9 +129,12 @@ export default definePluginEntry({
         workSessions: listWorkSessions,
         // Source checkouts, the flattened dist bundle, and installed packages all keep assets/ at the plugin root.
         assetsDir: path.join(api.rootDir ?? path.dirname(fileURLToPath(import.meta.url)), "assets"),
-        getStore: () => store,
-        status: () => requireScheduler().status(),
-        health: () => requireScheduler().health(),
+        getStore: async () => {
+          await readiness?.catch(() => {});
+          return store;
+        },
+        status: async () => (await requireScheduler()).status(),
+        health: async () => (await requireScheduler()).health(),
         orgs: () => scheduler?.orgs() ?? initial.github.orgs,
         people: () => scheduler?.people() ?? initial.people ?? [],
       }),

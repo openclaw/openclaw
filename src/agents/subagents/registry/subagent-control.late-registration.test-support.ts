@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun, holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
@@ -38,6 +38,10 @@ export function registerLateDescendantControlTests({
       let parent = createSubagentRunRecord({
         runId: "late-parent",
         childSessionKey: "agent:main:subagent:late-parent",
+        childSessionIdentity: {
+          sessionId: "late-parent-session",
+          lifecycleRevision: "late-parent-session-revision",
+        },
         requesterSessionKey: owner,
         requesterDisplayKey: owner,
         task: "orchestrator",
@@ -49,6 +53,10 @@ export function registerLateDescendantControlTests({
         ...parent,
         runId: "live-child",
         childSessionKey: "agent:main:subagent:live-child",
+        childSessionIdentity: {
+          sessionId: "live-child-session",
+          lifecycleRevision: "live-child-session-revision",
+        },
         controllerSessionKey: parent.childSessionKey,
       });
       await addSubagentRunForTests(parent);
@@ -62,7 +70,7 @@ export function registerLateDescendantControlTests({
       });
       const reached = createDeferred();
       const proceed = createDeferred();
-      const admission = await beginSessionWorkAdmission({
+      const admission = await beginSessionEffect({
         scope: storePath,
         identities: [parent.childSessionKey, "late-parent-session"],
         assertAllowed: () => {},
@@ -90,6 +98,11 @@ export function registerLateDescendantControlTests({
         return registerSubagentRun({
           runId: "late-child",
           childSessionKey: childKey,
+          childAgentId: "main",
+          sessionEntry: {
+            sessionId: "late-child-session",
+            lifecycleRevision: "late-child-session-revision",
+          },
           requesterSessionKey: requester.childSessionKey,
           requesterAgentId: "main",
           requesterDisplayKey: requester.childSessionKey,
@@ -99,15 +112,7 @@ export function registerLateDescendantControlTests({
           queued: true,
         });
       };
-      setSubagentControlDepsForTest({
-        isEmbeddedAgentRunActive: () => true,
-        abortEmbeddedAgentRun: () => {
-          if (phase === "admission drain") {
-            expect(releaseSwarmRun(parent.runId)).toBe(true);
-          }
-          return true;
-        },
-      });
+      setSubagentControlDepsForTest({});
       const controller = {
         controllerSessionKey: owner,
         controllerAgentId: "main",
@@ -158,6 +163,11 @@ export function registerLateDescendantControlTests({
         await registerSubagentRun({
           runId: "other-turn-root",
           childSessionKey: "agent:main:subagent:other-turn-root",
+          childAgentId: "main",
+          sessionEntry: {
+            sessionId: "other-turn-root-session",
+            lifecycleRevision: "other-turn-root-session-revision",
+          },
           requesterSessionKey: owner,
           requesterAgentId: "main",
           requesterTurnRunId: "other-turn",

@@ -8,7 +8,7 @@ import {
 } from "../dashboard-session-title.js";
 import { formatForLog } from "../ws-log.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
-import { emitSessionsChanged } from "./session-change-event.js";
+import { emitSessionTitleChanged } from "./session-change-event.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type DashboardSessionTitleRequest = {
@@ -19,12 +19,6 @@ type DashboardSessionTitleRequest = {
   request: Pick<NormalizedChatSendRequest, "normalizedAttachments" | "rawMessage">;
   sessionKey: string;
   storePath: string;
-};
-
-/** Reply gate for chat-turn naming; `released` reports whether its turn was still running. */
-type DashboardSessionTitleTurn = {
-  released: Promise<boolean>;
-  settled: Promise<void>;
 };
 
 export function scheduleCreatedDashboardSessionTitle(
@@ -55,7 +49,7 @@ export function scheduleCreatedDashboardSessionTitle(
 
 export function scheduleChatDashboardSessionTitle(
   params: DashboardSessionTitleRequest,
-  turn?: DashboardSessionTitleTurn,
+  retryAfter?: Promise<void>,
 ): void {
   const titleSource = buildDashboardSessionTitleSource({
     message: params.request.rawMessage,
@@ -69,8 +63,7 @@ export function scheduleChatDashboardSessionTitle(
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     // Naming only patches metadata under the title writer's session identity check.
     // It must not hold a turn admission while waiting on a model.
-    const retryAfter = turn && (await turn.released) ? turn.settled : undefined;
-    const updated = await maybeGenerateDashboardSessionTitle({
+    await maybeGenerateDashboardSessionTitle({
       cfg: params.cfg,
       agentId: params.agentId,
       sessionId: params.admittedSessionId,
@@ -83,14 +76,13 @@ export function scheduleChatDashboardSessionTitle(
         params.context.logGateway.warn(
           "dashboard session title generation exhausted; using a crustacean fallback name",
         ),
+      onTitleStateChanged: () =>
+        emitSessionTitleChanged(params.context, {
+          sessionKey: params.sessionKey,
+          sessionId: params.admittedSessionId,
+          agentId: params.agentId,
+        }),
     });
-    if (updated) {
-      emitSessionsChanged(params.context, {
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-        reason: "chat.title",
-      });
-    }
   }, "chat-send:background").catch((err: unknown) => {
     params.context.logGateway.warn(
       `dashboard session title generation failed: ${formatForLog(err)}`,

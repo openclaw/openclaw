@@ -10,7 +10,7 @@ import {
 } from "../infra/update-run-ledger.js";
 import type { UpdateRunPhase, UpdateRunRecord } from "../infra/update-run-record.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { reconcileOpenClawStateSchemaPublication } from "../state/openclaw-state-db.js";
+import { reconcileOpenClawStateSchemaPublicationAsync } from "../state/openclaw-state-schema-publication.async.js";
 import { GATEWAY_EVENT_UPDATE_RUN_CHANGED } from "./events.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 
@@ -38,30 +38,32 @@ export function startUpdateRunWatcher(params: {
     | undefined;
   let notices = Promise.resolve();
   let reconciled: UpdateRunRecord[] = [];
-  let polling: { runId?: string; terminalRevision?: number } | undefined;
+  let polling = false;
   let pollAgain = false;
   let scanning: Promise<void> | undefined;
   let scanRequested = false;
   let reconcileAllRequested = false;
 
-  const schedulePublication = () => {
+  const schedulePublication = async () => {
     publicationTimer?.cancel();
     publicationTimer = undefined;
     if (work.isClosing) {
       return;
     }
     try {
-      const blocker = reconcileOpenClawStateSchemaPublication();
-      if (blocker?.publishAfterMs != null) {
+      const blocker = await reconcileOpenClawStateSchemaPublicationAsync({ signal: work.signal });
+      if (!work.isClosing && blocker?.publishAfterMs != null) {
         // Deadline belongs to the ledger row, so process restarts never restart the grace.
         publicationTimer = scheduler.schedule({
           id: "update.schema-publication",
           atMs: blocker.publishAfterMs,
-          run: schedulePublication,
+          run: () => work.track(schedulePublication),
         });
       }
     } catch (error) {
-      params.log.warn(`state schema publication deferred: ${formatErrorMessage(error)}`);
+      if (!work.isClosing) {
+        params.log.warn(`state schema publication deferred: ${formatErrorMessage(error)}`);
+      }
     }
   };
 
@@ -80,11 +82,14 @@ export function startUpdateRunWatcher(params: {
         return;
       }
       reconciled.push(...abandoned.filter((run) => run.runId !== watched?.runId));
-      schedulePublication();
+      await schedulePublication();
+      if (work.isClosing) {
+        return;
+      }
       const nextActive = watched?.sentinelDeadline
         ? (await listUpdateRunsAsync({ active: true, limit: 1 }))[0]
         : undefined;
-      const observed =
+      const run =
         nextActive ??
         (watched
           ? await getUpdateRunAsync(watched.runId)
@@ -92,16 +97,10 @@ export function startUpdateRunWatcher(params: {
       if (work.isClosing) {
         return;
       }
-      if (!observed) {
+      if (!run) {
         watched = undefined;
         return;
       }
-      // A settlement may arrive while the active-run lookup is awaiting its snapshot.
-      const run = reconciled.reduce(
-        (latest, entry) =>
-          entry.runId === latest.runId && entry.updatedAtMs > latest.updatedAtMs ? entry : latest,
-        observed,
-      );
       reconciled = reconciled.filter((entry) => entry.runId !== run.runId);
       if (watched?.runId !== run.runId) {
         watched = { runId: run.runId };
@@ -145,9 +144,6 @@ export function startUpdateRunWatcher(params: {
           updatedAtMs: run.updatedAtMs,
         });
         watched.revision = run.updatedAtMs;
-        if (terminal && polling?.runId === run.runId) {
-          polling.terminalRevision = Math.max(polling.terminalRevision ?? 0, run.updatedAtMs);
-        }
       }
       if (watched.phase !== run.phase) {
         watched.phase = run.phase;
@@ -229,26 +225,16 @@ export function startUpdateRunWatcher(params: {
       pollAgain = true;
       return;
     }
-    polling = {};
-    const cycle = polling;
+    polling = true;
     void work
       .track(async () => {
-        const settled = await reconcileInterruptedUpdateRuns({ signal: work.signal }, (runId) => {
-          cycle.runId = runId;
-        });
+        const settled = await reconcileInterruptedUpdateRuns({ signal: work.signal });
         if (work.isClosing) {
           return;
         }
-        // A timer scan can publish this cycle's commit before its worker reply arrives.
-        reconciled.push(
-          ...settled.filter(
-            (run) =>
-              run.runId !== watched?.runId &&
-              (run.runId !== cycle.runId ||
-                cycle.terminalRevision === undefined ||
-                run.updatedAtMs > cycle.terminalRevision),
-          ),
-        );
+        // A delayed worker reply may repeat a terminal broadcast; notice delivery
+        // deduplicates at its durable effect boundary.
+        reconciled.push(...settled.filter((run) => run.runId !== watched?.runId));
         // The first history read may still be pending when verification settles.
         await scan();
       })
@@ -259,7 +245,7 @@ export function startUpdateRunWatcher(params: {
         }
       })
       .finally(() => {
-        polling = undefined;
+        polling = false;
         if (pollAgain) {
           pollAgain = false;
           if (!timer) {

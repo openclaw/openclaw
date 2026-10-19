@@ -34,7 +34,7 @@ suite.define(() => {
       ).toBe(0);
       expect(await composer.inputValue()).toBe("");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      expect(await statusBand.textContent()).toContain("1 in this conversation’s outbox.");
+      expect(await statusBand.count()).toBe(0);
 
       await gateway.deferNext("chat.send");
       await gateway.setOnline(true);

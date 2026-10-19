@@ -11,8 +11,12 @@ import { revokeMessageActionTurnCapability } from "../../gateway/message-action-
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
+import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
+import { lifecycleAdmissionByOperation } from "../../sessions/session-controller.state.js";
+import { readUserTurnPromptReactionSource } from "../../sessions/user-turn-transcript-admission.js";
+import { formatThinkingLevelClampNotice } from "../thinking.shared.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveFallbackCandidateRun, resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import { runCliFallbackCandidate } from "./agent-runner-cli-candidate.js";
@@ -30,6 +34,7 @@ import type {
 } from "./agent-runner-fallback-cycle.types.js";
 import { buildRunEntrySelection } from "./agent-runner-run-params.js";
 import {
+  buildModelResolveContext,
   mintReplyMessageActionTurnCapability,
   resolveModelFallbackOptions,
   resolveRunFastModeForFallbackCandidate,
@@ -37,6 +42,7 @@ import {
 } from "./agent-runner-utils.js";
 import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
+import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 import {
   bindSourceReplyDeliveryRuntime,
   createSourceReplyDeliveryRuntime,
@@ -47,6 +53,11 @@ import {
 /** Runs the provider/model fallback candidates while preserving cross-candidate delivery state. */
 export async function runAgentFallbackCandidates(params: AgentFallbackCycleParams) {
   const turn = params.turn;
+  const adoptInput = async () => {
+    if (turn.replyOperation) {
+      await lifecycleAdmissionByOperation.get(turn.replyOperation)?.adoptInput?.();
+    }
+  };
   const sourceReplyDeliveryRuntimeOptions = turn.opts as
     | SourceReplyDeliveryRuntimeOptions
     | undefined;
@@ -123,12 +134,30 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   return params.timing.measure("model_fallback", () =>
     runEmbeddedAgentEntry<EmbeddedAgentRunResult>({
       preparedRunAdmission: params.preparedRunAdmission,
+      modelResolve: {
+        prompt: turn.commandBody,
+        awaitSessionDiffBaseline: turn.opts?.awaitSessionDiffBaseline,
+        images: params.currentTurnImages.images,
+        cwd: turn.followupRun.run.cwd,
+        modelSelectionLocked: turn.followupRun.run.modelSelectionLocked,
+        context: withClaimingHookAdmission(
+          buildModelResolveContext({
+            run: turn.followupRun.run,
+            replyRoute: turn.followupRun,
+            sessionCtx: turn.sessionCtx,
+            hasRepliedRef: turn.opts?.hasRepliedRef,
+            trigger: resolveReplyRunTrigger(turn),
+          }),
+          { prepare: adoptInput },
+        ),
+      },
       selection: buildRunEntrySelection(selection, turn.followupRun.run),
       identity: {
         runId: params.runId,
         agentId: turn.followupRun.run.agentId,
         sessionId: turn.followupRun.run.sessionId,
         sessionKey: turn.sessionKey,
+        sessionLifecycleRevision: turn.getActiveSessionEntry()?.lifecycleRevision ?? null,
         lane: runLane,
       },
       harness: {
@@ -268,6 +297,10 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             }
             runStart.signalExecutionPhaseForTyping(info);
           };
+        await turn.opts?.dashboardReadAdmission?.prepare?.();
+        await readUserTurnPromptReactionSource(
+          turn.followupRun.userTurnTranscriptRecorder,
+        )?.prepare?.();
         const messageActionTurnCapability = mintReplyMessageActionTurnCapability(
           turn,
           params.runId,
@@ -306,6 +339,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           } satisfies AgentFallbackCandidateCommonParams;
           let result: EmbeddedAgentRunResult;
           if (runtime.useCliExecution) {
+            await adoptInput();
             result = await runCliFallbackCandidate({
               ...common,
               cliExecutionProvider: runtime.cliExecutionProvider,
@@ -336,6 +370,22 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             params.state.maintenanceAuthProfile = candidate.maintenanceAuthProfile;
             params.state.compactionRequestBudget = candidate.compactionRequestBudget;
             result = candidate.result;
+          }
+          const thinking = result.meta.requestShaping?.thinking ?? candidateThinkLevel;
+          const thinkingClamp = formatThinkingLevelClampNotice({
+            requested: turn.followupRun.run.thinkLevel,
+            effective: thinking,
+            provider: result.meta.agentMeta?.provider ?? provider,
+            model: result.meta.agentMeta?.model ?? model,
+          });
+          if (thinkingClamp) {
+            result = {
+              ...result,
+              meta: {
+                ...result.meta,
+                requestShaping: { ...result.meta.requestShaping, thinking, thinkingClamp },
+              },
+            };
           }
           params.state.bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,

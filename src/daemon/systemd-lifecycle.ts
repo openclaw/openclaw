@@ -1,4 +1,3 @@
-/** systemd start, stop, restart, and obsolete-unit removal. */
 import fs from "node:fs/promises";
 import { hasErrnoCode } from "../infra/errno.js";
 import { LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES } from "./constants.js";
@@ -92,7 +91,6 @@ async function runSystemdServiceAction(
   if (action !== "stop") {
     // Clear crash-loop start-limit latches only after scope ownership is proven;
     // otherwise resetting a conflicting manager could mutate the wrong service.
-    params.assertCurrent?.();
     await runSystemctl(["reset-failed", unitName]);
     params.assertCurrent?.();
   }
@@ -149,11 +147,21 @@ async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySys
     const unitPath = resolveSystemdUnitPathForName(env, name);
     const exists = await fs.access(unitPath).then(
       () => true,
-      () => false,
+      (error: unknown) => {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
+        return false;
+      },
     );
     const backupExists = await fs.access(`${unitPath}.bak`).then(
       () => true,
-      () => false,
+      (error: unknown) => {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
+        return false;
+      },
     );
     let enabled = false;
     if (systemctlAvailable) {

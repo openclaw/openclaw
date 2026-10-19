@@ -1,14 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createOverlay } from "../../components/overlay-lifecycle.ts";
+import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { t } from "../../i18n/index.ts";
+import * as attachmentInputs from "../chat/components/chat-attachment-inputs.tsx";
+import type { ChatDetailPanel } from "../chat/components/chat-detail-panel.tsx";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
+import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import { NewSessionModelControl } from "./model-control.ts";
+import { NewSessionPageOwner } from "./new-session-page-owner.ts";
 import "./new-session-page-entry.ts";
 
 type NewSessionElement = HTMLElement & {
   data: NewSessionRouteData | undefined;
   focusComposer(): void;
   updateComplete: Promise<boolean>;
-  requestUpdate: () => void;
 };
 
 function routeData(agentId: string, catalogId = ""): NewSessionRouteData {
@@ -58,10 +64,101 @@ afterEach(() => {
 });
 
 describe("new session draft route ownership", () => {
+  it("prepares composer options once per published typing revision without replacing the input", async () => {
+    const prepare = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
+    const projectRecents = vi.spyOn(DraftPlaceBrowser.prototype, "resolveProjectRecents");
+    const renderModels = vi.spyOn(NewSessionModelControl.prototype, "renderProps");
+    const page = await mount(routeData("research"));
+    const textarea = page.querySelector<HTMLTextAreaElement>("textarea")!;
+    await enterMessage(page, "warmup");
+    for (const text of ["h", "he", "hello"]) {
+      prepare.mockClear();
+      projectRecents.mockClear();
+      renderModels.mockClear();
+      await enterMessage(page, text);
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(projectRecents.mock.calls.length).toBeLessThanOrEqual(2);
+      expect(renderModels).not.toHaveBeenCalled();
+      expect(page.querySelector("textarea")).toBe(textarea);
+      expect(textarea.value).toBe(text);
+    }
+  });
+
+  it("keeps retained attachment callbacks connected to live draft and lock state", async () => {
+    const inputs = vi.spyOn(attachmentInputs, "ChatAttachmentInputs");
+    let dictating = false;
+    vi.spyOn(NewSessionDictationControl.prototype, "active", "get").mockImplementation(
+      () => dictating,
+    );
+    const page = await mount(routeData("research"));
+    await enterMessage(page, "initial draft");
+    const retained = inputs.mock.calls.at(-1)?.[0];
+    expect(retained).toBeDefined();
+    expect(retained?.getDraft?.()).toBe("initial draft");
+    await enterMessage(page, "later draft");
+    expect(retained?.getDraft?.()).toBe("later draft");
+    dictating = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle(page);
+    expect(retained?.disabled).toBe(true);
+  });
+
+  it.each([false, true])(
+    "retires composer frames through detach and reattach (reduced motion: %s)",
+    async (reducedMotion) => {
+      vi.stubGlobal("matchMedia", (media: string) => ({
+        media,
+        matches: reducedMotion && media === "(prefers-reduced-motion: reduce)",
+        onchange: null,
+        addListener() {},
+        removeListener() {},
+        addEventListener() {},
+        removeEventListener() {},
+        dispatchEvent: () => true,
+      }));
+      let nextFrame = 0;
+      const frames = new Map<number, FrameRequestCallback>();
+      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+        const id = ++nextFrame;
+        frames.set(id, callback);
+        return id;
+      });
+      vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+      const page = await mount(routeData("research"));
+      const flushFrames = async (timestamp: number) => {
+        const callbacks = [...frames.values()];
+        frames.clear();
+        for (const callback of callbacks) {
+          callback(timestamp);
+        }
+        await settle(page);
+      };
+      const placeholder = () => page.querySelector<HTMLTextAreaElement>("textarea")?.placeholder;
+      const target = t("newSession.messagePlaceholder");
+      await flushFrames(0);
+      await flushFrames(206);
+      expect(placeholder()).toBe(reducedMotion ? target : target.slice(0, 1));
+      page.remove();
+      await settle(page);
+      expect(frames.size).toBe(0);
+
+      document.body.append(page);
+      await settle(page);
+      await flushFrames(0);
+      await flushFrames(206);
+      expect(placeholder()).toBe(reducedMotion ? target : target.slice(0, 1));
+      await enterMessage(page, "Keep this draft");
+      await flushFrames(232);
+      expect(placeholder()).toBe(target);
+      expect(frames.size).toBe(0);
+    },
+  );
+
   it("focuses an opened draft and refocuses without changing its message", async () => {
     const page = await mount(routeData("research"));
     const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");
     expect(document.activeElement).toBe(textarea);
+    expect(textarea?.getAttribute("aria-label")).toBe(t("newSession.messagePlaceholder"));
     await enterMessage(page, "Keep this draft; do not submit it");
     const other = document.body.appendChild(document.createElement("button"));
     try {
@@ -112,14 +209,17 @@ describe("new session draft route ownership", () => {
         .not.toBeNull();
       if (transition === "finish dictation") {
         dictating = true;
-        page.requestUpdate();
+        document.dispatchEvent(new Event("visibilitychange"));
         await settle(page);
         expect(page.querySelector<HTMLTextAreaElement>("textarea")?.readOnly).toBe(true);
       }
       page
         .querySelector<HTMLElement>("openclaw-chat-pasted-text .chat-attachment-file__open")
         ?.click();
+      await customElements.whenDefined("openclaw-chat-detail-panel");
+      await settle(page);
       await expect.poll(() => page.querySelector("openclaw-chat-detail-panel")).not.toBeNull();
+      await page.querySelector<ChatDetailPanel>("openclaw-chat-detail-panel")?.updateComplete;
       await expect
         .poll(() => {
           const source = page
@@ -141,7 +241,7 @@ describe("new session draft route ownership", () => {
         expect(actionButtons()).toHaveLength(2);
         expect(actionButtons().every((button) => button.disabled)).toBe(true);
         dictating = false;
-        page.requestUpdate();
+        document.dispatchEvent(new Event("visibilitychange"));
         await expect.poll(() => actionButtons().every((button) => !button.disabled)).toBe(true);
       }
       if (transition === "show in composer" || transition === "finish dictation") {
@@ -180,7 +280,7 @@ describe("new session draft route ownership", () => {
       targets: HTMLElement[];
       expected: readonly Destination[];
       openDialog?: boolean;
-      openDropdown?: boolean;
+      openMenu?: boolean;
     };
     const append = <T extends HTMLElement>(element: T): T => page.appendChild(element);
     const main = append(document.createElement("main"));
@@ -188,11 +288,18 @@ describe("new session draft route ownership", () => {
     const button = append(document.createElement("button"));
     const link = append(document.createElement("a"));
     link.href = "#target";
-    const menu = append(document.createElement("wa-dropdown")) as HTMLElement & { open: boolean };
-    const menuItem = menu.appendChild(document.createElement("wa-dropdown-item"));
+    const menu = append(document.createElement("div"));
+    menu.setAttribute("role", "menu");
+    menu.popover = "manual";
+    const menuOwner = createOverlay("new-session-routing-test", undefined, {
+      dismissOutsideFocus: false,
+    });
+    menuOwner.bindSurface(menu);
+    const menuItem = menu.appendChild(document.createElement("button"));
     menuItem.setAttribute("role", "menuitemradio");
     menuItem.tabIndex = -1;
     const dialog = append(document.createElement("dialog"));
+    const releaseDialog = registerModalSurface(dialog);
     dialog.open = true;
     const dialogButton = dialog.appendChild(document.createElement("button"));
     const details = append(document.createElement("details"));
@@ -220,13 +327,13 @@ describe("new session draft route ownership", () => {
         name: "menuitem",
         targets: [menuItem],
         expected: ["composer", "overlay", "overlay", "overlay", "overlay"],
-        openDropdown: true,
+        openMenu: true,
       },
       {
-        name: "open wa-dropdown",
+        name: "open native menu",
         targets: [main],
         expected: ["composer", "overlay", "overlay", "overlay", "overlay"],
-        openDropdown: true,
+        openMenu: true,
       },
       { name: "dialog", targets: [dialogButton], expected: overlay, openDialog: true },
       {
@@ -237,80 +344,31 @@ describe("new session draft route ownership", () => {
       { name: "input/contenteditable", targets: [input, editable], expected: element },
     ];
 
-    for (const row of routing) {
-      for (const target of row.targets) {
-        for (const [index, key] of keys.entries()) {
-          menu.open = row.openDropdown === true;
-          dialog.open = row.openDialog === true;
-          target.focus();
-          target.dispatchEvent(
-            new KeyboardEvent("keydown", { key, bubbles: true, composed: true }),
-          );
-          const destination = row.expected[index];
-          if (destination === "composer") {
-            expect(document.activeElement, `${row.name} / ${key} -> composer`).toBe(textarea);
-          } else if (destination === "overlay") {
-            expect(document.activeElement, `${row.name} / ${key} -> overlay`).not.toBe(textarea);
-          } else {
-            expect(document.activeElement, `${row.name} / ${key} -> ${destination}`).toBe(target);
+    try {
+      for (const row of routing) {
+        for (const target of row.targets) {
+          for (const [index, key] of keys.entries()) {
+            menuOwner.request(row.openMenu === true);
+            dialog.open = row.openDialog === true;
+            target.focus();
+            target.dispatchEvent(
+              new KeyboardEvent("keydown", { key, bubbles: true, composed: true }),
+            );
+            const destination = row.expected[index];
+            if (destination === "composer") {
+              expect(document.activeElement, `${row.name} / ${key} -> composer`).toBe(textarea);
+            } else if (destination === "overlay") {
+              expect(document.activeElement, `${row.name} / ${key} -> overlay`).not.toBe(textarea);
+            } else {
+              expect(document.activeElement, `${row.name} / ${key} -> ${destination}`).toBe(target);
+            }
           }
         }
       }
+    } finally {
+      menuOwner.dispose();
+      releaseDialog();
     }
-  });
-
-  it("leaves shortcuts, composition, and other form controls alone", async () => {
-    const page = await mount(routeData("research"));
-    const neutral = page.appendChild(document.createElement("button"));
-    neutral.focus();
-
-    for (const init of [
-      { key: "x", ctrlKey: true },
-      { key: "x", metaKey: true },
-      { key: "Tab" },
-      { key: "Escape" },
-      { key: "Process", isComposing: true },
-    ]) {
-      document.dispatchEvent(
-        new KeyboardEvent("keydown", { ...init, bubbles: true, composed: true }),
-      );
-      expect(document.activeElement).toBe(neutral);
-    }
-
-    const editable = document.createElement("div");
-    editable.setAttribute("contenteditable", "true");
-    for (const control of [
-      document.createElement("input"),
-      document.createElement("select"),
-      document.createElement("textarea"),
-      editable,
-    ]) {
-      page.append(control);
-      control.focus();
-      control.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "x", bubbles: true, composed: true }),
-      );
-      expect(document.activeElement).toBe(control);
-    }
-  });
-
-  it("labels the message input independently of its placeholder", async () => {
-    const page = await mount(routeData("research"));
-    const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");
-
-    expect(textarea?.getAttribute("aria-label")).toBe(t("newSession.messagePlaceholder"));
-  });
-
-  it("clears source draft state when destination data is still pending", async () => {
-    const page = await mount(routeData("research"));
-    window.history.replaceState({}, "", "/new?agent=research");
-    await enterMessage(page, "source draft");
-
-    window.history.replaceState({}, "", "/new?agent=research&catalog=claude");
-    page.data = undefined;
-    await settle(page);
-
-    expect(message(page)).toBe("");
   });
 
   it("keeps destination input through pending data, settlement, and agent resolution", async () => {

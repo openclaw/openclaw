@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { normalizeAutomation } from "./metadata-contract-normalization.ts";
+import { definedFields } from "../../../record-fields.js";
 import {
   WORKBOARD_ATTEMPT_STATUSES,
   WORKBOARD_DIAGNOSTIC_KINDS,
@@ -11,6 +11,8 @@ import {
   WORKBOARD_NOTIFICATION_KINDS,
   WORKBOARD_PROOF_STATUSES,
   WORKBOARD_STATUSES,
+  WORKBOARD_WORKER_STATES,
+  WORKBOARD_DIAGNOSTIC_ACTION_KINDS,
   WORKBOARD_TEMPLATE_IDS,
   type WorkboardEvent,
   type WorkboardExecution,
@@ -36,21 +38,57 @@ function tolerantArray<T>(schema: z.ZodType<T>) {
     .catch(undefined);
 }
 
-function omitUndefinedFields<T extends Record<string, unknown>>(value: T): T {
-  for (const key of Object.keys(value)) {
-    if (value[key] === undefined) {
-      delete value[key];
-    }
-  }
-  return value;
+function sparseObject<Shape extends z.ZodRawShape>(shape: Shape) {
+  return z.object(shape).transform(definedFields);
 }
 
-function sparseObject<Shape extends z.ZodRawShape>(shape: Shape) {
-  return z.object(shape).transform(omitUndefinedFields);
-}
+const automationNumberSchema = z
+  .custom<number>((value) => typeof value === "number")
+  .optional()
+  .catch(undefined);
+const automationStringsSchema = tolerantArray(z.string().refine((value) => value.trim() !== ""));
+const automationSchema = sparseObject({
+  tenant: optionalStringSchema,
+  boardId: optionalStringSchema,
+  createdByCardId: optionalStringSchema,
+  idempotencyKey: optionalStringSchema,
+  skills: automationStringsSchema,
+  createdCardIds: automationStringsSchema,
+  workspace: sparseObject({
+    kind: z.enum(["scratch", "dir", "worktree"]),
+    path: optionalStringSchema,
+    branch: optionalStringSchema,
+    sourcePath: optionalStringSchema,
+    sourceBranch: optionalStringSchema,
+  })
+    .optional()
+    .catch(undefined),
+  workspaceAccess: z
+    .union([
+      z.object({ unrestricted: z.literal(true) }),
+      z.object({
+        unrestricted: z.literal(false),
+        roots: z
+          .array(z.unknown())
+          .transform((roots) => roots.filter((root): root is string => typeof root === "string")),
+        writable: z.boolean(),
+      }),
+    ])
+    .optional()
+    .catch(undefined),
+  maxRuntimeSeconds: automationNumberSchema,
+  maxRetries: automationNumberSchema,
+  scheduledAt: automationNumberSchema,
+  summary: optionalStringSchema,
+  dispatchCount: automationNumberSchema,
+  lastDispatchAt: automationNumberSchema,
+})
+  .transform((value) => (Object.keys(value).length ? value : undefined))
+  .optional()
+  .catch(undefined);
 
 const diagnosticActionSchema = z.object({
-  kind: z.enum(["claim", "unblock", "promote", "reclaim", "reassign", "add_proof", "open_session"]),
+  kind: z.enum(WORKBOARD_DIAGNOSTIC_ACTION_KINDS),
   label: z.string(),
 });
 
@@ -154,7 +192,7 @@ const workerLogSchema = sparseObject({
   runId: optionalStringSchema,
 });
 const workerProtocolSchema = sparseObject({
-  state: z.enum(["idle", "running", "completed", "blocked", "violated"]),
+  state: z.enum(WORKBOARD_WORKER_STATES),
   updatedAt: z.number().catch(() => Date.now()),
   detail: optionalStringSchema,
 })
@@ -225,7 +263,7 @@ const workboardMetadataSchema = z
     attachments: tolerantArray(attachmentSchema),
     workerLogs: tolerantArray(workerLogSchema),
     workerProtocol: workerProtocolSchema,
-    automation: z.unknown().transform(normalizeAutomation).optional(),
+    automation: automationSchema,
     claim: claimSchema,
     diagnostics: tolerantArray(diagnosticSchema),
     notifications: tolerantArray(notificationSchema),
@@ -241,7 +279,7 @@ const workboardMetadataSchema = z
     failureCount: optionalNumberSchema,
   })
   .transform((value): WorkboardMetadata | undefined => {
-    const metadata = omitUndefinedFields(value);
+    const metadata = definedFields(value);
     return Object.keys(metadata).length ? metadata : undefined;
   });
 

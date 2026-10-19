@@ -193,6 +193,28 @@ export async function recoverPendingWorkspaceResults(
             let active: WorkerOwnedPendingPlacement = pendingPlacement;
             const workspace = await resolveWorkspace(active, pending, recovery.workspace);
             recovery.assertCurrent();
+            if (workspace.kind === "device-folder") {
+              // A restart revokes the old turn, but not this device's authoritative files.
+              // Join process cleanup without capturing or reconciling the folder.
+              await environments.stopTunnel(active.environmentId, active.activeOwnerEpoch);
+              recovery.assertCurrent();
+              await placements.acceptWorkspaceResult(turnClaim, recovery.assertCurrent);
+              await placements.closeWorkerTurnToolState(turnClaim);
+              if (active.state === "draining") {
+                await environments.destroy(active.environmentId);
+                await completeRecoveredWorkspaceTeardown({
+                  placements,
+                  placement: active,
+                  turnClaim,
+                });
+              } else {
+                await placements.completeWorkspaceResultAndReleaseTurn(
+                  turnClaim,
+                  recovery.assertCurrent,
+                );
+              }
+              return;
+            }
             const root = sessionWorkspaceRoot(workspace);
             const priorWorkspaceResultConflict = await resolvePriorWorkspaceResultConflict(
               recovery.resolveConflict,

@@ -6,6 +6,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -21,6 +22,7 @@ import {
 import {
   consumeGatewayRestartHandoffSync,
   formatGatewayRestartHandoffDiagnostic,
+  readGatewayRestartHandoff,
   readGatewayRestartHandoffSync,
   writeGatewayRestartHandoff,
 } from "./restart-handoff.js";
@@ -182,12 +184,53 @@ describe("gateway restart handoff", () => {
     }
   });
 
-  it("does not create shared state when no restart handoff database exists", () => {
+  it("does not create shared state when no restart handoff database exists", async () => {
     const env = createHandoffEnv();
     const databasePath = path.join(env.OPENCLAW_STATE_DIR ?? "", "state", "openclaw.sqlite");
 
     expect(readGatewayRestartHandoffSync(env)).toBeNull();
+    await expect(readGatewayRestartHandoff(env)).resolves.toBeNull();
     expect(fs.existsSync(databasePath)).toBe(false);
+  });
+
+  it("reads committed handoff replacements without main-thread handoff SQL", async () => {
+    const env = createHandoffEnv();
+    await expectWrittenHandoff({
+      env,
+      pid: 111,
+      reason: "plugin source changed",
+      supervisorMode: "launchd",
+      createdAt: 1_000,
+      restartTrace: { startedAt: 900, lastAt: 1_000 },
+    });
+    const sql = observeHostDataSql();
+    try {
+      await expect(readGatewayRestartHandoff(env, 1_500)).resolves.toMatchObject({
+        pid: 111,
+        source: "plugin-change",
+        supervisorMode: "launchd",
+        restartTrace: { startedAt: 900, lastAt: 1_000 },
+      });
+      await expectWrittenHandoff({
+        env,
+        pid: 222,
+        reason: "gateway.restart",
+        supervisorMode: "systemd",
+        createdAt: 1_200,
+        restartTrace: { startedAt: 1_100, lastAt: 1_200 },
+      });
+      await expect(readGatewayRestartHandoff(env, 1_500)).resolves.toMatchObject({
+        pid: 222,
+        source: "operator-restart",
+        supervisorMode: "systemd",
+        restartTrace: { startedAt: 1_100, lastAt: 1_200 },
+      });
+      expect(
+        sql.queries.filter((query) => /\bfrom\s+"?gateway_restart_handoff\b/iu.test(query)),
+      ).toEqual([]);
+    } finally {
+      sql.restore();
+    }
   });
 
   it("reads a restart handoff without advancing an older shared schema", async () => {
@@ -208,6 +251,8 @@ describe("gateway restart handoff", () => {
     writable.close();
 
     expect(readGatewayRestartHandoffSync(env, 1_500)).toStrictEqual(handoff);
+    await expect(readGatewayRestartHandoff(env, 1_500)).resolves.toStrictEqual(handoff);
+    await closeOpenClawStateDatabaseAsync();
 
     const readOnly = new DatabaseSync(databasePath, { readOnly: true });
     try {

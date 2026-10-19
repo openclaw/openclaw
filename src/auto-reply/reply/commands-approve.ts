@@ -126,10 +126,15 @@ export async function handleApproveCommandFromContext(
       senderId: kind === "plugin" ? pluginReviewerSenderId : params.command.senderId,
       kind,
     });
+  const [exec, plugin, systemAgent] = await Promise.all([
+    authorize("exec"),
+    authorize("plugin"),
+    authorize("system-agent"),
+  ]);
   const authorizations: Record<(typeof approvalKinds)[number], ApprovalCommandAuthorization> = {
-    exec: authorize("exec"),
-    plugin: authorize("plugin"),
-    "system-agent": authorize("system-agent"),
+    exec,
+    plugin,
+    "system-agent": systemAgent,
   };
   const hasExplicitApprovalAuthorization = Object.values(authorizations).some(
     (authorization) => authorization.explicit && authorization.authorized,
@@ -152,7 +157,8 @@ export async function handleApproveCommandFromContext(
 
   // Channels with reviewer custody let the Gateway judge the actor; elsewhere an
   // OpenClaw change needs the current configured owner, like the tool that proposed it.
-  const systemAgentNeedsOwner = !approvalCapability?.authorizeActorAction;
+  const systemAgentNeedsOwner =
+    !approvalCapability?.authorizeActorActionAsync && !approvalCapability?.authorizeActorAction;
   const commandBehaviors = new Map<ChannelApprovalKind, ApproveCommandBehavior | undefined>();
   for (const approvalKind of approvalKinds) {
     commandBehaviors.set(
@@ -184,6 +190,7 @@ export async function handleApproveCommandFromContext(
     // Gateway's final decision guard rechecks live custody (channel approvers,
     // or else configured owner). Gateway clients are authorized by their scopes.
     const reviewer =
+      approvalCapability?.authorizeActorActionAsync ||
       approvalCapability?.authorizeActorAction ||
       (approvalKind === "system-agent" && !Array.isArray(params.ctx.GatewayClientScopes))
         ? {

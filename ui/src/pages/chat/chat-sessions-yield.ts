@@ -5,6 +5,7 @@ import {
   isToolResultContentType,
 } from "../../../../src/chat/tool-content.js";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
+import { t } from "../../i18n/index.ts";
 import type { ChatItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import {
   isStandaloneToolMessageForDisplay,
@@ -47,8 +48,8 @@ export type PendingSessionsYield = {
 
 type WorkingStatusItem = Extract<ChatItem, { kind: "reading-indicator" }>;
 
-function isWorkingStatus(item: ChatItem): item is WorkingStatusItem {
-  return item.kind === "reading-indicator" && !item.waitingOn;
+function isTurnStatus(item: ChatItem): item is WorkingStatusItem {
+  return item.kind === "reading-indicator";
 }
 
 function scanSessionsYieldItems(
@@ -83,7 +84,10 @@ function scanSessionsYieldItems(
         [...laterRuns].some(
           (runId) => lastYield.runId !== undefined && runId !== lastYield.runId,
         ) ||
-        (insideWorkingTurn && working !== undefined && !working.item.runId);
+        (insideWorkingTurn &&
+          working !== undefined &&
+          !working.item.waitingOn &&
+          !working.item.runId);
       // Nothing is drawn here. The boundary keeps the handed-off turn's rows in
       // place, also between the wait ending and the resume, and keeps a resumed
       // run's rows from pooling or rolling up with the run that handed off.
@@ -94,21 +98,32 @@ function scanSessionsYieldItems(
         text: "",
         timestamp: timestamp ?? 0,
       });
-      if (resumed) {
-        const handoffRunId = lastYield.runId ?? transcriptRunId(message);
-        if (
-          insideWorkingTurn &&
-          handoffRunId &&
-          handoffRunId !== working?.item.runId &&
-          !handoffRunIds.includes(handoffRunId)
-        ) {
-          handoffRunIds.unshift(handoffRunId);
-        }
-      } else {
+      const handoffRunId = lastYield.runId ?? transcriptRunId(message);
+      if (
+        insideWorkingTurn &&
+        handoffRunId &&
+        (handoffRunId !== working?.item.runId || working?.item.waitingOn === "subagents") &&
+        !handoffRunIds.includes(handoffRunId)
+      ) {
+        handoffRunIds.unshift(handoffRunId);
+      }
+      if (!resumed) {
         pending = {
           timestamp: timestamp !== null && timestamp > 0 ? timestamp : null,
           ...(lastYield.runId ? { runId: lastYield.runId } : {}),
         };
+        const facts =
+          asRecord(lastYield.details) ?? safeParseJsonRecord(lastYield.outputText ?? "");
+        const acknowledgment =
+          typeof facts?.acknowledgment === "string" ? facts.acknowledgment.trim() : "";
+        if (acknowledgment || asRecord(lastYield.args)?.waitFor === "message") {
+          boundary.push({
+            kind: "notice",
+            key: `yield-status:${item.key}:${lastYield.id}`,
+            text: acknowledgment || t("chat.waitingForMessage"),
+            timestamp: timestamp ?? 0,
+          });
+        }
       }
       laterActivity = true;
     }
@@ -158,7 +173,7 @@ function scanSessionsYieldItems(
     }
     const slot = [...remaining, ...boundary];
     projected.push(slot);
-    if (isWorkingStatus(item)) {
+    if (isTurnStatus(item)) {
       working = { slot, item };
       insideWorkingTurn = true;
     } else if (insideWorkingTurn && chatItemStartsUserTurn(item)) {
@@ -186,7 +201,7 @@ function scanSessionsYieldItems(
         normalizeRoleForGrouping(resolveMessageRole(message)) === "assistant" &&
         hasRenderableNormalizedMessage(message));
   }
-  // A run that resumes a handoff continues the same answer: its status counts
+  // Waiting on or resuming a handoff continues the same answer: its status counts
   // from the request and names the runs before it. That needs the loaded turn
   // to be exactly that chain, from the message that asked. A turn that also
   // holds another run, or starts outside the window, keeps the run's own status
@@ -200,7 +215,11 @@ function scanSessionsYieldItems(
     status.slot[status.slot.indexOf(status.item)] = {
       ...status.item,
       startedAt: Math.min(status.item.startedAt, status.askedAt),
-      request: { askedAt: status.askedAt, runIds: handoffRunIds },
+      request: {
+        askedAt: status.askedAt,
+        // Usage consumers add the status run itself, including while it waits.
+        runIds: handoffRunIds.filter((runId) => runId !== status.item.runId),
+      },
     };
   }
   return { items: projected.toReversed().flat(), pending };
@@ -208,11 +227,12 @@ function scanSessionsYieldItems(
 
 /**
  * Keeps handoff calls out of tool details and separates a resumed run from the
- * run that handed off. The working indicator shows the wait itself.
+ * run that handed off. Message waits retain their public acknowledgment/status;
+ * child waits use the working indicator.
  *
  * `complete` is this projection of the same transcript before search hid any
  * rows. A resumed run's request and handoffs are facts of the whole transcript,
- * so its working status is taken from there, not from the matching rows.
+ * so working and waiting statuses are taken from there, not from the matching rows.
  */
 export function projectSessionsYieldItems(
   items: ChatItem[],
@@ -220,10 +240,16 @@ export function projectSessionsYieldItems(
   complete?: readonly ChatItem[],
 ): ChatItem[] {
   const projected = scanSessionsYieldItems(items, showToolCalls).items;
-  const status = complete?.find(isWorkingStatus);
-  return status
-    ? projected.map((item) => (isWorkingStatus(item) && item.key === status.key ? status : item))
+  const status = complete?.find(isTurnStatus);
+  const completeKeys = complete && new Set(complete.map((item) => item.key));
+  const visible = completeKeys
+    ? projected.filter(
+        (item) => !item.key.startsWith("yield-status:") || completeKeys.has(item.key),
+      )
     : projected;
+  return status
+    ? visible.map((item) => (isTurnStatus(item) && item.key === status.key ? status : item))
+    : visible;
 }
 
 const pendingYieldByHistory = new WeakMap<readonly unknown[], PendingSessionsYield | null>();

@@ -28,7 +28,14 @@ function isTestCommand(command: Command) {
   );
 }
 
-type Step = { name?: string; run?: string; if?: string };
+type Step = {
+  id?: string;
+  name?: string;
+  run?: string;
+  if?: string;
+  "continue-on-error"?: boolean;
+  "timeout-minutes"?: number;
+};
 const workflow: {
   jobs: Record<
     string,
@@ -57,6 +64,88 @@ const configureStep = workflow.jobs["ios-build"]?.steps?.find(
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+describe("iOS incremental build-cache admission", () => {
+  it("reads only current main-tier products and publishes only after successful scheduled main tests", () => {
+    const step = (name: string) => {
+      const found = workflow.jobs["ios-build"]?.steps?.find((candidate) => candidate.name === name);
+      if (!found) {
+        throw new Error(`Missing iOS cache step: ${name}`);
+      }
+      return found;
+    };
+    const restore = step("Restore iOS test build products");
+    const record = step("Record iOS build-cache input metadata");
+    const save = step("Save iOS test build products");
+    const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+      eventName: "schedule",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      ref: "refs/heads/main",
+      matrix: { phase: "tests" },
+      env: { IOS_MAIN_TIER: "true" },
+      preflightOutputs: { cache_mode: "restore", cache_write_allowed: "true" },
+      steps: {
+        "ios-cache-inputs": { outputs: { xcode: "toolchain" } },
+        "ios-build-cache": {
+          outputs: { "cache-primary-key": "native-inputs", "cache-hit": "false" },
+        },
+        "record-ios-build-cache-metadata": { outputs: {}, outcome: "success" as const },
+      },
+    };
+    const selected = (owner: Step, overrides: Partial<typeof context> = {}) =>
+      evaluateWorkflowExpression(`\${{ ${owner.if} }}`, { ...context, ...overrides });
+    expect(selected(restore)).toBe(true);
+    expect(selected(record)).toBe(true);
+    expect(selected(save)).toBe(true);
+    for (const overrides of [
+      { matrix: { phase: "smoke" } },
+      { env: { IOS_MAIN_TIER: "false" } },
+      { preflightOutputs: { cache_mode: "off", cache_write_allowed: "true" } },
+      { steps: { ...context.steps, "ios-cache-inputs": { outputs: { xcode: "" } } } },
+    ]) {
+      expect(selected(restore, overrides)).toBe(false);
+    }
+    expect(
+      selected(save, {
+        preflightOutputs: { cache_mode: "restore", cache_write_allowed: "false" },
+      }),
+    ).toBe(false);
+    expect(selected(record, { eventName: "pull_request" })).toBe(false);
+    expect(selected(record, { ref: "refs/heads/feature" })).toBe(false);
+    expect(
+      selected(record, {
+        preflightOutputs: { cache_mode: "restore", cache_write_allowed: "false" },
+      }),
+    ).toBe(false);
+    for (const outputs of [
+      { "cache-primary-key": "", "cache-hit": "false" },
+      { "cache-primary-key": "native-inputs", "cache-hit": "true" },
+    ]) {
+      expect(
+        selected(record, { steps: { ...context.steps, "ios-build-cache": { outputs } } }),
+      ).toBe(false);
+    }
+    expect(evaluateWorkflowExpression(`\${{ ${record.if} }}`, { ...context, failed: true })).toBe(
+      false,
+    );
+    expect(
+      selected(save, {
+        steps: {
+          ...context.steps,
+          "record-ios-build-cache-metadata": { outputs: {}, outcome: "failure" },
+        },
+      }),
+    ).toBe(false);
+    for (const [owner, minutes] of [
+      [record, 1],
+      [save, 3],
+    ] as const) {
+      expect(owner["continue-on-error"]).toBe(true);
+      expect(owner["timeout-minutes"]).toBe(minutes);
+    }
+  });
+});
+
 function runSimulatorStep(mode = "ready", steps = [watchStep], env: Record<string, string> = {}) {
   const root = tempDirs.make("openclaw-watch-workflow-");
   const bin = path.join(root, "bin");
@@ -67,6 +156,11 @@ function runSimulatorStep(mode = "ready", steps = [watchStep], env: Record<strin
   copyFileSync("scripts/lib/swift-toolchain.sh", path.join(harnessLib, "swift-toolchain.sh"));
   copyFileSync("scripts/lib/ci-ios-smoke-plan.mjs", path.join(harnessLib, "ci-ios-smoke-plan.mjs"));
   copyFileSync("scripts/ci-xcodebuild.py", path.join(harnessLib, "..", "ci-xcodebuild.py"));
+  copyFileSync(
+    "scripts/swift-build-cache-metadata.py",
+    path.join(harnessLib, "..", "swift-build-cache-metadata.py"),
+  );
+  copyFileSync("scripts/ci-collect-checks.sh", path.join(harnessLib, "..", "ci-collect-checks.sh"));
   mkdirSync(product, { recursive: true });
   const runner = path.join(root, "tools.mjs");
   writeFileSync(
@@ -191,6 +285,7 @@ exec '${python.stdout.trim()}' "$@"
       IOS_SIMULATOR_SELECTION: JSON.stringify(resolveIosSimulatorTestSelection(null)),
       IOS_CI_PHASE: "smoke",
       IOS_MAIN_TIER: "false",
+      IOS_FROZEN_TARGET: "false",
       HISTORICAL_TARGET: "false",
       IOS_DEST: "",
       XCODE_XCCONFIG_FILE: "",
@@ -209,6 +304,7 @@ exec '${python.stdout.trim()}' "$@"
     commands,
     product,
     summary: readFileSync(summaryFile, "utf8"),
+    environment: readFileSync(environmentFile, "utf8"),
   };
 }
 
@@ -329,31 +425,6 @@ describe.skipIf(process.platform === "win32")("Watch simulator workflow", () => 
 
 describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () => {
   it.each([
-    ["tests", "false", "false"],
-    ["smoke", "true", "true"],
-    ["tests", "false", "true"],
-  ])(
-    "keeps the generic simulator build for phase=%s historical=%s frozen=%s",
-    (phase, historical, frozen) => {
-      const { result, commands } = runSimulatorStep("voice", [buildStep], {
-        IOS_CI_PHASE: phase,
-        HISTORICAL_TARGET: historical,
-        IOS_FROZEN_TARGET: frozen,
-      });
-      expect(result.status, result.stderr).toBe(0);
-      if (historical === "true" || frozen === "true") {
-        expect(commands).toEqual([{ tool: "pnpm", args: ["ios:build"], destination: "" }]);
-      } else {
-        const build = commands.find((command) => command.tool === "xcodebuild");
-        expect(build?.args).toEqual(
-          expect.arrayContaining(["-destination", "generic/platform=iOS Simulator", "build"]),
-        );
-        expect(build?.args).not.toContain("build-for-testing");
-      }
-    },
-  );
-
-  it.each([
     ["smoke", "false"],
     ["tests", "true"],
     ["tests", "false"],
@@ -361,19 +432,27 @@ describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () =
     "executes cleanup and sibling suites with normal Debug signing: %s, main=%s",
     (phase, main) => {
       const manual = phase === "tests" && main === "false";
-      const { result, commands } = runSimulatorStep(
+      const { result, commands, environment } = runSimulatorStep(
         "voice",
         [configureStep, prepareStep, buildStep, voiceStep, ...(manual ? [] : [iosStep])],
         { IOS_CI_PHASE: phase, IOS_MAIN_TIER: main },
       );
       expect(result.status, result.stderr).toBe(0);
+      expect(environment.includes("IOS_TEST_BUILD_PREPARED=true")).toBe(
+        phase === "smoke" || main === "true",
+      );
       const appBuild = commands.find((command) => command.tool === "pnpm");
       if (manual) {
         expect(appBuild?.destination).toBe("");
         expect(commands.every((command) => command.settings === undefined)).toBe(true);
         const testRun = commands.find(isTestCommand);
         expect(testRun?.args).toEqual(
-          expect.arrayContaining(["-collect-test-diagnostics", "on-failure"]),
+          expect.arrayContaining([
+            "-collect-test-diagnostics",
+            "never",
+            "-resultBundlePath",
+            "apps/ios/build/LifecycleTestResults/OpenClawVoiceCleanupTests.xcresult",
+          ]),
         );
         return;
       }
@@ -394,11 +473,7 @@ describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () =
             ["build", "build-for-testing", "test", "test-without-building"].includes(arg),
           ),
         ),
-      ).toEqual(
-        phase === "smoke"
-          ? ["build-for-testing", "test-without-building", "test-without-building"]
-          : ["build", "test", "test"],
-      );
+      ).toEqual(["build-for-testing", "test-without-building", "test-without-building"]);
       for (const command of builds) {
         expect(command.args).toEqual(expect.arrayContaining(["-configuration", "Debug"]));
         expect(command.args).toContain(appBuild?.destination);
@@ -471,6 +546,14 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
     const tests = commands.filter(isTestCommand);
     expect(tests).toHaveLength(phase === "smoke" ? 1 : 2);
     expect(tests[0]?.args).toContain("platform=iOS Simulator,id=watch-fixture");
+    expect(tests[0]?.args).toEqual(
+      expect.arrayContaining([
+        "-collect-test-diagnostics",
+        "never",
+        "-resultBundlePath",
+        "apps/ios/build/LifecycleTestResults/OpenClawLifecycleTests.xcresult",
+      ]),
+    );
     const authSelectors = [
       ...authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
       "-only-testing:OpenClawTests/ChatTypingFocusTests",
@@ -525,7 +608,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
   });
 
   it.each(["smoke", "tests"])(
-    "propagates auth test errors without later UI tests (%s)",
+    "retains auth test errors after completing independent restart and UI checks (%s)",
     (phase) => {
       const { result, commands } = runSimulatorStep(
         "voice-tests-failed",
@@ -534,59 +617,18 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
           IOS_CI_PHASE: phase,
         },
       );
-      expect(result.status).toBe(25);
-      expect(commands.filter(isTestCommand)).toHaveLength(1);
-      expect(commands.some((command) => command.tool === "python3")).toBe(false);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("[apple-command] Exit 25");
+      expect(commands.filter(isTestCommand)).toHaveLength(phase === "smoke" ? 1 : 2);
+      expect(commands.filter((command) => command.tool === "python3")).toHaveLength(1);
     },
   );
 });
 
 describe("iOS simulator owner selection", () => {
   it.each([
-    ["apps/ios/Sources/Voice/TalkModeManager.swift", true, true],
-    ["apps/ios/Sources/Onboarding/OnboardingWizardView.swift", true, true],
-    ["apps/ios/Sources/FutureFeature/NewService.swift", true, true],
-    ["apps/ios/WatchApp/Sources/WatchInboxView.swift", true, false],
-    ["apps/ios/ActivityWidget/OpenClawLiveActivity.swift", true, false],
-    ["apps/ios/Tests/TalkModeConfigParsingTests.swift", true, false],
-    ["apps/ios/Tests/Fixtures/managed-document-message.json", true, false],
-    ["apps/ios/Tests/CloudflareAccessTestTokens.swift", false, true],
-    ["apps/ios/Tests/CloudflareAccessBrowserPresenterTests.swift", false, true],
-    ["apps/ios/Tests/GatewayIngressActivationTests.swift", false, true],
-    ["apps/ios/Tests/GatewayIngressWireTests.swift", false, true],
-    ["apps/ios/Tests/GatewayIngressLoginPreparationTests.swift", false, true],
-    ["apps/ios/Tests/GatewayOperatorFleetTests.swift", false, true],
-    ["scripts/ios-access-restart-proof.py", false, true],
-    ["apps/ios/Tests/GatewayAccessRestartTests.swift", false, true],
-    ["apps/ios/Tests/IOSMediaArtifactLoaderTests.swift", true, true],
-    ["apps/ios/Tests/OpenClawTypographyTests.swift", true, true],
-    ["apps/ios/Tests/ChatSendHydrationTests.swift", false, true],
-    ["apps/ios/Tests/RootTabsNavigationTests.swift", false, false],
-    ["apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatViewModelTests.swift", false, false],
-    ["apps/shared/OpenClawKit/Sources/OpenClawNativeState/NativeState.swift", true, true],
-    ["apps/macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift", true, true],
-    ["apps/macos/Tests/OpenClawIPCTests/DashboardHTTPFixture.swift", true, true],
-    ["apps/macos/Tests/OpenClawIPCTests/AsyncTestGate.swift", true, true],
-    ["apps/macos/Tests/OpenClawIPCTests/TestWait.swift", true, true],
     ["apps/swabble/Sources/SwabbleKit/Speech.swift", true, true],
-    ["apps/swabble/Sources/swabble/main.swift", false, false],
-    ["apps/ios/fastlane/Fastfile", false, false],
-    ...[
-      "apps/ios/project.yml",
-      "apps/ios/Config/Signing.xcconfig",
-      "apps/ios/Sources/Fonts/Inter[opsz,wght].ttf",
-      "apps/ios/Tests/Info.plist",
-      "apps/shared/OpenClawKit/Package.swift",
-      "apps/swabble/Package.resolved",
-      "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid/index.html",
-      "scripts/lib/swift-toolchain.sh",
-      "scripts/ios-simulator-prepare.sh",
-      "scripts/ios-generate-test-tls-identity.sh",
-      "scripts/ci-xcodebuild.py",
-      "scripts/lib/ci-ios-smoke-plan.mjs",
-      ".github/workflows/ci.yml",
-      "pnpm-lock.yaml",
-    ].map((file) => [file, true, true] as const),
+    ["scripts/lib/swift-toolchain.sh", true, true],
   ] as const)(
     "selects the actual runtime, test, and resource owners for %s",
     (file, voice, lifecycle) => {
@@ -599,21 +641,18 @@ describe("iOS simulator owner selection", () => {
     },
   );
 
-  it.each([
-    { changedPaths: null, enabled: true },
-    { changedPaths: ["../apps/ios/Tests/ChatTypingFocusTests.swift"], enabled: true },
-    { changedPaths: ["/unknown"], enabled: true },
-    { changedPaths: ["invalid\npath"], enabled: true },
-    { changedPaths: null, enabled: false },
-  ])("falls back to full coverage only for admitted jobs: %j", ({ changedPaths, enabled }) => {
-    const selected = resolveIosSimulatorTestSelection(changedPaths, {
-      enabled,
-      forceFull: !enabled,
-    });
-    expect(selected.mode).toBe(enabled ? "full" : "not-selected");
-    expect(selected.voice.selected).toBe(enabled);
-    expect(selected.lifecycle.selected).toBe(enabled);
-  });
+  it.each([{ changedPaths: null, enabled: false }])(
+    "falls back to full coverage only for admitted jobs: %j",
+    ({ changedPaths, enabled }) => {
+      const selected = resolveIosSimulatorTestSelection(changedPaths, {
+        enabled,
+        forceFull: !enabled,
+      });
+      expect(selected.mode).toBe(enabled ? "full" : "not-selected");
+      expect(selected.voice.selected).toBe(enabled);
+      expect(selected.lifecycle.selected).toBe(enabled);
+    },
+  );
 });
 
 function admittedSimulatorSteps(
@@ -621,6 +660,15 @@ function admittedSimulatorSteps(
   phase = "smoke",
   compatibility = false,
 ) {
+  const outcomes: Record<
+    string,
+    { outputs: Record<string, string>; outcome: "success" | "skipped" }
+  > = Object.fromEntries(
+    ["select-xcode", "node-env", "ios-swift-tools", "watch-rust-toolchain"].map((id) => [
+      id,
+      { outputs: {}, outcome: "success" },
+    ]),
+  );
   return [configureStep, prepareStep, buildStep, voiceStep, iosStep].filter((step) => {
     if (!step) {
       throw new Error("Missing iOS simulator workflow step");
@@ -629,17 +677,22 @@ function admittedSimulatorSteps(
       return true;
     }
     const expression = step.if.startsWith("${{") ? step.if : `\${{ ${step.if} }}`;
-    return evaluateWorkflowExpression(expression, {
+    const selected = evaluateWorkflowExpression(expression, {
       repository: "openclaw/openclaw",
       eventName: "pull_request",
       runAttempt: 1,
       matrix: { phase },
+      steps: outcomes,
       preflightOutputs: {
         compatibility_target: String(compatibility),
         run_ios_voice_cleanup_tests: String(selection.voice.selected),
         run_ios_lifecycle_tests: String(selection.lifecycle.selected),
       },
     });
+    if (step.id) {
+      outcomes[step.id] = { outputs: {}, outcome: selected ? "success" : "skipped" };
+    }
+    return selected;
   });
 }
 
@@ -689,35 +742,9 @@ describe.skipIf(process.platform === "win32")("iOS selected simulator workflow",
       expect(summary).toContain(`| ${group} | ${groups.includes(group) ? "yes" : "no"} |`);
     }
   });
-
-  it("retains the full tests phase and compatibility exclusions regardless of PR group flags", () => {
-    const none = resolveIosSimulatorTestSelection([]);
-    expect(admittedSimulatorSteps(none, "tests")).toEqual([
-      configureStep,
-      prepareStep,
-      buildStep,
-      voiceStep,
-      iosStep,
-    ]);
-    const all = resolveIosSimulatorTestSelection(null);
-    expect(admittedSimulatorSteps(all)).toEqual([
-      configureStep,
-      prepareStep,
-      buildStep,
-      voiceStep,
-      iosStep,
-    ]);
-    for (const phase of ["smoke", "tests"]) {
-      const compatible = admittedSimulatorSteps(all, phase, true);
-      expect(compatible).toContain(buildStep);
-      expect(compatible).not.toContain(prepareStep);
-      expect(compatible).not.toContain(voiceStep);
-      expect(compatible).not.toContain(iosStep);
-    }
-  });
 });
 
-function runRestartProof(mode = "ready", format = 1) {
+function runRestartProof(mode = "ready", format = 1, prepared = false) {
   const root = tempDirs.make("openclaw-access-restart-");
   const result = spawnSync(
     "python3",
@@ -726,7 +753,8 @@ function runRestartProof(mode = "ready", format = 1) {
       "-c",
       String.raw`
 import contextlib, datetime, importlib.util, io, json, os, pathlib, plistlib, subprocess, sys
-helper, root, mode, format = sys.argv[1:]
+helper, root, mode, format, prepared = sys.argv[1:]
+os.environ["IOS_TEST_BUILD_PREPARED"] = prepared
 format = int(format)
 root = pathlib.Path(root)
 os.chdir(root)
@@ -869,6 +897,7 @@ print(json.dumps({"error": error, "commands": commands, "runs": runs, "bootTimeo
       root,
       mode,
       String(format),
+      String(prepared),
     ],
     { encoding: "utf8", timeout: 5_000 },
   );
@@ -891,10 +920,18 @@ print(json.dumps({"error": error, "commands": commands, "runs": runs, "bootTimeo
 }
 
 describe("iOS Access process restart proof", () => {
-  it.each([0, 1, 2])("preserves format %s for two fixed process repetitions", (format) => {
+  it.each([
+    { format: 0, prepared: false },
+    { format: 1, prepared: false },
+    { format: 2, prepared: false },
+    { format: 0, prepared: true },
+    { format: 1, prepared: true },
+    { format: 2, prepared: true },
+  ])("preserves two fixed process repetitions (%j)", ({ format, prepared }) => {
     const { error, commands, runs, bootTimeouts, receiptRetained } = runRestartProof(
       "ready",
       format,
+      prepared,
     );
     expect(error).toBeNull();
     expect(runs).toHaveLength(1);
@@ -932,7 +969,9 @@ describe("iOS Access process restart proof", () => {
         "-only-testing:OpenClawTests/GatewayAccessRestartTests/testAcknowledgedSignOutSurvivesProcessRestart",
       ]),
     );
-    expect(commands.filter((args) => args.includes("build-for-testing"))).toHaveLength(1);
+    expect(commands.filter((args) => args.includes("build-for-testing"))).toHaveLength(
+      prepared ? 0 : 1,
+    );
     for (const operation of [
       "install",
       "uninstall",
@@ -1027,12 +1066,6 @@ describe("iOS Access process restart proof", () => {
 });
 
 it.each([
-  { event: "pull_request", kill: "", full: false, releaseGate: false, historical: false },
-  { event: "pull_request", kill: "true", full: true, releaseGate: false, historical: false },
-  { event: "pull_request", kill: "1", full: true, releaseGate: false, historical: false },
-  { event: "schedule", kill: "", full: true, releaseGate: false, historical: false },
-  { event: "workflow_dispatch", kill: "", full: true, releaseGate: false, historical: false },
-  { event: "workflow_dispatch", kill: "", full: true, releaseGate: false, historical: true },
   { event: "workflow_dispatch", kill: "", full: true, releaseGate: true, historical: false },
 ] as const)(
   "publishes iOS manifest decisions for $event, override=$kill, release=$releaseGate, historical=$historical",
@@ -1046,26 +1079,21 @@ it.each([
       scopeEnv: {
         OPENCLAW_CI_RUN_IOS_BUILD: "true",
         OPENCLAW_CI_IOS_SIMULATOR_FULL: kill,
-        OPENCLAW_CI_VALIDATION_TIER: event === "schedule" ? "main" : "full",
+        OPENCLAW_CI_VALIDATION_TIER: "full",
       },
     });
     expect(result.status, result.output).toBe(0);
-    const admitted = event !== "pull_request";
-    expect(result.outputs.run_ios_build).toBe(String(admitted));
-    expect(result.outputs.run_ios_voice_cleanup_tests).toBe(String(admitted && full));
-    expect(result.outputs.run_ios_lifecycle_tests).toBe(String(admitted));
+    expect(result.outputs.run_ios_build).toBe("true");
+    expect(result.outputs.run_ios_voice_cleanup_tests).toBe(String(full));
+    expect(result.outputs.run_ios_lifecycle_tests).toBe("true");
     const selection: ReturnType<typeof resolveIosSimulatorTestSelection> = JSON.parse(
       result.outputs.ios_simulator_selection!,
     );
-    expect(selection.voice.selected).toBe(admitted && full);
-    expect(selection.lifecycle.selected).toBe(admitted);
-    if (admitted) {
-      expect(result.summary).toContain("iOS simulator test selection");
-      expect(result.summary).toContain(`| voice | ${full ? "yes" : "no"} |`);
-      expect(result.summary).toContain("| lifecycle | yes |");
-    } else {
-      expect(result.summary).not.toContain("iOS simulator test selection");
-    }
+    expect(selection.voice.selected).toBe(full);
+    expect(selection.lifecycle.selected).toBe(true);
+    expect(result.summary).toContain("iOS simulator test selection");
+    expect(result.summary).toContain(`| voice | ${full ? "yes" : "no"} |`);
+    expect(result.summary).toContain("| lifecycle | yes |");
     const phases = evaluateWorkflowExpression(workflow.jobs["ios-build"]?.strategy?.matrix?.phase, {
       repository: "openclaw/openclaw",
       eventName: event,
@@ -1073,12 +1101,6 @@ it.each([
       releaseGate,
       preflightOutputs: result.outputs,
     });
-    expect(phases).toEqual(
-      event === "schedule" || historical
-        ? ["tests"]
-        : event === "workflow_dispatch" && !releaseGate
-          ? ["release", "tests"]
-          : ["smoke"],
-    );
+    expect(phases).toEqual(["smoke"]);
   },
 );

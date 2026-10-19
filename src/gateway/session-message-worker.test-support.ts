@@ -5,7 +5,7 @@ import { captureWorkerTranscriptSource } from "./worker-environments/live-events
 import type { WorkerTranscriptCommitStore } from "./worker-environments/transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./worker-environments/transcript-commit.js";
 
-export function createWorkerFanoutFixture({
+export async function createWorkerFanoutFixture({
   storePath,
   sessionId,
   sessionKey,
@@ -42,7 +42,7 @@ export function createWorkerFanoutFixture({
     protocolFeatures: ["worker-live-event-v1", "worker-transcript-commit-v1"],
     credentialExpiresAtMs: Date.now() + 10_000,
   };
-  const source = captureWorkerTranscriptSource({
+  const source = await captureWorkerTranscriptSource({
     agentId: "main",
     sessionId,
     sessionKey,

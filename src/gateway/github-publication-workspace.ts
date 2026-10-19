@@ -5,11 +5,6 @@ import {
   bindAcceptedGitHubPublicationClaimSnapshotAsync,
   listGitHubPublicationsForClaimAsync,
 } from "./github-publication-store-async.js";
-import {
-  deferGitHubPublicationRequests as deferRequests,
-  ensureGitHubPublicationStore as ensureSchema,
-  listGitHubPublicationsForClaim,
-} from "./github-publication-store.js";
 import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
@@ -37,7 +32,7 @@ export async function prepareGitHubPublicationClaimWorkspace(
   }
   await params.placements.prepareWorkspaceResultClaim(claim);
   const first = rows[0]!;
-  const worktreeOwner = await readGitHubPublicationWorktreeOwner({
+  using worktreeOwner = await readGitHubPublicationWorktreeOwner({
     sessionId: first.session_id,
     sessionKey: first.session_key,
     agentId: first.agent_id,
@@ -47,6 +42,7 @@ export async function prepareGitHubPublicationClaimWorkspace(
       branch: first.branch,
     },
   });
+
   const { worktree } = worktreeOwner;
   if (!params.placements.validateWorkspaceResultClaim(claim)) {
     throw new Error("GitHub publication lost its workspace result claim before snapshot.");
@@ -93,10 +89,4 @@ export async function prepareGitHubPublicationClaimWorkspace(
       }
     });
   }
-}
-
-export function deferGitHubPublicationClaimPreparation(claim: WorkerSessionTurnClaim): void {
-  ensureSchema();
-  const rows = listGitHubPublicationsForClaim(claim, { pendingOnly: true });
-  deferRequests(rows.map((row) => row.request_id));
 }

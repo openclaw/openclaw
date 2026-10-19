@@ -1,18 +1,26 @@
-import type { DatabaseSync } from "node:sqlite";
+import { sql } from "kysely";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import { hashText, type MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
-import { MEMORY_INDEX_VECTOR_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
+import { isPostgresSqlConnection } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
-  prepareSqliteQuerySync,
   runSqliteImmediateTransactionSync,
-  tableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import { createMemoryChunkWriter, type IndexedMemoryChunk } from "./manager-chunk-writer.js";
-import { markMemoryVectorRebuildRequired } from "./manager-vector-rebuild-state.js";
-import { createMemoryVectorWriter } from "./manager-vector-write.js";
+import {
+  writeMemoryChunks,
+  type IndexedMemoryChunk,
+  type MemoryChunkWrite,
+} from "./manager-chunk-writer.js";
+import { admitMemoryVectorIndex } from "./manager-search-knn.js";
+import {
+  markMemoryVectorRebuildRequired,
+  resolveMemoryVectorIndexState,
+  VECTOR_REBUILD_META_KEY,
+} from "./manager-vector-rebuild-state.js";
 
+const SOURCE_WRITE_BATCH_SIZE = 128;
 const MAX_VECTOR_POINT_DELETES = 32;
 
 export type MemorySourceIndexReplacement = {
@@ -22,35 +30,29 @@ export type MemorySourceIndexReplacement = {
   model: string;
   now: number;
   vectorReady: boolean;
-} & (
-  | { source: "memory" }
-  | {
-      source: "sessions";
-      agentId: string;
-      sessionId: string;
-      /** Indexed chunks kept in place; publication refreshes only their provenance. */
-      retained?: IndexedMemoryChunk[];
-    }
-);
+  /** Retained chunks whose recall metadata or provenance changed. */
+  retained?: IndexedMemoryChunk[];
+  /** Present for a delta; computed with retained rows in the owner's planning read. */
+  removedIds?: string[];
+} & ({ source: "memory" } | { source: "sessions"; agentId: string; sessionId: string });
 
 export type MemorySourceIndexHeader = Omit<
   MemorySourceIndexReplacement,
-  "chunks" | "embeddings" | "retained"
-> &
-  (
+  "chunks" | "embeddings" | "retained" | "removedIds"
+> & { delta?: boolean } & (
     | { source: "memory" }
-    | { source: "sessions"; agentId: string; sessionId: string; delta?: boolean }
+    | { source: "sessions"; agentId: string; sessionId: string }
   );
-/** A delta publication stages every retained row before its first written row. */
-export type MemorySourceIndexRow = {
-  chunk: IndexedMemoryChunk;
-  embedding: number[];
-  retained?: boolean;
-};
-/** Drift means a retained row vanished before the write lock and nothing was written. */
-type MemorySourceIndexWriteResult = { retainedDrift: boolean };
-
+/** A retained row refreshes metadata without replacing indexed text or embeddings. */
+export type MemorySourceIndexRow =
+  | { removedId: string }
+  | {
+      chunk: IndexedMemoryChunk;
+      embedding: number[];
+      retained?: boolean;
+    };
 type SourceIndexDatabase = {
+  memory_index_meta: { key: string; value: string };
   memory_index_sources: {
     path: string;
     source: MemorySource;
@@ -64,11 +66,25 @@ type SourceIndexDatabase = {
     source: MemorySource;
     embedding: Uint8Array;
   };
+  memory_index_chunk_recall_metadata: {
+    chunk_id: string;
+    importance: number | null;
+    triggers: string | null;
+    project_key: string | null;
+  };
+  memory_index_chunk_provenance: {
+    chunk_id: string;
+    origin_class: string;
+    session_kind: string;
+    observed_at: number;
+    supersedes_key: string | null;
+  };
 };
 
 type SourceIndexState = {
   vector: { enabled: boolean; available: boolean | null };
   fts: { enabled: boolean; available: boolean };
+  hasVectorTable?: boolean;
 };
 
 export function memoryChunkRowId(
@@ -83,23 +99,39 @@ export function memoryChunkRowId(
 }
 
 /** Indexed row ids of one source and whether each row stores an embedding. */
-export function readMemorySourceChunks(
-  db: DatabaseSync,
-  source: MemorySource,
-  path: string,
-): Array<{ id: string; embedded: boolean }> {
+export function readMemorySourceChunks(db: EngineConnection, source: MemorySource, path: string) {
   return executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<SourceIndexDatabase>(db)
       .selectFrom("memory_index_chunks")
-      .select((eb) => ["id", eb(eb.fn<number>("length", ["embedding"]), ">", 0).as("embedded")])
+      .leftJoin(
+        "memory_index_chunk_recall_metadata as recall",
+        "recall.chunk_id",
+        "memory_index_chunks.id",
+      )
+      .leftJoin(
+        "memory_index_chunk_provenance as provenance",
+        "provenance.chunk_id",
+        "memory_index_chunks.id",
+      )
+      .select((eb) => [
+        "id",
+        eb(eb.fn<number>("length", ["embedding"]), ">", 0).as("embedded"),
+        "recall.importance",
+        "recall.triggers",
+        "recall.project_key as projectKey",
+        "provenance.origin_class as originClass",
+        "provenance.session_kind as sessionKind",
+        "provenance.observed_at as observedAt",
+        "provenance.supersedes_key as supersedesKey",
+      ])
       .where("path", "=", path)
       .where("source", "=", source),
-  ).rows.map((row) => ({ id: row.id, embedded: Boolean(row.embedded) }));
+  ).rows.map((row) => Object.assign(row, { embedded: Boolean(row.embedded) }));
 }
 
 export function readMemorySourceHash(
-  db: DatabaseSync,
+  db: EngineConnection,
   source: MemorySource,
   path: string,
 ): string | undefined {
@@ -116,72 +148,148 @@ export function readMemorySourceHash(
 // The caller retains transaction admission and repeats file validation before
 // each BEGIN attempt. This kernel runs only inside that admitted native transaction.
 export class MemorySourceIndexKernel {
+  private readonly search: ReturnType<typeof admitMemoryVectorIndex> | undefined;
   constructor(
-    private readonly database: DatabaseSync,
+    private readonly database: EngineConnection,
     private readonly state: SourceIndexState,
-  ) {}
+  ) {
+    // PostgreSQL admission installs projections on the canonical source rows.
+    // Only SQLite needs explicit vector writes and cleanup beside those rows.
+    this.search = isPostgresSqlConnection(database) ? undefined : admitMemoryVectorIndex(database);
+  }
 
-  replaceRows(
+  replaceRows(params: MemorySourceIndexHeader, rows: Iterable<MemorySourceIndexRow>): void {
+    this.replaceGroup([{ header: params, rows }]);
+  }
+
+  replaceGroup(
+    sources: Iterable<{ header: MemorySourceIndexHeader; rows: Iterable<MemorySourceIndexRow> }>,
+  ): void {
+    let pending: MemoryChunkWrite[] = [];
+    const pendingSources = new Set<string>();
+    const flush = () => {
+      writeMemoryChunks(this.database, pending);
+      pending = [];
+      pendingSources.clear();
+    };
+    const writeRows = (rows: MemoryChunkWrite[], defer: boolean) => {
+      // Only final tails can wait; later rows must observe intermediate writes.
+      if (!defer) {
+        flush();
+        writeMemoryChunks(this.database, rows);
+        return;
+      }
+      for (const row of rows) {
+        pending.push(row);
+        pendingSources.add(`${row.context.source}:${row.context.path}`);
+        if (pending.length === SOURCE_WRITE_BATCH_SIZE) {
+          flush();
+        }
+      }
+    };
+    for (const { header, rows } of sources) {
+      // A repeated source must observe its earlier replacement in this group.
+      if (pendingSources.has(`${header.source}:${header.entry.path}`)) {
+        flush();
+      }
+      this.replaceSourceRows(header, rows, writeRows);
+    }
+    flush();
+  }
+
+  private replaceSourceRows(
     params: MemorySourceIndexHeader,
     rows: Iterable<MemorySourceIndexRow>,
-  ): MemorySourceIndexWriteResult {
+    writeRows: (rows: MemoryChunkWrite[], defer: boolean) => void,
+  ): void {
     const { entry, source, model, now, vectorReady } = params;
-    // A session delta keeps unchanged rows and removes only ids this publication
-    // omits. Live ids are read under the write lock, so a writer that committed
-    // after planning cannot leave unknown rows behind.
-    const liveIds =
-      params.source === "sessions" && params.delta
-        ? new Set(readMemorySourceChunks(this.database, source, entry.path).map((row) => row.id))
-        : undefined;
-    if (!liveIds) {
+    const context = { path: entry.path, source, model, now };
+    const db = getNodeSqliteKysely<SourceIndexDatabase>(this.database);
+    const { delta } = params;
+    // Re-read mutable rebuild debt in this transaction; table presence is an
+    // admitted fact. Only a clean index relates stored embeddings to vectors.
+    const reuse =
+      !delta &&
+      vectorReady &&
+      resolveMemoryVectorIndexState({
+        marker: executeSqliteQueryTakeFirstSync(
+          this.database,
+          db
+            .selectFrom("memory_index_meta")
+            .select("value")
+            .where("key", "=", VECTOR_REBUILD_META_KEY),
+        )?.value,
+        hasVectorTable: this.state.hasVectorTable ?? this.state.vector.available === true,
+        hasSemanticChunks: true,
+      }).state === "complete";
+    const previous = reuse
+      ? new Set(
+          executeSqliteQuerySync(
+            this.database,
+            db
+              .selectFrom("memory_index_chunks")
+              .select("id")
+              .where("path", "=", entry.path)
+              .where("source", "=", source),
+          ).rows.map((row) => row.id),
+        )
+      : undefined;
+    if (!delta && !reuse) {
       this.clear(entry.path, source);
     }
-    const desiredIds = new Set<string>();
-    const retained: Array<{ id: string; chunk: IndexedMemoryChunk }> = [];
-    let written = false;
-    let writeChunk: ReturnType<typeof createMemoryChunkWriter> | undefined;
-    // Empty sources must not construct unused chunk-write queries.
-    const getChunkWriter = () =>
-      (writeChunk ??= createMemoryChunkWriter(this.database, {
-        path: entry.path,
-        source,
-        model,
-        now,
-      }));
-    let writeVector: ReturnType<typeof createMemoryVectorWriter> | undefined;
+    let batch: MemoryChunkWrite[] = [];
+    let removedIds: string[] = [];
     let hasEmbeddings = false;
-    for (const { chunk, embedding, retained: keep } of rows) {
-      const id = memoryChunkRowId(source, entry.path, chunk, model);
-      desiredIds.add(id);
-      if (keep) {
-        if (!liveIds || written) {
-          throw new Error("Memory publication retained rows must precede written rows");
+    const flush = (defer = false) => {
+      this.deleteIds(entry.path, source, removedIds);
+      removedIds = [];
+      writeRows(batch, defer);
+      if (vectorReady && this.search) {
+        // Explicit embeddings are authoritative; PostgreSQL owns its projection.
+        const vectors = [
+          ...new Map(
+            batch.flatMap((row) =>
+              row.embedding === undefined
+                ? []
+                : [[row.id, { id: row.id, embedding: row.embedding }] as const],
+            ),
+          ).values(),
+        ];
+        if (reuse) {
+          this.deleteVectors(
+            entry.path,
+            source,
+            vectors.filter((row) => row.embedding.length === 0).map((row) => row.id),
+          );
         }
-        if (!liveIds.has(id)) {
-          return { retainedDrift: true };
+        this.search.capability.write(
+          this.search.index,
+          vectors.filter((row) => row.embedding.length > 0),
+        );
+      }
+      batch = [];
+    };
+    for (const row of rows) {
+      if ("removedId" in row) {
+        removedIds.push(row.removedId);
+        if (removedIds.length === SOURCE_WRITE_BATCH_SIZE) {
+          flush();
         }
-        retained.push({ id, chunk });
         continue;
       }
-      written = true;
-      hasEmbeddings ||= embedding.length > 0;
-      getChunkWriter()(id, chunk, embedding);
-      if (vectorReady && embedding.length > 0) {
-        writeVector ??= createMemoryVectorWriter(this.database);
-        writeVector(id, embedding);
+      const { chunk, embedding, retained: keep } = row;
+      const id = memoryChunkRowId(source, entry.path, chunk, model);
+      previous?.delete(id);
+      hasEmbeddings ||= !keep && embedding.length > 0;
+      batch.push({ id, chunk, context, ...(keep ? {} : { embedding }) });
+      if (batch.length === SOURCE_WRITE_BATCH_SIZE) {
+        flush();
       }
     }
-    if (liveIds) {
-      for (const { id, chunk } of retained) {
-        getChunkWriter()(id, chunk);
-      }
-      this.deleteIds(
-        entry.path,
-        source,
-        [...liveIds].filter((id) => !desiredIds.has(id)),
-      );
+    flush(true);
+    if (previous?.size) {
+      this.deleteIds(entry.path, source, [...previous], "complete-replacement");
     }
-    const db = getNodeSqliteKysely<SourceIndexDatabase>(this.database);
     executeSqliteQuerySync(
       this.database,
       db
@@ -204,7 +312,6 @@ export class MemorySourceIndexKernel {
     if (!vectorReady && hasEmbeddings) {
       markMemoryVectorRebuildRequired(this.database);
     }
-    return { retainedDrift: false };
   }
 
   deleteIfCurrent(params: {
@@ -226,65 +333,78 @@ export class MemorySourceIndexKernel {
     return true;
   }
 
-  private deleteIds(pathname: string, source: MemorySource, ids: string[]): void {
+  private deleteIds(
+    pathname: string,
+    source: MemorySource,
+    ids: string[],
+    cleanup: "session-delta" | "complete-replacement" = "session-delta",
+  ): void {
     if (ids.length === 0) {
       return;
     }
-    this.deleteVectors(pathname, source, ids);
+    this.deleteVectors(pathname, source, ids, cleanup);
     // Recall metadata and provenance cascade; the body FTS trigger follows rowids.
-    const remove = prepareSqliteQuerySync<string>(this.database, (parameter) =>
-      getNodeSqliteKysely<SourceIndexDatabase>(this.database)
-        .deleteFrom("memory_index_chunks")
-        .where(
-          "id",
-          "=",
-          parameter((id) => id),
-        ),
-    );
-    for (const id of ids) {
-      remove(id);
+    for (let offset = 0; offset < ids.length; offset += SOURCE_WRITE_BATCH_SIZE) {
+      executeSqliteQuerySync(
+        this.database,
+        getNodeSqliteKysely<SourceIndexDatabase>(this.database)
+          .deleteFrom("memory_index_chunks")
+          .where("id", "in", ids.slice(offset, offset + SOURCE_WRITE_BATCH_SIZE)),
+      );
     }
   }
 
-  private deleteVectors(pathname: string, source: MemorySource, ids?: readonly string[]): void {
-    if (!tableExists(this.database, MEMORY_INDEX_VECTOR_TABLE)) {
+  private deleteVectors(
+    pathname: string,
+    source: MemorySource,
+    ids?: readonly string[],
+    cleanup: "session-delta" | "complete-replacement" = "session-delta",
+  ): void {
+    const search = this.search;
+    if (!search || ids?.length === 0) {
+      return;
+    }
+    if (!(this.state.hasVectorTable ?? this.state.vector.available === true)) {
       return;
     }
     if (!this.state.vector.enabled || this.state.vector.available !== true) {
       markMemoryVectorRebuildRequired(this.database);
       return;
     }
+    // Planning-read failures belong to the outer transaction, not best-effort cleanup.
+    const sparse =
+      ids ??
+      executeSqliteQuerySync(
+        this.database,
+        getNodeSqliteKysely<SourceIndexDatabase>(this.database)
+          .selectFrom("memory_index_chunks")
+          .select("id")
+          .where("path", "=", pathname)
+          .where("source", "=", source)
+          .limit(MAX_VECTOR_POINT_DELETES + 1),
+      ).rows.map((row) => row.id);
+    if (sparse.length === 0) {
+      return;
+    }
     try {
-      // Point lookups avoid scanning unrelated vectors for small sources;
-      // larger whole-source batches use one scan to bound native calls. Keep
-      // either path atomic before recording rebuild debt on a caught failure.
+      // Keep cleanup atomic before recording rebuild debt on a caught failure.
       runSqliteImmediateTransactionSync(this.database, () => {
-        const targets =
-          ids ??
-          executeSqliteQuerySync(
-            this.database,
-            getNodeSqliteKysely<SourceIndexDatabase>(this.database)
-              .selectFrom("memory_index_chunks")
-              .select("id")
-              .where("path", "=", pathname)
-              .where("source", "=", source)
-              .limit(MAX_VECTOR_POINT_DELETES + 1),
-          ).rows.map((row) => row.id);
-        if (!ids && targets.length > MAX_VECTOR_POINT_DELETES) {
-          this.database
-            .prepare(
-              `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id IN (` +
-                "SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?)",
-            )
-            .run(pathname, source);
+        if (
+          (ids === undefined || cleanup === "complete-replacement") &&
+          sparse.length > MAX_VECTOR_POINT_DELETES
+        ) {
+          // Dense complete replacements may scan once, restricted to stale IDs:
+          // retained and newly written rows are already present in this source.
+          // Session deltas always keep indexed scalar deletes, at every size.
+          search.capability.remove(
+            search.index,
+            ids === undefined
+              ? sql`SELECT id FROM memory_index_chunks WHERE path = ${pathname} AND source = ${source}`
+              : sql`SELECT id FROM memory_index_chunks WHERE path = ${pathname} AND source = ${source} AND id IN (${search.capability.idSet(search.index, ids)})`,
+          );
           return;
         }
-        const removeVector = this.database.prepare(
-          `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id = ?`,
-        );
-        for (const id of targets) {
-          removeVector.run(id);
-        }
+        search.capability.remove(search.index, sparse);
       });
     } catch {
       markMemoryVectorRebuildRequired(this.database);

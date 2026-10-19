@@ -8,6 +8,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { readActiveTranscriptStats } from "./session-accessor.sqlite-history.test-support.js";
@@ -15,6 +16,7 @@ import {
   readTranscriptEventRows,
   readTranscriptStatsSync,
   readTranscriptStorageRows,
+  type SqliteTranscriptSnapshotRow,
 } from "./session-accessor.sqlite-read.js";
 import {
   readTranscriptGenerationInTransaction,
@@ -23,22 +25,18 @@ import {
 import {
   appendTranscriptEventInTransaction,
   appendTranscriptEventsInTransaction,
+  replaceSqliteTranscriptEventsInTransaction,
   rewriteSqliteTranscriptEventRowsInTransaction,
   updateSqliteTranscriptEventJsonInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { replaceSqliteTranscriptSuffixInTransaction } from "./session-accessor.sqlite-transcript-suffix.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
   SYNC_REBUILD_MAX_BYTES,
   SYNC_REBUILD_MAX_ROWS,
   sessionTranscriptIndexNeedsReconcile,
 } from "./session-transcript-index.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
-import {
-  appendPreparedSessionTranscriptProjectionChunkInTransaction,
-  finalizePreparedSessionTranscriptProjectionInTransaction,
-  prepareSessionTranscriptProjection,
-  claimPreparedSessionTranscriptProjectionInTransaction,
-} from "./session-transcript-projection-rebuild.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.js";
 
@@ -51,6 +49,78 @@ afterEach(() => {
 });
 
 describe("SQLite transcript append", () => {
+  it("captures the replacement's stored rows after media normalization and duplicate filtering", async () => {
+    await withOpenClawTestState({ label: "replacement-snapshot" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "replacement",
+        sessionKey: "agent:main:replacement",
+        env: state.env,
+      };
+      const message = {
+        type: "message",
+        id: "answer",
+        parentId: null,
+        message: {
+          role: "assistant",
+          content: "large payload ".repeat(1024),
+          MediaPaths: ["/media/a.png"],
+          MediaTypes: ["image/png"],
+        },
+      };
+      const unicode = { type: "custom", id: "unicode", data: "\ud800\u0000" };
+      const rows: SqliteTranscriptSnapshotRow[] = [];
+      runOpenClawAgentWriteTransaction(
+        (database) =>
+          replaceSqliteTranscriptEventsInTransaction(
+            database,
+            scope,
+            [
+              message,
+              { ...message, message: { role: "assistant", content: "ignored duplicate" } },
+              unicode,
+            ],
+            { writtenRows: rows },
+          ),
+        scope,
+      );
+      const database = openOpenClawAgentDatabase(scope);
+      expect(rows.map((row) => row.seq)).toEqual([0, 1]);
+      expect(JSON.parse(rows[0]!.eventJson).message).toMatchObject({
+        content: message.message.content,
+        __openclaw: { media: [expect.objectContaining({ path: "/media/a.png" })] },
+      });
+      expect(JSON.parse(rows[0]!.eventJson).message).not.toHaveProperty("MediaPaths");
+      expect(JSON.parse(rows[1]!.eventJson)).toEqual(unicode);
+      expect(rows).toEqual(readTranscriptEventRows(database, scope.sessionId));
+      const emptyRows: SqliteTranscriptSnapshotRow[] = [];
+      const work = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["identityDeletes"],
+        (sql) =>
+          /^delete from "transcript_event_identities" /i.test(sql) ? "identityDeletes" : null,
+      );
+      try {
+        runOpenClawAgentWriteTransaction(
+          (writer) =>
+            replaceSqliteTranscriptEventsInTransaction(writer, scope, [], {
+              writtenRows: emptyRows,
+            }),
+          scope,
+        );
+      } finally {
+        work.restore();
+      }
+      expect(work.counts.identityDeletes).toBe(0);
+      expect(emptyRows).toEqual([]);
+      expect(readTranscriptEventRows(database, scope.sessionId)).toEqual([]);
+      const identities = database.db
+        .prepare("SELECT event_id FROM transcript_event_identities WHERE session_id = ?")
+        .all(scope.sessionId);
+      expect(identities).toEqual([]);
+    });
+  });
+
   it("canonicalizes assistant media at the generic transcript append owner", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-append-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -100,8 +170,10 @@ describe("SQLite transcript append", () => {
       timestamp: 1001,
       message: { role: "assistant", content: "next" },
     };
-    const policy = trackSqliteStatementExecutions(database.db, ["policy"], (sql) =>
-      sql.includes('"session_key_contract"') ? "policy" : null,
+    const policy = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["policy"],
+      (sql) => (sql.includes('"session_key_contract"') ? "policy" : null),
     );
     let nextJson: string | false;
     try {
@@ -174,7 +246,7 @@ async function withRewriteFixture(
       env: state.env,
     };
     const owner = openOpenClawAgentDatabase(scope);
-    const { db } = owner;
+    const db = requireNativeSqliteDatabase(owner.db);
     runOpenClawAgentWriteTransaction((database) => {
       appendTranscriptEventsInTransaction(database, scope, events);
     }, scope);
@@ -221,6 +293,28 @@ async function withRewriteFixture(
 }
 
 describe("SQLite exact transcript rewrite", () => {
+  it("preserves the generation when initially recording identical model prompt text", async () => {
+    await withRewriteFixture(({ snapshot, rewrite }) => {
+      const before = snapshot();
+      const message = {
+        ...rewriteEvents[1].message,
+        __openclaw: { modelPromptProjection: { version: 1, text: "question" } },
+      };
+      rewrite({ ...rewriteEvents[1], message });
+      const captured = snapshot();
+      expect(captured.generation).toBe(before.generation);
+      expect(captured.raw[1]?.event_json).toBe(JSON.stringify({ ...rewriteEvents[1], message }));
+      rewrite({
+        ...rewriteEvents[1],
+        message: {
+          ...message,
+          __openclaw: { modelPromptProjection: { version: 1, text: "changed" } },
+        },
+      });
+      expect(snapshot().generation).not.toBe(captured.generation);
+    });
+  });
+
   it.each([
     { name: "content", message: { content: "changed" } },
     { name: "provenance", message: { provenance: { kind: "internal_system" } } },
@@ -289,7 +383,7 @@ describe("SQLite exact transcript rewrite", () => {
       expect(before.storage[1]?.event_json === null).toBe(true);
       expect(before.storage[2]?.event_zstd instanceof Uint8Array).toBe(true);
       const work = trackSqliteStatementExecutions(
-        openOpenClawAgentDatabase(scope).db,
+        requireNativeSqliteDatabase(openOpenClawAgentDatabase(scope).db),
         ["fts", "size"],
         (sql) =>
           /\bsession_transcript_fts\b/i.test(sql)
@@ -342,7 +436,6 @@ describe("SQLite exact transcript rewrite", () => {
       };
       rewrite({ ...rewriteEvents[1], message });
       expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
-      const before = prepareSessionTranscriptProjection(db, scope.sessionId)!;
       const work = trackSqliteStatementExecutions(db, ["fts"], (sql) =>
         /\bsession_transcript_fts\b/i.test(sql) ? "fts" : null,
       );
@@ -357,7 +450,6 @@ describe("SQLite exact transcript rewrite", () => {
         SessionTranscriptProjectionUnavailableError,
       );
       expect(searchSessionTranscripts({ ...scope, query: "question" }).hits).toEqual([]);
-      expect(claimPreparedSessionTranscriptProjectionInTransaction(db, before, -1)).toBe(false);
       await waitForSessionTranscriptIndexReconcile(scope);
       expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
       expect(searchSessionTranscripts({ ...scope, query: "changed" }).hits).toMatchObject([
@@ -397,35 +489,10 @@ describe("SQLite exact transcript rewrite", () => {
             { seq: 2, expectedEventJson: JSON.stringify(events[2], null, 2), event: events[2] },
           ]);
         }, scope),
-      ).toThrow("changed before exact rewrite");
+      ).toThrow(SqliteTranscriptMutationConflictError);
       expect(snapshot()).toEqual(before);
       expect(readTranscriptStatsSync(scope)).toEqual(stats);
     }, events);
-  });
-
-  it("recovers a claimed projection on metadata rewrite and fences stale publication", async () => {
-    await withRewriteFixture(({ db, rewrite, snapshot, scope }) => {
-      const before = snapshot();
-      const plan = prepareSessionTranscriptProjection(db, scope.sessionId)!;
-      db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
-      expect(claimPreparedSessionTranscriptProjectionInTransaction(db, plan, -1)).toBe(true);
-      db.prepare("DELETE FROM session_transcript_active_events").run();
-      db.prepare("DELETE FROM session_transcript_fts_rows").run();
-      expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(true);
-      rewrite({ ...rewriteEvents[1], message: { ...rewriteEvents[1].message, provenance: "new" } });
-      expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
-      expect(snapshot().active).toEqual(before.active);
-      expect(snapshot().search).toEqual(before.search);
-      expect(claimPreparedSessionTranscriptProjectionInTransaction(db, plan, -2)).toBe(false);
-      expect(
-        appendPreparedSessionTranscriptProjectionChunkInTransaction(db, {
-          sessionId: scope.sessionId,
-          claimId: -1,
-          ftsRows: plan.ftsRows,
-        }),
-      ).toBe(false);
-      expect(finalizePreparedSessionTranscriptProjectionInTransaction(db, plan, -1)).toBe(false);
-    });
   });
 
   it.each([
@@ -695,14 +762,19 @@ describe("SQLite exact transcript suffix replacement", () => {
   });
 
   it("reparents a retained compressed opaque suffix while preserving payload and rollback", async () => {
-    const tail = {
+    const plannedTail = {
       type: "custom",
       id: "opaque",
       parentId: "user",
+      customType: "openclaw.cache-ttl",
+      display: true,
+      message: { role: "toolResult" },
+    };
+    const tail = {
+      ...plannedTail,
       data: { payload: "opaque retained 🦞 ".repeat(4096) },
     };
     const events = [rewriteEvents[0], rewriteEvents[1], tail];
-    const plannedTail = { type: "custom", id: "opaque", parentId: "user" };
     const expected = [rewriteEvents[0], rewriteEvents[1], plannedTail];
     const next = [rewriteEvents[0], { ...plannedTail, parentId: "root" }];
     const retainedIds = [tail.id];
@@ -731,6 +803,15 @@ describe("SQLite exact transcript suffix replacement", () => {
         before.raw[0],
         { ...before.raw[2], seq: 1, event_json: retainedJson },
       ]);
+      expect(result.storage[1]).toMatchObject({
+        navigation_type: "custom",
+        navigation_custom_type: "openclaw.cache-ttl",
+        navigation_display: 1,
+        message_role: "toolResult",
+        navigation_last_type: "custom",
+        navigation_last_custom_type: "openclaw.cache-ttl",
+        navigation_valid: 1,
+      });
       expect(result).toMatchObject({
         identities: [
           expect.objectContaining({ seq: 0 }),
@@ -751,22 +832,30 @@ describe("SQLite exact transcript suffix replacement", () => {
     }, events);
   });
 
+  const oldDuplicate = keyedAssistant("duplicate", "root", "old-key");
+  const oldOwner = keyedAssistant("owner", "duplicate", "old-key");
+  const newOwner = keyedAssistant("owner", "duplicate", "new-key", "updated");
+  const insertedOwner = keyedAssistant("new-owner", "owner", "old-key");
+
   it.each([
     {
       name: "promotes a prefix duplicate when the retained owner changes its key",
-      events: [
-        rewriteEvents[0],
-        keyedAssistant("duplicate", "root", "old-key"),
-        keyedAssistant("owner", "duplicate", "old-key"),
-      ],
-      next: [
-        rewriteEvents[0],
-        keyedAssistant("duplicate", "root", "old-key"),
-        keyedAssistant("owner", "duplicate", "new-key", "updated"),
-      ],
+      events: [rewriteEvents[0], oldDuplicate, oldOwner],
+      next: [rewriteEvents[0], oldDuplicate, newOwner],
       reassign: true,
       owners: [
         { event_id: "duplicate", message_idempotency_key: "old-key" },
+        { event_id: "owner", message_idempotency_key: "new-key" },
+      ],
+    },
+    {
+      name: "preserves a key claimed by an earlier suffix insert",
+      events: [rewriteEvents[0], oldDuplicate, oldOwner, assistant("removed", "owner", "removed")],
+      next: [rewriteEvents[0], oldDuplicate, newOwner, insertedOwner],
+      reassign: true,
+      owners: [
+        { event_id: "duplicate", message_idempotency_key: null },
+        { event_id: "new-owner", message_idempotency_key: "old-key" },
         { event_id: "owner", message_idempotency_key: "new-key" },
       ],
     },
@@ -816,58 +905,31 @@ describe("SQLite exact transcript suffix replacement", () => {
           "UPDATE transcript_event_identities SET message_idempotency_key = ? WHERE session_id = ? AND event_id = ?",
         ).run("old-key", scope.sessionId, "owner");
       }
-      replaceTranscriptSuffixForTest(scope, events, next);
+      const work = trackSqliteStatementExecutions(db, ["identityDeletes", "ownerReads"], (sql) => {
+        if (/^delete from "transcript_event_identities" /i.test(sql)) {
+          return "identityDeletes";
+        }
+        return /^select "event_id" from "transcript_event_identities" /i.test(sql) &&
+          sql.includes('"message_idempotency_key" =')
+          ? "ownerReads"
+          : null;
+      });
+      try {
+        replaceTranscriptSuffixForTest(scope, events, next);
+      } finally {
+        work.restore();
+      }
+      expect(work.counts).toEqual({ identityDeletes: 0, ownerReads: 0 });
+      const identities = db
+        .prepare(
+          "SELECT event_id, seq FROM transcript_event_identities WHERE session_id = ? ORDER BY seq",
+        )
+        .all(scope.sessionId);
+      expect(identities).toEqual(next.map((event, seq) => ({ event_id: event.id, seq })));
       expect(
         readIdempotencyOwners(db, scope.sessionId, ...owners.map((row) => row.event_id)),
       ).toEqual(owners);
     }, events);
-  });
-
-  it("preserves the established idempotency owner across retained suffix rows", async () => {
-    const duplicateKeyEvents = [
-      rewriteEvents[0],
-      keyedAssistant("first", "root", "retry"),
-      { type: "custom", id: "removed", parentId: "first" },
-      keyedAssistant("owner", "removed", "retry"),
-    ] as const;
-    await withRewriteFixture(({ db, scope }) => {
-      db.prepare(
-        "UPDATE transcript_events SET created_at = CASE seq WHEN 1 THEN 101 WHEN 3 THEN 303 ELSE created_at END WHERE session_id = ?",
-      ).run(scope.sessionId);
-      db.prepare(
-        "UPDATE transcript_event_identities SET message_idempotency_key = NULL, created_at = 101 WHERE session_id = ? AND event_id = ?",
-      ).run(scope.sessionId, "first");
-      db.prepare(
-        "UPDATE transcript_event_identities SET message_idempotency_key = ?, created_at = 303 WHERE session_id = ? AND event_id = ?",
-      ).run("retry", scope.sessionId, "owner");
-
-      replaceTranscriptSuffixForTest(scope, duplicateKeyEvents, [
-        duplicateKeyEvents[0],
-        duplicateKeyEvents[1],
-        { ...duplicateKeyEvents[3], parentId: "first" },
-      ]);
-
-      expect(
-        db
-          .prepare(
-            "SELECT event_id, message_idempotency_key, created_at FROM transcript_event_identities WHERE session_id = ? AND event_id IN ('first', 'owner') ORDER BY event_id",
-          )
-          .all(scope.sessionId),
-      ).toEqual([
-        { event_id: "first", message_idempotency_key: null, created_at: 101 },
-        { event_id: "owner", message_idempotency_key: "retry", created_at: 303 },
-      ]);
-      expect(
-        db
-          .prepare(
-            "SELECT seq, created_at FROM transcript_events WHERE session_id = ? AND seq IN (1, 2) ORDER BY seq",
-          )
-          .all(scope.sessionId),
-      ).toEqual([
-        { seq: 1, created_at: 101 },
-        { seq: 2, created_at: 303 },
-      ]);
-    }, duplicateKeyEvents);
   });
 
   it.each([

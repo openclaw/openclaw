@@ -8,12 +8,16 @@ import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
-import { redactSensitiveText } from "../logging/redact.js";
 import * as mediaStore from "../media/store.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
-import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
+import * as sessionLifecycle from "../sessions/session-controller.lifecycle.js";
+import {
+  observeGatewayRunExecution,
+  waitForAgentCommandCall,
+} from "./agent-command.test-helpers.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
 import {
@@ -46,8 +50,8 @@ type GatewayModelFixture = {
 };
 
 const TEXT_ONLY_AGENT_MODEL: GatewayModelFixture = {
-  id: "deepseek-v4-flash",
-  name: "DeepSeek V4 Flash",
+  id: "deepseek-v4-pro",
+  name: "DeepSeek V4 Pro",
   provider: "ollama-cloud",
   input: ["text"],
 };
@@ -206,7 +210,7 @@ describe("gateway server agent", () => {
     agentCommandMock.mockImplementationOnce(async () => {
       const admitted = getAgentRunContext("idem-agent-owned-global");
       admittedOwner = { sessionKey: admitted?.sessionKey, agentId: admitted?.agentId };
-      return { payloads: [], meta: { durationMs: 0 } };
+      return { payloads: [], meta: { durationMs: 0, terminalReply: { disposition: "empty" } } };
     });
     const res = await rpcReq(gatewaySuite.ws, "agent", {
       message: "hi",
@@ -247,7 +251,75 @@ describe("gateway server agent", () => {
     expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
   });
 
+  test.each(["missing", "expired", "requested", "internal"] as const)(
+    "agent keeps its effect-bound session identity for a %s turn",
+    async (kind) => {
+      const runId = `agent-bound-identity-${kind}`;
+      const sessionKey = `agent:main:bound-identity-${kind}`;
+      // Expired under the one-minute reset, but not old enough for archival.
+      const expiredAt = Date.now() - 120_000;
+      const previousSessionConfig = testState.sessionConfig;
+      testState.sessionConfig = { reset: { mode: "idle", idleMinutes: 1 } };
+      const execution = await observeGatewayRunExecution({ method: "agent", runId });
+      try {
+        await setTestSessionStore({
+          entries:
+            kind === "expired"
+              ? {
+                  [sessionKey]: {
+                    sessionId: "expired-predecessor",
+                    updatedAt: expiredAt,
+                    sessionStartedAt: expiredAt,
+                    lastInteractionAt: expiredAt,
+                  },
+                }
+              : {},
+        });
+        agentCommandMock.mockImplementationOnce(async () => ({
+          payloads: [],
+          meta: { durationMs: 0, terminalReply: { disposition: "empty" } },
+        }));
+        const response = await rpcReq(gatewaySuite.ws, "agent", {
+          message: "keep the admitted identity",
+          sessionKey,
+          idempotencyKey: runId,
+          ...(kind === "requested" ? { sessionId: "requested-session" } : {}),
+          ...(kind === "internal" ? { sessionEffects: "internal" } : {}),
+        });
+        expect(response.ok, JSON.stringify(response)).toBe(true);
+        const command = await waitForAgentCommandCall(runId);
+        await execution.waitForCompletion(runId);
+        const boundSessionId = vi
+          .mocked(sessionLifecycle.beginSessionEffect)
+          .mock.calls.flatMap(([params]) =>
+            params.sourceInput?.protocolRunId === runId && "target" in params
+              ? [params.target.incarnation]
+              : [],
+          )[0];
+        expect(boundSessionId).toEqual(expect.any(String));
+        expect(boundSessionId).not.toBe("");
+        expect(command.sessionId).toBe(boundSessionId);
+        const stored = await loadSessionEntryAsync(sessionKey, { agentId: "main" });
+        if (kind === "internal") {
+          expect(stored.entry).toBeUndefined();
+        } else {
+          expect(stored.entry?.sessionId).toBe(boundSessionId);
+        }
+        if (kind === "expired") {
+          expect(boundSessionId).not.toBe("expired-predecessor");
+        } else if (kind === "requested") {
+          expect(boundSessionId).toBe("requested-session");
+        }
+      } finally {
+        await execution.restore();
+        testState.sessionConfig = previousSessionConfig;
+      }
+    },
+  );
+
   test("discards sessionless offloaded media without a transcript owner", async () => {
+    testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
+    await setGatewayModelCatalogForTest([VISION_AGENT_MODEL]);
     vi.mocked(agentCommandMock).mockResolvedValueOnce(undefined);
     const inboundBefore = await listInboundMedia();
     const runId = "sessionless-media-success";
@@ -264,6 +336,8 @@ describe("gateway server agent", () => {
       idempotencyKey: runId,
     });
     expect(res.ok, JSON.stringify(res)).toBe(true);
+    const outcome = await rpcReq(gatewaySuite.ws, "agent.wait", { runId, timeoutMs: 2_000 });
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ ok: true, payload: { status: "ok" } });
     const call = await waitForAgentCommandCall(runId);
     expect(call.sessionKey).toBeUndefined();
     expect(call.media).toHaveLength(2);
@@ -386,18 +460,15 @@ describe("gateway server agent", () => {
       storePath: gatewaySuite.sessionStorePath,
     });
     expect(pending.items).toHaveLength(1);
-    // Inbound ids are random; compare the durable fact against its public
-    // redaction contract because an id can resemble sensitive text.
-    const transcriptMediaUrl = media?.[0]?.url ? redactSensitiveText(media[0].url) : undefined;
     expect(pending.items[0]?.message["__openclaw"]?.media).toEqual(
-      expect.arrayContaining([expect.objectContaining({ url: transcriptMediaUrl })]),
+      expect.arrayContaining([expect.objectContaining({ url: media?.[0]?.url })]),
     );
     const inboundAfter = await listInboundMedia();
     expect([...inboundAfter].filter((entry) => !inboundBefore.has(entry))).toHaveLength(1);
   });
 
   test("agent validates first image attachment against per-agent model for fresh sessions", async () => {
-    testState.agentConfig = { model: { primary: "ollama-cloud/deepseek-v4-flash" } };
+    testState.agentConfig = { model: { primary: "ollama-cloud/deepseek-v4-pro" } };
     testState.agentsConfig = {
       entries: {
         main: {},

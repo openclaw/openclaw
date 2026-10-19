@@ -12,7 +12,7 @@ read_when:
 
 Extended-stable validation uses the same candidate-owned helper: the exact
 source candidate C also owns qualification Q=C. Independently trusted P admits
-and verifies that request. Keep those roles and the canonical release context
+and verifies that request. Keep those roles and the selected release context
 separate; deliberately backport missing qualification contracts before freezing C.
 
 ```bash
@@ -36,7 +36,7 @@ pnpm ci:full-release \
 
 After independent admission, the helper creates `release-ci/<Q-prefix>-<unique-id>`
 at Q=C and dispatches from that immutable named branch. It passes the exact
-candidate as `ref` and `expected_sha`, with the canonical branch in
+candidate as `ref` and `expected_sha`, with the release branch in
 `target_context_ref`. GitHub workflow dispatch `--ref` accepts a branch or tag,
 not a raw SHA. The release branch supplies context, not qualification authority.
 Never create the transport ref manually or substitute a moving-main harness.
@@ -79,7 +79,7 @@ The conceptual phases map to current inputs:
   `run_release_soak=true` or explicit focused groups
 - `stable-publish`: `release_profile=stable`
 
-For an actual beta package on its matching canonical release branch or beta
+For an actual beta package on its matching release branch or beta
 tag, `all` with `release_profile=beta` and no soak records
 `coveragePolicy=npm-beta-v1`. It retains Linux, macOS, and Windows Node checks,
 Control UI, plugins, package integrity, install/update acceptance, Linux/Windows/macOS cross-OS
@@ -185,7 +185,7 @@ the publisher carries the waiver into release verification notes. The beta-only
 package deferral above remains unchanged.
 
 Source Telegram QA uses the release checks' shared context check: an exact candidate
-SHA must remain an ancestor of its canonical branch, or equal its release tag.
+SHA must remain an ancestor of its release branch, or equal its release tag.
 Both build and execution admission independently repeat that check and retain
 candidate-version, signature/merge-attribution, and live maintainer checks.
 Advancing a release branch does not select a new candidate or invalidate the old one.

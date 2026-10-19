@@ -1,13 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
-import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
-import { renderTalk, type TalkRealtimeProviderOption } from "./talk.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { Talk, type TalkRealtimeProviderOption } from "./talk.tsx";
 
-type TalkProps = Parameters<typeof renderTalk>[0];
+type TalkProps = Parameters<typeof Talk>[0];
 
 function renderFixture(
   overrides: Partial<Omit<TalkProps, "selection" | "catalog">> & {
@@ -17,9 +19,8 @@ function renderFixture(
 ) {
   const { selection, provider, ...props } = overrides;
   const model = selection?.model ?? "gpt-live";
-  const container = document.createElement("div");
-  render(
-    renderTalk({
+  const view = mountSolid(() =>
+    createComponent(Talk, {
       selection: {
         provider: "openai",
         model,
@@ -43,6 +44,17 @@ function renderFixture(
             voices: [],
             transports: ["webrtc", "gateway-relay"],
             defaultModel: model,
+            modelFamilySettings: {
+              family: "gpt-live",
+              unlistedModelVoices: "active",
+              unsupportedTransports: ["provider-websocket"],
+              gatewayRelayHandlesAgentConsult: true,
+              hint: {
+                titleKey: "talkPage.gptLive.title",
+                descriptionKey: "talkPage.gptLive.hint",
+                readyKey: "talkPage.gptLive.ready",
+              },
+            },
             ...provider,
           },
         ],
@@ -51,12 +63,12 @@ function renderFixture(
       onProviderChange: vi.fn(),
       onModelChange: vi.fn(),
       onVoiceChange: vi.fn(),
-      editor: html``,
+      editor: null,
       ...props,
     }),
-    container,
   );
-  return container;
+  flush();
+  return view.container;
 }
 
 describe("renderTalk", () => {
@@ -90,7 +102,8 @@ describe("renderTalk", () => {
 
     const picker = container.querySelector<SelectPicker>(
       "openclaw-select-picker.model-picker__select",
-    );
+    )!;
+    await openPicker(picker);
     expect(picker?.querySelector('[role="option"][data-value="gpt-realtime"]')).not.toBeNull();
     if (picker) {
       await choosePickerValue(picker, "gpt-realtime");
@@ -112,11 +125,41 @@ describe("renderTalk", () => {
     ).toEqual(["", ...voices]);
   });
 
-  it.each([["gpt-liveish", false]] as const)(
-    "renders the GPT-Live hint only for the exact family: %s",
-    (model, showsHint) => {
-      const container = renderFixture({ selection: { model, transport: "gateway-relay" } });
-      expect(container.textContent?.includes(t("talkPage.gptLive.hint"))).toBe(showsHint);
-    },
-  );
+  it.each([
+    ["gpt-live", true],
+    [" GPT-LIVE-test-canary ", true],
+    ["gpt-liveish", false],
+  ] as const)("renders the GPT-Live hint only for the exact family: %s", (model, showsHint) => {
+    const container = renderFixture({ selection: { model, transport: "gateway-relay" } });
+    expect(container.textContent?.includes(t("talkPage.gptLive.hint"))).toBe(showsHint);
+  });
+
+  it("resolves the declared family hint keys from the existing English catalog", () => {
+    const container = renderFixture();
+    const row = [...container.querySelectorAll(".settings-row")].find((entry) =>
+      entry.textContent?.includes("Released browser/Gateway-owned WebRTC"),
+    );
+    expect(row?.textContent).toContain("GPT-Live");
+    expect(row?.textContent).toContain("Ready");
+    expect(row?.textContent).not.toContain("talkPage.");
+  });
+
+  it("keeps another provider's unlisted model on its own voice catalog", () => {
+    const container = renderFixture({
+      selection: { provider: "other", model: "gpt-live-private-example" },
+      provider: {
+        id: "other",
+        voices: ["other-voice"],
+        activeVoices: ["active-only"],
+        modelFamilySettings: undefined,
+      },
+    });
+
+    expect(
+      [...container.querySelectorAll<HTMLOptionElement>("select option")].map(
+        (option) => option.value,
+      ),
+    ).toEqual(["", "other-voice"]);
+    expect(container.textContent).not.toContain(t("talkPage.gptLive.hint"));
+  });
 });

@@ -15,7 +15,10 @@ import {
   resolveTaskName,
   resolveTaskScriptPath,
 } from "./schtasks-layout.js";
-import { describeUnverifiedPortListeners } from "./schtasks-port-diagnostics.js";
+import {
+  describeUnverifiedPortListeners,
+  waitForGatewayPortRelease,
+} from "./schtasks-port-diagnostics.js";
 import {
   findInstalledProcessPid,
   isNodeHostArgv,
@@ -29,7 +32,6 @@ import {
   terminateGatewayProcessTree,
   terminateScheduledTaskGatewayListeners,
   terminateScheduledTaskNodeHost,
-  waitForGatewayPortRelease,
 } from "./schtasks-process.js";
 import {
   assertSchtasksAvailable,
@@ -310,9 +312,10 @@ async function changeScheduledTaskEnabledState(params: {
   const result = await execSchtasks(["/Change", "/TN", taskName, action]);
   if (result.code !== 0) {
     const detail = (result.stderr || result.stdout).trim() || "unknown error";
-    const changeError = new Error(
-      `schtasks ${params.enabled ? "enable" : "disable"} failed: ${detail}`,
-    );
+    const changeError = new Error(`schtasks ${action.slice(1).toLowerCase()} failed: ${detail}`);
+    if (/access is denied|0x80070005/iu.test(detail)) {
+      throw Object.assign(changeError, { code: "EACCES" });
+    }
     if (!params.enabled && params.restoreOnFailure !== false) {
       // A timeout can follow a committed /DISABLE, so restore the proven prior state.
       try {

@@ -9,6 +9,7 @@ import {
   pluginNativeNamespaceMemberPath,
   pluginNativeNamespaceMemberRelativePath,
 } from "./plugin-native-namespace.js";
+import { openClawHostRootsMatch } from "./plugin-peer-link.js";
 import type {
   PluginNativeArtifactFact,
   PluginNativeNamespaceFact,
@@ -106,8 +107,11 @@ export function createPluginNativeReferenceValidator(boundary: string, pluginId:
         );
         verdict.placements.add(placement);
       }
-      if (expectedHost && resolveNativeHost(target) !== expectedHost) {
-        throw new Error("The native companion directory resolves a different OpenClaw host");
+      if (expectedHost) {
+        const resolvedHost = resolveNativeHost(target);
+        if (!resolvedHost || !openClawHostRootsMatch(resolvedHost, expectedHost)) {
+          throw new Error("The native companion directory resolves a different OpenClaw host");
+        }
       }
     } catch (cause) {
       throw new Error(

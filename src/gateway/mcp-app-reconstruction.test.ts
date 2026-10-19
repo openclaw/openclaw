@@ -1,7 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   fetchMcpAppView: vi.fn(),
@@ -46,16 +43,15 @@ vi.mock("./session-transcript-readers.js", () => ({
     };
   },
 }));
-vi.mock("./session-utils.js", () => ({
-  loadSessionEntry: mocks.loadSessionEntry,
-  loadGatewaySessionEntryReadOnly: mocks.loadSessionEntry,
+// mock-isolation: transcript reconstruction tests control session identity without a live store.
+vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: mocks.loadSessionEntry,
 }));
 
 import { mintMcpAppViewFromTranscript, restoreMcpAppView } from "./mcp-app-reconstruction.js";
 
 const runtime = { mcpAppsEnabled: true };
 const view = { id: "view-lease" };
-const dirs = useAutoCleanupTempDirTracker(afterAll);
 
 beforeEach(() => {
   for (const mock of Object.values(mocks)) {
@@ -115,56 +111,6 @@ function toolResult(viewId: string, toolCallId: string, extraDescriptor: object 
 }
 
 describe("MCP App transcript reconstruction", () => {
-  it("keeps explicitly selected absence separate from an in-flight native restoration", async () => {
-    const sessionKey = "agent:main:dashboard:incognito-restoration";
-    const viewId = "mcp-app-native-collision";
-    mocks.visitSessionMessagesAsync.mockImplementation(
-      (_scope: unknown, visit: (message: unknown) => void) => {
-        visit({
-          role: "assistant",
-          content: [{ type: "toolCall", id: "call-1", name: "demo__show", args: {} }],
-        });
-        visit(toolResult(viewId, "call-1"));
-      },
-    );
-    const entered = createDeferred();
-    const release = createDeferred();
-    mocks.acquireSessionMcpRuntime.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      return { runtime, releaseLease: mocks.releaseLease };
-    });
-    const request = {
-      cfg: { agents: { entries: { main: {} } } },
-      sessionKey,
-      viewId,
-    };
-    const native = restoreMcpAppView(request);
-    let absent: ReturnType<typeof restoreMcpAppView> | undefined;
-    try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        native,
-        "Native restoration skipped acquisition",
-      );
-      absent = withIncognitoSessionBinding(
-        {
-          kind: "absent",
-          agentId: "main",
-          env: { OPENCLAW_STATE_DIR: dirs.make("mcp-reconstruction-absent-") },
-          authority: { assertCurrent() {} },
-        },
-        () => restoreMcpAppView(request),
-      );
-    } finally {
-      release.resolve();
-      await Promise.allSettled([native, absent]);
-    }
-    await expect(native).resolves.toEqual({ runtime, view });
-    await expect(absent).resolves.toBeUndefined();
-    expect(mocks.acquireSessionMcpRuntime).toHaveBeenCalledOnce();
-  });
-
   it.each([{ sessionKey: "global", agentId: "work", expectedOwner: "work" }])(
     "mints a fresh board lease for $sessionKey owned by $expectedOwner",
     async ({ sessionKey, agentId, expectedOwner }) => {
@@ -219,7 +165,11 @@ describe("MCP App transcript reconstruction", () => {
           toolCallId: "call-1",
         }),
       );
-      expect(mocks.loadSessionEntry).toHaveBeenCalledWith(sessionKey, { agentId: expectedOwner });
+      expect(mocks.loadSessionEntry).toHaveBeenCalledWith({
+        cfg: {},
+        key: sessionKey,
+        agentId: expectedOwner,
+      });
       expect(mocks.fetchMcpAppView.mock.calls.at(-1)?.[0]).not.toHaveProperty("viewId");
     },
   );

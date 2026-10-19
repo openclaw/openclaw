@@ -20,6 +20,7 @@ import { createPluginInventoryModuleRefsPlugin } from "./plugin-inventory-module
 import { preparePackageRuntimeAssets } from "./plugin-npm-runtime-assets.mts";
 import { collectPluginThemeAssetPaths } from "./plugin-theme-assets.mts";
 import { isRecord } from "./record-shared.mjs";
+import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 
 const env = {
   NODE_ENV: "production",
@@ -577,6 +578,28 @@ export function resolvePluginNpmRuntimeBuildPlan(params: PluginNpmRuntimeBuildPa
     ]),
   );
   const setupEntry = normalizePackageEntry(packageJson.openclaw?.setupEntry);
+  // The selected source root owns compatibility bindings, including ones that
+  // are currently absent and may become available in a later checkout.
+  const bundleTelegramLifecycle = packageJson.name === "@openclaw/telegram";
+  const bundledSdkSources = {
+    ...BUNDLED_SDK_EXPORTS,
+    ...(bundleTelegramLifecycle
+      ? {
+          "openclaw/plugin-sdk/channel-outbound": {
+            "src/channels/message/live.ts": ["createLivePreviewLifecycle"],
+          },
+        }
+      : {}),
+  };
+  const bundledSdkImports = {
+    [BUNDLED_GRAPHEME_SDK_IMPORT]: path.join(
+      repoRoot,
+      "packages/normalization-core/src/grapheme.ts",
+    ),
+    ...(params.profile === "qa-gateway-fixture"
+      ? { [QA_PROTOCOL_SDK_IMPORT]: path.join(repoRoot, "src/plugin-sdk/qa-channel-protocol.ts") }
+      : {}),
+  };
 
   const plan = {
     repoRoot,
@@ -590,6 +613,15 @@ export function resolvePluginNpmRuntimeBuildPlan(params: PluginNpmRuntimeBuildPa
     entry,
     outDir: path.join(packageDir, "dist"),
     runtimeFormat,
+    bundleTelegramLifecycle,
+    bundledSdkImports,
+    bundledSdkExports: selectAvailableBundledSdkExports(repoRoot, bundledSdkSources),
+    bundledSdkSourceFiles: [
+      ...Object.values(bundledSdkImports),
+      ...Object.values(bundledSdkSources).flatMap((sources) =>
+        Object.keys(sources).map((source) => path.join(repoRoot, source)),
+      ),
+    ],
     runtimeExtensions: (Array.isArray(packageJson.openclaw?.extensions)
       ? packageJson.openclaw.extensions
       : []
@@ -624,31 +656,8 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
   // The 9.6 host lacks Telegram's final-observation contract. This canonical factory
   // owns isolated per-turn state; its host error formatter stays external below.
   // Retire this binding when Telegram's declared host floor includes that contract.
-  const bundleTelegramLifecycle = plan.packageJson.name === "@openclaw/telegram";
-  const bundledSdkExports = selectAvailableBundledSdkExports(plan.repoRoot, {
-    ...BUNDLED_SDK_EXPORTS,
-    ...(bundleTelegramLifecycle
-      ? {
-          "openclaw/plugin-sdk/channel-outbound": {
-            "src/channels/message/live.ts": ["createLivePreviewLifecycle"],
-          },
-        }
-      : {}),
-  });
-  const bundledSdkImports = {
-    [BUNDLED_GRAPHEME_SDK_IMPORT]: path.join(
-      plan.repoRoot,
-      "packages/normalization-core/src/grapheme.ts",
-    ),
-    ...(plan.profile === "qa-gateway-fixture"
-      ? {
-          [QA_PROTOCOL_SDK_IMPORT]: path.join(
-            plan.repoRoot,
-            "src/plugin-sdk/qa-channel-protocol.ts",
-          ),
-        }
-      : {}),
-  };
+  const { bundleTelegramLifecycle, bundledSdkExports, bundledSdkImports } = plan;
+  const inputFiles = new Set<string>();
   const bundledSdkSpecifiers = new Set([
     ...Object.keys(bundledSdkImports),
     ...Object.keys(bundledSdkExports),
@@ -667,8 +676,17 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
     },
     entry: plan.entry,
     plugins: [
+      {
+        name: "openclaw:runtime-build-inputs",
+        moduleParsed({ id }) {
+          if (path.isAbsolute(id) && !id.split(path.sep).includes("node_modules")) {
+            inputFiles.add(path.relative(plan.repoRoot, id).split(path.sep).join("/"));
+          }
+        },
+      },
       createBundledSdkExportsPlugin(plan.repoRoot, bundledSdkExports, bundleTelegramLifecycle),
       createPluginInventoryModuleRefsPlugin(plan.packageDir),
+      createStateSchemaInlinePlugin(plan.repoRoot),
     ],
     outputOptions: {
       // Published plugins still support hosts predating these private source facades.
@@ -698,6 +716,7 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
   rewriteCommonJsRuntimeSpecifiers(plan);
   return {
     ...plan,
+    inputFiles: [...inputFiles].toSorted(),
     ...(await preparePackageRuntimeAssets(plan)),
   };
 }

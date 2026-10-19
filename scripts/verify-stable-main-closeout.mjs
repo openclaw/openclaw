@@ -125,6 +125,13 @@ function main() {
   const linuxUpdaterObservation = requiresLinuxUpdaterObservation({ release, existingManifest })
     ? inspectLinuxUpdaterManifest({ repository, carrierTag: args.tag })
     : undefined;
+  const withdrawnCompanionAssets =
+    linuxUpdaterObservation?.immutableManifest?.withdrawnCompanionAssets ?? [];
+  if (withdrawnCompanionAssets.length > 0) {
+    console.log(
+      `Linux publication companion assets withdrawn from ${args.tag}: ${withdrawnCompanionAssets.join(", ")}`,
+    );
+  }
   const result = verifyStableMainCloseout({
     // Replay reads the current main feed, so its withdrawal marker lives on main too.
     findAppcastWithdrawal: (withdrawnVersion) =>

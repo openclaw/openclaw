@@ -15,11 +15,13 @@ import {
   registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { retainOpenClawStateDatabaseForIdle } from "../state/openclaw-state-db-cache.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { finalizeCaptureStore } from "./store-lifecycle.js";
 import {
   DEBUG_PROXY_CAPTURE_DIR_MODE,
@@ -189,6 +191,11 @@ class DebugProxyCaptureStoreImpl extends DebugProxyCaptureKernel {
     optionsOrDbPath: DebugProxyCaptureStoreOptions | string = {},
     legacyBlobDir?: string,
   ) {
+    warnPluginSdkDeprecation({
+      family: "proxy-capture-store",
+      method: "DebugProxyCaptureStore",
+      replacement: "await acquireDebugProxyCaptureStoreAsync()",
+    });
     if (typeof optionsOrDbPath === "string") {
       if (!legacyBlobDir) {
         throw new TypeError("legacy debug proxy capture store requires a blob directory");
@@ -260,7 +267,7 @@ class DebugProxyCaptureStoreImpl extends DebugProxyCaptureKernel {
   }
 }
 
-/** @deprecated Use AsyncDebugProxyCaptureStore for worker-backed shared-state access. */
+/** @deprecated Use AsyncDebugProxyCaptureStore for worker-backed shared-state access. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export type DebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
   persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord;
 };
@@ -280,7 +287,7 @@ type DebugProxyCaptureStoreConstructor = {
 
 // The runtime implementation branches on constructor arguments; expose the
 // corresponding result type so both shipped constructor contracts stay exact.
-/** @deprecated Acquire shared-state storage with acquireDebugProxyCaptureStoreAsync. */
+/** @deprecated Acquire shared-state storage with acquireDebugProxyCaptureStoreAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export const DebugProxyCaptureStore =
   DebugProxyCaptureStoreImpl as unknown as DebugProxyCaptureStoreConstructor;
 
@@ -298,7 +305,7 @@ function resolveDebugProxyCaptureStoreKey(
 ): string {
   return typeof optionsOrDbPath === "string"
     ? `legacy:${optionsOrDbPath}:${legacyBlobDir ?? ""}`
-    : `shared:${openOpenClawStateDatabase({ env: optionsOrDbPath.env }).path}`;
+    : `shared:${resolveOpenClawStateSqlitePath(optionsOrDbPath.env ?? process.env)}`;
 }
 
 function getDebugProxyCaptureStoreImpl(
@@ -318,12 +325,12 @@ function getDebugProxyCaptureStoreImpl(
   return store;
 }
 
-/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. */
+/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function getDebugProxyCaptureStore(
   dbPath: string,
   blobDir: string,
 ): LegacyDebugProxyCaptureStore;
-/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. */
+/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function getDebugProxyCaptureStore(
   options?: DebugProxyCaptureStoreOptions,
 ): SharedDebugProxyCaptureStore;
@@ -331,11 +338,21 @@ export function getDebugProxyCaptureStore(
   optionsOrDbPath: DebugProxyCaptureStoreOptions | string = {},
   legacyBlobDir?: string,
 ): DebugProxyCaptureStore {
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-store",
+    method: "getDebugProxyCaptureStore",
+    replacement: "await acquireDebugProxyCaptureStoreAsync() and await lease.release() in finally",
+  });
   return getDebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
 }
 
-/** @deprecated Await each async capture lease's release instead. */
+/** @deprecated Await each async capture lease's release instead. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function closeDebugProxyCaptureStore(): void {
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-store",
+    method: "closeDebugProxyCaptureStore",
+    replacement: "await each async capture lease.release() in finally",
+  });
   unregisterExitClose?.();
   unregisterExitClose = null;
   const stores = [...cachedStores.values()];
@@ -355,7 +372,7 @@ export function closeDebugProxyCaptureStore(): void {
 
 // Lease API keeps one cached capture-store wrapper alive across related
 // operations, then releases it without closing the shared state database.
-/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. */
+/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function acquireDebugProxyCaptureStore(
   dbPath: string,
   blobDir: string,
@@ -363,7 +380,7 @@ export function acquireDebugProxyCaptureStore(
   store: LegacyDebugProxyCaptureStore;
   release: () => void;
 };
-/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. */
+/** @deprecated Use acquireDebugProxyCaptureStoreAsync for shared-state access. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function acquireDebugProxyCaptureStore(options?: DebugProxyCaptureStoreOptions): {
   store: SharedDebugProxyCaptureStore;
   release: () => void;
@@ -375,6 +392,11 @@ export function acquireDebugProxyCaptureStore(
   store: DebugProxyCaptureStore;
   release: () => void;
 } {
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-store",
+    method: "acquireDebugProxyCaptureStore",
+    replacement: "await acquireDebugProxyCaptureStoreAsync() and await lease.release() in finally",
+  });
   const key = resolveDebugProxyCaptureStoreKey(optionsOrDbPath, legacyBlobDir);
   const store = getDebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
   const cached = cachedStores.get(key);

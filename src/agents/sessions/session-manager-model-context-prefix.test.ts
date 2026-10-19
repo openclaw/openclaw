@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { appendTranscriptMessages } from "../../config/sessions/session-accessor.transcript-turn.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -36,6 +37,7 @@ function turn(index: number, resultBytes = 0) {
 
 it("keeps complete history prefixes across appends and restarts the window after compaction and reset", async () => {
   await withOpenClawTestState({ label: "model-context-prefix" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const scope = {
       agentId: "main",
       sessionId: "prefix",

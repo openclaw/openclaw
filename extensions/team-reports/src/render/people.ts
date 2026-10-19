@@ -90,36 +90,28 @@ export function renderPeoplePage(
           b.person.display ?? b.person.github[0] ?? "",
         ),
     );
-  const groups = [
-    {
-      key: "active",
-      label: "Active members",
-      rows: ranked.filter(
-        ({ person, stats }) =>
-          person.status !== "archived" && person.roleGroup !== "readonly" && stats.active > 0,
-      ),
-    },
-    {
-      key: "quiet",
-      label: "No visible activity in the ranking window",
-      rows: ranked.filter(
-        ({ person, stats }) =>
-          person.status !== "archived" && person.roleGroup !== "readonly" && stats.active === 0,
-      ),
-    },
-    {
-      key: "readonly",
-      label: "Read-only access",
-      rows: ranked.filter(
-        ({ person }) => person.status !== "archived" && person.roleGroup === "readonly",
-      ),
-    },
-    {
-      key: "archived",
-      label: "Former members",
-      rows: ranked.filter(({ person }) => person.status === "archived"),
-    },
-  ];
+  const groups = (
+    [
+      ["active", "Active members"],
+      ["quiet", "No visible activity in the ranking window"],
+      ["readonly", "Read-only access"],
+      ["archived", "Former members"],
+    ] as const
+  ).map(([key, label]) => ({
+    key,
+    label,
+    rows: ranked.filter(
+      ({ person, stats }) =>
+        key ===
+        (person.status === "archived"
+          ? "archived"
+          : person.roleGroup === "readonly"
+            ? "readonly"
+            : stats.active > 0
+              ? "active"
+              : "quiet"),
+    ),
+  }));
   const cards = groups
     .filter((group) => group.rows.length)
     .map((group) => {

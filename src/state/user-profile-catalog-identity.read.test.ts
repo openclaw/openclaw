@@ -1,60 +1,14 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { withOpenClawStateReadOnlyLocation } from "./openclaw-state-db-read-connection.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { readUserProfileCatalogIdentity } from "./user-profile-catalog-identity.read.js";
 import { setCanonicalUserProfileDisplayName } from "./user-profile-writes.js";
 import { syncGitHubIdentity } from "./user-profile-writes.worker.js";
 
 afterEach(() => vi.restoreAllMocks());
-
-it("preserves the first scalar error and retires a later corrupt reader without further SQL", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    syncGitHubIdentity({
-      identity: { accountId: 501, login: "person" },
-      authenticationAlias: { kind: "email", email: "person@example.test" },
-    });
-    const pathname = openOpenClawStateDatabase().path;
-    const first = new RangeError("first profile conversion");
-    const terminal = Object.assign(new Error("database disk image is malformed"), {
-      code: "ERR_SQLITE_ERROR",
-      errcode: 11,
-    });
-    let selected = 0;
-    let wasClosed = () => false;
-    const result = withOpenClawStateReadOnlyLocation(
-      ({ db }) => {
-        wasClosed = () => !db.isOpen;
-        const prepare = db.prepare.bind(db);
-        vi.spyOn(db, "prepare").mockImplementation((sql) => {
-          if (sql.includes('from "user_profiles"')) {
-            selected++;
-            throw selected < 3 ? first : terminal;
-          }
-          return prepare(sql);
-        });
-        return readUserProfileCatalogIdentity(db, {
-          kind: "source",
-          profileIds: ["first", "second", "third"],
-        });
-      },
-      pathname,
-      pathname,
-      undefined,
-      undefined,
-      undefined,
-      true,
-    );
-    expect(result.profiles.get("first")).toMatchObject({ ok: false, message: first.message });
-    for (const id of ["second", "third"]) {
-      expect(result.profiles.get(id)).toMatchObject({ ok: false, message: terminal.message });
-    }
-    expect(selected).toBe(3);
-    expect(wasClosed()).toBe(true);
-  });
-});
 
 it("invalidates retained cohorts after worker commits and rollback without freshness probes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -69,7 +23,7 @@ it("invalidates retained cohorts after worker commits and rollback without fresh
         readUserProfileCatalogIdentity(database.db, input),
       );
     const counter = trackSqliteStatementExecutions(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       ["profiles", "identities", "freshness"],
       (sql) =>
         /data_version/iu.test(sql)
@@ -125,12 +79,13 @@ it("does not replay terminal cohort corruption as scalar profile reads", async (
       authenticationAlias: { kind: "email", email: "person@example.test" },
     });
     const { db } = openOpenClawStateDatabase();
-    const prepare = db.prepare.bind(db);
+    const sqlite = requireNativeSqliteDatabase(db);
+    const prepare = sqlite.prepare.bind(sqlite);
     const corruption = Object.assign(new Error("database disk image is malformed"), {
       code: "ERR_SQLITE_ERROR",
       errcode: 11,
     });
-    const failure = vi.spyOn(db, "prepare").mockImplementation((sql) => {
+    const failure = vi.spyOn(sqlite, "prepare").mockImplementation((sql) => {
       if (sql.includes('from "user_profiles"')) {
         throw corruption;
       }

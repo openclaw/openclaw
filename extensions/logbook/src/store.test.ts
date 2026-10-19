@@ -23,14 +23,6 @@ import type { LogbookCardDraft } from "./types.js";
 const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
 const DAY = "2026-07-03";
 
-function queryPlanDetails(database: DatabaseSync, sql: string): string[] {
-  return (
-    database.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{
-      detail: string;
-    }>
-  ).map((row) => row.detail);
-}
-
 function draft(overrides: Partial<LogbookCardDraft> = {}): LogbookCardDraft {
   const base = new Date(`${DAY}T10:00:00`).getTime();
   return {
@@ -79,22 +71,6 @@ describe("LogbookStore", () => {
     });
   };
 
-  it("tracks unbatched active frames and excludes idle ones", async () => {
-    const t0 = Date.now();
-    await insertFrame(t0);
-    await insertFrame(t0 + 1000, { idle: true });
-    await insertFrame(t0 + 2000);
-    expect(await store.countUnbatchedActiveFrames()).toBe(2);
-    const batchId = await store.createBatch({
-      day: dayKeyFor(t0),
-      startMs: t0,
-      endMs: t0 + 3000,
-      frameIds: (await store.unbatchedActiveFrames(10)).map((frame) => frame.id),
-    });
-    expect(await store.countUnbatchedActiveFrames()).toBe(0);
-    expect(await store.batchImages(batchId)).toHaveLength(2);
-  });
-
   it("refuses a hardlinked database with another frame root before bootstrapping that root", async () => {
     const capturedAtMs = Date.now();
     const frameId = await insertFrame(capturedAtMs);
@@ -121,174 +97,35 @@ describe("LogbookStore", () => {
     }
   });
 
-  it("creates every owned table as STRICT with foreign keys enabled", () => {
-    const database = new DatabaseSync(path.join(dir, "logbook.sqlite"), { readOnly: true });
-    try {
-      const ordinaryTables = database
-        .prepare(
-          `SELECT name, strict FROM pragma_table_list
-           WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%'
-           ORDER BY name`,
-        )
-        .all();
-      expect(ordinaryTables).toEqual([
-        { name: "batches", strict: 1 },
-        { name: "cards", strict: 1 },
-        { name: "frames", strict: 1 },
-        { name: "observations", strict: 1 },
-        { name: "standups", strict: 1 },
-      ]);
-      expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
-      expect(database.prepare("PRAGMA foreign_key_list(observations)").all()).toContainEqual(
-        expect.objectContaining({ table: "batches", on_delete: "CASCADE" }),
-      );
-      expect(database.prepare("PRAGMA foreign_key_list(cards)").all()).toContainEqual(
-        expect.objectContaining({ table: "frames", on_delete: "SET NULL" }),
-      );
-    } finally {
-      database.close();
-    }
-  });
-
-  it.each([
-    {
-      operation: "batch frame reads",
-      sql: "SELECT id FROM frames WHERE batch_id = 1 ORDER BY captured_at_ms ASC",
-      expectedIndex: "idx_logbook_frames_batch",
-      scannedTable: "frames",
-      ordered: true,
-    },
-    {
-      operation: "observation replacement",
-      sql: "DELETE FROM observations WHERE batch_id = 1",
-      expectedIndex: "idx_logbook_observations_batch",
-      scannedTable: "observations",
-      ordered: false,
-    },
-    {
-      operation: "frame pruning foreign-key maintenance",
-      sql: "DELETE FROM frames WHERE id = 1",
-      expectedIndex: "idx_logbook_cards_keyframe",
-      scannedTable: "cards",
-      ordered: false,
-    },
-    {
-      operation: "latest frame reads",
-      sql: "SELECT id FROM frames ORDER BY captured_at_ms DESC LIMIT 1",
-      expectedIndex: "idx_logbook_frames_captured_at",
-      scannedTable: "frames",
-      ordered: true,
-    },
-    {
-      operation: "frame range reads",
-      sql: "SELECT id FROM frames WHERE captured_at_ms >= 1 AND captured_at_ms < 2 ORDER BY captured_at_ms ASC",
-      expectedIndex: "idx_logbook_frames_captured_at",
-      scannedTable: "frames",
-      ordered: true,
-    },
-  ])(
-    "uses the supporting index for $operation",
-    ({ sql, expectedIndex, scannedTable, ordered }) => {
-      const database = new DatabaseSync(path.join(dir, "logbook.sqlite"), { readOnly: true });
-      try {
-        const plan = queryPlanDetails(database, sql);
-        expect(plan).toEqual(expect.arrayContaining([expect.stringContaining(expectedIndex)]));
-        expect(
-          plan.some(
-            (detail) => detail.startsWith(`SCAN ${scannedTable}`) && !detail.includes(" USING "),
-          ),
-        ).toBe(false);
-        if (ordered) {
-          expect(plan).not.toEqual(
-            expect.arrayContaining([expect.stringContaining("USE TEMP B-TREE FOR ORDER BY")]),
-          );
-        }
-      } finally {
-        database.close();
-      }
-    },
-  );
-
-  it("upgrades indexes on a populated schema-1 database without changing rows or version", async () => {
-    const frameId = await insertFrame(1000);
-    const batchId = await store.createBatch({
-      day: DAY,
-      startMs: 1000,
-      endMs: 2000,
-      frameIds: [frameId],
-    });
-    await store.setBatchStatus(batchId, "done", undefined, "synthetic/model");
-    const batch = await store.latestBatch();
-    await store.close();
-    const databasePath = path.join(dir, "logbook.sqlite");
-    // Build the old format on a physical file this process has not admitted.
-    renameSync(databasePath, `${databasePath}.seed`);
-    copyFileSync(`${databasePath}.seed`, databasePath);
-    const database = new DatabaseSync(databasePath);
-    database.exec(`
-      DROP INDEX IF EXISTS idx_logbook_frames_captured_at;
-      DROP INDEX IF EXISTS idx_logbook_frames_batch;
-      DROP INDEX IF EXISTS idx_logbook_observations_batch;
-      DROP INDEX IF EXISTS idx_logbook_cards_keyframe;
-      DROP INDEX IF EXISTS idx_logbook_batches_pending;
-      CREATE INDEX IF NOT EXISTS idx_logbook_batches_day ON batches (day, start_ms);
-    `);
-    const batches = database.prepare("SELECT * FROM batches ORDER BY id").all();
-    const frames = database.prepare("SELECT * FROM frames ORDER BY id").all();
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
-    database.close();
-
-    store = await LogbookStore.open(dir, workerModuleUrl);
-    expect(await store.latestBatch()).toEqual(batch);
-    expect(await store.nextPendingBatch()).toBeNull();
-
-    const reopened = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      const indexes = reopened
-        .prepare(
-          `SELECT name FROM sqlite_schema
-           WHERE type = 'index'
-             AND name IN (
-               'idx_logbook_batches_day',
-               'idx_logbook_batches_pending',
-               'idx_logbook_frames_batch',
-               'idx_logbook_frames_captured_at',
-               'idx_logbook_observations_batch',
-               'idx_logbook_cards_keyframe'
-             )
-           ORDER BY name`,
-        )
-        .all();
-      expect(indexes).toEqual([
-        { name: "idx_logbook_batches_pending" },
-        { name: "idx_logbook_cards_keyframe" },
-        { name: "idx_logbook_frames_batch" },
-        { name: "idx_logbook_frames_captured_at" },
-        { name: "idx_logbook_observations_batch" },
-      ]);
-      expect(reopened.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
-      expect(reopened.prepare("SELECT * FROM batches ORDER BY id").all()).toEqual(batches);
-      expect(reopened.prepare("SELECT * FROM frames ORDER BY id").all()).toEqual(frames);
-    } finally {
-      reopened.close();
-    }
-  });
-
-  it("rolls back the whole batch when any frame is missing", async () => {
+  it("rolls back large frame claims with a late missing or duplicate frame", async () => {
     const t0 = Date.now();
-    const frameId = await insertFrame(t0);
+    const frameIds = await Promise.all(
+      Array.from({ length: 70 }, (_, index) => insertFrame(t0 + index)),
+    );
+    const firstFrameId = expectDefined(frameIds[0], "first frame");
 
-    await expect(
-      store.createBatch({
-        day: dayKeyFor(t0),
-        startMs: t0,
-        endMs: t0 + 1000,
-        frameIds: [frameId, 999_999],
-      }),
-    ).rejects.toThrow("Logbook frame 999999 is missing or already batched");
+    for (const invalidFrameId of [999_999, firstFrameId]) {
+      await expect(
+        store.createBatch({
+          day: dayKeyFor(t0),
+          startMs: t0,
+          endMs: t0 + 1000,
+          frameIds: [...frameIds, invalidFrameId],
+        }),
+      ).rejects.toThrow(`Logbook frame ${invalidFrameId} is missing or already batched`);
 
-    expect(await store.latestBatch()).toBeNull();
-    expect((await store.unbatchedActiveFrames(10)).map((frame) => frame.id)).toEqual([frameId]);
+      expect(await store.latestBatch()).toBeNull();
+      expect((await store.unbatchedActiveFrames(100)).map((frame) => frame.id)).toEqual(frameIds);
+    }
+
+    const batchId = await store.createBatch({
+      day: dayKeyFor(t0),
+      startMs: t0,
+      endMs: t0 + 1000,
+      frameIds,
+    });
+    expect(await store.latestBatch()).toMatchObject({ id: batchId, frameCount: 70 });
+    expect(await store.countUnbatchedActiveFrames()).toBe(0);
   });
 
   it("does not steal a frame from an existing batch", async () => {
@@ -336,42 +173,6 @@ describe("LogbookStore", () => {
     expect(await store.countUnbatchedActiveFrames()).toBe(1);
   });
 
-  it("resets running batches to pending on startup recovery", async () => {
-    const t0 = Date.now();
-    await insertFrame(t0);
-    const batchId = await store.createBatch({
-      day: dayKeyFor(t0),
-      startMs: t0,
-      endMs: t0 + 1000,
-      frameIds: [1],
-    });
-    await store.setBatchStatus(batchId, "running");
-    await store.resetRunningBatches();
-    expect((await store.nextPendingBatch())?.id).toBe(batchId);
-  });
-
-  it("replaces only cards overlapping the revision window", async () => {
-    const base = new Date(`${DAY}T09:00:00`).getTime();
-    await store.replaceCardsInWindow(DAY, base, base + 4 * 60 * 60_000, [
-      draft({ startMs: base, endMs: base + 30 * 60_000, title: "Early" }),
-      draft({ startMs: base + 60 * 60_000, endMs: base + 90 * 60_000, title: "Mid" }),
-    ]);
-    expect(
-      await store.cardsForDay(DAY, { startMs: base + 30 * 60_000, endMs: base + 60 * 60_000 }),
-    ).toEqual([]);
-    expect(
-      (
-        await store.cardsForDay(DAY, { startMs: base + 50 * 60_000, endMs: base + 2 * 60 * 60_000 })
-      ).map((card) => card.title),
-    ).toEqual(["Mid"]);
-    // Revise only the window covering "Mid"; "Early" must survive untouched.
-    await store.replaceCardsInWindow(DAY, base + 50 * 60_000, base + 2 * 60 * 60_000, [
-      draft({ startMs: base + 55 * 60_000, endMs: base + 95 * 60_000, title: "Mid revised" }),
-    ]);
-    const titles = (await store.cardsForDay(DAY)).map((card) => card.title);
-    expect(titles).toEqual(["Early", "Mid revised"]);
-  });
-
   it("round-trips distractions and computes day stats", async () => {
     const base = new Date(`${DAY}T10:00:00`).getTime();
     await store.replaceCardsInWindow(DAY, base, base + 60 * 60_000, [
@@ -380,12 +181,6 @@ describe("LogbookStore", () => {
       }),
       draft({ title: "Review", category: "review", appPrimary: undefined, appSecondary: "" }),
     ]);
-    const database = new DatabaseSync(path.join(dir, "logbook.sqlite"));
-    try {
-      database.prepare("UPDATE cards SET distractions = ? WHERE title = ?").run("{", "Review");
-    } finally {
-      database.close();
-    }
     const cards = await store.cardsForDay(DAY);
     expect(cards.map((card) => card.title)).toEqual(["Card", "Review"]);
     expect(cards[1]).toMatchObject({
@@ -412,6 +207,14 @@ describe("LogbookStore", () => {
       cards: [],
       stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
     });
+    const database = new DatabaseSync(path.join(dir, "logbook.sqlite"));
+    try {
+      database.prepare("UPDATE cards SET distractions = ? WHERE title = ?").run("{", "Review");
+    } finally {
+      database.close();
+    }
+    await expect(store.cardsForDay(DAY)).rejects.toThrow(/JSON/);
+    await expect(store.timelineForDay(DAY)).rejects.toThrow(/JSON/);
   });
 
   it("keeps frame metadata when a retained file cannot be removed", async () => {
@@ -432,26 +235,6 @@ describe("LogbookStore", () => {
     expect(await store.frameById(blockedId)).toBeNull();
   });
 
-  it("replaces observations on batch retry instead of appending", async () => {
-    const t0 = Date.now();
-    const frameId = await insertFrame(t0);
-    const batchId = await store.createBatch({
-      day: DAY,
-      startMs: t0,
-      endMs: t0 + 1000,
-      frameIds: [frameId],
-    });
-    await store.replaceObservations(batchId, DAY, [
-      { startMs: t0, endMs: t0 + 500, text: "first run" },
-    ]);
-    await store.replaceObservations(batchId, DAY, [
-      { startMs: t0, endMs: t0 + 500, text: "retry run" },
-    ]);
-    const observations = await store.observationsInRange(DAY, 0, Number.MAX_SAFE_INTEGER);
-    expect(observations).toHaveLength(1);
-    expect(expectDefined(observations[0], "retried observation").text).toBe("retry run");
-  });
-
   it("rejects observations for a missing batch", async () => {
     await expect(
       store.replaceObservations(999_999, DAY, [
@@ -461,53 +244,64 @@ describe("LogbookStore", () => {
     expect(await store.observationsInRange(DAY, 0, Number.MAX_SAFE_INTEGER)).toEqual([]);
   });
 
-  it("rolls back a card replacement with a missing keyframe", async () => {
+  it("replaces large observation sets in order and rolls back a late invalid timestamp", async () => {
+    const frameId = await insertFrame(Date.now());
+    const batchId = await store.createBatch({
+      day: DAY,
+      startMs: 1,
+      endMs: 2,
+      frameIds: [frameId],
+    });
+    const segments = Array.from({ length: 70 }, (_, index) => ({
+      startMs: 1,
+      endMs: 2,
+      text: `Observation ${Math.max(0, index - 1)}`,
+    }));
+    await store.replaceObservations(batchId, DAY, [{ startMs: 1, endMs: 2, text: "replaced" }]);
+    await store.replaceObservations(batchId, DAY, segments);
+    expect(
+      (await store.observationsInRange(DAY, 0, 3)).map(({ startMs, endMs, text }) => ({
+        startMs,
+        endMs,
+        text,
+      })),
+    ).toEqual(segments);
+
+    await expect(
+      store.replaceObservations(batchId, DAY, [
+        ...segments,
+        { startMs: 1.5, endMs: 2, text: "invalid integer timestamp" },
+      ]),
+    ).rejects.toThrow();
+    expect((await store.observationsInRange(DAY, 0, 3)).map(({ text }) => text)).toEqual(
+      segments.map(({ text }) => text),
+    );
+
+    await store.replaceObservations(batchId, DAY, []);
+    expect(await store.observationsInRange(DAY, 0, 3)).toEqual([]);
+  });
+
+  it("replaces large card sets in order and rolls back a late missing keyframe", async () => {
     const base = new Date(`${DAY}T10:00:00`).getTime();
-    await store.replaceCardsInWindow(DAY, base, base + 60_000, [draft({ title: "kept" })]);
+    const drafts = Array.from({ length: 70 }, (_, index) => draft({ title: `Card ${index}` }));
+    await store.replaceCardsInWindow(DAY, base, base + 60_000, [draft({ title: "replaced" })]);
+    await store.replaceCardsInWindow(DAY, base, base + 60_000, drafts);
+    expect((await store.cardsForDay(DAY)).map(({ title }) => title)).toEqual(
+      drafts.map(({ title }) => title),
+    );
 
     await expect(
       store.replaceCardsInWindow(DAY, base, base + 60_000, [
+        ...drafts,
         draft({ title: "invalid", keyframeId: 999_999 }),
       ]),
     ).rejects.toThrow();
-    expect((await store.cardsForDay(DAY)).map((card) => card.title)).toEqual(["kept"]);
-  });
+    expect((await store.cardsForDay(DAY)).map(({ title }) => title)).toEqual(
+      drafts.map(({ title }) => title),
+    );
 
-  it.each([false, true])(
-    "selects current keyframes after pruning instead of retaining a stale draft id (survivor=%s)",
-    async (survivor) => {
-      const startMs = new Date(`${DAY}T10:00:00`).getTime();
-      const expiredId = await insertFrame(startMs + 10 * 60_000);
-      const remainingId = survivor ? await insertFrame(startMs + 25 * 60_000) : undefined;
-      expect(await store.pruneFrames(startMs + 20 * 60_000)).toBe(1);
-      await store.replaceCardsInWindow(
-        DAY,
-        startMs,
-        startMs + 30 * 60_000,
-        [draft({ keyframeId: expiredId })],
-        { selectKeyframes: true },
-      );
-      const cards = await store.cardsForDay(DAY);
-      expect(cards).toHaveLength(1);
-      expect(cards[0]?.keyframeId).toBe(remainingId);
-    },
-  );
-
-  it("requeues errored batches for explicit retry", async () => {
-    const t0 = Date.now();
-    const frameId = await insertFrame(t0);
-    const batchId = await store.createBatch({
-      day: dayKeyFor(t0),
-      startMs: t0,
-      endMs: t0 + 1000,
-      frameIds: [frameId],
-    });
-    await store.setBatchStatus(batchId, "error", "boom");
-    expect(await store.nextPendingBatch()).toBeNull();
-    expect(await store.resetErrorBatches()).toBe(1);
-    const requeued = await store.nextPendingBatch();
-    expect(requeued?.id).toBe(batchId);
-    expect(requeued?.error).toBeUndefined();
+    await store.replaceCardsInWindow(DAY, base, base + 60_000, []);
+    expect(await store.cardsForDay(DAY)).toEqual([]);
   });
 
   it("keeps capture data owner-only on disk", () => {

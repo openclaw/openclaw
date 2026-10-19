@@ -9,6 +9,7 @@ import { validateProviderSettings } from "../../config/provider-settings.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
+  type WorkerExecutionMode,
   type WorkerLease,
   type WorkerLeaseStatus,
   type WorkerProvider,
@@ -29,6 +30,20 @@ export function requireWorkerProfile(value: unknown): WorkerProfile {
   }
   // SAFETY: Validation accepts only bounded JSON objects and checks any secret references.
   return value as WorkerProfile;
+}
+
+export function readWorkerProfileSelection(snapshot: WorkerProfile): {
+  machineClass?: string;
+  os?: string;
+  executionMode?: WorkerExecutionMode;
+} {
+  return {
+    ...(typeof snapshot.machineClass === "string" ? { machineClass: snapshot.machineClass } : {}),
+    ...(typeof snapshot.os === "string" ? { os: snapshot.os } : {}),
+    ...(snapshot.executionMode === "worker-turn" || snapshot.executionMode === "remote-exec"
+      ? { executionMode: snapshot.executionMode }
+      : {}),
+  };
 }
 
 export function requireInheritedWorkerProfileAuthorization(
@@ -92,14 +107,7 @@ export function normalizeWorkerMachineOptions(
       defaultSystems.add(option.os);
     }
   }
-  return value.map((option) => ({
-    id: option.id,
-    label: option.label,
-    ...(option.os === undefined ? {} : { os: option.os }),
-    ...(option.cpu === undefined ? {} : { cpu: option.cpu }),
-    ...(option.memoryGb === undefined ? {} : { memoryGb: option.memoryGb }),
-    ...(option.default === undefined ? {} : { default: option.default }),
-  }));
+  return value;
 }
 
 export function normalizeWorkerOperatingSystems(
@@ -125,12 +133,7 @@ export function normalizeWorkerOperatingSystems(
     }
     ids.add(option.id);
     hasDefault ||= option.default === true;
-    systems.push({
-      id: option.id,
-      label: option.label,
-      ...(option.default === undefined ? {} : { default: option.default }),
-      ...(option.disabledReason === undefined ? {} : { disabledReason: option.disabledReason }),
-    });
+    systems.push(option);
   }
   return systems;
 }

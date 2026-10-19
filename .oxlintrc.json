@@ -248,9 +248,14 @@
   ],
   "overrides": [
     {
-      "files": ["ui/**/*.tsx"],
+      "files": [
+        "ui/**/*.tsx",
+        "ui/src/lib/reactive/**/*.ts",
+        "ui/src/components/solid/**/*.ts",
+        "ui/src/test-helpers/**/*.ts"
+      ],
       "jsPlugins": ["./tools/solid-lint/index.mjs"],
-      // eslint-plugin-solid/configs/v2; keep the AST-only rules on the UI boundary.
+      // Solid 2 rendering and helper scopes; plain TypeScript domain owners are not components.
       "rules": {
         "solid/jsx-no-duplicate-props": "error",
         "solid/jsx-no-undef": "error",
@@ -261,8 +266,7 @@
         "solid/components-return-once": "warn",
         "solid/no-destructure": "error",
         "solid/prefer-for": "error",
-        // Solid 2 dynamic() tracks its component selector through an internal memo.
-        "solid/reactivity": ["warn", { "customReactiveFunctions": ["dynamic"] }],
+        "solid/reactivity": "warn",
         "solid/event-handlers": "error",
         "solid/imports": "warn",
         "solid/style-prop": "warn",
@@ -374,6 +378,7 @@
         "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
+        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
@@ -395,6 +400,7 @@
         "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
+        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
@@ -416,6 +422,7 @@
         "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
+        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
@@ -436,6 +443,7 @@
       "excludeFiles": [
         "**/__generated__/**",
         "**/generated/**",
+        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",

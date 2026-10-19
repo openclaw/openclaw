@@ -17,6 +17,7 @@ import {
   failTransportStream,
   notifyProviderHttpResponse,
   parseTerminalToolCallArguments,
+  iterateSseFrames,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -89,8 +90,9 @@ function createEventConverter(partial: AssistantMessage) {
       }
       if (type === "error" && (reason === "error" || reason === "aborted")) {
         for (const block of partial.content) {
-          // SAFETY: Only in-flight tool blocks carry this optional producer buffer.
-          delete (block as { partialJson?: string }).partialJson;
+          if (block.type === "toolCall") {
+            delete block.partialJson;
+          }
         }
         partial.stopReason = reason;
         partial.errorMessage =
@@ -119,7 +121,7 @@ function createEventConverter(partial: AssistantMessage) {
       } else if (type === "thinking_start") {
         partial.content.push({ type: "thinking", thinking: "" });
       } else {
-        const toolCall: ToolCall & { partialJson?: string } = {
+        const toolCall: ToolCall = {
           type: "toolCall",
           id: string(event.id),
           name: string(event.toolName),
@@ -179,11 +181,10 @@ function createEventConverter(partial: AssistantMessage) {
           break;
         }
         const delta = string(event.delta);
-        // SAFETY: The pending entry is installed with this block's scratch buffer at start.
-        const streaming = block as ToolCall & { partialJson: string };
-        streaming.partialJson += delta;
-        if (pending(streaming.partialJson.length)) {
-          block.arguments = parseStreamingJson(streaming.partialJson);
+        const partialJson = (block.partialJson ?? "") + delta;
+        block.partialJson = partialJson;
+        if (pending(partialJson.length)) {
+          block.arguments = parseStreamingJson(partialJson);
         }
         return { type, contentIndex, delta, partial };
       }
@@ -196,8 +197,7 @@ function createEventConverter(partial: AssistantMessage) {
           throw new Error("Radius terminal tool call does not match its start");
         }
         block.arguments = parseTerminalToolCallArguments(call.arguments);
-        // SAFETY: The matching start created this producer-only optional buffer.
-        delete (block as ToolCall & { partialJson?: string }).partialJson;
+        delete block.partialJson;
         if (call.thoughtSignature !== undefined) {
           block.thoughtSignature = string(call.thoughtSignature);
         }
@@ -211,45 +211,31 @@ function createEventConverter(partial: AssistantMessage) {
 
 async function* readEvents(body: ReadableStream<Uint8Array>, signal?: AbortSignal): AsyncGenerator {
   const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   const cancel = () => {
     void reader.cancel(signal?.reason).catch(() => undefined);
   };
   signal?.addEventListener("abort", cancel, { once: true });
   try {
-    while (true) {
-      signal?.throwIfAborted();
-      const { done, value } = await reader.read();
-      signal?.throwIfAborted();
-      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
-      for (;;) {
-        const boundary = /\r\n\r\n|\n\n|\r\r/u.exec(buffer);
-        if (!boundary && !done) {
-          break;
-        }
-        const frame = boundary ? buffer.slice(0, boundary.index) : buffer;
-        if (Buffer.byteLength(frame, "utf8") > MAX_SSE_EVENT_BYTES) {
+    for await (const { frame } of iterateSseFrames(
+      async () => {
+        signal?.throwIfAborted();
+        const chunk = await reader.read();
+        signal?.throwIfAborted();
+        return chunk;
+      },
+      (pending) => {
+        if (Buffer.byteLength(pending, "utf8") > MAX_SSE_EVENT_BYTES) {
           throw new Error("Radius SSE event exceeds 16 MiB");
         }
-        buffer = boundary ? buffer.slice(boundary.index + boundary[0].length) : "";
-        const data = frame
-          .split(/\r\n|\n|\r/u)
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trimStart())
-          .join("\n");
-        if (data && data !== "[DONE]") {
-          yield JSON.parse(data);
-        }
-        if (!boundary) {
-          break;
-        }
-      }
-      if (Buffer.byteLength(buffer, "utf8") > MAX_SSE_EVENT_BYTES) {
-        throw new Error("Radius SSE event exceeds 16 MiB");
-      }
-      if (done) {
-        return;
+      },
+    )) {
+      const data = frame
+        .split(/\r\n|\n|\r/u)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n");
+      if (data && data !== "[DONE]") {
+        yield JSON.parse(data);
       }
     }
   } finally {
@@ -330,8 +316,9 @@ export function createRadiusStreamFn(): StreamFunction<string, RadiusStreamOptio
         throw new Error("Radius stream ended without a terminal event");
       } catch (error) {
         for (const block of partial.content) {
-          // SAFETY: Only in-flight tool blocks carry this optional producer buffer.
-          delete (block as { partialJson?: string }).partialJson;
+          if (block.type === "toolCall") {
+            delete block.partialJson;
+          }
         }
         failTransportStream({ stream, output: partial, signal: options?.signal, error });
       } finally {

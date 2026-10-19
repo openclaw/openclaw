@@ -88,12 +88,12 @@ type GatewayRestartWaitOptions = {
   /** Diagnostics return the last observation at expiry; lifecycle callers keep throwing. */
   deadlineOutcome?: "throw" | "snapshot";
   phase?: string;
-  settle?: { probes: number };
   env?: NodeJS.ProcessEnv;
   expectedVersion?: string | null;
   expectedBuildId?: string | null;
   requireRunningService?: boolean;
   requirePluginHealth?: boolean;
+  requireChannelHealth?: boolean;
   /** Diagnostics can report absence immediately; start/restart callers wait for installation. */
   waitForMissingService?: boolean;
   supervisorKeepsAlive?: boolean;
@@ -142,28 +142,16 @@ export async function waitForGatewayHealthyRestart(
       : Math.min(params.timeoutMs ?? remainingDeadlineMs, remainingDeadlineMs);
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
-  const settleProbes = Math.max(1, params.settle?.probes ?? 1);
-  const settleDurationMs = params.deadline
-    ? 0
-    : Math.min(
-        (settleProbes - 1) * delayMs,
-        remainingDeadlineMs === undefined
-          ? Infinity
-          : Math.max(0, remainingDeadlineMs - (params.timeoutMs ?? remainingDeadlineMs)),
-      );
   // A longer update budget must not make an old heartbeat count as fresh progress.
   const progressWindowMs = attempts * delayMs;
   const standardDeadlineMs = timeoutMs ?? progressWindowMs;
-  const probeTimeoutMs = () => {
-    const remaining = params.deadline
+  // Native inspection shares the readiness deadline, not a network request's cap.
+  const inspectionTimeoutMs = () =>
+    params.deadline
       ? Math.max(1, params.deadline.remainingMs())
       : timeoutMs === undefined
         ? undefined
-        : Math.max(1, timeoutMs + settleDurationMs - (performance.now() - startedAtMs));
-    return params.probeTimeoutMs === undefined
-      ? remaining
-      : Math.min(params.probeTimeoutMs, remaining ?? Infinity);
-  };
+        : Math.max(1, timeoutMs - (performance.now() - startedAtMs));
   const updateInProgress = (params.env ?? process.env).OPENCLAW_UPDATE_IN_PROGRESS === "1";
 
   let snapshot: GatewayRestartSnapshot = {
@@ -190,7 +178,6 @@ export async function waitForGatewayHealthyRestart(
   let observedRunning = false;
   let observedListener = false;
   let startupProgressDeadlineMs = progressWindowMs;
-  let healthyStreak: { snapshot: GatewayRestartSnapshot; probes: number } | undefined;
   let updateStartupDeadlineMs: number | undefined;
   let observedOwner: string | undefined;
   let observedBootId: string | undefined;
@@ -201,7 +188,7 @@ export async function waitForGatewayHealthyRestart(
       snapshot.runtime.status !== "running" ||
       snapshot.versionMismatch ||
       snapshot.buildIdMismatch ||
-      snapshot.channelProbeErrors?.length ||
+      (params.requireChannelHealth !== false && snapshot.channelProbeErrors?.length) ||
       (params.requirePluginHealth !== false && snapshot.activatedPluginErrors?.length) ||
       snapshot.staleGatewayPids.length > 0
     ) {
@@ -264,10 +251,12 @@ export async function waitForGatewayHealthyRestart(
         expectedVersion: params.expectedVersion,
         expectedBuildId: params.expectedBuildId,
         requirePluginHealth: params.requirePluginHealth,
+        requireChannelHealth: params.requireChannelHealth,
         probeContext,
         configuredProbe,
         probeHosts,
-        timeoutMs: probeTimeoutMs(),
+        timeoutMs: inspectionTimeoutMs(),
+        probeTimeoutMs: params.probeTimeoutMs,
         deadline: params.deadline,
         phase: params.phase ?? "health-wait",
         ...(signal ? { signal } : {}),
@@ -284,7 +273,7 @@ export async function waitForGatewayHealthyRestart(
         updateStartupDeadlineMs ??= Math.max(standardDeadlineMs, STARTUP_MIGRATION_LEASE_TTL_MS);
       }
       const boundedDeadlineMs = timeoutMs ?? updateStartupDeadlineMs;
-      // A managed settle streak needs a concrete process identity. Scheduled Tasks can
+      // Managed readiness needs a concrete process identity. Scheduled Tasks can
       // report running without exposing a PID, so Windows retains status-only proof.
       const healthy =
         snapshot.healthy &&
@@ -295,7 +284,7 @@ export async function waitForGatewayHealthyRestart(
       snapshot.startupPhase =
         reportedStartupPhase ??
         (healthy
-          ? "settling healthy Gateway"
+          ? "healthy Gateway"
           : snapshot.runtime.status !== "running"
             ? "waiting for managed service"
             : snapshot.portUsage.status === "free"
@@ -309,7 +298,7 @@ export async function waitForGatewayHealthyRestart(
           elapsedMs,
         );
       }
-      if (boundedDeadlineMs !== undefined && elapsedMs > boundedDeadlineMs + settleDurationMs) {
+      if (boundedDeadlineMs !== undefined && elapsedMs > boundedDeadlineMs) {
         return withWaitContext(
           { ...snapshot, healthy: false },
           expiredOutcome(elapsedMs, true),
@@ -317,25 +306,13 @@ export async function waitForGatewayHealthyRestart(
         );
       }
       if (healthy) {
-        if (healthyStreak && isSameGatewayRestartGeneration(healthyStreak.snapshot, snapshot)) {
-          healthyStreak.probes += 1;
-        } else {
-          healthyStreak = { snapshot, probes: 1 };
-        }
-        if (healthyStreak.probes >= settleProbes) {
-          return withWaitContext(snapshot, "healthy", elapsedMs);
-        }
-      } else {
-        healthyStreak = undefined;
+        return withWaitContext(snapshot, "healthy", elapsedMs);
       }
-      if (settleProbes > 1 && snapshot.healthy) {
-        // Callers consume snapshot.healthy; a partial settle must not report recovery at timeout.
-        snapshot.healthy = false;
-      }
+      snapshot.healthy = false;
       if (params.requirePluginHealth !== false && snapshot.activatedPluginErrors?.length) {
         return withWaitContext(snapshot, "plugin-errors", elapsedMs);
       }
-      if (snapshot.channelProbeErrors?.length) {
+      if (params.requireChannelHealth !== false && snapshot.channelProbeErrors?.length) {
         return withWaitContext(snapshot, "channel-errors", elapsedMs);
       }
       if (snapshot.versionMismatch) {
@@ -343,6 +320,9 @@ export async function waitForGatewayHealthyRestart(
       }
       if (snapshot.buildIdMismatch) {
         return withWaitContext(snapshot, "build-id-mismatch", elapsedMs);
+      }
+      if (snapshot.authenticationError) {
+        return withWaitContext(snapshot, "auth-rejected", elapsedMs);
       }
       if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
         return withWaitContext(snapshot, "stale-pids", elapsedMs);
@@ -377,7 +357,7 @@ export async function waitForGatewayHealthyRestart(
             readActiveGatewayLockIdentity({
               env: params.env,
               requireInspection: true,
-              timeoutMs: params.deadline?.remainingMs() ?? probeTimeoutMs(),
+              timeoutMs: params.deadline?.remainingMs() ?? inspectionTimeoutMs(),
               signal,
             }),
           );
@@ -513,8 +493,7 @@ export async function waitForGatewayHealthyRestart(
       if (
         !healthy &&
         stableRunning &&
-        (boundedDeadlineMs !== undefined ||
-          elapsedMs <= startupProgressDeadlineMs + settleDurationMs) &&
+        (boundedDeadlineMs !== undefined || elapsedMs <= startupProgressDeadlineMs) &&
         (migrationProgress || migrationCompleted || startupProgress)
       ) {
         // Include one poll of observation lag after the producer's renewal interval.
@@ -537,9 +516,9 @@ export async function waitForGatewayHealthyRestart(
         // Explicit budgets and the shipped updater marker keep their existing behavior.
         const deadlineMs =
           boundedDeadlineMs !== undefined
-            ? boundedDeadlineMs + settleDurationMs
+            ? boundedDeadlineMs
             : Math.min(
-                (stableRunning ? startupProgressDeadlineMs : standardDeadlineMs) + settleDurationMs,
+                stableRunning ? startupProgressDeadlineMs : standardDeadlineMs,
                 startupCapMs,
               );
         if (elapsedMs >= deadlineMs) {
@@ -554,7 +533,7 @@ export async function waitForGatewayHealthyRestart(
         sleep(
           boundedDeadlineMs === undefined
             ? delayMs
-            : Math.min(delayMs, Math.max(0, boundedDeadlineMs + settleDurationMs - elapsedMs)),
+            : Math.min(delayMs, Math.max(0, boundedDeadlineMs - elapsedMs)),
           signal,
         ),
       );

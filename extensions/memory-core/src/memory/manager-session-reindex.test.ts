@@ -2,6 +2,20 @@ import { describe, expect, it } from "vitest";
 import { MemoryManagerSessionSyncOps } from "./manager-session-sync-ops.js";
 
 describe("memory manager session reindex gating", () => {
+  it("defers dirty-session search syncs unless explicitly forced", () => {
+    for (const needsFullReindex of [true, false]) {
+      for (const force of [true, false]) {
+        expect(
+          MemoryManagerSessionSyncOps.prototype["shouldSyncSessions"].call(
+            { sources: new Set(["sessions"]), sessionsDirty: true, sessionsFullRetryDirty: true },
+            { reason: "search", force },
+            needsFullReindex,
+          ),
+        ).toBe(force);
+      }
+    }
+  });
+
   it("keeps session syncing enabled for full reindexes triggered from session-start/watch", () => {
     for (const reason of ["session-start", "watch"]) {
       for (const needsFullReindex of [true, false]) {

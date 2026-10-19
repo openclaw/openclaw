@@ -387,6 +387,12 @@ platform/architecture, or disable `memory-lancedb`.
 
 ## Troubleshooting
 
+### Embedding provider cleanup failed
+
+The plugin waits for admitted embedding requests before closing each retired
+provider. If native cleanup fails, it reports the error instead of retrying it
+across plugin instances. Restart the Gateway to reclaim remaining native resources.
+
 ### Input length exceeds the context length
 
 The embedding model rejected the recall query:

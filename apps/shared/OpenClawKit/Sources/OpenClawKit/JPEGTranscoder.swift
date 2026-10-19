@@ -109,16 +109,13 @@ struct JPEGTranscoder: Sendable {
 
         let minQuality = max(0.2, self.clampQuality(quality) * 0.35)
         let minPixelSize = 256
-        var best = try encode(maxPixelSize: targetMaxPixelSize, quality: quality)
-        if best.data.count <= maxBytes {
-            return best
-        }
+        var actualBytes = 0
 
         for _ in 0..<6 {
             var q = self.clampQuality(quality)
             for _ in 0..<6 {
                 let candidate = try encode(maxPixelSize: targetMaxPixelSize, quality: q)
-                best = candidate
+                actualBytes = candidate.data.count
                 if candidate.data.count <= maxBytes {
                     return candidate
                 }
@@ -133,7 +130,7 @@ struct JPEGTranscoder: Sendable {
             targetMaxPixelSize = nextPixelSize
         }
 
-        throw JPEGTranscodeError.sizeLimitExceeded(maxBytes: maxBytes, actualBytes: best.data.count)
+        throw JPEGTranscodeError.sizeLimitExceeded(maxBytes: maxBytes, actualBytes: actualBytes)
     }
 
     /// JPEG cannot store alpha. Flatten transparent sources over white before encoding so ImageIO does not composite

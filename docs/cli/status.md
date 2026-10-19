@@ -59,7 +59,17 @@ build, or unknown identity keeps the warning and its recorded failure details,
 with the serving and target versions when known. Rollback and recovery observations
 cannot by themselves establish the intended candidate identity. A
 same-version rollback stays warned when the intended candidate build cannot be
-verified. Status does not rewrite the failed run or claim the update succeeded.
+verified. A failed run that never selected a target, such as a preflight refusal
+that recorded no target version, SHA, tag, or post-update identity, is also
+labeled as historical once the Gateway serves a different version or build than
+the running Gateway observation saved with that failure: `Last update run failed
+(preflight-no-good-commit) — Gateway is now serving 2026.10.1; recorded serving
+identity was 2026.9.4.` The installed package identity alone cannot establish this
+change: it may already have been ahead of the running Gateway when the update
+failed. A recovery check matching the old installed package does not establish
+an update target. Without a saved serving identity, the warning remains. A run with an
+explicit target keeps the rules above.
+Status does not rewrite the failed run or claim the update succeeded.
 Starting, unreachable, degraded, and
 remote Gateways do not qualify for this note. Use
 `openclaw update status` to inspect the saved verification failure.
@@ -90,6 +100,8 @@ Local agent ownership checks read schema and owner metadata from one consistent
 SQLite snapshot, including committed WAL changes. They do not copy the entire
 agent database unless its journal state requires private recovery. Startup and
 migration readiness checks retain their full validation.
+
+Local reports apply committed agent deletions after their final diagnostics, database-engine, backup, log, and usage reads. Deleted namespaces are omitted while undeleted namespaces in shared stores remain visible. Online JSON keeps the snapshot published by the Gateway.
 
 The CLI runs in a separate process and contacts the Gateway over WebSocket, even
 for a local loopback target. `--timeout` bounds checks, not the entire status
@@ -198,6 +210,8 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
   until cleared.
 - Output includes per-agent session stores when multiple agents are
   configured.
+- Session summaries omit namespaces with a committed agent deletion while cleanup drains. Undeleted namespaces in a shared store still contribute to counts and recent sessions, even when its configured reader is deleted.
+- Display defaults follow the surviving roster when the configured default is being deleted. Runtime and System Agent ownership remain unchanged, and explicit fleets without a default still require agent selection.
 - Fleet status works without a System Agent owner. Pending events include each
   agent's main queue; a shared global queue is counted once. `--agent` selects
   credentials only for `--usage`.
@@ -251,6 +265,21 @@ If local session state requires Doctor, status prints any installation drift to 
 - `status --all` includes a **Telemetry exporters** diagnosis with the latest
   trusted per-signal exporter state and transport. Endpoint values, headers,
   certificates, payloads, and raw errors are not shown.
+- Missing log files are omitted from `status --all`. Unreadable logs show an
+  unavailable message with guidance to check the file path and permissions.
+
+## Plugin reload
+
+While the Gateway replaces plugins, status shows a **Plugin reload** overview
+row naming the plugins, phase, and waiting or failure reason. JSON includes the
+owner's `pluginReload` record: `phase` (`reloading`, `recovering`, or `failed`),
+`pluginIds`, and optional `deadlineAtMs` and `reason`. New agent runs wait during
+replacement. Ordinary drains have a shared 60-second budget;
+[`plugins reload --wait`](/cli/plugins/uninstall-and-update) extends it to ten
+minutes and can be cancelled with Ctrl+C. A successful rollback, including after
+a drain timeout, clears the pending reload record. Unresolved activation or
+recovery failures stay visible until a later reload of the affected plugin
+succeeds or the Gateway restarts.
 
 ## Secrets
 

@@ -1,4 +1,8 @@
+import { writeFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { SqliteIntegrityOperation } from "../infra/sqlite-integrity.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -8,10 +12,10 @@ import type {
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
 import type { PendingAgentDatabaseOpen } from "./openclaw-agent-db-lifecycle.js";
-import { withOpenClawAgentDatabaseWrite } from "./openclaw-agent-db-write.js";
+import { withOpenClawAgentDatabaseWrite as writeDatabase } from "./openclaw-agent-db-write.js";
 import {
-  withOpenClawAgentDatabaseAdmission,
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseAdmission as admitDatabase,
+  withOpenClawAgentDatabaseAsync as useDatabase,
 } from "./openclaw-agent-db.js";
 
 const boundary = vi.hoisted(() => {
@@ -47,16 +51,23 @@ const boundary = vi.hoisted(() => {
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class {
     readonly isOpen = true;
+    constructor(private readonly pathname: string) {}
     location() {
-      return null;
+      return this.pathname;
     }
   },
 }));
 vi.mock("../config/state-dir.js", () => ({
   resolveStateDir: (env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/synthetic/default",
 }));
+// mock-isolation: Use a deterministic route to observe the captured environment before admission.
 vi.mock("./openclaw-agent-db.paths.js", () => ({
+  INCOGNITO_AGENT_SQLITE_BASENAME: "incognito-openclaw-agent.sqlite",
   resolveOpenClawAgentSqlitePath: boundary.route,
+}));
+// mock-isolation: This fixture tests native one-shot env/admission, not worker discovery.
+vi.mock("./openclaw-agent-execution.js", () => ({
+  supportsOpenClawAgentDatabaseExecution: () => false,
 }));
 // mock-isolation: Capture environment before queued admission without opening real databases.
 vi.mock("./openclaw-agent-write-admission.js", () => ({
@@ -66,31 +77,23 @@ vi.mock("./openclaw-agent-db-lifecycle.js", () => ({
   agentDatabaseLifecycle: boundary.cache,
   retainAgentDatabase: vi.fn(() => vi.fn()),
 }));
-vi.mock("./agent-database-admission.js", () => ({
-  assertAgentDatabaseAdmitted: vi.fn(),
-}));
+// mock-isolation: The fixture supplies database admission without opening operator databases.
+vi.mock("./agent-database-admission.js", () => ({ assertAgentDatabaseAdmitted: vi.fn() }));
 vi.mock("./agent-deletion-cleanup.js", () => ({
   assertAgentDeletionDatabaseCleanupAccess: vi.fn(),
   getAgentDeletionDatabaseCleanup: () => undefined,
 }));
-vi.mock("./openclaw-state-db-async-lifecycle.js", () => ({
+vi.mock("./openclaw-state-db-async-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-state-db-async-lifecycle.js")>()),
   getOpenClawDatabaseMaintenanceScope: () => undefined,
   observeOpenClawDatabaseMaintenanceResource: vi.fn(),
-}));
-vi.mock("./openclaw-agent-db-schema-helpers.js", () => ({
-  assertExistingAgentSchemaOwner: vi.fn(),
-  assertSupportedAgentSchemaVersion: vi.fn(),
-  readExistingAgentSchemaMeta: vi.fn(),
 }));
 vi.mock("../infra/sqlite-integrity-worker.js", () => ({
   assertSqliteIntegrityInWorker: boundary.integrity,
 }));
-vi.mock("../infra/sqlite-integrity.js", () => ({
-  runSqliteIntegrityCheckSync: vi.fn(),
-}));
-vi.mock("../infra/sqlite-wal-write-admission.js", () => ({
-  registerDeferredSqliteWalWriteAdmission: vi.fn(),
-}));
+// mock-isolation: Keep native integrity checks outside this environment-capture fixture.
+vi.mock("../infra/sqlite-integrity.js", () => ({ runSqliteIntegrityCheckSync: vi.fn() }));
+// mock-isolation: Exercise the admission owner without native database initialization.
 vi.mock("./openclaw-agent-db.js", async () => {
   const { DatabaseSync } = await import("node:sqlite");
   const { createSqliteWalReclamationResult } = await import("../infra/sqlite-wal-reclamation.js");
@@ -100,10 +103,12 @@ vi.mock("./openclaw-agent-db.js", async () => {
   const owner = createOpenClawAgentDatabaseAdmissionOwner(function* (
     options: OpenClawAgentDatabaseOptions,
   ): SqliteIntegrityOperation<OpenClawAgentDatabase> {
+    const pathname = boundary.route(options);
+    writeFileSync(pathname, "", { flag: "wx" });
     const database = {
       agentId: options.agentId,
-      path: boundary.route(options),
-      db: new DatabaseSync(":memory:"),
+      path: pathname,
+      db: new DatabaseSync(pathname),
       walMaintenance: {
         stop: async () => {},
         checkpoint: () => false,
@@ -121,13 +126,14 @@ vi.mock("./openclaw-agent-db.js", async () => {
 });
 
 afterEach(() => {
-  expect(boundary.cache.pending.size).toBe(0);
-  expect(boundary.cache.activePending.size).toBe(0);
+  expect([boundary.cache.pending.size, boundary.cache.activePending.size]).toEqual([0, 0]);
   boundary.cache.databases.clear();
   boundary.controls.ready = Promise.resolve();
   boundary.controls.onIntegrity = undefined;
   vi.clearAllMocks();
 });
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+const databasePath = (database: OpenClawAgentDatabase) => database.path;
 
 it.each([
   { driver: "write", platform: "win32", stateKey: "OpenClaw_State_Dir", input: "plain" },
@@ -136,20 +142,20 @@ it.each([
   { driver: "admission", platform: "win32", stateKey: "OpenClaw_State_Dir", input: "plain" },
   { driver: "write", platform: "linux", stateKey: "OPENCLAW_STATE_DIR", input: "plain" },
 ] as const)("pins $input environment through $driver capture on $platform", async (fixture) => {
+  const originalRoot = dirs.make("agent-db-env-capture-");
   await withMockedPlatform(fixture.platform, async () => {
-    const originalRoot = "/synthetic/captured";
     const rawEnv = { [fixture.stateKey]: originalRoot };
     const env = fixture.input === "precloned" ? cloneEnvWithPlatformSemantics(rawEnv) : rawEnv;
     const options = { agentId: "main", env };
     const ready = createDeferredCore();
     boundary.controls.ready = ready.promise;
-    const mutate = vi.fn((database: OpenClawAgentDatabase) => database.path);
+    const mutate = vi.fn(databasePath);
     const write =
       fixture.driver === "write"
-        ? withOpenClawAgentDatabaseWrite(options, mutate)
+        ? writeDatabase(options, mutate)
         : fixture.driver === "async"
-          ? withOpenClawAgentDatabaseAsync(options, mutate)
-          : withOpenClawAgentDatabaseAdmission(
+          ? useDatabase(options, mutate)
+          : admitDatabase(
               options,
               async (run) => {
                 await ready.promise;
@@ -189,16 +195,21 @@ it("cancels one coalesced waiter without aborting the shared integrity check", a
     }
     started.resolve(signal);
   };
-  const first = vi.fn((database: OpenClawAgentDatabase) => database.path);
-  const second = vi.fn((database: OpenClawAgentDatabase) => database.path);
-  const options = { agentId: "main", path: "/synthetic/coalesced.sqlite" };
+  const first = vi.fn(databasePath);
+  const second = vi.fn(databasePath);
+  const options = {
+    agentId: "main",
+    path: path.join(dirs.make("agent-db-coalesced-capture-"), "coalesced.sqlite"),
+  };
   const canceled = new AbortController();
-  const stopped = Promise.allSettled([
-    withOpenClawAgentDatabaseAsync(options, first, undefined, canceled.signal),
-  ]);
-  const remaining = withOpenClawAgentDatabaseAsync(options, second);
+  const stopped = Promise.allSettled([useDatabase(options, first, undefined, canceled.signal)]);
+  const remaining = useDatabase(options, second);
   try {
-    const physicalSignal = await started.promise;
+    const physicalSignal = await awaitGateBeforeSettlement(
+      started.promise,
+      remaining,
+      "Database admission settled before its integrity check",
+    );
     const reason = new Error("Stop only the first waiter");
     canceled.abort(reason);
     expect(await stopped).toMatchObject([

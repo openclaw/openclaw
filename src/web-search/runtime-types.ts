@@ -1,3 +1,4 @@
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 
@@ -10,6 +11,7 @@ export type RuntimeWebSearchConfig = NonNullable<
 export type ResolveWebSearchDefinitionParams = {
   config?: OpenClawConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
   sandboxed?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
   providerId?: string;

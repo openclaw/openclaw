@@ -1,10 +1,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { ProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
+  externalContentStamp,
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
   normalizeCacheKey,
-  readCache,
+  readCachedSearchPayload,
   readResponseText,
   resolveCacheTtlMs,
   resolveSearchCount,
@@ -13,7 +14,7 @@ import {
   withSelfHostedWebSearchEndpoint,
   withTrustedWebSearchEndpoint,
   wrapWebContent,
-  writeCache,
+  writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
   assertHttpUrlTargetsPrivateNetwork,
@@ -31,11 +32,6 @@ import {
 const DEFAULT_TIMEOUT_SECONDS = 20;
 const MAX_RESPONSE_BYTES = 1_000_000;
 type SearxngEndpointMode = "selfHosted" | "strict";
-
-const SEARXNG_SEARCH_CACHE = new Map<
-  string,
-  { value: Record<string, unknown>; insertedAt: number; expiresAt: number }
->();
 
 type SearxngResult = {
   url: string;
@@ -247,9 +243,9 @@ export async function runSearxngSearch(params: {
       baseUrl,
     }),
   );
-  const cached = readCache(SEARXNG_SEARCH_CACHE, cacheKey, cacheTtlMs);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
-    return { ...cached.value, cached: true };
+    return cached;
   }
 
   const startedAt = Date.now();
@@ -278,12 +274,7 @@ export async function runSearxngSearch(params: {
     provider: "searxng",
     count: results.length,
     tookMs: Date.now() - startedAt,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "searxng",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("searxng"),
     results: results.map((result) => ({
       title: wrapWebContent(result.title, "web_search"),
       url: result.url,
@@ -293,10 +284,6 @@ export async function runSearxngSearch(params: {
     })),
   } satisfies Record<string, unknown>;
 
-  writeCache(SEARXNG_SEARCH_CACHE, cacheKey, payload, cacheTtlMs);
+  writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }
-
-export const testing = {
-  SEARXNG_SEARCH_CACHE,
-};

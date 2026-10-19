@@ -330,17 +330,15 @@ function nestedDefaultOwnsEffectiveTransport(entries: Record<string, unknown>[])
 }
 
 function isDiscardedTransportEntry(entries: Record<string, unknown>[], index: number): boolean {
-  if (index === 0) {
-    // Shipped account merging let accounts.default override root transport fields. Materialize
-    // that effective merged entry once; probing the shadowed root can block an otherwise valid
-    // migration when its retired endpoint is offline.
-    return !hasRootSignalAccount(entries) || nestedDefaultOwnsEffectiveTransport(entries);
+  if (isSignalTransportConfig(entries[0]?.transport)) {
+    // Canonical root transport owns the default account and must reserve its port;
+    // a nested default's retired endpoint fields are cleanup-only.
+    return index === resolveNestedDefaultEntryIndex(entries);
   }
-  // A canonical root transport owns the default account; a nested default's
-  // retired endpoint fields are cleanup-only and must not block migration.
+  // Shipped account merging let accounts.default override legacy root transport fields.
+  // Do not probe a shadowed root endpoint while migrating that effective entry.
   return (
-    index === resolveNestedDefaultEntryIndex(entries) &&
-    isSignalTransportConfig(entries[0]?.transport)
+    index === 0 && (!hasRootSignalAccount(entries) || nestedDefaultOwnsEffectiveTransport(entries))
   );
 }
 

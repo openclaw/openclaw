@@ -3,16 +3,20 @@ import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/s
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
 import { isGatewayAvailable, resolveGatewayReadRetryDelayMs } from "../gateway-availability.ts";
 
 type AgentIdentityGatewaySnapshot = Pick<
   ApplicationGatewaySnapshot,
   "client" | "phase" | "restartPending" | "suspensionPhase"
->;
+> &
+  Partial<Pick<ApplicationGatewaySnapshot, "hello" | "selfUser">>;
 
 type AgentIdentityGateway = {
   readonly snapshot: AgentIdentityGatewaySnapshot;
+  readonly connectionRevision?: number;
   subscribe: (listener: (snapshot: AgentIdentityGatewaySnapshot) => void) => () => void;
   subscribeEvents?: (listener: (event: { event: string; payload?: unknown }) => void) => () => void;
 };
@@ -102,9 +106,9 @@ export type AgentIdentityCapability = ReturnType<typeof createAgentIdentityCapab
 export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
   let cachedClient: GatewayBrowserClient | null = gateway.snapshot.client;
   let cachedConnected = gateway.snapshot.phase === "connected";
+  let presentationKey = gatewayPresentationScope(gateway).key;
   let connectionGeneration = 0;
   const identities = new Map<string, AgentIdentityResult>();
-  const invalidationEpochs = new Map<string, number>();
   const listeners = new Set<() => void>();
 
   const publish = () => {
@@ -115,17 +119,25 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
 
   const resetForGateway = (snapshot: AgentIdentityGatewaySnapshot) => {
     const connected = snapshot.phase === "connected";
-    if (snapshot.client === cachedClient && connected === cachedConnected) {
+    const nextPresentationKey = gatewayPresentationScope(gateway).key;
+    const identityChanged =
+      snapshot.client !== cachedClient || presentationKey !== nextPresentationKey;
+    const accessLost = connected && !hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null);
+    if (!identityChanged && connected === cachedConnected && !accessLost) {
       return;
     }
+    presentationKey = nextPresentationKey;
     const hadIdentities = identities.size > 0;
     invalidateAgentIdentityCache(cachedClient);
     cachedClient = snapshot.client;
     cachedConnected = connected;
     connectionGeneration += 1;
-    identities.clear();
-    invalidationEpochs.clear();
-    if (hadIdentities) {
+    if (identityChanged || accessLost) {
+      identities.clear();
+    } else if (connected && hadIdentities) {
+      void capability.ensure([...identities.keys()]);
+    }
+    if ((identityChanged || accessLost) && hadIdentities) {
       publish();
     }
   };
@@ -136,7 +148,6 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
     const ids = normalizeUniqueTrimmedStringList(agentIds);
     invalidateAgentIdentityCache(cachedClient, ids);
     for (const agentId of ids) {
-      invalidationEpochs.set(agentId, (invalidationEpochs.get(agentId) ?? 0) + 1);
       identities.delete(agentId);
     }
     // Chat can hold a shared request without a capability snapshot.
@@ -159,11 +170,10 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
     invalidateAgentIdentityCache(cachedClient);
     connectionGeneration += 1;
     identities.clear();
-    invalidationEpochs.clear();
     publish();
   });
 
-  return {
+  const capability = {
     get(agentId: string | null | undefined) {
       const normalized = agentId?.trim();
       return normalized ? (identities.get(normalized) ?? null) : null;
@@ -175,7 +185,11 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
       const snapshot = gateway.snapshot;
       resetForGateway(snapshot);
       const client = snapshot.client;
-      if (!client || !isGatewayAvailable(snapshot)) {
+      if (
+        !client ||
+        !isGatewayAvailable(snapshot) ||
+        !hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null)
+      ) {
         return;
       }
       const generation = connectionGeneration;
@@ -187,14 +201,10 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
         return;
       }
       const results = await Promise.all(
-        missing.map(async (agentId) => {
-          const invalidationEpoch = invalidationEpochs.get(agentId) ?? 0;
-          return [
-            agentId,
-            invalidationEpoch,
-            await fetchAgentIdentity(client, agentId).catch(() => null),
-          ] as const;
-        }),
+        missing.map(
+          async (agentId) =>
+            [agentId, await fetchAgentIdentity(client, agentId).catch(() => null)] as const,
+        ),
       );
       if (
         connectionGeneration !== generation ||
@@ -204,14 +214,10 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
         return;
       }
       let changed = false;
-      for (const [agentId, invalidationEpoch, identity] of results) {
+      for (const [agentId, identity] of results) {
         // Overlapping ensure calls share the request, so only its first
         // publication changes the snapshot observed by subscribers.
-        if (
-          identity &&
-          identities.get(agentId) !== identity &&
-          invalidationEpoch === (invalidationEpochs.get(agentId) ?? 0)
-        ) {
+        if (identity && identities.get(agentId) !== identity) {
           identities.set(agentId, identity);
           changed = true;
         }
@@ -223,4 +229,5 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
     invalidate,
     subscribe: (listener: () => void) => registerListener(listeners, listener),
   };
+  return capability;
 }

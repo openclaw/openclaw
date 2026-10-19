@@ -47,7 +47,7 @@ export function targetKey(cdpUrl: string, targetId: string) {
 }
 
 export function bindRoleRefsTarget(page: Page, cdpUrl: string, targetId?: string | null): void {
-  const normalizedTargetId = normalizeOptionalString(targetId ?? undefined);
+  const normalizedTargetId = normalizeOptionalString(targetId);
   if (!normalizedTargetId) {
     return;
   }
@@ -362,30 +362,17 @@ export function createObservedDialogAbortSignalForPage(opts: {
       controller.abort(new BrowserObservedDialogBlockedError(serializeObservedBrowserState(state)));
     }
   };
-  const abortForParent = () => {
-    if (!controller.signal.aborted) {
-      controller.abort(opts.parentSignal?.reason ?? new Error("aborted"));
-    }
-  };
-
   if (state.pendingDialogs.length > 0) {
     abortForCurrentDialog();
   } else {
     state.dialogAbortControllers.add(controller);
   }
-  if (opts.parentSignal) {
-    if (opts.parentSignal.aborted) {
-      abortForParent();
-    } else {
-      opts.parentSignal.addEventListener("abort", abortForParent, { once: true });
-    }
-  }
-
   return {
-    signal: controller.signal,
+    signal: opts.parentSignal
+      ? AbortSignal.any([controller.signal, opts.parentSignal])
+      : controller.signal,
     cleanup: () => {
       state.dialogAbortControllers.delete(controller);
-      opts.parentSignal?.removeEventListener("abort", abortForParent);
     },
   };
 }

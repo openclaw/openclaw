@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -93,7 +94,7 @@ suite.define(() => {
             .frameLocator("iframe")
             .getByText("All systems ready")
             .waitFor();
-          await page.locator(".chat-panel-swap").click();
+          await selectChatLayoutAction(page, /^Swap /);
           await expect
             .poll(() =>
               page
@@ -101,10 +102,10 @@ suite.define(() => {
                 .evaluate((view) => view.closest("[data-region]")?.getAttribute("data-region")),
             )
             .toBe("main");
-          // Observe the browser cache owner's completed write before exercising reload.
+          // Transcript persistence is debounced separately from the sidebar write.
           await expect
             .poll(() =>
-              page.evaluate(async () => {
+              page.evaluate(async (expectedSessionKey) => {
                 if (
                   !Object.keys(localStorage).some((key) =>
                     key.startsWith("openclaw.control.bootRecord.v1:"),
@@ -124,15 +125,44 @@ suite.define(() => {
                   );
                   open.addEventListener("success", () => {
                     const db = open.result;
-                    const transaction = db.transaction("sidebarSnapshots", "readonly");
+                    const transaction = db.transaction(
+                      ["sidebarSnapshots", "snapshots"],
+                      "readonly",
+                    );
                     const request = transaction.objectStore("sidebarSnapshots").count();
+                    const snapshots = transaction.objectStore("snapshots").getAll();
                     transaction.addEventListener("complete", () => {
                       db.close();
-                      resolve(request.result > 0);
+                      const transcriptPersisted = snapshots.result.some((record: unknown) => {
+                        if (
+                          typeof record !== "object" ||
+                          record === null ||
+                          !("sessionKey" in record) ||
+                          typeof record.sessionKey !== "string" ||
+                          !record.sessionKey.endsWith(`\u0000${expectedSessionKey}`) ||
+                          !("snapshot" in record) ||
+                          typeof record.snapshot !== "object" ||
+                          record.snapshot === null ||
+                          !("messages" in record.snapshot) ||
+                          !Array.isArray(record.snapshot.messages)
+                        ) {
+                          return false;
+                        }
+                        return record.snapshot.messages.some(
+                          (message: unknown) =>
+                            typeof message === "object" &&
+                            message !== null &&
+                            "role" in message &&
+                            message.role === "assistant" &&
+                            "content" in message &&
+                            message.content === "Synthetic mission briefing.",
+                        );
+                      });
+                      resolve(request.result > 0 && transcriptPersisted);
                     });
                   });
                 });
-              }),
+              }, sessionKey),
             )
             .toBe(true);
           await page.addInitScript(() => {
@@ -189,36 +219,16 @@ suite.define(() => {
             const frames = await page.evaluate(() => Reflect.get(window, "dashboardPaints"));
             console.log("Dashboard reload first painted frame", JSON.stringify(frames[0]));
             expect(frames.length).toBeGreaterThan(0);
-            expect(frames).toEqual(
-              expect.arrayContaining([
-                {
-                  title,
-                  welcome: false,
-                  board: true,
-                  boardRegion: "main",
-                  transcript: true,
-                  transcriptRegion: "side",
-                },
-              ]),
-            );
-            expect(
-              frames.every(
-                (frame: {
-                  title: string;
-                  welcome: boolean;
-                  board: boolean;
-                  boardRegion: string | null;
-                  transcript: boolean;
-                  transcriptRegion: string | null;
-                }) =>
-                  frame.title === title &&
-                  !frame.welcome &&
-                  frame.board &&
-                  frame.boardRegion === "main" &&
-                  frame.transcript &&
-                  frame.transcriptRegion === "side",
-              ),
-            ).toBe(true);
+            for (const frame of frames) {
+              expect(frame).toEqual({
+                title,
+                welcome: false,
+                board: true,
+                boardRegion: "main",
+                transcript: true,
+                transcriptRegion: "side",
+              });
+            }
             expect(await gateway.getRequests("board.get")).toHaveLength(0);
             const helloReleasedAt = performance.now();
             await gateway.resolveDeferred("connect");

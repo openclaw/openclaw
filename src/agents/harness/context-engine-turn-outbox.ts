@@ -4,6 +4,8 @@ import type {
   TranscriptTurnAdmission,
   TranscriptTurnBoundary,
 } from "../../config/sessions/transcript-entry-anchor.js";
+import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 
 export type PendingContextEngineTurn = Readonly<{
@@ -86,6 +88,25 @@ export type ContextEngineTurnOutboxStore = Readonly<{
   hasPending(filter: ContextEngineTurnOutboxFilter & { sessionId?: string }): Promise<boolean>;
 }>;
 
+/** The durable context-engine turn outbox of one agent database, executed in its worker. */
+export type ContextEngineTurnOutboxWorkerStore = ContextEngineTurnOutboxStore &
+  Readonly<{
+    [
+      Type in
+        | "prepareRun"
+        | "enqueueIntent"
+        | "acceptIntent"
+        | "publishClosedTurn"
+        | "discardIntent"
+    ]: (
+      input: ContextEngineTurnOutboxWorkerOperations[Type]["input"],
+    ) => Promise<
+      ContextEngineTurnOutboxWorkerOperations[Type]["output"] extends undefined
+        ? void
+        : ContextEngineTurnOutboxWorkerOperations[Type]["output"]
+    >;
+  }>;
+
 export async function drainContextEngineTurnOutbox(params: {
   store: ContextEngineTurnOutboxStore;
   engine: ContextEngine;
@@ -167,6 +188,14 @@ async function commitPendingContextEngineTurn(params: {
       },
       isHeartbeat: payload.isHeartbeat,
       ...(payload.runtimeContext ? { runtimeContext: payload.runtimeContext } : {}),
+      runtimeSettings: buildContextEngineRuntimeSettings({
+        contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+        provider: payload.runtimeContext?.provider,
+        resolvedModel: payload.runtimeContext?.modelId,
+        promptTokenBudget: payload.runtimeContext?.tokenBudget,
+        selectedContextEngineId: params.engine.info.id,
+        contextEngineSelectionSource: params.engine.info.id === "legacy" ? "default" : "configured",
+      }),
     };
     params.store.assertReadable?.();
     const result = await params.engine.commitTurn?.(commonParams);

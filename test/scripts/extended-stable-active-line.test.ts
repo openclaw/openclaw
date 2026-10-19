@@ -40,6 +40,7 @@ describe("extended-stable live publication eligibility", () => {
       mkdirSync(join(harness, "lib"), { recursive: true });
       for (const script of [
         "openclaw-npm-extended-stable-release.mjs",
+        "plugin-sdk-api-release-evidence.mjs",
         "lib/release-version.mjs",
       ]) {
         writeFileSync(join(harness, script), readFileSync(join("scripts", script)));

@@ -40,13 +40,13 @@ type PersistedChatSendMedia = Awaited<
 
 function resolveChatSendManagedMedia(
   entries: PersistedChatSendMedia,
-  suppressInlineHydration = false,
+  suppressPromptHydration = false,
 ): MediaFact[] {
   return entries.map((entry) => ({
     path: entry.path,
     contentType: entry.fact.contentType ?? "application/octet-stream",
     ...(entry.fact.fileName ? { fileName: entry.fact.fileName } : {}),
-    ...(suppressInlineHydration && entry.imageKind === "inline"
+    ...(suppressPromptHydration && (entry.imageKind === "inline" || entry.imageKind === "offloaded")
       ? { hydrationSuppressed: true }
       : {}),
   }));
@@ -150,15 +150,18 @@ export function prepareChatSendUserTurn(params: {
       };
     }),
   );
-  const pluginBoundMediaPromise =
-    attachments.parsedImages.length > 0
-      ? persistedMediaForTranscriptPromise.then((result) => {
-          const entries = attachments.explicitOriginTargetsPlugin
-            ? result.entries
-            : result.entries.filter((entry) => entry.imageKind === "inline");
-          return resolveChatSendManagedMedia(entries, !attachments.explicitOriginTargetsPlugin);
-        })
-      : Promise.resolve([]);
+  const pluginBoundMediaPromise = persistedMediaForTranscriptPromise.then((result) =>
+    resolveChatSendManagedMedia(
+      result.entries.filter(
+        (entry) =>
+          attachments.explicitOriginTargetsPlugin ||
+          entry.imageKind === "inline" ||
+          (entry.imageKind === "offloaded" &&
+            !attachments.mediaPathOffloads.some((fact) => fact.contentType?.startsWith("image/"))),
+      ),
+      !attachments.explicitOriginTargetsPlugin,
+    ),
+  );
   void pluginBoundMediaPromise.catch(() => undefined);
   // Generated media hints belong to the prompt and reset payload, not command arguments.
   const commandBody = request.inboundMessage;

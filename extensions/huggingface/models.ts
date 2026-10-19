@@ -15,7 +15,6 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const HUGGINGFACE_MANIFEST_CATALOG = manifest.modelCatalog.providers.huggingface;
 export const HUGGINGFACE_BASE_URL = HUGGINGFACE_MANIFEST_CATALOG.baseUrl;
-export const HUGGINGFACE_POLICY_SUFFIXES = ["cheapest", "fastest"] as const;
 const HUGGINGFACE_DISCOVERY_TIMEOUT_MS = 30_000;
 
 const HUGGINGFACE_DEFAULT_COST = {
@@ -48,11 +47,6 @@ export const HUGGINGFACE_MODEL_CATALOG: ModelDefinitionConfig[] = buildManifestM
   providerId: "huggingface",
   catalog: HUGGINGFACE_MANIFEST_CATALOG,
 }).models;
-
-export function isHuggingfacePolicyLocked(modelRef: string): boolean {
-  const ref = modelRef.trim();
-  return HUGGINGFACE_POLICY_SUFFIXES.some((suffix) => ref.endsWith(`:${suffix}`) || ref === suffix);
-}
 
 function isReasoningModelHeuristic(modelId: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(modelId);
@@ -128,7 +122,7 @@ export async function discoverHuggingfaceModels(
 ): Promise<ModelDefinitionConfig[]> {
   const trimmedKey = apiKey?.trim();
   if (!trimmedKey) {
-    return HUGGINGFACE_MODEL_CATALOG.map((model) => Object.assign({}, model));
+    return HUGGINGFACE_MODEL_CATALOG;
   }
 
   const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, HUGGINGFACE_DISCOVERY_TIMEOUT_MS);
@@ -137,7 +131,7 @@ export async function discoverHuggingfaceModels(
     providerId: "huggingface",
     endpoint: `${HUGGINGFACE_BASE_URL}/models`,
     providerConfig: { baseUrl: HUGGINGFACE_BASE_URL, api: "openai-completions" },
-    models: HUGGINGFACE_MODEL_CATALOG.map((model) => Object.assign({}, model)),
+    models: HUGGINGFACE_MODEL_CATALOG,
     discoveryApiKey: trimmedKey,
     signal: AbortSignal.timeout(requestTimeoutMs),
     timeoutMs: requestTimeoutMs,

@@ -65,14 +65,11 @@ export type DesktopPanelToggleDetail = {
 };
 
 export type PortalPanelToggleDetail = {
+  requestId?: string;
   dock?: "bottom" | "right";
   open?: boolean;
   portalId?: string;
   environmentId?: string;
-};
-
-export type PanelToggleElement = HTMLElement & {
-  handleToggleRequest: (event: Event) => void;
 };
 
 export function isTerminalPanelShortcut(event: KeyboardEvent): boolean {

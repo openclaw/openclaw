@@ -104,7 +104,7 @@ sidebarTitle: "Troubleshooting"
 
   </Accordion>
 
-  <Accordion title="Model outputs tool JSON as text">
+  <Accordion title="Model outputs tool calls as text">
     Usually the provider is in OpenAI-compatible mode, or the model cannot
     handle tool schemas. Prefer native mode:
 
@@ -124,20 +124,36 @@ sidebarTitle: "Troubleshooting"
     If a small local model still fails on tool schemas, set
     `compat.supportsTools: false` on that model entry and retest.
 
+    When a reply consists of a structured tool-call attempt naming an available
+    tool, including wrapped XML, ReAct `Action`/`Action Input`, and legacy
+    `[TOOL_CALL]` blocks, OpenClaw asks the model once to call the tool natively
+    when recovery is safe. Earlier side effects can prevent that retry. A repeated text call
+    fails visibly instead of reporting success. Text calls are never executed
+    by this guard; examples in substantive answers remain text.
+    The original reply and corrective continuation remain in session history.
+
   </Accordion>
 
   <Accordion title="Repeated tool errors stop the turn">
+    With `tools.toolSearch` unset, embedded runs using native local Ollama expose
+    policy-approved `web_search`, `web_fetch`, `memory_search`, and `memory_get`
+    directly. Other optional tools remain deferred. Explicit Tool Search settings
+    keep their configured behavior. Direct exposure does not enable a denied
+    tool, enable memory, or configure a web-search provider.
+
     OpenClaw stops after three consecutive identical failures for the same tool
     and arguments, including repeated unknown tool IDs. This protection is always
     active; enabling `tools.loopDetection` is not required.
 
-    On Ollama 0.40.1, some model templates can cause the server to mistake the
-    `<tool_call>` marker for Tool Search's `tool_call` function. OpenClaw avoids
-    this collision with transport-only tool aliases, so Tool Search can remain
-    enabled. Execution and session history keep the original tool names; raw
-    provider requests may show names such as `openclaw_tool_call`.
+    Ollama 0.40's generic parser can mistake a chat-template marker for an
+    advertised tool name. Tool Search uses the collision-free `dispatch_action`
+    name across providers, with the same name in instructions, requests, and
+    new session history. It no longer needs an `openclaw_tool_call` wire alias.
+    Directly exposed names that still collide, such as `ls`, `name`, and
+    `function`, retain transport-only aliases such as `openclaw_ls`. Execution
+    and session history keep those tools' original names.
 
-    This translation covers native Ollama and the Ollama plugin's identified
+    These remaining aliases cover native Ollama and the Ollama plugin's identified
     OpenAI-compatible chat-completions route. Other providers are unchanged.
     Custom Ollama templates with different markers may need separate diagnosis.
 
@@ -145,6 +161,28 @@ sidebarTitle: "Troubleshooting"
     tool names or cannot use the exposed schemas, switch to a model with native
     tool calling and start a new turn. Changed errors and successful retries
     reset the count. See [Tool-loop detection](/tools/loop-detection).
+
+  </Accordion>
+
+  <Accordion title="Repetitive output stopped">
+    OpenClaw stopped a long repetition-dominated response from a model with a
+    known total size in the 32B class or smaller. It replaced the affected unfinished
+    block in session history with `[Repetitive output stopped]`. Earlier blocks
+    and completed tool work remain; side effects are not retried automatically.
+
+    Try a stronger model, request less output, or split the task into smaller
+    turns. Native Ollama requests also send the resolved model output cap as
+    `num_predict`; lower the model's `maxTokens` if generation runs too long.
+    Discovered local models default to 8,192 output tokens. Ollama Cloud models
+    use their documented output limits, or their context window when a separate
+    output limit is unavailable. Authored `maxTokens` and `params.num_predict`
+    override those defaults. Set `params: { num_predict: -1 }` on a model entry
+    to restore Ollama's unlimited generation default; an explicit request output
+    cap still wins.
+    The detector starts around 16,000 characters and can stop legitimate output
+    with sufficiently dominant repetition. It applies to the 32B class (less than
+    34 billion total parameters) and stays off when total model size is unknown.
+    See [Output budgets and repetition stops](/gateway/local-models#output-budgets-and-repetition-stops).
 
   </Accordion>
 
@@ -159,7 +197,7 @@ sidebarTitle: "Troubleshooting"
     session and a fallback model:
 
     ```bash
-    openclaw infer model run --model ollama/kimi-k2.5:cloud --prompt "Reply with exactly: ok" --json
+    openclaw infer model run --model ollama/kimi-k2.6:cloud --prompt "Reply with exactly: ok" --json
     openclaw models set ollama/gemma4
     ```
 
@@ -222,6 +260,19 @@ sidebarTitle: "Troubleshooting"
     Lower the model entry's `contextTokens` if OpenClaw sends too much prompt. Lower
     `params.num_ctx` if Ollama's runtime context is too large for the machine.
     Lower `maxTokens` if generation runs too long.
+
+  </Accordion>
+
+  <Accordion title="Memory embedding rebuild fails">
+    If `openclaw memory index --force` fails against Ollama (for example with
+    `bge-m3`), try [llmman](/providers/llmman#advanced-configuration) as the
+    embedding server. `provider: "ollama"` only needs a new `remote.baseUrl`.
+
+  </Accordion>
+
+  <Accordion title="Ollama still aborts or hangs on this host">
+    If `curl` to Ollama works but agent turns abort, try [llmman](/providers/llmman)
+    as the local server.
 
   </Accordion>
 </AccordionGroup>

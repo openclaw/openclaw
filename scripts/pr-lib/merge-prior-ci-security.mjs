@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
@@ -6,7 +7,7 @@ import {
   securityReviewContracts,
 } from "../github/guard-review.mjs";
 import { parseGithubResponse } from "./gh-api-preflight.mjs";
-import { execPrGh } from "./github.mjs";
+import { execPrGhAsync } from "./github.mjs";
 
 const oid = /^[a-f0-9]{40}$/u;
 const positiveInteger = (value) => Number.isSafeInteger(value) && value > 0;
@@ -18,10 +19,10 @@ function requireEvidence(condition, message) {
   }
 }
 
-function read(path) {
+async function read(path) {
   let raw;
   try {
-    raw = execPrGh(
+    raw = await execPrGhAsync(
       [
         "api",
         "--hostname",
@@ -51,11 +52,11 @@ function read(path) {
   return response.body;
 }
 
-function pages(path, key, head) {
+async function pages(path, key, head) {
   const rows = [];
   let total;
   for (let page = 1; ; page += 1) {
-    const result = read(`${path}?per_page=100&page=${page}`);
+    const result = await read(`${path}?per_page=100&page=${page}`);
     requireEvidence(
       Array.isArray(result[key]) &&
         Number.isSafeInteger(result.total_count) &&
@@ -77,10 +78,10 @@ function pages(path, key, head) {
   }
 }
 
-function list(path) {
+async function list(path) {
   const rows = [];
   for (let page = 1; ; page += 1) {
-    const values = read(`${path}${path.includes("?") ? "&" : "?"}per_page=100&page=${page}`);
+    const values = await read(`${path}${path.includes("?") ? "&" : "?"}per_page=100&page=${page}`);
     requireEvidence(
       Array.isArray(values) && page <= 100,
       "incomplete security authority pagination",
@@ -92,10 +93,10 @@ function list(path) {
   }
 }
 
-function latestStatuses(path) {
+async function latestStatuses(path) {
   // Only history carries creator identity. GitHub orders it newest first,
   // including earlier failures superseded by a current guard decision.
-  const history = list(path);
+  const history = await list(path);
   requireEvidence(
     history.every((status) => positiveInteger(status?.id) && typeof status.context === "string") &&
       new Set(history.map((status) => status.id)).size === history.length,
@@ -186,6 +187,46 @@ function publisherIdentity(run) {
   ]);
 }
 
+async function readTogether(reads) {
+  // Drain all children before surfacing a failure; the shared transport bounds fan-out.
+  const settled = await Promise.allSettled(reads);
+  return settled.map((result) => {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+    return result.value;
+  });
+}
+
+export function verifyPriorCiSecurityMainSources(proof, main) {
+  requireEvidence(oid.test(main ?? ""), "complete current main identity is required");
+  const sources = proof.sources;
+  requireEvidence(
+    Array.isArray(sources) &&
+      sources.length > 0 &&
+      sources.every((source) => typeof source.path === "string" && oid.test(source.sha ?? "")),
+    "protected publisher source identities are required",
+  );
+  const output = execFileSync(
+    process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git",
+    ["--no-lazy-fetch", "ls-tree", "-r", "-z", main, "--", ...sources.map((source) => source.path)],
+    { encoding: "utf8", env: { ...process.env, GIT_NO_LAZY_FETCH: "1" } },
+  );
+  const blobs = new Map();
+  for (const entry of output.split("\0").filter(Boolean)) {
+    const match = /^\d+ blob ([a-f0-9]{40})\t(.+)$/u.exec(entry);
+    requireEvidence(match && !blobs.has(match[2]), "ambiguous current publisher source");
+    blobs.set(match[2], match[1]);
+  }
+  for (const { path, sha } of sources) {
+    requireEvidence(
+      blobs.get(path) === sha,
+      `Security Review publisher source differs from the current owner: ${path}`,
+    );
+  }
+  return { main, sources };
+}
+
 export async function verifyPriorCiSecurity({
   repository,
   repositoryId,
@@ -197,7 +238,8 @@ export async function verifyPriorCiSecurity({
   const [owner, repo] = repository.split("/");
   const prefix = `/repos/${repository}`;
   const statusPath = `${prefix}/commits/${head}/statuses`;
-  const statuses = latestStatuses(statusPath);
+  const pullPath = `${prefix}/pulls/${pr}`;
+  const [statuses, pullRequest] = await readTogether([latestStatuses(statusPath), read(pullPath)]);
   const snapshot = statusSnapshot(statuses);
   const combined = statuses.find(
     (status) => status.id === statusId && status.context === "openclaw/ci-gate",
@@ -212,7 +254,7 @@ export async function verifyPriorCiSecurity({
     "combined status has no exact Security Review publisher",
   );
   const runPath = `${prefix}/actions/runs/${runId}`;
-  const run = read(runPath);
+  const run = await read(runPath);
   requireEvidence(
     run.id === runId &&
       positiveInteger(run.run_attempt) &&
@@ -228,30 +270,34 @@ export async function verifyPriorCiSecurity({
     "successful protected Security Review publisher is required",
   );
   const attemptPath = `${runPath}/attempts/${run.run_attempt}`;
-  const attempt = read(attemptPath);
+  const paths = sourceFiles();
+  const [attempt, comparison, sources, jobs] = await readTogether([
+    read(attemptPath),
+    read(`${prefix}/compare/${run.head_sha}...${main}?per_page=1&page=2`),
+    readTogether(
+      paths.map(async (path) => {
+        const bytes = readFileSync(new URL(path, root));
+        const sha = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+        const source = await read(`${prefix}/contents/${path}?ref=${run.head_sha}`);
+        requireEvidence(
+          source.type === "file" && source.path === path && source.sha === sha,
+          `Security Review publisher source differs from the current owner: ${path}`,
+        );
+        return { path, sha };
+      }),
+    ),
+    pages(`${attemptPath}/jobs`, "jobs"),
+  ]);
   requireEvidence(
     publisherIdentity(attempt) === publisherIdentity(run),
     "publisher attempt identity changed",
   );
-  const comparison = read(`${prefix}/compare/${run.head_sha}...${main}?per_page=1&page=2`);
   requireEvidence(
     comparison.base_commit?.sha === run.head_sha &&
       comparison.merge_base_commit?.sha === run.head_sha &&
       ["ahead", "identical"].includes(comparison.status),
     "publisher source is not on protected main",
   );
-  const sources = [];
-  for (const path of sourceFiles()) {
-    const bytes = readFileSync(new URL(path, root));
-    const sha = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
-    const source = read(`${prefix}/contents/${path}?ref=${run.head_sha}`);
-    requireEvidence(
-      source.type === "file" && source.path === path && source.sha === sha,
-      `Security Review publisher source differs from the current owner: ${path}`,
-    );
-    sources.push({ path, sha });
-  }
-  const jobs = pages(`${attemptPath}/jobs`, "jobs");
   requireEvidence(
     new Set(jobs.map((job) => job.id)).size === jobs.length &&
       jobs.every(
@@ -274,8 +320,6 @@ export async function verifyPriorCiSecurity({
       steps[0].conclusion === "success",
     "successful exact-head security enforcement is required",
   );
-  const pullPath = `${prefix}/pulls/${pr}`;
-  const pullRequest = read(pullPath);
   requireEvidence(
     pullRequest.number === pr &&
       pullRequest.head?.sha === head &&
@@ -308,10 +352,13 @@ export async function verifyPriorCiSecurity({
       completedAt: steps[0].completed_at,
     },
   );
-  const current = read(runPath);
+  const [current, currentStatuses] = await readTogether([
+    read(runPath),
+    latestStatuses(statusPath),
+  ]);
   requireEvidence(
     publisherIdentity(current) === publisherIdentity(run) &&
-      JSON.stringify(statusSnapshot(latestStatuses(statusPath))) === JSON.stringify(snapshot),
+      JSON.stringify(statusSnapshot(currentStatuses)) === JSON.stringify(snapshot),
     "security publisher or current statuses changed during admission",
   );
   return {

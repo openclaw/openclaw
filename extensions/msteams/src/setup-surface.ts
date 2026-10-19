@@ -86,8 +86,9 @@ async function promptMSTeamsAllowFrom(params: {
       entries: parts,
     }).catch(() => null);
 
+    let ids: string[];
     if (!resolved) {
-      const ids = parts.filter((part) => looksLikeGuid(part));
+      ids = parts.filter((part) => looksLikeGuid(part));
       if (ids.length !== parts.length) {
         await params.prompter.note(
           t("wizard.msteams.graphLookupUnavailable"),
@@ -95,27 +96,19 @@ async function promptMSTeamsAllowFrom(params: {
         );
         continue;
       }
-      const unique = mergeAllowFromEntries(existing, ids);
-      return patchMSTeamsAccountConfig({
-        cfg: params.cfg,
-        accountId,
-        patch: { dmPolicy: "allowlist", allowFrom: unique },
-        scopeDefaultToAccounts: shouldScopeMSTeamsDefaultToAccounts(params.cfg, accountId),
-      });
+    } else {
+      const unresolved = resolved.filter((item) => !item.resolved || !item.id);
+      if (unresolved.length > 0) {
+        await params.prompter.note(
+          t("wizard.msteams.couldNotResolve", {
+            entries: unresolved.map((item) => item.input).join(", "),
+          }),
+          t("wizard.msteams.allowlistTitle"),
+        );
+        continue;
+      }
+      ids = resolved.flatMap((item) => (item.id ? [item.id] : []));
     }
-
-    const unresolved = resolved.filter((item) => !item.resolved || !item.id);
-    if (unresolved.length > 0) {
-      await params.prompter.note(
-        t("wizard.msteams.couldNotResolve", {
-          entries: unresolved.map((item) => item.input).join(", "),
-        }),
-        t("wizard.msteams.allowlistTitle"),
-      );
-      continue;
-    }
-
-    const ids = resolved.flatMap((item) => (item.id ? [item.id] : []));
     const unique = mergeAllowFromEntries(existing, ids);
     return patchMSTeamsAccountConfig({
       cfg: params.cfg,

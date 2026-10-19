@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -13,6 +14,80 @@ import {
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Collaborator transcript scroll" });
+type ScrollPoint = { top: number; anchor: number | null; distance: number; keys: string[] };
+type SamplingThread = HTMLElement & {
+  scrollProbe: {
+    read: () => ScrollPoint;
+    samples: Pick<ScrollPoint, "top" | "anchor">[];
+    stop: () => void;
+  };
+};
+
+async function watchScroll(thread: Locator, useAnchor = false) {
+  const before = await thread.evaluate((element, anchored) => {
+    const viewport = element.getBoundingClientRect();
+    const anchor = anchored
+      ? [...element.querySelectorAll<HTMLElement>(".chat-bubble[data-message-id]")].find(
+          (bubble) => {
+            const rect = bubble.getBoundingClientRect();
+            return rect.top >= viewport.top + 1 && rect.bottom <= viewport.bottom - 1;
+          },
+        )
+      : undefined;
+    if (anchored && !anchor) {
+      throw new Error("Expected a fully visible reading anchor");
+    }
+    const anchorId = anchor?.dataset.messageId;
+    const offset = () => {
+      const bubble = anchorId
+        ? element.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(anchorId)}"]`)
+        : null;
+      return bubble
+        ? bubble.getBoundingClientRect().top - element.getBoundingClientRect().top
+        : null;
+    };
+    const read = (): ScrollPoint => ({
+      top: element.scrollTop,
+      anchor: offset(),
+      distance: element.scrollHeight - element.clientHeight - element.scrollTop,
+      keys: [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")].map(
+        (row) => row.dataset.virtualRowKey!,
+      ),
+    });
+    const samples: Pick<ScrollPoint, "top" | "anchor">[] = [];
+    let frame = 0;
+    const tick = () => {
+      samples.push({ top: element.scrollTop, anchor: offset() });
+      frame = requestAnimationFrame(tick);
+    };
+    (element as SamplingThread).scrollProbe = {
+      read,
+      samples,
+      stop: () => cancelAnimationFrame(frame),
+    };
+    frame = requestAnimationFrame(tick);
+    return {
+      ...read(),
+      anchorTop: anchor ? anchor.getBoundingClientRect().top - viewport.top : 0,
+      text: anchor?.textContent?.replace(/\s+/gu, " ").trim().slice(0, 70),
+      frameKey: element.querySelector<HTMLElement>(
+        '.chat-virtual-row[data-virtual-row-key^="agent-run:"]',
+      )?.dataset.virtualRowKey,
+    };
+  }, useAnchor);
+  return {
+    before,
+    count: () =>
+      thread.evaluate((element) => (element as SamplingThread).scrollProbe.samples.length),
+    read: () => thread.evaluate((element) => (element as SamplingThread).scrollProbe.read()),
+    stop: () =>
+      thread.evaluate((element) => {
+        const probe = (element as SamplingThread).scrollProbe;
+        probe.stop();
+        return { ...probe.read(), samples: probe.samples };
+      }),
+  };
+}
 
 suite.define(() => {
   it.each(["following", "reading"] as const)(
@@ -24,6 +99,7 @@ suite.define(() => {
           const sessionKey = "agent:main:dashboard:collaborator-scroll";
           const runId = "active-review";
           const now = Date.now() - 60_000;
+          const finding = "The workspace is organized into independent components. ".repeat(5);
           const history = [
             {
               role: "user",
@@ -37,11 +113,7 @@ suite.define(() => {
               content: [
                 {
                   type: "text",
-                  text:
-                    "Finding " +
-                    (index + 1) +
-                    ": " +
-                    "The workspace is organized into independent components. ".repeat(5),
+                  text: `Finding ${index + 1}: ${finding}`,
                 },
               ],
               timestamp: now + index + 1,
@@ -82,27 +154,9 @@ suite.define(() => {
           }
           const artifacts = createControlUiE2eArtifactDir("collaborator-scroll-" + mode);
           await page.screenshot({ path: path.join(artifacts, "before-message.png") });
-          const before = await thread.evaluate((element) => ({
-            top: element.scrollTop,
-            height: element.scrollHeight,
-            frameKey: element.querySelector<HTMLElement>(
-              '.chat-virtual-row[data-virtual-row-key^="agent-run:"]',
-            )?.dataset.virtualRowKey,
-          }));
           // Observe every animation frame, not only the eventual settled position.
-          await thread.evaluate((element) => {
-            const samples: number[] = [];
-            let frame = 0;
-            const sample = () => {
-              samples.push(element.scrollTop);
-              frame = requestAnimationFrame(sample);
-            };
-            Object.assign(element, {
-              scrollSamples: samples,
-              stopScrollSamples: () => cancelAnimationFrame(frame),
-            });
-            frame = requestAnimationFrame(sample);
-          });
+          const probe = await watchScroll(thread);
+          const { before } = probe;
           const message = {
             role: "user",
             content: "Please also check the shared components.",
@@ -114,10 +168,7 @@ suite.define(() => {
             },
           };
           await gateway.setHistoryMessages([...history, message]);
-          const samplesBeforeEvent = await thread.evaluate(
-            (element) =>
-              (element as HTMLElement & { scrollSamples: number[] }).scrollSamples.length,
-          );
+          const samplesBeforeEvent = await probe.count();
           await gateway.emitGatewayEvent("session.message", {
             sessionKey,
             message,
@@ -158,31 +209,17 @@ suite.define(() => {
             },
           );
           await writeFile(path.join(artifacts, "after-incoming-turn.png"), frame.png);
-          const after = await thread.evaluate((element) => {
-            const sampling = element as HTMLElement & {
-              scrollSamples: number[];
-              stopScrollSamples: () => void;
-            };
-            sampling.stopScrollSamples();
-            return {
-              top: element.scrollTop,
-              height: element.scrollHeight,
-              distance: element.scrollHeight - element.clientHeight - element.scrollTop,
-              samples: sampling.scrollSamples,
-              keys: [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")].map(
-                (row) => row.dataset.virtualRowKey,
-              ),
-            };
-          });
+          const after = await probe.stop();
+          const tops = after.samples.map((sample) => sample.top);
           console.log("COLLABORATOR_SCROLL", JSON.stringify({ mode, before, after }));
           expect(new Set(after.keys).size).toBe(after.keys.length);
           expect(after.keys[1]).toBe(before.frameKey);
           expect(after.samples.length).toBeGreaterThan(samplesBeforeEvent);
           // Appending a peer turn must not move backwards through existing content.
-          for (let index = 1; index < after.samples.length; index += 1) {
-            expect(after.samples[index]).toBeGreaterThanOrEqual(after.samples[index - 1]! - 1);
+          for (let index = 1; index < tops.length; index += 1) {
+            expect(tops[index]).toBeGreaterThanOrEqual(tops[index - 1]! - 1);
           }
-          expect(Math.min(...after.samples)).toBeGreaterThanOrEqual(before.top - 1);
+          expect(Math.min(...tops)).toBeGreaterThanOrEqual(before.top - 1);
           if (mode === "following") {
             expect(after.distance).toBeLessThanOrEqual(8);
           } else {
@@ -220,6 +257,12 @@ suite.define(() => {
             senderName: person.name,
             senderIdentity: person.identity,
           });
+          const earlier =
+            "Retain this reading position while the shared conversation continues. ".repeat(5);
+          const active =
+            "The component remains independently testable and its current behavior is being inspected. ".repeat(
+              4,
+            );
           const history: unknown[] = Array.from({ length: 12 }, (_, index) => [
             {
               role: "user",
@@ -234,11 +277,7 @@ suite.define(() => {
             },
             {
               role: "assistant",
-              content:
-                "Earlier answer " +
-                index +
-                ". " +
-                "Retain this reading position while the shared conversation continues. ".repeat(5),
+              content: `Earlier answer ${index}. ${earlier}`,
               timestamp: now + index * 2 + 1,
               __openclaw: {
                 id: "earlier-answer-" + index,
@@ -262,13 +301,7 @@ suite.define(() => {
             history.push({
               role: "assistant",
               phase: "commentary",
-              content:
-                "Active finding " +
-                index +
-                ". " +
-                "The component remains independently testable and its current behavior is being inspected. ".repeat(
-                  4,
-                ),
+              content: `Active finding ${index}. ${active}`,
               timestamp: now + 31 + index,
               __openclaw: { id: "active-finding-" + index, seq: 26 + index, runId },
             });
@@ -353,26 +386,8 @@ suite.define(() => {
             await waitForChatScrollIdle(reader);
           }
           const dir = createControlUiE2eArtifactDir("two-client-scroll-" + mode);
-          const before = await thread.evaluate((element) => {
-            const viewport = element.getBoundingClientRect();
-            const bubbles = [
-              ...element.querySelectorAll<HTMLElement>(".chat-bubble[data-message-id]"),
-            ];
-            const anchor = bubbles.find((bubble) => {
-              const rect = bubble.getBoundingClientRect();
-              return rect.top >= viewport.top + 1 && rect.bottom <= viewport.bottom - 1;
-            });
-            if (!anchor) {
-              throw new Error("Expected a fully visible reading anchor");
-            }
-            return {
-              top: element.scrollTop,
-              anchorId: anchor.dataset.messageId!,
-              anchorTop: anchor.getBoundingClientRect().top - viewport.top,
-              text: anchor.textContent?.replace(/\s+/gu, " ").trim().slice(0, 70),
-              distance: element.scrollHeight - element.clientHeight - element.scrollTop,
-            };
-          });
+          const probe = await watchScroll(thread, true);
+          const { before } = probe;
           if (mode === "older-history") {
             expect(before.text).toContain("Earlier");
           }
@@ -380,34 +395,7 @@ suite.define(() => {
             expect(before.distance).toBeGreaterThan(8);
           }
           await reader.screenshot({ path: path.join(dir, "before-remote-send.png") });
-          await thread.evaluate((element, anchorId) => {
-            let frame = 0;
-            const samples: Array<{ top: number; anchor: number | null }> = [];
-            const sample = () => {
-              const bubble = element.querySelector<HTMLElement>(
-                '[data-message-id="' + CSS.escape(anchorId) + '"]',
-              );
-              samples.push({
-                top: element.scrollTop,
-                anchor: bubble
-                  ? bubble.getBoundingClientRect().top - element.getBoundingClientRect().top
-                  : null,
-              });
-              frame = requestAnimationFrame(sample);
-            };
-            Object.assign(element, {
-              anchorSamples: samples,
-              stopAnchorSamples: () => cancelAnimationFrame(frame),
-            });
-            frame = requestAnimationFrame(sample);
-          }, before.anchorId);
-          const checkpoints: Array<{
-            stage: string;
-            top: number;
-            anchor: number | null;
-            distance: number;
-            keys: string[];
-          }> = [];
+          const checkpoints: Array<ScrollPoint & { stage: string }> = [];
           const checkpoint = async (stage: string) => {
             await reader.evaluate(
               () =>
@@ -416,35 +404,14 @@ suite.define(() => {
                 }),
             );
             await waitForChatScrollIdle(reader);
-            checkpoints.push(
-              await thread.evaluate(
-                (element, args) => {
-                  const bubble = element.querySelector<HTMLElement>(
-                    '[data-message-id="' + CSS.escape(args.anchorId) + '"]',
-                  );
-                  return {
-                    stage: args.stage,
-                    top: element.scrollTop,
-                    anchor: bubble
-                      ? bubble.getBoundingClientRect().top - element.getBoundingClientRect().top
-                      : null,
-                    distance: element.scrollHeight - element.clientHeight - element.scrollTop,
-                    keys: [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")].map(
-                      (row) => row.dataset.virtualRowKey!,
-                    ),
-                  };
-                },
-                { stage, anchorId: before.anchorId },
-              ),
-            );
+            checkpoints.push({ stage, ...(await probe.read()) });
           };
           await senderGateway.deferNext("chat.send");
           const prompt = "Please also check the shared components.";
           await sender.locator(".agent-chat__composer-combobox textarea").fill(prompt);
           await sender.getByRole("button", { name: /^(Send|Queue) message$/ }).click();
           const request = requireRecord((await senderGateway.waitForRequest("chat.send")).params);
-          expect(request.message).toBe(prompt);
-          expect(request.sessionKey).toBe(sessionKey);
+          expect(request).toMatchObject({ message: prompt, sessionKey });
           const sendId = requireString(request.idempotencyKey, "second-client send identity");
           const pendingMessage = {
             role: "user",
@@ -462,27 +429,25 @@ suite.define(() => {
           // The fixture relays the actual sender request to both independent clients.
           // It is not a production Gateway or an authenticated multi-user backend.
           const clients = [readerGateway, senderGateway];
-          await Promise.all(
-            clients.map((gateway) =>
-              gateway.setMethodResponse("chat.history", {
-                ...snapshot,
-                pendingInputs: { items: [pending], total: 1 },
-              }),
-            ),
-          );
+          const setHistory = (overrides: Record<string, unknown>) =>
+            Promise.all(
+              clients.map((gateway) =>
+                gateway.setMethodResponse("chat.history", { ...snapshot, ...overrides }),
+              ),
+            );
+          const broadcast = (event: string, payload: Record<string, unknown>) =>
+            Promise.all(
+              clients.map((gateway) => gateway.emitGatewayEvent(event, { sessionKey, ...payload })),
+            );
+          await setHistory({ pendingInputs: { items: [pending], total: 1 } });
           await senderGateway.resolveDeferred("chat.send", { runId: sendId, status: "queued" });
           const reads = (await readerGateway.getRequests("chat.history")).length;
-          await Promise.all(
-            clients.map((gateway) =>
-              gateway.emitGatewayEvent("sessions.changed", {
-                sessionKey,
-                agentId: "main",
-                reason: "send",
-                hasActiveRun: true,
-                activeRunIds: [runId],
-              }),
-            ),
-          );
+          await broadcast("sessions.changed", {
+            agentId: "main",
+            reason: "send",
+            hasActiveRun: true,
+            activeRunIds: [runId],
+          });
           await expect
             .poll(async () => (await readerGateway.getRequests("chat.history")).length)
             .toBeGreaterThan(reads);
@@ -497,52 +462,30 @@ suite.define(() => {
             },
           };
           const nextHistory = [...history, promoted];
-          await Promise.all(
-            clients.map((gateway) =>
-              gateway.setMethodResponse("chat.history", { ...snapshot, messages: nextHistory }),
-            ),
-          );
-          await Promise.all(
-            clients.map((gateway) =>
-              gateway.emitGatewayEvent("session.message", {
-                sessionKey,
-                sessionId,
-                agentId: "main",
-                session,
-                message: promoted,
-                messageId: "peer-persisted",
-                messageSeq: 45,
-                clientRunId: sendId,
-                hasActiveRun: true,
-                activeRunIds: [runId],
-              }),
-            ),
-          );
+          await setHistory({ messages: nextHistory });
+          await broadcast("session.message", {
+            sessionId,
+            agentId: "main",
+            session,
+            message: promoted,
+            messageId: "peer-persisted",
+            messageSeq: 45,
+            clientRunId: sendId,
+            hasActiveRun: true,
+            activeRunIds: [runId],
+          });
           await checkpoint("persisted");
           const tail =
             "Streaming continuation. " +
             "A new verified detail expands the current response. ".repeat(15);
-          await Promise.all(
-            clients.map((gateway) =>
-              gateway.emitGatewayEvent("chat", {
-                sessionKey,
-                runId,
-                state: "delta",
-                seq: 1,
-                message: { role: "assistant", content: tail },
-              }),
-            ),
-          );
+          await broadcast("chat", {
+            runId,
+            state: "delta",
+            seq: 1,
+            message: { role: "assistant", content: tail },
+          });
           await checkpoint("stream-growth");
-          await Promise.all(
-            clients.map((gateway) =>
-              gateway.setMethodResponse("chat.history", {
-                ...snapshot,
-                messages: nextHistory,
-                inFlightRun: { ...inFlightRun, text: tail },
-              }),
-            ),
-          );
+          await setHistory({ messages: nextHistory, inFlightRun: { ...inFlightRun, text: tail } });
           await readerGateway.emitGatewayEvent("sessions.changed", {
             sessionKey,
             agentId: "main",
@@ -552,30 +495,9 @@ suite.define(() => {
           });
           await checkpoint("reconciled");
           await reader.screenshot({ path: path.join(dir, "after-remote-send.png") });
-          const samples = await thread.evaluate((element) => {
-            const probe = element as HTMLElement & {
-              anchorSamples: Array<{ top: number; anchor: number | null }>;
-              stopAnchorSamples: () => void;
-            };
-            probe.stopAnchorSamples();
-            return probe.anchorSamples;
-          });
+          const { samples } = await probe.stop();
           const proof = { mode, before, checkpoints, samples };
           await writeFile(path.join(dir, "scroll-proof.json"), JSON.stringify(proof, null, 2));
-          console.log(
-            "TWO_CLIENT_SCROLL",
-            JSON.stringify({
-              mode,
-              before,
-              checkpoints,
-              sampleCount: samples.length,
-              maxAnchorDrift: Math.max(
-                ...samples.map((sample) =>
-                  Math.abs((sample.anchor ?? Number.POSITIVE_INFINITY) - before.anchorTop),
-                ),
-              ),
-            }),
-          );
           expect(await readerGateway.getRequests("chat.send")).toHaveLength(0);
           for (const point of checkpoints) {
             expect(new Set(point.keys).size, point.stage).toBe(point.keys.length);

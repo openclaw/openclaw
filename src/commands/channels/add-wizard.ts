@@ -175,9 +175,16 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
     },
   });
   const commitWizardConfig = async (config: OpenClawConfig) => {
-    await params.beforePersistentEffect?.();
     const committed = await persistChannelPluginConfig({
       cfg: config,
+      setup: {
+        previousConfig: cfg,
+        beforePersistentEffect: params.beforePersistentEffect,
+        assertCurrent: () => {
+          writeSnapshot.writeOptions.assertConfigPathForWrite?.();
+          params.assertPersistentEffectCurrent?.();
+        },
+      },
       pluginInstalled: false,
       writeOptions: writeSnapshot.writeOptions,
       baseHash,

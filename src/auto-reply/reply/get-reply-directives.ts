@@ -9,7 +9,7 @@ import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { listModelAliasCandidates } from "../../agents/model-selection-shared.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
@@ -23,7 +23,7 @@ import {
   hasSkillReferenceCandidate,
 } from "../../skills/discovery/chat-command-invocation.js";
 import { resolveCommandAuthorizationAsync } from "../command-auth.js";
-import { isExplicitCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import { isExplicitCommandTurn } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
@@ -40,6 +40,7 @@ import {
 } from "../thinking.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
+import { matchSlashCommandToken } from "./commands-slash-parse.js";
 import { resolveReplyDirectiveCommand } from "./directive-handling.parse.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
@@ -149,7 +150,10 @@ export async function resolveReplyDirectives(params: {
     commandSource: ctx.CommandSource,
   });
   const canInterpretTextDirectives =
-    allowTextCommands && command.isAuthorizedSender && ctx.CommandInterpretationSuppressed !== true;
+    allowTextCommands &&
+    command.isAuthorizedSender &&
+    ctx.CommandInterpretationSuppressed !== true &&
+    matchSlashCommandToken(command.commandBodyNormalized, "/followup") === null;
   const commandTextHasSlash = commandText.includes("/");
   const configuredModelAliases = commandTextHasSlash
     ? listModelAliasCandidates(cfg, agentId)
@@ -225,7 +229,7 @@ export async function resolveReplyDirectives(params: {
   const configuredAliases = rawAliases.filter(
     (alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)),
   );
-  const commandTurn = resolveCommandTurnContext(ctx);
+  const commandTurn = ctx.CommandTurn;
   const commandRegistry =
     command.isAuthorizedSender &&
     isExplicitCommandTurn(commandTurn) &&
@@ -284,17 +288,16 @@ export async function resolveReplyDirectives(params: {
   if (directives.hasElevatedDirective && (!elevatedEnabled || !elevatedAllowed)) {
     typing.cleanup();
     recordReplyPreRunRejection(resolveReplyOperationRunState(opts), "session-directive-rejected");
-    const runtimeSandboxed = resolveSandboxRuntimeStatus({
-      cfg,
-      agentId,
-      sessionKey,
-      classificationSessionKey: resolveRuntimePolicySessionKey({
-        agentId,
+    const policySessionKey = resolveRuntimePolicySessionKey({ agentId, cfg, ctx, sessionKey });
+    const runtimeSandboxed = (
+      await resolveSandboxRuntimeStatusAsync({
         cfg,
-        ctx,
+        agentId,
         sessionKey,
-      }),
-    }).sandboxed;
+        classificationSessionKey: policySessionKey,
+        ...(policySessionKey === sessionKey ? { preparedSessionEntry: targetSessionEntry } : {}),
+      })
+    ).sandboxed;
     return {
       kind: "reply" as const,
       reply: {

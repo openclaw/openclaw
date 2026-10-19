@@ -213,7 +213,6 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
         "Removed all plugin entries owned by the calendar-plus package.",
       ] as const;
       const refreshError = "Configuration reload failed after removal.";
-      await gateway.deferNext("config.get");
       const removing = page.getByRole("button", { name: "Uninstall Calendar Plus", exact: true });
       await expect.poll(() => removing.getAttribute("aria-busy")).toBe("true");
       expect(await removing.locator(".btn__spinner").count()).toBe(1);
@@ -232,6 +231,13 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
         await gateway.waitForRequest("plugins.list", { after: listReads });
       }
       await captureScreenshot(page, `lifecycle-uninstall-inspection-${inspection}.png`);
+      // Keep reloads unavailable until feedback is checked, including any successor read.
+      await gateway.setMethodResponse(
+        "config.get",
+        withWarnings
+          ? { __mockError: { code: "UNAVAILABLE", message: refreshError } }
+          : configSnapshot(false),
+      );
       await gateway.setMethodResponse("plugins.list", initialInventory);
       await gateway.resolveDeferred("plugins.uninstall", {
         ok: true,
@@ -239,14 +245,6 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
         removed: ["config entry", "install record"],
         warnings: withWarnings ? warnings : [],
       });
-      if (withWarnings) {
-        await gateway.rejectDeferred("config.get", {
-          code: "UNAVAILABLE",
-          message: refreshError,
-        });
-      } else {
-        await gateway.resolveDeferred("config.get", configSnapshot(false));
-      }
       await page.getByRole("button", { name: "Install", exact: true }).waitFor();
       expect(
         await removalErrors.evaluate(({ errors, observer }) => {
@@ -276,6 +274,7 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
       await expect
         .poll(() => new URL(page.url()).pathname)
         .toBe(`/plugins/${calendarDiscoveryPlugin.id}`);
+      await gateway.setMethodResponse("config.get", configSnapshot(false));
       await gateway.deferNext("plugins.install");
       await page.getByRole("button", { name: "Install", exact: true }).click();
       expect((await gateway.waitForRequest("plugins.install", { after: 1 })).params).toEqual({
@@ -383,6 +382,75 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
           .getByRole("heading", { name: "Updated calendar workflows", exact: true })
           .waitFor();
         expect(await readme.count()).toBe(0);
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
+  it.each([
+    { surface: "hub", heading: "Calendar Plus" },
+    { surface: "settings", heading: "Plugins" },
+  ] as const)(
+    "keeps keyboard focus on the $surface page after canceling and confirming removal",
+    async ({ surface, heading }) => {
+      const context = await newContext();
+      const page = await context.newPage();
+      const installedCalendar = { ...calendarPlugin, catalogId: calendarDiscoveryPlugin.id };
+      const gateway = await installMockGateway(page, {
+        featureMethods: pluginMethods,
+        methodResponses: pluginMethodResponses(),
+      });
+      const hasFocus = (locator: ReturnType<typeof page.locator>) =>
+        locator.evaluate((element) => element === document.activeElement);
+      try {
+        await page.goto(`${server.baseUrl}plugins/${calendarDiscoveryPlugin.id}`);
+        await gateway.deferNext("plugins.install");
+        await page.getByRole("button", { name: "Install", exact: true }).click();
+        await gateway.waitForRequest("plugins.install");
+        await gateway.setMethodResponse(
+          "plugins.list",
+          inventory([...initialInventory.plugins, installedCalendar]),
+        );
+        await gateway.resolveDeferred("plugins.install", {
+          ok: true,
+          plugin: installedCalendar,
+          restartRequired: false,
+        });
+        await page.getByRole("button", { name: "Disable Calendar Plus", exact: true }).waitFor();
+        if (surface === "settings") {
+          await page.goto(`${server.baseUrl}settings/plugins/calendar-plus`);
+        }
+        const trigger = page.getByRole("button", { name: "Uninstall Calendar Plus", exact: true });
+        const dialog = page.locator("openclaw-modal-dialog");
+        await trigger.focus();
+        await page.keyboard.press("Enter");
+        const cancel = dialog.getByRole("button", { name: "Cancel", exact: true });
+        await expect.poll(() => hasFocus(cancel)).toBe(true);
+        await page.keyboard.press("Enter");
+        await expect.poll(() => hasFocus(trigger)).toBe(true);
+        expect(await gateway.getRequests("plugins.uninstall")).toHaveLength(0);
+
+        await gateway.deferNext("plugins.uninstall");
+        await page.keyboard.press("Enter");
+        const remove = dialog.getByRole("button", { name: "Remove", exact: true });
+        await remove.focus();
+        await page.keyboard.press("Enter");
+        await gateway.waitForRequest("plugins.uninstall");
+        await gateway.setMethodResponse("plugins.list", initialInventory);
+        await gateway.setMethodResponse("config.get", configSnapshot(false));
+        await gateway.resolveDeferred("plugins.uninstall", {
+          ok: true,
+          pluginId: "calendar-plus",
+          removed: ["config entry", "install record"],
+          warnings: [],
+        });
+        const title = page.getByRole("heading", { level: 1, name: heading, exact: true });
+        await expect.poll(() => hasFocus(title)).toBe(true);
+        expect(await trigger.count()).toBe(0);
+        expect(new URL(page.url()).pathname).toBe(
+          surface === "hub" ? `/plugins/${calendarDiscoveryPlugin.id}` : "/settings/plugins",
+        );
       } finally {
         await context.close();
       }

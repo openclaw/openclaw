@@ -106,8 +106,8 @@ until you explicitly trust one Access issuer, identity-provider ID, and claim na
 The issuer is the Access team origin without a trailing slash. `providerId` is
 the selected integration's ID from Access, not its name or an OIDC user subject.
 The provider must verify ownership of the GitHub account and bind it to the
-verified sign-in email. Its ID token must contain a canonical positive
-decimal-string account ID, such as `"12345"`, within JavaScript's safe-integer
+verified sign-in email. Its ID token must contain a positive
+decimal-string account ID with no leading zeros, such as `"12345"`, within JavaScript's safe-integer
 range. Configure Access to forward that exact [custom OIDC claim](https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/generic-oidc/#custom-oidc-claims).
 OpenClaw reads it from `oidc_fields` in the authenticated
 `/cdn-cgi/access/get-identity` response, or from `custom` when `oidc_fields` is

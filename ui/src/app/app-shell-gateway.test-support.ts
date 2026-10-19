@@ -13,11 +13,11 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     () =>
       new Promise<{
         status: string;
-        entries: { "ui.accent": string; "ui.sidebarEntries": string[] };
+        entries: { "ui.accent": string; "ui.railShortcuts": string[] };
       }>((resolve) => {
         pendingResponses.push((accent) =>
           // Existing personal navigation keeps this appearance fixture out of legacy inventory.
-          resolve({ status: "ok", entries: { "ui.accent": accent, "ui.sidebarEntries": [] } }),
+          resolve({ status: "ok", entries: { "ui.accent": accent, "ui.railShortcuts": [] } }),
         );
         requestStarted.resolve();
       }),
@@ -34,7 +34,7 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     hello: { auth: { role: "operator", scopes: ["operator.write"] } },
   } as ApplicationGatewaySnapshot;
   const refreshTheme = vi.fn();
-  const requestUpdate = vi.fn();
+  const invalidate = vi.fn();
   const connectionBootstrap = {
     reset: vi.fn(),
     run: (_key: string, task: () => Promise<unknown>) => task(),
@@ -66,7 +66,7 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     lastLocalePrefSignature: null,
     outboxStoreImport: { load: vi.fn(async () => undefined) },
     recoverDeletedActiveSession: vi.fn(),
-    requestUpdate,
+    invalidate,
     routeState: {},
   } as unknown as ShellGatewayHost;
   const owner = new ShellGatewayOwner(host);
@@ -91,7 +91,7 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     host,
     owner,
     refreshTheme,
-    requestUpdate,
+    invalidate,
     request,
     snapshot,
   };

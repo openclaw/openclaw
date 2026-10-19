@@ -11,7 +11,7 @@ const suite = createControlUiE2eSuite({ name: "Chrome extension installation sta
 
 suite.define(() => {
   it.each(["current", "v2026.9.5"])(
-    "shows installed Chrome with the %s Mac bridge",
+    "checks Chrome only after an explicit action with the %s Mac bridge",
     async (appVersion) => {
       const artifactDir = createControlUiE2eArtifactDir("chrome-extension-status");
       await suite.withPage(
@@ -95,31 +95,24 @@ suite.define(() => {
           await card.scrollIntoViewIfNeeded();
           const messages = () =>
             page.evaluate(() => Reflect.get(window, "chromeExtensionMessages"));
+          expect(await messages()).toEqual([{ type: "status" }]);
+          expect(await card.textContent()).not.toContain("Installed");
+          expect(await card.textContent()).not.toContain("Status unavailable");
           if (appVersion === "v2026.9.5") {
-            await expect.poll(() => card.textContent()).toContain("Status unavailable");
-            expect(await messages()).toEqual([
-              { type: "status" },
-              { type: "chrome-extension-status" },
-            ]);
-            await page.screenshot({
-              path: path.join(artifactDir, "chrome-extension-unavailable.png"),
-              animations: "disabled",
-              fullPage: false,
-            });
             await card.getByRole("button", { name: "Set up Chrome on this device" }).click();
+          } else {
+            await card.getByRole("button", { name: "Refresh setup status" }).click();
           }
           await expect.poll(() => card.textContent()).toContain("Installed");
           expect(
             await card.getByRole("button", { name: "Set up Chrome on this device" }).count(),
-          ).toBe(0);
-          expect(await card.getByRole("button", { name: "Refresh setup status" }).count()).toBe(1);
+          ).toBe(1);
+          expect(await card.getByRole("button", { name: "Refresh setup status" }).count()).toBe(
+            appVersion === "current" ? 1 : 0,
+          );
           expect(await messages()).toEqual(
             appVersion === "v2026.9.5"
-              ? [
-                  { type: "status" },
-                  { type: "chrome-extension-status" },
-                  { type: "install-chrome-extension" },
-                ]
+              ? [{ type: "status" }, { type: "install-chrome-extension" }]
               : [{ type: "status" }, { type: "chrome-extension-setup", action: "inspect" }],
           );
           if (appVersion === "current") {
@@ -127,6 +120,15 @@ suite.define(() => {
               Reflect.set(window, "chromeExtensionEnabledProfiles", 0);
               window.dispatchEvent(new Event("focus"));
             });
+            await expect
+              .poll(messages)
+              .toEqual([
+                { type: "status" },
+                { type: "chrome-extension-setup", action: "inspect" },
+                { type: "status" },
+              ]);
+            expect(await card.textContent()).not.toContain("installed but not enabled");
+            await card.getByRole("button", { name: "Refresh setup status" }).click();
             await expect.poll(() => card.textContent()).toContain("installed but not enabled");
             expect(await messages()).toEqual([
               { type: "status" },
@@ -136,7 +138,7 @@ suite.define(() => {
             ]);
             expect(
               await card.getByRole("button", { name: "Set up Chrome on this device" }).count(),
-            ).toBe(0);
+            ).toBe(1);
           }
           await page.screenshot({
             path: path.join(artifactDir, "chrome-extension-installed.png"),

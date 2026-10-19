@@ -15,7 +15,7 @@ import { loadCronJobsStoreWithConfigJobsReadOnly } from "./store.js";
 import { installCronSnapshotFaults } from "./store.readonly-worker-faults.test-support.js";
 
 it.each(["worker", "snapshot"] as const)(
-  "retries failed %s cleanup through the canonical owner",
+  "retains %s cleanup custody without losing a completed read",
   async (failureStage) => {
     await withOpenClawTestState(
       { label: "cron-readonly-cleanup", env: { XDG_CACHE_HOME: undefined } },
@@ -64,7 +64,7 @@ it.each(["worker", "snapshot"] as const)(
           if (failureStage === "worker") {
             await expect(reading).rejects.toBe(failure);
           } else {
-            await expect(reading).rejects.toThrow("Cron read-only state snapshot cleanup failed.");
+            expect((await reading).store.jobs).toEqual([]);
           }
           if (fault) {
             expect(fault.count("staging-rm")).toBeGreaterThan(0);
@@ -81,6 +81,7 @@ it.each(["worker", "snapshot"] as const)(
 
           fault?.allowRemoval();
           await closeOpenClawStateDatabaseByPathAsync(databasePath);
+          await snapshots.cleanupSnapshotOperations();
           for (const retained of directories) {
             await expect(fs.stat(retained)).rejects.toMatchObject({ code: "ENOENT" });
           }

@@ -54,6 +54,10 @@ as `openclaw tui`.
 
 The bearer token is passed through environment variables, not argv. OpenClaw launches Claude Code with `--strict-mcp-config --mcp-config <path>` so ambient Claude MCP servers do not join the attached session. Normal launches (without `--print-config`) revoke the grant when the Claude Code process exits.
 
+Malformed grant responses, including expiry timestamps outside JavaScript's valid
+Date range, report `attach.grant returned an unexpected response from the gateway.`
+and exit with code 1. The CLI attempts to revoke any returned token before exiting.
+
 If an attached tool asks a structured question, answer it through the question
 controls in the Control UI or native app. An attach grant scopes tools to a
 session but does not identify an active OpenClaw run or its original caller

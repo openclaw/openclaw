@@ -4,6 +4,7 @@ import { TextDecoder } from "node:util";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { mergeDeep } from "../infra/deep-merge.js";
+import { isPlainObject } from "../infra/plain-object.js";
 
 const AGENT_EXEC_MESSAGE_MAX_BYTES = 4 * 1024 * 1024;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
@@ -13,6 +14,7 @@ export type AgentExecCliOptions = {
   cwd?: string;
   stateDir?: string;
   config?: string;
+  configOverride?: string[];
   isolated?: boolean;
   model?: string;
   thinking?: string;
@@ -137,8 +139,11 @@ function buildExecConfigDefaults(): OpenClawConfig {
  * Environment-only execution therefore skips it entirely; ordinary exec inherits it.
  */
 export async function resolveExecBaseConfig(
-  opts: Pick<AgentExecCliOptions, "authEnvOnly" | "config" | "isolated">,
+  opts: Pick<AgentExecCliOptions, "authEnvOnly" | "config" | "configOverride" | "isolated">,
 ): Promise<OpenClawConfig> {
+  if (opts.configOverride?.length && opts.authEnvOnly === true) {
+    throw new Error("--config-override cannot be combined with --auth-env-only.");
+  }
   if (opts.config && (opts.isolated || opts.authEnvOnly === true)) {
     const conflicting = opts.isolated ? "--isolated" : "--auth-env-only";
     throw new Error(`--config cannot be combined with ${conflicting}.`);
@@ -148,16 +153,48 @@ export async function resolveExecBaseConfig(
     const { coerceConfig } = await import("../config/io.read-helpers.js");
     return coerceConfig(applyImplicitAgentRosterDefaults({}));
   }
-  const { createConfigIO, getRuntimeConfig } = await import("../config/io.js");
+  const { createConfigIO, captureRuntimeConfigAsyncReader } = await import("../config/io.js");
   if (!opts.config) {
-    return getRuntimeConfig();
+    return await captureRuntimeConfigAsyncReader()();
   }
   // A pinned file bypasses the published runtime snapshot and fails if missing or invalid.
   const io = createConfigIO({ configPath: path.resolve(opts.config) });
   if (!existsSync(io.configPath)) {
     throw new Error(`--config file not found: ${io.configPath}`);
   }
-  return io.loadConfig();
+  return await io.loadConfigAsync();
+}
+
+/** Overlay the selected config before resolving the run's agent and credential owner. */
+export async function applyExecConfigOverrides(
+  base: OpenClawConfig,
+  overrides: string[] = [],
+): Promise<OpenClawConfig> {
+  if (overrides.length === 0) {
+    return base;
+  }
+  const parsed = overrides.map((value) => {
+    let override: unknown;
+    try {
+      override = JSON.parse(value);
+    } catch {
+      // Parser diagnostics can echo credential-bearing input.
+      throw new Error("--config-override must contain valid JSON.");
+    }
+    if (!isPlainObject(override)) {
+      throw new Error("--config-override must be a JSON object.");
+    }
+    return override;
+  });
+  const merged = parsed.reduce<unknown>((config, override) => mergeDeep(config, override), base);
+  const { validateConfigObjectWithPlugins } = await import("../config/validation.js");
+  const result = validateConfigObjectWithPlugins(merged);
+  if (!result.ok) {
+    throw new Error(
+      `Invalid --config-override: ${result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ")}`,
+    );
+  }
+  return result.config;
 }
 
 export function buildExecRunConfig(params: {

@@ -33,6 +33,10 @@ import {
   withGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
 
+// mock-isolation: Process lifecycle tests use synthetic destinations; durable notification behavior has its own owner suite.
+vi.mock("../config/sessions/session-accessor.sqlite-entry.js", () => ({
+  patchSessionEntryCore: async () => null,
+}));
 const enqueueSessionEventMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventWithReceiptMock = vi.hoisted(() => vi.fn());
 const supervisorMock = vi.hoisted(() => ({
@@ -816,7 +820,7 @@ describe("exec notifyOnExit suppression", () => {
     expect(message).toContain("Exec failed");
     expect(message).toContain("external side effects may already have completed");
     expect(message).toContain("Verify the resulting state before retrying");
-    expect(message).toContain("Do not automatically rerun non-idempotent commands");
+    expect(message).toContain("Do not automatically rerun commands unless repeating them is safe");
     expect(options.sessionKey).toBe("agent:main:main");
     expect(enqueueSessionEventMock).toHaveBeenCalledTimes(1);
     expect(options).toMatchObject({

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { collectGatewayDaemonFindings } from "../flows/doctor-core-checks.runtime.js";
 import { maybeRepairGatewayDaemon } from "./doctor-gateway-daemon-flow.js";
@@ -89,6 +89,23 @@ async function hostRoot() {
   return root;
 }
 
+function setHostService(root: string, running: boolean) {
+  const command = {
+    programArguments: running
+      ? ["/fixture/node", path.join(root, "openclaw.mjs"), "gateway"]
+      : ["/app/bun", path.join(root, "openclaw.mjs"), "gateway", "run"],
+    ...(!running ? { environment: {} } : {}),
+  };
+  mocks.readCommand.mockResolvedValue(command);
+  mocks.readGatewayServiceState.mockResolvedValue({
+    installed: true,
+    loadState: { status: running ? "loaded" : "not-loaded" },
+    running,
+    env: {},
+    command,
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.root.mockResolvedValue(null);
@@ -106,109 +123,79 @@ beforeEach(() => {
   });
 });
 
-describe("Doctor host-owned runtime diagnostics", () => {
-  it.each([
-    { owner: "CLI", surface: "config" },
-    { owner: "service", surface: "config" },
-    { owner: "CLI", surface: "daemon" },
-    { owner: "service", surface: "daemon" },
-  ])("leaves $owner-owned $surface repairs with the app", async ({ owner, surface }) => {
-    const root = await hostRoot();
-    if (owner === "CLI") {
-      mocks.root.mockResolvedValue(root);
-    } else {
-      const command = {
-        programArguments: ["/app/bun", path.join(root, "openclaw.mjs"), "gateway", "run"],
-        environment: {},
-      };
-      mocks.readCommand.mockResolvedValue(command);
-      mocks.readGatewayServiceState.mockResolvedValue({
-        installed: true,
-        loadState: { status: "not-loaded" },
-        running: false,
-        env: {},
-        command,
-      });
-    }
-    const runtime = makeDoctorIo();
-    const prompter = makeDoctorPrompts();
-    if (surface === "config") {
-      await maybeRepairGatewayServiceConfig({ gateway: {} }, "local", runtime, prompter, {
-        writeConfig: mocks.writeConfig,
-      });
-    } else {
-      await maybeRepairGatewayDaemon({
-        cfg: { gateway: { mode: "local" } },
-        runtime,
-        prompter,
-        options: {},
-        healthOk: false,
-        gatewayDetailsMessage: "Gateway is unavailable.",
-      });
-    }
-    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
-    expect(mocks.buildGatewayInstallPlan).not.toHaveBeenCalled();
-    expect(mocks.auditGatewayServiceConfig).not.toHaveBeenCalled();
-    expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
-    expect(mocks.install).not.toHaveBeenCalled();
-    expect(mocks.restart).not.toHaveBeenCalled();
-    expect(mocks.writeConfig).not.toHaveBeenCalled();
-    expect(mocks.repairLaunchAgentBootstrap).not.toHaveBeenCalled();
-    expect(mocks.note).toHaveBeenCalledWith(
-      ownerHint,
-      surface === "config" ? "Gateway runtime" : "Gateway",
-    );
-  });
-  it("keeps CLI Node health failures while routing runtime repair to the host", async () => {
-    mocks.root.mockResolvedValue(await hostRoot());
-    mocks.detectRuntime.mockResolvedValue({
-      kind: "node",
-      version: "26.8.1",
-      execPath: "/fixture/node",
-      sqliteProbe: { available: true, version: "3.53.4", text: false, blob: true, json: true },
+it.each([
+  { owner: "CLI", surface: "config" },
+  { owner: "service", surface: "config" },
+  { owner: "CLI", surface: "daemon" },
+  { owner: "service", surface: "daemon" },
+])("leaves $owner-owned $surface repairs with the app", async ({ owner, surface }) => {
+  const root = await hostRoot();
+  if (owner === "CLI") {
+    mocks.root.mockResolvedValue(root);
+  } else {
+    setHostService(root, false);
+  }
+  const runtime = makeDoctorIo();
+  const prompter = makeDoctorPrompts();
+  if (surface === "config") {
+    await maybeRepairGatewayServiceConfig({ gateway: {} }, "local", runtime, prompter, {
+      writeConfig: mocks.writeConfig,
     });
-    expect(await collectNodeRuntimeFindings({})).toEqual([
+  } else {
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: { mode: "local" } },
+      runtime,
+      prompter,
+      options: {},
+      healthOk: false,
+      gatewayDetailsMessage: "Gateway is unavailable.",
+    });
+  }
+  expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+  expect(mocks.buildGatewayInstallPlan).not.toHaveBeenCalled();
+  expect(mocks.auditGatewayServiceConfig).not.toHaveBeenCalled();
+  expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
+  expect(mocks.install).not.toHaveBeenCalled();
+  expect(mocks.restart).not.toHaveBeenCalled();
+  expect(mocks.writeConfig).not.toHaveBeenCalled();
+  expect(mocks.repairLaunchAgentBootstrap).not.toHaveBeenCalled();
+  expect(mocks.note).toHaveBeenCalledWith(
+    ownerHint,
+    surface === "config" ? "Gateway runtime" : "Gateway",
+  );
+});
+it.each([
+  { mode: "CLI TEXT", surface: "node", severity: "error", message: "truncates TEXT" },
+  { mode: "service", surface: "node", severity: "warning", message: "unsupported" },
+  { mode: "service", surface: "daemon", severity: "warning", message: "unsupported" },
+  { mode: "CLI only", surface: "daemon", severity: "info", message: ownerHint },
+])(
+  "reports $mode health through $surface with host-owned repair",
+  async ({ mode, surface, severity, message }) => {
+    const root = await hostRoot();
+    if (mode === "service") {
+      setHostService(root, true);
+    } else {
+      mocks.root.mockResolvedValue(root);
+    }
+    if (mode === "CLI TEXT") {
+      mocks.detectRuntime.mockResolvedValue({
+        kind: "node",
+        version: "26.8.1",
+        execPath: "/fixture/node",
+        sqliteProbe: { available: true, version: "3.53.4", text: false, blob: true, json: true },
+      });
+    }
+    const findings =
+      surface === "node"
+        ? await collectNodeRuntimeFindings({})
+        : await collectGatewayDaemonFindings({ cfg: { gateway: { mode: "local" } } });
+    expect(findings).toEqual([
       expect.objectContaining({
-        severity: "error",
-        message: expect.stringContaining("truncates TEXT"),
-        fixHint: ownerHint,
+        severity,
+        message: mode === "CLI only" ? message : expect.stringContaining(message),
+        ...(mode !== "CLI only" ? { fixHint: ownerHint } : {}),
       }),
     ]);
-  });
-
-  it.each(["Node diagnostics", "daemon diagnostics"])(
-    "preserves unsupported service health in %s without recommending runtime replacement",
-    async (surface) => {
-      const root = await hostRoot();
-      const command = {
-        programArguments: ["/fixture/node", path.join(root, "openclaw.mjs"), "gateway"],
-      };
-      mocks.readCommand.mockResolvedValue(command);
-      mocks.readGatewayServiceState.mockResolvedValue({
-        installed: true,
-        loadState: { status: "loaded" },
-        running: true,
-        env: {},
-        command,
-      });
-      const findings =
-        surface === "Node diagnostics"
-          ? await collectNodeRuntimeFindings({})
-          : await collectGatewayDaemonFindings({ cfg: { gateway: { mode: "local" } } });
-      expect(findings).toEqual([
-        expect.objectContaining({
-          severity: "warning",
-          message: expect.stringContaining("unsupported"),
-          fixHint: ownerHint,
-        }),
-      ]);
-    },
-  );
-
-  it("reports the app owner when an app-hosted Gateway has no native service", async () => {
-    mocks.root.mockResolvedValue(await hostRoot());
-    expect(await collectGatewayDaemonFindings({ cfg: { gateway: { mode: "local" } } })).toEqual([
-      expect.objectContaining({ severity: "info", message: ownerHint }),
-    ]);
-  });
-});
+  },
+);

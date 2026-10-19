@@ -6,6 +6,7 @@ import {
   type OutboundReplyPayload,
 } from "../plugin-sdk/reply-payload.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { buildChannelInboundEventContext } from "./inbound-event/context.js";
 import {
@@ -199,7 +200,7 @@ function buildDirectDmTurnPlan(
   };
 }
 
-/** @deprecated Use dispatchInboundDirectDm. Retained for released SDK runtime callbacks until the next major. */
+/** @deprecated Use dispatchInboundDirectDm. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export async function dispatchInboundDirectDmWithRuntime(
   params: Omit<DispatchInboundDirectDmParams, "resolveChannelIngress"> & {
     runtime: PluginRuntime;
@@ -209,6 +210,11 @@ export async function dispatchInboundDirectDmWithRuntime(
   storePath: string;
   ctxPayload: FinalizedMsgContext;
 }> {
+  warnPluginSdkDeprecation({
+    family: "channel-inbound-envelope",
+    method: "dispatchInboundDirectDmWithRuntime",
+    replacement: "dispatchInboundDirectDm",
+  });
   const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: params.cfg,
     channel: params.channel,

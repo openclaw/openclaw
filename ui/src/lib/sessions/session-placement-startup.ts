@@ -3,6 +3,7 @@ import type {
   SessionPlacement,
   SessionsDispatchResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import {
   GatewayPayloadLimitError,
   GatewayRequestError,
@@ -111,7 +112,7 @@ async function readPlacement(
     return {
       status: "read",
       placement: described?.session?.placement,
-      ...(typeof sessionId === "string" && sessionId.trim() ? { sessionId } : {}),
+      ...(sessionId?.trim() ? { sessionId } : {}),
     };
   } catch (error) {
     if (isAwaitingGatewayFailure(error, null)) {
@@ -266,15 +267,6 @@ export async function deleteSessionPlacementDraft(
   agentId: string,
   recovered = false,
 ): Promise<string | undefined> {
-  return deletePlacementDraft(requests, key, agentId, recovered);
-}
-
-async function deletePlacementDraft(
-  requests: SessionPlacementRequests,
-  key: string,
-  agentId: string,
-  recovered: boolean,
-): Promise<string | undefined> {
   const { client } = requests;
   if (!client) {
     return "gateway unavailable during draft cleanup";
@@ -345,13 +337,14 @@ export async function startSessionPlacementInitialTurn(
     messageId?: string;
     mode: SessionPlacementStartMode;
     cleanupOnCancellation?: () => boolean;
+    signal?: AbortSignal;
   },
   isCurrent: () => boolean,
   beforeSend: () => boolean = () => true,
 ): Promise<SessionPlacementStartOutcome> {
   const { client } = requests;
   const message = params.message;
-  const mentions = params.mentions?.map((mention) => ({ ...mention }));
+  const mentions = params.mentions;
   const cleanupOnCancellation = params.cleanupOnCancellation ?? (() => true);
   const resolvePlacement = (mode: SessionPlacementStartMode, initial?: SessionPlacement) =>
     resolveActivePlacement(
@@ -449,14 +442,22 @@ export async function startSessionPlacementInitialTurn(
     return rejectBeforeDelivery("placement recovery storage is unavailable", "send-not-started");
   }
   try {
-    const sent = await client.request("sessions.send", {
-      key: params.key,
-      agentId: params.agentId,
-      message,
-      ...(mentions?.length ? { mentions } : {}),
-      attachments: params.attachments,
-      idempotencyKey: messageId,
-    });
+    const sent = await client.request(
+      "sessions.send",
+      {
+        key: params.key,
+        agentId: params.agentId,
+        message,
+        ...(mentions?.length ? { mentions } : {}),
+        attachments: params.attachments,
+        idempotencyKey: messageId,
+      },
+      {
+        timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+        signal: params.signal,
+        retainSentResultOnAbort: true,
+      },
+    );
     if (!isCurrent()) {
       return await cancelSessionPlacement(client, params, cleanupOnCancellation, messageId);
     }

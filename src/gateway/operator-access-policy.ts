@@ -99,11 +99,12 @@ function pluginProfile(
 export function resolveGatewayOperatorAccessAuthority(
   profileId: string,
   config: OpenClawConfig,
+  options: { requireLivePolicySet?: boolean } = {},
 ): GatewayOperatorAccessAuthority | null {
   if (profileId === GATEWAY_OWNER_PROFILE_ID) {
     return null;
   }
-  if (!hasGatewayOperatorAccessPolicies(config)) {
+  if (!options.requireLivePolicySet && !hasGatewayOperatorAccessPolicies(config)) {
     return null;
   }
   const resident = captureResidentUserProfileAccess(profileId);
@@ -144,6 +145,7 @@ export function resolveGatewayOperatorAccessAuthority(
       },
     },
     config,
+    options,
   );
 }
 
@@ -158,12 +160,17 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     isCurrent: () => boolean;
   }>,
   config: OpenClawConfig,
+  options: { requireLivePolicySet?: boolean } = {},
 ): GatewayOperatorAccessAuthority | null {
   if (profile.profileId === GATEWAY_OWNER_PROFILE_ID) {
     return null;
   }
   const policies = currentAccessPolicies();
-  if (policies.length === 0 && !hasGatewayOperatorAccessPolicies(config)) {
+  if (
+    !options.requireLivePolicySet &&
+    policies.length === 0 &&
+    !hasGatewayOperatorAccessPolicies(config)
+  ) {
     return null;
   }
   const requiredPlugin = resolveOperatorRolePolicyForAssignment(
@@ -216,7 +223,11 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     if (!requiredPolicyConfirmed) {
       throw new GatewayOperatorAccessDeniedError();
     }
-    if (authorities.length === 0 && !usesGitHubRoleAssignments(config, profile.role)) {
+    if (
+      !options.requireLivePolicySet &&
+      authorities.length === 0 &&
+      !usesGitHubRoleAssignments(config, profile.role)
+    ) {
       releaseProfiles();
       return null;
     }
@@ -227,6 +238,15 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     const assertCurrent = () => {
       try {
         assertProfileCurrent();
+        if (options.requireLivePolicySet) {
+          const current = currentAccessPolicies();
+          if (
+            current.length !== policies.length ||
+            current.some((entry, index) => entry !== policies[index])
+          ) {
+            throw new GatewayOperatorAccessDeniedError();
+          }
+        }
         for (const { authority } of authorities) {
           authority.assertCurrent();
         }
@@ -242,6 +262,7 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     return {
       assertCurrent,
       signal,
+      requiredPolicyPlugin: requiredPlugin,
       gatewayAccessGrant: original?.authority.grantId
         ? Object.freeze({ pluginId: original.pluginId, grantId: original.authority.grantId })
         : authorities.length === 0
@@ -260,6 +281,7 @@ export function resumeGatewayOperatorAccessGrant(
   profile: UserProfileAccessFacts,
   config: OpenClawConfig,
   grant: GatewayAccessGrantRef | null,
+  retained?: PluginGatewayAccessAuthority,
 ): PluginGatewayAccessAuthority | undefined {
   const policies = currentAccessPolicies();
   const requiredPlugin = resolveOperatorRolePolicyForAssignment(
@@ -284,13 +306,14 @@ export function resumeGatewayOperatorAccessGrant(
     }
     let authority: PluginGatewayAccessAuthority | undefined;
     try {
-      authority = policy.resume({
-        ...context,
-        grantId: grant.grantId,
-        requiredByRole: requiredPlugin === grant.pluginId,
-      });
-      authority?.signal.throwIfAborted();
-      authority?.assertCurrent();
+      // The admitted authority owns live grant checks; resuming again creates a second owner.
+      authority =
+        retained ??
+        policy.resume({
+          ...context,
+          grantId: grant.grantId,
+          requiredByRole: requiredPlugin === grant.pluginId,
+        });
     } catch {
       // Startup and unavailable observations are not evidence that a grant ended.
       throw new GatewayOperatorAccessUnavailableError();
@@ -314,6 +337,13 @@ export function resumeGatewayOperatorAccessGrant(
       // A newly applicable policy needs a fresh request bound to that dependency.
       throw new GatewayOperatorAccessDeniedError();
     }
+  }
+  try {
+    // Other policies can synchronously invalidate the original grant without aborting its signal.
+    resumed?.signal.throwIfAborted();
+    resumed?.assertCurrent();
+  } catch {
+    throw new GatewayOperatorAccessUnavailableError();
   }
   return resumed;
 }

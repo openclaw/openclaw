@@ -13,8 +13,10 @@ import {
 } from "./session-entry-json.js";
 import {
   attachSessionEntrySnapshots,
-  sessionEntrySnapshotColumnsForKeys,
   type SessionEntryProjection,
+} from "./session-entry-snapshot-values.js";
+import {
+  sessionEntrySnapshotColumnsForKeys,
   type SessionEntrySnapshotRow,
 } from "./session-entry-snapshots.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";

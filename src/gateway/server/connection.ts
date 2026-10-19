@@ -1,6 +1,7 @@
 // Shared Gateway connection owner: admission, registration, dispatch, and tracked cleanup.
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolvePreauthHandshakeTimeoutMs } from "../../../packages/gateway-client/src/timeouts.js";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
@@ -13,7 +14,11 @@ import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
 import { removeRemoteNodeInfo } from "../../skills/runtime/remote.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import { getHeader } from "../http-header-value.js";
-import type { GatewayIngressAttribution } from "../ingress-attribution.js";
+import {
+  getRemoteControlUiIngressContext,
+  hasCurrentRemoteControlUiIngress,
+  type GatewayIngressAttribution,
+} from "../ingress-attribution.js";
 import { isLoopbackAddress } from "../net.js";
 import { clearNodeWakeState } from "../node-wake-state.js";
 import {
@@ -118,6 +123,7 @@ type AttachGatewayConnectionParams = GatewayConnectionOptions & {
 };
 
 export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
+  const remoteIngress = getRemoteControlUiIngressContext(params.request);
   const {
     socket,
     connectionKind,
@@ -137,7 +143,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     logWsControl,
     buildRequestContext,
   } = params;
-  if (connectionWork.isClosing) {
+  if (connectionWork.isClosing || !hasCurrentRemoteControlUiIngress(remoteIngress)) {
     socket.terminate();
     return;
   }
@@ -254,12 +260,21 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     closeGatewayTransportWithGrace(socket, code, reason ?? "");
   };
   const close = closeWithGrace;
+  const closeRemoteIngress = () => closeWithGrace(1008, "remote Control UI ingress closed");
+  remoteIngress?.signal.addEventListener("abort", closeRemoteIngress, { once: true });
+  socket.once("close", () =>
+    remoteIngress?.signal.removeEventListener("abort", closeRemoteIngress),
+  );
 
   const releaseConnection = connectionWork.registerConnection(() => {
     closeWithGrace(1012, connectionKind === "worker" ? "gateway-shutdown" : "service restart");
   });
 
   const send = (obj: unknown) => {
+    if (!hasCurrentRemoteControlUiIngress(remoteIngress)) {
+      closeRemoteIngress();
+      return { kind: "unavailable" } as const;
+    }
     if (closed) {
       return { kind: "unavailable" } as const;
     }
@@ -281,22 +296,21 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
       closeWithGrace(1008, connectionKind === "worker" ? "slow-consumer" : "slow consumer");
       return { kind: "unavailable" } as const;
     }
-    let encoded: string | Buffer;
+    let encoded: Buffer;
     try {
-      encoded = serializeGatewayFrame(obj);
+      const serialized = serializeGatewayFrame(obj);
+      encoded = typeof serialized === "string" ? Buffer.from(serialized) : serialized;
     } catch (error) {
       return { kind: "serialization", error } as const;
     }
     try {
-      if (typeof encoded === "string") {
-        socket.send(encoded);
-      } else {
-        socket.send(encoded, { binary: false });
+      socket.send(encoded, { binary: false });
+      const bytes = encoded.byteLength;
+      const frame = asOptionalRecord(obj);
+      if (frame?.type === "event" && typeof frame.event === "string") {
+        socket.recordEventSent?.(frame.event, encoded);
       }
-      return {
-        kind: "sent",
-        bytes: typeof encoded === "string" ? Buffer.byteLength(encoded) : encoded.byteLength,
-      } as const;
+      return { kind: "sent", bytes } as const;
     } catch {
       socket.terminate();
       retireConnection();
@@ -494,7 +508,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
 
   const setClient = (next: GatewayWsClient) => {
     // Keep one socket owner when concurrent connect frames finish out of order.
-    if (closed || client) {
+    if (closed || client || !hasCurrentRemoteControlUiIngress(remoteIngress)) {
       return false;
     }
     if (
@@ -551,7 +565,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     isStartupPending,
     send,
     close,
-    isClosed: () => closed,
+    isClosed: () => closed || !hasCurrentRemoteControlUiIngress(remoteIngress),
     clearHandshakeTimer: () => clearTimeout(handshakeTimer),
     getClient: () => client,
     setClient,

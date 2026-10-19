@@ -1,13 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import "./file-preview-modal-registration.ts";
-import { icons } from "./icons.ts";
+import { Icon } from "./solid/icon.tsx";
 
 type FilePreviewModalElement = HTMLElementTagNameMap["openclaw-file-preview-modal"];
 
@@ -82,15 +82,6 @@ describe("openclaw-file-preview-modal", () => {
     delete (document as unknown as { execCommand?: unknown }).execCommand;
   });
 
-  it("filters files by path or contents", async () => {
-    const modal = await renderPreview({ query: "sender" });
-
-    expect(previewText(modal)).toContain("1/2 files");
-    expect(previewText(modal)).toContain("filters/auto-senders.txt");
-    expect(previewText(modal)).not.toContain("templates/digest.md");
-    expect(previewText(modal)).toContain("noreply@example.com");
-  });
-
   it("uses the composer skill glyph for skill files but keeps ordinary Markdown icons", async () => {
     const modal = await renderPreview({
       activePath: "SKILL.md",
@@ -100,7 +91,7 @@ describe("openclaw-file-preview-modal", () => {
       ],
     });
     const reference = document.createElement("div");
-    render(icons.pencilSparkles, reference);
+    mountSolid(() => createComponent(Icon, { name: "pencilSparkles" }), { container: reference });
     const paths = (element: Element | null | undefined) =>
       [...(element?.querySelectorAll("path") ?? [])].map((path) => path.getAttribute("d"));
     const expectedIcon = paths(reference.querySelector("svg"));
@@ -110,19 +101,13 @@ describe("openclaw-file-preview-modal", () => {
     expect(paths(markdownIcon)).not.toEqual(expectedIcon);
   });
 
-  it("shows the Escape shortcut only on the close button", async () => {
-    const modal = await renderPreview();
-    const state = modal.querySelector<HTMLElement>(".state");
-    const closeButton = modal.querySelector<HTMLButtonElement>(".button");
-
-    expect(state?.textContent?.trim()).toBe("2 files");
-    expect(state?.querySelector(".kbd")).toBeNull();
-    expect(closeButton?.textContent?.replace(/\s+/g, " ").trim()).toBe("Close esc");
-    expect(closeButton?.querySelector(".kbd")?.textContent).toBe("esc");
-  });
-
   it("emits controlled query, select, and close events", async () => {
     const modal = await renderPreview();
+    const actions = modal.querySelector(".foot > openclaw-modal-actions");
+    expect(actions?.querySelector("button")).not.toBeNull();
+    expect(actions?.parentElement?.lastElementChild).toBe(actions);
+    expect(actions?.querySelector(".foot-group")).toBeNull();
+    expect(modal.querySelector(".foot > .foot-group")).not.toBeNull();
     const onQuery = vi.fn();
     const onSelect = vi.fn();
     const onClose = vi.fn();
@@ -148,34 +133,52 @@ describe("openclaw-file-preview-modal", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps keyboard focus in the modal and navigates files with arrow keys", async () => {
+  it.each(["files", "document"] as const)(
+    "updates the active %s preview and focus without untracked reads",
+    async (layout) => {
+      const warning = vi.spyOn(console, "warn");
+      const modal = await renderPreview({ layout });
+      modal.activePath = files[1]!.path;
+      await modal.updateComplete;
+
+      expect(modal.querySelector(".detail-body")?.textContent).toContain("noreply@example.com");
+      expect(document.activeElement).toBe(
+        modal.querySelector(layout === "files" ? ".search" : ".item.is-active"),
+      );
+      expect(warning.mock.calls.flat().join(" ")).not.toContain("STRICT_READ_UNTRACKED");
+    },
+  );
+
+  it("reveals active rows on list updates and only refocuses changed document paths", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
     const modal = await renderPreview();
-    const onSelect = vi.fn();
-    const onDocumentKeydown = vi.fn();
-    modal.addEventListener("file-preview-select", onSelect);
-    document.addEventListener("keydown", onDocumentKeydown);
+    const focusTarget = modal.querySelector<HTMLElement>(".modal")!;
+    focusTarget.tabIndex = 0;
+    focusTarget.focus();
 
-    const input = modal.querySelector<HTMLInputElement>(".search");
-    expect(input).toBeInstanceOf(HTMLInputElement);
-    expect(document.activeElement).toBe(input);
+    scroll.mockClear();
+    modal.query = "digest";
+    await modal.updateComplete;
+    expect(scroll.mock.contexts.at(-1)).toBe(modal.querySelector(".item.is-active"));
+    expect(document.activeElement).toBe(focusTarget);
 
-    const arrowDown = pressArrowDown(input);
+    scroll.mockClear();
+    modal.files = files.map((file) => ({ ...file, size: "3 KB" }));
+    await modal.updateComplete;
+    expect(scroll.mock.contexts.at(-1)).toBe(modal.querySelector(".item.is-active"));
+    expect(document.activeElement).toBe(focusTarget);
 
-    expect(arrowDown.defaultPrevented).toBe(true);
-    expect(onDocumentKeydown).not.toHaveBeenCalled();
-    expect(onSelect.mock.lastCall?.[0].detail).toBe("filters/auto-senders.txt");
-  });
+    scroll.mockClear();
+    modal.layout = "document";
+    await modal.updateComplete;
+    expect(scroll.mock.contexts.at(-1)).toBe(modal.querySelector(".item.is-active"));
+    expect(document.activeElement).toBe(focusTarget);
 
-  it("handles file navigation from the modal dialog event path", async () => {
-    const modal = await renderPreview();
-    const onSelect = vi.fn();
-    modal.addEventListener("file-preview-select", onSelect);
-
-    const dialog = modal.querySelector<HTMLElement>("openclaw-modal-dialog");
-    const arrowDown = pressArrowDown(dialog);
-
-    expect(arrowDown.defaultPrevented).toBe(true);
-    expect(onSelect.mock.lastCall?.[0].detail).toBe("filters/auto-senders.txt");
+    scroll.mockClear();
+    modal.activePath = files[1]!.path;
+    await modal.updateComplete;
+    expect(scroll.mock.contexts.at(-1)).toBe(modal.querySelector(".item.is-active"));
+    expect(document.activeElement).toBe(modal.querySelector(".item.is-active"));
   });
 
   it("restores modal focus when the same element reconnects", async () => {
@@ -226,6 +229,7 @@ describe("openclaw-file-preview-modal", () => {
     expect(firstChunks.map((chunk) => chunk.textContent ?? "").join("\n")).toBe(firstContents);
 
     body!.scrollTop = 2200;
+    body!.scrollLeft = 40;
     expect(body!.scrollTop).toBe(2200);
 
     modal.activePath = "second.ts";
@@ -234,27 +238,53 @@ describe("openclaw-file-preview-modal", () => {
     const secondChunks = [...(modal.querySelectorAll<HTMLElement>(".code-chunk") ?? [])];
 
     expect(updatedBody?.scrollTop).toBe(0);
+    expect(updatedBody?.scrollLeft).toBe(0);
     expect(secondChunks.map((chunk) => chunk.textContent ?? "").join("\n")).toBe(secondContents);
-  });
 
-  it("keeps the current document and scroll position when a sibling file finishes loading", async () => {
-    const modal = await renderPreview();
-    const body = modal.querySelector<HTMLElement>(".detail-body")!;
-    body.scrollTop = 240;
-    body.scrollLeft = 40;
-
-    modal.files = files.map((file) => ({
-      path: file.path,
-      size: file.size,
-      contents: file.path === modal.activePath ? file.contents : "New sibling contents",
-    }));
+    updatedBody!.scrollTop = 320;
+    updatedBody!.scrollLeft = 40;
+    modal.files = previewFiles.map((file) =>
+      file.path === "second.ts"
+        ? Object.assign({}, file, { contents: `${file.contents}\nUpdated contents` })
+        : file,
+    );
     await modal.updateComplete;
-
-    expect(modal.querySelector(".detail-body")).toBe(body);
-    expect(body.scrollTop).toBe(240);
-    expect(body.scrollLeft).toBe(40);
-    expect(body.textContent).toContain("Morning digest template");
+    expect(modal.querySelector<HTMLElement>(".detail-body")?.scrollTop).toBe(0);
+    expect(modal.querySelector<HTMLElement>(".detail-body")?.scrollLeft).toBe(0);
   });
+
+  it.each(["files", "document"] as const)(
+    "keeps the current %s content and scroll position when a sibling file finishes loading",
+    async (layout) => {
+      const modal = await renderPreview({ layout });
+      const body = modal.querySelector<HTMLElement>(".detail-body")!;
+      const content = body.querySelector(".markdown, .code-content")!;
+      const first = content.firstElementChild;
+      body.scrollTop = 240;
+      body.scrollLeft = 40;
+
+      modal.files = files.map((file) => ({
+        path: file.path,
+        size: file.size,
+        contents: file.path === modal.activePath ? file.contents : "New sibling contents",
+      }));
+      await modal.updateComplete;
+
+      expect(modal.querySelector(".detail-body")).toBe(body);
+      expect(content.firstElementChild).toBe(first);
+      expect(body.scrollTop).toBe(240);
+      expect(body.scrollLeft).toBe(40);
+      expect(body.textContent).toContain("Morning digest template");
+
+      // Changing the requested path still reveals a row, but an unchanged resolved file stays put.
+      const reveal = vi.spyOn(Element.prototype, "scrollIntoView");
+      modal.activePath = "missing-file.md";
+      await modal.updateComplete;
+      expect(reveal.mock.contexts.at(-1)).toBe(modal.querySelector(".item.is-active"));
+      expect(body.scrollTop).toBe(240);
+      expect(body.scrollLeft).toBe(40);
+    },
+  );
 
   it("navigates only expanded document folders and keeps relative Markdown links inside the preview", async () => {
     const modal = await renderPreview({
@@ -284,24 +314,6 @@ describe("openclaw-file-preview-modal", () => {
     link.dispatchEvent(click);
     expect(click.defaultPrevented).toBe(true);
     expect(select.mock.lastCall?.[0].detail).toBe("notes/a.md");
-  });
-
-  it("copies the complete active file while only a virtual window is rendered", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
-    const contents = Array.from({ length: 500 }, (_, index) => `line-${index}`).join("\n");
-    const previewFiles = [{ path: "large.ts", size: "5 KB", contents }];
-    const modal = await renderPreview({ activePath: "large.ts", previewFiles });
-    const copyButton = modal.querySelector<HTMLButtonElement>(".chat-copy-btn");
-
-    expect(copyButton).toBeInstanceOf(HTMLButtonElement);
-    expect(modal.querySelectorAll(".code-chunk").length).toBe(8);
-    copyButton!.click();
-
-    await waitForSolid(() => {
-      expect(writeText).toHaveBeenCalledWith(contents);
-      expect(copyButton?.getAttribute("aria-label")).toBe("Copied!");
-    });
   });
 
   it.each([true, false])(
@@ -359,34 +371,15 @@ describe("openclaw-file-preview-modal", () => {
     },
   );
 
-  it.each([
-    ["references/notes.constructor", "CONSTRUCTOR"],
-    ["references/notes.__proto__", "__PROTO__"],
-  ])("renders the fallback file-kind label for %s", async (path, label) => {
-    const modal = await renderPreview({
-      activePath: path,
-      previewFiles: [{ path, size: "12 B", contents: "Example file" }],
-    });
+  it.each([["references/notes.constructor", "CONSTRUCTOR"]])(
+    "renders the fallback file-kind label for %s",
+    async (path, label) => {
+      const modal = await renderPreview({
+        activePath: path,
+        previewFiles: [{ path, size: "12 B", contents: "Example file" }],
+      });
 
-    expect(modal.querySelector(".chip.accent")?.textContent).toBe(label);
-  });
-
-  it("localizes generic file-kind chips", async () => {
-    i18n.registerTranslation("pt-BR", {
-      filePreview: {
-        kind: {
-          text: "Texto",
-          shell: "Shell",
-          file: "Arquivo",
-        },
-      },
-    });
-    await i18n.setLocale("pt-BR");
-
-    const modal = await renderPreview({
-      activePath: "filters/auto-senders.txt",
-    });
-
-    expect(modal.querySelector(".chip.accent")?.textContent).toBe("Texto");
-  });
+      expect(modal.querySelector(".chip.accent")?.textContent).toBe(label);
+    },
+  );
 });

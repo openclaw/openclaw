@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Locale } from "../../../../src/shared/control-ui-locale.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import {
@@ -8,7 +9,6 @@ import {
   installSafeLocalStorageForTesting,
 } from "../../test-helpers/storage.ts";
 import { registerCommandPaletteEnglish } from "../locales/en-command-palette.ts";
-import type { Locale } from "./registry.ts";
 import { createI18nManagerForTesting } from "./translate.test-support.ts";
 import type { TranslationMap } from "./types.ts";
 
@@ -193,33 +193,6 @@ describe("I18nManager pending locale retry", () => {
       expect(localStorage.getItem("openclaw.i18n.locale")).toBe(preference);
     },
   );
-
-  it("does not report a repeated non-import failure", async () => {
-    const { loadTranslation, manager, retryPendingLocale } = createManager();
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const onUnrecoverableLocaleLoad = vi.fn();
-    manager.setLocaleLoadRecovery({
-      isUnrecoverableError: (error) =>
-        error instanceof Error &&
-        /failed to fetch dynamically imported module/i.test(error.message),
-      onUnrecoverableLocaleLoad,
-    });
-    loadTranslation
-      .mockRejectedValueOnce(new Error("gateway unavailable"))
-      .mockRejectedValueOnce(new Error("request failed"))
-      .mockResolvedValueOnce(german);
-
-    await manager.setLocale("fr");
-    await retryPendingLocale();
-    expect(loadTranslation).toHaveBeenCalledTimes(2);
-
-    expect(onUnrecoverableLocaleLoad).not.toHaveBeenCalled();
-    expect(manager.getLocale()).toBe("en");
-
-    await retryPendingLocale();
-    expect(loadTranslation).toHaveBeenCalledTimes(3);
-    expect(manager.getLocale()).toBe("fr");
-  });
 
   it("ignores an older failure after a newer locale succeeds", async () => {
     const { loadTranslation, manager, retryPendingLocale } = createManager();

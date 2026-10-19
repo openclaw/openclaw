@@ -78,6 +78,7 @@ export function clearSubmittedComposerState(
         : [];
   }
   resetChatInputHistoryNavigation(host);
+  host.composerDraftChanged?.();
   return {
     previousAttachments: submittedAttachments,
     previousDraft: submittedDraft,
@@ -298,9 +299,6 @@ function restoreFailedCommandComposer(
   if (!restorePlan.complete) {
     clearOwnedCommandComposerFallback(host, recovery);
   }
-  if (owner !== host) {
-    owner.requestUpdate?.();
-  }
   return retained;
 }
 
@@ -353,6 +351,9 @@ function strictComposerRestore(host: ChatHost, snapshot: PendingComposerSnapshot
       }
       if (attachments) {
         host.chatAttachments = snapshot.previousAttachments ?? [];
+      }
+      if (draft || attachments) {
+        host.composerDraftChanged?.();
       }
     },
   };

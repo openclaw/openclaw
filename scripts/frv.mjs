@@ -27,8 +27,10 @@ import {
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
+  isReleaseGhServerError,
   MAX_RELEASE_ARTIFACT_BYTES,
   planReleaseChildRerun,
+  readReleaseJobListing,
   releaseChildSpec,
   releaseChildSpecs,
   releaseGhRateLimitRetryAt,
@@ -281,7 +283,7 @@ function isUnknownAllowEscapeSequencesFlag(error) {
   );
 }
 
-async function execGhRead(args, options = {}) {
+async function execGhRead(args, { smallerPageFallback = false, ...options } = {}) {
   for (let attempt = 1; ; attempt += 1) {
     const remaining =
       options.operationDeadline === undefined
@@ -295,6 +297,7 @@ async function execGhRead(args, options = {}) {
     } catch (error) {
       if (
         attempt === 4 ||
+        (smallerPageFallback && isReleaseGhServerError(error)) ||
         releaseGhRateLimitRetryAt(error) !== undefined ||
         classifyReleaseGhTransportError(error) !== "transient"
       ) {
@@ -846,6 +849,34 @@ export async function inspectContinuation(plan, client, options = {}) {
   return continuationStatus(children);
 }
 
+function releaseCandidateIdentity(plan) {
+  const ref =
+    plan?.sourceAdmission?.targetContextRef ?? plan?.qualificationInputs?.target_context_ref;
+  return { sha: plan?.targetSha ?? null, ref: ref ?? null, tipSha: null, state: "unknown" };
+}
+
+async function observeReleaseCandidate(plan, client, options) {
+  const candidate = releaseCandidateIdentity(plan);
+  const ref = candidate.ref;
+  if (!ref || /^[a-f0-9]{40}$/u.test(ref)) {
+    return candidate;
+  }
+  const fullRef = ref.startsWith("refs/") ? ref : `refs/heads/${ref}`;
+  const tip = await client.getRef(fullRef, options);
+  if (
+    tip.ref !== fullRef ||
+    tip.object?.type !== "commit" ||
+    !/^[a-f0-9]{40}$/u.test(tip.object.sha)
+  ) {
+    throw new Error("Candidate tip observation has invalid ref identity");
+  }
+  return {
+    ...candidate,
+    tipSha: tip.object.sha,
+    state: tip.object.sha === plan.targetSha ? "current" : "superseded",
+  };
+}
+
 async function inspectQualificationStatus(plan, runId, client) {
   const operationDeadline = createOperationDeadline();
   let status;
@@ -942,22 +973,11 @@ async function inspectQualificationStatus(plan, runId, client) {
               : "running",
     evidence,
   };
-  const ref =
-    plan.sourceAdmission?.targetContextRef ?? plan.qualificationInputs?.target_context_ref;
-  let candidate = { sha: plan.targetSha, ref: ref ?? null, tipSha: null, state: "unknown" };
-  if (ref && !/^[a-f0-9]{40}$/u.test(ref)) {
-    try {
-      const fullRef = ref.startsWith("refs/") ? ref : `refs/heads/${ref}`;
-      const tip = await client.getRef(fullRef, { operationDeadline });
-      candidate = {
-        sha: plan.targetSha,
-        ref,
-        tipSha: tip.object.sha,
-        state: tip.object.sha === plan.targetSha ? "current" : "superseded",
-      };
-    } catch {
-      observationErrors.push("Candidate tip observation unavailable");
-    }
+  let candidate = releaseCandidateIdentity(plan);
+  try {
+    candidate = await observeReleaseCandidate(plan, client, { operationDeadline });
+  } catch {
+    observationErrors.push("Candidate tip observation unavailable");
   }
   const nextCommand = `pnpm frv ${
     status.active.length || parent.status !== "completed"
@@ -997,15 +1017,24 @@ export function createClient(repository, dependencies = {}) {
   const rerun = (runId, action) =>
     mutate(["api", "-X", "POST", `repos/${repository}/actions/runs/${runId}/${action}`]);
   const execute = dependencies.execCommand ?? execCommand;
-  const readJobs = async (path, options) => {
-    const output = await apiText(path, ".jobs[] | @json", [], options);
-    return output
-      ? output
-          .split("\n")
-          .filter(Boolean)
-          .map((line) => JSON.parse(line))
-      : [];
-  };
+  const readJobs = (path, options) =>
+    readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
+      const output = await apiText(
+        `${path}${path.includes("?") ? "&" : "?"}per_page=${perPage}`,
+        ".jobs[] | @json",
+        [],
+        {
+          ...options,
+          smallerPageFallback,
+        },
+      );
+      return output
+        ? output
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line))
+        : [];
+    });
   const verify = async (runId, plan, operationDeadline, expectedRunAttempts) => {
     const sourceSha = plan.trustedWorkflow?.sha;
     return execute(
@@ -1048,14 +1077,17 @@ export function createClient(repository, dependencies = {}) {
     getAttemptJobs:
       dependencies.getAttemptJobs ??
       ((runId, runAttempt, options) =>
-        readJobs(`actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`, options)),
+        readJobs(`actions/runs/${runId}/attempts/${runAttempt}/jobs`, options)),
     getRef(fullRef, options) {
       const ref = fullRef
         .replace(/^refs\//u, "")
         .split("/")
         .map(encodeURIComponent)
         .join("/");
-      return apiJson(`git/ref/${ref}`, options);
+      // Mutable candidate tips must stay fresh even when watcher job reads use the relay cache.
+      return dependencies.apiJson
+        ? dependencies.apiJson(`git/ref/${ref}`, options)
+        : ghJson(repository, `git/ref/${ref}`, options, true);
     },
     getRun(runId, options) {
       return apiJson(`actions/runs/${runId}`, options);
@@ -1063,8 +1095,7 @@ export function createClient(repository, dependencies = {}) {
     getRunAttempt(runId, runAttempt, options) {
       return apiJson(`actions/runs/${runId}/attempts/${runAttempt}`, options);
     },
-    getParentJobs: (runId, options) =>
-      readJobs(`actions/runs/${runId}/jobs?filter=all&per_page=100`, options),
+    getParentJobs: (runId, options) => readJobs(`actions/runs/${runId}/jobs?filter=all`, options),
     async getJobLog(jobId, options) {
       // Octopool's gh shim refuses log bodies with terminal escape sequences even off a TTY;
       // real gh ignores the flag off-TTY, so the controller works with either binary.
@@ -2029,7 +2060,9 @@ async function createPublicationReader(repository) {
     const ids = new Set();
     let total;
     for (let page = 1; page <= limits.pages; page += 1) {
-      const value = json(`${path}?per_page=${limits.pageSize}&page=${page}`);
+      const value = json(
+        `${path}${path.includes("?") ? "&" : "?"}per_page=${limits.pageSize}&page=${page}`,
+      );
       requirePublication(
         Number.isSafeInteger(value?.total_count) &&
           value.total_count >= 0 &&
@@ -2059,13 +2092,15 @@ async function createPublicationReader(repository) {
     }
     throw new PublicationStatusError("limits");
   }
-  async function getRun(runId) {
+  async function getRun(runId, options = {}) {
+    const event = options.event ?? "workflow_dispatch";
     const key = String(runId);
     requirePublication(/^[1-9][0-9]*$/u.test(key) && Number.isSafeInteger(Number(key)), "limits");
     if (!runs.has(key)) {
       requirePublication(runs.size < limits.runs, "limits");
-      runs.set(key, parsePublicationRun(json(`actions/runs/${key}`), repository, key));
+      runs.set(key, parsePublicationRun(json(`actions/runs/${key}`), repository, key, event));
     }
+    requirePublication(runs.get(key).event === event);
     return runs.get(key);
   }
   async function authenticate(run, path) {
@@ -2083,6 +2118,7 @@ async function createPublicationReader(repository) {
       json(`actions/runs/${runId}/attempts/${attempt}`),
       repository,
       String(runId),
+      current.event,
     );
     requirePublication(
       observed.run_attempt === attempt &&
@@ -2170,6 +2206,17 @@ async function createPublicationReader(repository) {
     authenticate,
     readArtifact,
     listArtifacts,
+    findLinuxBuilders(request) {
+      requirePublication(request.created_at, "incomplete");
+      const title = `Linux App Release request=${request.id} attempt=${request.run_attempt}`;
+      // workflow_run uses current main, which can reject an older request.
+      // Filter by request creation, not SHA, so that rejection remains visible.
+      const created = encodeURIComponent(`>=${request.created_at}`);
+      return collection(
+        `actions/workflows/linux-app-release.yml/runs?event=workflow_run&branch=main&created=${created}`,
+        "workflow_runs",
+      ).filter((run) => run.display_title === title);
+    },
     async getAttemptJobs(runId, attempt) {
       return parsePublicationJobs(
         collection(`actions/runs/${runId}/attempts/${attempt}/jobs`, "jobs"),
@@ -2182,7 +2229,7 @@ async function createPublicationReader(repository) {
         try {
           assertPublicationRunUnchanged(
             run,
-            parsePublicationRun(json(`actions/runs/${runId}`), repository, runId),
+            parsePublicationRun(json(`actions/runs/${runId}`), repository, runId, run.event),
           );
         } catch (error) {
           throw new PublicationStatusError(publicationFailure(error), runId);
@@ -2212,6 +2259,8 @@ async function inspectPublicationStatus(options) {
     joinPublicationValidation,
     observePublicationChild,
     parseWindowsDispatch,
+    parseLinuxDispatch,
+    observeLinuxAdmission,
     observeWindowsMarker,
     parseClawHubDispatch,
   } = policy;
@@ -2398,6 +2447,110 @@ async function inspectPublicationStatus(options) {
         );
       }
     }
+    const linux = await reader.readArtifact(
+      publisher,
+      `linux-release-dispatch-${publisher.id}-${publisher.run_attempt}`,
+      "linux-dispatch.json",
+      PUBLICATION_LIMITS.diagnosticBytes,
+    );
+    if (linux.state === "available") {
+      requireArtifactUploadJob(
+        jobs,
+        "Request Linux assets after publication",
+        "Retain Linux request evidence",
+      );
+      const dispatch = parseLinuxDispatch(linux.value, plan.targetSha);
+      requirePublication(
+        !diagnostic?.context.releaseTag || dispatch.tag === diagnostic.context.releaseTag,
+      );
+      const surface = publication.surfaces.nativeLinux;
+      surface.selection = "selected";
+      surface.operation.state =
+        dispatch.state === "request-dispatched" || dispatch.state === "request-reused"
+          ? "awaiting-admission"
+          : dispatch.state;
+      publication.dispatches.push({
+        scope: "linux",
+        state: dispatch.requestRunId ? "acknowledged" : "unknown",
+        runId: String(publisher.id),
+        runAttempt: publisher.run_attempt,
+        artifactId: linux.artifactId,
+      });
+      if (dispatch.requestRunId && !dispatch.requestRunAttempt) {
+        surface.operation.state = "request-attempt-unknown";
+      }
+      if (dispatch.requestRunId && dispatch.requestRunAttempt) {
+        const currentRequest = await reader.getRun(dispatch.requestRunId);
+        await reader.authenticate(
+          currentRequest,
+          ".github/workflows/linux-app-release-request.yml",
+        );
+        const request = await reader.getRunAttempt(
+          dispatch.requestRunId,
+          Number(dispatch.requestRunAttempt),
+        );
+        requirePublication(
+          request.head_branch === "main" &&
+            request.head_sha === dispatch.workflowSha &&
+            [
+              `Linux App Release Request [${dispatch.tag}] desktop=false`,
+              `Linux App Release Request [${dispatch.tag}] desktop=true`,
+            ].includes(request.display_title),
+        );
+        const builders = reader.findLinuxBuilders(request);
+        requirePublication(builders.length <= 1);
+        if (
+          !builders.length &&
+          request.status === "completed" &&
+          request.conclusion !== "success"
+        ) {
+          surface.operation.state = `request-${request.conclusion ?? "unknown"}`;
+        }
+        if (builders.length) {
+          const builder = await reader.getRun(String(builders[0].id), { event: "workflow_run" });
+          await reader.authenticate(builder, ".github/workflows/linux-app-release.yml");
+          requirePublication(
+            builder.head_branch === "main" &&
+              builder.display_title ===
+                `Linux App Release request=${request.id} attempt=${request.run_attempt}`,
+          );
+          observePublicationChild(publication, "nativeLinux", builder, null, "dispatch-record");
+          surface.operation.state =
+            builder.status === "completed"
+              ? (builder.conclusion ?? "unknown")
+              : "awaiting-admission";
+          const admission = await reader.readArtifact(
+            builder,
+            `linux-release-admission-${request.id}-${request.run_attempt}-${builder.id}-${builder.run_attempt}`,
+            "linux-release-admission.json",
+            PUBLICATION_LIMITS.diagnosticBytes,
+          );
+          if (admission.state === "available") {
+            const builderJobs = await reader.getAttemptJobs(
+              String(builder.id),
+              builder.run_attempt,
+            );
+            requireArtifactUploadJob(
+              builderJobs,
+              "Validate release tag",
+              "Retain Linux builder admission",
+            );
+            observeLinuxAdmission(
+              publication,
+              admission.value,
+              request,
+              builder,
+              dispatch.tag,
+              plan.targetSha,
+              admission.artifactId,
+            );
+            if (builder.status !== "completed") {
+              surface.operation.state = surface.terminalMarker.state;
+            }
+          }
+        }
+      }
+    }
     const windows = await reader.readArtifact(
       publisher,
       `windows-release-dispatch-${publisher.id}-${publisher.run_attempt}`,
@@ -2415,6 +2568,10 @@ async function inspectPublicationStatus(options) {
         !diagnostic?.context.releaseTag || dispatch.tag === diagnostic.context.releaseTag,
       );
       publication.surfaces.nativeWindows.selection = "selected";
+      publication.surfaces.nativeWindows.target = {
+        tag: dispatch.tag,
+        sourceTag: dispatch.sourceTag,
+      };
       publication.dispatches.push({
         scope: "windows",
         state: dispatch.state === "dispatched" ? "acknowledged" : "unknown",
@@ -2507,6 +2664,8 @@ const DISPATCHED_CHILD_PATTERN =
 const ARTIFACT_DISPATCH_JOBS = [
   ["Prepare release npm artifacts", "artifact:npm"],
   ["Prepare release Docker artifacts", "artifact:docker"],
+  ["Acquire full release candidate", "artifact:candidate"],
+  ["Prepare exact plugin npm artifacts", "artifact:plugin-npm"],
 ];
 const FAILED_JOB_CONCLUSIONS = new Set([
   "action_required",
@@ -2579,17 +2738,21 @@ async function mapBounded(values, limit, operation) {
   return results;
 }
 
-async function pollRelease(state, client, pending, readOptions) {
+async function pollRelease(state, client, pending, observation, readOptions) {
   const events = [];
   const failedReads = [];
-  const report = (id, message, url) => {
+  const report = (id, message, url, candidate) => {
     if (!state.reported.has(id)) {
       state.reported.add(id);
-      events.push({ message, ...(url ? { url: String(url) } : {}) });
+      events.push({
+        message,
+        ...(url ? { url: String(url) } : {}),
+        ...(candidate ? { candidate } : {}),
+      });
     }
   };
   // Transient GitHub failures, including HTML 5xx bodies, never become job results.
-  const read = async (label, operation) => {
+  const read = async (label, operation, required = true) => {
     if (state.nextCheckAt > Date.now()) {
       return undefined;
     }
@@ -2602,10 +2765,16 @@ async function pollRelease(state, client, pending, readOptions) {
         state.rateLimitFailures += 1;
       }
       const text = String(error?.stderr ?? error?.message ?? error);
-      if (classifyReleaseGhTransportError(error) === "hard" && !/HTTP 404\b/u.test(text)) {
+      if (
+        required &&
+        classifyReleaseGhTransportError(error) === "hard" &&
+        !/HTTP 404\b/u.test(text)
+      ) {
         throw error;
       }
-      failedReads.push(label);
+      if (required) {
+        failedReads.push(label);
+      }
       return undefined;
     }
   };
@@ -2720,8 +2889,70 @@ async function pollRelease(state, client, pending, readOptions) {
       return done && scansComplete;
     },
   );
+  // Required tree reads precede advisory metadata so a tip throttle cannot suppress
+  // terminal evidence; its shared backoff still prevents requests before the retry boundary.
+  // The execution plan binds the candidate, not the parent's tooling SHA. Before sealing,
+  // candidate identity is unknown; retained in-process bytes never replace a fresh tip read.
+  if (
+    !observation.plan &&
+    parentJobs?.some(
+      (job) =>
+        job.name === "Seal release execution plan" &&
+        (job.conclusion === "success" ||
+          job.steps?.some(
+            (step) =>
+              step.name === "Upload immutable release execution plan" &&
+              step.conclusion === "success",
+          )),
+    )
+  ) {
+    observation.plan = await read(
+      "execution plan",
+      async () => {
+        const evidence = await client
+          .getReleaseEvidenceClient()
+          .loadExecutionPlanEvidence(parentRunId);
+        return validateReleaseExecutionPlanArtifact(evidence.plan, {
+          parentRunId,
+          workflowSha: parent.head_sha,
+        });
+      },
+      false,
+    );
+  }
+  // Candidate metadata is advisory: absent artifacts or refs stay unknown, never hold
+  // an independently verified terminal tree open or grant qualification authority.
+  const candidate =
+    (await read(
+      "candidate tip",
+      () => observeReleaseCandidate(observation.plan, client, readOptions),
+      false,
+    )) ?? releaseCandidateIdentity(observation.plan);
+  const candidateKey = `candidate:${candidate.sha}:${candidate.tipSha}:${candidate.state}`;
+  // Deduplicate unchanged observations, not historical values: a ref can return to an old tip.
+  for (const previous of state.reported) {
+    if (previous.startsWith("candidate:") && previous !== candidateKey) {
+      state.reported.delete(previous);
+    }
+  }
+  report(
+    candidateKey,
+    candidate.state === "superseded"
+      ? `candidate ${candidate.sha} is superseded by ${candidate.ref} tip ${candidate.tipSha}; this run does not qualify the current tip`
+      : candidate.state === "current"
+        ? `candidate ${candidate.sha} is the current ${candidate.ref} tip; qualification remains separate`
+        : `candidate ${candidate.sha ?? "identity"}: tip observation unknown; no current-tip qualification claim`,
+    undefined,
+    candidate,
+  );
   const complete =
     parentDone && !dispatchPending && childStates.every(Boolean) && failedReads.length === 0;
+  if (complete) {
+    report(
+      `terminal:${parent.run_attempt}`,
+      `parent ${parentRunId} and every dispatched child are terminal`,
+    );
+  }
   return { complete, events, failedReads };
 }
 
@@ -2735,11 +2966,12 @@ export async function watchRelease(parentRunId, client, options = {}) {
   const emit = options.emit ?? ((event) => console.log(event.message));
   const state = readWatchState(statePath, repository, String(parentRunId));
   const pending = new Set();
+  const observation = {};
   while (true) {
     const { complete, events, failedReads } =
       state.nextCheckAt > Date.now()
         ? { complete: false, events: [], failedReads: [] }
-        : await pollRelease(state, client, pending, { operationDeadline });
+        : await pollRelease(state, client, pending, observation, { operationDeadline });
     if (failedReads.length > 0) {
       const fingerprint = `${failedReads.join(", ")}:${state.nextCheckAt}`;
       if (state.failedReadFingerprint !== fingerprint) {
@@ -2761,7 +2993,6 @@ export async function watchRelease(parentRunId, client, options = {}) {
       emit(event);
     }
     if (complete) {
-      emit({ message: `parent ${parentRunId} and every dispatched child are terminal` });
       return { complete, statePath };
     }
     const remaining = operationDeadline - Date.now();

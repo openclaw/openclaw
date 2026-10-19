@@ -1,27 +1,30 @@
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import {
+  getRpcSourceIdentity,
+  isRpcSourceRegistered,
+} from "../../sessions/session-controller.rpc-sources.js";
 import { bindUserTurnPromptReactionSource } from "../../sessions/user-turn-transcript-admission.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createCurrentPromptReaction } from "../current-prompt-reaction.js";
-import {
-  resolveSessionMutationAuthorization,
-  SessionMutationAuthorizationChangedError,
-} from "../session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
-import type { GatewayRequestHandlerOptions, SessionMutationAuthorization } from "./types.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** One source authorization survives queue adoption; read grants retain the original work lease. */
-export function createChatSendDashboardAuthority(params: {
+export async function createChatSendDashboardAuthority(params: {
   admission: Pick<
     AdmittedChatSend,
-    "activeRunAbort" | "sessionBinding" | "lifecycleGeneration" | "assertWorkAdmissionCurrent"
+    "activeRunAbort" | "sourceRef" | "lifecycleGeneration" | "assertWorkAdmissionCurrent"
   >;
   session: Pick<PreparedChatSendSession, "agentId" | "storePath">;
   client: GatewayRequestHandlerOptions["client"];
   context: GatewayRequestHandlerOptions["context"];
   hasCurrentClientAuthority: GatewayRequestHandlerOptions["hasCurrentClientAuthority"];
   sessionMutationCommitGuard: GatewayRequestHandlerOptions["sessionMutationCommitGuard"];
+  sessionMutationAuthorization?: GatewayRequestHandlerOptions["sessionMutationAuthorization"];
   externalAuthorityAdmission: ChatSendExternalAuthorityAdmission | undefined;
   externalAdmissionParams: Parameters<
     ChatSendExternalAuthorityAdmission["allowsDashboardReads"]
@@ -35,9 +38,30 @@ export function createChatSendDashboardAuthority(params: {
     externalAuthorityAdmission,
     externalAdmissionParams,
   } = params;
-  const { runId, sessionKey } = externalAdmissionParams;
+  const { sessionKey } = externalAdmissionParams;
   const eligible = externalAuthorityAdmission?.allowsDashboardReads(externalAdmissionParams);
-  let sessionAuthorization: SessionMutationAuthorization | undefined;
+  const resolved =
+    eligible && !params.sessionMutationAuthorization
+      ? await resolveSessionMutationAuthorizationAsync({
+          client,
+          context,
+          method: "chat.send",
+          requestParams: { agentId: session.agentId, sessionKey },
+          expectedTarget: {
+            agentId: session.agentId,
+            sessionKey,
+            storePath: session.storePath,
+            sessionId: getRpcSourceIdentity(admission.sourceRef).sessionId,
+          },
+        })
+      : undefined;
+  if (resolved?.error) {
+    throw new SessionMutationAuthorizationChangedError(resolved.error);
+  }
+  const sessionAuthorization = params.sessionMutationAuthorization ?? resolved?.authorization;
+  if (eligible && !sessionAuthorization) {
+    throw new Error("Dashboard session authorization is unavailable.");
+  }
   const assertSourceCurrent =
     eligible && externalAuthorityAdmission
       ? () => {
@@ -45,12 +69,11 @@ export function createChatSendDashboardAuthority(params: {
           if (admission.lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
             throw new Error("Dashboard prompt source lifecycle is no longer active.");
           }
-          const queued = context.chatQueuedTurns.get(runId);
           if (
             admission.activeRunAbort.controller.signal.aborted &&
             !(
-              queued?.controller === admission.activeRunAbort.controller &&
-              queued.abortable === false
+              isRpcSourceRegistered(admission.sourceRef) &&
+              admission.sourceRef.input.custody.cancellationRetired
             )
           ) {
             admission.activeRunAbort.controller.signal.throwIfAborted();
@@ -63,32 +86,13 @@ export function createChatSendDashboardAuthority(params: {
           ) {
             throw new Error("Dashboard message read admission is no longer active.");
           }
-          if (!sessionAuthorization) {
-            // Fresh-session preparation may create its SID. Capture it once, never a successor.
-            const resolved = resolveSessionMutationAuthorization({
-              client,
-              context,
-              method: "chat.send",
-              requestParams: { agentId: session.agentId, sessionKey },
-              expectedTarget: {
-                agentId: session.agentId,
-                sessionKey,
-                storePath: session.storePath,
-                sessionId: admission.sessionBinding.sessionId,
-              },
-            });
-            if (resolved.error) {
-              throw new SessionMutationAuthorizationChangedError(resolved.error);
-            }
-            if (!resolved.authorization) {
-              throw new Error("Dashboard session authorization is unavailable.");
-            }
-            sessionAuthorization = resolved.authorization;
-          }
-          sessionAuthorization.assertCurrent();
+          (
+            sessionAuthorization?.assertAdmittedInputCurrent ?? sessionAuthorization?.assertCurrent
+          )?.();
         }
       : undefined;
   return {
+    release: () => resolved?.authorization?.release?.(),
     assertReadCurrent: assertSourceCurrent
       ? () => {
           admission.assertWorkAdmissionCurrent();

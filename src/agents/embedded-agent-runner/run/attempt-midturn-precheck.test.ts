@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import type { ContextEngine } from "../../../context-engine/types.js";
 import type { Context } from "../../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
@@ -26,8 +27,33 @@ const { installEmbeddedAttemptStreamGuards } =
 
 registerAgentSessionLoopTestLifecycle();
 
-describe("mid-turn provider admission", () => {
+describe("provider request admission", () => {
   it.each([
+    {
+      name: "owning engine cannot submit oversized assembled history on its first request",
+      usage: 15_000,
+      chars: 12_000,
+      cap: 16_000,
+      fits: false,
+      ownsCompaction: true,
+      oversizedAssembly: true,
+    },
+    {
+      name: "owning engine admits fitting requests despite an exaggerated engine estimate",
+      usage: 15_000,
+      chars: 12_000,
+      cap: 16_000,
+      fits: true,
+      ownsCompaction: true,
+    },
+    {
+      name: "owning engine blocks an oversized measured continuation without opt-in",
+      usage: 23_000,
+      chars: 12_000,
+      cap: 16_000,
+      fits: false,
+      ownsCompaction: true,
+    },
     { name: "measured unchanged prefix", usage: 15_000, chars: 12_000, cap: 16_000, fits: true },
     {
       name: "counts measured visible completion once",
@@ -37,6 +63,37 @@ describe("mid-turn provider admission", () => {
       fits: true,
       completionTokens: 6_000,
       assistantChars: 24_000,
+    },
+    {
+      name: "counts visible completion once after a small system change",
+      usage: 15_000,
+      chars: 2_000,
+      cap: 16_000,
+      fits: true,
+      completionTokens: 5_000,
+      assistantChars: 20_000,
+      tweakSystem: true,
+    },
+    {
+      name: "counts visible completion once after tool definitions change",
+      usage: 15_000,
+      chars: 2_000,
+      cap: 16_000,
+      fits: true,
+      completionTokens: 5_000,
+      assistantChars: 20_000,
+      tweakTools: true,
+    },
+    {
+      name: "counts split visible completion once after a small system change",
+      usage: 15_000,
+      chars: 2_000,
+      cap: 16_000,
+      fits: true,
+      completionTokens: 5_000,
+      assistantChars: 20_000,
+      asyncFragments: true,
+      tweakSystem: true,
     },
     {
       name: "counts async completion fragments once when the provider identity arrives late",
@@ -121,11 +178,14 @@ describe("mid-turn provider admission", () => {
       fits,
       growSystem,
       tweakSystem,
+      tweakTools,
       opaque,
       completionTokens,
       assistantChars,
       asyncFragments,
       syntheticAssistant,
+      ownsCompaction,
+      oversizedAssembly,
     }) => {
       const fixture = await createFixture({ exerciseTerminalMerges: false });
       const model = {
@@ -156,6 +216,11 @@ describe("mid-turn provider admission", () => {
                 session.setBaseSystemPrompt("Additional instructions. ".repeat(6_000));
               } else if (tweakSystem) {
                 session.setBaseSystemPrompt(`${systemPrompt}Prefer concise answers.`);
+              } else if (tweakTools) {
+                session.agent.state.tools = session.agent.state.tools.map((tool) => ({
+                  ...tool,
+                  description: `${tool.description}. Return the report.`,
+                }));
               }
               return { content: [{ type: "text", text: "r".repeat(chars) }], details: {} };
             },
@@ -171,8 +236,24 @@ describe("mid-turn provider admission", () => {
               ]
             : messages;
       }
+      const activeContextEngine: ContextEngine | undefined = ownsCompaction
+        ? {
+            info: { id: "fixture", name: "Fixture", ownsCompaction: true },
+            ingest: async () => ({ ingested: true }),
+            assemble: async ({ messages }) => ({
+              messages: oversizedAssembly
+                ? [{ role: "user", content: "history ".repeat(40_000), timestamp: 1 }, ...messages]
+                : messages,
+              estimatedTokens: oversizedAssembly ? 1 : 1_000_000,
+            }),
+            compact: async () => ({ ok: false, compacted: false }),
+          }
+        : undefined;
+      fixture.input.activeContextEngine = activeContextEngine;
       Object.assign(fixture.input.attempt, {
-        config: { agents: { defaults: { compaction: { midTurnPrecheck: { enabled: true } } } } },
+        config: ownsCompaction
+          ? {}
+          : { agents: { defaults: { compaction: { midTurnPrecheck: { enabled: true } } } } },
         contextTokenBudget: model.contextWindow,
         model,
         modelId: model.id,
@@ -181,6 +262,7 @@ describe("mid-turn provider admission", () => {
       });
       const projectionState = createToolResultPromptProjectionState();
       const guards = installEmbeddedAttemptContextGuards({
+        activeContextEngine,
         activeSession: session,
         agentDir: "/fixture/agent",
         attempt: fixture.input.attempt,
@@ -314,15 +396,13 @@ describe("mid-turn provider admission", () => {
           toolResultAggregateMaxChars: cap * 4,
           toolResultPromptProjectionState: projectionState,
           onModelRequest: streamGuards.onModelRequest,
-          preparePrimaryModelRequest: () =>
-            Promise.resolve(() => ({
-              systemPrompt: session.agent.state.systemPrompt,
-              tools: session.agent.state.tools,
-            })),
           promptActiveSession: (prompt, options) => session.prompt(prompt, options),
         });
-        expect(requests, session.agent.state.errorMessage).toHaveLength(fits ? 2 : 1);
-        expect(guards.takePendingMidTurnPrecheckRequest() !== null).toBe(!fits);
+        const pendingPrecheck = guards.takePendingMidTurnPrecheckRequest();
+        expect(requests, JSON.stringify(pendingPrecheck)).toHaveLength(
+          oversizedAssembly ? 0 : fits ? 2 : 1,
+        );
+        expect(pendingPrecheck !== null).toBe(!fits);
         if (fits) {
           const sent = requests[1]?.messages.find((message) => message.role === "toolResult");
           expect(sent?.content).toEqual([{ type: "text", text: expect.any(String) }]);

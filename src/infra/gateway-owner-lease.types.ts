@@ -13,4 +13,5 @@ export type GatewayOwnerLeaseIdentity = StateLeaseProcessOwner & {
   state: "live" | "dead" | "unknown";
   expired: boolean;
   heartbeatAt?: number;
+  listeningAt?: number;
 };

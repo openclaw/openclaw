@@ -4,13 +4,20 @@ import { registerListener } from "../../../../src/shared/listeners.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { BootRecord } from "../../app/boot-record.ts";
 import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { type SelectedAgentSource, watchSelectedAgent } from "../agents/watch-selected-agent.ts";
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
+import { isSessionRunStateActive } from "../session-run-state.ts";
 import type { SessionCreateOutcome } from "./create.ts";
 import { captureBootRoster } from "./session-boot-roster.ts";
 import { createSessionBootSnapshot } from "./session-boot-snapshot.ts";
-import type { SessionCapability, SessionGateway, SessionState } from "./session-capability.ts";
+import {
+  createSessionState,
+  type SessionCapability,
+  type SessionGateway,
+  type SessionState,
+} from "./session-capability.ts";
 import { createSessionDeletions } from "./session-deletions.ts";
 import { createSessionEventSubscriptionOwner } from "./session-event-subscription.ts";
 import { createSessionGitHubPublication } from "./session-github-publication.ts";
@@ -69,17 +76,7 @@ export function createSessionCapability(
     connectionBootstrap?: ConnectionBootstrapCoordinator;
   } = {},
 ): SessionCapability {
-  let state: SessionState = {
-    result: null,
-    agentId: null,
-    modelOverrides: {},
-    loading: false,
-    error: null,
-    deletedSessions: [],
-    groups: cacheOptions.bootRecord?.groups.map((group) => group.name) ?? [],
-    groupSettings: cacheOptions.bootRecord?.groups ?? [],
-    sectionOrder: cacheOptions.bootRecord?.sectionOrder ?? [],
-  };
+  let state = createSessionState(cacheOptions.bootRecord);
   let presentation: SessionCapability["presentation"] = { result: null, agentId: null };
   let reconnectListRevision: number | null = null;
   let presentationProfileId =
@@ -111,6 +108,7 @@ export function createSessionCapability(
   });
 
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
+  let presentationKey = gatewayPresentationScope(gateway).key;
   const background = async (key: string | object, task: () => Promise<unknown>): Promise<void> => {
     const scope = connection.capture();
     const run = async () => {
@@ -434,18 +432,28 @@ export function createSessionCapability(
   const stopGateway = gateway.subscribe((next) => {
     const previousClient = connectionClient;
     const connected = next.phase === "connected";
-    const selfUserId = next.selfUser?.id.trim() || null;
-    const connectionChanged = connection.transition(next);
-    if (connected) {
+    const presentationScope = gatewayPresentationScope(gateway);
+    const selfUserId = presentationScope.displayUser?.id.trim() || null;
+    // First-client adoption keeps the boot roster admitted by the cache lifecycle.
+    const identityChanged =
+      (previousClient !== null && previousClient !== next.client) ||
+      presentationKey !== presentationScope.key;
+    presentationKey = presentationScope.key;
+    const transportChanged = connection.transition(next);
+    if (identityChanged && !transportChanged) {
+      connection.invalidate();
+    }
+    const connectionChanged = transportChanged || identityChanged;
+    if (connected && next.selfUser !== undefined) {
       if (presentationProfileId !== undefined && presentationProfileId !== selfUserId) {
         roster.retireWarmLists();
         retirePresentation();
         notifySubscribers();
       }
       presentationProfileId = selfUserId;
-    } else if (!next.client) {
+    } else if (!connected && !next.client) {
       retirePresentation();
-    } else if (presentation.result && reconnectListRevision === null) {
+    } else if (!connected && presentation.result && reconnectListRevision === null) {
       // Keep the paired presentation through partial startup reads until the canonical list lands.
       reconnectListRevision = canonicalListRevision + 1;
     }
@@ -454,14 +462,14 @@ export function createSessionCapability(
     connectionClient = next.client;
     githubPublication.observeRows([]);
     if (connectionChanged) {
-      if (previousClient !== next.client) {
+      if (identityChanged) {
         deletions.clear();
       }
       const hadPullRequestSummaries = pullRequestSummaries.size > 0;
       const hadSubscriptionError = sessionEventSubscriptionError !== null;
       thinkingClaims.reset();
       permissions.clear();
-      roster.reset();
+      roster.reset(identityChanged);
       sessionEventSubscription.reset();
       sessionEventSubscriptionError = null;
       retireOperationConnection(previousClient);
@@ -470,6 +478,13 @@ export function createSessionCapability(
       mutations.retireConnection();
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
+      if (identityChanged) {
+        hydratedClient = null;
+        hydratedSelfUserId = null;
+        presentationProfileId = selfUserId;
+        retirePresentation();
+        publish({ ...createSessionState(), resultCached: false, startupPending: false });
+      }
       // Client replacement needs a publish; disconnect publishes cleared state below.
       if ((hadPullRequestSummaries || hadSubscriptionError) && connected && next.client) {
         publish({ ...state });
@@ -578,7 +593,6 @@ export function createSessionCapability(
       hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
     const isTerminalMessage = event.event === "session.message" && runEnded;
     const primarySnapshotApplied = reconciled.applied && canApplySnapshot;
-    let primaryPublished = false;
     if (
       claimChanged ||
       swarmChanged ||
@@ -591,10 +605,9 @@ export function createSessionCapability(
       const result = decorateRows(reconciled.result);
       if (claimChanged || result !== state.result) {
         publishReconciledState({ ...state, result });
-        primaryPublished = true;
       }
     }
-    notifyManaged?.(primaryPublished);
+    notifyManaged?.();
     if (eventObservation.scope && !connection.isCurrent(eventObservation.scope)) {
       return;
     }
@@ -667,6 +680,9 @@ export function createSessionCapability(
     observeRow,
     inheritRow: roster.observations.inheritRow,
     projectRows: roster.observations.projectRows,
+    // Answer/finishing progress can precede the final stream tail. Only the
+    // shared run owner settles roster activity, including passive sessions.
+    isRunVisuallyActive: isSessionRunStateActive,
     reconcileRunTerminal,
     refresh: roster.refresh,
     invalidate: roster.scheduleEvent,
@@ -694,7 +710,6 @@ export function createSessionCapability(
     deletionState: deletions.deletionState,
     reset: mutations.reset,
     groupsLoad: groups.load,
-    groupsGeneration: groups.generation,
     groupsStatus: groups.status,
     groupsInvalidate: groups.invalidate,
     groupsPut: groups.put,

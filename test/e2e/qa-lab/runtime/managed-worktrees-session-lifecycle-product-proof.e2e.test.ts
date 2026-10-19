@@ -269,7 +269,7 @@ describe("managed worktrees session-owner product proof", () => {
           },
         }),
       );
-      await expect(fs.access(locked.worktree.path)).resolves.toBeUndefined();
+      await fs.access(locked.worktree.path);
     },
   );
 });

@@ -38,8 +38,6 @@ export async function runPluginUninstallCommand(
     await import("../plugins/management-uninstall.js");
   const { formatUninstallActionLabels, resolveUninstallChannelConfigKeys } =
     await import("../plugins/uninstall.js");
-  const { collectClawPluginUninstallWarnings } =
-    await import("../plugins/uninstall-claw-references.js");
   const { PromptInputClosedError, promptYesNo } = await import("./prompt.js");
   const keepFiles = Boolean(opts.keepFiles || opts.keepConfig);
   const printPreview = async (preview: PreparedPluginUninstall) => {
@@ -62,12 +60,6 @@ export async function runPluginUninstallCommand(
       );
     }
     runtime.log(`Will remove: ${labels.length ? labels.join(", ") : "(nothing)"}`);
-    for (const warning of await collectClawPluginUninstallWarnings({
-      pluginId: preview.pluginId,
-      installRecord: preview.installRecords[preview.pluginId],
-    })) {
-      runtime.log(theme.warn(warning));
-    }
   };
   const executeLocal = async (
     targetPluginId: string,

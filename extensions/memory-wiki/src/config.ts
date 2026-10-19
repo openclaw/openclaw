@@ -122,8 +122,7 @@ export function resolveMemoryWikiConfig(
   options?: { homedir?: string; env?: NodeJS.ProcessEnv },
 ) {
   const homedir = options?.homedir ?? os.homedir();
-  const parsed = config ? MemoryWikiConfigSource.safeParse(config) : null;
-  const safeConfig = parsed?.success ? parsed.data : (config ?? {});
+  const safeConfig = config ?? {};
   const vaultScope = safeConfig.vault?.scope ?? "global";
   const vaultPath =
     safeConfig.vault?.path ??

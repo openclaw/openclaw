@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { createAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
@@ -10,7 +11,7 @@ import {
   type SessionCleanupSummary,
   type SessionsCleanupFailure,
 } from "./cleanup-result.js";
-import { withSessionCleanupStore, type SessionCleanupSource } from "./cleanup-service-read.js";
+import { withSessionCleanupStore } from "./cleanup-service-read.js";
 import type { SessionCleanupReadResult } from "./cleanup-service-read.types.js";
 import {
   pruneUnreferencedSessionArtifacts,
@@ -48,9 +49,6 @@ export {
   serializeSessionCleanupResult,
   SessionsCleanupFailureError,
   type SessionCleanupSummary,
-  type SessionsCleanupFailure,
-  type SessionsCleanupPartialErrorDetail,
-  type SessionsCleanupPartialResult,
   type SessionsCleanupResult,
 } from "./cleanup-result.js";
 export { resolveSessionCleanupAction } from "./cleanup-action.js";
@@ -231,7 +229,7 @@ async function previewStoreCleanup(params: {
     },
   });
   const archived = totalArchived - capArchived;
-  const entryCleanupArtifactPaths = new Set<string>();
+  const entryCleanupArtifactPaths = new Set(params.snapshot.retainedArtifactPaths);
   for (const keys of [modelRunPrunedKeys, staleKeys, cappedKeys, dmScopeRetiredKeys]) {
     addEntryArtifactPathsToSet({
       paths: entryCleanupArtifactPaths,
@@ -311,7 +309,7 @@ export async function runSessionsCleanup(params: {
   targets?: SessionStoreTarget[];
   reclamationMode?: "worker" | "in-process";
   assertCurrent?: () => void;
-  beforeCommitInTransaction?: () => void;
+  commitGuard?: () => void;
 }): Promise<SessionsCleanupRunResult> {
   const { cfg, opts } = params;
   params.assertCurrent?.();
@@ -326,13 +324,12 @@ export async function runSessionsCleanup(params: {
     });
 
   const previewResults: SessionsCleanupRunResult["previewResults"] = [];
-  const previewSources = new Map<SessionStoreTarget, SessionCleanupSource>();
-  for (const target of targets) {
-    const { result, source } = await withSessionCleanupStore(
+  for (const target of opts.dryRun ? targets : []) {
+    const result = await withSessionCleanupStore(
       target,
       async (owner) => {
         const snapshot = await owner.read(Boolean(opts.fixMissing));
-        const preview = await previewStoreCleanup({
+        return previewStoreCleanup({
           cfg,
           target,
           maintenance,
@@ -342,11 +339,9 @@ export async function runSessionsCleanup(params: {
           fixDmScope: Boolean(opts.fixDmScope),
           snapshot,
         });
-        return { result: preview, source: owner.source };
       },
       { assertCurrent: params.assertCurrent },
     );
-    previewSources.set(target, source);
     previewResults.push(result);
   }
 
@@ -392,7 +387,7 @@ export async function runSessionsCleanup(params: {
               ...missingRemovals,
               ...dmScopeRetiredRemovals,
             ];
-            // Let queued I/O run between preview/repair work and the synchronous commit.
+            // Let queued I/O run between preview/repair work and the lifecycle commit.
             await yieldToEventLoop();
             owner.assertCurrent();
             const lifecycleResult = await applySessionEntryLifecycleMutation(
@@ -400,8 +395,10 @@ export async function runSessionsCleanup(params: {
                 agentId: target.agentId,
                 storePath: target.storePath,
                 removals,
-                commitGuard: owner.assertCurrent,
-                beforeCommitInTransaction: params.beforeCommitInTransaction,
+                commitGuard: () => {
+                  owner.assertCurrent();
+                  params.commitGuard?.();
+                },
                 activeSessionKey: opts.activeKey,
                 maintenanceOverride: {
                   ...maintenance,
@@ -414,8 +411,8 @@ export async function runSessionsCleanup(params: {
               owner.resolved,
             );
             await yieldToEventLoop();
-            const postApplyStore = (await owner.read()).store;
             owner.assertCurrent();
+            const retainedArtifactPaths = new Set<string>();
             const unreferencedArtifacts =
               mode === "warn"
                 ? {
@@ -425,10 +422,17 @@ export async function runSessionsCleanup(params: {
                     olderThanMs: maintenance.pruneAfterMs,
                   }
                 : await pruneUnreferencedSessionArtifacts({
-                    store: postApplyStore,
+                    store: async () => {
+                      const snapshot = await owner.read();
+                      for (const artifactPath of snapshot.retainedArtifactPaths) {
+                        retainedArtifactPaths.add(artifactPath);
+                      }
+                      return snapshot.store;
+                    },
                     storePath: target.storePath,
                     olderThanMs: maintenance.pruneAfterMs,
                     dryRun: false,
+                    excludeCanonicalPaths: retainedArtifactPaths,
                   });
             owner.assertCurrent();
             const removedSessionKeys = new Set(lifecycleResult.removedSessionKeys);
@@ -440,11 +444,10 @@ export async function runSessionsCleanup(params: {
               reclamationMode: params.reclamationMode,
             });
             owner.assertCurrent();
-            const finalStore =
+            const finalCount =
               (appliedDiskBudget?.removedEntries ?? 0) > 0
-                ? (await owner.read()).store
-                : postApplyStore;
-            const finalCount = Object.keys(finalStore).length;
+                ? Object.keys((await owner.read()).store).length
+                : lifecycleResult.afterCount;
             const missing = missingRemovals.filter(({ sessionKey }) =>
               removedSessionKeys.has(sessionKey),
             ).length;
@@ -485,7 +488,7 @@ export async function runSessionsCleanup(params: {
             };
             appliedSummaries.push(summary);
           },
-          { source: previewSources.get(target), assertCurrent: params.assertCurrent },
+          { assertCurrent: params.assertCurrent },
         );
       }
     }
@@ -521,10 +524,13 @@ export async function purgeAgentSessionStoreEntries(
   options: {
     env?: NodeJS.ProcessEnv;
     runDatabaseCleanup?: ReturnType<typeof createAgentDeletionDatabaseCleanup>;
+    onFailure?: (failure: { path: string; reason: string }) => void;
   } = {},
 ): Promise<boolean> {
   const normalizedAgentId = normalizeAgentId(agentId);
   let storePath = typeof cfg.session?.store === "string" ? cfg.session.store : "<default>";
+  let failurePath = storePath;
+  let step = "resolve session store";
   try {
     storePath = resolveSessionStorePathCore(cfg.session?.store, {
       agentId: normalizedAgentId,
@@ -535,30 +541,38 @@ export async function purgeAgentSessionStoreEntries(
       defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg),
       env: options.env,
     });
+    failurePath = sqliteTarget.path;
     if (!fs.existsSync(sqliteTarget.path)) {
       return false;
     }
     const storeAgentId = sqliteTarget.agentId ?? normalizedAgentId;
-    const purge = () =>
-      purgeDeletedAgentSessionEntries({
+    const purge = async () => {
+      step = "purge session entries";
+      await purgeDeletedAgentSessionEntries({
         cfg,
         agentId: normalizedAgentId,
         storeAgentId,
         storePath,
         env: options.env,
       });
+      step = "close session-store cleanup";
+    };
     if (options.runDatabaseCleanup) {
+      step = "admit session-store cleanup";
       await options.runDatabaseCleanup({ agentId: storeAgentId, path: sqliteTarget.path }, purge);
     } else {
       await purge();
     }
     return false;
   } catch (error) {
+    const failure = { path: failurePath, reason: `${step}: ${formatErrorMessageWithCode(error)}` };
     getLogger().warn("session store purge failed during agent deletion", {
       agentId: normalizedAgentId,
       error,
       storePath,
+      ...failure,
     });
+    options.onFailure?.(failure);
     return true;
   }
 }

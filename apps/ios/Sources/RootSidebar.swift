@@ -551,13 +551,15 @@ struct RootSidebar: View {
     }
 
     private var visibleSessionSections: [ChatSessionSidebarModel.Section] {
-        self.model.sections(
+        RootSidebarModel.sections(
+            sessions: self.model.sessions,
             query: self.searchText,
             currentSessionKey: self.appModel.chatSessionKey,
             mainSessionKey: self.appModel.mainSessionKey,
             activeAgentID: self.appModel.chatAgentId,
             groups: self.sessionGroups,
-            sessionRoutingContract: self.appModel.chatSessionRoutingContract)
+            sessionRoutingContract: self.appModel.chatSessionRoutingContract,
+            now: self.model.now)
     }
 
     struct SessionLayout: Equatable {

@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -19,7 +20,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
-import { reconcileSessionRunTerminal, type SessionRunTerminal } from "./session-run-terminal.ts";
+import type { SessionRunTerminal } from "./session-run-terminal.ts";
 
 const mainKey = "agent:main:main";
 const row = (key = mainKey, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
@@ -202,31 +203,6 @@ it("keeps a confirmed group rename completed when its row refresh outlives the c
   sessions.dispose();
 });
 
-it("ignores an older group load failure after an event-driven load succeeds", async () => {
-  const first = createDeferred<{ groups: Array<{ name: string }> }>();
-  const current = createDeferred<{ groups: Array<{ name: string }> }>();
-  let calls = 0;
-  const { sessions, emitEvent } = sessionHarness(
-    {
-      "sessions.groups.list": () => (++calls === 1 ? first.promise : current.promise),
-      "sessions.list": () => sessionsResult([], 1),
-    },
-    ["sessions.groups.list"],
-  );
-  const firstLoad = sessions.groupsLoad();
-  await waitForFast(() => expect(calls).toBe(1));
-  emitEvent({ type: "event", event: "sessions.changed", payload: { reason: "groups" } });
-  await waitForFast(() => expect(calls).toBe(2));
-  current.resolve({ groups: [{ name: "Current" }] });
-  await waitForFast(() => expect(sessions.state.groups).toEqual(["Current"]));
-  first.reject(new Error("stale catalog failure"));
-  await firstLoad;
-  await sessions.groupsLoad();
-  expect(calls).toBe(2);
-  expect(sessions.state.groups).toEqual(["Current"]);
-  sessions.dispose();
-});
-
 it("excludes lifecycle no-ops from batch deletion results", async () => {
   const rejectedKey = "agent:main:rejected";
   const keptKey = "agent:main:kept";
@@ -290,7 +266,11 @@ it("creates a session while a list refresh is in flight", async () => {
   expect(sessions.state.loading).toBe(true);
   const created = sessions.create({ agentId: "main" });
   await waitForFast(() =>
-    expect(request).toHaveBeenCalledWith("sessions.create", { agentId: "main" }),
+    expect(request).toHaveBeenCalledWith(
+      "sessions.create",
+      { agentId: "main" },
+      expect.objectContaining({ timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS }),
+    ),
   );
   pending.resolve(sessionsResult([], 1));
   await expect(created).resolves.toBe(key);
@@ -487,64 +467,6 @@ it("ignores stale archive state after a newer unarchive via Gateway events", asy
     updatedAt: 30,
   });
   sessions.dispose();
-});
-
-it("advances the canonical list revision only for sessions.list publications", async () => {
-  const { sessions } = sessionHarness({
-    "sessions.list": () => sessionsResult([row("agent:main:listed", { updatedAt: 2 })], 2),
-  });
-  expect(sessions.canonicalListRevision).toBe(0);
-  sessions.reconcile(row("agent:main:startup"), {
-    modelProvider: null,
-    model: null,
-    contextTokens: null,
-  });
-  expect(sessions.canonicalListRevision).toBe(0);
-  await sessions.refresh({ force: true });
-  expect(sessions.canonicalListRevision).toBe(1);
-  expect(sessions.state.result?.sessions[0]?.key).toBe("agent:main:listed");
-  sessions.dispose();
-});
-
-it("starts a fresh list epoch when the same client reconnects", async () => {
-  const stale = createDeferred<SessionsListResult>();
-  const current = createDeferred<SessionsListResult>();
-  let calls = 0;
-  const { sessions, publish } = sessionHarness({
-    "sessions.subscribe": subscribed,
-    "sessions.list": () => (++calls === 1 ? stale.promise : current.promise),
-  });
-  const staleRefresh = sessions.refresh({ force: true });
-  publish(false);
-  publish(true);
-  await waitForFast(() => expect(calls).toBe(2));
-  stale.resolve(sessionsResult([row("stale")], 1));
-  await staleRefresh;
-  expect(sessions.state.result).toBeNull();
-  current.resolve(sessionsResult([row("current", { updatedAt: 2 })], 2));
-  await waitForFast(() => expect(sessions.state.result?.sessions[0]?.key).toBe("current"));
-  sessions.dispose();
-});
-
-it("does not probe for a group catalog when the method is explicitly absent", async () => {
-  const { sessions, request } = sessionHarness({}, []);
-  await sessions.groupsLoad();
-  await sessions.groupsLoad();
-  expect(request).not.toHaveBeenCalled();
-  expect(sessions.state.groups).toEqual([]);
-  sessions.dispose();
-});
-
-it("preserves registry-active terminal rows without matching run identity", () => {
-  const result = sessionsResult([row(mainKey, { hasActiveRun: true, status: "done" })], 1);
-  expect(
-    reconcileSessionRunTerminal(result, {
-      sessionKeys: ["main"],
-      runId: "run-1",
-      status: "done",
-      endedAt: 160,
-    }),
-  ).toBe(result);
 });
 
 it("refreshes stale active rows after a terminal session message", async () => {

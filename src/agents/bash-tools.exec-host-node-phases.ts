@@ -4,6 +4,7 @@ import {
   SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY,
   type SystemRunExecutionContext,
 } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
@@ -42,6 +43,7 @@ import {
   resolveSystemRunCommandRequest,
 } from "../infra/system-run-command.js";
 import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
+import { runWithAgentToolSourceExecutionScope } from "./agent-tool-source-execution-guard.js";
 import { resolveNodeAutoApprovalEligibility } from "./bash-tools.exec-host-node-approval-eligibility.js";
 import {
   formatNodeInvokeFailureToolResult,
@@ -215,7 +217,7 @@ export async function resolveNodeExecutionTarget(
   const nodes = await listNodes({});
   if (nodes.length === 0) {
     throw new Error(
-      "exec host=node requires a paired node (none available). This requires a companion app or node host.",
+      "exec host=node requires a paired node (none available). This lasts until the operator pairs a companion app or node host, so retrying will not help. Run the command on another exec host if the task allows it, or tell the user a node must be paired.",
     );
   }
   // Canonicalize boundNode and requestedNode (which may be display names, IPs,
@@ -253,7 +255,7 @@ export async function resolveNodeExecutionTarget(
       nameResolveFailed: (reason, eligibleIds) =>
         `${reason} (eligible connected system.run node ids: ${eligibleIds})`,
       noneEligible: () =>
-        "exec host=node requires a connected node that supports system.run (none available). Start or reconnect the companion app or node host.",
+        "exec host=node requires a connected node that supports system.run (none available). This lasts until a node reconnects, so retrying will not help. Run the command on another exec host if the task allows it, or tell the user to start or reconnect the companion app or node host.",
       multipleEligible: (eligible) =>
         `exec host=node requires a node when multiple executable nodes are connected: ${eligible
           .map((node) => (node.displayName ? `${node.nodeId} (${node.displayName})` : node.nodeId))
@@ -332,6 +334,7 @@ export function buildNodeSystemRunInvoke(params: {
 }
 
 export async function dispatchNodeSystemRun(params: {
+  source?: SessionSourceAssertion;
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
   invoke: Record<string, unknown>;
@@ -339,12 +342,15 @@ export async function dispatchNodeSystemRun(params: {
 }): Promise<AgentToolResult<ExecToolDetails>> {
   const startedAt = Date.now();
   params.request.signal?.throwIfAborted();
-  const result = await invokeNodeSystemRun({
-    invokeWaitMs: params.target.invokeWaitMs,
-    invoke: params.invoke,
-    scopes: params.scopes,
-    signal: params.request.signal,
-  });
+  const result = await runWithAgentToolSourceExecutionScope(params.source, () =>
+    invokeNodeSystemRun({
+      source: params.source,
+      invokeWaitMs: params.target.invokeWaitMs,
+      invoke: params.invoke,
+      scopes: params.scopes,
+      signal: params.request.signal,
+    }),
+  );
   if (!result.ok) {
     return formatNodeInvokeFailureToolResult({
       failure: result.failure,

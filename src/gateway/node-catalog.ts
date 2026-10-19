@@ -5,7 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { NodePairingPendingRequest, PairedDeviceNode } from "../infra/device-pairing-node.js";
-import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
+import type { PairedDevice } from "../infra/device-pairing.js";
 import { filterPublicNodeCommands } from "../infra/node-commands.js";
 import {
   sameNodeApprovalSurfaceSet,
@@ -18,8 +18,6 @@ type KnownNodePendingSource = NodePairingPendingRequest & {
   caps: string[];
   commands: string[];
 };
-
-type KnownNodeCatalog = Map<string, NodeListNode>;
 
 function uniqueSortedStrings(...items: Array<readonly unknown[] | undefined>): string[] {
   return normalizeSortedUniqueTrimmedStringList(items.flatMap((item) => item ?? []));
@@ -85,20 +83,20 @@ function compareKnownNodes(left: NodeListNode, right: NodeListNode): number {
 }
 
 export function createKnownNodeCatalog(params: {
+  /** Devices selected by the pairing owner's current node bindings. */
   pairedDevices: readonly PairedDevice[];
   pairedNodes?: readonly PairedDeviceNode[];
   pendingNodes?: readonly NodePairingPendingRequest[];
   connectedNodes: readonly NodeSession[];
   sessionHostNodeIds?: ReadonlySet<string>;
+  deviceFolderNodeIds?: ReadonlySet<string>;
   workerSlotsByNodeId?: ReadonlyMap<string, NonNullable<NodeListNode["workerSlots"]>>;
   workerBundleByNodeId?: ReadonlyMap<string, NonNullable<NodeListNode["workerBundle"]>>;
   issuesByNodeId?: ReadonlyMap<string, NodeListNode["issues"]>;
-}): KnownNodeCatalog {
+}): NodeListNode[] {
   const devicePairingById = new Map(
     params.pairedDevices
-      .filter(
-        (entry) => hasNonEmptyString(entry.deviceId) && hasEffectivePairedDeviceRole(entry, "node"),
-      )
+      .filter((entry) => hasNonEmptyString(entry.deviceId))
       .map((entry) => [entry.deviceId, entry]),
   );
   // Prepare every approved command surface before duplicate selection, even when a live
@@ -132,7 +130,7 @@ export function createKnownNodeCatalog(params: {
     ...pendingNodePairingById.keys(),
     ...liveById.keys(),
   ]);
-  const catalog: KnownNodeCatalog = new Map();
+  const catalog: NodeListNode[] = [];
   for (const nodeId of nodeIds) {
     const devicePairing = devicePairingById.get(nodeId);
     const approved = nodePairingById.get(nodeId);
@@ -165,7 +163,7 @@ export function createKnownNodeCatalog(params: {
     const nodeMetadata = (
       key: "version" | "coreVersion" | "uiVersion" | "deviceFamily" | "modelIdentifier",
     ) => firstNormalizedString(live?.[key], nodePairing?.[key], pendingNodePairing?.[key]);
-    catalog.set(nodeId, {
+    catalog.push({
       nodeId,
       displayName: firstNormalizedString(
         // The approved surface owns the operator's rename. Live metadata is a
@@ -212,10 +210,13 @@ export function createKnownNodeCatalog(params: {
       sessionHost: live
         ? params.sessionHostNodeIds?.has(nodeId) === true
         : nodePairing?.sessionHost === true,
-      ...(hostStats ? { hostStats: structuredClone(hostStats) } : {}),
-      ...(live && workerSlots ? { workerSlots: { ...workerSlots } } : {}),
-      ...(live && workerBundle ? { workerBundle: structuredClone(workerBundle) } : {}),
-      ...(issues?.length ? { issues: [...issues] } : {}),
+      ...(live && params.deviceFolderNodeIds?.has(nodeId)
+        ? { workerHost: { deviceFolders: true as const } }
+        : {}),
+      ...(hostStats ? { hostStats } : {}),
+      ...(live && workerSlots ? { workerSlots } : {}),
+      ...(live && workerBundle ? { workerBundle } : {}),
+      ...(issues?.length ? { issues } : {}),
       nodePluginTools: live?.nodePluginTools,
       pathEnv: live?.pathEnv,
       permissions: live?.permissions ?? nodePairing?.permissions,
@@ -242,10 +243,5 @@ export function createKnownNodeCatalog(params: {
       connected: Boolean(live),
     });
   }
-  return catalog;
-}
-
-/** Lists known nodes with connected nodes first and deterministic display ordering. */
-export function listKnownNodes(catalog: KnownNodeCatalog): NodeListNode[] {
-  return [...catalog.values()].toSorted(compareKnownNodes);
+  return catalog.toSorted(compareKnownNodes);
 }

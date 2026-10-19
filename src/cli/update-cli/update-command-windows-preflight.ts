@@ -34,18 +34,21 @@ export function preflightWindowsUpdateTask(tag?: string, timeoutMs?: number): vo
       return;
     }
   }
+  throw new GatewayServiceUpdateOwnershipError(
+    createUpdatePreflightFailure(
+      failureCode,
+      [error?.message, windowsUpdateManualGuidance(tag)].filter(Boolean).join("\n"),
+      "managed-service",
+    ),
+    error,
+  );
+}
+
+export function windowsUpdateManualGuidance(tag?: string): string {
   const target = resolveGlobalInstallSpec({
     packageName: "openclaw",
     tag: normalizePackageTagInput(tag, ["openclaw"]) ?? "<target>",
   });
   const spec = /^[\w@.+-]+$/.test(target) ? target : quotePowerShellArg(target);
-  const manual = `For a global npm installation, update manually: npm i -g ${spec} --allow-scripts=openclaw, then openclaw doctor --fix, then openclaw gateway restart.`;
-  throw new GatewayServiceUpdateOwnershipError(
-    createUpdatePreflightFailure(
-      failureCode,
-      [error?.message, manual].filter(Boolean).join("\n"),
-      "managed-service",
-    ),
-    error,
-  );
+  return `For a global npm installation, update manually: npm i -g ${spec} --allow-scripts=openclaw, then openclaw doctor --fix, then openclaw gateway restart.`;
 }

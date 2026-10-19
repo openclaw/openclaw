@@ -16,7 +16,6 @@ import {
   formatErrorMessage,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveAgentExecutorController,
-  sanitizeToolArgs,
   setActiveEmbeddedRun,
   type AgentHarnessAttemptParamsV2,
   type EmbeddedRunAttemptResult,
@@ -64,6 +63,7 @@ export async function runAgentsApiAttempt(
   onTerminalSessionFailure?: (binding: AgentsApiBinding) => Promise<void>,
 ): Promise<EmbeddedRunAttemptResult> {
   const startedAtMs = Date.now();
+  const startedAtMonotonicMs = performance.now();
   const cancellationState = {
     explicitCancellationObserved: false,
     terminalOutcomeFrozen: false,
@@ -107,6 +107,7 @@ export async function runAgentsApiAttempt(
   let settlementDeadlineAtMs: number | undefined;
   const deadlines = createAgentHarnessAttemptDeadlineController({
     startedAtMs,
+    startedAtMonotonicMs,
     timeoutMs: params.timeoutMs,
     settlementTimeoutMs: 30_000,
     signal: controller.signal,
@@ -211,9 +212,9 @@ export async function runAgentsApiAttempt(
     abort: () => cancellation.abortExplicitly(new Error("Agents API turn interrupted")),
     cancel: () => cancellation.abortExplicitly(new Error("Agents API turn interrupted")),
   } satisfies Parameters<typeof setActiveEmbeddedRun>[1];
+  let activeAttachment: ReturnType<typeof setActiveEmbeddedRun> | undefined;
   try {
-    params.replyOperation?.attachBackend(handle);
-    setActiveEmbeddedRun(
+    activeAttachment = setActiveEmbeddedRun(
       params.sessionId,
       handle,
       params.sessionKey,
@@ -249,14 +250,16 @@ export async function runAgentsApiAttempt(
       // Executor paths are independent of the Gateway's tool workspace.
       environment.workspace_directory = executorController.workspaceDirectory;
     }
-    const surface = await buildAgentsApiToolSurface(
-      runParams,
-      controller.signal,
-      assertCurrent,
-      (cleanup) => toolCleanups.push(cleanup),
-    );
+    // Gate the owners, not just their declarations: construction can discover tools
+    // and resolve credentials even when the resulting surface would be empty.
+    const surface = pluginConfig.forwarding.gatewayTools
+      ? await buildAgentsApiToolSurface(runParams, controller.signal, assertCurrent, (cleanup) =>
+          toolCleanups.push(cleanup),
+        )
+      : undefined;
     toolSurface = surface;
-    const mcpTools = await buildAgentsApiMcpTools(params);
+    const declarations = surface?.declarations ?? [];
+    const mcpTools = pluginConfig.forwarding.mcpServers ? await buildAgentsApiMcpTools(params) : [];
     assertCurrent();
     const fingerprint = requireAgentsApiSessionFingerprint({
       existingFingerprint: binding?.configFingerprint,
@@ -264,6 +267,7 @@ export async function runAgentsApiAttempt(
       environment,
       mcpTools,
       webSearchEnabled,
+      forwarding: pluginConfig.forwarding,
     });
     const inputMedia =
       environment.type === "openai_hosted" && params.hostCapabilities.resolveInputAttachmentMedia
@@ -283,7 +287,7 @@ export async function runAgentsApiAttempt(
     const reasoningEffort = resolveAgentsApiReasoningEffort(params);
     const creatingSession = !remoteSessionId;
     const instructions = creatingSession
-      ? await buildAgentsApiInstructions(params, surface.declarations, environment)
+      ? await buildAgentsApiInstructions(params, declarations, environment)
       : "";
     assertCurrent();
     const recorder = params.userTurnTranscriptRecorder;
@@ -331,7 +335,7 @@ export async function runAgentsApiAttempt(
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       toolAuthority: {
         fingerprint: params.toolAuthorityFingerprint,
-        activeToolNames: () => surface.declarations.map((tool) => tool.name),
+        activeToolNames: () => declarations.map((tool) => tool.name),
         assertActive: assertCurrent,
       },
     });
@@ -344,7 +348,7 @@ export async function runAgentsApiAttempt(
         params.model.id,
         {
           nativeTools,
-          functions: surface.declarations,
+          functions: declarations,
           mcpTools,
           files: inputs.files,
           environment,
@@ -369,14 +373,10 @@ export async function runAgentsApiAttempt(
     let connectEnvironment: ((environmentId: string) => Promise<void>) | undefined;
     if (environment.type === "self_hosted" && executorController) {
       const workspaceDirectory = environment.workspace_directory;
-      const selfHostedBinding = activeBinding;
-      if (!selfHostedBinding) {
-        throw new Error("Agents API self-hosted session is missing its canonical binding");
-      }
       connectEnvironment = async (environmentId) => {
         const currentBinding = activeBinding;
         if (!currentBinding) {
-          throw new Error("Agents API self-hosted session is missing its canonical binding");
+          throw new Error("Agents API self-hosted session is missing its saved binding");
         }
         await ensureAgentsApiEnvironment({
           controller: executorController,
@@ -449,6 +449,12 @@ export async function runAgentsApiAttempt(
         }
       },
       executeFunction: async (call) => {
+        assertCurrent();
+        if (!surface) {
+          throw new Error(
+            `Agents API Gateway tool forwarding is disabled; refusing remote function call: ${call.name}`,
+          );
+        }
         startedToolCount++;
         await emitEvent({
           stream: "tool",
@@ -456,7 +462,7 @@ export async function runAgentsApiAttempt(
             phase: "start",
             name: call.name,
             toolCallId: call.call_id,
-            args: asOptionalRecord(sanitizeToolArgs(call.arguments)),
+            args: asOptionalRecord(call.arguments),
           },
         });
         assertCurrent();
@@ -495,7 +501,7 @@ export async function runAgentsApiAttempt(
     lifecycle.emitLifecycleStart({ provider: "openai", model: params.model.id });
     const turnInput = await buildAgentsApiTurnInput(
       params,
-      surface.declarations,
+      declarations,
       promptBuild.prompt,
       inputs.mappingText,
       environment.type,
@@ -630,7 +636,14 @@ export async function runAgentsApiAttempt(
         logFailure("Agents API tool cleanup failed", error);
       }
     }
-    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+    clearActiveEmbeddedRun(
+      params.sessionId,
+      handle,
+      params.sessionKey,
+      params.sessionFile,
+      undefined,
+      activeAttachment,
+    );
     lifecycle.emitLifecycleTerminal({ phase: terminal.kind === "failed" ? "error" : "end" });
   }
   if (terminal.kind === "failed") {

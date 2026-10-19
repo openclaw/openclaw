@@ -5,6 +5,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
+  pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -17,12 +18,15 @@ const suspensionError = {
 };
 
 async function reactivatePage(page: Page): Promise<void> {
+  await pauseVirtualClock(page);
   await page.evaluate(() => {
     for (const value of ["hidden", "visible"]) {
       Object.defineProperty(document, "visibilityState", { configurable: true, value });
       document.dispatchEvent(new Event("visibilitychange"));
     }
   });
+  await page.clock.fastForward(5_001);
+  await page.clock.resume();
 }
 
 function catalog(name: string) {
@@ -64,6 +68,7 @@ suite.define(() => {
     const context = await suite.browser.newContext({ viewport: { width: 1440, height: 900 } });
     const page = await context.newPage();
     try {
+      await page.clock.install();
       const gateway = await installMockGateway(page, {
         featureMethods: [...defaultControlUiFeatureMethods, "sessions.catalog.list"],
         methodResponses: { "sessions.catalog.list": catalog("Retained sample session") },
@@ -71,25 +76,19 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       const sidebar = page.locator("openclaw-app-sidebar");
       const identity = sidebar.locator(".sidebar-identity-card");
+      const connectionStatus = page.locator(".sidebar-shell__footer .gateway-status");
       await sidebar.getByText("Retained sample session", { exact: true }).waitFor();
       await gateway.setMethodResponse("sessions.catalog.list", { __mockError: suspensionError });
+      const beforeSuspension = await gateway.deferNext("sessions.catalog.list");
       await gateway.emitGatewayEvent("gateway.suspension", { phase: "draining" });
       await reactivatePage(page);
-      await expect
-        .poll(async () => {
-          const app = await sidebar.evaluate(
-            (element) =>
-              (
-                element as HTMLElement & {
-                  sessionData: { sessionCatalogRefreshStatus: { awaitingGateway: boolean } };
-                }
-              ).sessionData.sessionCatalogRefreshStatus.awaitingGateway,
-          );
-          return app;
-        })
-        .toBe(true);
+      await gateway.waitForRequest("sessions.catalog.list", { after: beforeSuspension });
+      await gateway.rejectDeferred("sessions.catalog.list", suspensionError);
       expect(await sidebar.getByRole("alert").count()).toBe(0);
       await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("suspending");
+      await expect
+        .poll(() => connectionStatus.locator(".gateway-status__label").textContent())
+        .toBe("Suspending…");
       expect(await identity.getAttribute("aria-label")).toContain("Suspending…");
       expect(await identity.getAttribute("title")).toBe(await identity.getAttribute("aria-label"));
       expect(await sidebar.getByText("Retained sample session", { exact: true }).isVisible()).toBe(
@@ -98,9 +97,13 @@ suite.define(() => {
       await page.screenshot({ path: path.join(artifactDir, "suspending.png") });
       const before = (await gateway.getRequests("sessions.catalog.list")).length;
       await gateway.setMethodResponse("sessions.catalog.list", catalog("Recovered sample session"));
+      await pauseVirtualClock(page);
       await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
+      await page.clock.fastForward(5_001);
+      await page.clock.resume();
       await sidebar.getByText("Recovered sample session", { exact: true }).waitFor();
-      await expect.poll(() => identity.getAttribute("data-connection-status")).toBeNull();
+      await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("connected");
+      await connectionStatus.waitFor({ state: "detached" });
       expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(before + 1);
       expect(await gateway.getSocketCount()).toBe(1);
       expect(await sidebar.getByRole("alert").count()).toBe(0);
@@ -127,6 +130,9 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("connect")).length)
         .toBeGreaterThan(1);
       await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("suspending");
+      await expect
+        .poll(() => connectionStatus.locator(".gateway-status__label").textContent())
+        .toBe("Suspending…");
       expect(await identity.getAttribute("aria-label")).toContain("Suspending…");
       expect(await identity.getAttribute("title")).toBe(await identity.getAttribute("aria-label"));
       expect(await sidebar.getByRole("alert").count()).toBe(0);

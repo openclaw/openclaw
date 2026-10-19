@@ -1,4 +1,3 @@
-// Shared record helpers for legacy config migration modules.
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 import { isRecord } from "../../../utils.js";
 type JsonRecord = Record<string, unknown>;

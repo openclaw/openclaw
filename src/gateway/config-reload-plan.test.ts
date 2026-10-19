@@ -167,7 +167,12 @@ describe("Gateway core reload policy", () => {
       "security.unknownPolicy",
       "secrets.egressProxy.enabled",
     ].map((path) => ({ path, restart: true, heartbeat: false })),
-    ...["tools.codeMode.enabled", "gateway.controlUi.experimental.customPlugins"].map((path) => ({
+    ...[
+      "tools.codeMode.enabled",
+      "gateway.controlUi.experimental.customPlugins",
+      "gateway.controlUi.experimental.claws",
+      "gateway.controlUi.experimental.chatBubbles",
+    ].map((path) => ({
       path,
       restart: false,
       heartbeat: false,

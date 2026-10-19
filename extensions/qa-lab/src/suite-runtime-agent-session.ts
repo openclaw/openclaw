@@ -1,8 +1,8 @@
 import path from "node:path";
 import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
-  listSessionEntries,
-  loadTranscriptEventsSync,
+  listSessionEntriesAsync,
+  loadTranscriptEvents,
   resolveStorePath,
   type SessionEntry,
   upsertSessionEntry,
@@ -17,6 +17,7 @@ import {
   extractGatewayMessageText,
 } from "./gateway-log-sentinel.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
+import { findSubagentHandoffReply } from "./subagent-handoff-reply.js";
 import type { QaSkillStatusEntry, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import { projectQaToolActivity, readQaNestedToolActivity } from "./tool-activity.js";
 
@@ -337,7 +338,7 @@ function qaSessionRuntimeEnv(tempRoot: string): NodeJS.ProcessEnv {
 }
 
 async function seedQaSessionEntries(
-  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  env: { gateway: Pick<QaSuiteRuntimeEnv["gateway"], "tempRoot"> },
   entries: readonly QaSessionEntrySeed[],
 ): Promise<void> {
   const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
@@ -416,12 +417,13 @@ async function readRawQaSessionStore(
 ): Promise<Record<string, SessionEntry>> {
   const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
   const agentId = readNonEmptyString(options.agentId) ?? "qa";
-  return Object.fromEntries(
-    listSessionEntries({ agentId, env: runtimeEnv }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
-  );
+  // The harness reads a separate Gateway process and does not receive its write receipts.
+  const entries = await listSessionEntriesAsync({
+    agentId,
+    env: runtimeEnv,
+    readConsistency: "latest",
+  });
+  return Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
 }
 
 async function readQaSessionTranscriptEvents(
@@ -442,7 +444,7 @@ async function readQaSessionTranscriptEvents(
     }
     throw new Error(`session transcript entry not found for ${normalizedSessionKey}`);
   }
-  const events = loadTranscriptEventsSync({
+  const events = await loadTranscriptEvents({
     agentId: "qa",
     env: qaSessionRuntimeEnv(env.gateway.tempRoot),
     sessionId,
@@ -469,6 +471,19 @@ async function readSessionToolActivity(
 ) {
   const { selectedEvents } = await readQaSessionTranscriptEvents(env, sessionKey, options);
   return projectQaToolActivity(selectedEvents);
+}
+
+async function readSubagentHandoffReply(
+  env: Parameters<typeof readQaSessionTranscriptEvents>[0],
+  requesterSessionKey: string,
+  childSessionKey: string,
+  childReply: string,
+  visibleMessages: readonly unknown[],
+) {
+  return findSubagentHandoffReply(visibleMessages, childSessionKey, childReply, async () => {
+    const { events } = await readQaSessionTranscriptEvents(env, requesterSessionKey);
+    return events;
+  });
 }
 
 async function readSessionTranscriptSummary(
@@ -522,6 +537,7 @@ export {
   readRawQaSessionStore,
   readSessionTranscriptSummary,
   readSessionToolActivity,
+  readSubagentHandoffReply,
   readSkillStatus,
   seedQaSessionEntries,
   seedQaSessionTranscript,

@@ -29,6 +29,18 @@ export type WorkerWriteOperationContext = WorkerOperationContext & {
   ) => T;
 };
 
+export function createCommittedWorkerMutation<Input, Result extends boolean | number>(
+  type: string,
+  apply: (db: OpenClawStateDatabase["db"], input: Input) => Result,
+) {
+  return (input: Input, { writeAdmitted }: WorkerWriteOperationContext) =>
+    writeAdmitted(({ db }) => ({ type, result: apply(db, input) }), {
+      operationLabel: type,
+      receipt: "result",
+      transactionEnvironment: "process",
+    }).result;
+}
+
 export type WorkerOperationHandlers<Context = WorkerOperationContext> = Record<
   string,
   (input: never, context: Context) => unknown
@@ -40,6 +52,18 @@ export type WorkerOperations<Handlers extends WorkerOperationHandlers<never>> = 
     output: ReturnType<Handlers[Key]>;
   };
 };
+
+type IntersectUnion<T> = (T extends unknown ? (value: T) => void : never) extends (
+  value: infer Intersection,
+) => void
+  ? Intersection
+  : never;
+
+export type WorkerOperationsFromLoaders<
+  Loaders extends Record<string, () => Promise<WorkerOperationHandlers<never>>>,
+> = IntersectUnion<
+  { [Key in keyof Loaders]: WorkerOperations<Awaited<ReturnType<Loaders[Key]>>> }[keyof Loaders]
+>;
 
 type Namespace<Key> = Key extends `${infer Domain}.${string}` ? Domain : never;
 type DomainLoaders<Operations extends SqliteWorkerOperations, Context, Domains extends string> = {
@@ -88,7 +112,7 @@ export function createWorkerOperationRegistry<
     },
     has(command: {
       type: PropertyKey;
-      input: unknown;
+      input?: unknown;
     }): command is SqliteWorkerCommand<Operations> {
       return handlerFor(command.type) !== undefined;
     },

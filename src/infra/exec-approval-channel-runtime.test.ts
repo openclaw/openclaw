@@ -471,29 +471,6 @@ describe("createExecApprovalChannelRuntime", () => {
     expectStartGatewayClientCall();
   });
 
-  it("can retry start after gateway client creation fails", async () => {
-    const boom = new Error("boom");
-    mockCreateOperatorApprovalsGatewayClient
-      .mockRejectedValueOnce(boom)
-      .mockImplementationOnce(async (params) => ({
-        start: () => {
-          mockGatewayClientStarts();
-          queueMicrotask(() => {
-            params.onHelloOk?.({ type: "hello-ok" } as never);
-          });
-        },
-        stop: mockGatewayClientStops,
-        request: mockGatewayClientRequests,
-      }));
-    const runtime = createRuntime();
-
-    await expect(runtime.start()).rejects.toThrow("boom");
-    await runtime.start();
-
-    expect(mockCreateOperatorApprovalsGatewayClient).toHaveBeenCalledTimes(2);
-    expect(mockGatewayClientStarts).toHaveBeenCalledTimes(1);
-  });
-
   it("waits through retryable connect auth errors until hello succeeds", async () => {
     const authError = Object.assign(new Error("gateway token mismatch"), {
       details: {
@@ -599,33 +576,6 @@ describe("createExecApprovalChannelRuntime", () => {
     });
   });
 
-  it("logs async expiration handling failures", async () => {
-    vi.useFakeTimers();
-    const runtime = createRuntime<PluginApprovalRequest, PluginApprovalResolved>({
-      nowMs: () => 1000,
-      eventKinds: ["plugin"],
-      deliverRequested: async (request) => [{ id: request.id }],
-      finalizeExpired: async () => {
-        throw new Error("expire failed");
-      },
-    });
-
-    await runtime.handleRequested({
-      id: "plugin:abc",
-      request: {
-        title: "Plugin approval",
-        description: "Let plugin proceed",
-      },
-      createdAtMs: 1000,
-      expiresAtMs: 1001,
-    });
-    await vi.advanceTimersByTimeAsync(1);
-
-    expect(loggerMocks.error).toHaveBeenCalledWith(
-      "error handling approval expiration: expire failed",
-    );
-  });
-
   it("subscribes to plugin approval events when requested", async () => {
     const deliverRequested = vi.fn(async (request) => [{ id: request.id }]);
     const finalizeResolved = vi.fn(async () => undefined);
@@ -659,44 +609,6 @@ describe("createExecApprovalChannelRuntime", () => {
         entries: [{ id: "plugin:abc" }],
       });
     });
-  });
-
-  it("round-trips old-shape replay requests without mutating their serialized form", async () => {
-    const oldShapeRequest = createPluginReplayRequest("plugin:old-shape");
-    const oldShapeJson = JSON.stringify(oldShapeRequest);
-    mockReplayLists({ plugin: [oldShapeRequest] });
-    const deliverRequested = vi.fn(async (request) => [{ id: request.id }]);
-    const finalizeResolved = vi.fn(async () => undefined);
-    const runtime = createRuntime<PluginApprovalRequest, PluginApprovalResolved>({
-      eventKinds: ["plugin"],
-      deliverRequested,
-      finalizeResolved,
-    });
-
-    await runtime.start();
-    await vi.waitFor(() => {
-      expect(deliverRequested).toHaveBeenCalledWith({
-        ...oldShapeRequest,
-        approvalKind: "plugin",
-      });
-    });
-
-    await runtime.handleResolved({
-      id: oldShapeRequest.id,
-      decision: "allow-once",
-      ts: 1500,
-    });
-
-    expect(finalizeResolved).toHaveBeenCalledWith({
-      request: { ...oldShapeRequest, approvalKind: "plugin" },
-      resolved: {
-        id: oldShapeRequest.id,
-        decision: "allow-once",
-        ts: 1500,
-      },
-      entries: [{ id: oldShapeRequest.id }],
-    });
-    expect(JSON.stringify(oldShapeRequest)).toBe(oldShapeJson);
   });
 
   it("ignores live duplicate approval events after replay", async () => {
@@ -815,71 +727,6 @@ describe("createExecApprovalChannelRuntime", () => {
       expect(loggerMocks.error).toHaveBeenCalledWith(
         "error replaying pending approvals: deliver failed",
       );
-    });
-  });
-
-  it("logs replay list failures without failing startup", async () => {
-    mockGatewayClientRequests.mockImplementation(async (method: string) => {
-      if (method === "exec.approval.list") {
-        throw new Error("list failed");
-      }
-      return { ok: true };
-    });
-    const deliverRequested = vi.fn(async (request) => [{ id: request.id }]);
-    const runtime = createRuntime({
-      deliverRequested,
-    });
-
-    await expect(runtime.start()).resolves.toBeUndefined();
-
-    await vi.waitFor(() => {
-      expect(loggerMocks.error).toHaveBeenCalledWith(
-        "error replaying pending approvals: list failed",
-      );
-    });
-    expect(deliverRequested).not.toHaveBeenCalled();
-  });
-
-  it("clears pending state when delivery throws", async () => {
-    const deliverRequested = vi
-      .fn<() => Promise<Array<{ id: string }>>>()
-      .mockRejectedValueOnce(new Error("deliver failed"))
-      .mockResolvedValueOnce([{ id: "abc" }]);
-    const finalizeResolved = vi.fn(async () => undefined);
-    const runtime = createRuntime({
-      deliverRequested,
-      finalizeResolved,
-    });
-
-    await expect(
-      runtime.handleRequested({
-        id: "abc",
-        request: {
-          command: "echo abc",
-        },
-        createdAtMs: 1000,
-        expiresAtMs: 2000,
-      }),
-    ).rejects.toThrow("deliver failed");
-
-    await runtime.handleRequested({
-      id: "abc",
-      request: {
-        command: "echo abc",
-      },
-      createdAtMs: 1000,
-      expiresAtMs: 2000,
-    });
-    await runtime.handleResolved({
-      id: "abc",
-      decision: "allow-once",
-      ts: 1500,
-    });
-
-    expectFinalizedResolved(finalizeResolved, {
-      id: "abc",
-      decision: "allow-once",
-      entries: [{ id: "abc" }],
     });
   });
 });

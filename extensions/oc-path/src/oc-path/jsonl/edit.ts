@@ -5,140 +5,62 @@
  * @module @openclaw/oc-path/jsonl/edit
  */
 
+import { findNodeAtLocation, parseTree } from "jsonc-parser/lib/esm/main.js";
+import { OcPathEditError } from "../edit-error.js";
 import type { JsoncValue } from "../jsonc/ast.js";
-import { resolveJsoncPositionalSegment } from "../jsonc/resolve-value.js";
+import { renderJsoncValue } from "../jsonc/emit.js";
+import { resolveJsoncValueOcPath } from "../jsonc/resolve-value.js";
 import type { OcPath } from "../oc-path.js";
-import {
-  isPositionalSeg,
-  parseArrayIndexSegment,
-  splitRespectingBrackets,
-  unquoteSeg,
-} from "../oc-path.js";
-import type { JsonlAst, JsonlLine } from "./ast.js";
-import { renderJsonl } from "./emit.js";
+import { splitOcPathSlots } from "../oc-path.js";
+import { sourceLineOffset } from "../source.js";
+import type { JsonlAst } from "./ast.js";
 import { pickJsonlLineIndex } from "./line.js";
+import { parseJsonl } from "./parse.js";
 
-type JsonlEditResult =
-  | { readonly ok: true; readonly ast: JsonlAst }
-  | { readonly ok: false; readonly reason: "unresolved" | "not-a-value-line" };
-
-export function setJsonlOcPath(ast: JsonlAst, path: OcPath, newValue: JsoncValue): JsonlEditResult {
+export function setJsonlOcPath(ast: JsonlAst, path: OcPath, newValue: JsoncValue): JsonlAst {
   const head = path.section;
   if (head === undefined) {
-    return { ok: false, reason: "unresolved" };
+    throw new OcPathEditError("unresolved");
   }
 
   const lineIdx = pickJsonlLineIndex(ast, head);
   const target = ast.lines[lineIdx];
   if (target === undefined) {
-    return { ok: false, reason: "unresolved" };
+    throw new OcPathEditError("unresolved");
   }
 
   if (target.kind !== "value") {
-    return { ok: false, reason: "not-a-value-line" };
+    throw new OcPathEditError("not-a-value-line");
   }
 
-  // Quote-aware split keeps edit symmetric with resolveJsonlOcPath.
-  const segments = [path.item, path.field].flatMap((slot) =>
-    slot === undefined ? [] : splitRespectingBrackets(slot, "."),
+  const match = resolveJsoncValueOcPath(target.value, splitOcPathSlots(path.item, path.field));
+  if (match === null) {
+    throw new OcPathEditError("unresolved");
+  }
+  const editPath = match.path;
+  const bomLength = target.raw.startsWith("\uFEFF") ? 1 : 0;
+  const tree = parseTree(target.raw.slice(bomLength), [], { allowTrailingComma: true });
+  const node = tree && findNodeAtLocation(tree, editPath);
+  if (!node) {
+    throw new OcPathEditError("unresolved");
+  }
+  const replacement = renderJsoncValue(
+    newValue,
+    `oc://${path.file}/L${target.line}`,
+    editPath.map(String),
   );
-
-  const replaced = replaceAt(target.value, segments, 0, newValue);
-  if (replaced === null) {
-    return { ok: false, reason: "unresolved" };
-  }
-  return {
-    ok: true,
-    ast: renderEditedJsonl(ast, ast.lines.with(lineIdx, { ...target, value: replaced }), path.file),
-  };
-}
-
-function replaceAt(
-  current: JsoncValue,
-  segments: readonly string[],
-  i: number,
-  newValue: JsoncValue,
-): JsoncValue | null {
-  let seg = segments[i];
-  if (seg === undefined) {
-    return newValue;
-  }
-  if (seg.length === 0) {
-    return null;
-  }
-  if (isPositionalSeg(seg)) {
-    const resolved = resolveJsoncPositionalSegment(current, seg);
-    if (resolved === null) {
-      return null;
-    }
-    seg = resolved;
-  }
-
-  if (current.kind === "object") {
-    // Positional tokens resolve against the entries' ordered key list;
-    // quoted segments are unquoted before literal-key comparison.
-    const lookupKey = unquoteSeg(seg);
-    const idx = current.entries.findIndex((e) => e.key === lookupKey);
-    const child = current.entries[idx];
-    if (child === undefined) {
-      return null;
-    }
-    const replacedChild = replaceAt(child.value, segments, i + 1, newValue);
-    if (replacedChild === null) {
-      return null;
-    }
-    return {
-      kind: "object",
-      entries: current.entries.with(idx, { ...child, value: replacedChild }),
-      ...(current.line !== undefined ? { line: current.line } : {}),
-    };
-  }
-
-  if (current.kind === "array") {
-    const idx = parseArrayIndexSegment(seg, current.items.length);
-    if (idx === null) {
-      return null;
-    }
-    const child = current.items[idx];
-    if (child === undefined) {
-      return null;
-    }
-    const replacedChild = replaceAt(child, segments, i + 1, newValue);
-    if (replacedChild === null) {
-      return null;
-    }
-    return {
-      kind: "array",
-      items: current.items.with(idx, replacedChild),
-      ...(current.line !== undefined ? { line: current.line } : {}),
-    };
-  }
-
-  return null;
-}
-
-function renderEditedJsonl(
-  ast: JsonlAst,
-  lines: readonly JsonlLine[],
-  fileName?: string,
-): JsonlAst {
-  const next: JsonlAst = {
-    kind: "jsonl",
-    raw: "",
-    lines,
-    ...(ast.lineEnding !== undefined ? { lineEnding: ast.lineEnding } : {}),
-  };
-  return { ...next, raw: renderJsonl(next, fileName) };
+  const start = sourceLineOffset(ast.raw, target.line) + bomLength + node.offset;
+  // Replace only the selected source token. Re-rendering parsed siblings rounds
+  // large integers and removes comments, escapes, and record separators.
+  const raw = ast.raw.slice(0, start) + replacement + ast.raw.slice(start + node.length);
+  return parseJsonl(raw).ast;
 }
 
 /** Append a value as the next line. Line numbers are substrate-assigned. */
 export function appendJsonlOcPath(ast: JsonlAst, value: JsoncValue): JsonlAst {
-  const nextLineNo = ast.lines.length === 0 ? 1 : (ast.lines[ast.lines.length - 1]?.line ?? 0) + 1;
-  const newLine: JsonlLine = {
-    kind: "value",
-    line: nextLineNo,
-    value,
-    raw: "",
-  };
-  return renderEditedJsonl(ast, [...ast.lines, newLine]);
+  const finalNewline = ast.raw.endsWith("\r\n") ? "\r\n" : ast.raw.endsWith("\n") ? "\n" : "";
+  const separator = ast.raw.length > 0 && !finalNewline ? (ast.lineEnding ?? "\n") : "";
+  const nextLineNo = ast.raw.split("\n").length + (separator ? 1 : 0);
+  const rendered = renderJsoncValue(value, `oc:///L${nextLineNo}`);
+  return parseJsonl(ast.raw + separator + rendered + finalNewline).ast;
 }

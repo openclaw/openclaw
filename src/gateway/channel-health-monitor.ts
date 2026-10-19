@@ -1,7 +1,4 @@
-import {
-  isFutureDateTimestampMs,
-  resolveTimerTimeoutMs,
-} from "@openclaw/normalization-core/number-coercion";
+import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { settlesWithin } from "../shared/settle-within.js";
@@ -18,31 +15,7 @@ const log = createSubsystemLogger("gateway/health-monitor");
 const DEFAULT_CHECK_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_MONITOR_STARTUP_GRACE_MS = 60_000;
 const DEFAULT_COOLDOWN_CYCLES = 2;
-const DEFAULT_MAX_RESTARTS_PER_HOUR = 10;
 const CHANNEL_HEALTH_MONITOR_HANDOFF_TIMEOUT_MS = 5_000;
-const ONE_HOUR_MS = 60 * 60_000;
-
-/**
- * How long a connected channel can go without proven transport activity before
- * the health monitor treats it as a "stale socket" and triggers a restart.
- * Providers should only publish that timestamp from transport/heartbeat/poll
- * signals, not from ordinary app messages.
- */
-type ChannelHealthTimingPolicy = {
-  monitorStartupGraceMs: number;
-  channelConnectGraceMs: number;
-  staleEventThresholdMs: number;
-};
-
-type ChannelHealthMonitorDeps = {
-  channelManager: ChannelManager;
-  scheduler: GatewayScheduler;
-  checkIntervalMs?: number;
-  timing?: Partial<ChannelHealthTimingPolicy>;
-  cooldownCycles?: number;
-  maxRestartsPerHour?: number;
-  abortSignal?: AbortSignal;
-};
 
 export type ChannelHealthMonitor = {
   stop: () => void;
@@ -52,29 +25,15 @@ export type ChannelHealthMonitor = {
 
 type RestartRecord = {
   lastRestartAt: number;
-  restartsThisHour: { at: number }[];
-  // True once the free pending-continuation pass ran; cleared when the account
-  // leaves the pending-restart state so the next recovery earns a new pass.
-  pendingContinuationUsed?: boolean;
 };
 
-export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): ChannelHealthMonitor {
-  const {
-    channelManager,
-    cooldownCycles = DEFAULT_COOLDOWN_CYCLES,
-    maxRestartsPerHour = DEFAULT_MAX_RESTARTS_PER_HOUR,
-    abortSignal,
-  } = deps;
-  const checkIntervalMs = resolveTimerTimeoutMs(deps.checkIntervalMs, DEFAULT_CHECK_INTERVAL_MS);
-  const timing = {
-    monitorStartupGraceMs: deps.timing?.monitorStartupGraceMs ?? DEFAULT_MONITOR_STARTUP_GRACE_MS,
-    channelConnectGraceMs: deps.timing?.channelConnectGraceMs ?? DEFAULT_CHANNEL_CONNECT_GRACE_MS,
-    staleEventThresholdMs:
-      deps.timing?.staleEventThresholdMs ?? DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
-  };
-  const scheduler = deps.scheduler.scope();
-
-  const cooldownMs = cooldownCycles * checkIntervalMs;
+export function startChannelHealthMonitor(params: {
+  channelManager: ChannelManager;
+  scheduler: GatewayScheduler;
+}): ChannelHealthMonitor {
+  const { channelManager } = params;
+  const scheduler = params.scheduler.scope();
+  const cooldownMs = DEFAULT_COOLDOWN_CYCLES * DEFAULT_CHECK_INTERVAL_MS;
   const restartRecords = new Map<string, RestartRecord>();
   const startedAt = scheduler.now();
   let stopped = false;
@@ -87,7 +46,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
       const now = scheduler.now();
       if (
         !isFutureDateTimestampMs(startedAt, { nowMs: now }) &&
-        now - startedAt < timing.monitorStartupGraceMs
+        now - startedAt < DEFAULT_MONITOR_STARTUP_GRACE_MS
       ) {
         return;
       }
@@ -135,23 +94,11 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             continue;
           }
           suppressedAccounts.delete(key);
-          const pendingRestartState =
-            status.running !== true &&
-            status.restartPending === true &&
-            (status.reconnectAttempts ?? 0) === 0;
-          // Clear only on genuine recovery (running or pending flag dropped);
-          // a transient reconnectAttempts bump while still stuck pending must
-          // not re-arm the free continuation pass.
-          const leftPendingRestart = status.running === true || status.restartPending !== true;
-          const trackedRecord = restartRecords.get(key);
-          if (trackedRecord?.pendingContinuationUsed && leftPendingRestart) {
-            trackedRecord.pendingContinuationUsed = false;
-          }
           const health = evaluateChannelHealth(status, {
             channelId,
             now,
-            staleEventThresholdMs: timing.staleEventThresholdMs,
-            channelConnectGraceMs: timing.channelConnectGraceMs,
+            staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+            channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
           });
           if (health.healthy) {
             continue;
@@ -172,32 +119,12 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           const record = restartRecords.get(key) ?? {
             lastRestartAt: 0,
-            restartsThisHour: [],
           };
 
-          // A timed-out recovery stop uses the first start request to mark
-          // restartPending; the next monitor pass must finish that same recovery
-          // instead of waiting behind this monitor's fresh-restart cooldown.
-          // Only one continuation is free: an account stuck in restartPending
-          // rejoins cooldown + hourly budget so it cannot thrash forever (#105189).
-          const continuingPendingRestart =
-            pendingRestartState && record.pendingContinuationUsed !== true;
-
           if (
-            !continuingPendingRestart &&
             !isFutureDateTimestampMs(record.lastRestartAt, { nowMs: now }) &&
             now - record.lastRestartAt <= cooldownMs
           ) {
-            continue;
-          }
-
-          record.restartsThisHour = record.restartsThisHour.filter(
-            (r) => !isFutureDateTimestampMs(r.at, { nowMs: now }) && now - r.at < ONE_HOUR_MS,
-          );
-          if (!continuingPendingRestart && record.restartsThisHour.length >= maxRestartsPerHour) {
-            log.warn(
-              `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit, skipping`,
-            );
             continue;
           }
 
@@ -205,12 +132,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           log.info(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 
-          if (continuingPendingRestart) {
-            record.pendingContinuationUsed = true;
-          } else {
-            record.lastRestartAt = now;
-            record.restartsThisHour.push({ at: now });
-          }
+          record.lastRestartAt = now;
           restartRecords.set(key, record);
 
           try {
@@ -228,7 +150,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
               continue;
             }
             channelManager.resetRestartAttempts(channelId, accountId);
-            await channelManager.startChannel(channelId, accountId);
+            await channelManager.startChannel(channelId, accountId, { reason: "health-monitor" });
           } catch (err) {
             log.error(`[${channelId}:${accountId}] health-monitor: restart failed: ${String(err)}`);
           }
@@ -244,9 +166,6 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
   function runCheck(): Promise<void> {
     activeCheck = runCheckWork().finally(() => {
       activeCheck = null;
-      if (stopped) {
-        abortSignal?.removeEventListener("abort", shutdown);
-      }
     });
     return activeCheck;
   }
@@ -255,9 +174,6 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     stopped = true;
     abandonInFlightRestart ||= abandonRestart;
     scheduler.beginClose();
-    if (!activeCheck) {
-      abortSignal?.removeEventListener("abort", shutdown);
-    }
   }
 
   const stop = () => retire(false);
@@ -277,21 +193,15 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     }
   };
 
-  if (abortSignal?.aborted) {
-    stopped = true;
-    abandonInFlightRestart = true;
-  } else {
-    abortSignal?.addEventListener("abort", shutdown, { once: true });
-    scheduler.schedule({
-      id: "channel-health-monitor",
-      atMs: startedAt + resolveTimerTimeoutMs(timing.monitorStartupGraceMs, 0, 0),
-      everyMs: checkIntervalMs,
-      run: runCheck,
-    });
-    log.info(
-      `started (interval: ${Math.round(checkIntervalMs / 1000)}s, startup-grace: ${Math.round(timing.monitorStartupGraceMs / 1000)}s, channel-connect-grace: ${Math.round(timing.channelConnectGraceMs / 1000)}s)`,
-    );
-  }
+  scheduler.schedule({
+    id: "channel-health-monitor",
+    atMs: startedAt + DEFAULT_MONITOR_STARTUP_GRACE_MS,
+    everyMs: DEFAULT_CHECK_INTERVAL_MS,
+    run: runCheck,
+  });
+  log.info(
+    `started (interval: ${Math.round(DEFAULT_CHECK_INTERVAL_MS / 1000)}s, startup-grace: ${Math.round(DEFAULT_MONITOR_STARTUP_GRACE_MS / 1000)}s, channel-connect-grace: ${Math.round(DEFAULT_CHANNEL_CONNECT_GRACE_MS / 1000)}s)`,
+  );
 
   return { stop, shutdown, waitForIdle };
 }

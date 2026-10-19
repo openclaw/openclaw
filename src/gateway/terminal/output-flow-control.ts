@@ -120,7 +120,7 @@ export class TerminalOutputController {
     this.bufferedBytes = 0;
   }
 
-  private flush(): void {
+  flush(): void {
     const chunks = this.chunks;
     this.clear();
     if (chunks.length === 0) {

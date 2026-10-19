@@ -15,8 +15,9 @@ import type { SessionChildLink } from "./session-utils-core.js";
 import {
   buildProjectedSubagentActivity,
   buildSessionListRowMetadataContext,
+  projectSessionRowChildLinks,
 } from "./session-utils-projection.js";
-import { projectSessionRowChildLinks, refreshSessionRowProfiles } from "./session-utils-row.js";
+import { refreshSessionRowProfiles } from "./session-utils-row.js";
 
 /** Registry and display facts have their own lifecycle, independent of stored row acquisition. */
 export function createSessionRowProjectionContext(subagents: SubagentSessionListReadView) {
@@ -121,7 +122,6 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
         ) {
           return true;
         }
-        modelFactsDirty = true;
         return false;
       }
       if (typeof change.scope === "object" && change.scope.topology && !change.factsInvalidated) {

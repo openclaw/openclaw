@@ -385,7 +385,7 @@ describe("applyAgentToolSurfaceCatalog", () => {
     expect(result.tools.map((tool) => tool.name)).toEqual([
       "tool_search",
       "tool_describe",
-      "tool_call",
+      "dispatch_action",
     ]);
     expect(result.catalogToolCount).toBe(1);
     expect(config.tools).toBeUndefined();

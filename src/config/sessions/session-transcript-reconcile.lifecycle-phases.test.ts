@@ -94,7 +94,12 @@ async function releaseInRealWorker(
           {
             inputBytes: 512,
             signal: controller.signal,
-            transferList: (task) => [task.port],
+            transferList: (task) => [
+              task.port,
+              ...(task.coordination?.databaseAdmission
+                ? [task.coordination.databaseAdmission]
+                : []),
+            ],
           },
         );
         await pending;

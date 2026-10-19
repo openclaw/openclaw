@@ -14,6 +14,7 @@ import {
 } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import {
@@ -31,12 +32,9 @@ import {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
 } from "./subagent-registry-read.js";
-import {
-  bindSubagentRunRecord,
-  rowToSubagentRunRecord,
-  subagentRunRecordVersion,
-} from "./subagent-registry.store.codec.js";
+import { bindSubagentRunRecord, rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import { holdLiveRequesterTurns } from "./subagent-requester-turn-liveness.test-support.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 type CompletionPolicyOwners = Map<object, Pick<SubagentLifecycleOptions, "runs">>;
@@ -62,11 +60,11 @@ function policyReceipt(
       if (!entry) {
         return [];
       }
-      const subagent = rowToSubagentRunRecord(bindSubagentRunRecord(entry))!;
+      const row = bindSubagentRunRecord(entry);
+      const subagent = rowToSubagentRunRecord(row)!;
       return [
         {
           subagent,
-          version: subagentRunRecordVersion(subagent)!,
           cleanupHandled: entry.cleanupHandled,
         },
       ];
@@ -318,6 +316,7 @@ export function registerPrivateCompletionSettlementTests({
         },
         maybeWakeRequesterAfterAllChildrenSettled: async () => false,
       });
+      const requesterTurn = holdLiveRequesterTurns("run-requester");
       try {
         expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(false);
         expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
@@ -329,6 +328,7 @@ export function registerPrivateCompletionSettlementTests({
             requesterTurnRunId: "run-requester",
           });
         }
+        requesterTurn.end("run-requester");
         expect(
           await controller.settleRequesterTurnAfterSessionSpawns({
             requesterSessionKey: entry.requesterSessionKey,
@@ -357,10 +357,65 @@ export function registerPrivateCompletionSettlementTests({
         expect(readLifecycleRun(entry).delivery?.lastError).toBeUndefined();
         expect(readLifecycleRun(entry).delivery?.lastDropReason).toBeUndefined();
       } finally {
-        controller.clearScheduledResumeTimers();
+        requesterTurn.restore();
+        controller.clearRuntimeState();
       }
     },
   );
+}
+
+type RestartRecoveryReceipt = NonNullable<SubagentRunRecord["execution"]["restartRecovery"]>;
+
+export function makeRestartRecoveryReceipt(
+  overrides: Partial<RestartRecoveryReceipt> = {},
+): RestartRecoveryReceipt {
+  return {
+    sessionId: "session-id",
+    sessionMarker: "session-id:1",
+    idempotencyKey: "recovery-run",
+    phase: "accepted",
+    ...overrides,
+  };
+}
+
+export function makeSubagentCompletion(
+  entry: SubagentRunRecord,
+  overrides: Omit<Partial<SubagentCompletionRequest>, "runId"> = {},
+): SubagentCompletionRequest {
+  return {
+    runId: entry.runId,
+    endedAt: 4_000,
+    outcome: { status: "ok" },
+    reason: SUBAGENT_ENDED_REASON_COMPLETE,
+    triggerCleanup: false,
+    terminalReply: { disposition: "visible", text: "final completion reply" },
+    ...overrides,
+  };
+}
+
+export function makeKilledSubagentCompletion(
+  entry: SubagentRunRecord,
+  overrides: Omit<Partial<SubagentCompletionRequest>, "runId"> = {},
+): SubagentCompletionRequest {
+  return makeSubagentCompletion(entry, {
+    outcome: { status: "error", error: "agent run aborted" },
+    reason: SUBAGENT_ENDED_REASON_KILLED,
+    terminalReply: undefined,
+    ...overrides,
+  });
+}
+
+export function makeInterruptedSubagentCompletion(
+  entry: SubagentRunRecord,
+  overrides: Omit<Partial<SubagentCompletionRequest>, "runId"> = {},
+): SubagentCompletionRequest {
+  return makeSubagentCompletion(entry, {
+    outcome: { status: "error", error: "restart interrupted run" },
+    reason: SUBAGENT_ENDED_REASON_ERROR,
+    recoverInterrupted: true,
+    terminalReply: undefined,
+    ...overrides,
+  });
 }
 
 export function registerNativeCompletionAuthorityTest({
@@ -589,13 +644,10 @@ export function registerRequesterSettleRetirementTests({
           await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
           expect(subagentRuns.has(intermediate.runId)).toBe(true);
           expect(readLifecycleRun(ancestor).cleanupCompletedAt).toBeUndefined();
+          // Nothing retries a failed retirement; the next settlement event re-arms it.
           failRetirement = false;
-          const wake = controller.scheduledRequesterSettleWakeTimers.get(intermediate.runId)!;
-          controller.resumeRequesterSettleWake(intermediate.runId, intermediate);
-          await vi.advanceTimersByTimeAsync(wake.deadline - Date.now() - 1);
-          expect(subagentRuns.has(intermediate.runId)).toBe(true);
-          expect(readLifecycleRun(ancestor).cleanupCompletedAt).toBeUndefined();
-          await vi.advanceTimersByTimeAsync(1);
+          const retained = subagentRuns.get(intermediate.runId)!;
+          controller.resumeRequesterSettleWake(retained.runId, retained);
         }
         await waitForLifecycleState(() => expect(subagentRuns.has(intermediate.runId)).toBe(false));
         await completeRun(controller, descendant, {
@@ -606,7 +658,7 @@ export function registerRequesterSettleRetirementTests({
           expect(readLifecycleRun(ancestor).cleanupCompletedAt).toBeTypeOf("number"),
         );
       } finally {
-        controller.clearScheduledResumeTimers();
+        controller.clearRuntimeState();
         for (const entry of [ancestor, intermediate, descendant]) {
           subagentRuns.delete(entry.runId);
         }

@@ -1,7 +1,7 @@
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   getCliHistoryWriter,
-  isKnownCliHistoryBoundary,
+  advanceCliHistoryBoundary,
   type CliHistoryWriterFacts,
 } from "./cli-history-boundary.js";
 import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
@@ -42,32 +42,12 @@ export function advanceCliHistoryBoundaryRangeInTransaction(
     database,
     scope.sessionKey,
   )?.entry;
-  const boundary = entry?.cliHistoryBoundary;
   const generation = readTranscriptGenerationInTransaction(database, scope.sessionId);
-  if (
-    !entry ||
-    !isKnownCliHistoryBoundary(boundary) ||
-    entry.sessionId !== scope.sessionId ||
-    boundary.sessionId !== scope.sessionId ||
-    entry.activeWriterRunId !== writer.runId ||
-    entry.lifecycleRevision !== writer.lifecycleRevision ||
-    boundary.writerRunId !== writer.runId ||
-    boundary.authFingerprint !== writer.authFingerprint ||
-    (boundary.maxSeq === null ? range.first !== 0 : boundary.maxSeq !== range.first - 1) ||
-    !generation ||
-    (boundary.generation === null ? range.first !== 0 : boundary.generation !== generation)
-  ) {
+  const next = advanceCliHistoryBoundary(entry, scope.sessionId, generation ?? null, range, writer);
+  if (!next) {
     return false;
   }
   assertCurrent();
-  writeSessionEntry(
-    database,
-    scope.sessionKey,
-    {
-      ...entry,
-      cliHistoryBoundary: { ...boundary, generation, maxSeq: range.last },
-    } satisfies InternalSessionEntry,
-    { previousEntry: entry },
-  );
+  writeSessionEntry(database, scope.sessionKey, next, { previousEntry: entry });
   return true;
 }

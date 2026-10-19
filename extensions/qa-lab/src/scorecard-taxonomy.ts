@@ -964,7 +964,7 @@ function buildQaScorecardTaxonomyReport(params: {
   });
   const allScenarioCoverageIds = uniqueSorted(params.scenarios.flatMap(scenarioCoverageIds));
 
-  if (!pathExists(params.repoRoot, QA_MATURITY_TAXONOMY_PATH) || !params.taxonomy) {
+  if (!params.taxonomy) {
     issues.push({
       code: "taxonomy-ref-not-found",
       severity: "warning",

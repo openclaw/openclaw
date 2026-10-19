@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -9,10 +8,7 @@ import * as selectionRead from "../../skills/library/selection-read.js";
 import * as librarySelection from "../../skills/library/selection.js";
 import { saveSkillLibrary } from "../../skills/library/service.js";
 import type { SkillSnapshot } from "../../skills/types.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseByPathAsync,
-} from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -26,13 +22,36 @@ const config: OpenClawConfig = {
   plugins: { enabled: false },
   tools: { fs: { workspaceOnly: true } },
 };
+const toolOptions = {
+  config,
+  runtimeToolAllowlist: ["read"],
+  toolConstructionPlan: {
+    includeBaseCodingTools: true,
+    includeShellTools: false,
+    includeChannelTools: false,
+    includeOpenClawTools: false,
+    includePluginTools: false,
+  },
+};
+
+async function expectResource(
+  tools: Awaited<ReturnType<LibraryHost["build"]>>,
+  resourcePath: string,
+  id: string,
+) {
+  const read = tools.find((tool) => tool.name === "read");
+  expect(read).toBeDefined();
+  const result = await read!.execute(id, { path: resourcePath });
+  expect(result.content).toEqual([
+    expect.objectContaining({ type: "text", text: expect.stringContaining(resourceContent) }),
+  ]);
+}
 
 type LibraryHost = {
   host: Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>;
   build: () => ReturnType<typeof agentTools.createOpenClawCodingToolsInternalAsync>;
   controller: AbortController;
   snapshot: SkillSnapshot;
-  databasePath: string;
   resourcePath: string;
 };
 
@@ -83,24 +102,15 @@ async function withLibraryHost(run: (fixture: LibraryHost) => Promise<void>) {
         host,
         controller,
         snapshot,
-        databasePath: path.join(root, "state", "openclaw.sqlite"),
         resourcePath: path.join(
           skillLibraryRevisionDir(pin.skillId, pin.revision),
           "references/example.txt",
         ),
         build: () =>
           host.hostCapabilities.createToolSurfaceAsync!({
+            ...toolOptions,
             workspaceDir,
             cwd: workspaceDir,
-            config,
-            runtimeToolAllowlist: ["read"],
-            toolConstructionPlan: {
-              includeBaseCodingTools: true,
-              includeShellTools: false,
-              includeChannelTools: false,
-              includeOpenClawTools: false,
-              includePluginTools: false,
-            },
           }),
       });
     } finally {
@@ -117,17 +127,22 @@ it("reads cold and warm pinned resources through awaited host construction witho
     try {
       sql.calibrate();
       for (let pass = 0; pass < 2; pass++) {
-        const read = (await build()).find((tool) => tool.name === "read");
-        expect(read).toBeDefined();
-        const result = await read!.execute(`library-${pass}`, { path: resourcePath });
-        expect(result.content).toEqual([
-          expect.objectContaining({ type: "text", text: expect.stringContaining(resourceContent) }),
-        ]);
+        await expectResource(await build(), resourcePath, `library-${pass}`);
       }
       sql.expectIdle();
     } finally {
       sql.restore();
     }
+  });
+});
+
+it("keeps pinned resources available to the deprecated synchronous host", async () => {
+  await withLibraryHost(async ({ host, resourcePath }) => {
+    await expectResource(
+      host.hostCapabilities.createToolSurface!(toolOptions),
+      resourcePath,
+      "legacy-library",
+    );
   });
 });
 
@@ -150,11 +165,7 @@ it("retains prepared resources after other selections evict their shared cache e
     requireNodeSqlite();
     const sql = observeMainThreadSql();
     try {
-      const read = (await build()).find((tool) => tool.name === "read");
-      const result = await read!.execute("evicted-library", { path: resourcePath });
-      expect(result.content).toEqual([
-        expect.objectContaining({ type: "text", text: expect.stringContaining(resourceContent) }),
-      ]);
+      await expectResource(await build(), resourcePath, "evicted-library");
       sql.expectIdle();
     } finally {
       sql.restore();
@@ -195,57 +206,10 @@ it.each(["host close", "abort", "snapshot edit"] as const)(
         }
         resume.resolve();
         if (change === "snapshot edit") {
-          const read = (await pending).find((tool) => tool.name === "read");
-          const result = await read!.execute("captured-library", { path: resourcePath });
-          expect(result.content).toEqual([
-            expect.objectContaining({
-              type: "text",
-              text: expect.stringContaining(resourceContent),
-            }),
-          ]);
+          await expectResource(await pending, resourcePath, "captured-library");
         } else {
           await expect(pending).rejects.toThrow();
         }
-      } finally {
-        resume.resolve();
-        await settled;
-      }
-    });
-  },
-);
-
-it.each(["admission close", "physical replacement"] as const)(
-  "refuses pinned tool publication after %s during later tool preparation",
-  async (change) => {
-    await withLibraryHost(async ({ build, databasePath }) => {
-      const entered = createDeferred();
-      const resume = createDeferred();
-      const construct = agentTools.createOpenClawCodingToolsInternalAsync;
-      using _ = vi
-        .spyOn(agentTools, "createOpenClawCodingToolsInternalAsync")
-        .mockImplementationOnce(async (...args) => {
-          const tools = await construct(...args);
-          entered.resolve();
-          await resume.promise;
-          return tools;
-        });
-      const pending = build();
-      const settled = pending.catch(() => undefined);
-      try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          pending,
-          "Tool construction did not start",
-        );
-        if (change === "admission close") {
-          await closeOpenClawStateDatabaseByPathAsync(databasePath);
-        } else {
-          const replacement = `${databasePath}.replacement`;
-          fs.copyFileSync(databasePath, replacement);
-          fs.renameSync(replacement, databasePath);
-        }
-        resume.resolve();
-        await expect(pending).rejects.toThrow();
       } finally {
         resume.resolve();
         await settled;

@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.entry-mutation.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { recordSessionParticipant as recordNativeParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
@@ -15,11 +16,33 @@ import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import {
+  createTestProjection,
+  watchRowFacts as observeRowFacts,
+} from "./session-row-projection.read-fixture.test-support.js";
 import { reportPlacementTransition } from "./worker-environments/placement-record.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { createPlacementTurnClaimFixtureOps } from "./worker-environments/placement-test-fixtures.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+function sessionDescriber(context: ReturnType<typeof requestContext>, key: string) {
+  return async (expected: Record<string, unknown>) => {
+    const respond = vi.fn();
+    await sessionByKeyReadHandlers["sessions.describe"]!({
+      req: { type: "req", id: "placement", method: "sessions.describe" },
+      params: { key },
+      client: null,
+      context,
+      isWebchatConnect: () => false,
+      respond,
+    });
+    expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+      session: expect.objectContaining(expected),
+    });
+    return respond;
+  };
+}
 
 it("publishes local placement receipts without rereading or adopting another store's facts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -39,22 +62,9 @@ it("publishes local placement receipts without rereading or adopting another sto
       placementFactsReader: placements,
     });
     const context = bindSessionRowProjection(requestContext(cfg), () => projection);
-    const describe = async (updatedAtMs: number) => {
-      const respond = vi.fn();
-      await sessionByKeyReadHandlers["sessions.describe"]!({
-        req: { type: "req", id: "placement-receipt", method: "sessions.describe" },
-        params: { key: target.sessionKey },
-        client: null,
-        context,
-        isWebchatConnect: () => false,
-        respond,
-      });
-      expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
-        session: expect.objectContaining({
-          placement: expect.objectContaining({ state: "local", updatedAtMs }),
-        }),
-      });
-    };
+    const read = sessionDescriber(context, target.sessionKey);
+    const describe = (updatedAtMs: number) =>
+      read({ placement: expect.objectContaining({ state: "local", updatedAtMs }) });
     const claimInput = {
       ...target,
       claimId: "receipt-claim",
@@ -129,6 +139,7 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
         defaults: { model: "unit-test/model", utilityModel: "" },
       },
     };
+    setRuntimeConfigSnapshot(cfg);
     const target = {
       agentId: "main",
       sessionKey: "agent:main:entry-placement",
@@ -137,119 +148,97 @@ it("reuses placement after runtime events and entry writes and refreshes actual 
     replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
     const placements = createWorkerSessionPlacementStore();
     await placements.startDispatch(target);
-    const projection = await createSessionRowProjection({
+    using projection = await createTestProjection({
       cfg,
       modelCatalog: [],
       placementFactsReader: placements,
     });
     const context = bindSessionRowProjection(requestContext(cfg), () => projection);
-    const respond = vi.fn();
-    const describe = async () => {
-      respond.mockClear();
-      await sessionByKeyReadHandlers["sessions.describe"]!({
-        req: { type: "req", id: "entry-placement", method: "sessions.describe" },
-        params: { key: target.sessionKey },
-        client: null,
-        context,
-        isWebchatConnect: () => false,
-        respond,
-      });
-    };
-    try {
-      await projection.ensureMaterialized();
-      const reads = vi.spyOn(placements, "readProjection");
-      for (let index = 0; index < 3; index++) {
-        await persistSessionTranscriptTurn(target, {
-          messages: [
-            {
-              eventId: `entry-message-${index}`,
-              message: { role: "user", content: `Message ${index}` },
-            },
-          ],
-          touchSessionEntry: true,
-        });
-        await describe();
-        expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
-          session: expect.objectContaining({
-            sessionId: target.sessionId,
-            placement: expect.objectContaining({ state: "requested" }),
-          }),
-        });
-      }
-      await updateSessionEntry(target, () => ({ label: "Updated by the entry worker" }));
-      await describe();
-      expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
-        session: expect.objectContaining({
-          label: "Updated by the entry worker",
-          placement: expect.objectContaining({ state: "requested" }),
-        }),
-      });
-      expect(reads).not.toHaveBeenCalled();
+    const describe = sessionDescriber(context, target.sessionKey);
+    const requested = expect.objectContaining({ state: "requested" });
 
-      for (const [index, record] of [recordNativeParticipant, recordSessionParticipant].entries()) {
-        const identity = { type: "agent" as const, id: `peer-${index}` };
-        for (const promptedAt of [10, 20]) {
-          expect(await record(target, { identity, promptedAt })).toBe(
-            promptedAt === 10 ? "inserted" : "updated",
-          );
-          await describe();
-          expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
-            session: expect.objectContaining({
-              participantCount: index + 1,
-              participants: expect.arrayContaining([expect.objectContaining({ identity })]),
-              placement: expect.objectContaining({ state: "requested" }),
-            }),
-          });
+    await projection.ensureMaterialized();
+    const reads = vi.spyOn(placements, "readProjection");
+    for (let index = 0; index < 3; index++) {
+      await persistSessionTranscriptTurn(target, {
+        messages: [
+          {
+            eventId: `entry-message-${index}`,
+            message: { role: "user", content: `Message ${index}` },
+          },
+        ],
+        touchSessionEntry: true,
+      });
+      await describe({ sessionId: target.sessionId, placement: requested });
+    }
+    await updateSessionEntry(target, () => ({ label: "Updated by the entry worker" }));
+    await describe({ label: "Updated by the entry worker", placement: requested });
+    expect(reads).not.toHaveBeenCalled();
+
+    const rowFactReads: string[][] = [];
+    observeRowFacts((owner) => (input) => {
+      rowFactReads.push([...input.sessionKeys]);
+      return owner.readRowFacts(input);
+    });
+    const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    for (const [index, record] of [recordNativeParticipant, recordSessionParticipant].entries()) {
+      const identity = { type: "agent" as const, id: `peer-${index}` };
+      for (const promptedAt of [10, 20]) {
+        rowFactReads.length = 0;
+        sharedReads.mockClear();
+        expect(await record(target, { identity, promptedAt })).toBe(
+          promptedAt === 10 ? "inserted" : "updated",
+        );
+        await describe({
+          participantCount: index + 1,
+          participants: expect.arrayContaining(
+            Array.from({ length: index + 1 }, (_, peer) =>
+              expect.objectContaining({ identity: { type: "agent", id: `peer-${peer}` } }),
+            ),
+          ),
+          placement: requested,
+        });
+        if (record === recordSessionParticipant) {
+          expect(rowFactReads).toEqual([]);
+          expect(
+            sharedReads.mock.calls.filter(
+              ([, command]) => command.type === "sessionRows.sharedFacts",
+            ),
+          ).toEqual([]);
         }
       }
-      expect(reads).not.toHaveBeenCalled();
-
-      emitSessionLifecycleEvent({
-        agentId: target.agentId,
-        sessionKey: target.sessionKey,
-        reason: "worker-runtime-install",
-        scope: "runtime",
-      });
-      await describe();
-      expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
-        session: expect.objectContaining({
-          label: "Updated by the entry worker",
-          placement: expect.objectContaining({ state: "requested" }),
-        }),
-      });
-      expect(reads).not.toHaveBeenCalled();
-
-      sessionChanges.emit({
-        agentId: target.agentId,
-        sessionKey: target.sessionKey,
-        factsInvalidated: true,
-      });
-      await describe();
-      expect(reads).toHaveBeenCalled();
-      reads.mockClear();
-
-      reportPlacementTransition(
-        undefined,
-        await placements.fail({ sessionId: target.sessionId, recoveryError: "Worker stopped" }),
-      );
-      await describe();
-      expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
-        session: expect.objectContaining({
-          placement: expect.objectContaining({ state: "failed", recoveryError: "Worker stopped" }),
-        }),
-      });
-      expect(reads).toHaveBeenCalled();
-
-      replaceSessionEntrySync(target, { sessionId: "replacement-session", updatedAt: 2 });
-      await describe();
-      expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
-        session: expect.objectContaining({
-          sessionId: "replacement-session",
-        }),
-      });
-      expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("session.placement");
-    } finally {
-      projection.dispose();
     }
+    expect(reads).not.toHaveBeenCalled();
+
+    emitSessionLifecycleEvent({
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      reason: "worker-runtime-install",
+      scope: "runtime",
+    });
+    await describe({ label: "Updated by the entry worker", placement: requested });
+    expect(reads).not.toHaveBeenCalled();
+
+    sessionChanges.emit({
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      factsInvalidated: true,
+    });
+    await describe({ placement: requested });
+    expect(reads).toHaveBeenCalled();
+    reads.mockClear();
+
+    reportPlacementTransition(
+      undefined,
+      await placements.fail({ sessionId: target.sessionId, recoveryError: "Worker stopped" }),
+    );
+    await describe({
+      placement: expect.objectContaining({ state: "failed", recoveryError: "Worker stopped" }),
+    });
+    expect(reads).toHaveBeenCalled();
+
+    replaceSessionEntrySync(target, { sessionId: "replacement-session", updatedAt: 2 });
+    const respond = await describe({ sessionId: "replacement-session" });
+    expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("session.placement");
   });
 });

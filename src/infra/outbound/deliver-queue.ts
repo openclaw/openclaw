@@ -181,7 +181,6 @@ async function runOutboundDeliveryWithIntent(
         )
       : null;
     throwIfAborted(params.abortSignal);
-    params.deliveryQueueStateContext?.workerContext.admission.assertCurrent();
     if (isReusablePreparedDeliveryOwner(owner)) {
       return [];
     }
@@ -682,6 +681,12 @@ async function runOutboundDeliveryWithQueue(
     if (recoveredFailure !== undefined && error === recoveredFailure) {
       throw error;
     }
-    throw queueOwner ? queueOwner.project(error) : error;
+    throw queueOwner
+      ? queueOwner.project(error, {
+          sentBeforeError:
+            existingStableDelivery?.recoveryState === "send_attempt_started" ||
+            existingStableDelivery?.recoveryState === "unknown_after_send",
+        })
+      : error;
   }
 }

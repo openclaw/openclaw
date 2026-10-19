@@ -9,7 +9,11 @@ import {
   resolveQuarantineStorePath,
 } from "./openclaw-state-db.paths.js";
 
-export type StateDatabaseInitialization = { kind: "fresh" | "existing" | "unavailable" };
+export type StateDatabaseInitialization = {
+  kind: "fresh" | "existing" | "unavailable";
+  /** No history outside the shared file; its catalog must still prove native bootstrap. */
+  nativeBootstrapEligible?: true;
+};
 
 /** Capture deletion-history evidence before a native open can create the shared database. */
 export function prepareStateDatabaseInitialization(
@@ -18,12 +22,10 @@ export function prepareStateDatabaseInitialization(
   initializationAgentPaths: readonly string[] = [],
 ): StateDatabaseInitialization {
   try {
+    // Lease admission leaves the quarantine store even for unconfigured external agents.
     if (
-      // Lease admission leaves a durable integrity store even for unconfigured external agents.
-      [pathname, resolveQuarantineStorePath(env)].some((databasePath) =>
-        resolveSqliteDatabaseFilePaths(databasePath).some((file) =>
-          fs.lstatSync(file, { throwIfNoEntry: false }),
-        ),
+      resolveSqliteDatabaseFilePaths(resolveQuarantineStorePath(env)).some((file) =>
+        fs.lstatSync(file, { throwIfNoEntry: false }),
       )
     ) {
       return { kind: "existing" };
@@ -74,6 +76,13 @@ export function prepareStateDatabaseInitialization(
       ) {
         return { kind: "existing" };
       }
+    }
+    if (
+      resolveSqliteDatabaseFilePaths(pathname).some((file) =>
+        fs.lstatSync(file, { throwIfNoEntry: false }),
+      )
+    ) {
+      return { kind: "existing", nativeBootstrapEligible: true };
     }
     return { kind: "fresh" };
   } catch {

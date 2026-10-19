@@ -18,6 +18,8 @@ let serviceCalls = 0;
 // service and unrelated metadata boundaries; no large database is needed.
 mockNativeModuleExports(new URL(`../config/config.${extension}`, import.meta.url), {
   getRuntimeConfig: () => ({}),
+  loadConfig: () => ({}),
+  captureRuntimeConfigAsyncReader: () => async () => ({}),
 });
 mockNativeModuleExports(new URL(`./session-store-targets.${extension}`, import.meta.url), {
   resolveCommandSessionStoreTargets: () => [{ agentId: "main", storePath }],

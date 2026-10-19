@@ -96,9 +96,8 @@ async function runModelRun(params: {
     resolveLocalCapabilityRuntimeConfig,
   } = await import("./shared.js");
   const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
-  const { getRuntimeConfig } = await import("../../config/config.js");
+  const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
   const { canonicalizeCaseOnlyCatalogModelRef } = await import("../../agents/model-selection.js");
-  const { readPreparedModelCatalog } = await import("../../agents/prepared-model-catalog.js");
   const explicitModelOverride = requireProviderModelOverride(params.model);
   const cfg =
     params.transport === "local"
@@ -106,13 +105,13 @@ async function runModelRun(params: {
           commandName: "infer model run",
           targetIds: getModelsCommandSecretTargetIds(),
         })
-      : getRuntimeConfig();
+      : await captureRuntimeConfigAsyncReader()();
   const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer model run");
   const modelRef = await canonicalizeCaseOnlyCatalogModelRef({
     raw: params.model,
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
-    loadCatalog: () => readPreparedModelCatalog({ config: cfg, agentId, readOnly: true }),
+    loadCatalog: () => loadModelCatalogForInspection(cfg, agentId),
     preserveAuthProfile: params.transport === "local",
   });
   const hasExplicitProviderModelOverride = Boolean(explicitModelOverride);
@@ -159,6 +158,13 @@ async function runModelRun(params: {
             if (prepared.selection.provider === "codex") {
               throw new Error(
                 'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with provider/model agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
+              );
+            }
+            // Provider transcript transforms replace images with a placeholder for text-only
+            // models, so a raw local run would answer without ever seeing the --file input.
+            if (imageFiles.length > 0 && !prepared.model.input.includes("image")) {
+              throw new Error(
+                `Model "${prepared.selection.provider}/${prepared.selection.modelId}" does not accept image input, so --file cannot be sent to it. Use an image-capable model, run openclaw infer image describe, or add --gateway to describe images for text-only models.`,
               );
             }
             const localModelRunSystemPrompt =
@@ -368,15 +374,15 @@ async function runModelAuthStatus(agent: string) {
 }
 
 async function runModelAuthLogout(provider: string, agent: string) {
-  const { getRuntimeConfig } = await import("../../config/config.js");
+  const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
   const { resolveAgentDir } = await import("../../agents/agent-scope.js");
-  const { listProfilesForProvider, loadAuthProfileStoreForRuntime } =
+  const { listProfilesForProvider, loadAuthProfileStoreForRuntimeAsync } =
     await import("../../agents/auth-profiles.js");
   const { updateAuthProfileStoreWithLock } =
     await import("../../agents/auth-profiles/store-runtime.js");
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const agentDir = resolveAgentDir(cfg, agent);
-  const store = loadAuthProfileStoreForRuntime(agentDir);
+  const store = await loadAuthProfileStoreForRuntimeAsync(agentDir);
   const profileIds = listProfilesForProvider(store, provider);
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
@@ -436,18 +442,12 @@ export function registerModelCapabilityCommands(capability: Command): void {
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const { resolveCapabilityAgentOption, resolveTransport } = await import("./shared.js");
         const prompt = opts.prompt;
-        if (typeof prompt !== "string" || normalizeOptionalString(prompt) === undefined) {
+        if (normalizeOptionalString(prompt) === undefined) {
           throw new Error("--prompt cannot be empty or whitespace-only.");
         }
-        let thinking: ThinkLevel | undefined;
-        if (opts.thinking !== undefined) {
-          if (typeof opts.thinking !== "string") {
-            throw new Error("--thinking must be a string.");
-          }
-          thinking = normalizeThinkLevel(opts.thinking);
-          if (!thinking) {
-            throw new Error(`Invalid thinking level. Use one of: ${THINKING_LEVELS_HELP}.`);
-          }
+        const thinking = normalizeThinkLevel(opts.thinking);
+        if (opts.thinking !== undefined && !thinking) {
+          throw new Error(`Invalid thinking level. Use one of: ${THINKING_LEVELS_HELP}.`);
         }
         const transport = resolveTransport({
           local: Boolean(opts.local),
@@ -472,9 +472,9 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .action((opts, command) =>
       runCapabilityCommand(opts.json, providerSummaryText, async () => {
         const { resolveCapabilityAgentOption } = await import("./shared.js");
-        const { getRuntimeConfig } = await import("../../config/config.js");
+        const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
         return loadModelCatalogForInspection(
-          getRuntimeConfig(),
+          await captureRuntimeConfigAsyncReader()(),
           resolveCapabilityAgentOption(command, opts.agent),
         );
       }),
@@ -488,10 +488,10 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .action((opts, command) =>
       runCapabilityCommand(opts.json, undefined, async () => {
         const { resolveCapabilityAgentOption } = await import("./shared.js");
-        const { getRuntimeConfig } = await import("../../config/config.js");
+        const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
         const target = normalizeStringifiedOptionalString(opts.model) ?? "";
         const catalog = await loadModelCatalogForInspection(
-          getRuntimeConfig(),
+          await captureRuntimeConfigAsyncReader()(),
           resolveCapabilityAgentOption(command, opts.agent),
         );
         const entry =
@@ -519,9 +519,9 @@ export function registerModelCapabilityCommands(capability: Command): void {
   const resolveModelAuthAgent = async (command: Command, rawAgentId: unknown, surface: string) => {
     const { resolveCapabilityProviderAgentId, resolveCapabilityAgentOption } =
       await import("./shared.js");
-    const { getRuntimeConfig } = await import("../../config/config.js");
+    const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
     return resolveCapabilityProviderAgentId(
-      getRuntimeConfig(),
+      await captureRuntimeConfigAsyncReader()(),
       resolveCapabilityAgentOption(command, rawAgentId),
       surface,
     );

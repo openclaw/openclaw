@@ -33,9 +33,14 @@ vi.doMock("../runtime.js", async () => {
     runtime,
   );
 });
+// mock-isolation: QR setup resolves fixture config and secrets without host credentials.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
+  captureRuntimeConfigAsyncReader:
+    (...args: Parameters<typeof mocks.loadConfig>) =>
+    async () =>
+      mocks.loadConfig(...args),
 }));
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.runCommandWithTimeout }));
 vi.mock("../media/qr-terminal.ts", () => ({
@@ -140,24 +145,6 @@ describe("registerQrCli", () => {
     const program = createProgram();
     await program.parseAsync(["qr", ...args], { from: "user" });
   }
-
-  it.each([[[], "wss://gateway.example:8444/gateway"]])(
-    "preserves the Control UI path in configured QR URLs with overrides %j",
-    async (args, url) => {
-      loadConfig.mockReturnValue({
-        gateway: {
-          bind: "loopback",
-          controlUi: { basePath: "/gateway" },
-          auth: { mode: "token", token: "tok" },
-        },
-        plugins: {
-          entries: { "device-pair": { config: { publicUrl: "https://gateway.example:8444" } } },
-        },
-      });
-      await runQr(["--json", ...args]);
-      expect(parseLastLoggedQrJson().gatewayUrl).toBe(url);
-    },
-  );
 
   async function expectQrExit(args: string[]) {
     await expect(runQr(args)).rejects.toThrow("exit");

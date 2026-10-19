@@ -1,12 +1,7 @@
 import { GatewayDispatchEvents } from "discord-api-types/v10";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { getGuild, getGuildMember } from "./api.guild.js";
 import { getChannel } from "./api.messages.js";
 import { getUser } from "./api.users.js";
-import type { RequestClient } from "./rest.js";
 import { Guild, GuildMember, User, channelFactory, type StructureClient } from "./structures.js";
 
 type CacheEntry<T> = {
@@ -34,12 +29,7 @@ export class DiscordEntityCache {
   private readonly entries = new Map<string, CacheEntry<unknown>>();
   private lastSweepAt = 0;
 
-  constructor(
-    private readonly params: {
-      client: StructureClient;
-      rest: () => RequestClient;
-    },
-  ) {}
+  constructor(private readonly client: StructureClient) {}
 
   get size(): number {
     return this.entries.size;
@@ -47,29 +37,29 @@ export class DiscordEntityCache {
 
   async fetchUser(id: string): Promise<User> {
     return await this.fetchCached(`user:${id}`, async () => {
-      const raw = await getUser(this.params.rest(), id);
-      return new User(this.params.client, raw);
+      const raw = await getUser(this.client.rest, id);
+      return new User(this.client, raw);
     });
   }
 
   async fetchChannel(id: string) {
     return await this.fetchCached(`channel:${id}`, async () => {
-      const raw = await getChannel(this.params.rest(), id);
-      return channelFactory(this.params.client, raw);
+      const raw = await getChannel(this.client.rest, id);
+      return channelFactory(this.client, raw);
     });
   }
 
   async fetchGuild(id: string): Promise<Guild> {
     return await this.fetchCached(`guild:${id}`, async () => {
-      const raw = await getGuild(this.params.rest(), id);
-      return new Guild(this.params.client, raw);
+      const raw = await getGuild(this.client.rest, id);
+      return new Guild(this.client, raw);
     });
   }
 
   async fetchMember(guildId: string, userId: string): Promise<GuildMember> {
     return await this.fetchCached(`member:${guildId}:${userId}`, async () => {
-      const raw = await getGuildMember(this.params.rest(), guildId, userId);
-      return new GuildMember(this.params.client, raw);
+      const raw = await getGuildMember(this.client.rest, guildId, userId);
+      return new GuildMember(this.client, raw);
     });
   }
 
@@ -99,27 +89,19 @@ export class DiscordEntityCache {
   }
 
   private async fetchCached<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
-    const rawNow = Date.now();
-    const now = asDateTimestampMs(rawNow);
+    const now = Date.now();
     const cached = this.entries.get(key) as CacheEntry<T> | undefined;
-    if (cached && now !== undefined && cached.expiresAt > now) {
+    if (cached && cached.expiresAt > now) {
       return cached.value;
     }
     if (cached) {
       this.entries.delete(key);
     }
     const value = await fetcher();
-    const expiresAt = resolveExpiresAtMsFromDurationMs(DEFAULT_REST_CACHE_TTL_MS, {
-      nowMs: rawNow,
-    });
-    if (expiresAt !== undefined) {
-      if (now !== undefined) {
-        this.maybeSweepExpired(now);
-      }
-      this.entries.set(key, { expiresAt, value });
-      if (this.entries.size > DEFAULT_MAX_ENTRIES) {
-        this.entries.delete(this.entries.keys().next().value!);
-      }
+    this.maybeSweepExpired(now);
+    this.entries.set(key, { expiresAt: now + DEFAULT_REST_CACHE_TTL_MS, value });
+    if (this.entries.size > DEFAULT_MAX_ENTRIES) {
+      this.entries.delete(this.entries.keys().next().value!);
     }
     return value;
   }

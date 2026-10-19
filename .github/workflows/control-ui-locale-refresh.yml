@@ -10,11 +10,20 @@ on:
       - ui/src/i18n/.i18n/*
       - ui/src/i18n/lib/types.ts
       - ui/src/i18n/lib/registry.ts
+      - src/shared/control-ui-locale.ts
+      - src/shared/public-session-copy.ts
       - ui/config/control-ui-locales.ts
       - scripts/control-ui-i18n.ts
+      - scripts/control-ui-locale-artifacts.ts
       - scripts/control-ui-i18n-verify.ts
       - scripts/lib/control-ui-i18n-catalog.ts
       - scripts/lib/control-ui-i18n-catalog-values.ts
+      - scripts/lib/control-ui-plugin-i18n-catalog.ts
+      - extensions/active-memory/control-ui.presentation.json
+      - extensions/memory-wiki/control-ui.presentation.json
+      - extensions/*/package.json
+      - extensions/**/i18n/locales/en.ts
+      - extensions/**/i18n/locales/translated.json
       - ui/src/i18n/lib/config-hint-translation.ts
       - ui/src/lib/fnv1a.ts
       - src/config/schema*.ts
@@ -37,7 +46,7 @@ on:
   workflow_dispatch:
     inputs:
       full_refresh:
-        description: Retranslate every source string, including existing translations.
+        description: Retranslate core source strings and missing plugin copy; preserve authored plugin translations.
         required: false
         default: false
         type: boolean
@@ -198,20 +207,14 @@ jobs:
       - name: Prepare locale artifact
         env:
           LOCALE: ${{ matrix.locale }}
-        run: |
-          set -euo pipefail
-          artifact_dir="${RUNNER_TEMP}/control-ui-locale-${LOCALE}"
-          mkdir -p "${artifact_dir}"
-          locale_memory="ui/src/i18n/.i18n/${LOCALE}.tm.jsonl"
-          locale_metadata="ui/src/i18n/.i18n/${LOCALE}.meta.json"
-          git add -A -- "${locale_memory}" "${locale_metadata}"
-          git diff --cached --binary --full-index -- "${locale_memory}" "${locale_metadata}" ':(exclude)ui/src/i18n/.i18n/catalog-fallbacks.json' > "${artifact_dir}/${LOCALE}.patch"
+          LOCALE_SOURCE_COMMIT: ${{ needs.resolve-base.outputs.sha }}
+        run: node --import tsx scripts/control-ui-locale-artifacts.ts pack "${RUNNER_TEMP}/control-ui-locale-${LOCALE}" "${LOCALE}"
 
       - name: Upload locale artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: control-ui-locale-${{ matrix.locale }}
-          path: ${{ runner.temp }}/control-ui-locale-${{ matrix.locale }}/${{ matrix.locale }}.patch
+          path: ${{ runner.temp }}/control-ui-locale-${{ matrix.locale }}/${{ matrix.locale }}.json
           if-no-files-found: error
           retention-days: 1
 
@@ -228,26 +231,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.resolve-base.outputs.sha }}
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
           persist-credentials: false
           submodules: false
 
       - name: Download locale artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: control-ui-locale-*
           path: ${{ runner.temp }}/control-ui-locale-artifacts
           merge-multiple: true
 
-      - name: Apply locale artifacts
-        run: |
-          set -euo pipefail
-          while IFS= read -r patch; do
-            if [ -s "${patch}" ]; then
-              git apply "${patch}"
-            fi
-          done < <(find "${RUNNER_TEMP}/control-ui-locale-artifacts" -type f -name '*.patch' | sort)
+      # Full-history transfer can take minutes after Git advertises the branch tip.
+      # Reuse that history to refresh main before dependencies or worker admission.
+      - name: Refresh canonical main after history download
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -255,8 +259,39 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
+      # Reconcile once against the fresh canonical checkout. A second source
+      # movement still defers through the unchanged publisher freshness checks.
+      - name: Restore same-run locale memory
+        id: locale_memory
+        env:
+          LOCALE_SOURCE_COMMIT: ${{ needs.resolve-base.outputs.sha }}
+          LOCALE_SOURCE_LOCALES: ${{ needs.resolve-base.outputs.locales }}
+        run: node --import tsx scripts/control-ui-locale-artifacts.ts restore "${RUNNER_TEMP}/control-ui-locale-artifacts"
+
       - name: Finalize control UI generated artifacts
-        run: node --import tsx scripts/control-ui-i18n.ts sync --write
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          OPENCLAW_CONTROL_UI_I18N_PROVIDER: openai
+          OPENCLAW_CONTROL_UI_I18N_MODEL: ${{ secrets.OPENCLAW_I18N_MODEL }}
+          OPENCLAW_I18N_FALLBACK_MODEL: ${{ secrets.OPENCLAW_I18N_FALLBACK_MODEL }}
+          OPENCLAW_CONTROL_UI_I18N_THINKING: low
+          OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL: "0"
+          FULL_REFRESH: ${{ inputs.full_refresh || false }}
+          INVALIDATED_LOCALES: ${{ steps.locale_memory.outputs.invalidated }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${OPENAI_API_KEY}" || -z "${OPENCLAW_CONTROL_UI_I18N_MODEL}" || -z "${OPENCLAW_I18N_FALLBACK_MODEL}" ]]; then
+            echo "Translation API key and private primary/fallback model secrets are required." >&2
+            exit 1
+          fi
+          # Compatible workers already honored --force. Only discarded workers
+          # need another forced pass; ordinary source deltas stay incremental.
+          if [[ "${FULL_REFRESH}" == "true" ]]; then
+            while IFS= read -r locale; do
+              node --import tsx scripts/control-ui-i18n.ts sync --locale "${locale}" --write --force
+            done < <(jq -r '.[]' <<< "${INVALIDATED_LOCALES}")
+          fi
+          node --import tsx scripts/control-ui-i18n.ts sync --write
 
       - name: Validate control UI locale refresh
         run: node --import tsx scripts/control-ui-i18n.ts check
@@ -277,6 +312,9 @@ jobs:
             ui/src/i18n/.i18n/*.tm.jsonl
             ui/src/i18n/.i18n/*.meta.json
             ui/src/i18n/.i18n/catalog-fallbacks.json
+            extensions/**/i18n/.i18n/*
+            extensions/**/i18n/locales/translated.json
+            extensions/*/openclaw.plugin.json
           invalidation-paths: |
             ui/src/i18n/locales/*.ts
             ui/src/i18n/locales/en.ts
@@ -285,11 +323,32 @@ jobs:
             ui/src/i18n/.i18n/raw-copy-baseline.json
             ui/src/i18n/lib/types.ts
             ui/src/i18n/lib/registry.ts
+            src/shared/control-ui-locale.ts
+            src/shared/public-session-copy.ts
             ui/config/control-ui-locales.ts
             scripts/control-ui-i18n.ts
+            scripts/control-ui-locale-artifacts.ts
             scripts/control-ui-i18n-verify.ts
             scripts/lib/control-ui-i18n-catalog.ts
             scripts/lib/control-ui-i18n-catalog-values.ts
+            scripts/lib/control-ui-plugin-i18n-catalog.ts
+            extensions/active-memory/control-ui.presentation.json
+            extensions/memory-wiki/control-ui.presentation.json
+            extensions/*/package.json
+            extensions/*/openclaw.plugin.json
+            extensions/**/*.ts
+            extensions/**/*.css
+            extensions/**/i18n/locales/translated.json
+            scripts/build-plugin-control-ui.mts
+            src/cli/plugins-control-ui-build.ts
+            src/cli/plugins-build-bundle.ts
+            src/plugins/sdk-alias*.ts
+            src/plugin-sdk/**
+            packages/**
+            package.json
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+            patches/**
             ui/src/i18n/lib/config-hint-translation.ts
             ui/src/lib/fnv1a.ts
             src/config/schema*.ts
@@ -311,7 +370,7 @@ jobs:
 
             ## Why This Change Was Made
 
-            The Control UI Locale Refresh workflow generated this update from `${{ needs.resolve-base.outputs.sha }}` and published it through a reviewable automation branch.
+            The Control UI Locale Refresh workflow generated worker memory from `${{ needs.resolve-base.outputs.sha }}`, reconciled it once against `${{ steps.locale_memory.outputs.sha }}`, and published the current output through a reviewable automation branch.
 
             ## User Impact
 

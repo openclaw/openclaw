@@ -167,6 +167,13 @@ reports a billed amount. This gives `/usage cost` and
 transcript-backed session status a stable source even after the live
 runtime state is gone.
 
+If a stream is interrupted before its final usage report, token and cost
+accounting are unavailable. Intermediate token snapshots do not count as complete
+usage, and `/status` clears the previous response's counters instead of showing
+them for the interrupted response. Usage cost summaries retain known amounts
+from completed responses and label the aggregate incomplete. A provider-reported
+terminal zero remains a measured zero; an initialized zero is not a measurement.
+
 OpenClaw keeps provider usage accounting separate from the current context
 snapshot. Provider `usage.total` can include cached input, output, and
 multiple tool-loop model calls, so it is useful for cost and telemetry but

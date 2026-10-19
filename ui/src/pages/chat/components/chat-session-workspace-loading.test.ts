@@ -39,7 +39,6 @@ function fixture() {
     agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
     sidebarContent: null,
     handleOpenSidebar: () => {},
-    requestUpdate: vi.fn(),
     sessions: createSessionCapabilityFixture({
       listFiles,
       getFile: async () => ({

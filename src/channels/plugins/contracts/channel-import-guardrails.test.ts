@@ -1,36 +1,32 @@
-// Channel import guardrail tests cover forbidden imports across channel plugin boundaries.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
-import type { SourceFile } from "typescript/unstable/ast";
+import type { SourceFile } from "typescript/ast";
 import { afterAll, describe, expect, it } from "vitest";
 import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mts";
 import { collectModuleReferencesFromSource } from "../../../../scripts/lib/guard-inventory-utils.mjs";
 import { createNativeTypeScriptParser } from "../../../../scripts/lib/native-typescript.mts";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugin-sdk/test-helpers/public-artifacts.js";
 import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
-import { expectNoReaddirSyncDuring } from "../../../test-utils/fs-scan-assertions.js";
 import {
   listGitTrackedFiles,
-  toRepoPath,
+  toRepoPath as normalizePath,
   toRepoRelativePath,
 } from "../../../test-utils/repo-files.js";
 
-const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-const REPO_ROOT = resolve(ROOT_DIR, "..");
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
-const bundledPluginRecords = loadPluginManifestRegistryCore({
-  config: {},
-}).plugins.filter((plugin) => plugin.origin === "bundled");
+const bundledPluginRecords = loadPluginManifestRegistryCore({ config: {} }).plugins.filter(
+  (plugin) => plugin.origin === "bundled",
+);
 const bundledPluginRoots = new Map(
   bundledPluginRecords.map(
-    (plugin) => [plugin.id, resolveBundledPluginSourceRoot(plugin.rootDir)] as const,
+    ({ id, rootDir }) => [id, resolveBundledPluginSourceRoot(rootDir)] as const,
   ),
 );
 const BUNDLED_EXTENSION_IDS = [...bundledPluginRoots.keys()].toSorted(
@@ -72,39 +68,26 @@ function bundledPluginFile(pluginId: string, relativePath: string): string {
   return normalizePath(resolve(rootDir, relativePath));
 }
 
-type GuardedSource = {
-  path: string;
-  forbiddenPatterns: RegExp[];
-};
-
-function createGuardedSource(
-  pluginId: string,
-  relativePath: string,
-  forbiddenPatterns: RegExp[],
-): GuardedSource {
-  return { path: bundledPluginFile(pluginId, relativePath), forbiddenPatterns };
-}
-
+type GuardedSource = readonly [plugin: string, path: string, patterns: RegExp[]];
 const SAME_CHANNEL_SDK_GUARDS: GuardedSource[] = [
-  ...["discord", "slack", "telegram", "imessage", "whatsapp", "signal"].flatMap((pluginId) => {
-    const relativePaths =
-      pluginId === "signal"
+  ...["discord", "slack", "telegram", "imessage", "whatsapp", "signal"].flatMap((id) => {
+    const paths =
+      id === "signal"
         ? ["src/shared.ts", "runtime-api.ts"]
-        : pluginId === "telegram"
+        : id === "telegram"
           ? ["src/channel.ts", "src/setup-plugin.ts"]
           : ["src/shared.ts"];
-    return relativePaths.map((relativePath) =>
-      createGuardedSource(pluginId, relativePath, [
-        new RegExp(`["']openclaw/plugin-sdk/${pluginId}["']`),
-        new RegExp(`plugin-sdk-internal/${pluginId}`),
-      ]),
-    );
+    return paths.map((path): GuardedSource => [
+      id,
+      path,
+      [new RegExp(`["']openclaw/plugin-sdk/${id}["']`), new RegExp(`plugin-sdk-internal/${id}`)],
+    ]);
   }),
-  ...["src/account-inspect.ts", "src/accounts.ts", "src/token.ts"].map((relativePath) =>
-    createGuardedSource("telegram", relativePath, [
-      /["']openclaw\/plugin-sdk\/account-resolution["']/,
-    ]),
-  ),
+  ...["src/account-inspect.ts", "src/accounts.ts", "src/token.ts"].map((path): GuardedSource => [
+    "telegram",
+    path,
+    [/["']openclaw\/plugin-sdk\/account-resolution["']/],
+  ]),
   ...[
     "src/channel.ts",
     "src/action-runtime.ts",
@@ -115,45 +98,36 @@ const SAME_CHANNEL_SDK_GUARDS: GuardedSource[] = [
     "src/probe.ts",
     "src/setup-core.ts",
     "src/token.ts",
-  ].map((relativePath) =>
-    createGuardedSource("telegram", relativePath, [/["']\.\.\/runtime-api\.js["']/]),
-  ),
+  ].map((path): GuardedSource => ["telegram", path, [/["']\.\.\/runtime-api\.js["']/]]),
 ];
-
+const docsLink = /\bformatDocsLink\b/;
+const cliCommand = /\bformatCliCommand\b/;
+const detectBinary = /\bdetectBinary\b/;
 const SETUP_BARREL_GUARDS: GuardedSource[] = [
-  createGuardedSource("signal", "src/setup-core.ts", [
-    /\bformatCliCommand\b/,
-    /\bformatDocsLink\b/,
-  ]),
-  createGuardedSource("signal", "src/setup-surface.ts", [
-    /\bdetectBinary\b/,
-    /\bformatCliCommand\b/,
-    /\bformatDocsLink\b/,
-  ]),
-  ...["slack", "discord"].flatMap((pluginId) =>
-    ["src/setup-core.ts", "src/setup-surface.ts"].map((relativePath) =>
-      createGuardedSource(pluginId, relativePath, [/\bformatDocsLink\b/]),
-    ),
-  ),
-  createGuardedSource("imessage", "src/setup-core.ts", [/\bformatDocsLink\b/]),
-  createGuardedSource("imessage", "src/setup-surface.ts", [
-    /\bdetectBinary\b/,
-    /\bformatDocsLink\b/,
-  ]),
-  ...[
-    { pluginId: "telegram", relativePath: "src/setup-core.ts" },
-    { pluginId: "whatsapp", relativePath: "src/setup-surface.ts" },
-  ].map(({ pluginId, relativePath }) =>
-    createGuardedSource(pluginId, relativePath, [/\bformatCliCommand\b/, /\bformatDocsLink\b/]),
-  ),
+  ["signal", "src/setup-core.ts", [cliCommand, docsLink]],
+  ["signal", "src/setup-surface.ts", [detectBinary, cliCommand, docsLink]],
+  ["slack", "src/setup-core.ts", [docsLink]],
+  ["slack", "src/setup-surface.ts", [docsLink]],
+  ["discord", "src/setup-core.ts", [docsLink]],
+  ["discord", "src/setup-surface.ts", [docsLink]],
+  ["imessage", "src/setup-core.ts", [docsLink]],
+  ["imessage", "src/setup-surface.ts", [detectBinary, docsLink]],
+  ["telegram", "src/setup-core.ts", [cliCommand, docsLink]],
+  ["whatsapp", "src/setup-surface.ts", [cliCommand, docsLink]],
+];
+const CHANNEL_CONFIG_SCHEMA_GUARDS: GuardedSource[] = [
+  ["tlon", "src/config-schema.ts", [/["']openclaw\/plugin-sdk\/core["']/]],
 ];
 
-const CHANNEL_CONFIG_SCHEMA_GUARDS: GuardedSource[] = [
-  {
-    path: bundledPluginFile("tlon", "src/config-schema.ts"),
-    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/core["']/],
-  },
-];
+function expectGuardedSources(sources: GuardedSource[], read = readSource) {
+  for (const [plugin, path, patterns] of sources) {
+    const fullPath = bundledPluginFile(plugin, path);
+    const text = read(fullPath);
+    for (const pattern of patterns) {
+      expect(text, `${fullPath} should not match ${pattern}`).not.toMatch(pattern);
+    }
+  }
+}
 
 const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "acpx",
@@ -194,36 +168,18 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
 ] as const;
 
 const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
-  // Direct import avoids a circular init path:
-  // accounts.ts -> runtime-api.ts -> plugin api barrel -> accounts.ts
+  // Avoid accounts.ts -> runtime-api.ts -> plugin api barrel -> accounts.ts.
   bundledPluginFile("matrix", "src/matrix/accounts.ts"),
   // Config schema stays on the public SDK seam and is covered by dedicated config guardrails.
   bundledPluginFile("msteams", "src/config-schema.ts"),
 ] as const;
 
 const sourceTextCache = new Map<string, string>();
-type SourceAnalysis = {
-  text: string;
-  importSpecifiers: string[];
-  extensionImports: string[];
-};
-const sourceAnalysisCache = new Map<string, SourceAnalysis>();
-let extensionSourceFilesCache: string[] | null = null;
+const sourceAnalysisCache = new Map<string, string[]>();
 let coreSourceFilesCache: string[] | null = null;
 const extensionFilesCache = new Map<string, string[]>();
-const STATIC_FROM_IMPORT_RE =
-  /^\s*import(?:\s+type)?\s+(?!["'])(?:[\s\S]*?)\s+from\s*["']([^"']+)["']/gmu;
-const STATIC_SIDE_EFFECT_IMPORT_RE = /^\s*import\s*["']([^"']+)["']/gmu;
-const RE_EXPORT_STAR_RE =
-  /^\s*export\s+(?:type\s+)?\*\s*(?:as\s+\w+\s+)?from\s*["']([^"']+)["']/gmu;
-const RE_EXPORT_NAMED_RE = /^\s*export\s+(?:type\s+)?\{[^}]*\}\s+from\s*["']([^"']+)["']/gmu;
-const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*["']([^"']+)["']\s*\)/gmu;
-const REQUIRE_RE = /\brequire\s*\(\s*["']([^"']+)["']\s*\)/gmu;
-const trackedSourceFilesByRoot = new Map<string, readonly string[] | null>();
-
 type SourceFileCollectorOptions = {
   rootDir: string;
-  shouldSkipPath?: (normalizedFullPath: string) => boolean;
   shouldSkipEntry?: (params: { entryName: string; normalizedFullPath: string }) => boolean;
 };
 
@@ -233,59 +189,34 @@ function readSource(path: string): string {
   if (cached !== undefined) {
     return cached;
   }
-  expect(fs.existsSync(fullPath), `Missing guardrail source: ${path}`).toBe(true);
   const text = fs.readFileSync(fullPath, "utf8");
   sourceTextCache.set(fullPath, text);
   return text;
 }
 
-function normalizePath(path: string): string {
-  return toRepoPath(path);
-}
-
-function repoRelativePath(path: string): string {
-  return toRepoRelativePath(REPO_ROOT, path);
-}
-
 function listTrackedSourceFiles(options: SourceFileCollectorOptions): string[] | null {
-  const relativeRoot = repoRelativePath(options.rootDir);
+  const relativeRoot = toRepoRelativePath(REPO_ROOT, options.rootDir);
   if (!relativeRoot || relativeRoot.startsWith("..")) {
     return null;
   }
-  if (trackedSourceFilesByRoot.has(relativeRoot)) {
-    const files = trackedSourceFilesByRoot.get(relativeRoot);
-    return files ? [...files] : null;
-  }
-  const trackedFiles = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeRoot });
-  if (!trackedFiles) {
-    trackedSourceFilesByRoot.set(relativeRoot, null);
-    return null;
-  }
-  const files = trackedFiles
-    .filter((line) => {
-      if (!/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(line) || line.endsWith(".d.ts")) {
-        return false;
-      }
-      if (!fs.existsSync(resolve(REPO_ROOT, line))) {
-        return false;
-      }
-      const parts = line.split("/");
-      return !parts.some(
-        (part) => part === "node_modules" || part === "dist" || part === "coverage",
-      );
-    })
-    .map((line) => resolve(REPO_ROOT, line))
-    .filter((fullPath) => {
-      const normalizedFullPath = normalizePath(fullPath);
-      const entryName = basename(fullPath);
-      return !(
-        options.shouldSkipPath?.(normalizedFullPath) ||
-        options.shouldSkipEntry?.({ entryName, normalizedFullPath })
-      );
-    })
-    .toSorted();
-  trackedSourceFilesByRoot.set(relativeRoot, files);
-  return [...files];
+  return (
+    listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeRoot })
+      ?.map((file) => resolve(REPO_ROOT, file))
+      .filter((file) => isSourceFile(file, options))
+      .toSorted() ?? null
+  );
+}
+
+function isSourceFile(file: string, options: SourceFileCollectorOptions): boolean {
+  const normalizedFullPath = normalizePath(file);
+  return (
+    /\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(file) &&
+    !file.endsWith(".d.ts") &&
+    !normalizedFullPath
+      .split("/")
+      .some((part) => ["node_modules", "dist", "coverage"].includes(part)) &&
+    !options.shouldSkipEntry?.({ entryName: basename(file), normalizedFullPath })
+  );
 }
 
 function collectSourceFiles(
@@ -299,43 +230,16 @@ function collectSourceFiles(
   if (trackedFiles) {
     return trackedFiles;
   }
-
-  const files: string[] = [];
-  const stack = [options.rootDir];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) {
-      continue;
-    }
-    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-      const fullPath = resolve(current, entry.name);
-      const normalizedFullPath = normalizePath(fullPath);
+  function walk(dir: string): string[] {
+    return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const path = resolve(dir, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
-          continue;
-        }
-        if (options.shouldSkipPath?.(normalizedFullPath)) {
-          continue;
-        }
-        stack.push(fullPath);
-        continue;
+        return ["node_modules", "dist", "coverage"].includes(entry.name) ? [] : walk(path);
       }
-      if (!entry.isFile() || !/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(entry.name)) {
-        continue;
-      }
-      if (entry.name.endsWith(".d.ts")) {
-        continue;
-      }
-      if (
-        options.shouldSkipPath?.(normalizedFullPath) ||
-        options.shouldSkipEntry?.({ entryName: entry.name, normalizedFullPath })
-      ) {
-        continue;
-      }
-      files.push(fullPath);
-    }
+      return entry.isFile() && isSourceFile(path, options) ? [path] : [];
+    });
   }
-  return files;
+  return walk(options.rootDir);
 }
 
 function readSetupBarrelImportBlock(path: string): string {
@@ -347,43 +251,25 @@ function readSetupBarrelImportBlock(path: string): string {
     return "";
   }
   let startLineIndex = targetLineIndex;
-  while (
-    startLineIndex >= 0 &&
-    !expectDefined(lines[startLineIndex], "lines[startLineIndex] test invariant").includes("import")
-  ) {
+  while (startLineIndex >= 0 && !lines[startLineIndex]?.includes("import")) {
     startLineIndex -= 1;
   }
   return lines.slice(startLineIndex, targetLineIndex + 1).join("\n");
 }
 
 function collectExtensionSourceFiles(): string[] {
-  if (extensionSourceFilesCache) {
-    return extensionSourceFilesCache;
-  }
-  extensionSourceFilesCache = bundledPluginRecords.flatMap((plugin) =>
-    collectSourceFiles(undefined, {
-      rootDir: resolveBundledPluginSourceRoot(plugin.rootDir),
-      shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
-        classifyBundledExtensionSourcePath(normalizedFullPath).isTestLike ||
-        entryName === "api.ts" ||
-        entryName === "runtime-api.ts",
-    }),
-  );
-  return extensionSourceFilesCache;
+  return [...bundledPluginRoots.keys()].flatMap((id) => collectExtensionFiles(id, true));
 }
 
 function isGuardedExtensionSourceFile(relativePath: string): boolean {
-  if (!/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(relativePath) || relativePath.endsWith(".d.ts")) {
-    return false;
-  }
-  if (relativePath.split("/").some((part) => part === "node_modules" || part === "dist")) {
-    return false;
-  }
   const entryName = basename(relativePath);
-  return !(
-    classifyBundledExtensionSourcePath(resolve(REPO_ROOT, relativePath)).isTestLike ||
-    entryName === "api.ts" ||
-    entryName === "runtime-api.ts"
+  return (
+    /\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(relativePath) &&
+    !relativePath.endsWith(".d.ts") &&
+    !relativePath.split("/").some((part) => part === "node_modules" || part === "dist") &&
+    !classifyBundledExtensionSourcePath(resolve(REPO_ROOT, relativePath)).isTestLike &&
+    entryName !== "api.ts" &&
+    entryName !== "runtime-api.ts"
   );
 }
 
@@ -422,31 +308,24 @@ function collectExtensionForbiddenImportMatches(literals: readonly string[]): st
 }
 
 function collectCoreSourceFiles(): string[] {
-  const srcDir = resolve(ROOT_DIR, "..", "src");
-  const normalizedPluginSdkDir = normalizePath(resolve(ROOT_DIR, "plugin-sdk"));
+  const normalizedPluginSdkDir = normalizePath(resolve(REPO_ROOT, "src/plugin-sdk"));
   coreSourceFilesCache = collectSourceFiles(coreSourceFilesCache, {
-    rootDir: srcDir,
+    rootDir: resolve(REPO_ROOT, "src"),
     shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
-      normalizedFullPath.includes(".test.") ||
-      normalizedFullPath.includes(".test-utils.") ||
-      normalizedFullPath.includes(".test-harness.") ||
-      normalizedFullPath.includes(".test-helpers.") ||
+      /\.(?:test|test-utils|test-harness|test-helpers|test-support|mock-harness|suite|spec|fixture)\.|\.snap/u.test(
+        normalizedFullPath,
+      ) ||
       entryName.endsWith("-test-helpers.ts") ||
       entryName === "test-manager-helpers.ts" ||
-      normalizedFullPath.includes(".mock-harness.") ||
-      normalizedFullPath.includes(".suite.") ||
-      normalizedFullPath.includes(".spec.") ||
-      normalizedFullPath.includes(".fixture.") ||
-      normalizedFullPath.includes(".snap") ||
-      // src/plugin-sdk is the curated bridge layer; validate its contracts with dedicated
-      // plugin-sdk guardrails instead of the generic "core should not touch extensions" rule.
+      // The curated SDK bridge has dedicated guards, not the generic core import rule.
       normalizedFullPath.includes(`${normalizedPluginSdkDir}/`),
   });
   return coreSourceFilesCache;
 }
 
-function collectExtensionFiles(extensionId: string): string[] {
-  const cached = extensionFilesCache.get(extensionId);
+function collectExtensionFiles(extensionId: string, excludeApi = false): string[] {
+  const key = `${extensionId}:${excludeApi}`;
+  const cached = extensionFilesCache.get(key);
   const rootDir = bundledPluginRoots.get(extensionId);
   if (!rootDir) {
     return [];
@@ -455,23 +334,23 @@ function collectExtensionFiles(extensionId: string): string[] {
     rootDir,
     shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
       classifyBundledExtensionSourcePath(normalizedFullPath).isTestLike ||
-      entryName === "runtime-api.ts",
+      entryName === "runtime-api.ts" ||
+      (excludeApi && entryName === "api.ts"),
   });
-  extensionFilesCache.set(extensionId, files);
+  extensionFilesCache.set(key, files);
   return files;
 }
 
 function collectModuleSpecifiers(text: string): string[] {
-  const patterns = [
-    DYNAMIC_IMPORT_RE,
-    REQUIRE_RE,
-    STATIC_FROM_IMPORT_RE,
-    STATIC_SIDE_EFFECT_IMPORT_RE,
-    RE_EXPORT_STAR_RE,
-    RE_EXPORT_NAMED_RE,
-  ] as const;
   const specifiers = new Set<string>();
-  for (const pattern of patterns) {
+  for (const pattern of [
+    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/gmu,
+    /\brequire\s*\(\s*["']([^"']+)["']\s*\)/gmu,
+    /^\s*import(?:\s+type)?\s+(?!["'])(?:[\s\S]*?)\s+from\s*["']([^"']+)["']/gmu,
+    /^\s*import\s*["']([^"']+)["']/gmu,
+    /^\s*export\s+(?:type\s+)?\*\s*(?:as\s+\w+\s+)?from\s*["']([^"']+)["']/gmu,
+    /^\s*export\s+(?:type\s+)?\{[^}]*\}\s+from\s*["']([^"']+)["']/gmu,
+  ]) {
     for (const match of text.matchAll(pattern)) {
       const specifier = match[1]?.trim();
       if (specifier && /\.(?:[cm]?[jt]sx?)$/u.test(specifier)) {
@@ -482,27 +361,15 @@ function collectModuleSpecifiers(text: string): string[] {
   return [...specifiers];
 }
 
-function collectImportSpecifiers(text: string): string[] {
-  return collectModuleSpecifiers(text);
-}
-
-function getSourceAnalysis(path: string): SourceAnalysis {
+function getImportSpecifiers(path: string): string[] {
   const fullPath = resolve(REPO_ROOT, path);
   const cached = sourceAnalysisCache.get(fullPath);
   if (cached) {
     return cached;
   }
-  const text = readSource(path);
-  const importSpecifiers = collectImportSpecifiers(text);
-  const analysis = {
-    text,
-    importSpecifiers,
-    extensionImports: importSpecifiers.filter((specifier) =>
-      specifier.includes(`/${BUNDLED_PLUGIN_ROOT_DIR}/`),
-    ),
-  } satisfies SourceAnalysis;
-  sourceAnalysisCache.set(fullPath, analysis);
-  return analysis;
+  const imports = collectModuleSpecifiers(readSource(path));
+  sourceAnalysisCache.set(fullPath, imports);
+  return imports;
 }
 
 function expectNoCorePluginPrivateSrcImports(sourceFile: SourceFile): void {
@@ -514,6 +381,9 @@ function expectNoCorePluginPrivateSrcImports(sourceFile: SourceFile): void {
 
 function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void {
   for (const specifier of imports) {
+    if (!specifier.includes(`/${BUNDLED_PLUGIN_ROOT_DIR}/`)) {
+      continue;
+    }
     const normalized = specifier.replaceAll("\\", "/");
     const resolved = specifier.startsWith(".")
       ? resolve(dirname(file), specifier).replaceAll("\\", "/")
@@ -523,18 +393,16 @@ function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void
     if (!extensionId || !GUARDED_CHANNEL_EXTENSIONS.has(extensionId)) {
       continue;
     }
-    const basenameLocal = resolved.split("/").at(-1) ?? "";
     expect(
-      ALLOWED_EXTENSION_PUBLIC_SURFACES.has(basenameLocal),
+      ALLOWED_EXTENSION_PUBLIC_SURFACES.has(resolved.split("/").at(-1) ?? ""),
       `${file} should only import approved extension surfaces, got ${specifier}`,
     ).toBe(true);
   }
 }
 
-function expectNoCrossPluginSdkFacadeImports(file: string, imports: string[]): void {
-  const normalizedFile = file.replaceAll("\\", "/");
+function expectNoCrossPluginFacades(file: string, imports: string[]): void {
   const currentExtensionId =
-    normalizedFile.match(new RegExp(`/${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/`))?.[1] ?? null;
+    normalizePath(file).match(new RegExp(`/${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/`))?.[1] ?? null;
   if (!currentExtensionId) {
     return;
   }
@@ -543,11 +411,7 @@ function expectNoCrossPluginSdkFacadeImports(file: string, imports: string[]): v
       continue;
     }
     const targetSubpath = specifier.slice("openclaw/plugin-sdk/".length);
-    const targetExtensionId =
-      BUNDLED_EXTENSION_IDS.find(
-        (extensionId) =>
-          targetSubpath === extensionId || targetSubpath.startsWith(`${extensionId}-`),
-      ) ?? null;
+    const targetExtensionId = findExtensionId(targetSubpath, BUNDLED_EXTENSION_IDS);
     if (!targetExtensionId || targetExtensionId === currentExtensionId) {
       continue;
     }
@@ -557,17 +421,17 @@ function expectNoCrossPluginSdkFacadeImports(file: string, imports: string[]): v
   }
 }
 
-function expectCoreSourceStaysOffPluginSpecificSdkFacades(file: string, imports: string[]): void {
+function findExtensionId(subpath: string, ids: Iterable<string>) {
+  return [...ids].find((id) => subpath === id || subpath.startsWith(`${id}-`));
+}
+
+function expectNoCoreFacades(file: string, imports: string[]): void {
   for (const specifier of imports) {
     if (!specifier.includes("/plugin-sdk/")) {
       continue;
     }
     const targetSubpath = specifier.split("/plugin-sdk/")[1]?.replace(/\.[cm]?[jt]sx?$/u, "") ?? "";
-    const targetExtensionId =
-      [...GUARDED_CHANNEL_EXTENSIONS].find(
-        (extensionId) =>
-          targetSubpath === extensionId || targetSubpath.startsWith(`${extensionId}-`),
-      ) ?? null;
+    const targetExtensionId = findExtensionId(targetSubpath, GUARDED_CHANNEL_EXTENSIONS);
     if (!targetExtensionId) {
       continue;
     }
@@ -578,68 +442,34 @@ function expectCoreSourceStaysOffPluginSpecificSdkFacades(file: string, imports:
 }
 
 describe("channel import guardrails", () => {
-  it("lists channel import guardrail sources from git without walking roots", () => {
-    expectNoReaddirSyncDuring(() => {
-      const coreSources = collectCoreSourceFiles();
-      const telegramSources = collectExtensionFiles("telegram");
+  it.each([
+    ["own SDK barrels", SAME_CHANNEL_SDK_GUARDS, readSource],
+    ["setup primitives", SETUP_BARREL_GUARDS, readSetupBarrelImportBlock],
+    ["config schema imports", CHANNEL_CONFIG_SCHEMA_GUARDS, readSource],
+  ] as const)("guards %s", (_name, sources, read) => expectGuardedSources(sources, read));
 
-      expect(coreSources.length).toBeGreaterThan(0);
-      expect(telegramSources.length).toBeGreaterThan(0);
-    });
-  });
-
-  it("keeps channel helper modules off their own SDK barrels", () => {
-    for (const source of SAME_CHANNEL_SDK_GUARDS) {
-      const text = readSource(source.path);
-      for (const pattern of source.forbiddenPatterns) {
-        expect(text, `${source.path} should not match ${pattern}`).not.toMatch(pattern);
-      }
-    }
-  });
-
-  it("keeps setup barrels limited to setup primitives", () => {
-    for (const source of SETUP_BARREL_GUARDS) {
-      const importBlock = readSetupBarrelImportBlock(source.path);
-      for (const pattern of source.forbiddenPatterns) {
-        expect(importBlock, `${source.path} setup import should not match ${pattern}`).not.toMatch(
-          pattern,
-        );
-      }
-    }
-  });
-
-  it("keeps channel config schemas off the broad core sdk barrel", () => {
-    for (const source of CHANNEL_CONFIG_SCHEMA_GUARDS) {
-      const text = readSource(source.path);
-      for (const pattern of source.forbiddenPatterns) {
-        expect(text, `${source.path} should not match ${pattern}`).not.toMatch(pattern);
-      }
-    }
-  });
-
-  it("keeps bundled extension source files off root and compat plugin-sdk imports", () => {
-    expect(
-      collectExtensionForbiddenImportMatches([
-        `"openclaw/plugin-sdk"`,
-        `'openclaw/plugin-sdk'`,
-        `"openclaw/plugin-sdk/compat"`,
-        `'openclaw/plugin-sdk/compat'`,
-      ]),
-    ).toEqual([]);
-  });
-
-  it("keeps bundled extension source files off legacy core send-deps src imports", () => {
-    expect(collectExtensionForbiddenImportMatches(["src/infra/outbound/send-deps"])).toEqual([]);
+  it.each([
+    [
+      "root and compat SDK",
+      [
+        '"openclaw/plugin-sdk"',
+        "'openclaw/plugin-sdk'",
+        '"openclaw/plugin-sdk/compat"',
+        "'openclaw/plugin-sdk/compat'",
+      ],
+    ],
+    ["legacy send-deps", ["src/infra/outbound/send-deps"]],
+  ] as const)("forbids %s imports", (_name, imports) => {
+    expect(collectExtensionForbiddenImportMatches(imports)).toEqual([]);
   });
 
   it.each([
     'import { client } from "../../extensions/feishu/src/client.js";',
-    'import "../../extensions/feishu/src/client.js";',
     'await import("../../extensions/feishu/src/client.js");',
     'export * from "../../extensions/feishu/src/client.js";',
-    'export { client } from "../../extensions/feishu/src/client.js";',
     'require("../../extensions/feishu/src/client.js");',
     'import client = require("../../extensions/feishu/src/client");',
+    'new URL("../../extensions/feishu/src/client.js", import.meta.url);',
   ])("rejects core plugin-private module references: %s", (source) => {
     expect(() =>
       expectNoCorePluginPrivateSrcImports(parser.parseSourceFile("source.ts", source)),
@@ -672,30 +502,14 @@ describe("channel import guardrails", () => {
     }
   });
 
-  it("keeps extension production files off other bundled plugin sdk facades", () => {
-    for (const file of collectExtensionSourceFiles()) {
-      expectNoCrossPluginSdkFacadeImports(file, getSourceAnalysis(file).importSpecifiers);
-    }
-  });
-
-  it("keeps core extension imports limited to approved public surfaces", () => {
-    for (const file of collectCoreSourceFiles()) {
-      expectOnlyApprovedExtensionSeams(file, getSourceAnalysis(file).extensionImports);
-    }
-  });
-
-  it("keeps core production files off plugin-specific sdk facades", () => {
-    for (const file of collectCoreSourceFiles()) {
-      expectCoreSourceStaysOffPluginSpecificSdkFacades(
-        file,
-        getSourceAnalysis(file).importSpecifiers,
-      );
-    }
-  });
-
-  it("keeps extension-to-extension imports limited to approved public surfaces", () => {
-    for (const file of collectExtensionSourceFiles()) {
-      expectOnlyApprovedExtensionSeams(file, getSourceAnalysis(file).extensionImports);
+  it.each<[string, () => string[], (file: string, imports: string[]) => void]>([
+    ["cross-plugin facades", collectExtensionSourceFiles, expectNoCrossPluginFacades],
+    ["core public seams", collectCoreSourceFiles, expectOnlyApprovedExtensionSeams],
+    ["core plugin facades", collectCoreSourceFiles, expectNoCoreFacades],
+    ["extension public seams", collectExtensionSourceFiles, expectOnlyApprovedExtensionSeams],
+  ])("guards %s", (_name, collect, check) => {
+    for (const file of collect()) {
+      check(file, getImportSpecifiers(file));
     }
   });
 
@@ -706,11 +520,7 @@ describe("channel import guardrails", () => {
         if (
           LOCAL_EXTENSION_API_BARREL_EXCEPTIONS.some((suffix) => normalized.endsWith(suffix)) ||
           normalized.endsWith("/api.ts") ||
-          normalized.endsWith("/test-runtime.ts") ||
-          normalized.includes(".test.") ||
-          normalized.includes(".spec.") ||
-          normalized.includes(".fixture.") ||
-          normalized.includes(".snap")
+          normalized.endsWith("/test-runtime.ts")
         ) {
           continue;
         }

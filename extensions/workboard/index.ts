@@ -1,5 +1,5 @@
 import { definePluginEntry } from "./api.js";
-import { registerWorkboardGatewayMethods } from "./runtime-api.js";
+import { registerWorkboardGatewayMethods, WorkboardStore } from "./runtime-api.js";
 import { createWorkboardAutomationNudgeService } from "./src/automation-nudge.js";
 import { createWorkboardChangeEventService } from "./src/change-events.js";
 import { registerWorkboardCommand } from "./src/command.js";
@@ -12,7 +12,6 @@ import {
 import { createWorkboardSessionsBoardService } from "./src/sessions-board.js";
 import { resolveWorkboardSqliteWorkerModuleUrl } from "./src/sqlite-store-paths.js";
 import { registerWorkboardStoreLifecycle } from "./src/store-lifecycle.js";
-import { WorkboardStore } from "./src/store.js";
 import { createWorkboardSessionsBoardTools } from "./src/tools-sessions-board.js";
 import { createWorkboardTools } from "./src/tools.js";
 import {

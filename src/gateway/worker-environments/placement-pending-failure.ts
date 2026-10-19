@@ -44,16 +44,6 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
           claim_id: pending.claimId,
           run_id: pending.runId,
         };
-        const exactPending = executeSqliteQuerySync(
-          db,
-          pendingQuery
-            .selectFrom("worker_workspace_pending_results")
-            .select("session_id")
-            .where((eb) => eb.and(pendingOwner)),
-        ).rows[0];
-        if (!exactPending) {
-          throw new Error(`Session ${sessionId} workspace result changed before failure`);
-        }
         const terminalAtMs = now();
         // Intermediate states are private to this transaction; retain their generation steps.
         const draining =
@@ -84,9 +74,10 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
             )
             .where("session_id", "=", sessionId)
             .where("state", "=", current.state)
-            .where("transition_generation", "=", current.generation),
-        );
-        if (failed.numAffectedRows !== 1n) {
+            .where("transition_generation", "=", current.generation)
+            .returningAll(),
+        ).rows[0];
+        if (!failed) {
           throw new Error(`Session ${sessionId} workspace result changed during failure`);
         }
         const removed = executeSqliteQuerySync(
@@ -98,7 +89,7 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
         if (removed.numAffectedRows !== 1n) {
           throw new Error(`Session ${sessionId} workspace result changed during failure`);
         }
-        const record = getRequired(db, sessionId);
+        const record = fromRow(failed);
         publishPlacementWorkspaceResultState(db, sessionId, null);
         publishPlacementTurnClaimState(db, record, current.state);
         return { placement: record, closedClaim: projectPlacementTurnClaim(current) };

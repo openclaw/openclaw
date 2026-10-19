@@ -8,7 +8,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const simulatorId = "11111111-2222-3333-4444-555555555555";
 const keptCategories =
   "widgets,siri,icloud,store,pim,web,health,photos,apps,messaging,connectivity,telemetry,other";
-const checksum = "eec00b27f0694fa899fb3bbc71362309a9da11ec670f430633cfae855eaf4a1d";
+const checksum = "d7ae4d0c834dfea9911f113cf60e98c25ee61f2a3a85ca22d0c28c43b39ccfaf";
 type Command = { tool: string; args: string[] };
 
 function runFixture(
@@ -48,7 +48,7 @@ if (tool === "uname") {
   copyFileSync(path.join(root, "bin", "simslim"), path.join(args[args.indexOf("-C") + 1], "simslim"));
 } else if (tool === "simslim") {
   if (args[0] === "--version") {
-    console.log(failure === "version" ? "simslim 0.9.0" : "simslim 0.10.0");
+    console.log(failure === "version" ? "simslim 0.9.0" : "simslim 0.11.0");
     if (failure === "version-exit") process.exit(23);
   } else if (args[0] === failure) {
     process.exit(23);
@@ -103,30 +103,15 @@ describe.skipIf(process.platform === "win32")("simslim installer", () => {
   it("checks the pinned bounded download before extraction and version execution", () => {
     const { result, commands, installDir } = runFixture("install-simslim.sh");
     expect(result.status, result.stderr).toBe(0);
-    expect(commands.map(({ tool }) => tool)).toEqual([
-      "uname",
-      "uname",
-      "curl",
-      "shasum",
-      "tar",
-      "simslim",
-    ]);
+    expect(commands.map(({ tool }) => tool)).toEqual(
+      "uname uname curl shasum tar simslim".split(" "),
+    );
     expect(commands.find(({ tool }) => tool === "curl")?.args).toEqual([
-      "--fail",
-      "--location",
-      "--silent",
-      "--show-error",
-      "--connect-timeout",
-      "10",
-      "--max-time",
-      "120",
-      "--retry",
-      "3",
-      "--retry-max-time",
-      "120",
+      ..."--fail --location --silent --show-error --connect-timeout 10 --max-time 120".split(" "),
+      ..."--retry 3 --retry-all-errors --retry-max-time 120".split(" "),
       "--output",
       expect.stringContaining("simslim.tar.gz"),
-      "https://github.com/MobAI-App/simslim/releases/download/v0.10.0/simslim-v0.10.0-macos-arm64.tar.gz",
+      "https://github.com/MobAI-App/simslim/releases/download/v0.11.0/simslim-v0.11.0-macos-arm64.tar.gz",
     ]);
     expect(commands.find(({ tool }) => tool === "shasum")?.args).toEqual([
       "-a",
@@ -166,10 +151,11 @@ describe.skipIf(process.platform === "win32")("iOS simulator preparation", () =>
   it("boots the explicit simulator before applying and verifying the conservative profile", () => {
     const { result, commands } = runFixture("ios-simulator-prepare.sh");
     expect(result.status, result.stderr).toBe(0);
+    const ready = { tool: "xcrun", args: ["simctl", "bootstatus", simulatorId, "-b"] };
     expect(commands).toEqual([
-      { tool: "xcrun", args: ["simctl", "bootstatus", simulatorId, "-b"] },
+      ready,
       { tool: "simslim", args: ["on", simulatorId, "--except", keptCategories] },
-      { tool: "xcrun", args: ["simctl", "bootstatus", simulatorId, "-b"] },
+      ready,
       { tool: "simslim", args: ["verify", simulatorId, "--except", keptCategories] },
     ]);
   });
@@ -183,11 +169,7 @@ describe.skipIf(process.platform === "win32")("iOS simulator preparation", () =>
     { options: { args: ["booted"] }, enabled: true },
   ])("makes no tool calls without valid opt-in admission: %j", ({ options, enabled }) => {
     const { result, commands } = runFixture("ios-simulator-prepare.sh", options);
-    if (enabled) {
-      expect(result.status).not.toBe(0);
-    } else {
-      expect(result.status).toBe(0);
-    }
+    expect(result.status === 0).toBe(!enabled);
     expect(commands).toEqual([]);
   });
 

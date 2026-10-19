@@ -1,12 +1,12 @@
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 // Voice Call tests cover manager.restore plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { VoiceCallConfigSchema } from "./config.js";
+import { normalizeVoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import {
   createTestStorePath,
@@ -22,8 +22,8 @@ import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-
 function installStateRuntime(): VoiceCallStateRuntime["state"] {
   const state: VoiceCallStateRuntime["state"] = {
     resolveStateDir: () => "",
-    openKeyedStore: (options: OpenAsyncKeyedStoreOptions) =>
-      createPluginStateKeyedStoreForTests("voice-call", options),
+    openKeyedStoreV2: (options: OpenAsyncKeyedStoreOptions) =>
+      createPluginStateKeyedStoreV2ForTests("voice-call", options, { assertCurrent() {} }),
     openChannelIngressQueue: (() => {
       throw new Error("openChannelIngressQueue is not used by voice-call restore tests");
     }) as never,
@@ -76,7 +76,7 @@ describe("CallManager verification on restore", () => {
 
     const provider = params?.provider ?? new FakeProvider();
 
-    const config = VoiceCallConfigSchema.parse({
+    const config = normalizeVoiceCallConfig({
       enabled: true,
       provider: "plivo",
       fromNumber: "+15550000000",
@@ -118,7 +118,7 @@ describe("CallManager verification on restore", () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     const provider = new FakeProvider();
     const status = vi.spyOn(provider, "getCallStatus");
-    const config = VoiceCallConfigSchema.parse({
+    const config = normalizeVoiceCallConfig({
       enabled: true,
       provider: "plivo",
       fromNumber: "+15550000000",
@@ -168,13 +168,13 @@ describe("CallManager verification on restore", () => {
     setVoiceCallStateRuntime({
       state: {
         ...retainedStateRuntime,
-        openKeyedStore: () => {
+        openKeyedStoreV2: () => {
           throw new Error("ambient state runtime must not own retained manager records");
         },
       },
     });
 
-    const config = VoiceCallConfigSchema.parse({
+    const config = normalizeVoiceCallConfig({
       enabled: true,
       provider: "plivo",
       fromNumber: "+15550000000",
@@ -206,7 +206,7 @@ describe("CallManager verification on restore", () => {
         state: "answered",
       }),
     ]);
-    const config = VoiceCallConfigSchema.parse({
+    const config = normalizeVoiceCallConfig({
       enabled: true,
       provider: "plivo",
       fromNumber: "+15550000000",
@@ -327,7 +327,7 @@ describe("CallManager verification on restore", () => {
       }
       throw new Error("network failure");
     };
-    const config = VoiceCallConfigSchema.parse({
+    const config = normalizeVoiceCallConfig({
       enabled: true,
       provider: "plivo",
       fromNumber: "+15550000000",
@@ -428,7 +428,7 @@ describe("CallManager verification on restore", () => {
     await writeCallsToStore(storePath, [persisted]);
 
     const provider = new FakeProvider();
-    const config = VoiceCallConfigSchema.parse({
+    const config = normalizeVoiceCallConfig({
       enabled: true,
       provider: "plivo",
       fromNumber: "+15550000000",

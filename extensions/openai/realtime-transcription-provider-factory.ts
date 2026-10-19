@@ -1,8 +1,9 @@
-import type {
-  RealtimeTranscriptionProviderConfig,
-  RealtimeTranscriptionProviderPlugin,
-  RealtimeTranscriptionWebSocketTransport,
-} from "openclaw/plugin-sdk/realtime-transcription-session";
+import {
+  measureTranscriptDeltaBytes,
+  type RealtimeTranscriptionProviderConfig,
+  type RealtimeTranscriptionProviderPlugin,
+  type RealtimeTranscriptionWebSocketTransport,
+} from "openclaw/plugin-sdk/realtime-transcription-provider";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   asFiniteNumberInRange,
@@ -49,38 +50,23 @@ const OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REQUIRED =
 const OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REJECTED =
   "OpenAI Realtime transcription rejected the selected API key. Update or remove the active OpenAI API-key source";
 
-function appendedUtf8ByteLength(previous: string, appended: string): number {
-  const appendedBytes = Buffer.byteLength(appended, "utf8");
-  if (!previous || !appended) {
-    return appendedBytes;
-  }
-  const previousCodeUnit = previous.charCodeAt(previous.length - 1);
-  const appendedCodeUnit = appended.charCodeAt(0);
-  const joinsSurrogatePair =
-    previousCodeUnit >= 0xd800 &&
-    previousCodeUnit <= 0xdbff &&
-    appendedCodeUnit >= 0xdc00 &&
-    appendedCodeUnit <= 0xdfff;
-  return joinsSurrogatePair ? appendedBytes - 2 : appendedBytes;
-}
-
 function normalizeProviderConfig(config: RealtimeTranscriptionProviderConfig) {
   const raw = resolveOpenAIProviderConfigRecord(config);
   return {
     apiKey:
       normalizeResolvedSecretInputString({
-        value: raw?.apiKey,
+        value: raw.apiKey,
         path: "plugins.entries.voice-call.config.streaming.providers.openai.apiKey",
       }) ??
       normalizeResolvedSecretInputString({
-        value: raw?.openaiApiKey,
+        value: raw.openaiApiKey,
         path: "plugins.entries.voice-call.config.streaming.openaiApiKey",
       }),
-    language: normalizeOptionalString(raw?.language),
-    model: normalizeOptionalString(raw?.model) ?? normalizeOptionalString(raw?.sttModel),
-    prompt: normalizeOptionalString(raw?.prompt),
-    silenceDurationMs: asSafeIntegerInRange(raw?.silenceDurationMs, { min: 0 }),
-    vadThreshold: asFiniteNumberInRange(raw?.vadThreshold, { min: 0, max: 1 }),
+    language: normalizeOptionalString(raw.language),
+    model: normalizeOptionalString(raw.model) ?? normalizeOptionalString(raw.sttModel),
+    prompt: normalizeOptionalString(raw.prompt),
+    silenceDurationMs: asSafeIntegerInRange(raw.silenceDurationMs, { min: 0 }),
+    vadThreshold: asFiniteNumberInRange(raw.vadThreshold, { min: 0, max: 1 }),
   };
 }
 
@@ -94,6 +80,7 @@ export function buildOpenAIRealtimeTranscriptionProvider(
     defaultModel: OPENAI_REALTIME_TRANSCRIPTION_DEFAULT_MODEL,
     autoSelectOrder: 10,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
+    // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured: ({ cfg, providerConfig }) =>
       Boolean(
         normalizeProviderConfig(providerConfig).apiKey ||
@@ -103,6 +90,16 @@ export function buildOpenAIRealtimeTranscriptionProvider(
           cfg,
           profileTypes: ["api_key"],
         }),
+      ),
+    isConfiguredAsync: async ({ cfg, providerConfig }) =>
+      Boolean(
+        normalizeProviderConfig(providerConfig).apiKey ||
+        process.env.OPENAI_API_KEY?.trim() ||
+        (await runtime.isProviderAuthProfileConfiguredAsync({
+          provider: "openai",
+          cfg,
+          profileTypes: ["api_key"],
+        })),
       ),
     createSession: (req) => {
       const normalized = normalizeProviderConfig(req.providerConfig);
@@ -480,7 +477,7 @@ export function buildOpenAIRealtimeTranscriptionProvider(
                 }
                 const pendingTranscript = pendingTranscripts.get(key);
                 const previousPartial = pendingTranscript?.text ?? "";
-                const deltaBytes = appendedUtf8ByteLength(previousPartial, event.delta);
+                const deltaBytes = measureTranscriptDeltaBytes(previousPartial, event.delta);
                 if (
                   deltaBytes >
                   OPENAI_REALTIME_TRANSCRIPTION_MAX_RETAINED_TRANSCRIPT_BYTES -

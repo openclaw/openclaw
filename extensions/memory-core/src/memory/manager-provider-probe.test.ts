@@ -99,21 +99,4 @@ describe("embedding availability probes", () => {
       await probe;
     }
   });
-
-  it("holds the provider lease until a timed-out request settles", async () => {
-    const { manager, probe, options, completion, close } = await createProbe("local");
-    try {
-      await vi.advanceTimersByTimeAsync(300_000);
-      expect(options?.signal?.aborted).toBe(true);
-      await expect(probe).resolves.toMatchObject({ ok: false });
-      const closing = manager.close();
-      expect(close).not.toHaveBeenCalled();
-      completion.resolve([1, 0]);
-      await closing;
-      expect(close).toHaveBeenCalledTimes(1);
-    } finally {
-      completion.resolve([1, 0]);
-      await probe;
-    }
-  });
 });

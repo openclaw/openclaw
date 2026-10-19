@@ -1,8 +1,58 @@
 import { describe, expect, it } from "vitest";
-import type { DraftCloudProfile } from "./discovery.ts";
+import { defaultCloudMachine, type DraftCloudProfile } from "./discovery.ts";
 import { DraftCloudMachineState } from "./draft-cloud-machine-state.ts";
 
 describe("cloud selection intent", () => {
+  it("prefers a smaller reported machine only for an unconfigured OS-scoped catalog", () => {
+    const profile: DraftCloudProfile = {
+      id: "cloud",
+      providerId: "worker",
+      operatingSystems: [{ id: "linux", label: "Linux", default: true }],
+      machines: [
+        { id: "large", label: "Large", os: "linux", cpu: 32, memoryGb: 64 },
+        { id: "small", label: "Small", os: "linux", cpu: 8, memoryGb: 16 },
+        { id: "tiny", label: "Tiny", os: "windows", cpu: 2, memoryGb: 4 },
+      ],
+    };
+    const state = new DraftCloudMachineState();
+    expect(state.selection(profile.id, [profile])).toEqual({ os: "linux", machineClass: "small" });
+    state.select(profile.id, "large", [profile]);
+    expect(state.selection(profile.id, [profile])).toEqual({ os: "linux", machineClass: "large" });
+  });
+
+  it.each<{ name: string; machines: NonNullable<DraftCloudProfile["machines"]> }>([
+    {
+      name: "CPU and memory tradeoff",
+      machines: [
+        { id: "first", label: "First", cpu: 4, memoryGb: 8 },
+        { id: "second", label: "Second", cpu: 2, memoryGb: 64 },
+      ],
+    },
+    {
+      name: "unknown CPU",
+      machines: [
+        { id: "first", label: "First", memoryGb: 64 },
+        { id: "second", label: "Second", cpu: 2, memoryGb: 8 },
+      ],
+    },
+    {
+      name: "unknown memory",
+      machines: [
+        { id: "first", label: "First", cpu: 32 },
+        { id: "second", label: "Second", cpu: 2, memoryGb: 8 },
+      ],
+    },
+    {
+      name: "equal reported shapes",
+      machines: [
+        { id: "first", label: "First", cpu: 2, memoryGb: 8 },
+        { id: "second", label: "Second", cpu: 2, memoryGb: 8 },
+      ],
+    },
+  ])("preserves provider order for $name", ({ machines }) => {
+    expect(defaultCloudMachine({ id: "cloud", providerId: "worker", machines })?.id).toBe("first");
+  });
+
   it("retains a selected machine and its OS after catalog refresh", () => {
     const profile: DraftCloudProfile = {
       id: "aws",

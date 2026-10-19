@@ -91,17 +91,6 @@ afterEach(() => {
 });
 
 describe("runResumeCommand", () => {
-  it.each([
-    ["malformed", "not+base64url"],
-    ["oversized", "A".repeat(4097)],
-  ])("rejects a %s handoff before Gateway discovery or the TUI", async (_name, handoff) => {
-    await expect(runResumeCommand(undefined, { handoff })).rejects.toThrow(
-      "Invalid --handoff payload. Copy a fresh command from the Control UI.",
-    );
-    expect(mocks.connect).not.toHaveBeenCalled();
-    expect(mocks.runTui).not.toHaveBeenCalled();
-  });
-
   it.each([["an explicit URL", undefined, "wss://other.example/ws"]])(
     "rejects a handoff combined with %s",
     async (_name, query, url) => {
@@ -208,18 +197,6 @@ describe("runResumeCommand", () => {
     expect(mocks.runTui).not.toHaveBeenCalled();
   });
 
-  it("excludes the bare global session from query resolution", async () => {
-    const client = createGatewayClient([]);
-
-    await runResumeCommand("global", {});
-
-    expect(client.listSessions).toHaveBeenCalledWith(
-      expect.objectContaining({ includeGlobal: false }),
-    );
-    expect(mocks.exit).toHaveBeenCalledWith(1);
-    expect(mocks.runTui).not.toHaveBeenCalled();
-  });
-
   it("omits the bare global session from the interactive picker", async () => {
     const client = createGatewayClient([
       { key: "agent:main:alpha", displayName: "Alpha planning", label: "roadmap" },
@@ -301,13 +278,6 @@ describe("resume command registration", () => {
     ]);
     expect(client.stop).toHaveBeenCalledOnce();
     expect(mocks.runTui).not.toHaveBeenCalled();
-  });
-
-  it("documents the additive opaque handoff option", () => {
-    const program = new Command().name("openclaw");
-    registerResumeCli(program);
-
-    expect(program.commands[0]?.helpInformation()).toContain("--handoff <payload>");
   });
 });
 

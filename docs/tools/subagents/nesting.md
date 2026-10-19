@@ -120,6 +120,10 @@ host-minted root audience to memory providers and plugin tools. Providers must
 consume that prepared audience and must not walk session lineage or infer memory
 authority from session lookups.
 
+Spawn records the parent incarnation captured during preparation. If the parent
+resets before creation finishes, the child can still be created, but memory
+access rejects its stale lineage; respawn it from the current parent session.
+
 A child reset preserves its recorded parent grant, so a newly resolved audience
 can still inherit from the same root. A reset or removal of any recorded parent
 invalidates an already captured audience, so the next protected provider or tool

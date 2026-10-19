@@ -190,7 +190,7 @@ export function readMeetingTranscriptMigrationDetectionState(params: {
     pendingImportCount: 0,
     hasOversizedSessionSlugs: false,
   });
-  const read = ({ db: database }: { db: import("node:sqlite").DatabaseSync }) => {
+  const read = ({ db: database }: { db: import("./sql-connection.js").SqlConnection }) => {
     const tables = new Set(
       database
         .prepare(

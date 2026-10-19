@@ -183,6 +183,10 @@ describe("memory dreaming host helpers", () => {
     ]);
   });
 
+  it("returns no workspaces for an explicitly empty roster", () => {
+    expect(resolveMemoryDreamingWorkspaces({ agents: { entries: {} } })).toEqual([]);
+  });
+
   it("dedupes non-adjacent workspace symlink aliases across agents", async () => {
     const rootDir = tempDirs.make("openclaw-dreaming-workspace-");
     const workspaceDir = path.join(rootDir, "workspace");
@@ -299,18 +303,6 @@ describe("memory dreaming host helpers", () => {
         },
       }),
     ).toEqual({ dreaming: { enabled: true, frequency: "0 */6 * * *" } });
-  });
-
-  it("falls back to memory-core when no memory slot override is configured", () => {
-    expect(
-      resolveMemoryDreamingPluginConfig({
-        plugins: {
-          entries: {
-            "memory-core": { config: { dreaming: { enabled: true } } },
-          },
-        },
-      }),
-    ).toEqual({ dreaming: { enabled: true } });
   });
 
   it('falls back to memory-core when memory slot is "none" or blank', () => {

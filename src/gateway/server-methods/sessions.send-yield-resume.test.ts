@@ -18,12 +18,14 @@ import { dispatchGatewayMethodInProcess } from "../../agents/subagents/announce/
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "../../agents/subagents/registry/subagent-registry-run-pause.js";
+import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "../../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import * as requesterAuthority from "../../agents/subagents/requester-cron-authority.js";
 import { createSessionsYieldTool } from "../../agents/tools/sessions-yield-tool.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import * as transcriptArchive from "../../config/sessions/session-accessor.sqlite-archive.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
@@ -52,6 +54,8 @@ async function createInitialYieldFixture(label: string) {
   await registerSubagentRun({
     runId,
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: `${runId}-session` },
     requesterSessionKey,
     requesterAgentId: "main",
     requesterTurnRunId,
@@ -98,9 +102,9 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
     const entry = expectDefined(subagentRuns.get(runId), `completed run ${runId}`);
     expect(entry).toMatchObject({
       execution: { status: "terminal", outcome: { status: "ok" } },
-      completion: { resultText },
       cleanupCompletedAt: expect.any(Number),
     });
+    expect(loadSubagentRegistryFromSqlite().get(runId)?.completion?.resultText).toBe(resultText);
   };
   const expectSharedRequesterCohort = (runIds: string[], batchRunIds: string[]) => {
     const wakes = runIds.map(
@@ -141,6 +145,8 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   for (const child of children) {
     await registerSubagentRun({
       ...child,
+      childAgentId: "main",
+      sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: child.childSessionKey }),
       requesterSessionKey,
       requesterAgentId: "main",
       requesterTurnRunId,
@@ -417,9 +423,6 @@ it.each(["runtime owner", "state source"] as const)(
       await closing;
       worker.mockRestore();
     }
-    const { loadSubagentRegistryFromSqlite } = await vi.importActual<
-      typeof import("../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js")
-    >("../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js");
     expect(loadSubagentRegistryFromSqlite().get(runId)?.requesterTurnYielded).toBe(true);
   },
 );

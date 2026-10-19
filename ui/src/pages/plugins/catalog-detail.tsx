@@ -1,7 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
-import { Icon } from "../../components/solid/icon.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
@@ -9,14 +8,12 @@ import type { PluginDiscoveryDetailResult, PluginInstallRequest } from "../../li
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
-import { PluginInstallAction } from "./install-action.tsx";
+import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import "../../styles/sidebar-markdown.css";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
-  renderPluginCapabilitySection,
-  renderPluginDeclaredCapabilities,
+  renderPluginContentCapabilities,
   renderPluginMetadata,
-  renderPluginMcpServers,
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.tsx";
@@ -24,6 +21,9 @@ import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-mess
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
 
 export type PluginCatalogDetailProps = {
+  registerRemovalHeading?: (heading: HTMLHeadingElement) => () => void;
+  registerInstallAction?: PluginInstallActionProps["registerInstallAction"];
+  registerIcon?: (readId: () => string) => () => void;
   onAskPlugin?: () => void;
   busy?: boolean;
   installProgress?: PluginInstallProgress;
@@ -44,17 +44,18 @@ export type PluginCatalogDetailProps = {
 };
 
 export function renderPluginReadme(readme: string | undefined): JSX.Element {
-  const readmeHtml = readme
-    ? toSanitizedMarkdownHtml(readme, { mode: "document" })
-        .replaceAll("<h1", "<h2")
-        .replaceAll("</h1>", "</h2>")
-    : null;
   return readme ? (
     <article
       class="plugin-catalog-detail__readme sidebar-markdown"
       onClick={handleMarkdownCodeBlockClick}
     >
-      <SanitizedHtml html={readmeHtml ?? ""} class="lit-content" style={{ display: "contents" }} />
+      <SanitizedHtml
+        html={toSanitizedMarkdownHtml(readme, { mode: "document" })
+          .replaceAll("<h1", "<h2")
+          .replaceAll("</h1>", "</h2>")}
+        class="lit-content"
+        style={{ display: "contents" }}
+      />
     </article>
   ) : (
     <p class="plugin-catalog-detail__empty">{t("pluginsPage.detailNoReadme")}</p>
@@ -65,6 +66,7 @@ function CatalogDetailContent(props: {
   value: PluginDiscoveryDetailResult;
   state: PluginCatalogDetailProps;
 }) {
+  let installButton: HTMLButtonElement | undefined;
   const plugin = () => props.value.plugin;
   const detail = () => props.value.detail;
   const installing = () =>
@@ -75,6 +77,7 @@ function CatalogDetailContent(props: {
     detail().author?.imageUrl ? props.state.iconUrls[detail().author!.imageUrl!] : undefined;
   return (
     <PluginDetailShell
+      registerRemovalHeading={props.state.registerRemovalHeading}
       id="plugin-catalog-detail"
       name={plugin().catalog.name}
       summary={plugin().catalog.summary}
@@ -83,34 +86,28 @@ function CatalogDetailContent(props: {
       onBack={props.state.onBack}
       icon={
         <PluginArtTile
+          registerIcon={props.state.registerIcon}
           slug={plugin().id}
           name={plugin().catalog.name}
-          options={{
-            get iconUrl() {
-              return packageIcon();
-            },
-            get authorIconUrl() {
-              return authorIcon();
-            },
-            get whiteBackground() {
-              return plugin().catalog.official && Boolean(packageIcon());
-            },
-            get loading() {
-              return Boolean(
-                (plugin().catalog.imageUrl &&
-                  props.state.iconLoading?.(plugin().catalog.imageUrl!)) ||
-                (detail().author?.imageUrl &&
-                  props.state.iconLoading?.(detail().author!.imageUrl!)),
-              );
-            },
-          }}
+          iconUrl={packageIcon()}
+          authorIconUrl={authorIcon()}
+          whiteBackground={plugin().catalog.official && Boolean(packageIcon())}
+          loading={Boolean(
+            (plugin().catalog.imageUrl && props.state.iconLoading?.(plugin().catalog.imageUrl!)) ||
+            (detail().author?.imageUrl && props.state.iconLoading?.(detail().author!.imageUrl!)),
+          )}
         />
       }
       titleAction={
         <>
           {plugin().local.action === "install" || installing() ? (
-            <ReasonedDisabledControl reason={props.state.installBlockedReason}>
+            <ReasonedDisabledControl
+              reason={props.state.installBlockedReason}
+              descriptionTarget={() => installButton ?? null}
+            >
               <PluginInstallAction
+                registerInstallAction={props.state.registerInstallAction}
+                onButtonRef={(element) => (installButton = element)}
                 buttonClass="btn oc-action plugin-catalog-detail__install"
                 primary
                 disabled={!props.state.canInstall}
@@ -134,21 +131,15 @@ function CatalogDetailContent(props: {
             busy: props.state.busy,
             onContinue: props.state.canInstall ? props.state.onContinueInstall : undefined,
           })}
-          {renderPluginDeclaredCapabilities(detail().contracts, detail().uiCapabilities)}
-          {props.state.skillsSection ??
-            renderPluginCapabilitySection(
-              t("pluginsPage.detailTabs.skills"),
-              detail().skills,
-              () => <Icon name="bookOpenText" />,
-            )}
-          {renderPluginCapabilitySection(
-            t("pluginsPage.detailTools"),
-            (detail().contracts?.tools ?? []).map((name) => ({ name })),
-            () => (
-              <Icon name="wrench" />
-            ),
-          )}
-          {renderPluginMcpServers(detail().mcpServers, detail().mcpServerDetails)}
+          {renderPluginContentCapabilities({
+            contracts: detail().contracts,
+            uiCapabilities: detail().uiCapabilities,
+            skillsSection: props.state.skillsSection,
+            skills: detail().skills,
+            tools: (detail().contracts?.tools ?? []).map((name) => ({ name })),
+            mcpServers: detail().mcpServers,
+            mcpServerDetails: detail().mcpServerDetails,
+          })}
         </>
       }
       readme={detail().readme ? renderPluginReadme(detail().readme) : undefined}

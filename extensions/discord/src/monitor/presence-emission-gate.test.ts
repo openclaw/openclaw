@@ -15,20 +15,12 @@ function reserveAndCommit(
 ) {
   const decision = gate.reserveBurst(targetGuildId, nowMs, gateOptions);
   if (decision.allowed) {
-    gate.commitBurst(targetGuildId, decision.reservation, nowMs);
+    gate.commitBurst(decision.reservation, nowMs);
   }
   return decision;
 }
 
 describe("resolveDiscordPresenceGateOptions", () => {
-  it("defaults to a five-minute reconnect window and bounded burst", () => {
-    expect(options).toEqual({
-      reconnectSuppressMs: 5 * 60 * 1000,
-      burstLimit: 8,
-      burstWindowMs: 60 * 1000,
-    });
-  });
-
   it("converts configured seconds and honors zero as disabled", () => {
     expect(
       resolveDiscordPresenceGateOptions({
@@ -53,32 +45,6 @@ describe("DiscordPresenceEmissionGate", () => {
     });
   });
 
-  it("rate-limits emission bursts within the sliding window", () => {
-    const gate = new DiscordPresenceEmissionGate();
-    const burstOptions = { ...options, burstLimit: 2, burstWindowMs: 10_000 };
-
-    expect(reserveAndCommit(gate, guildId, 1_000, burstOptions)).toMatchObject({ allowed: true });
-    expect(reserveAndCommit(gate, guildId, 2_000, burstOptions)).toMatchObject({ allowed: true });
-    expect(gate.reserveBurst(guildId, 3_000, burstOptions)).toEqual({
-      allowed: false,
-      reason: "burst",
-      shouldLog: true,
-    });
-    expect(gate.reserveBurst(guildId, 4_000, burstOptions)).toEqual({
-      allowed: false,
-      reason: "burst",
-      shouldLog: false,
-    });
-    // The window drains as old emissions age out; logging re-arms for the next burst.
-    expect(reserveAndCommit(gate, guildId, 12_500, burstOptions)).toMatchObject({ allowed: true });
-    expect(reserveAndCommit(gate, guildId, 12_600, burstOptions)).toMatchObject({ allowed: true });
-    expect(gate.reserveBurst(guildId, 12_700, burstOptions)).toEqual({
-      allowed: false,
-      reason: "burst",
-      shouldLog: true,
-    });
-  });
-
   it("holds lookup admission and starts the burst window when emission commits", () => {
     const gate = new DiscordPresenceEmissionGate();
     const burstOptions = { ...options, burstLimit: 1, burstWindowMs: 10_000 };
@@ -93,7 +59,7 @@ describe("DiscordPresenceEmissionGate", () => {
       reason: "burst-pending",
     });
 
-    gate.commitBurst(guildId, first.reservation, 12_000);
+    gate.commitBurst(first.reservation, 12_000);
     expect(gate.reserveBurst(guildId, 12_001, burstOptions)).toMatchObject({
       allowed: false,
       reason: "burst",

@@ -116,6 +116,7 @@ export async function resolveShortSessionReference(
       isCurrent,
     });
   });
+  // Retire the prepared result before a later connection publication can reuse its scope.
   stopGateway = gateway.subscribe(() => {
     if (!isCurrent()) {
       retire();

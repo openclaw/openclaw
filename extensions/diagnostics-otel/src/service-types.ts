@@ -40,4 +40,3 @@ export type SessionRecoveryDiagnosticEvent = Extract<
 >;
 export type TalkDiagnosticEvent = Extract<DiagnosticEventPayload, { type: "talk.event" }>;
 export type SecuritySeverityText = "FATAL" | "ERROR" | "WARN" | "INFO";
-export type TrustedSpanAliasOwner = { kind: "run"; id: string };

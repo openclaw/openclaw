@@ -8,13 +8,9 @@ type ProfileAppearancePrefs = {
   profileId: string;
   scope: string;
   prefs: ServerUiPrefs;
-  sidebarEntriesReady: boolean;
 };
 export type ProfilePreferencesReadOptions = {
-  configObject: unknown;
-  canMigrate: boolean | (() => boolean);
   isCurrent: () => boolean;
-  onSidebarEntriesUnavailable?: (error: unknown) => void;
 };
 
 // The asynchronous reader borrows this same owner, never a copied publication state.
@@ -22,11 +18,14 @@ export type ProfilePreferencesState = {
   appearance: ProfileAppearancePrefs | null;
   identity: { profileId: string; scope: string } | null;
   requestId: number;
+  // Cached refreshes survive newer reads, but not write or identity invalidation.
+  invalidationId: number;
 };
 export const profilePreferencesState: ProfilePreferencesState = {
   appearance: null,
   identity: null,
   requestId: 0,
+  invalidationId: 0,
 };
 
 // Eager identity updates and the deferred reader share this owner and request generation.
@@ -54,8 +53,7 @@ export function rememberProfileAppearanceIdentity(
   profileId: string | null,
 ): boolean {
   if (state.identity?.scope !== scope || state.identity.profileId !== profileId) {
-    state.requestId += 1;
-    state.appearance = null;
+    invalidateProfileAppearanceReads(true);
   }
   state.identity = profileId ? { scope, profileId } : null;
   return setBackgroundPreferenceIdentity(scope, profileId);
@@ -64,6 +62,7 @@ export function rememberProfileAppearanceIdentity(
 /** A commit retires older reads without discarding the current projection. */
 export function invalidateProfileAppearanceReads(clearSnapshot = false): void {
   state.requestId += 1;
+  state.invalidationId += 1;
   if (clearSnapshot) {
     state.appearance = null;
   }
@@ -91,8 +90,16 @@ export function recordProfileAppearanceCommit(
 }
 
 export function resetProfileAppearancePrefs(): void {
-  state.appearance = null;
+  invalidateProfileAppearanceReads(true);
   state.identity = null;
-  state.requestId += 1;
   clearBackgroundPreferenceIdentity();
+}
+
+export function seedProfileAppearancePrefs(
+  scope: string,
+  profileId: string,
+  prefs: ServerUiPrefs,
+): void {
+  rememberProfileAppearanceIdentity(scope, profileId);
+  state.appearance = { scope, profileId, prefs };
 }

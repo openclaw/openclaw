@@ -1,8 +1,8 @@
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { extractDeliveryInfo } from "../../config/sessions/delivery-info.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
+import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
@@ -19,6 +19,7 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import type { WorkshopChange } from "./changes.kernel.js";
+import { resolveSkillWorkshopConfig } from "./config.js";
 import { workshopReviewIdOf } from "./review-undo.js";
 
 const log = createSubsystemLogger("skills/workshop");
@@ -104,14 +105,14 @@ function formatWorkshopChangeNotice(
     text,
     presentation,
     marker: { kind: SKILL_WORKSHOP_CHANGE_NOTICE_KIND, agentId, runId, skills },
-    undoContext: `A background skill review just changed your learned skills and told the user: ${text} If the user asks to undo or revert it, call ${reverts.join("; then ")}.`,
+    undoContext: `A background skill review just changed your learned skills: ${text} If the user asks to undo or revert it, call ${reverts.join("; then ")}.`,
   };
 }
 
 /**
- * Posts the notice into the originating conversation: external channels get a durable send
- * mirrored into the session transcript; channel-less sessions (Control UI) get a transcript
- * entry. The next foreground turn also gets a system event naming the exact revert call,
+ * Opted-in, supported channels get a durable send mirrored into the session transcript as
+ * plain text. All other sessions get a marked transcript entry the Control UI renders as the
+ * Learned row. The next foreground turn also gets a system event naming the exact revert call,
  * because an assistant line the model did not write is weak evidence that "undo" means it.
  * A conversation reset or replaced since the review started gets none of it.
  */
@@ -127,43 +128,51 @@ export async function postWorkshopChangeNotice(params: {
   }
   const { generation } = params;
   const { agentId, sessionKey } = generation;
-  const isReviewedGeneration = () => {
-    const current = loadSessionEntryReadOnly({
-      agentId,
-      sessionKey,
-      storePath: generation.storePath,
-      hydrateSkillPromptRefs: false,
-      readConsistency: "latest",
-    });
-    return (
-      current?.sessionId === generation.sessionId &&
-      (current.lifecycleRevision ?? null) === generation.lifecycleRevision
-    );
-  };
-  if (!isReviewedGeneration()) {
-    log.debug(`skill workshop notice skipped: session ${sessionKey} was reset`);
-    return;
-  }
-  const { deliveryContext: target, threadId } = extractDeliveryInfo(sessionKey, {
+  const { deliveryContext: target, threadId } = await extractDeliveryInfo(sessionKey, {
     cfg: params.config,
   });
   const channel = target?.channel ? normalizeMessageChannel(target.channel) : undefined;
-  // Slack conversations get no notice (owner decision); the change stays in the Workshop.
-  if (channel === "slack") {
-    log.debug(`skill workshop notice skipped: Slack session ${sessionKey}`);
+  const notice = await withSessionEntriesFromStoresInWorker(
+    [
+      {
+        agentId,
+        storePath: generation.storePath,
+        sessionKeys: [sessionKey],
+        projection: "exact",
+        snapshotFields: [],
+      },
+    ],
+    ([read]) => {
+      const current = read?.result.entries.find((row) => row.sessionKey === sessionKey)?.entry;
+      if (
+        current?.sessionId !== generation.sessionId ||
+        (current.lifecycleRevision ?? null) !== generation.lifecycleRevision
+      ) {
+        log.debug(`skill workshop notice skipped: session ${sessionKey} was reset`);
+        return undefined;
+      }
+      const formatted = formatWorkshopChangeNotice(agentId, params.runId, params.changes);
+      enqueueSystemEvent(formatted.undoContext, {
+        sessionKey: resolveSystemEventQueueKey(sessionKey, agentId),
+      });
+      return formatted;
+    },
+    { ordered: true },
+  );
+  if (!notice) {
     return;
   }
-  const { text, presentation, marker, undoContext } = formatWorkshopChangeNotice(
-    agentId,
-    params.runId,
-    params.changes,
-  );
-  enqueueSystemEvent(undoContext, {
-    sessionKey: resolveSystemEventQueueKey(sessionKey, agentId),
-  });
+  const { text, presentation, marker } = notice;
   const idempotencyKey = `skill-workshop-notice:${params.runId}`;
   try {
-    if (channel && isDeliverableMessageChannel(channel) && target?.to) {
+    // Slack never gets a channel message (owner decision).
+    if (
+      resolveSkillWorkshopConfig(params.config).autonomous.channelNotices &&
+      channel &&
+      channel !== "slack" &&
+      isDeliverableMessageChannel(channel) &&
+      target?.to
+    ) {
       // Delivery and transcript runtimes stay lazy: most reviews change nothing.
       const { sendDurableMessageBatchCore } = await import("../../channels/message/runtime.js");
       const send = await sendDurableMessageBatchCore(
@@ -211,10 +220,6 @@ export async function postWorkshopChangeNotice(params: {
       throw new Error(appended.reason);
     }
   } catch (error) {
-    if (!isReviewedGeneration()) {
-      log.debug(`skill workshop notice skipped: session ${sessionKey} was reset`);
-      return;
-    }
     // The system event above still carries the change to the next turn.
     log.warn(`skill workshop notice delivery failed: ${String(error)}`);
   }

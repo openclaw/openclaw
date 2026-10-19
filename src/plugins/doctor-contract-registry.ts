@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { definePluginDoctorMigrationFromPlans } from "../plugin-sdk/doctor-migration-plan-adapter.js";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { areBundledPluginsDisabled } from "./bundled-dir.js";
 import { resolveBundledPluginScanDir } from "./bundled-plugin-scan.js";
 import { hasPluginConfigMigrationSource } from "./config-contract-matches.js";
@@ -20,6 +21,7 @@ import { findUninspectedPluginDiagnostic } from "./discovery-availability.js";
 import { discoverConfiguredPluginLoadPaths } from "./discovery.js";
 import {
   applyResolvedPluginDoctorCompatibilityMigrations,
+  type PluginDoctorCompatibilityOptions,
   type PluginDoctorCompatibilityResult,
 } from "./doctor-compatibility-migration.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
@@ -102,6 +104,8 @@ type PluginDoctorRegistryParams = {
   manifestRegistry?: PluginManifestRegistry;
   historicalWebhookListeners?: boolean;
   startup?: boolean;
+  /** Port preflight inspects retained data even when its selected owner is disabled. */
+  includeDisabled?: boolean;
 };
 
 function hasScopedProviderAuthAlias(
@@ -521,15 +525,14 @@ export function resolvePluginDoctorStateMigrationRecords(
     return [];
   }
   const registry = params.manifestRegistry ?? discoverConfigWidePluginManifestRegistry(params);
-  return filterPluginDoctorStateMigrationRecords(
-    filterPluginDoctorRecordsByScope(registry.plugins, params.pluginIds),
-    params.config,
-  );
+  const candidates = filterPluginDoctorRecordsByScope(registry.plugins, params.pluginIds);
+  return filterPluginDoctorStateMigrationRecords(candidates, params.config, params.includeDisabled);
 }
 
 function filterPluginDoctorStateMigrationRecords(
   candidates: readonly PluginManifestRegistryRecord[],
   config?: OpenClawConfig,
+  includeDisabled = false,
 ): PluginManifestRegistryRecord[] {
   const records: PluginManifestRegistryRecord[] = [];
   const normalizedConfig = normalizePluginsConfig(config?.plugins);
@@ -537,11 +540,11 @@ function filterPluginDoctorStateMigrationRecords(
     if (deferredPluginMigrations.getStore()?.has(record.id)) {
       continue;
     }
-    const channelOwner = record.channels.length > 0;
     // Config repair intentionally includes disabled plugins; channel state must never be moved
     // after its operator has disabled the owning plugin or every configured channel.
     if (
-      channelOwner &&
+      !includeDisabled &&
+      record.channels.length > 0 &&
       !shouldIncludeChannelSetupFeatureForConfig({
         plugin: record,
         config,
@@ -553,6 +556,7 @@ function filterPluginDoctorStateMigrationRecords(
     // Trusted bundled non-channel migrations remain available while plugins are globally disabled.
     // Every non-bundled owner must pass normal activation before either artifact can execute.
     if (
+      !includeDisabled &&
       record.origin !== "bundled" &&
       !isActivatedManifestOwner({ plugin: record, normalizedConfig, rootConfig: config })
     ) {
@@ -741,9 +745,7 @@ export function resolveLivePluginDoctorStateMigrationInventory(params: {
 
 export function applyPluginDoctorCompatibilityMigrations(
   cfg: OpenClawConfig,
-  params?: PluginDoctorRegistryParams & {
-    onInspectedPlugin?: (pluginId: string, hasConfigRepair: boolean) => void;
-  },
+  params?: PluginDoctorRegistryParams & PluginDoctorCompatibilityOptions,
 ): PluginDoctorCompatibilityResult {
   return applyResolvedPluginDoctorCompatibilityMigrations(
     cfg,
@@ -760,15 +762,17 @@ export function applyPluginDoctorCompatibilityMigrations(
 export async function preparePluginDoctorMigrationBackupResources(
   params: PluginDoctorMigrationResourceCollectionParams,
 ) {
-  return await withPluginSourceCaptureStorage(
-    { stateDir: params.stateDir, placement: "temporary" },
-    async () => {
-      const entries = loadPluginDoctorStateMigrationEntries(
-        resolvePluginDoctorStateMigrationRecords({ ...params, artifactPreservingReadOnly: true }),
-      );
-      const { preparePluginDoctorMigrationResources } =
-        await import("./doctor-migration-resources.js");
-      return await preparePluginDoctorMigrationResources(entries, params);
-    },
+  return await withArtifactPreservingStateReads(() =>
+    withPluginSourceCaptureStorage(
+      { stateDir: params.stateDir, placement: "temporary" },
+      async () => {
+        const entries = loadPluginDoctorStateMigrationEntries(
+          resolvePluginDoctorStateMigrationRecords({ ...params, artifactPreservingReadOnly: true }),
+        );
+        const { preparePluginDoctorMigrationResources } =
+          await import("./doctor-migration-resources.js");
+        return await preparePluginDoctorMigrationResources(entries, params);
+      },
+    ),
   );
 }

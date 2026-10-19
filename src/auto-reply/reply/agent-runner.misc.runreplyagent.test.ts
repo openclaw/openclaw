@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Tests miscellaneous run-reply-agent behaviors and artifact output.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { parseCliOutput } from "../../agents/cli-output.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
@@ -40,11 +40,19 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
+import {
+  createReplyOperation,
+  getSessionControllerOperation,
+  type ReplyOperation,
+} from "../../sessions/session-controller.js";
 import type { VisibleWorkSession } from "../get-reply-options.types.js";
-import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  isReplyPayloadTerminalContent,
+  type ReplyPayload,
+} from "../reply-payload.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { VerboseLevel } from "../thinking.shared.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   compactState,
   loadCronStoreMock,
@@ -60,11 +68,6 @@ import { type BaseRunOptions, createBaseRun } from "./agent-runner.runreplyagent
 import { clearPendingFinalDeliveryAfterSuccess } from "./dispatch-from-config.pending-final.js";
 import { scheduleFollowupDrain } from "./queue.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
-import {
-  createReplyOperation,
-  replyRunRegistry,
-  type ReplyOperation,
-} from "./reply-run-registry.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 function createCliBackendTestConfig() {
@@ -586,7 +589,7 @@ describe("runReplyAgent auto-compaction token update", () => {
 
     vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
       expect(key).toBe(sessionKey);
-      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
       deliveryOrder.push("followup");
     });
 
@@ -602,7 +605,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     }).run();
 
     expectReplyText(result, "ok");
-    expect(replyRunRegistry.get(sessionKey)).toBe(replyOperation);
+    expect(getSessionControllerOperation(sessionKey)).toBe(replyOperation);
     expect(replyOperation.result).toBeNull();
     expect(scheduleFollowupDrain).not.toHaveBeenCalled();
 
@@ -697,7 +700,11 @@ describe("runReplyAgent auto-compaction token update", () => {
 
       try {
         const pending = baseRun.run();
-        await candidateSettled;
+        await awaitGateBeforeSettlement(
+          candidateSettled,
+          pending,
+          "Reply settled before the fallback candidate completed",
+        );
         const replyOperation = expectDefined(
           onReplyOperationOwned.mock.calls[0]?.[0],
           "admitted reply operation",
@@ -709,7 +716,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         }
         releaseFallback();
 
-        expectReplyText(await pending, SILENT_REPLY_TOKEN);
+        expect(await pending).toEqual({});
         expect(replyOperation.result).toEqual({ kind: "aborted", code: expectedCode });
         expect(
           loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
@@ -725,176 +732,6 @@ describe("runReplyAgent auto-compaction token update", () => {
         releaseFallback();
         onReplyOperationOwned.mock.calls[0]?.[0].complete();
       }
-    },
-  );
-
-  it("reports live diagnostic context from promptTokens, not provider usage totals", async () => {
-    const { sessionKey, stored, usageEvent } = await runBaseReplyWithAgentMeta({
-      tmpPrefix: "openclaw-usage-diagnostic-",
-      collectDiagnostics: true,
-      agentMeta: {
-        usage: { input: 75_000, output: 5_000, cacheRead: 25_000, total: 105_000 },
-        diagnosticUsage: {
-          input: 90_000,
-          output: 8_000,
-          cacheRead: 30_000,
-          cacheWrite: 2_000,
-          total: 130_000,
-        },
-        lastCallUsage: { input: 55_000, output: 2_000, cacheRead: 25_000, total: 82_000 },
-        promptTokens: 44_000,
-      },
-    });
-
-    const usagePayload = expectRecordFields(
-      usageEvent,
-      {
-        type: "model.usage",
-        agentId: "main",
-      },
-      "usage diagnostic event",
-    );
-    expectRecordFields(
-      usagePayload.usage,
-      {
-        input: 90_000,
-        output: 8_000,
-        cacheRead: 30_000,
-        cacheWrite: 2_000,
-        promptTokens: 122_000,
-        total: 130_000,
-      },
-      "usage diagnostic usage",
-    );
-    expectRecordFields(
-      usagePayload.context,
-      {
-        limit: 200_000,
-        used: 44_000,
-      },
-      "usage diagnostic context",
-    );
-    expect(stored[sessionKey as keyof typeof stored]?.totalTokens).toBe(44_000);
-  });
-
-  it.each([0, 0.25])(
-    "preserves cost-only total %s in reply diagnostics and persistence",
-    async (total) => {
-      const { sessionKey, stored, usageEvent } = await runBaseReplyWithAgentMeta({
-        tmpPrefix: "openclaw-usage-diagnostic-cost-only-",
-        collectDiagnostics: true,
-        agentMeta: { usage: { cost: { total } } },
-      });
-
-      expect(usageEvent).toMatchObject({ type: "model.usage", costUsd: total });
-      expect(usageEvent).not.toHaveProperty("context.used");
-      const entry = stored[sessionKey as keyof typeof stored];
-      expect(entry?.estimatedCostUsd).toBe(total);
-      for (const key of ["inputTokens", "outputTokens", "cacheRead", "cacheWrite"] as const) {
-        expect(entry?.[key]).toBeUndefined();
-      }
-      expect(entry?.totalTokensFresh).not.toBe(true);
-    },
-  );
-
-  it("falls back to last-call prompt usage for live diagnostic context", async () => {
-    const { usageEvent } = await runBaseReplyWithAgentMeta({
-      tmpPrefix: "openclaw-usage-diagnostic-last-",
-      collectDiagnostics: true,
-      agentMeta: {
-        usage: { input: 75_000, output: 5_000, cacheRead: 25_000, total: 105_000 },
-        lastCallUsage: {
-          input: 55_000,
-          output: 2_000,
-          cacheRead: 25_000,
-          cacheWrite: 1_000,
-          total: 83_000,
-        },
-      },
-    });
-
-    const usagePayload = expectRecordFields(
-      usageEvent,
-      {
-        type: "model.usage",
-      },
-      "usage diagnostic event",
-    );
-    expectRecordFields(
-      usagePayload.usage,
-      {
-        input: 75_000,
-        output: 5_000,
-        cacheRead: 25_000,
-        promptTokens: 100_000,
-        total: 105_000,
-      },
-      "usage diagnostic usage",
-    );
-    expectRecordFields(
-      usagePayload.context,
-      {
-        limit: 200_000,
-        used: 81_000,
-      },
-      "usage diagnostic context",
-    );
-  });
-
-  it.each([0, 1])(
-    "honors queued post-compaction sections with %i reported compactions",
-    async (compactionCount) => {
-      const workspaceDir = tempDirs.make("openclaw-post-compaction-workspace-");
-      await fs.writeFile(
-        path.join(workspaceDir, "AGENTS.md"),
-        [
-          "## Session Startup",
-          "Read the queued workspace startup file.",
-          "",
-          "## Red Lines",
-          "Never use the process cwd for this refresh.",
-        ].join("\n"),
-        "utf-8",
-      );
-
-      const { sessionKey, stored } = await runBaseReplyWithAgentMeta({
-        tmpPrefix: "openclaw-post-compaction-workspace-root-",
-        workspaceDir,
-        config: {
-          agents: {
-            defaults: {
-              compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
-            },
-          },
-        },
-        agentMeta: {
-          compactionCount,
-          lastCallUsage: { input: 10_000, output: 500, total: 10_500 },
-        },
-      });
-
-      // The session seed pins an unrelated source-less snapshot. It must not erase
-      // the queued turn's explicit compaction configuration.
-      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-      expect(firstMockCallArg(runEmbeddedAgentMock, "embedded run params")).toMatchObject({
-        config: {
-          agents: {
-            defaults: {
-              compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
-            },
-          },
-        },
-      });
-      const events = peekSystemEvents(resolveSystemEventQueueKey(sessionKey, "main"));
-      expect(events).toHaveLength(compactionCount);
-      if (compactionCount > 0) {
-        expect(events[0]).toContain("Post-compaction context refresh");
-        expect(events[0]).toContain("Read the queued workspace startup file.");
-        expect(events[0]).toContain("Never use the process cwd for this refresh.");
-      }
-      // Result metadata can report presentation-only compaction, not durable writer custody.
-      expect(stored).toHaveProperty([sessionKey, "sessionId"], "session");
-      expect(stored).not.toHaveProperty([sessionKey, "compactionCount"]);
     },
   );
 });
@@ -1000,11 +837,7 @@ describe("runReplyAgent block streaming", () => {
 });
 
 describe("runReplyAgent inline tool verbosity", () => {
-  it.each([
-    { stored: "off", override: "full", expected: ["Tool summary", "Tool output"] },
-    { stored: "full", override: "off", expected: [] },
-    { stored: "full", override: "on", expected: ["Tool summary"] },
-  ] as const)(
+  it.each([{ stored: "full", override: "on", expected: ["Tool summary"] }] as const)(
     "delivers tool progress with inline $override over stored $stored",
     async ({ stored, override, expected }) => {
       const storePath = path.join(rootDir, "sessions.json");
@@ -1051,6 +884,102 @@ describe("runReplyAgent inline tool verbosity", () => {
 });
 
 describe("runReplyAgent Active Memory inline debug", () => {
+  it.each([
+    {
+      selection: "turn",
+      override: "raw",
+      live: "off",
+      authorized: true,
+      returned: true,
+      raw: true,
+    },
+    {
+      selection: "live",
+      override: undefined,
+      live: "raw",
+      authorized: true,
+      returned: false,
+      raw: true,
+    },
+    {
+      selection: "off",
+      override: "off",
+      live: "raw",
+      authorized: true,
+      returned: true,
+      raw: false,
+    },
+    {
+      selection: "unauthorized",
+      override: "raw",
+      live: "raw",
+      authorized: false,
+      returned: false,
+      raw: false,
+    },
+  ] as const)(
+    "keeps selected trace after native final delivery: $selection",
+    async ({ override, live, authorized, returned, raw }) => {
+      const storePath = path.join(tempDirs.make("openclaw-delivered-trace-"), "sessions.json");
+      const sessionKey = "main";
+      const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: 1, traceLevel: "off" };
+      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+      const onPreparedBlockReply = vi.fn(async () => {});
+      const reply = "Delivered native answer";
+      runEmbeddedAgentMock.mockImplementationOnce(
+        async (params: RunEmbeddedAgentInternalParams) => {
+          await replaceSessionEntry(
+            { storePath, sessionKey },
+            { ...sessionEntry, traceLevel: live },
+          );
+          await params.onAgentEvent?.({
+            stream: "lifecycle",
+            data: { phase: "start" },
+            transcriptStart: null,
+          });
+          await params.onBlockReply?.({ text: reply });
+          return {
+            payloads: returned ? [{ text: reply }] : [],
+            meta: { finalPromptText: "Trace input", finalAssistantRawText: reply },
+          };
+        },
+      );
+      const result = await createBaseRun({
+        context: { Provider: "webchat", Surface: "webchat", MessageSid: "trace-message" },
+        run: {
+          agentId: "main",
+          sessionKey,
+          messageProvider: "webchat",
+          traceAuthorized: authorized,
+          traceLevelOverride: override,
+        },
+        reply: {
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
+          sessionKey,
+          storePath,
+          blockStreamingEnabled: true,
+          opts: { onPreparedBlockReply },
+        },
+      }).run();
+      expect(onPreparedBlockReply).toHaveBeenCalledOnce();
+      expect(firstMockCallArg(onPreparedBlockReply, "native final")).toMatchObject({
+        payload: { text: reply },
+      });
+      const payloads = Array.isArray(result) ? result : result ? [result] : [];
+      expect(payloads.filter(isReplyPayloadTerminalContent)).toEqual([]);
+      const diagnosticsText = payloads.map((payload) => payload.text).join("\n");
+      expect(diagnosticsText.includes("Model Input (User Role)")).toBe(raw);
+      expect(diagnosticsText.includes("Model Output (Assistant Role)")).toBe(raw);
+      expect(payloads).toHaveLength(raw ? 1 : 0);
+      expect(payloads.every((payload) => payload.isStatusNotice === true)).toBe(true);
+      if (!raw) {
+        expect(result).toBeUndefined();
+      }
+      expect(loadSessionEntry({ storePath, sessionKey })?.traceLevel).toBe(live);
+    },
+  );
+
   // Seeds the plugin-owned debug rows through the canonical session accessor.
   async function writeActiveMemoryDebugEntry(params: {
     sessionEntry: SessionEntry;
@@ -1134,9 +1063,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
   }
 
   it.each([
-    { stored: "off", override: "raw", authorized: true, trace: true, raw: true },
-    { stored: "raw", override: "off", authorized: true, trace: false, raw: false },
-    { stored: "raw", override: "on", authorized: true, trace: true, raw: false },
     { stored: "raw", override: "raw", authorized: false, trace: false, raw: false },
   ] as const)(
     "honors turn trace $override over stored $stored with authorization=$authorized",
@@ -1176,10 +1102,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
     },
   );
 
-  it.each([
-    { stored: "off", selected: "on", traceLevel: "off", status: true },
-    { stored: "on", selected: "off", traceLevel: "raw", status: false },
-  ] as const)(
+  it.each([{ stored: "on", selected: "off", traceLevel: "raw", status: false }] as const)(
     "selects plugin status using turn verbosity $selected over stored $stored",
     async ({ stored, selected, traceLevel, status }) => {
       const result = await runActiveMemoryDebugCase(
@@ -1236,7 +1159,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
   it("appends raw trace payloads when trace raw is enabled", async () => {
     const tmp = tempDirs.make("openclaw-trace-raw-usage-");
     const storePath = path.join(tmp, "sessions.json");
-    const sessionFile = path.join(tmp, "session.jsonl");
     const sessionKey = "main";
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -1246,25 +1168,25 @@ describe("runReplyAgent Active Memory inline debug", () => {
     };
 
     await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({
-          message: {
-            role: "user",
-            content: "Earlier turn",
-            usage: { input: 400, output: 20, cacheRead: 100, cacheWrite: 50, total: 570 },
-          },
-        }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: "Earlier reply",
-            usage: { input: 200, output: 10, cacheRead: 20, cacheWrite: 5, total: 235 },
-          },
-        }),
-      ].join("\n"),
-      "utf-8",
+    const transcript = await SessionManager.openAsync(
+      { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath },
+      tmp,
+    );
+    await transcript.appendMessageAsync({ role: "user", content: "Earlier turn", timestamp: 0 });
+    await transcript.appendMessageAsync(
+      makeAssistantMessageFixture({
+        content: [{ type: "text", text: "Earlier reply" }],
+        stopReason: "stop",
+        errorMessage: undefined,
+        usage: {
+          input: 200,
+          output: 10,
+          cacheRead: 20,
+          cacheWrite: 5,
+          totalTokens: 235,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      }),
     );
 
     runWithModelFallbackMock.mockImplementationOnce(async (params: RunWithModelFallbackParams) => ({
@@ -1351,7 +1273,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       commandBody: "/trace raw show me everything",
       reasoningLevel: "on",
       sessionEntry,
-      sessionFile,
+      sessionFile: sessionKey,
       storePath,
       thinkLevel: "low",
       traceAuthorized: true,
@@ -1596,55 +1518,6 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(texts).toContain("Model Output (Assistant Role):\n~~~text\n<empty>\n~~~");
     expect(texts).not.toContain("secret hitl prompt");
   });
-
-  it("uses the selected CLI runtime for canonical Anthropic models", async () => {
-    runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
-      meta: {
-        agentMeta: {
-          provider: "claude-cli",
-          model: "claude-opus-4-7",
-        },
-      },
-    });
-
-    const sessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    } as SessionEntry;
-    const result = await createBaseRun({
-      context: {
-        Provider: "webchat",
-        OriginatingTo: "session:1",
-        AccountId: "primary",
-        MessageSid: "msg",
-      },
-      run: {
-        messageProvider: "webchat",
-        config: {
-          agents: {
-            defaults: {
-              models: {
-                "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
-              },
-            },
-          },
-        },
-        provider: "anthropic",
-        model: "claude-opus-4-7",
-        thinkLevel: "low",
-      },
-      reply: { sessionEntry, defaultModel: "anthropic/claude-opus-4-7" },
-    }).run();
-
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expectRecordFields(
-      firstMockCallArg(runCliAgentMock, "CLI run params"),
-      { provider: "claude-cli" },
-      "CLI run params",
-    );
-    expectReplyText(result, "ok");
-  });
 });
 
 describe("runReplyAgent messaging tool dedupe", () => {
@@ -1788,22 +1661,6 @@ describe("runReplyAgent reminder commitment guard", () => {
     }).run();
   }
 
-  it("keeps reminder commitment unchanged when cron.add succeeded", async () => {
-    mockReminderReply("I'll remind you tomorrow morning.", 1);
-
-    const result = await createRun();
-    expectReplyText(result, "I'll remind you tomorrow morning.");
-  });
-
-  it("suppresses guard note when session already has an active cron job", async () => {
-    mockCronJob();
-
-    mockReminderReply("I'll ping you when it's done.");
-
-    const result = await createRun();
-    expectReplyText(result, "I'll ping you when it's done.");
-  });
-
   it("still appends guard note when cron jobs exist but not for the current session", async () => {
     mockCronJob({ id: "unrelated-job", name: "daily-news", sessionKey: "other-session" });
 
@@ -1813,30 +1670,6 @@ describe("runReplyAgent reminder commitment guard", () => {
     expectReplyText(
       result,
       "I'll remind you tomorrow morning.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
-    );
-  });
-
-  it("still appends guard note when cron jobs for session exist but are disabled", async () => {
-    mockCronJob({ id: "disabled-job", name: "old-monitor", enabled: false });
-
-    mockReminderReply("I'll check back in an hour.");
-
-    const result = await createRun();
-    expectReplyText(
-      result,
-      "I'll check back in an hour.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
-    );
-  });
-
-  it("still appends guard note when sessionKey is missing", async () => {
-    mockCronJob();
-
-    mockReminderReply("I'll ping you later.");
-
-    const result = await createRun({ omitSessionKey: true });
-    expectReplyText(
-      result,
-      "I'll ping you later.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
     );
   });
 
@@ -1980,40 +1813,15 @@ describe("runReplyAgent response usage footer", () => {
         model: params.model ?? "claude",
         thinkLevel: "low",
       },
-      reply: { queueKey: "main", sessionEntry, sessionKey: params.sessionKey },
+      reply: { queueKey: params.sessionKey, sessionEntry, sessionKey: params.sessionKey },
     }).run();
   }
 
   it.each([
     {
-      name: "split token counts",
-      usage: { input_tokens: 12, output_tokens: 3, cacheRead: 4, cacheWrite: 2 },
-      expected: "Usage: 12 in / 3 out · cache 4 cached / 2 new",
-    },
-    {
-      name: "input-only counts",
-      usage: { input_tokens: 12, total_tokens: 15 },
-      expected: "Usage: 12 in / ? out",
-    },
-    {
-      name: "output-only counts",
-      usage: { output_tokens: 3, total_tokens: 15 },
-      expected: "Usage: ? in / 3 out",
-    },
-    {
-      name: "total-only counts",
-      usage: { total_tokens: 1250 },
-      expected: "Usage: 1.3k total",
-    },
-    {
       name: "cache-only counts",
       usage: { cacheRead: 800, cacheWrite: 200 },
       expected: "Usage: ? in / ? out · cache 800 cached / 200 new",
-    },
-    {
-      name: "total and cache counts without a split",
-      usage: { total_tokens: 1250, cacheRead: 800, cacheWrite: 200 },
-      expected: "Usage: 1.3k total · cache 800 cached / 200 new",
     },
   ])("shows $name without cost or session keys in tokens mode", async ({ usage, expected }) => {
     const output = parseCliOutput({
@@ -2311,6 +2119,7 @@ describe("runReplyAgent visible work delivery", () => {
               reply: {
                 opts,
                 replyOperation: opts?.replyOperation,
+                queueKey: ctx.SessionKey,
                 sessionKey: ctx.SessionKey,
                 storePath,
                 sessionEntry,

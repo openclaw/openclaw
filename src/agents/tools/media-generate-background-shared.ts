@@ -1,9 +1,14 @@
 import crypto from "node:crypto";
+import { formatErrorMessage as formatToolErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { computeBackoffSchedule, sleepWithAbort } from "@openclaw/retry";
 import { getRuntimeConfig } from "../../config/config.js";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import {
   captureSessionTranscriptStorageEnvironment,
   captureSessionTranscriptTargetBinding,
@@ -65,8 +70,6 @@ const MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS = [250, 500, 1_000, 2_
 const MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS = 120_000;
 
 export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => void;
-
-export type MediaGenerateAsyncStartCallback = (message: string) => Promise<void> | void;
 
 function shouldDetachMediaGenerationTask(
   sessionKey: string | undefined,
@@ -134,24 +137,31 @@ type WakeMediaGenerationTaskCompletionParams = Omit<
 >;
 
 async function wakeMediaGenerationTaskCompletionWithRetry(params: {
+  handle: MediaGenerationTaskHandle;
   wake: () => Promise<MediaGenerationCompletionWakeOutcome>;
   beforeRetry?: () => void;
 }): Promise<MediaGenerationCompletionWakeOutcome> {
   const deadline = Date.now() + MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS;
   let outcome = await params.wake();
   let retryIndex = 0;
-  while (outcome.status === "pending") {
+  let queueOwnsCompletion = false;
+  while (outcome.status === "pending" || outcome.status === "queued") {
+    if (outcome.status === "queued" && !queueOwnsCompletion) {
+      queueOwnsCompletion = true;
+      updateMediaGenerationOperation(params.handle.runId, { completionDelivery: "queued" });
+    }
     const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
+    if (!queueOwnsCompletion && remainingMs <= 0) {
       throw new Error("media completion did not settle before the handoff deadline");
     }
-    // Queue admission and an owned continuation can both be transient. Keep the
-    // operation live until delivery, permanent refusal, or the bounded deadline.
+    // The deadline bounds unconfirmed handoff, not work the queue already owns.
+    // Keep observing its receipt so real delivery failures still retain the media.
     const delayMs = computeBackoffSchedule(
       MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS,
       retryIndex + 1,
     );
-    await sleepWithAbort(Math.min(delayMs, remainingMs), undefined, { ref: false });
+    const retryDelayMs = queueOwnsCompletion ? delayMs : Math.min(delayMs, remainingMs);
+    await sleepWithAbort(retryDelayMs, undefined, { ref: false });
     params.beforeRetry?.();
     outcome = await params.wake();
     retryIndex += 1;
@@ -176,25 +186,28 @@ function touchMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle) {
 }
 
 /** Preserve all launch authority across both requester lookup and its caller's return await. */
-export function captureMediaGenerationAdmission(assertSourceCurrent?: () => void): () => void {
+export function captureMediaGenerationAdmission(
+  assertSourceCurrent?: SessionSourceAssertion,
+): SessionSourceAssertion {
   const generation = getAgentRunLifecycleGeneration();
   const env = captureSessionTranscriptStorageEnvironment(process.env);
   const assertInvocationCurrent = captureAgentToolSourceExecutionGuard();
   const assertGatewayCallerCurrent = captureGatewayToolCallerAssertion();
-  return () => {
-    assertInvocationCurrent();
-    assertGatewayCallerCurrent?.();
-    assertSourceCurrent?.();
-    if (
-      generation !== getAgentRunLifecycleGeneration() ||
-      !sameSessionTranscriptStorageEnvironment(
-        env,
-        captureSessionTranscriptStorageEnvironment(process.env),
-      )
-    ) {
-      throw new Error("Media generation admission owner is no longer current");
-    }
-  };
+  return composeSessionSourceAssertion(
+    [assertInvocationCurrent, assertGatewayCallerCurrent, assertSourceCurrent],
+    (assertSource) => {
+      assertSource();
+      if (
+        generation !== getAgentRunLifecycleGeneration() ||
+        !sameSessionTranscriptStorageEnvironment(
+          env,
+          captureSessionTranscriptStorageEnvironment(process.env),
+        )
+      ) {
+        throw new Error("Media generation admission owner is no longer current");
+      }
+    },
+  );
 }
 
 async function createMediaGenerationTaskRun(
@@ -410,12 +423,13 @@ export function scheduleMediaGenerationTaskCompletion(params: {
       }
       try {
         const wakeOutcome = await wakeMediaGenerationTaskCompletionWithRetry({
+          handle: params.handle,
           wake: async () =>
             await params.lifecycle.wakeTaskCompletion({
               handle: params.handle,
               status: "error",
               statusLabel: "failed",
-              result: formatErrorMessage(error),
+              result: formatToolErrorMessage(error),
             }),
         });
         if (wakeOutcome.status !== "delivered") {
@@ -446,6 +460,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
     let terminalResult: RequiredCompletionTerminalResult | undefined;
     try {
       const wakeOutcome = await wakeMediaGenerationTaskCompletionWithRetry({
+        handle: params.handle,
         wake: async () =>
           await params.lifecycle.wakeTaskCompletion({
             handle: params.handle,
@@ -466,7 +481,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
       }
     } catch (error) {
       terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
-        formatErrorMessage(error),
+        formatToolErrorMessage(error),
       );
       reportFailure(`${params.toolName} completion wake failed after successful generation`, {
         error,
@@ -557,7 +572,7 @@ export function createMediaGenerationTaskLifecycle(kind: "image" | "music" | "vi
       }
       try {
         const endedAt = Date.now();
-        const errorText = formatErrorMessage(params.error);
+        const errorText = formatToolErrorMessage(params.error);
         updateMediaGenerationOperation(params.handle.runId, {
           status: "failed",
           endedAt,

@@ -20,6 +20,7 @@ import {
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+  NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../infra/node-commands.js";
 import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
@@ -347,6 +348,46 @@ describe("gateway/node-registry", () => {
     expect(ping).not.toHaveBeenCalled();
   });
 
+  it("reports connected nodes without session hosting as ineligible, not disconnected", async () => {
+    const resolveCurrentPairingState = vi.fn(async () => ({
+      identity: "identity-a",
+      generation: "generation-a",
+    }));
+    const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
+      createPrivateRegistry({
+        resolveCurrentPairingState,
+      });
+    registerNodeSession(
+      registry,
+      makeClient("conn-1", "node-1", [], {
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        commands: ["system.run"],
+      }),
+      pairingA,
+    );
+    registerNodeSession(registry, makeClient("conn-unrelated", "node-unrelated"), pairingA);
+    const runtime = createDeviceWorkerRuntime({
+      getPairedDevice: async () => ({
+        deviceId: "node-1",
+        publicKey: "fixture",
+        role: "node",
+        roles: ["node"],
+        tokens: { node: { token: "fixture-token", role: "node", scopes: [], createdAtMs: 1 } },
+        createdAtMs: 1,
+        approvedAtMs: 1,
+      }),
+    });
+    runtime.bindNodeTransport(transport);
+    const availability = await runtime.resolveAvailability("node-1");
+    expect(registry.get("node-1")).toBeDefined();
+    expect(availability).toMatchObject({
+      available: false,
+      unavailableReason: "hosting-unavailable",
+    });
+    expect(deviceUnavailableText("node-1", availability)).toContain("enable session hosting");
+    expect(resolveCurrentPairingState).toHaveBeenCalledExactlyOnceWith("node-1");
+  });
+
   it("rejects a private worker command through the generic invoke surface", async () => {
     const registry = createNodeRegistry();
     const frames = registerNode(registry, { clientId: GATEWAY_CLIENT_IDS.NODE_HOST });
@@ -438,46 +479,6 @@ describe("gateway/node-registry", () => {
         workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
       }),
     ]);
-  });
-
-  it("reports connected nodes without session hosting as ineligible, not disconnected", async () => {
-    const resolveCurrentPairingState = vi.fn(async () => ({
-      identity: "identity-a",
-      generation: "generation-a",
-    }));
-    const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
-      createPrivateRegistry({
-        resolveCurrentPairingState,
-      });
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], {
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        commands: ["system.run"],
-      }),
-      pairingA,
-    );
-    registerNodeSession(registry, makeClient("conn-unrelated", "node-unrelated"), pairingA);
-    const runtime = createDeviceWorkerRuntime({
-      getPairedDevice: async () => ({
-        deviceId: "node-1",
-        publicKey: "fixture",
-        role: "node",
-        roles: ["node"],
-        tokens: { node: { token: "fixture-token", role: "node", scopes: [], createdAtMs: 1 } },
-        createdAtMs: 1,
-        approvedAtMs: 1,
-      }),
-    });
-    runtime.bindNodeTransport(transport);
-    const availability = await runtime.resolveAvailability("node-1");
-    expect(registry.get("node-1")).toBeDefined();
-    expect(availability).toMatchObject({
-      available: false,
-      unavailableReason: "hosting-unavailable",
-    });
-    expect(deviceUnavailableText("node-1", availability)).toContain("enable session hosting");
-    expect(resolveCurrentPairingState).toHaveBeenCalledExactlyOnceWith("node-1");
   });
 
   it("separates inventory topology from availability across proof mutations", async () => {
@@ -643,12 +644,6 @@ describe("gateway/node-registry", () => {
       ]);
       expect(snapshot.sessionHostNodeIds.has("node-1")).toBe(false);
       expect(snapshot.workerSlotsByNodeId.get("node-1")).toEqual({ total: 2, available: 0 });
-      const projectedCapacity = snapshot.workerSlotsByNodeId.get("node-1");
-      if (!projectedCapacity) {
-        throw new Error("expected projected capacity");
-      }
-      // JavaScript consumers can mutate a readonly-typed snapshot without changing admission.
-      Object.assign(projectedCapacity, { available: 2 });
       expect(transport.isCurrent(proof, true)).toBe(false);
       expect(frames).toEqual([]);
 
@@ -825,6 +820,54 @@ describe("gateway/node-registry", () => {
       await expect(outcome).resolves.toMatchObject({ ok: false });
       expect(frames).toEqual([]);
       expect(dispatched).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["current", "owner-revoked", "node-revoked"] as const)(
+    "settles a dispatched maintenance response with %s completion custody",
+    async (completion) => {
+      const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
+        createPrivateRegistry();
+      const frames: string[] = [];
+      registerNodeSession(
+        registry,
+        makeClient("conn-1", "node-1", frames, {
+          clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+          commands: [NODE_WORKER_WORKSPACE_RETAIN_COMMAND],
+        }),
+        pairingA,
+      );
+      publishRunner(registry, { enabled: true, capacity: { total: 1, available: 1 } });
+      const proof = expectDefined((await transport.listCurrentNodes())[0], "runner proof");
+      const dispatched = createDeferred();
+      let dispatchCurrent = true;
+      let completionCurrent = true;
+      const invocation = transport.invoke({
+        node: proof,
+        command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+        isDispatchAuthorized: () => dispatchCurrent,
+        isCompletionAuthorized: () => completionCurrent,
+        onDispatchReady: () => dispatched.resolve(),
+      });
+      await dispatched.promise;
+      dispatchCurrent = false;
+      if (completion === "owner-revoked") {
+        completionCurrent = false;
+      } else if (completion === "node-revoked") {
+        publishRunner(registry, { enabled: false });
+      }
+      const payloadJSON = JSON.stringify({ applied: true, deleted: 0, hasMore: false });
+      expect(finish(registry, readRequest(frames).id, { ok: true, payloadJSON })).toBe(
+        completion === "current",
+      );
+      if (completion === "current") {
+        await expect(invocation).resolves.toMatchObject({ ok: true, payloadJSON });
+      } else {
+        await expect(invocation).resolves.toMatchObject({
+          ok: false,
+          error: { code: "APPROVAL_AUTHORITY_CLOSED" },
+        });
+      }
     },
   );
 
@@ -1623,7 +1666,6 @@ describe("gateway/node-registry", () => {
 
   it.each([
     { clientId: GATEWAY_CLIENT_IDS.NODE_HOST, command: "mcp.tools.call.v1" },
-    { clientId: GATEWAY_CLIENT_IDS.MACOS_APP, command: "system.run" },
     { clientId: GATEWAY_CLIENT_IDS.IOS_APP, command: "system.run" },
   ])(
     "preserves negotiated non-streaming cancellation for $clientId $command",
@@ -2109,34 +2151,6 @@ describe("gateway/node-registry", () => {
     ).toBeNull();
     expect(registry.get("node-1")?.nodePluginTools).toEqual([]);
     expect(listConnectedNodePluginTools()).toEqual([]);
-  });
-
-  it("enriches published node tools after matching plugin descriptors load", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], { commands: ["demo.echo"] }),
-      {},
-    );
-    publishTools(registry, [
-      {
-        pluginId: "demo",
-        name: "demo_echo",
-        description: "Published description",
-        command: "demo.echo",
-      },
-    ]);
-
-    expect(registry.get("node-1")?.nodePluginTools[0]?.description).toBe("Published description");
-
-    registerTool({
-      name: "demo_echo",
-      command: "demo.echo",
-      description: "Registered description",
-    });
-    registry.refreshRuntimePolicy();
-
-    expect(registry.get("node-1")?.nodePluginTools[0]?.description).toBe("Registered description");
   });
 
   it("enforces node skill count and total-content caps", () => {

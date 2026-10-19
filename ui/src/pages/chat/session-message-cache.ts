@@ -5,7 +5,9 @@ import {
 } from "@openclaw/gateway-client/browser";
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
+import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
@@ -22,19 +24,6 @@ export const MAX_CACHED_CHAT_WEIGHT = 24 * 1024 * 1024;
 const cachedMessageWeights = new WeakMap<object, number>();
 const appendedEventClaims = new WeakMap<ChatMessageCache, WeakSet<object>>();
 
-export type ChatTranscriptMetadata = Pick<
-  GatewaySessionRow,
-  | "key"
-  | "kind"
-  | "classification"
-  | "participants"
-  | "expandedParticipants"
-  | "owner"
-  | "lastRunId"
-  | "status"
-  | "runtimeMs"
->;
-
 const transcriptMetadata = new WeakMap<GatewaySessionRow, ChatTranscriptMetadata>();
 
 export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTranscriptMetadata {
@@ -45,6 +34,9 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
   const {
     key,
     kind,
+    label,
+    displayName,
+    derivedTitle,
     classification,
     participants,
     expandedParticipants,
@@ -56,6 +48,9 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
   const metadata = {
     key,
     kind,
+    label,
+    displayName,
+    derivedTitle,
     classification,
     participants,
     expandedParticipants,
@@ -69,14 +64,60 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
 }
 
 export type ChatSessionSnapshot = {
+  widgetHeights?: Record<string, number>;
   transcriptMetadata?: ChatTranscriptMetadata;
   progressCard?: ProgressCard | null;
   deltaCursor?: string;
+  historyState?: ChatHistoryState;
   displayedLeafEntryId?: string | null;
   messages: unknown[];
   pagination: ChatHistoryPagination;
   sessionId: string | null;
 };
+
+export type ChatWidgetLayout = {
+  read: (key: string) => number | undefined;
+  write: (key: string, height: number) => void;
+};
+
+export function createChatWidgetLayout(
+  cache: ChatMessageCache,
+  host: ChatMessageCacheHost,
+  target: ChatMessageCacheTarget,
+): ChatWidgetLayout {
+  const cacheKey = resolveChatSnapshotKey(host, target);
+  let sessionId = cache.get(cacheKey)?.snapshot.sessionId;
+  const current = () => {
+    const snapshot = cache.get(cacheKey)?.snapshot;
+    // A row can mount before the history owner commits its first cache snapshot.
+    if (sessionId === undefined && snapshot) {
+      sessionId = snapshot.sessionId;
+    }
+    return resolveChatSnapshotKey(host, target) === cacheKey && snapshot?.sessionId === sessionId
+      ? snapshot
+      : undefined;
+  };
+  return {
+    read: (key) => current()?.widgetHeights?.[key],
+    write: (key, height) => {
+      const snapshot = current();
+      if (!snapshot || !Number.isFinite(height) || height < 48 || height > 8000) {
+        return;
+      }
+      if (snapshot.widgetHeights?.[key] === height) {
+        return;
+      }
+      const widgetHeights = { ...snapshot.widgetHeights };
+      delete widgetHeights[key];
+      widgetHeights[key] = height;
+      const keys = Object.keys(widgetHeights);
+      if (keys.length > 100) {
+        delete widgetHeights[keys[0]!];
+      }
+      cacheChatSessionSnapshot(cache, host, target, { ...snapshot, widgetHeights });
+    },
+  };
+}
 
 type CachedChatSessionSnapshot = {
   snapshot: ChatSessionSnapshot;
@@ -84,6 +125,15 @@ type CachedChatSessionSnapshot = {
 };
 
 export type ChatMessageCache = Map<string, CachedChatSessionSnapshot>;
+
+/** Disk snapshots omit pairing secrets; discard only their connection-owned memory copies. */
+export function retireCachedPairingQr(cache: ChatMessageCache | undefined): void {
+  for (const [key, cached] of cache ?? []) {
+    if (cached.snapshot.messages.some((message) => readPairingQrContent(message).length > 0)) {
+      cache?.delete(key);
+    }
+  }
+}
 
 export type ChatCacheObserver = {
   delete: (sessionKey: string, reason?: SessionSnapshotInvalidationReason) => void | Promise<void>;
@@ -111,6 +161,19 @@ export function readChatHistoryCursor(state: ChatHistoryCursorHost): string | un
   }
   delete state.chatHistoryCursor;
   return undefined;
+}
+
+export function readChatHistoryState(
+  state: ChatHistoryCursorHost & { chatMessagesBySession?: ChatMessageCache },
+  cursor: string | undefined,
+): ChatHistoryState | undefined {
+  if (cursor === undefined || !state.currentSessionId || !state.chatMessagesBySession) {
+    return undefined;
+  }
+  const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, {
+    sessionKey: state.sessionKey,
+  });
+  return snapshot?.sessionId === state.currentSessionId ? snapshot.historyState : undefined;
 }
 
 export function setChatHistoryCursor(
@@ -249,19 +312,25 @@ export function cacheChatSessionSnapshot(
   const cacheKey = resolveChatSnapshotKey(host, target);
   const existing = getSessionCacheValue(cache, cacheKey);
   // History prefetch owns transcript facts, not the independently refreshed card.
-  const snapshot =
+  const withProgress =
     incoming.progressCard === undefined &&
     existing?.snapshot.progressCard !== undefined &&
     existing.snapshot.sessionId === incoming.sessionId
       ? { ...incoming, progressCard: existing.snapshot.progressCard }
       : incoming;
+  const snapshot =
+    withProgress.widgetHeights === undefined && existing?.snapshot.sessionId === incoming.sessionId
+      ? { ...withProgress, widgetHeights: existing.snapshot.widgetHeights }
+      : withProgress;
   if (
     existing?.snapshot.messages === snapshot.messages &&
     existing.snapshot.deltaCursor === snapshot.deltaCursor &&
+    existing.snapshot.historyState === snapshot.historyState &&
     existing.snapshot.sessionId === snapshot.sessionId &&
     existing.snapshot.displayedLeafEntryId === snapshot.displayedLeafEntryId &&
     existing.snapshot.transcriptMetadata === snapshot.transcriptMetadata &&
     existing.snapshot.progressCard === snapshot.progressCard &&
+    existing.snapshot.widgetHeights === snapshot.widgetHeights &&
     samePagination(existing.snapshot.pagination, snapshot.pagination)
   ) {
     return;

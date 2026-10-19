@@ -6,14 +6,14 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import type { RawData } from "ws";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { readAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { ACTIVE_EMBEDDED_RUN_REGISTRATIONS } from "../agents/embedded-agent-runner/run-state.js";
+import { getEmbeddedRunAttachment } from "../agents/embedded-agent-runner/run-state.js";
 import { createAttemptNestedToolActivityState } from "../agents/embedded-agent-runner/run/attempt-nested-tool-activity.js";
 import { prepareEmbeddedAttemptStream } from "../agents/embedded-agent-runner/run/attempt-stream-prepare.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../agents/embedded-agent-runner/run/types.js";
-import { clearActiveEmbeddedRun } from "../agents/embedded-agent-runner/runs.js";
+import { detachActiveEmbeddedRun } from "../agents/embedded-agent-runner/runs.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -22,13 +22,14 @@ import {
 } from "../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { runAnnounceAgentCall } from "../agents/subagents/announce/subagent-announce-completion-delivery.js";
 import { makeEmbeddedRunnerAttempt } from "../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig, writeConfigFile } from "../config/config.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { createDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { rawDataToString } from "../infra/ws.js";
 import { createDiagnosticEmbeddedRunOwner } from "../logging/diagnostic-run-activity.js";
 import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
+import { getSessionControllerOperation } from "../sessions/session-controller.js";
+import * as messageInjection from "../sessions/session-controller.message-injection.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
 import {
   agentCommandMock,
@@ -48,8 +49,8 @@ const runAttempt = vi.hoisted(() =>
   vi.fn<(params: EmbeddedRunAttemptParams) => Promise<EmbeddedRunAttemptResult>>(),
 );
 
-// The real harness selects the runtime and prepares its authority before this
-// model-execution boundary. The test never creates a reply operation or hash.
+// The real harness selects the runtime and binds its authority to the controller
+// operation before this model-execution boundary.
 vi.mock("../agents/embedded-agent-runner/run/attempt.js", () => ({
   runEmbeddedAttempt: runAttempt,
 }));
@@ -166,8 +167,8 @@ it.for([
       typeof import("../agents/agent-model-discovery.js")
     >("../agents/agent-model-discovery.js");
     const discoverySpy = vi
-      .spyOn(discovery, "discoverModels")
-      .mockImplementation(actualDiscovery.discoverModels);
+      .spyOn(discovery, "discoverModelsAsync")
+      .mockImplementation(actualDiscovery.discoverModelsAsync);
     onTestFinished(() => discoverySpy.mockRestore());
     await prepareGatewayReplyRuntimeForTest({ force: true });
     await writeSessionStore({
@@ -190,6 +191,33 @@ it.for([
     );
     const releaseModel = createDeferred();
     const modelStarted = createDeferred();
+    const sessionLifecycleState = await import("./session-lifecycle-state.js");
+    const startCommitted = createDeferred();
+    // Start persistence is detached from model readiness and can still change sharing facts.
+    void startCommitted.promise.catch(() => undefined);
+    const prepareLifecycle = sessionLifecycleState.prepareGatewaySessionLifecycleEvent;
+    const lifecycleSpy = vi
+      .spyOn(sessionLifecycleState, "prepareGatewaySessionLifecycleEvent")
+      .mockImplementation((params) => {
+        const persist = prepareLifecycle(params);
+        if (
+          params.sessionKey !== sessionKey ||
+          params.event.runId !== runId ||
+          params.event.data?.phase !== "start"
+        ) {
+          return persist;
+        }
+        return async () => {
+          try {
+            await persist();
+            startCommitted.resolve();
+          } catch (error) {
+            startCommitted.reject(error);
+            throw error;
+          }
+        };
+      });
+    onTestFinished(() => lifecycleSpy.mockRestore());
     const ownerReady = createDeferred<{
       attempt: EmbeddedRunAttemptParams;
       handle: ReturnType<typeof prepareEmbeddedAttemptStream>["queueHandle"];
@@ -270,7 +298,7 @@ it.for([
         });
       } finally {
         prepared.subscription.unsubscribe();
-        clearActiveEmbeddedRun(sessionId, prepared.queueHandle, sessionKey, attempt.sessionFile);
+        detachActiveEmbeddedRun(sessionId, prepared.queueHandle, sessionKey, attempt.sessionFile);
         embeddedRunMock.activeIds.delete(sessionId);
         session.dispose();
       }
@@ -344,7 +372,7 @@ it.for([
         }),
       );
     }
-    const capture = vi.spyOn(replyRunRegistry, "resolveCurrentMessageInjectionTarget");
+    const capture = vi.spyOn(messageInjection, "captureCurrentReplyMessageInjectionTarget");
     onTestFinished(() => capture.mockRestore());
     const diagnostics = vi.spyOn(diagnosticLogger, "info");
     onTestFinished(() => diagnostics.mockRestore());
@@ -354,18 +382,18 @@ it.for([
       }
       const { attempt, handle } = await withinTest(
         Promise.race([
-          ownerReady.promise,
+          Promise.all([ownerReady.promise, startCommitted.promise]).then(([owner]) => owner),
           original.then((response) => {
             throw new Error(
-              `Direct command finished before publishing its steering owner: ${JSON.stringify(response)}`,
+              `Direct command finished before its steering owner and lifecycle start were ready: ${JSON.stringify(response)}`,
             );
           }),
         ]),
         signal,
       );
-      const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
+      const registration = getEmbeddedRunAttachment(handle);
       const facts = {
-        hasReplyOperation: replyRunRegistry.get(sessionKey) !== undefined,
+        hasReplyOperation: getSessionControllerOperation(sessionKey) !== undefined,
         authoritySource: registration?.toolAuthority?.source,
         hasOperatorAuthority:
           readAdmittedRunOperatorAuthority(attempt.admittedRunContext) !== undefined,
@@ -379,13 +407,13 @@ it.for([
         supportsTranscriptCommitWait: handle.supportsTranscriptCommitWait,
       };
       expect(facts).toEqual({
-        hasReplyOperation: false,
-        authoritySource: "attempt",
+        hasReplyOperation: true,
+        authoritySource: "reply",
         hasOperatorAuthority: source === "browser",
         ownsAdmittedInstance: true,
         hasDelegatedAuthority: true,
         isControlUiVisible: true,
-        terminalReplyExpectation: "required",
+        terminalReplyExpectation: "result-required",
         injectionVersion: 2,
         supportsTranscriptCommitWait: true,
       });
@@ -396,7 +424,9 @@ it.for([
         idempotencyKey: `browser-direct-command-correction-${source}`,
         queueMode: "steer",
       });
-      expect(response.ok).toBe(true);
+      expect(response.ok, JSON.stringify({ response, diagnostics: diagnostics.mock.calls })).toBe(
+        true,
+      );
       const captured = capture.mock.results.find(
         (result) => result.type === "return" && result.value?.runId === runId,
       );

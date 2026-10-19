@@ -1,6 +1,8 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { enqueueSwarmRun, holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -37,6 +39,10 @@ export function registerQueuedReservationFailureTests({
     let entry = createSubagentRunRecord({
       runId: "failure-queued",
       childSessionKey: "agent:main:subagent:failure-queued",
+      childSessionIdentity: {
+        sessionId: "queued-session",
+        lifecycleRevision: "queued-session-revision",
+      },
       controllerSessionKey,
       requesterSessionKey: controllerSessionKey,
       task: "queued failure",
@@ -92,7 +98,10 @@ export function registerQueuedReservationFailureTests({
                 }
               }
               const receipt = await scope.execute(command);
-              if (failure === "session replacement release" && writeNumber === 1) {
+              if (
+                ["session replacement", "session replacement release"].includes(failure) &&
+                writeNumber === 1
+              ) {
                 replaceSessionEntrySync(
                   { storePath, sessionKey: entry.childSessionKey },
                   { sessionId: "new-session", updatedAt: 2 },
@@ -105,18 +114,24 @@ export function registerQueuedReservationFailureTests({
       ),
     );
     setSubagentControlDepsForTest({
-      isEmbeddedAgentRunActive: () => {
-        if (failure === "session replacement") {
-          replaceSessionEntrySync(
-            { storePath, sessionKey: entry.childSessionKey },
-            { sessionId: "new-session", updatedAt: 2 },
-          );
-        }
-        return failure === "claim release";
-      },
-      abortEmbeddedAgentRun: () => failure !== "claim release",
-      clearSessionLifecycleQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+      clearSessionQueues: () => ({ followupCleared: 0, keys: [] }),
     });
+    if (failure === "claim release") {
+      const operation = createReplyOperation({
+        sessionKey: entry.childSessionKey,
+        sessionId: "queued-session",
+        agentId: "main",
+        resetTriggered: false,
+        target: captureSessionTarget({
+          storeScope: storePath,
+          sessionKey: entry.childSessionKey,
+          incarnation: "queued-session",
+          agentId: "main",
+        }),
+      });
+      operation.freezeAbort();
+      onTestFinished(() => operation.complete());
+    }
     const reservationReleases: Promise<void>[] = [];
     try {
       const pending = killAllControlledSubagentRuns({

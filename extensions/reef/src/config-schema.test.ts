@@ -122,7 +122,7 @@ describe("Reef configuration boundary", () => {
     expect(flowSend).not.toHaveBeenCalled();
   });
 
-  it("keeps read-only account and security inspection safe before runtime setup", () => {
+  it("keeps read-only account and security inspection safe before runtime setup", async () => {
     const cfg = {
       channels: {
         reef: {
@@ -140,12 +140,14 @@ describe("Reef configuration boundary", () => {
     };
     const account = reefPlugin.config.resolveAccount(cfg, "default");
 
-    expect(reefPlugin.config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([]);
-    expect(reefPlugin.config.describeAccount?.(account, cfg)).toMatchObject({
+    expect(await reefPlugin.config.resolveAllowFromAsync?.({ cfg, accountId: "default" })).toEqual(
+      [],
+    );
+    expect(await reefPlugin.config.describeAccountAsync?.(account, cfg)).toMatchObject({
       extra: { friendCount: 0 },
     });
     expect(
-      reefPlugin.security?.resolveDmPolicy?.({ cfg, accountId: "default", account }),
+      await reefPlugin.security?.resolveDmPolicyAsync?.({ cfg, accountId: "default", account }),
     ).toMatchObject({ policy: "pairing", allowFrom: [] });
   });
 });

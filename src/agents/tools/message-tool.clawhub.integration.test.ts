@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { readClawHubRecommendations } from "../../shared/clawhub-recommendations.js";
 import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messaging-extraction.js";
 import { createMessageTool } from "./message-tool-execution.js";
@@ -32,19 +33,13 @@ const remotePlugin = {
 const catalog = { version: 0, channels: [], getChannel: () => undefined } as const;
 
 function messageTool(config = {}, options: Partial<Parameters<typeof createMessageTool>[0]> = {}) {
+  setRuntimeConfigSnapshot(options.config ?? config);
   return createMessageTool({
     config,
     preparedMessageToolCatalog: catalog,
     currentChannelProvider: "webchat",
     agentSessionKey: "agent:main:webchat:dm:clawhub-proof",
     runId: "clawhub-proof-run",
-    getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-    resolveCommandSecretRefsViaGateway: async () => ({
-      resolvedConfig: config,
-      diagnostics: [],
-      targetStatesByPath: {},
-      hadUnresolvedTargets: false,
-    }),
     ...options,
   });
 }
@@ -56,6 +51,10 @@ beforeEach(() => {
     .mockResolvedValue({ plugins: [], diagnostics: [], mutationAllowed: true });
   registry.skills.mockReset().mockResolvedValue([]);
   registry.skillStatus.mockReset().mockReturnValue({ skills: [] });
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });
 
 describe("ClawHub message recommendations", () => {

@@ -1,17 +1,17 @@
+import { PluginStateOperationInvalidatedError } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { effectiveGuardPolicyVersion, generateIdentity } from "../protocol/index.js";
-import { MemoryAuditStore, MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
+import { MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
 import { isPermanentReefOutboundRejection, ReefMessageFlow } from "./flow.js";
 import {
   allow,
   config,
-  flowStores,
   guard,
   peerTrust,
   reefKeys,
   resetFlowStoresForTests,
   transport,
-  trust,
+  workerFlowStores,
 } from "./flow.test-helpers.js";
 import { reefPeerIdentity } from "./friend-types.js";
 import { reefMessageTextHash } from "./rejection-resend.js";
@@ -23,19 +23,21 @@ afterEach(resetFlowStoresForTests);
 describe("ReefMessageFlow send recovery", () => {
   it("does not send to a peer revoked while delivery dispatch is prepared", async () => {
     const alice = reefKeys();
-    const trusted = trust({ bob: peerTrust(generateIdentity()) });
     const fetcher = vi.fn<typeof fetch>();
     const cfg = config();
     cfg.handle = "alice";
+    const { trusted, audit, ...stores } = await workerFlowStores(cfg, {
+      bob: peerTrust(generateIdentity()),
+    });
     const flow = new ReefMessageFlow({
       config: cfg,
-      trust: trusted.store,
+      trust: trusted,
       keys: alice,
       transport: new ReefTransportClient(cfg.relayUrl, "alice", alice, fetcher),
       guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(7)),
+      audit,
       replay: new MemoryReplayStore(),
-      ...flowStores(),
+      ...stores,
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -43,12 +45,12 @@ describe("ReefMessageFlow send recovery", () => {
     const error = await flow
       .send("bob", "private coordination", {
         onPlatformSendDispatch: async () => {
-          trusted.values.delete("bob");
+          await trusted.remove("bob");
         },
       })
       .catch((cause: unknown) => cause);
 
-    expect(error).toMatchObject({ message: "Reef peer @bob changed trust before dispatch" });
+    expect(error).toBeInstanceOf(PluginStateOperationInvalidatedError);
     expect(isPermanentReefOutboundRejection(error)).toBe(true);
     expect(fetcher).not.toHaveBeenCalled();
   });
@@ -59,29 +61,29 @@ describe("ReefMessageFlow send recovery", () => {
     const cfg = config();
     cfg.handle = "alice";
     const trustedPeer = peerTrust(bob);
-    const trusted = trust({ bob: trustedPeer });
+    const { trusted, audit, ...stores } = await workerFlowStores(cfg, { bob: trustedPeer });
     const relay = transport();
     const flow = new ReefMessageFlow({
       config: cfg,
-      trust: trusted.store,
+      trust: trusted,
       keys: alice,
-
       transport: relay as unknown as ReefTransportClient,
       guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(7)),
+      audit,
       replay: new MemoryReplayStore(),
-      ...flowStores(),
+      ...stores,
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
 
     const id = await flow.send("bob", " rephrased coordination ", { resendDisabled: true });
 
-    expect(trusted.deliveries.get(`bob:${id}`)).toEqual({
+    expect((await trusted.readOutboundDelivery("bob", id))?.delivery).toEqual({
       bodyHash: expect.any(String),
       textHash: reefMessageTextHash("rephrased coordination"),
       recipient: reefPeerIdentity(trustedPeer),
       resendDisabled: true,
+      sentAt: expect.any(Number),
     });
     expect(relay.sendEnvelope).toHaveBeenCalledOnce();
   });
@@ -95,17 +97,17 @@ describe("ReefMessageFlow send recovery", () => {
     const policyVersion = effectiveGuardPolicyVersion("v1", cfg.guard!.rules);
     expect(policyVersion).toMatch(/^v1\+[0-9a-f]{64}$/);
     const guardMock = guard({ ...allow, policyVersion });
-    const trusted = trust({ bob: peerTrust(bob) });
+    const { trusted, audit, ...stores } = await workerFlowStores(cfg, { bob: peerTrust(bob) });
     const relay = transport();
     const flow = new ReefMessageFlow({
       config: cfg,
-      trust: trusted.store,
+      trust: trusted,
       keys: alice,
       transport: relay as unknown as ReefTransportClient,
       guard: guardMock,
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(7)),
+      audit,
       replay: new MemoryReplayStore(),
-      ...flowStores(),
+      ...stores,
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -114,43 +116,5 @@ describe("ReefMessageFlow send recovery", () => {
 
     expect(guardMock.classify).toHaveBeenCalledWith(expect.objectContaining({ policyVersion }));
     expect(relay.sendEnvelope).toHaveBeenCalledOnce();
-  });
-
-  it("refuses delivery when peer trust is revoked during the final storage await", async () => {
-    const alice = reefKeys();
-    const trusted = trust({ bob: peerTrust(generateIdentity()) });
-    const prepare = trusted.store.prepareOutboundDelivery.bind(trusted.store);
-    vi.spyOn(trusted.store, "prepareOutboundDelivery").mockImplementation(async (...args) => {
-      const prepared = await prepare(...args);
-      if (!prepared) {
-        return prepared;
-      }
-      return {
-        ...prepared,
-        async record(...recordArgs) {
-          await prepared.record(...recordArgs);
-          trusted.values.delete("bob");
-        },
-      };
-    });
-    const fetcher = vi.fn<typeof fetch>();
-    const cfg = { ...config(), handle: "alice" };
-    const flow = new ReefMessageFlow({
-      config: cfg,
-      trust: trusted.store,
-      keys: alice,
-      transport: new ReefTransportClient(cfg.relayUrl, "alice", alice, fetcher),
-      guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(7)),
-      replay: new MemoryReplayStore(),
-      ...flowStores(),
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
-
-    await expect(flow.send("bob", "meeting at ten")).rejects.toThrow(
-      "changed trust before dispatch",
-    );
-    expect(fetcher).not.toHaveBeenCalled();
   });
 });

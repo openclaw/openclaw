@@ -21,6 +21,28 @@ import { drainingRelaySessions, type RelaySession } from "./state.js";
 
 const RELAY_TRANSCRIPT_RETRY_DELAYS_MS = [0, 500, 2_000] as const;
 
+async function withRelayTranscriptRetries(
+  run: () => Promise<unknown>,
+  reconcileUnknown = false,
+): Promise<void> {
+  let lastError: unknown;
+  for (const delayMs of RELAY_TRANSCRIPT_RETRY_DELAYS_MS) {
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
+    try {
+      await run();
+      return;
+    } catch (error) {
+      if (hasSqliteWorkerOutcomeUnknown(error) && !reconcileUnknown) {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
 function logRelayVoiceFailure(session: RelaySession, message: string, error: unknown): void {
   session.context.logGateway?.warn(`${message}: ${formatErrorMessage(error)}`);
 }
@@ -124,34 +146,22 @@ export function enqueueRelayVoiceTranscript(
             physicalSource: captureRelayVoiceSessionSource(session),
           });
           try {
-            let lastError: unknown;
-            for (const delayMs of RELAY_TRANSCRIPT_RETRY_DELAYS_MS) {
-              if (delayMs > 0) {
-                await sleep(delayMs);
-              }
-              try {
-                await appendRelayVoiceTranscript(
-                  {
-                    agentId,
-                    sessionKey,
-                    sessionTarget: { sessionKey: canonicalKey, storePath },
-                    voiceSessionId: session.id,
-                    entryId,
-                    role,
-                    text: normalizedText,
-                    ...(session.voiceConfig ? { config: session.voiceConfig } : {}),
-                  },
-                  writer,
-                );
-                return;
-              } catch (error) {
-                if (hasSqliteWorkerOutcomeUnknown(error)) {
-                  throw error;
-                }
-                lastError = error;
-              }
-            }
-            throw lastError;
+            await withRelayTranscriptRetries(() =>
+              appendRelayVoiceTranscript(
+                {
+                  agentId,
+                  sessionKey,
+                  sessionTarget: { sessionKey: canonicalKey, storePath },
+                  voiceSessionId: session.id,
+                  entryId,
+                  role,
+                  text: normalizedText,
+                  ...(session.capabilities?.handlesAgentConsult ? { providerOwned: true } : {}),
+                  ...(session.voiceConfig ? { config: session.voiceConfig } : {}),
+                },
+                writer,
+              ),
+            );
           } finally {
             await writer.release();
           }
@@ -182,7 +192,10 @@ export function enqueueRelayVoiceTranscript(
   return true;
 }
 
-export function closeRelayVoiceSession(session: RelaySession): Promise<void> {
+export function closeRelayVoiceSession(
+  session: RelaySession,
+  disposition: "abort" | "detach" = "abort",
+): Promise<void> {
   if (session.voiceSessionClose) {
     return session.voiceSessionClose;
   }
@@ -205,19 +218,34 @@ export function closeRelayVoiceSession(session: RelaySession): Promise<void> {
         agentId,
         physicalSource: captureRelayVoiceSessionSource(session),
       });
+      const errors: unknown[] = [];
       try {
-        const config = session.voiceConfig ?? session.context.getRuntimeConfig();
-        await closeRelayVoiceSessionRecord(
-          {
-            agentId,
-            sessionKey,
-            voiceSessionId: session.id,
-            config,
-          },
-          writer,
-        );
+        if (disposition === "detach") {
+          for (const append of session.unspokenAnswers?.values() ?? []) {
+            try {
+              // The stable-key transcript turn reconciles any earlier commit before inserting.
+              await withRelayTranscriptRetries(() => append(writer), true);
+            } catch (error) {
+              errors.push(error);
+            }
+          }
+        }
+        try {
+          const config = session.voiceConfig ?? session.context.getRuntimeConfig();
+          await closeRelayVoiceSessionRecord(
+            {
+              agentId,
+              sessionKey,
+              voiceSessionId: session.id,
+              config,
+            },
+            writer,
+          );
+        } catch (error) {
+          errors.push(error);
+        }
       } finally {
-        await writer.release();
+        await releaseSessionSourceAuthorities([writer], errors);
       }
     },
     async (error) => {
@@ -227,10 +255,14 @@ export function closeRelayVoiceSession(session: RelaySession): Promise<void> {
     session.voiceSessionSource?.settlementContext,
   ).catch((error: unknown) => {
     logRelayVoiceFailure(session, "realtime relay voice session close failed", error);
+    if (disposition === "detach") {
+      throw error;
+    }
   });
   drainingRelaySessions.add(session);
-  void session.voiceSessionClose.finally(() => {
-    drainingRelaySessions.delete(session);
-  });
+  void session.voiceSessionClose.then(
+    () => drainingRelaySessions.delete(session),
+    () => drainingRelaySessions.delete(session),
+  );
   return session.voiceSessionClose;
 }

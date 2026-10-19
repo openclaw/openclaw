@@ -35,6 +35,7 @@ private final class DashboardWindow: ExperienceWindow {
     var userIntentGeneration: UInt64 = 0
     var lifetimeRevision: UInt64 = 0
     var pendingGatewaySwitch: DashboardGatewaySwitchIntent?
+    var documentLoad: DashboardDocumentLoad?
 
     override func toggleToolbarShown(_: Any?) {}
 
@@ -125,6 +126,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var pendingNativeCommands: [DashboardNativeCommand] = []
     private var pendingNativeNavigation: DashboardNativeNavigation?
     var onClosed: (() -> Void)?
+    private var documentLoad: DashboardDocumentLoad? {
+        (self.window as? DashboardWindow)?.documentLoad
+    }
 
     init(
         url: URL,
@@ -481,6 +485,15 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.documentHost.load(url)
     }
 
+    func reloadDashboard() {
+        guard self.pendingGatewaySwitch == nil else { return }
+        if self.isShowingFailurePage {
+            DashboardManager.shared.recoverDashboard(self)
+        } else if self.isTrustedDashboardDocument {
+            self.webView.reload()
+        }
+    }
+
     private func requestBrowserProfileImportOfferIfNeeded() {
         guard !self.isHiddenForExperience,
               self.browserProfileImportOfferIsArmed,
@@ -700,10 +713,15 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     private func showLoadFailure(_ error: Error) {
         let nsError = error as NSError
+        if ControlUIDocumentHost.shouldIgnoreDashboardPolicyInterruption(
+            nsError, isShowingFailurePage: self.isShowingFailurePage)
+        { return }
         // A cancelled provisional navigation never commits, so the prior
         // document survives and stays command-capable; clearing live state
         // here would queue native commands forever with no reload to flush.
-        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
+        if self.documentHost.consumeDownloadPolicyInterruption(nsError) ||
+            (nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled)
+        {
             // A finish deferred for this successor belongs to the document that survives,
             // unless that is a failure page (about:blank HTML), which still needs a reload.
             if self.deferredFinishSourceID == self.notificationSourceID, !self.webView.isLoading,
@@ -716,6 +734,14 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             refreshGatewayHealth()
             return
         }
+        self.showDashboardFailure(
+            error,
+            message: error.localizedDescription,
+            detail: String(localized: "Choose Reload to try loading the dashboard again."))
+    }
+
+    private func showDashboardFailure(_ error: Error, message: String, detail: String) {
+        self.finishDocumentLoad(.failure(error))
         prepareForFailure()
         let urlDescription = GatewayEndpointStore.diagnosticURLString(for: self.currentURL)
         dashboardWindowLogger.error(
@@ -724,9 +750,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             error=\(error.localizedDescription, privacy: .public)
             """)
         let html = DashboardFailurePage.html(
-            title: "Dashboard unavailable",
-            message: error.localizedDescription,
-            detail: "The dashboard window is open, but the web UI could not load from this endpoint.",
+            title: String(localized: "Dashboard unavailable"),
+            message: message,
+            detail: detail,
             url: self.currentURL)
         self.webView.loadHTMLString(html, baseURL: nil)
     }
@@ -734,6 +760,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
 extension DashboardWindowController {
     private func prepareForFailure(preservingPendingCommands: Bool = false) {
+        self.finishDocumentLoad(.failure(URLError(.cannotLoadFromNetwork)))
         self.deferredFinishSourceID = nil
         self.documentHost.retirePendingLoad()
         self.invalidateGatewayHealth()
@@ -968,19 +995,23 @@ extension DashboardWindowController {
     }
 
     private func refreshNativeCommandReadiness() {
-        guard self.auth.usesBrowserIdentity else { return }
+        guard self.auth.usesBrowserIdentity || self.documentLoad != nil else { return }
         let sourceID = self.notificationSourceID
         let sourceURL = self.currentURL
         Task { @MainActor [weak self] in
             guard let self else { return }
             // Messages only wake the read. A previous same-URL document cannot
             // attest that the currently displayed sign-in page has command listeners.
-            let ready = try? await self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(
-                "return window.__OPENCLAW_NATIVE_COMMANDS_READY__ === true;", url: sourceURL))
+            let readiness = try? await self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(
+                "return window.__OPENCLAW_NATIVE_COMMANDS_READY__ === true;",
+                url: sourceURL)) as? Bool
             guard self.notificationSourceID == sourceID, self.currentURL == sourceURL,
                   !self.webView.isLoading else { return }
-            self.nativeCommandsReady = ready as? Bool == true
+            self.nativeCommandsReady = readiness == true
             self.flushReadyNativeActions()
+            if self.nativeCommandsReady {
+                self.finishDocumentLoad(.success(()))
+            }
         }
     }
 
@@ -1050,6 +1081,7 @@ extension DashboardWindowController {
     }
 
     func windowWillClose(_: Notification) {
+        self.finishDocumentLoad(.failure(CancellationError()))
         self.reconnectTask?.task.cancel()
         self.reconnectTask = nil
         self.browserSignInRoute = nil
@@ -1203,7 +1235,11 @@ extension DashboardWindowController {
             let handled = result as? Bool
             // Async completions may return after another route or New Session intent.
             // Only the newest navigation intent may load its fallback URL.
-            guard handled != true, self.isTrustedDashboardDocument,
+            if handled == true {
+                self.refreshNativeCommandReadiness()
+                return
+            }
+            guard self.isTrustedDashboardDocument,
                   self.navigationFallbackIsCurrent(generation: generation, sourceURL: sourceURL)
             else { return }
             self.load(navigation.fallbackURL)
@@ -1377,6 +1413,31 @@ extension DashboardWindowController {
         }
     }
 
+    func waitForDocumentLoad() async throws {
+        // The shell can bootstrap after HTML finishes; its listener-owned readiness
+        // signal completes handoff even if the user has already changed web routes.
+        try Task.checkCancellation()
+        if self.isShowingFailurePage { throw URLError(.cannotLoadFromNetwork) }
+        guard let window = self.window as? DashboardWindow else { throw CancellationError() }
+        let request = DashboardDocumentLoad()
+        window.documentLoad?.finish(.failure(CancellationError()))
+        window.documentLoad = request
+        defer {
+            if window.documentLoad === request { window.documentLoad = nil }
+        }
+        if self.documentHost.hasLiveContent, !self.webView.isLoading {
+            self.refreshNativeCommandReadiness()
+        }
+        try await AsyncTimeout.withTimeout(
+            seconds: 120,
+            onTimeout: { URLError(.timedOut) },
+            operation: { try await request.wait() })
+    }
+
+    private func finishDocumentLoad(_ result: Result<Void, Error>) {
+        self.documentLoad?.finish(result)
+    }
+
     private func finishDocument() {
         self.deferredFinishSourceID = nil
         // A finished sign-in document is usable but never receives native
@@ -1410,6 +1471,7 @@ extension DashboardWindowController {
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         if webView === self.webView {
+            self.finishDocumentLoad(.failure(URLError(.networkConnectionLost)))
             self.documentHost.hasLiveContent = false
             self.nativeCommandsReady = false
             self.invalidateGatewayHealth()
@@ -1418,11 +1480,46 @@ extension DashboardWindowController {
         }
     }
 
+    func webView(_ webView: WKWebView, navigationAction _: WKNavigationAction, didBecome download: WKDownload) {
+        guard webView === self.webView else { download.cancel { _ in }
+            return
+        }
+        self.documentHost.adoptDownload(download)
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse _: WKNavigationResponse, didBecome download: WKDownload) {
+        guard webView === self.webView else { download.cancel { _ in }
+            return
+        }
+        self.documentHost.adoptDownload(download)
+    }
+
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationResponse: WKNavigationResponse,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
     {
+        if webView === self.webView, self.documentHost.shouldDownload(navigationResponse) {
+            decisionHandler(.download)
+            return
+        }
+        if webView === self.webView,
+           ControlUIDocumentHost.shouldShowDashboardResponseFailure(
+               navigationResponse.response,
+               isMainFrame: navigationResponse.isForMainFrame,
+               dashboardURL: self.currentURL),
+           let response = navigationResponse.response as? HTTPURLResponse
+        {
+            decisionHandler(.cancel)
+            self.showDashboardFailure(
+                URLError(.badServerResponse),
+                message: String(
+                    format: String(localized: "The Gateway returned HTTP %ld (%@)."),
+                    response.statusCode,
+                    HTTPURLResponse.localizedString(forStatusCode: response.statusCode).capitalized),
+                detail: String(localized: "Choose Reload to try loading the dashboard again."))
+            return
+        }
         guard let tab = self.nativeBrowser.browserTab(for: webView) else {
             decisionHandler(.allow)
             return

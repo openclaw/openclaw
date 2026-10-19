@@ -1,15 +1,13 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { resolveSessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { copyExplicitSkillSelectionFileHost } from "../../../skills/discovery/skill-command-provenance.js";
-import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { createAgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
-import { resolveDelegationCapability } from "../../delegation-capability.js";
+import { prepareDelegationCapability } from "../../delegation-capability.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/tool-surface.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
 import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
@@ -17,34 +15,35 @@ import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.j
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
-import { resolveSessionSkillResourceSnapshot } from "../../session-placement-skill-resources.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import { preparePluginHarnessWorkspace, resolveHarnessWorkspace } from "../../workspace-sandbox.js";
+import { log } from "../logger.js";
 import { remapExplicitSkillSelectionPath, remapSkillReferencePaths } from "../sandbox-skills.js";
-import { prepareEmbeddedSkills } from "../skill-runtime.js";
+import { preparePluginHarnessSkills } from "../skill-runtime.js";
 import { mapThinkingLevelForProvider } from "../utils.js";
+import { createAttemptContinuationRetryCount } from "./attempt-continuation-retry.js";
 import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
 import { withPreparedEmbeddedGatewayTools } from "./attempt-gateway-tools.js";
 import { resolveEmbeddedAttemptMemoryAudience } from "./attempt-memory-audience.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE } from "./attempt-stage-timing.js";
 import { prepareAttemptSystemPromptAdditions } from "./attempt-system-prompt-additions.js";
+import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush.js";
+import { prepareEmbeddedHarnessTrajectory } from "./attempt-trajectory.js";
 import { resolveAttemptDispatchApiKey } from "./auth-store.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import type { PreparedEmbeddedAttemptDispatchInput } from "./execution-context.js";
 import { resolveEmbeddedAttemptBasePrompt } from "./helpers.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
-import { CODEX_HARNESS_ID, resolveAttemptTrajectoryAttribution } from "./runtime-resolution.js";
-import {
-  projectEmbeddedMessageContext,
-  projectTrajectorySessionTarget,
-} from "./shared-run-context.js";
+import { projectEmbeddedMessageContext } from "./shared-run-context.js";
 import { MAX_BEFORE_AGENT_FINALIZE_REVISIONS } from "./terminal-retry-state.js";
+import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 /** Prepares the selected runtime and dispatches an attempt under its admitted lifecycle. */
 export async function prepareAndDispatchEmbeddedRunAttempt(
   input: PreparedEmbeddedAttemptDispatchInput,
+  onSettledTurn?: EmbeddedRunAttemptParams["onSettledTurn"],
 ) {
   const { runInput, preparedRuntime, contextEngine, sessionPromptState, terminalRetryState } =
     input;
@@ -147,6 +146,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     harnessId: runtime.agentHarness.id,
     harnessRuntime: runtime.agentHarness.id,
     preparedAuthPlan: runtime.activePreparedAuthPlan,
+    transportConfig: runtime.transportConfig,
     metadataSnapshot: runtime.pluginMetadataSnapshot,
     providerRuntimeHandle: runtime.providerRuntimeHandle,
     config: params.config,
@@ -155,12 +155,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     agentId: workspaceResolution.agentId,
     thinkingLevel: mapThinkingLevelForProvider(runtime.thinkLevel, effectiveModel),
     extraParamsOverride: { ...params.streamParams, fastMode: attemptFastMode },
-  });
-  const trajectoryAttribution = resolveAttemptTrajectoryAttribution({
-    model: effectiveModel,
-    modelId,
-    provider,
-    runtimePlan,
   });
   if (!params.admittedRunContext) {
     throw new Error("embedded attempt reached dispatch without an admitted run context");
@@ -174,24 +168,19 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     return assertion;
   };
   const assertTrajectoryCurrent = requireActiveAssertion(params.abortSignal);
-  const trajectoryRecorder =
-    runtime.agentHarness.id === CODEX_HARNESS_ID &&
-    !params.disableTrajectory &&
-    params.sessionPersistence !== "detached"
-      ? await createTrajectoryRuntimeRecorder({
-          cfg: params.config,
-          env: process.env,
-          runId: params.runId,
-          sessionId: sessionPromptState.sessionId,
-          sessionKey: resolvedSessionKey,
-          sessionFile: trajectorySessionFile,
-          ...projectTrajectorySessionTarget(resolvedSessionTarget, true),
-          provider: trajectoryAttribution.provider,
-          modelId: trajectoryAttribution.modelId,
-          modelApi: trajectoryAttribution.modelApi,
-          workspaceDir,
-        })
-      : undefined;
+  const trajectoryRecorder = await prepareEmbeddedHarnessTrajectory({
+    attempt: params,
+    harnessId: runtime.agentHarness.id,
+    model: effectiveModel,
+    modelId,
+    provider,
+    runtimePlan,
+    sessionId: sessionPromptState.sessionId,
+    sessionKey: resolvedSessionKey,
+    sessionFile: trajectorySessionFile,
+    sessionTarget: resolvedSessionTarget,
+    workspaceDir,
+  });
   assertTrajectoryCurrent();
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.runtimePlan);
@@ -247,6 +236,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   });
   const assertActiveRun = requireActiveAssertion(attemptAbortController.signal);
   assertActiveRun();
+  if (runtime.pluginHarnessOwnsTransport) {
+    await params.awaitSessionDiffBaseline?.();
+    assertActiveRun();
+  }
   using placement = runtime.pluginHarnessOwnsTransport
     ? await preparePluginHarnessWorkspace({
         ...params,
@@ -259,6 +252,12 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     : null;
   assertActiveRun();
   const pluginWorkspace = placement?.workspace;
+  const continuationRetryCount = createAttemptContinuationRetryCount(
+    params,
+    runtime,
+    { sessionId, agentDir },
+    assertActiveRun,
+  );
   const promptMedia = pluginWorkspace
     ? await prepareEmbeddedAttemptPromptExecution({
         attempt: { ...params, model: effectiveModel },
@@ -300,36 +299,31 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     toolsAllow: params.toolsAllow,
   });
   assertActiveRun();
-  let skillsSnapshot = resolveSessionSkillResourceSnapshot(params.skillsSnapshot);
-  let skillReferencePaths = pluginSandbox?.readOnlyResourceMounts?.map((mount) => ({
-    skillFile: path.join(mount.hostPath, "SKILL.md"),
-    readPath: path.posix.join(mount.containerPath, "SKILL.md"),
-  }));
-  if (pluginSandbox?.enabled && !pluginSandbox.readOnlyResourceMounts?.length && skillsSnapshot) {
-    const prepared = await prepareEmbeddedSkills({
-      assertCurrent: () => {
-        attemptAbortController.signal.throwIfAborted();
-        assertActiveRun();
-      },
-      applySkillEnvironment: false,
-      includeCodeModeSkills: false,
-      attempt: {
-        bootstrapWorkspaceDir,
-        config: params.config,
-        contextTokenBudget: runtime.contextTokenBudget,
-        skillsSnapshot,
-        toolExecutionAllow: params.toolExecutionAllow,
-      },
-      effectiveWorkspace: workspaceDir,
-      sandbox: pluginSandbox,
-      sessionAgentId: workspaceResolution.agentId,
-    });
-    skillsSnapshot = {
-      ...(prepared.skillsSnapshotForRun ?? skillsSnapshot),
-      prompt: prepared.skillsPrompt,
-    };
-    skillReferencePaths = prepared.skillUsagePaths;
-  }
+  const { skillsSnapshot, skillReferencePaths } = await preparePluginHarnessSkills({
+    assertCurrent: () => {
+      attemptAbortController.signal.throwIfAborted();
+      assertActiveRun();
+    },
+    attempt: {
+      bootstrapWorkspaceDir,
+      config: params.config,
+      contextTokenBudget: runtime.contextTokenBudget,
+      skillsSnapshot: params.skillsSnapshot,
+      toolExecutionAllow: params.toolExecutionAllow,
+    },
+    effectiveWorkspace: workspaceDir,
+    sandbox: pluginSandbox,
+    sessionAgentId: workspaceResolution.agentId,
+  });
+  const delegationCapability = await prepareDelegationCapability({
+    fallbackActive,
+    run: params,
+    sessionKey: resolvedSessionKey,
+    sessionId,
+    modelProvider: provider,
+    modelId,
+  });
+  assertActiveRun();
   // Resolve after the last fallible preparation so the attempt's finally owns the leases.
   const { memoryAudience, release: releaseMemoryAudience } =
     await resolveEmbeddedAttemptMemoryAudience({
@@ -384,7 +378,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     sessionKey: string;
     agentHarnessId: string;
   } = {
+    modelCallSequence: (runInput.modelCallSequence ??= { value: 0 }),
+    bindWatchdogAttempt: attemptControls.bindWatchdogAttempt,
     providerReviewAcknowledgment: params.providerReviewAcknowledgment,
+    awaitSessionDiffBaseline: params.awaitSessionDiffBaseline,
     pluginRuntimeRefreshPending: pluginRefresh.isPending,
     registerPluginRuntimeRefreshConsumer: (isCurrent) => {
       if (attemptControls.isCurrent()) {
@@ -393,6 +390,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     },
     pluginRuntimeRefreshMessages: params.pluginRuntimeRefreshMessages,
     continuation: sessionPromptState.continuation,
+    runCleanupSettlement: params.runCleanupSettlement,
     permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
     startedAtMs: runInput.startedAtMs,
@@ -443,6 +441,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     agentDir,
     preparedModelRuntime: runInput.preparedModelRuntime,
     config: params.config,
+    transportConfig: runtime.transportConfig,
     toolOverrides: params.toolOverrides,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     ...(attemptContextEngine
@@ -494,12 +493,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     requestedModelId,
     fallbackActive,
     fallbackReason,
-    delegationCapability: resolveDelegationCapability({
-      fallbackActive,
-      inputProvenance: params.inputProvenance,
-      disableTools: params.disableTools,
-      toolsAllow: params.toolsAllow,
-    }),
+    delegationCapability,
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     agentHarnessId: runtime.agentHarness.id,
     agentHarnessRuntimeOverride: runtime.agentHarness.id,
@@ -531,13 +525,21 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     runtimePlan,
     observeToolTerminal: createToolTerminalObserver(params.runId),
     model: applyAuthHeaderOverride(
-      applyLocalNoAuthHeaderOverride(effectiveModel, runtime.apiKeyInfo),
+      applyLocalNoAuthHeaderOverride(
+        effectiveModel,
+        runtime.runtimeAuthState ?? runtime.apiKeyInfo,
+      ),
       runtime.runtimeAuthState !== null ? null : runtime.apiKeyInfo,
-      params.config,
+      runtime.transportConfig,
     ),
     resolvedApiKey: resolvedAttemptApiKey,
     authProfileId: runtime.lastProfileId,
-    authProfileIdSource: explicitAuthProfile ? "user" : "auto",
+    authProfileIdSource: params.authProfileBinding
+      ? params.authProfileIdSource
+      : explicitAuthProfile
+        ? "user"
+        : "auto",
+    authProfileBinding: params.authProfileBinding,
     initialReplayState: input.replayState,
     authStorage,
     authProfileStore,
@@ -545,6 +547,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     modelRegistry,
     agentId: workspaceResolution.agentId,
     thinkLevel: runtime.thinkLevel,
+    thinkingExplicit: params.thinkingExplicit,
     onToolOutcome: input.observeToolOutcome,
     isTurnTainted: input.isTurnTainted,
     allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,
@@ -574,6 +577,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     onAttemptDeadlineChanged: attemptControls.onAttemptDeadlineChanged,
     onAttemptTimeout: attemptControls.onAttemptTimeout,
     onAttemptAbort: attemptControls.onAttemptAbort,
+    onSettledTurn,
     replyOperation: params.replyOperation,
     shouldEmitToolResult: params.shouldEmitToolResult,
     shouldEmitToolOutput: params.shouldEmitToolOutput,
@@ -586,13 +590,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     onReasoningStream: params.onReasoningStream,
     streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
     onReasoningEnd: params.onReasoningEnd,
-    onToolResult: async (payload) => {
-      await params.onToolResult?.(payload);
-    },
+    onToolResult: params.onToolResult,
     onAgentToolResult: params.onAgentToolResult,
-    onAgentEvent: async (event) => {
-      await params.onAgentEvent?.(event);
-    },
+    onAgentEvent: async (event) => params.onAgentEvent?.(event),
     // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
     deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
     onDeferredLifecycleOwner: params.onDeferredLifecycleOwner,
@@ -602,6 +602,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     gitCoauthorPrompt,
     preparedTtsPreferences: params.preparedTtsPreferences,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    messageToolFinalByDefault: params.messageToolFinalByDefault,
     silentReplyPromptMode: params.silentReplyPromptMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     inputProvenance: params.inputProvenance,
@@ -665,30 +666,45 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       sessionPromptState.activePrompt.persisted = false;
     },
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
+    privateCompletion: params.privateCompletion,
+    ...continuationRetryCount.capability,
   };
-  const rawAttempt = await withPreparedEmbeddedGatewayTools(
-    attemptParams,
-    attemptControls.isCurrent,
-    () => {
+  let rawAttempt: EmbeddedRunAttemptResult;
+  try {
+    rawAttempt = await withPreparedEmbeddedGatewayTools(attemptParams, () => {
       assertActiveRun();
       placement?.assertCurrent();
       return runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime, params.media);
-    },
-    resolvedSessionTarget,
-  )
-    .catch((err: unknown): never => {
-      throw input.getPostCompactionAbortError() ?? err;
-    })
-    .finally(() => {
-      attemptControls.close();
+    });
+  } catch (err) {
+    throw input.getPostCompactionAbortError() ?? err;
+  } finally {
+    attemptControls.close();
+    try {
+      if (trajectoryRecorder) {
+        // The plugin's revoked host cannot flush during cancellation. The creator
+        // still owns settlement of events accepted before that revocation.
+        await flushEmbeddedAttemptTrajectoryRecorder({
+          runId: params.runId,
+          sessionId,
+          trajectoryRecorder,
+          log,
+        });
+      }
+    } finally {
       releaseMemoryAudience();
       input.clearPostCompactionAbortController(attemptAbortController);
-    });
+    }
+  }
 
   const postCompactionAbortError = input.getPostCompactionAbortError();
   if (postCompactionAbortError) {
     throw postCompactionAbortError;
   }
+  if (pluginWorkspace?.sandboxRuntime) {
+    rawAttempt.sandboxRuntime = pluginWorkspace.sandboxRuntime;
+  }
+  continuationRetryCount.applyTo(rawAttempt);
   return {
     dispatchedAttempt: { rawAttempt, preparedAttempt: attemptParams },
     runtimePlan,

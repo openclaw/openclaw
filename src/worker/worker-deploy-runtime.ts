@@ -15,6 +15,7 @@ for (const [name, file] of [
   ["workerNativeLifecycle", "worker-native-lifecycle.worker.mjs"],
   ["fileToolPlanning", WORKER_BUNDLE_FILE_TOOL_PLANNING_PATH],
   ["fileToolRead", WORKER_BUNDLE_FILE_TOOL_READ_PATH],
+  ["gatewayStateOwnerHeartbeat", "gateway-state-owner-heartbeat.worker.mjs"],
   ["githubExec", WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH],
   ["imageProcessor", WORKER_BUNDLE_IMAGE_PROCESSOR_PATH],
   ["serviceChildRelay", "service-child-relay.mjs"],

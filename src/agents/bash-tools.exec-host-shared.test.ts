@@ -1,4 +1,5 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import * as logger from "../logger.js";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
@@ -99,61 +100,54 @@ describe("sendExecApprovalFollowupResult", () => {
     expect(logWarn).not.toHaveBeenCalled();
   });
 
-  it.each([false])(
-    "authenticates an elevated=%s result handoff to one session and claimant",
-    async (elevated) => {
-      const approvalId = `approval-authenticated-${elevated}`;
-      await sendExecApprovalFollowupResult(
-        {
-          approvalId,
-          agentId: "research",
-          sessionKey,
-          expectedSessionId: "session-original",
-          turnSourceChannel: "telegram",
-          ...(elevated ? { bashElevated } : {}),
-        },
-        "Exec finished",
-      );
-      const call = sendExecApprovalFollowup.mock.calls[0]?.[0];
-      assert.isDefined(call);
-      expect(call).toMatchObject({
+  it("authenticates a result handoff to one session and claimant", async () => {
+    const approvalId = "approval-authenticated-false";
+    await sendExecApprovalFollowupResult(
+      {
+        approvalId,
         agentId: "research",
         sessionKey,
         expectedSessionId: "session-original",
-      });
-      expect(call.internalRuntimeHandoffId).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-      );
-      expect(call.idempotencyKey).toMatch(
-        new RegExp(`^exec-approval-followup:${approvalId}:nonce:`),
-      );
-      expect(call.idempotencyKey).not.toContain(call.internalRuntimeHandoffId ?? "");
-      expect(call).not.toHaveProperty("bashElevated");
-      expect(call).not.toHaveProperty("execApprovalFollowupToken");
-      const claim = {
-        handoffId: call.internalRuntimeHandoffId,
-        approvalId,
-        idempotencyKey: call.idempotencyKey,
-        sessionKey,
-        claimId: "owner-run",
-      };
-      expect(
-        claimExecApprovalFollowupRuntimeHandoff({ ...claim, sessionKey: "wrong-session" }),
-      ).toBeUndefined();
-      expect(claimExecApprovalFollowupRuntimeHandoff(claim)).toEqual({
-        kind: "exec-approval-followup",
-        approvalId,
-        sessionKey,
-        idempotencyKey: call.idempotencyKey,
-        ...(elevated ? { bashElevated } : {}),
-        resultText: "Exec finished",
-      });
-      expect(
-        claimExecApprovalFollowupRuntimeHandoff({ ...claim, claimId: "competing-run" }),
-      ).toBeUndefined();
-      expect(finalizeExecApprovalFollowupRuntimeHandoff(claim)).toBe(true);
-    },
-  );
+        turnSourceChannel: "telegram",
+      },
+      "Exec finished",
+    );
+    const call = sendExecApprovalFollowup.mock.calls[0]?.[0];
+    assert.isDefined(call);
+    expect(call).toMatchObject({
+      agentId: "research",
+      sessionKey,
+      expectedSessionId: "session-original",
+    });
+    expect(call.internalRuntimeHandoffId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(call.idempotencyKey).toMatch(new RegExp(`^exec-approval-followup:${approvalId}:nonce:`));
+    expect(call.idempotencyKey).not.toContain(call.internalRuntimeHandoffId ?? "");
+    expect(call).not.toHaveProperty("bashElevated");
+    expect(call).not.toHaveProperty("execApprovalFollowupToken");
+    const claim = {
+      handoffId: call.internalRuntimeHandoffId,
+      approvalId,
+      idempotencyKey: call.idempotencyKey,
+      sessionKey,
+      claimId: "owner-run",
+    };
+    expect(
+      claimExecApprovalFollowupRuntimeHandoff({ ...claim, sessionKey: "wrong-session" }),
+    ).toBeUndefined();
+    expect(claimExecApprovalFollowupRuntimeHandoff(claim)).toEqual({
+      kind: "exec-approval-followup",
+      approvalId,
+      sessionKey,
+      idempotencyKey: call.idempotencyKey,
+      resultText: "Exec finished",
+    });
+    expect(
+      claimExecApprovalFollowupRuntimeHandoff({ ...claim, claimId: "competing-run" }),
+    ).toBeUndefined();
+    expect(finalizeExecApprovalFollowupRuntimeHandoff(claim)).toBe(true);
+  });
 
   it("does not register elevated runtime handoffs when the process clock is invalid", () => {
     expect(
@@ -257,6 +251,8 @@ describe("resolveExecApprovalWaitOutcome", () => {
 });
 
 describe("createExecApprovalRequestRoute", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(() => clearRuntimeConfigSnapshot());
   const createRoute = (turnSourceChannel?: string, finalDecision?: null) =>
     createExecApprovalRequestRoute({
       warnings: [],

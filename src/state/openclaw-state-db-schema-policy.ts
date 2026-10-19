@@ -1,8 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { realpathSync } from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { hasErrnoCode } from "../infra/errno.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { normalizeDatabasePath } from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
@@ -12,7 +12,7 @@ const schemaPolicies = resolveGlobalSingleton(
   Symbol.for("openclaw.stateDatabaseSchemaPolicies"),
   () => ({
     scopes: new AsyncLocalStorage<ExistingSchemaScope>(),
-    existingDatabases: new WeakMap<DatabaseSync, string>(),
+    existingDatabases: new WeakMap<EngineConnection, string>(),
   }),
 );
 
@@ -86,7 +86,10 @@ export function captureOpenClawStateSchemaReadAdmission(pathname: string) {
 }
 
 /** Check supplied and cached handles before exposing them to another admission policy. */
-export function isExistingOpenClawStateSchema(pathname: string, database?: DatabaseSync): boolean {
+export function isExistingOpenClawStateSchema(
+  pathname: string,
+  database?: EngineConnection,
+): boolean {
   const scopedPath = getExistingOpenClawStateSchemaPath();
   const scope = schemaPolicies.scopes.getStore();
   const admittedPath = database && schemaPolicies.existingDatabases.get(database);
@@ -110,7 +113,7 @@ export function isExistingOpenClawStateSchema(pathname: string, database?: Datab
 }
 
 export function recordExistingOpenClawStateSchemaDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   pathname: string,
 ): void {
   const scope = schemaPolicies.scopes.getStore();
@@ -124,8 +127,8 @@ export function recordExistingOpenClawStateSchemaDatabase(
 export function assertExistingOpenClawStateSchemaCacheAdmission(
   pathname: string,
   cache: {
-    cachedDatabases: ReadonlyMap<string, { db: DatabaseSync }>;
-    retainedDatabaseHandles: ReadonlyMap<DatabaseSync, { db: DatabaseSync }>;
+    cachedDatabases: ReadonlyMap<string, { db: EngineConnection }>;
+    retainedDatabaseHandles: ReadonlyMap<EngineConnection, { db: EngineConnection }>;
   },
 ): void {
   const scopedPath = getExistingOpenClawStateSchemaPath();

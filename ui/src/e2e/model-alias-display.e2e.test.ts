@@ -152,6 +152,7 @@ suite.define(() => {
         'openclaw-agents-page openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
       );
       await select.waitFor({ state: "visible", timeout: 10_000 });
+      await select.locator(".picker-select__trigger").click();
       await expect
         .poll(() =>
           select.locator('[role="option"][data-value="anthropic/claude-opus-4-8"]').textContent(),

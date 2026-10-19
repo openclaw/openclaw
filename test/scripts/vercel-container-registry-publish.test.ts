@@ -757,26 +757,33 @@ describe("Vercel Container Registry publishing", () => {
       lockfileVersion?: number;
       packages?: Record<string, { integrity?: string; version?: string }>;
     };
-    const materialize = readFileSync("scripts/materialize-vercel-cli.sh", "utf8");
+    const materialize =
+      readFileSync("scripts/materialize-vercel-cli.sh", "utf8") +
+      readFileSync("scripts/lib/materialize-pinned-cli.sh", "utf8");
 
-    expect(packageJson.dependencies).toEqual({ sandbox: "4.6.0", vercel: "62.2.0" });
+    expect(packageJson.dependencies).toEqual({ sandbox: "4.7.1", vercel: "63.1.2" });
     expect(packageLock.lockfileVersion).toBe(3);
     expect(packageLock.packages?.["node_modules/vercel"]).toMatchObject({
       integrity:
-        "sha512-hwet6qXoOfZEc6waIx1VgI2nLl83wwuZZnFqKSsKJ47UFi9waEezPmAV7uNOx8Fq+6JTJIi+lRnxFXr9YFW3Eg==",
-      version: "62.2.0",
+        "sha512-kD/AKQVTV5Lwlg69fUNaW0OBGh6iSX42UTRrka10CtbOJDcxcqE8VoDRIuAsduGHiD3Hf90Ak9dX39nNzq8srA==",
+      version: "63.1.2",
     });
     expect(packageLock.packages?.["node_modules/sandbox"]).toMatchObject({
       bin: { sandbox: "bin/sandbox.mjs", sbx: "bin/sandbox.mjs" },
       integrity:
-        "sha512-u2hE1xn/HNxLxupbVsGQGfA+W2WYORrK18j6+x7AFRQzStkd5X2CHOUP2Zj93up8tT5lKBHmwyplVivlK9e4CQ==",
-      version: "4.6.0",
+        "sha512-sAY15QFNGlHclRKl06CNjynENgacoHDFSJfaGxS8/JbBhsgqFv9SuHAMhGWI3sYX14317MH8B+gjzhhQiXVo9Q==",
+      version: "4.7.1",
     });
     const lockSha256 = createHash("sha256").update(packageLockBytes).digest("hex");
     expect(materialize).toContain(`expected_lock_sha256="${lockSha256}"`);
     expect(materialize).toContain("npm ci \\\n");
     expect(materialize).toContain("--ignore-scripts");
-    expect(materialize).toContain('sandbox_cli="${destination}/node_modules/.bin/sandbox"');
-    expect(materialize).toContain('echo "sandbox_cli=${sandbox_cli}"');
+    expect(materialize).toContain("additional_bin=sandbox_cli=sandbox");
+    expect(materialize).toContain(
+      'test -x "${destination}/node_modules/.bin/${additional_bin#*=}"',
+    );
+    expect(materialize).toContain(
+      'echo "${additional_bin%%=*}=${destination}/node_modules/.bin/${additional_bin#*=}"',
+    );
   });
 });

@@ -28,6 +28,10 @@ export type AgentRunContext = {
   lifecycleStartedAt?: number;
   /** Shared with captured routing so terminal publication survives execution cleanup. */
   eventState?: AgentRunEventState;
+  /** Model request numbering survives provider fallback within this registered run. */
+  modelCallSequence?: { value: number };
+  /** Active provider-owned local wait; cleared on first response or call settlement. */
+  localModelWait?: { requestId: string };
   activeModel?: AgentRunModel;
   verboseLevel?: VerboseLevel;
   isHeartbeat?: boolean;
@@ -44,7 +48,7 @@ export type AgentRunContext = {
   /** Sticky diagnostic provenance only; never authorization for recovery work. */
   mainSessionRestartRecovery?: true;
   /** Active cadence state by job; admission permits one invocation per job. */
-  cronRunsByJobId?: Map<string, { pacingEnabled: boolean; nextCheckMs?: number }>;
+  cronRunsByJobId?: Map<string, { nextCheckEnabled: boolean; nextCheckMs?: number }>;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */
   registeredAt?: number;
   /** Bounded presentation facts from this registration's accepted events; never authority. */

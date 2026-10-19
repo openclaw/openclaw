@@ -2,6 +2,8 @@ import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { agentRunFrameActiveStatusParts, chatItemGroups } from "../chat-agent-run-grouping.ts";
+import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
+import { coalesceSystemEvents } from "../chat-system-event-grouping.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   type buildCachedChatItems,
@@ -18,14 +20,14 @@ import {
 import { isInterSessionMessage, isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { readLiveTerminalRevision } from "../terminal-message-identity.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
-import type { StreamGroupPart } from "./chat-message-stream.ts";
+import type { StreamGroupPart } from "./chat-message-stream-view.tsx";
 import { projectChatPositions, type ChatPositionIndex } from "./chat-position-projection.ts";
 import type { LoadedReplySource } from "./chat-reply-preview.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 
-type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
+type ChatRenderItem = SystemEventRenderItem;
 
 type TranscriptChain = {
   searchActive: boolean;
@@ -181,6 +183,9 @@ export function projectTranscriptChain(
     sessionKey: string;
     runWorking: boolean;
     searchActive: boolean;
+    bubbleMode?: boolean;
+    messages?: readonly unknown[];
+    activeRunId?: string | null;
     session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
   },
 ): TranscriptChain {
@@ -190,6 +195,9 @@ export function projectTranscriptChain(
     options.sessionKey,
     options.runWorking,
     options.searchActive,
+    options.bubbleMode,
+    options.messages,
+    options.activeRunId,
     session?.key,
     session?.lastRunId,
     session?.status,
@@ -231,7 +239,9 @@ export function projectTranscriptChain(
     ),
     options,
   );
-  const collapsedItems = options.searchActive ? frames : coalesceInterSessionUpdates(frames);
+  const collapsedItems = options.searchActive
+    ? frames
+    : coalesceSystemEvents(coalesceInterSessionUpdates(frames));
   const continuations = new Map<string, StreamGroupPart[]>();
   const transcriptItems = collapsedItems.filter((item, index) => {
     // A handoff boundary only shapes the grouping above; it has no row of its own.

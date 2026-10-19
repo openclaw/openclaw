@@ -2,8 +2,13 @@ import type { DaemonRuntimePinSnapshot } from "../../daemon/runtime-pin-types.js
 const pinSnapshotMock = vi.hoisted(() =>
   vi.fn<() => DaemonRuntimePinSnapshot>(() => ({ revision: "empty", stored: false })),
 );
+const pinMigrationMock = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../../daemon/runtime-pin-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/runtime-pin-state.js")>()),
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, run: () => T) => {
+    await pinMigrationMock();
+    return run();
+  },
   readDaemonRuntimePinForInstall: pinSnapshotMock,
 }));
 // Daemon install tests cover service install command behavior and plan handling.
@@ -194,6 +199,7 @@ const envSnapshot = captureFullEnv();
 export function setupInstallTests() {
   beforeEach(() => {
     pinSnapshotMock.mockReset().mockReturnValue({ revision: "empty", stored: false });
+    pinMigrationMock.mockReset().mockResolvedValue(undefined);
     runExecMock.mockReset();
     runExecMock.mockResolvedValue(nodeProbeOutput("26.8.1"));
     resolveNodeStartupTlsEnvironmentMock.mockReset();
@@ -277,4 +283,4 @@ export {
   service,
 };
 
-export { pinSnapshotMock };
+export { pinSnapshotMock, pinMigrationMock };

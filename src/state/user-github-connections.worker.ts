@@ -1,13 +1,18 @@
 import { randomUUID } from "node:crypto";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import type { DB } from "./openclaw-state-db.generated.js";
 import {
   cancelUserGitHubAuthorizationInDatabase,
   disconnectedUserGitHubConnection,
   disconnectUserGitHubConnectionInDatabase,
-  listUserGitHubConnectionsInDatabase,
+  parseUserGitHubConnection,
   readUserGitHubConnectionInDatabase,
   readCanonicalUserGitHubConnectionInDatabase,
   writeUserGitHubConnectionInDatabase,
@@ -18,11 +23,61 @@ import type {
   UserGitHubConnectionMutation,
   UserGitHubRefreshMutation,
 } from "./user-github-connections.types.js";
+import type { UserProfilesDatabase } from "./user-profiles.types.js";
 import type {
   WorkerOperationHandlers,
   WorkerOperations,
   WorkerWriteOperationContext,
 } from "./worker-operation-registry.js";
+
+function listUserGitHubConnections(db: EngineConnection): Array<{
+  owner: string;
+  connection: UserGitHubConnection;
+}> {
+  if (!tableExists(db, "secret_store_entries") || !tableExists(db, "user_profiles")) {
+    return [];
+  }
+  const query = getNodeSqliteKysely<
+    Pick<DB, "secret_store_entries"> & Pick<UserProfilesDatabase, "user_profiles">
+  >(db);
+  return executeSqliteQuerySync(
+    db,
+    query
+      .selectFrom("secret_store_entries")
+      .innerJoin("user_profiles", "user_profiles.id", "secret_store_entries.scope_id")
+      .select(["scope_id", "value"])
+      .where("scope_kind", "=", "identity")
+      .where("name", "=", "github-connection")
+      .where("kind", "=", "secret")
+      .where("allowed_hosts", "is", null)
+      .where("deleted_at_ms", "is", null)
+      .where("merged_into", "is", null)
+      .orderBy("scope_id"),
+  ).rows.flatMap((row) => {
+    try {
+      return [{ owner: row.scope_id, connection: parseUserGitHubConnection(row.value) }];
+    } catch {
+      return [];
+    }
+  });
+}
+
+export const userGitHubConnectionReadOperations = {
+  "userGitHubConnections.read": ({ owner }: { owner: string }, db) => ({
+    type: "userGitHubConnections.read" as const,
+    connection: runSqliteReadSnapshotSync(db, () => readUserGitHubConnectionInDatabase(db, owner)),
+  }),
+  "userGitHubConnections.readCanonical": ({ profile }: { profile: string }, db) => ({
+    type: "userGitHubConnections.readCanonical" as const,
+    canonical: runSqliteReadSnapshotSync(db, () =>
+      readCanonicalUserGitHubConnectionInDatabase(db, profile),
+    ),
+  }),
+  "userGitHubConnections.list": (_input: undefined, db) => ({
+    type: "userGitHubConnections.list" as const,
+    connections: listUserGitHubConnections(db),
+  }),
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
 function requirePending(
   current: UserGitHubConnection | undefined,
@@ -150,22 +205,10 @@ function mutate<T>(
 }
 
 export const userGitHubConnectionOperations = {
-  "userGitHubConnections.read": ({ owner }: { owner: string }, { open }) =>
-    readUserGitHubConnectionInDatabase(open().db, owner),
-  "userGitHubConnections.list": (_input: undefined, { open }) =>
-    listUserGitHubConnectionsInDatabase(open().db),
   "userGitHubConnections.mutate": (
     input: { owner: string; mutation: UserGitHubConnectionMutation },
     context,
   ) => {
-    // A matching request is still reread under the write transaction.
-    if (
-      input.mutation.kind === "cancel" &&
-      readUserGitHubConnectionInDatabase(context.open().db, input.owner)?.pending?.requestId !==
-        input.mutation.requestId
-    ) {
-      return undefined;
-    }
     return mutate(context, (db, capture) => {
       const { owner, mutation } = input;
       if (mutation.kind === "disconnect") {

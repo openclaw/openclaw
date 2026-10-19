@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import { requestCloudWorkerStop } from "../components/cloud-worker-stop.runtime.ts";
@@ -9,8 +10,9 @@ import {
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
 import * as toast from "../lib/toast.ts";
-import { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.ts";
+import { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.tsx";
 import { PendingSessionPlacementRecoveryState } from "../pages/new-session/session-placement-recovery-state.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
 import createRuntime from "./session-placement-startup.runtime.ts";
@@ -243,6 +245,7 @@ describe("placement startup Stop", () => {
         expect(request).toHaveBeenCalledWith(
           "sessions.send",
           expect.objectContaining({ key: "agent:cloud:other", idempotencyKey: "other-message" }),
+          expect.anything(),
         );
         expect(startup.get(input.recovery.sessionKey)?.action).toBe("retry");
       } finally {
@@ -347,7 +350,11 @@ describe("placement startup Stop", () => {
       try {
         startup.start(input);
         await vi.waitFor(() =>
-          expect(request).toHaveBeenCalledWith("sessions.send", expect.anything()),
+          expect(request).toHaveBeenCalledWith(
+            "sessions.send",
+            expect.anything(),
+            expect.anything(),
+          ),
         );
         await requestCloudWorkerStop(stopClient, { key: input.recovery.sessionKey }, startup);
         sent.resolve({ status: "started", runId: input.recovery.messageId });
@@ -495,6 +502,11 @@ describe("placement startup Retry", () => {
               message: input.recovery.message,
               idempotencyKey: messageId,
             }),
+            expect.objectContaining({
+              timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+              signal: expect.any(AbortSignal),
+              retainSentResultOnAbort: true,
+            }),
           ],
         ]);
         expect(request.mock.calls.some(([method]) => method === "sessions.dispatch")).toBe(false);
@@ -640,7 +652,8 @@ describe("placement startup Retry", () => {
 describe("placement startup reload", () => {
   beforeEach(() => {
     vi.spyOn(Math, "random").mockReturnValue(0);
-    sessionStorage.clear();
+    // Each case represents a fresh document, including in-memory reload ownership.
+    vi.stubGlobal("sessionStorage", createStorageMock());
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -690,7 +703,10 @@ describe("placement startup reload", () => {
       );
       const { startup, input, gateway } = createPlacementStartupHarness(vi.fn(), { loadRuntime });
       const privateKey = "agent:cloud:incognito";
-      const saved = Object.entries(sessionStorage);
+      const saved = Array.from({ length: sessionStorage.length }, (_, index) => {
+        const key = sessionStorage.key(index)!;
+        return [key, sessionStorage.getItem(key)];
+      });
       try {
         startup.resumeRecovery();
         await flushStartupMicrotasks();
@@ -731,7 +747,12 @@ describe("placement startup reload", () => {
         ).toBe(false);
         expect(fetch).not.toHaveBeenCalled();
         expect(reload).not.toHaveBeenCalled();
-        expect(Object.entries(sessionStorage)).toEqual(saved);
+        expect(
+          Array.from({ length: sessionStorage.length }, (_, index) => {
+            const key = sessionStorage.key(index)!;
+            return [key, sessionStorage.getItem(key)];
+          }),
+        ).toEqual(saved);
         expect(startup.hasPendingTurn(privateKey)).toBe(true);
 
         // Credential replacement retires this input's authority; it cannot block the new owner.

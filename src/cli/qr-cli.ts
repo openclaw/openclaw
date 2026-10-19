@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { trimToUndefined } from "../gateway/credentials.js";
@@ -102,7 +102,7 @@ export function registerQrCli(program: Command) {
         const password = trimToUndefined(opts.password) ?? "";
         const wantsRemote = opts.remote === true;
 
-        const loadedRaw = getRuntimeConfig();
+        const loadedRaw = await captureRuntimeConfigAsyncReader()();
         if (wantsRemote && !opts.url && !opts.publicUrl) {
           const tailscaleMode = loadedRaw.gateway?.tailscale?.mode ?? "off";
           const remoteUrl = loadedRaw.gateway?.remote?.url;
