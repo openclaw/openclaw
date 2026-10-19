@@ -45,6 +45,29 @@ afterEach(async () => {
 async function readLive(name: string) {
   return (await viewWorkshopSkill({}, "main", name)).content;
 }
+const create = (body: string, name = "deploy", description?: string) =>
+  createWorkshopSkill(ctx, { name, content: skill(name, body, description) });
+const patch = (oldText: string, newText: string, context = ctx, name = "deploy") =>
+  patchWorkshopSkill(context, { name, oldText, newText });
+const write = (filePath: string, content: string) =>
+  writeWorkshopSkillFile(ctx, { name: "deploy", filePath, content });
+const refuses = (operation: Promise<unknown>, error: string | RegExp) =>
+  expect(operation).rejects.toThrow(error);
+function revokedAfter(allowed: number): WorkshopMutationContext {
+  let checks = 0;
+  return {
+    ...ctx,
+    assertLive: () => {
+      if (++checks > allowed) {
+        throw new Error("Learning is off.");
+      }
+    },
+  };
+}
+async function createPatched() {
+  await create("step 0");
+  return patch("step 0", "step 1");
+}
 
 describe("workshop library", () => {
   it("reports unreadable skill files instead of returning an incomplete inventory", async () => {
@@ -52,9 +75,7 @@ describe("workshop library", () => {
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(path.join(skillDir, "SKILL.md"), Buffer.alloc(1024 * 1024 + 1, "x"));
 
-    await expect(listWorkshopSkills({}, "main")).rejects.toThrow(
-      /file exceeds limit of 1048576 bytes/,
-    );
+    await refuses(listWorkshopSkills({}, "main"), /file exceeds limit of 1048576 bytes/);
   });
 
   it("skips directories without SKILL.md but still lists hand-edited broken frontmatter", async () => {
@@ -76,7 +97,7 @@ describe("workshop library", () => {
       expect(await listWorkshopChanges("main", { runId: "another" })).toEqual([]);
       expect(reads.mock.calls).toHaveLength(count);
 
-      await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "1. Deploy.") });
+      await create("1. Deploy.");
       const changes = await listWorkshopChanges("main", { runId: "run-1" });
       expect(changes).toMatchObject([{ action: "create", skillName: "deploy" }]);
       changes[0]!.summary = "caller mutation";
@@ -90,10 +111,7 @@ describe("workshop library", () => {
   });
 
   it("versions every mutation so restore undoes it, and undoing the undo is possible", async () => {
-    await createWorkshopSkill(ctx, {
-      name: "deploy",
-      content: skill("deploy", "1. Run make deploy."),
-    });
+    await create("1. Run make deploy.");
     const patched = await patchWorkshopSkill(ctx, {
       name: "deploy",
       oldText: "make deploy",
@@ -127,24 +145,21 @@ describe("workshop library", () => {
   });
 
   it("archives into a restorable version and hides the skill from the live list", async () => {
-    await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "1. Deploy.") });
-    await createWorkshopSkill(ctx, { name: "release", content: skill("release", "1. Release.") });
-    await writeWorkshopSkillFile(ctx, {
-      name: "deploy",
-      filePath: "references/hosts.md",
-      content: "staging.example.test\n",
-    });
+    await create("1. Deploy.");
+    await create("1. Release.", "release");
+    await write("references/hosts.md", "staging.example.test\n");
 
-    await expect(
+    await refuses(
       archiveWorkshopSkill(ctx, { name: "deploy", absorbedInto: "missing" }),
-    ).rejects.toThrow(/absorbed_into must name another live workshop skill/);
+      /absorbed_into must name another live workshop skill/,
+    );
     const archived = await archiveWorkshopSkill(ctx, { name: "deploy", absorbedInto: "release" });
     expect(archived.summary).toBe("archived: merged into release");
     expect((await listWorkshopSkills({}, "main")).map((entry) => entry.name)).toEqual(["release"]);
     const [entry] = await listWorkshopArchive({}, "main");
     expect(entry).toMatchObject({ name: "deploy", live: false });
     expect(entry?.versions[0]?.action).toBe("archive");
-    await expect(viewWorkshopSkill({}, "main", "deploy")).rejects.toThrow(/is archived/);
+    await refuses(viewWorkshopSkill({}, "main", "deploy"), /is archived/);
 
     await restoreWorkshopSkill(ctx, { name: "deploy" });
     const restored = await viewWorkshopSkill({}, "main", "deploy", "references/hosts.md");
@@ -162,62 +177,38 @@ describe("workshop library", () => {
   });
 
   it("refuses invalid or unsafe writes with actionable errors and leaves files untouched", async () => {
-    await expect(
-      createWorkshopSkill(ctx, { name: "Deploy", content: skill("Deploy", "x") }),
-    ).rejects.toThrow(/Invalid skill name/);
-    await expect(
+    await refuses(create("x", "Deploy"), /Invalid skill name/);
+    await refuses(
       createWorkshopSkill(ctx, { name: "deploy", content: skill("other", "x") }),
-    ).rejects.toThrow(/must contain "name: deploy"/);
-    await expect(
-      createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "x", "d".repeat(1025)) }),
-    ).rejects.toThrow(/description" must be 1-1024 bytes/);
+      /must contain "name: deploy"/,
+    );
+    await refuses(create("x", "deploy", "d".repeat(1025)), /description" must be 1-1024 bytes/);
     const token = `ghp_${"A".repeat(30)}`;
-    await expect(
-      createWorkshopSkill(ctx, {
-        name: "deploy",
-        content: skill("deploy", `export TOKEN=${token}`),
-      }),
-    ).rejects.toThrow(/literal-secret.*placeholder/);
+    await refuses(create(`export TOKEN=${token}`), /literal-secret.*placeholder/);
     await expect(
       fs.stat(path.join(resolveWorkshopSkillsDir({}, "main"), "deploy")),
     ).rejects.toMatchObject({ code: "ENOENT" });
 
-    await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "run it\nrun it") });
-    await expect(
-      patchWorkshopSkill(ctx, { name: "deploy", oldText: "run it", newText: "run" }),
-    ).rejects.toThrow(/matches 2 places/);
-    await expect(
-      writeWorkshopSkillFile(ctx, { name: "deploy", filePath: "../escape.md", content: "x" }),
-    ).rejects.toBeInstanceOf(WorkshopWriteError);
-    await expect(
-      writeWorkshopSkillFile(ctx, {
-        name: "deploy",
-        filePath: `references/${token}.md`,
-        content: "x",
-      }),
-    ).rejects.toThrow(/file path in "deploy" looks like it contains a credential/);
-    await expect(
-      writeWorkshopSkillFile(ctx, {
-        name: "deploy",
-        filePath: "SKILL.md",
-        content: "no frontmatter",
-      }),
-    ).rejects.toThrow(/must contain "name: deploy"/);
+    await create("run it\nrun it");
+    await refuses(patch("run it", "run"), /matches 2 places/);
+    await expect(write("../escape.md", "x")).rejects.toBeInstanceOf(WorkshopWriteError);
+    await refuses(
+      write(`references/${token}.md`, "x"),
+      /file path in "deploy" looks like it contains a credential/,
+    );
+    await refuses(write("SKILL.md", "no frontmatter"), /must contain "name: deploy"/);
     expect(await readLive("deploy")).toBe(skill("deploy", "run it\nrun it"));
     expect(await listWorkshopArchive({}, "main")).toEqual([]);
   });
 
   it("rejects a patch whose old text matches overlapping places", async () => {
-    await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "run\nrun\nrun") });
-
-    await expect(
-      patchWorkshopSkill(ctx, { name: "deploy", oldText: "run\nrun", newText: "go" }),
-    ).rejects.toThrow(/matches 2 places/);
+    await create("run\nrun\nrun");
+    await refuses(patch("run\nrun", "go"), /matches 2 places/);
     expect(await readLive("deploy")).toBe(skill("deploy", "run\nrun\nrun"));
   });
 
   it("never lists or reads a symlinked saved version", async () => {
-    await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "step 1") });
+    await create("step 1");
     const outside = path.join(state.root, "outside");
     await fs.mkdir(outside, { recursive: true });
     await fs.writeFile(path.join(outside, "SKILL.md"), "secret host file\n");
@@ -227,18 +218,12 @@ describe("workshop library", () => {
     await fs.symlink(outside, path.join(versionsDir, id));
 
     expect(await listWorkshopArchive({}, "main")).toEqual([]);
-    await expect(viewWorkshopSkill({}, "main", "deploy", undefined, id)).rejects.toThrow(
-      /has no version/,
-    );
+    await refuses(viewWorkshopSkill({}, "main", "deploy", undefined, id), /has no version/);
   });
 
   it("refuses to restore a tampered saved version and leaves the live skill untouched", async () => {
-    await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "step 1") });
-    const { versionId = "" } = await patchWorkshopSkill(ctx, {
-      name: "deploy",
-      oldText: "step 1",
-      newText: "step 2",
-    });
+    await create("step 1");
+    const { versionId = "" } = await patch("step 1", "step 2");
     const versionDir = path.join(
       resolveWorkshopSkillsDir({}, "main"),
       ".archive",
@@ -248,17 +233,17 @@ describe("workshop library", () => {
     const restore = () => restoreWorkshopSkill(ctx, { name: "deploy" });
 
     await fs.writeFile(path.join(versionDir, "SKILL.md"), "no frontmatter\n");
-    await expect(restore()).rejects.toThrow(/Cannot restore "deploy".*must contain "name: deploy"/);
+    await refuses(restore(), /Cannot restore "deploy".*must contain "name: deploy"/);
     await fs.writeFile(path.join(versionDir, "SKILL.md"), skill("deploy", "step 1"));
     await fs.mkdir(path.join(versionDir, "references"));
     await fs.writeFile(
       path.join(versionDir, "references", "env.md"),
       `TOKEN=ghp_${"A".repeat(30)}`,
     );
-    await expect(restore()).rejects.toThrow(/Cannot restore "deploy".*literal-secret/);
+    await refuses(restore(), /Cannot restore "deploy".*literal-secret/);
     await fs.rm(path.join(versionDir, "references", "env.md"));
     await fs.symlink("/etc/hosts", path.join(versionDir, "references", "hosts.md"));
-    await expect(restore()).rejects.toThrow(/references\/hosts\.md is a symlink/);
+    await refuses(restore(), /references\/hosts\.md is a symlink/);
 
     expect(await readLive("deploy")).toBe(skill("deploy", "step 2"));
     const [entry] = await listWorkshopArchive({}, "main");
@@ -266,13 +251,9 @@ describe("workshop library", () => {
   });
 
   it("keeps the newest ten versions per skill", async () => {
-    await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "step 0") });
+    await create("step 0");
     for (let step = 1; step <= 12; step += 1) {
-      await patchWorkshopSkill(ctx, {
-        name: "deploy",
-        oldText: `step ${step - 1}`,
-        newText: `step ${step}`,
-      });
+      await patch(`step ${step - 1}`, `step ${step}`);
     }
     const [entry] = await listWorkshopArchive({}, "main");
     expect(entry?.versions).toHaveLength(10);
@@ -284,51 +265,29 @@ describe("workshop library", () => {
   it.each(["patch", "archive"] as const)(
     "does not %s once authority is revoked during the snapshot",
     async (action) => {
-      await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "step 0") });
+      await create("step 0");
       // Live at lock time; revoked by the time the snapshot copy finishes.
-      let checks = 0;
-      const revoking = {
-        ...ctx,
-        assertLive: () => {
-          checks += 1;
-          if (checks > 1) {
-            throw new Error("Learning is off.");
-          }
-        },
-      };
-      await expect(
+      const revoking = revokedAfter(1);
+      await refuses(
         action === "patch"
-          ? patchWorkshopSkill(revoking, { name: "deploy", oldText: "step 0", newText: "step 1" })
+          ? patch("step 0", "step 1", revoking)
           : archiveWorkshopSkill(revoking, { name: "deploy", reason: "unused" }),
-      ).rejects.toThrow("Learning is off.");
+        "Learning is off.",
+      );
       expect(await readLive("deploy")).toContain("step 0");
       expect(await listWorkshopArchive({}, "main")).toEqual([]);
     },
   );
 
   it("keeps the live skill when restore is revoked between the swap's two renames", async () => {
-    await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "step 0") });
-    await patchWorkshopSkill(ctx, { name: "deploy", oldText: "step 0", newText: "step 1" });
+    await createPatched();
     // Lock time, snapshot publish and the first swap check pass; the final publish is refused.
-    let checks = 0;
-    const revoking = {
-      ...ctx,
-      assertLive: () => {
-        checks += 1;
-        if (checks > 3) {
-          throw new Error("Learning is off.");
-        }
-      },
-    };
-    await expect(restoreWorkshopSkill(revoking, { name: "deploy" })).rejects.toThrow(
-      "Learning is off.",
-    );
+    await refuses(restoreWorkshopSkill(revokedAfter(3), { name: "deploy" }), "Learning is off.");
     expect(await readLive("deploy")).toContain("step 1");
   });
 
   it("retains the original live copy when restore publication and rollback both fail", async () => {
-    await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "step 0") });
-    await patchWorkshopSkill(ctx, { name: "deploy", oldText: "step 0", newText: "step 1" });
+    await createPatched();
     const live = path.join(resolveWorkshopSkillsDir({}, "main"), "deploy");
     let previous = "";
     const rename = fs.rename;
@@ -341,9 +300,7 @@ describe("workshop library", () => {
       await rename(from, to);
     });
     try {
-      await expect(restoreWorkshopSkill(ctx, { name: "deploy" })).rejects.toThrow(
-        "rollback blocked",
-      );
+      await refuses(restoreWorkshopSkill(ctx, { name: "deploy" }), "rollback blocked");
     } finally {
       publishing.mockRestore();
     }
@@ -362,15 +319,13 @@ describe("workshop library", () => {
     await fs.writeFile(path.join(skillDir, "SKILL.md"), skill(legacy, "step 0"));
 
     expect((await listWorkshopSkills({}, "main")).map((live) => live.name)).toEqual([legacy]);
-    await patchWorkshopSkill(ctx, { name: legacy, oldText: "step 0", newText: "step 1" });
+    await patch("step 0", "step 1", ctx, legacy);
     expect(await readLive(legacy)).toContain("step 1");
     await archiveWorkshopSkill(ctx, { name: legacy, reason: "superseded" });
     expect((await listWorkshopArchive({}, "main")).map((entry) => entry.name)).toEqual([legacy]);
     await restoreWorkshopSkill(ctx, { name: legacy });
     expect(await readLive(legacy)).toContain("step 1");
 
-    await expect(
-      createWorkshopSkill(ctx, { name: `${legacy}-copy`, content: skill(`${legacy}-copy`, "x") }),
-    ).rejects.toThrow(/use 1-63 lowercase letters/);
+    await refuses(create("x", `${legacy}-copy`), /use 1-63 lowercase letters/);
   });
 });

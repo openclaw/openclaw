@@ -69,39 +69,60 @@ afterEach(async () => {
   await state.cleanup();
 });
 
+type ReviewParams = Parameters<typeof runSkillWorkshopReview>[0];
+async function candidateFor(runId: string, content = "Remember the verified procedure.") {
+  const candidate = await createExperienceReviewCandidate(
+    runId,
+    [{ role: "user", content, timestamp: 1 }],
+    { workspaceDir: state.workspaceDir, modelId: "gpt-test" },
+  );
+  setRuntimeConfigSnapshot(candidate.config);
+  return candidate;
+}
+async function useRealReview() {
+  const review = await vi.importActual<{ runSkillWorkshopReview: typeof runSkillWorkshopReview }>(
+    "./review-run.js",
+  );
+  mocks.runSkillWorkshopReview.mockImplementation(review.runSkillWorkshopReview);
+}
+function withAdmission(
+  run: (assertCurrent: ReturnType<typeof resolveAdmittedRunActiveAssertion>) => Promise<void>,
+) {
+  mocks.runSkillWorkshopReview.mockImplementation(async (params: ReviewParams) => {
+    try {
+      const admitted = await params.preparedRunAdmission.admit("embedded");
+      const assertCurrent = resolveAdmittedRunActiveAssertion(admitted, params.abortSignal);
+      expect(assertCurrent).toBeDefined();
+      await run(assertCurrent);
+      return { meta: { durationMs: 1 } };
+    } finally {
+      params.preparedRunAdmission.close();
+    }
+  });
+}
 describe("runSkillExperienceReview", () => {
   it("yields an in-flight review when interactive work starts", async () => {
-    const candidate = await createExperienceReviewCandidate(
-      "review-yield",
-      [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
-      { workspaceDir: state.workspaceDir, modelId: "gpt-test" },
-    );
-    setRuntimeConfigSnapshot(candidate.config);
-    const review = await vi.importActual<{ runSkillWorkshopReview: typeof runSkillWorkshopReview }>(
-      "./review-run.js",
-    );
-    mocks.runSkillWorkshopReview.mockImplementation(review.runSkillWorkshopReview);
+    const candidate = await candidateFor("review-yield");
+    await useRealReview();
     const ownHandle = createEmbeddedRunHandle();
     const interactiveHandle = createEmbeddedRunHandle({ abort: vi.fn() });
-    mocks.runEmbeddedAgent.mockImplementation(
-      async (params: Parameters<typeof runSkillWorkshopReview>[0]) => {
-        registerTestEmbeddedRun(params.sessionId, ownHandle, params.sessionKey);
-        try {
-          expect(params.abortSignal?.aborted).toBe(false);
-          registerTestEmbeddedRun(
-            "interactive-session",
-            interactiveHandle,
-            "agent:other:interactive",
-          );
-          expect(params.abortSignal?.aborted).toBe(true);
-          expect(interactiveHandle.abort).not.toHaveBeenCalled();
-          return { meta: { durationMs: 1, aborted: true } };
-        } finally {
-          clearTestEmbeddedRun("interactive-session", interactiveHandle);
-          clearTestEmbeddedRun(params.sessionId, ownHandle);
-        }
-      },
-    );
+    mocks.runEmbeddedAgent.mockImplementation(async (params: ReviewParams) => {
+      registerTestEmbeddedRun(params.sessionId, ownHandle, params.sessionKey);
+      try {
+        expect(params.abortSignal?.aborted).toBe(false);
+        registerTestEmbeddedRun(
+          "interactive-session",
+          interactiveHandle,
+          "agent:other:interactive",
+        );
+        expect(params.abortSignal?.aborted).toBe(true);
+        expect(interactiveHandle.abort).not.toHaveBeenCalled();
+        return { meta: { durationMs: 1, aborted: true } };
+      } finally {
+        clearTestEmbeddedRun("interactive-session", interactiveHandle);
+        clearTestEmbeddedRun(params.sessionId, ownHandle);
+      }
+    });
     try {
       await expect(runSkillExperienceReview(candidate)).rejects.toThrow("yielded to foreground");
       expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
@@ -111,12 +132,7 @@ describe("runSkillExperienceReview", () => {
   });
 
   it("does not dispatch user reply hooks for a detached experience review", async () => {
-    const candidate = await createExperienceReviewCandidate(
-      "review-user-reply-hook",
-      [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
-      { workspaceDir: state.workspaceDir, modelId: "gpt-test" },
-    );
-    setRuntimeConfigSnapshot(candidate.config);
+    const candidate = await candidateFor("review-user-reply-hook");
     const handler = vi.fn(() => ({ handled: true }));
     const reviewModel = vi.fn(() => ({ meta: { durationMs: 1 } }));
     initializeGlobalHookRunner(
@@ -137,23 +153,18 @@ describe("runSkillExperienceReview", () => {
       expect(handler).toHaveBeenCalledOnce();
       handler.mockClear();
 
-      const review = await vi.importActual<{
-        runSkillWorkshopReview: typeof runSkillWorkshopReview;
-      }>("./review-run.js");
-      mocks.runSkillWorkshopReview.mockImplementation(review.runSkillWorkshopReview);
-      mocks.runEmbeddedAgent.mockImplementation(
-        async (params: Parameters<typeof runSkillWorkshopReview>[0]) => {
-          const admitted = await params.preparedRunAdmission.admit("embedded");
-          const hookResult = await runBeforeAgentReplyForTurn({
-            runId: params.runId,
-            trigger: params.trigger,
-            event: { cleanedBody: params.prompt },
-            context: { sessionKey: params.sessionKey, sessionId: params.sessionId },
-            assertCurrent: resolveAdmittedRunActiveAssertion(admitted, params.abortSignal),
-          });
-          return hookResult?.handled ? { meta: { durationMs: 1 } } : reviewModel();
-        },
-      );
+      await useRealReview();
+      mocks.runEmbeddedAgent.mockImplementation(async (params: ReviewParams) => {
+        const admitted = await params.preparedRunAdmission.admit("embedded");
+        const hookResult = await runBeforeAgentReplyForTurn({
+          runId: params.runId,
+          trigger: params.trigger,
+          event: { cleanedBody: params.prompt },
+          context: { sessionKey: params.sessionKey, sessionId: params.sessionId },
+          assertCurrent: resolveAdmittedRunActiveAssertion(admitted, params.abortSignal),
+        });
+        return hookResult?.handled ? { meta: { durationMs: 1 } } : reviewModel();
+      });
 
       await runSkillExperienceReview(candidate);
 
@@ -167,13 +178,7 @@ describe("runSkillExperienceReview", () => {
   });
 
   it("announces changes committed before the review run failed", async () => {
-    const workspaceDir = state.workspaceDir;
-    const candidate = await createExperienceReviewCandidate(
-      "review-fails-after-commit",
-      [{ role: "user", content: "Reconcile the budget.", timestamp: 1 }],
-      { workspaceDir, modelId: "gpt-test" },
-    );
-    setRuntimeConfigSnapshot(candidate.config);
+    const candidate = await candidateFor("review-fails-after-commit", "Reconcile the budget.");
     const committed: WorkshopChange = {
       id: "c1",
       agentId: "main",
@@ -203,58 +208,43 @@ describe("runSkillExperienceReview", () => {
   });
 
   it("keeps prepared effects live through receipt pressure without MAIN SQL and denies revocation", async () => {
-    const candidate = await createExperienceReviewCandidate(
-      "review-append",
-      [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
-      { workspaceDir: state.workspaceDir, modelId: "gpt-test" },
-    );
-    setRuntimeConfigSnapshot(candidate.config);
-    mocks.runSkillWorkshopReview.mockImplementation(
-      async (params: Parameters<typeof runSkillWorkshopReview>[0]) => {
-        try {
-          const admitted = await params.preparedRunAdmission.admit("embedded");
-          const assertCurrent = resolveAdmittedRunActiveAssertion(admitted, params.abortSignal);
-          expect(assertCurrent).toBeDefined();
-          const session = await SessionManager.openAsync(candidate.source, state.workspaceDir);
-          const sql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-          try {
-            for (let index = 0; index < 5; index += 1) {
-              assertCurrent!();
-            }
-            expect(sql.queries).toEqual([]);
-          } finally {
-            sql.restore();
-          }
-          await session.appendMessageWithTranscriptAnchorAsync(
-            { role: "user", content: "Continue the foreground task.", timestamp: 2 },
-            { config: candidate.config },
-          );
-          const refreshedSql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-          try {
-            // The model response resumes before the next tool can prepare its source scope.
-            assertCurrent!();
-            await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-              expect(
-                readSqliteDatabaseScopedWriteTokensForPath(
-                  candidate.source.storePath,
-                  Array.from({ length: 5_000 }, (_, index) => `unrelated-review-${index}`),
-                ),
-              ).toHaveLength(5_000);
-              assertCurrent!();
-            });
-            expect(refreshedSql.queries).toEqual([]);
-          } finally {
-            refreshedSql.restore();
-          }
-          await upsertSessionEntryCore(candidate.source, { permissionMode: "read-only" });
-          // Provider dispatch checks the admitted assertion without preparing another scope.
-          expect(() => assertCurrent!()).toThrow("no longer active");
-          return { meta: { durationMs: 1 } };
-        } finally {
-          params.preparedRunAdmission.close();
+    const candidate = await candidateFor("review-append");
+    withAdmission(async (assertCurrent) => {
+      const session = await SessionManager.openAsync(candidate.source, state.workspaceDir);
+      const sql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+      try {
+        for (let index = 0; index < 5; index += 1) {
+          assertCurrent!();
         }
-      },
-    );
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+      await session.appendMessageWithTranscriptAnchorAsync(
+        { role: "user", content: "Continue the foreground task.", timestamp: 2 },
+        { config: candidate.config },
+      );
+      const refreshedSql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+      try {
+        // The model response resumes before the next tool can prepare its source scope.
+        assertCurrent!();
+        await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+          expect(
+            readSqliteDatabaseScopedWriteTokensForPath(
+              candidate.source.storePath,
+              Array.from({ length: 5_000 }, (_, index) => `unrelated-review-${index}`),
+            ),
+          ).toHaveLength(5_000);
+          assertCurrent!();
+        });
+        expect(refreshedSql.queries).toEqual([]);
+      } finally {
+        refreshedSql.restore();
+      }
+      await upsertSessionEntryCore(candidate.source, { permissionMode: "read-only" });
+      // Provider dispatch checks the admitted assertion without preparing another scope.
+      expect(() => assertCurrent!()).toThrow("no longer active");
+    });
     await runSkillExperienceReview(candidate);
     expect(mocks.runSkillWorkshopReview).toHaveBeenCalledOnce();
   });
@@ -262,12 +252,7 @@ describe("runSkillExperienceReview", () => {
   it.each(["permission", "reset", "replacement", "deletion", "rewrite", "membership"] as const)(
     "refuses a Workshop file write after source %s during preparation",
     async (change) => {
-      const candidate = await createExperienceReviewCandidate(
-        `review-write-${change}`,
-        [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
-        { workspaceDir: state.workspaceDir, modelId: "gpt-test" },
-      );
-      setRuntimeConfigSnapshot(candidate.config);
+      const candidate = await candidateFor(`review-write-${change}`);
       await upsertSessionEntryCore(candidate.source, {
         permissionMode: "guarded",
         lifecycleRevision: "original",
@@ -315,38 +300,19 @@ describe("runSkillExperienceReview", () => {
         }
         return result;
       });
-      mocks.runSkillWorkshopReview.mockImplementation(
-        async (params: Parameters<typeof runSkillWorkshopReview>[0]) => {
-          try {
-            const admitted = await params.preparedRunAdmission.admit("embedded");
-            const assertLive = resolveAdmittedRunActiveAssertion(admitted, params.abortSignal);
-            expect(assertLive).toBeDefined();
-            await expect(
-              runWithAgentToolSourceExecutionScope(assertLive, () =>
-                writeWorkshopSkillFile(
-                  { ...context, assertLive },
-                  {
-                    name: "procedure",
-                    filePath: "SKILL.md",
-                    content: original.replace("Original", "Changed"),
-                  },
-                ),
-              ),
-            ).rejects.toThrow("no longer active");
-            await expect(
-              runWithAgentToolSourceExecutionScope(assertLive, () =>
-                writeWorkshopSkillFile(
-                  { ...context, assertLive },
-                  { name: "procedure", filePath: "SKILL.md", content: "must stay denied" },
-                ),
-              ),
-            ).rejects.toThrow();
-            return { meta: { durationMs: 1 } };
-          } finally {
-            params.preparedRunAdmission.close();
-          }
-        },
-      );
+      withAdmission(async (assertLive) => {
+        const write = (content: string) =>
+          runWithAgentToolSourceExecutionScope(assertLive, () =>
+            writeWorkshopSkillFile(
+              { ...context, assertLive },
+              { name: "procedure", filePath: "SKILL.md", content },
+            ),
+          );
+        await expect(write(original.replace("Original", "Changed"))).rejects.toThrow(
+          "no longer active",
+        );
+        await expect(write("must stay denied")).rejects.toThrow();
+      });
       try {
         await runSkillExperienceReview(candidate);
         expect(changed).toBe(true);

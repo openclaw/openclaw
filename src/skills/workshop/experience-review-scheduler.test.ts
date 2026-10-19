@@ -70,7 +70,10 @@ function createHarness() {
       source,
       ...overrides,
     });
-  const fireTimers = () => vi.runOnlyPendingTimers();
+  const fireTimers = async () => {
+    vi.runOnlyPendingTimers();
+    await setImmediate();
+  };
   return { turn, fireTimers, runReview };
 }
 
@@ -82,25 +85,21 @@ describe("skill experience review scheduler", () => {
     runReview.mockRejectedValue(new Error("429 Rate limit reached: tokens per min (TPM)"));
 
     turn(10);
-    fireTimers();
-    await setImmediate();
+    await fireTimers();
     expect(runReview).toHaveBeenCalledTimes(1);
     for (const minutes of [15, 30, 60]) {
       turn(10, { sessionKey: `agent:main:session-${minutes}` });
       now += minutes * 60_000 - 1;
-      fireTimers();
-      await setImmediate();
+      await fireTimers();
       const before = runReview.mock.calls.length;
       // The queue cannot bypass a cooldown through another session.
       expect(before).toBe([15, 30, 60].indexOf(minutes) + 1);
       now += 1;
-      fireTimers();
-      await setImmediate();
+      await fireTimers();
       expect(runReview).toHaveBeenCalledTimes(before + 1);
     }
     now += 60 * 60_000;
-    fireTimers();
-    await setImmediate();
+    await fireTimers();
     expect(runReview).toHaveBeenCalledTimes(4);
   });
 
@@ -109,25 +108,21 @@ describe("skill experience review scheduler", () => {
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const { turn, fireTimers, runReview } = createHarness();
     turn(10);
-    turn(1, {
-      sessionKey: "agent:other:interactive",
-      event: { messages: [], success: false, error: "429 Rate limit reached (TPM)" },
-    });
-    fireTimers();
-    await setImmediate();
+    const foregroundRejection = () =>
+      turn(1, {
+        sessionKey: "agent:other:interactive",
+        event: { messages: [], success: false, error: "429 Rate limit reached (TPM)" },
+      });
+    foregroundRejection();
+    await fireTimers();
     expect(runReview).not.toHaveBeenCalled();
     now += 15 * 60_000 - 1;
-    turn(1, {
-      sessionKey: "agent:other:interactive",
-      event: { messages: [], success: false, error: "429 Rate limit reached (TPM)" },
-    });
+    foregroundRejection();
     now += 1;
-    fireTimers();
-    await setImmediate();
+    await fireTimers();
     expect(runReview).not.toHaveBeenCalled();
     now += 15 * 60_000;
-    fireTimers();
-    await setImmediate();
+    await fireTimers();
     expect(runReview).toHaveBeenCalledOnce();
   });
 
@@ -167,7 +162,7 @@ describe("skill experience review scheduler", () => {
 
     turn(10);
     log.debug.mockClear();
-    fireTimers();
+    await fireTimers();
     await reported.promise;
 
     expect(log[level]).toHaveBeenCalledWith(
@@ -187,8 +182,8 @@ describe("skill experience review scheduler", () => {
     // Compacted sessions keep counting; only the running total matters.
     turn(3, { compacted: true });
     expect(vi.getTimerCount()).toBe(1);
-    fireTimers();
-    await vi.waitFor(() => expect(runReview).toHaveBeenCalledTimes(1));
+    await fireTimers();
+    expect(runReview).toHaveBeenCalledTimes(1);
     expect(runReview.mock.calls[0]?.[0]).toMatchObject({ source, ctx: { runId: "run-3" } });
 
     // The counter restarts after scheduling.
@@ -234,43 +229,34 @@ describe("skill experience review scheduler", () => {
     turn(10);
     expect(vi.getTimerCount()).toBe(1);
     turn(1, { workshopMutated: true });
-    fireTimers();
-    await setImmediate();
+    await fireTimers();
     expect(runReview).not.toHaveBeenCalled();
   });
 
   it("waits for ten accumulated iterations even when turns use a learned skill", async () => {
     const { turn, fireTimers, runReview } = createHarness();
-    const workshopSkill = path.join(resolveWorkshopSkillsDir({}, "main"), "deploy", "SKILL.md");
-
-    turn(1, {
-      usedSkills: [
-        { name: "notes", source: "workspace", activation: "read", skillFile: "/ws/notes/SKILL.md" },
-      ],
-    });
+    const usedSkill = (name: string, skillFile: string) =>
+      [{ name, source: "workspace", activation: "read", skillFile }] as const;
+    turn(1, { usedSkills: usedSkill("notes", "/ws/notes/SKILL.md") });
     expect(vi.getTimerCount()).toBe(0);
-    const usedSkills = [
-      { name: "deploy", source: "workspace", activation: "read", skillFile: workshopSkill },
-    ] as const;
+    const usedSkills = usedSkill(
+      "deploy",
+      path.join(resolveWorkshopSkillsDir({}, "main"), "deploy", "SKILL.md"),
+    );
     turn(1, { usedSkills });
     expect(vi.getTimerCount()).toBe(0);
     turn(7, { usedSkills });
     expect(vi.getTimerCount()).toBe(0);
     turn(1, { usedSkills });
     expect(vi.getTimerCount()).toBe(1);
-    fireTimers();
-    await vi.waitFor(() => expect(runReview).toHaveBeenCalledTimes(1));
+    await fireTimers();
+    expect(runReview).toHaveBeenCalledTimes(1);
     expect(runReview.mock.calls[0]?.[0].usedSkills).toEqual([
       expect.objectContaining({ name: "deploy" }),
     ]);
 
     // Saving its own change already captured the lesson; the used skill does not re-trigger.
-    turn(1, {
-      workshopMutated: true,
-      usedSkills: [
-        { name: "deploy", source: "workspace", activation: "read", skillFile: workshopSkill },
-      ],
-    });
+    turn(1, { workshopMutated: true, usedSkills });
     expect(vi.getTimerCount()).toBe(0);
   });
 

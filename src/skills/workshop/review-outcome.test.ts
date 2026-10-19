@@ -99,17 +99,56 @@ describe("postWorkshopChangeNotice", () => {
   });
   const reviewId = "0b6a4a52-1f43-4f0e-9d55-3c1d8e1f7a10";
   const runId = `skill-workshop-review:${reviewId}`;
+  const channelNotices: OpenClawConfig = {
+    skills: { workshop: { autonomous: { channelNotices: true } } },
+  };
+  const reviewChanges = (firstPass = false, typoVersion?: string) => [
+    change({ id: "c2", versionId: "20260101T000000002Z-patch", createdAtMs: 2 }),
+    change({
+      id: "c1",
+      ...(firstPass ? { summary: "first pass" } : {}),
+      versionId: "20260101T000000001Z-patch",
+      createdAtMs: 1,
+    }),
+    change({
+      id: "c3",
+      skillName: "release-notes",
+      action: "create",
+      summary: "drafting release notes",
+      createdAtMs: 3,
+    }),
+    change({
+      id: "c4",
+      skillName: "release-notes",
+      createdAtMs: 4,
+      ...(typoVersion ? { versionId: typoVersion } : { summary: "fixed a typo" }),
+    }),
+  ];
+  const marker = (includeRelease = false) => ({
+    kind: "skill-workshop-change",
+    agentId: "main",
+    runId,
+    skills: [
+      {
+        name: "actual-budget-operations",
+        action: "updated",
+        summary: "tightened reconciliation step",
+      },
+      ...(includeRelease
+        ? [{ name: "release-notes", action: "created", summary: "drafting release notes" }]
+        : []),
+    ],
+  });
+  const expectNoNotice = () => {
+    expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+  };
   const post = (
     changes: WorkshopChange[],
     sessionKey = "agent:main:telegram:direct:42",
     config: OpenClawConfig = {},
-  ) =>
-    postWorkshopChangeNotice({
-      config,
-      generation: generation(sessionKey),
-      runId,
-      changes,
-    });
+  ) => postWorkshopChangeNotice({ config, generation: generation(sessionKey), runId, changes });
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -131,9 +170,7 @@ describe("postWorkshopChangeNotice", () => {
   it("stays quiet when the review changed nothing", async () => {
     await post([]);
     expect(mocks.extractDeliveryInfo).not.toHaveBeenCalled();
-    expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
-    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    expectNoNotice();
   });
 
   it("sends one line with an Undo command button into the session thread when channel notices are enabled", async () => {
@@ -147,32 +184,7 @@ describe("postWorkshopChangeNotice", () => {
       },
       threadId: "456",
     });
-    await post(
-      [
-        change({ id: "c2", versionId: "20260101T000000002Z-patch", createdAtMs: 2 }),
-        change({
-          id: "c1",
-          summary: "first pass",
-          versionId: "20260101T000000001Z-patch",
-          createdAtMs: 1,
-        }),
-        change({
-          id: "c3",
-          skillName: "release-notes",
-          action: "create",
-          summary: "drafting release notes",
-          createdAtMs: 3,
-        }),
-        change({
-          id: "c4",
-          skillName: "release-notes",
-          summary: "fixed a typo",
-          createdAtMs: 4,
-        }),
-      ],
-      sessionKey,
-      { skills: { workshop: { autonomous: { channelNotices: true } } } },
-    );
+    await post(reviewChanges(true), sessionKey, channelNotices);
     expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(1);
     expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -221,37 +233,14 @@ describe("postWorkshopChangeNotice", () => {
 
   it("marks a default transcript notice with each skill's net change without a delivery target", async () => {
     mocks.extractDeliveryInfo.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
-    await post([
-      change({ id: "c2", versionId: "20260101T000000002Z-patch", createdAtMs: 2 }),
-      change({ id: "c1", versionId: "20260101T000000001Z-patch", createdAtMs: 1 }),
-      change({
-        id: "c3",
-        skillName: "release-notes",
-        action: "create",
-        summary: "drafting release notes",
-        createdAtMs: 3,
-      }),
-      change({ id: "c4", skillName: "release-notes", versionId: "v-typo", createdAtMs: 4 }),
-    ]);
+    await post(reviewChanges(false, "v-typo"));
     expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
     // The Control UI renders this marker natively: a later edit of a created skill stays "created".
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:telegram:direct:42",
         text: expect.stringContaining("💾 Learned: updated `actual-budget-operations`"),
-        deliveryMirror: {
-          kind: "skill-workshop-change",
-          agentId: "main",
-          runId,
-          skills: [
-            {
-              name: "actual-budget-operations",
-              action: "updated",
-              summary: "tightened reconciliation step",
-            },
-            { name: "release-notes", action: "created", summary: "drafting release notes" },
-          ],
-        },
+        deliveryMirror: marker(true),
       }),
     );
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
@@ -266,27 +255,14 @@ describe("postWorkshopChangeNotice", () => {
       threadId: "1234567890.123456",
     });
     const sessionKey = "agent:main:slack:channel:c0123abc:thread:1234567890.123456";
-    await post([change({})], sessionKey, {
-      skills: { workshop: { autonomous: { channelNotices: true } } },
-    });
+    await post([change({})], sessionKey, channelNotices);
     expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey,
         expectedSessionId: "reviewed-session",
         expectedLifecycleRevision: "reviewed-revision",
-        deliveryMirror: {
-          kind: "skill-workshop-change",
-          agentId: "main",
-          runId,
-          skills: [
-            {
-              name: "actual-budget-operations",
-              action: "updated",
-              summary: "tightened reconciliation step",
-            },
-          ],
-        },
+        deliveryMirror: marker(),
       }),
     );
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(expect.any(String), { sessionKey });
@@ -309,9 +285,7 @@ describe("postWorkshopChangeNotice", () => {
       threadId: undefined,
     });
     await post([change({})]);
-    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
-    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    expectNoNotice();
   });
 
   it("observes a reset during delivery lookup before enqueueing undo instructions", async () => {
@@ -323,9 +297,7 @@ describe("postWorkshopChangeNotice", () => {
       return { deliveryContext: { channel: "telegram", to: "42" } };
     });
     await post([change({})]);
-    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
-    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    expectNoNotice();
   });
 
   it("keeps undo instructions after delivery failure without rereading the generation", async () => {
@@ -333,9 +305,7 @@ describe("postWorkshopChangeNotice", () => {
       deliveryContext: { channel: "telegram", to: "42" },
     });
     mocks.sendDurableMessageBatchCore.mockRejectedValueOnce(new Error("delivery failed"));
-    await post([change({})], undefined, {
-      skills: { workshop: { autonomous: { channelNotices: true } } },
-    });
+    await post([change({})], undefined, channelNotices);
     expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledOnce();
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledOnce();
     expect(mocks.withSessionEntriesFromStoresInWorker).toHaveBeenCalledOnce();
