@@ -1,5 +1,4 @@
 import { Portal, render } from "@solidjs/web";
-import { For } from "solid-js";
 import { t } from "../../../i18n/index.ts";
 
 export type ThreadMenuAction = {
@@ -9,7 +8,6 @@ export type ThreadMenuAction = {
   tooltip?: string;
   className?: string;
   onClick: (event: Event) => void;
-  element?: HTMLButtonElement;
 };
 
 export function mountThreadMenu(
@@ -19,6 +17,7 @@ export function mountThreadMenu(
   y: number,
 ) {
   let element!: HTMLDivElement;
+  let firstButton: HTMLButtonElement | undefined;
   const dispose = render(
     () => (
       <Portal mount={parent}>
@@ -31,35 +30,35 @@ export function mountThreadMenu(
           aria-label={t("chat.messages.actions")}
           style={{ left: `${x}px`, top: `${y}px` }}
         >
-          <For each={actions}>
-            {(action) => {
-              const button = (
-                <button
-                  ref={(node) => {
-                    action.element = node;
-                  }}
-                  type="button"
-                  role="menuitem"
-                  aria-label={action.ariaLabel}
-                  disabled={action.disabled ?? false}
-                  onClick={(event) => action.onClick(event)}
-                >
-                  {action.tooltip ? <span data-copy-label="">{action.label}</span> : action.label}
-                </button>
-              );
-              return action.tooltip ? (
-                <openclaw-tooltip prop:content={action.tooltip} class={action.className}>
-                  {button}
-                </openclaw-tooltip>
-              ) : (
-                button
-              );
-            }}
-          </For>
+          {actions.map((action) => {
+            const button = (
+              <button
+                ref={(node) => {
+                  if (!action.disabled && !firstButton) {
+                    firstButton = node;
+                  }
+                }}
+                type="button"
+                role="menuitem"
+                aria-label={action.ariaLabel}
+                disabled={action.disabled}
+                onClick={action.onClick}
+              >
+                {action.tooltip ? <span data-copy-label="">{action.label}</span> : action.label}
+              </button>
+            );
+            return action.tooltip ? (
+              <openclaw-tooltip prop:content={action.tooltip} class={action.className}>
+                {button}
+              </openclaw-tooltip>
+            ) : (
+              button
+            );
+          })}
         </div>
       </Portal>
     ),
     document.createElement("div"),
   );
-  return { element, dispose };
+  return { element, dispose, firstButton };
 }

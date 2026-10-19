@@ -149,13 +149,13 @@ export function MessageActions(props: {
   details: MessageActionDetails | null | undefined;
   options: MessageActionOptions;
   actionOwner?: () => HTMLElement | undefined;
-  messageKey?: () => string | undefined;
+  messageKey?: string;
 }) {
   const elements: MessageActionElements = {};
   onSettled(() => {
     const owner = props.actionOwner?.();
     return owner
-      ? registerMessageActionElements(owner, () => props.messageKey?.(), elements)
+      ? registerMessageActionElements(owner, () => props.messageKey, elements)
       : undefined;
   });
   return (
@@ -168,7 +168,7 @@ export function MessageActions(props: {
           text={props.details!.markdown!}
           idleLabel={copyMarkdownLabel()}
           bare
-          buttonRef={(element) => {
+          ref={(element) => {
             elements.copy = element;
           }}
         />

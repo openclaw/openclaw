@@ -127,7 +127,7 @@ function TextDisclosure(props: {
   source: string;
   messageKey: string;
   options: MessageTextOptions;
-  parts: readonly string[];
+  parts: readonly [string, string];
   children: (elementRef: (element: HTMLDivElement) => void) => JSX.Element;
 }) {
   let text: HTMLDivElement | undefined;
@@ -185,30 +185,25 @@ function TextDisclosure(props: {
 }
 
 function DisclosureContent(props: {
-  parts: readonly string[];
+  parts: readonly [string, string];
   expanded: boolean;
   forwarded: boolean;
   getNodes: () => { text?: HTMLElement; toggle?: HTMLButtonElement };
   children: JSX.Element;
 }) {
   const presented = useContext(ContentPresentation);
-  const dependencies = createMemo(
+  const parts = createMemo(() => props.parts, {
+    equals: (before, next) => before[0] === next[0] && before[1] === next[1],
+  });
+  const overflow = messageOverflowRef(
     () => ({
-      parts: props.parts,
+      parts: parts(),
       expanded: props.expanded,
       forwarded: props.forwarded,
       connected: presented(),
     }),
-    {
-      equals: (before, next) =>
-        before.expanded === next.expanded &&
-        before.forwarded === next.forwarded &&
-        before.connected === next.connected &&
-        before.parts.length === next.parts.length &&
-        before.parts.every((value, index) => value === next.parts[index]),
-    },
+    () => props.getNodes(),
   );
-  const overflow = messageOverflowRef(dependencies, () => props.getNodes());
   return (
     <div class="chat-message-disclosure__content" ref={overflow}>
       {props.children}

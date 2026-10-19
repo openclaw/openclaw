@@ -68,7 +68,7 @@ function MessageActionsRow(props: {
         details={props.details}
         options={props.options}
         actionOwner={() => owner}
-        messageKey={() => props.messageKey}
+        messageKey={props.messageKey}
       />
     </div>
   );
@@ -280,7 +280,7 @@ function UserFooterActions(props: { frame: MessageGroupFrame }) {
           details={frame().footerActionDetails}
           options={messageReactionOptions(frame().group, options())}
           actionOwner={() => owner}
-          messageKey={() => frame().footerActionMessageKey}
+          messageKey={frame().footerActionMessageKey}
         />
       </div>
     </Show>
@@ -540,7 +540,7 @@ function SessionActivityGroup(props: {
               details={prepared().actions}
               options={options()}
               actionOwner={() => actionOwner}
-              messageKey={() => item().key}
+              messageKey={item().key}
             />
           ),
         };

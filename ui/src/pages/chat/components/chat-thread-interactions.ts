@@ -484,15 +484,11 @@ export function handleTranscriptContextMenu(
   event.stopPropagation();
   removeReplyContextMenu();
   const actions: ThreadMenuAction[] = [];
-  const appendAction = (params: ThreadMenuAction) => {
-    actions.push(params);
-    return params;
-  };
   const appendCopyAction = (label: string, text: string) => {
     if (!text) {
       return;
     }
-    appendAction({
+    actions.push({
       label,
       tooltip: label,
       onClick: (copyEvent, labelElement) => {
@@ -511,7 +507,7 @@ export function handleTranscriptContextMenu(
     appendCopyAction(contentCopy.label, contentCopy.text);
   }
   if (canReply && replyTarget) {
-    appendAction({
+    actions.push({
       label: t("chat.messages.reply"),
       ariaLabel: t("chat.messages.replyToMessage"),
       onClick: () => {
@@ -523,13 +519,14 @@ export function handleTranscriptContextMenu(
   }
   const working = Boolean(props.runActive || props.runWorking);
   if (canRewind) {
-    const button = appendAction({
+    actions.push({
       label: t("chat.messages.rewindToHere"),
       disabled: working,
       tooltip: working ? t("chat.messages.rewindUnavailable") : t("chat.messages.rewindToHere"),
       className: "chat-confirm-wrap chat-rewind-wrap",
-      onClick: () => {
-        openChatRewindConfirmation(button.element!, () => {
+      onClick: (rewindEvent) => {
+        // SAFETY: Menu actions bind directly to their native button.
+        openChatRewindConfirmation(rewindEvent.currentTarget as HTMLButtonElement, () => {
           removeReplyContextMenu();
           void Promise.resolve(props.onRewindMessage?.(entryId)).then((rewound) => {
             if (rewound) {
@@ -543,7 +540,7 @@ export function handleTranscriptContextMenu(
   if (copyMarkdown && !copyButton) {
     appendCopyAction(copyMarkdownLabel(), copyMarkdown);
   } else if (copyButton) {
-    appendAction({
+    actions.push({
       label: copyMarkdownLabel(),
       tooltip: copyMarkdownLabel(),
       onClick: () => {
@@ -554,7 +551,7 @@ export function handleTranscriptContextMenu(
   }
   if (readAloudButton) {
     const label = readAloudButton.getAttribute("aria-label") ?? t("chat.messages.readAloud");
-    appendAction({
+    actions.push({
       label,
       tooltip: label,
       onClick: () => {
@@ -564,7 +561,7 @@ export function handleTranscriptContextMenu(
     });
   }
   if (canFork) {
-    appendAction({
+    actions.push({
       label: t("chat.messages.forkFromHere"),
       disabled: working,
       tooltip: working ? t("chat.messages.forkUnavailable") : t("chat.messages.forkFromHere"),
@@ -598,7 +595,7 @@ export function handleTranscriptContextMenu(
   }
   menu.style.left = `${Math.max(0, left)}px`;
   menu.style.top = `${Math.max(0, top)}px`;
-  actions.find((action) => !action.element?.disabled)?.element?.focus();
+  mounted.firstButton?.focus();
   requestAnimationFrame(() => {
     if (!menu.isConnected || activeReplyContextMenu !== owner) {
       return;

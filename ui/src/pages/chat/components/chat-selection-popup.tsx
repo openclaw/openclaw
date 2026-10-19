@@ -107,11 +107,10 @@ function positionPopup(popup: HTMLElement, anchor: DOMRect) {
 
 function mountPopup(
   popup: HTMLDivElement,
-  anchor: DOMRect,
+  layout: () => void,
   paneId: string,
   dispose: () => void,
   onEscape?: () => void,
-  anchorElement?: HTMLElement,
   // A layout-driven transcript scroll must not dismiss in-progress input. The
   // annotation editor supplies its own policy; the selection toolbar keeps the
   // default scroll dismissal.
@@ -120,8 +119,7 @@ function mountPopup(
   const listeners = new AbortController();
   activeSelectionPopup = { element: popup, listeners, paneId, dispose };
   const { signal } = listeners;
-  const position = () => positionPopup(popup, anchorElement?.getBoundingClientRect() ?? anchor);
-  position();
+  layout();
   listen(
     document,
     "pointerdown",
@@ -157,9 +155,9 @@ function mountPopup(
     },
     { capture: true, passive: true, signal },
   );
-  listen(window, "resize", position, { signal });
+  listen(window, "resize", layout, { signal });
   if (window.visualViewport) {
-    listen(window.visualViewport, "resize", position, { signal });
+    listen(window.visualViewport, "resize", layout, { signal });
   }
   return signal;
 }
@@ -209,12 +207,13 @@ function showChatSelectionPopup(
     ),
     document.createElement("div"),
   );
-  const signal = mountPopup(popup, anchor, actions.paneId, dispose);
+  const signal = mountPopup(popup, () => positionPopup(popup, anchor), actions.paneId, dispose);
   listen(
     document,
     "selectionchange",
     () => {
-      if (!window.getSelection() || window.getSelection()?.isCollapsed) {
+      const currentSelection = window.getSelection();
+      if (!currentSelection || currentSelection.isCollapsed) {
         removeChatSelectionPopup();
       }
     },
@@ -381,15 +380,12 @@ export function showChatAnnotationEditor(options: {
   const originalComment = options.comment;
   const signal = mountPopup(
     popup,
-    options.anchorRect,
+    resizeInput,
     options.paneId,
     dispose,
     options.onCancel,
-    options.anchorElement,
     () => input.value === originalComment,
   );
-  listen(window, "resize", resizeInput, { signal });
-  resizeInput();
   if (options.sourceRange && typeof Highlight !== "undefined") {
     // Keep the passage visible as a selection after focus moves into the textarea.
     CSS.highlights.set("openclaw-comment", new Highlight(options.sourceRange));
