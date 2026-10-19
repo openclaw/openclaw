@@ -7,6 +7,7 @@ import type {
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { SessionCatalogLiveState } from "./app-sidebar-session-catalog-live.ts";
 import { refetchExpandedSessionCatalogPages } from "./app-sidebar-session-catalog-state.ts";
+import { catalogErrorMessages } from "./app-sidebar-session-catalogs.ts";
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 
 function catalog(id: string, hostCount: number): SessionCatalog {
@@ -74,6 +75,65 @@ describe("SessionCatalogLiveState", () => {
       expect(request).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps a pending error replayed by an expanded page out of the warning list", async () => {
+    const current = catalog("codex", 1);
+    current.hosts[0]!.nextCursor = "next-page";
+    const expanded = {
+      ...current,
+      hosts: [
+        {
+          ...current.hosts[0]!,
+          sessions: [
+            ...current.hosts[0]!.sessions,
+            {
+              threadId: "codex-thread-extra",
+              name: "Expanded page session",
+              status: "idle",
+              archived: false,
+              canContinue: true,
+              canArchive: true,
+            },
+          ],
+        },
+      ],
+    };
+    // The live payload already reports in-flight discovery on the host.
+    const liveHost = {
+      ...current.hosts[0]!,
+      error: { code: "catalog_pending", message: "Catalog refresh is still pending." },
+    };
+    const request = vi.fn();
+
+    const result = await refetchExpandedSessionCatalogPages({
+      catalogs: [{ ...current, hosts: [liveHost] }],
+      previousCatalogs: [expanded],
+      client: { request } as unknown as GatewayBrowserClient,
+      agentId: "main",
+      pageDepths: new Map([[sessionCatalogHostKey("codex", liveHost.hostId), 1]]),
+      isCurrent: () => true,
+      canRequestPage: () => true,
+    });
+
+    // Expanded rows survive the replay and no provider failure is advertised.
+    expect(result[0]?.hosts[0]?.sessions).toEqual(expanded.hosts[0]!.sessions);
+    expect(result[0]?.hosts[0]?.error).toMatchObject({ code: "catalog_pending" });
+    expect(catalogErrorMessages(result[0]!)).toEqual([]);
+    expect(request).not.toHaveBeenCalled();
+
+    // Control: a genuine refresh error on the same path still warns.
+    expect(
+      catalogErrorMessages({
+        ...result[0]!,
+        hosts: [
+          {
+            ...result[0]!.hosts[0]!,
+            error: { code: "catalog_stale", message: "Showing stale results." },
+          },
+        ],
+      }),
+    ).toEqual([expect.stringContaining("[catalog_stale]")]);
+  });
 
   it("does not replace a settled progressive host with its pending final response", () => {
     const live = new SessionCatalogLiveState();

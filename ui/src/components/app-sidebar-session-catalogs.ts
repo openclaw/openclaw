@@ -133,6 +133,12 @@ export function adoptedCatalogSessionKeys(catalogs: readonly SessionCatalog[]): 
   return keys;
 }
 
+/** Gateway catalog codes that describe healthy in-flight discovery, not failure. */
+const pendingCatalogErrorCodes: ReadonlySet<string> = new Set(["catalog_pending"]);
+
+const isPendingCatalogError = (error: SessionCatalog["error"]): boolean =>
+  error !== undefined && pendingCatalogErrorCodes.has(error.code);
+
 export function catalogErrorMessages(catalog: SessionCatalog): string[] {
   const messages = new Set<string>();
   const add = (error: SessionCatalog["error"]) => {
@@ -140,11 +146,15 @@ export function catalogErrorMessages(catalog: SessionCatalog): string[] {
       messages.add(formatUiError(`[${error.code}] ${error.message}`));
     }
   };
-  add(catalog.error);
+  // Pending discovery is a healthy in-flight catalog, not a provider failure: the
+  // gateway already marks its hosts pending, so the sidebar must not warn here (#172473).
+  if (!isPendingCatalogError(catalog.error)) {
+    add(catalog.error);
+  }
   for (const host of catalog.hosts) {
     // A disconnected empty host is normal fleet state, not a provider failure.
     // Cached rows still expose the host-level offline badge when the host is visible.
-    if (host.error?.code !== "NODE_OFFLINE") {
+    if (host.error?.code !== "NODE_OFFLINE" && !isPendingCatalogError(host.error)) {
       add(host.error);
     }
   }
