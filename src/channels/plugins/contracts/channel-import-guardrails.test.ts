@@ -1,4 +1,3 @@
-// Channel import guardrail tests cover forbidden imports across channel plugin boundaries.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { basename, dirname, resolve } from "node:path";
@@ -13,7 +12,7 @@ import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugin-sdk/
 import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import {
   listGitTrackedFiles,
-  toRepoPath,
+  toRepoPath as normalizePath,
   toRepoRelativePath,
 } from "../../../test-utils/repo-files.js";
 
@@ -24,9 +23,9 @@ afterAll(() => parser.close());
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
-const bundledPluginRecords = loadPluginManifestRegistryCore({
-  config: {},
-}).plugins.filter((plugin) => plugin.origin === "bundled");
+const bundledPluginRecords = loadPluginManifestRegistryCore({ config: {} }).plugins.filter(
+  (plugin) => plugin.origin === "bundled",
+);
 const bundledPluginRoots = new Map(
   bundledPluginRecords.map(
     (plugin) => [plugin.id, resolveBundledPluginSourceRoot(plugin.rootDir)] as const,
@@ -201,12 +200,7 @@ const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
 ] as const;
 
 const sourceTextCache = new Map<string, string>();
-type SourceAnalysis = {
-  text: string;
-  importSpecifiers: string[];
-  extensionImports: string[];
-};
-const sourceAnalysisCache = new Map<string, SourceAnalysis>();
+const sourceAnalysisCache = new Map<string, string[]>();
 let extensionSourceFilesCache: string[] | null = null;
 let coreSourceFilesCache: string[] | null = null;
 const extensionFilesCache = new Map<string, string[]>();
@@ -218,7 +212,6 @@ const RE_EXPORT_STAR_RE =
 const RE_EXPORT_NAMED_RE = /^\s*export\s+(?:type\s+)?\{[^}]*\}\s+from\s*["']([^"']+)["']/gmu;
 const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*["']([^"']+)["']\s*\)/gmu;
 const REQUIRE_RE = /\brequire\s*\(\s*["']([^"']+)["']\s*\)/gmu;
-const trackedSourceFilesByRoot = new Map<string, readonly string[] | null>();
 
 type SourceFileCollectorOptions = {
   rootDir: string;
@@ -238,53 +231,30 @@ function readSource(path: string): string {
   return text;
 }
 
-function normalizePath(path: string): string {
-  return toRepoPath(path);
-}
-
-function repoRelativePath(path: string): string {
-  return toRepoRelativePath(REPO_ROOT, path);
-}
-
 function listTrackedSourceFiles(options: SourceFileCollectorOptions): string[] | null {
-  const relativeRoot = repoRelativePath(options.rootDir);
+  const relativeRoot = toRepoRelativePath(REPO_ROOT, options.rootDir);
   if (!relativeRoot || relativeRoot.startsWith("..")) {
     return null;
   }
-  if (trackedSourceFilesByRoot.has(relativeRoot)) {
-    const files = trackedSourceFilesByRoot.get(relativeRoot);
-    return files ? [...files] : null;
-  }
-  const trackedFiles = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeRoot });
-  if (!trackedFiles) {
-    trackedSourceFilesByRoot.set(relativeRoot, null);
-    return null;
-  }
-  const files = trackedFiles
-    .filter((line) => {
-      if (!/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(line) || line.endsWith(".d.ts")) {
-        return false;
-      }
-      if (!fs.existsSync(resolve(REPO_ROOT, line))) {
-        return false;
-      }
-      const parts = line.split("/");
-      return !parts.some(
-        (part) => part === "node_modules" || part === "dist" || part === "coverage",
-      );
-    })
-    .map((line) => resolve(REPO_ROOT, line))
-    .filter((fullPath) => {
-      const normalizedFullPath = normalizePath(fullPath);
-      const entryName = basename(fullPath);
-      return !(
-        options.shouldSkipPath?.(normalizedFullPath) ||
-        options.shouldSkipEntry?.({ entryName, normalizedFullPath })
-      );
-    })
-    .toSorted();
-  trackedSourceFilesByRoot.set(relativeRoot, files);
-  return [...files];
+  return (
+    listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeRoot })
+      ?.map((file) => resolve(REPO_ROOT, file))
+      .filter((file) => isSourceFile(file, options))
+      .toSorted() ?? null
+  );
+}
+
+function isSourceFile(file: string, options: SourceFileCollectorOptions): boolean {
+  const normalizedFullPath = normalizePath(file);
+  return (
+    /\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(file) &&
+    !file.endsWith(".d.ts") &&
+    !normalizedFullPath
+      .split("/")
+      .some((part) => ["node_modules", "dist", "coverage"].includes(part)) &&
+    !options.shouldSkipPath?.(normalizedFullPath) &&
+    !options.shouldSkipEntry?.({ entryName: basename(file), normalizedFullPath })
+  );
 }
 
 function collectSourceFiles(
@@ -298,7 +268,6 @@ function collectSourceFiles(
   if (trackedFiles) {
     return trackedFiles;
   }
-
   const files: string[] = [];
   const stack = [options.rootDir];
   while (stack.length > 0) {
@@ -310,28 +279,15 @@ function collectSourceFiles(
       const fullPath = resolve(current, entry.name);
       const normalizedFullPath = normalizePath(fullPath);
       if (entry.isDirectory()) {
-        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
-          continue;
+        if (
+          !["node_modules", "dist", "coverage"].includes(entry.name) &&
+          !options.shouldSkipPath?.(normalizedFullPath)
+        ) {
+          stack.push(fullPath);
         }
-        if (options.shouldSkipPath?.(normalizedFullPath)) {
-          continue;
-        }
-        stack.push(fullPath);
-        continue;
+      } else if (entry.isFile() && isSourceFile(fullPath, options)) {
+        files.push(fullPath);
       }
-      if (!entry.isFile() || !/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(entry.name)) {
-        continue;
-      }
-      if (entry.name.endsWith(".d.ts")) {
-        continue;
-      }
-      if (
-        options.shouldSkipPath?.(normalizedFullPath) ||
-        options.shouldSkipEntry?.({ entryName: entry.name, normalizedFullPath })
-      ) {
-        continue;
-      }
-      files.push(fullPath);
     }
   }
   return files;
@@ -482,27 +438,15 @@ function collectModuleSpecifiers(text: string): string[] {
   return [...specifiers];
 }
 
-function collectImportSpecifiers(text: string): string[] {
-  return collectModuleSpecifiers(text);
-}
-
-function getSourceAnalysis(path: string): SourceAnalysis {
+function getImportSpecifiers(path: string): string[] {
   const fullPath = resolve(REPO_ROOT, path);
   const cached = sourceAnalysisCache.get(fullPath);
   if (cached) {
     return cached;
   }
-  const text = readSource(path);
-  const importSpecifiers = collectImportSpecifiers(text);
-  const analysis = {
-    text,
-    importSpecifiers,
-    extensionImports: importSpecifiers.filter((specifier) =>
-      specifier.includes(`/${BUNDLED_PLUGIN_ROOT_DIR}/`),
-    ),
-  } satisfies SourceAnalysis;
-  sourceAnalysisCache.set(fullPath, analysis);
-  return analysis;
+  const imports = collectModuleSpecifiers(readSource(path));
+  sourceAnalysisCache.set(fullPath, imports);
+  return imports;
 }
 
 function expectNoCorePluginPrivateSrcImports(sourceFile: SourceFile): void {
@@ -514,6 +458,9 @@ function expectNoCorePluginPrivateSrcImports(sourceFile: SourceFile): void {
 
 function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void {
   for (const specifier of imports) {
+    if (!specifier.includes(`/${BUNDLED_PLUGIN_ROOT_DIR}/`)) {
+      continue;
+    }
     const normalized = specifier.replaceAll("\\", "/");
     const resolved = specifier.startsWith(".")
       ? resolve(dirname(file), specifier).replaceAll("\\", "/")
@@ -663,28 +610,25 @@ describe("channel import guardrails", () => {
 
   it("keeps extension production files off other bundled plugin sdk facades", () => {
     for (const file of collectExtensionSourceFiles()) {
-      expectNoCrossPluginSdkFacadeImports(file, getSourceAnalysis(file).importSpecifiers);
+      expectNoCrossPluginSdkFacadeImports(file, getImportSpecifiers(file));
     }
   });
 
   it("keeps core extension imports limited to approved public surfaces", () => {
     for (const file of collectCoreSourceFiles()) {
-      expectOnlyApprovedExtensionSeams(file, getSourceAnalysis(file).extensionImports);
+      expectOnlyApprovedExtensionSeams(file, getImportSpecifiers(file));
     }
   });
 
   it("keeps core production files off plugin-specific sdk facades", () => {
     for (const file of collectCoreSourceFiles()) {
-      expectCoreSourceStaysOffPluginSpecificSdkFacades(
-        file,
-        getSourceAnalysis(file).importSpecifiers,
-      );
+      expectCoreSourceStaysOffPluginSpecificSdkFacades(file, getImportSpecifiers(file));
     }
   });
 
   it("keeps extension-to-extension imports limited to approved public surfaces", () => {
     for (const file of collectExtensionSourceFiles()) {
-      expectOnlyApprovedExtensionSeams(file, getSourceAnalysis(file).extensionImports);
+      expectOnlyApprovedExtensionSeams(file, getImportSpecifiers(file));
     }
   });
 
