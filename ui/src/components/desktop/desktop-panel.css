@@ -83,7 +83,7 @@ openclaw-desktop-panel {
     width: 15px;
     height: 15px;
   }
-  .desktop-open-window {
+  a.desktop-open-window {
     cursor: pointer;
     text-decoration: none;
   }

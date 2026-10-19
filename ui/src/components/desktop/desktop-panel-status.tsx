@@ -1,8 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createEffect, createMemo, createSignal, onSettled } from "solid-js";
+import { Show, createMemo, createSignal, onSettled } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
+import { desktopCanvas } from "./desktop-client.ts";
 
 /** Status chrome is a sibling of the retained remote surface, never its owner. */
 export function DesktopStatusSurface(props: {
@@ -52,16 +54,17 @@ export function DesktopViewerHint(props: {
   fullscreen: boolean;
 }) {
   let hint!: HTMLSpanElement;
-  const [point, setPoint] = createSignal<{ x: number; y: number } | null>(null);
   const followsPointer = createMemo(() => props.active && props.fullscreen);
+  // Pointer position belongs to the current active fullscreen presentation.
+  const [point, setPoint] = createSignal<{ x: number; y: number } | null>(() => {
+    followsPointer();
+    return null;
+  });
   const position = createMemo(() => {
     const current = point();
     return props.fullscreen && current
       ? { left: `${current.x}px`, top: `${current.y}px` }
       : undefined;
-  });
-  createEffect(followsPointer, () => {
-    setPoint(null);
   });
   onSettled(() => {
     const stage = props.stage();
@@ -72,7 +75,7 @@ export function DesktopViewerHint(props: {
       if (!followsPointer()) {
         return;
       }
-      const canvas = stage.querySelector(".desktop-surface canvas");
+      const canvas = desktopCanvas(stage);
       if (!canvas) {
         hide();
         return;
@@ -101,11 +104,11 @@ export function DesktopViewerHint(props: {
           frame.top,
       });
     };
-    stage.addEventListener("pointermove", move);
-    stage.addEventListener("pointerleave", hide);
+    const stopMove = listen(stage, "pointermove", move);
+    const stopLeave = listen(stage, "pointerleave", hide);
     return () => {
-      stage.removeEventListener("pointermove", move);
-      stage.removeEventListener("pointerleave", hide);
+      stopMove();
+      stopLeave();
     };
   });
   return (

@@ -1,8 +1,10 @@
 import type { WorkerDesktopAppId } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import { Show, createEffect, createMemo, createSignal, createUniqueId, onSettled } from "solid-js";
+import { Show, createMemo, createSignal, createUniqueId, onSettled } from "solid-js";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
+import { createResizeObserver } from "../../lib/reactive/observers.ts";
 import { Icon } from "../solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuItem } from "../solid/menu.tsx";
 import type { DesktopSizingMode } from "./desktop-client.ts";
@@ -76,23 +78,16 @@ export function DesktopConnectionRail(
   let rail!: HTMLDivElement;
   let inlineWindow!: HTMLDivElement;
   const [windowInOverflow, setWindowInOverflow] = createSignal(false);
-  createEffect(
-    () => !props.recovery || mobile(),
-    (hasTools) => {
-      // Recovery has identity and a local retry; observe only mounted viewer tools.
-      if (!hasTools) {
-        return undefined;
-      }
-      // Read the CSS-selected presentation so hidden groups leave Menu's item graph.
-      const measure = () => {
-        setWindowInOverflow(getComputedStyle(inlineWindow).display === "none");
-      };
-      const observer = new ResizeObserver(measure);
-      observer.observe(rail);
-      measure();
-      return () => observer.disconnect();
-    },
-  );
+  const measureWindowActions = () => {
+    // Read the CSS-selected presentation so hidden groups leave Menu's item graph.
+    setWindowInOverflow(getComputedStyle(inlineWindow).display === "none");
+  };
+  createResizeObserver(() => (!props.recovery || mobile() ? [rail] : []), measureWindowActions);
+  onSettled(() => {
+    if (!props.recovery || mobile()) {
+      measureWindowActions();
+    }
+  });
   const fullscreenControl = () => (
     <button
       type="button"
@@ -389,21 +384,14 @@ export function DesktopConnectionRail(
 function DesktopMachineName(props: { name: string }) {
   let element!: HTMLSpanElement;
   const [overflow, setOverflow] = createSignal(false);
-  const measure = () => setOverflow(element.scrollWidth > element.clientWidth);
-  createEffect(
+  createLayoutMeasurement(
     () => props.name,
     () => {
-      if (element) {
-        measure();
-      }
+      const overflowing = element.scrollWidth > element.clientWidth;
+      return () => setOverflow(overflowing);
     },
+    { targets: () => [element] },
   );
-  onSettled(() => {
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    measure();
-    return () => observer.disconnect();
-  });
   return (
     <span
       ref={(node) => {
