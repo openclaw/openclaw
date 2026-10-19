@@ -856,7 +856,7 @@ extensions/tlon/src/types.ts	1
 extensions/tlon/src/urbit/sse-client.ts	4
 extensions/tokenjuice/tool-result-middleware.ts	1
 extensions/twitch/src/config.ts	6
-extensions/twitch/src/outbound.ts	2
+extensions/twitch/src/outbound.ts	1
 extensions/twitch/src/resolver.ts	1
 extensions/twitch/src/setup-surface.ts	1
 extensions/twitch/src/token.ts	3

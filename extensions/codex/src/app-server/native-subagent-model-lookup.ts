@@ -15,7 +15,7 @@ export function waitForNativeModelSourceChange(
   signal?: AbortSignal,
 ): Promise<void> {
   signal?.throwIfAborted();
-  const changed = createDeferred<void>();
+  const changed = createDeferred();
   (state.modelSourceWaiters ??= new Set()).add(changed.resolve);
   return racePromiseWithAbortSignal(changed.promise, signal, (aborted) =>
     toErrorObject(aborted.reason, "Codex model source capture was aborted"),
