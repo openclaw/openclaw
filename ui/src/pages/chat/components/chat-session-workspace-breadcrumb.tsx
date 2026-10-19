@@ -1,15 +1,8 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  createUniqueId,
-  For,
-  onSettled,
-  Show,
-} from "solid-js";
+import { createMemo, createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { splitWorkspaceFilename } from "./chat-session-workspace-catalog.ts";
 
 export type WorkspaceBreadcrumbProps = {
@@ -48,9 +41,9 @@ export function WorkspaceBreadcrumb(props: WorkspaceBreadcrumbProps) {
     ];
   });
   const name = () => props.name ?? (props.path.split("/").at(-1) || props.rootLabel);
-  const measure = () => {
+  const measure = (): (() => void) | undefined => {
     if (!container?.clientWidth || !current) {
-      return;
+      return undefined;
     }
     const entries = parents();
     const available = Math.max(
@@ -77,16 +70,17 @@ export function WorkspaceBreadcrumb(props: WorkspaceBreadcrumbProps) {
       width -= elements.get(entry.path)?.offsetWidth ?? 0;
       next.push(entry.path);
     }
-    setHidden(next);
     const fullName = name();
     const room = Math.max(0, available - (width - nameWidth));
     if (nameWidth <= room) {
-      setDisplayName(fullName);
-      return;
+      return () => {
+        setHidden(next);
+        setDisplayName(fullName);
+      };
     }
     textMeasure ??= document.createElement("canvas").getContext("2d");
     if (!textMeasure) {
-      return;
+      return () => setHidden(next);
     }
     textMeasure.font = getComputedStyle(current).font;
     const { stem, extension } = splitWorkspaceFilename(fullName);
@@ -106,11 +100,15 @@ export function WorkspaceBreadcrumb(props: WorkspaceBreadcrumbProps) {
         high = count - 1;
       }
     }
-    setDisplayName(fitted);
+    return () => {
+      setHidden(next);
+      setDisplayName(fitted);
+    };
   };
-  createEffect(
+  const schedule = createLayoutMeasurement(
     () => [props.path, props.rootLabel, props.name, props.sourceLabel],
-    () => measure(),
+    measure,
+    { targets: () => (container ? [container] : []) },
   );
   onSettled(() => {
     if (!container) {
@@ -119,16 +117,12 @@ export function WorkspaceBreadcrumb(props: WorkspaceBreadcrumbProps) {
     let active = true;
     const update = () => {
       if (active) {
-        measure();
+        schedule();
       }
     };
-    const observer = new ResizeObserver(update);
-    observer.observe(container);
-    update();
     void document.fonts.ready.then(update);
     return () => {
       active = false;
-      observer.disconnect();
     };
   });
   const browse = (path: string) => {

@@ -12,7 +12,9 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
+import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import { isSessionWorkspaceFileSelected } from "../../../lib/sessions/workspace.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import { WorkspaceTranscriptAttachments } from "./chat-session-workspace-attachments.tsx";
@@ -38,10 +40,14 @@ function WorkspaceFilename(props: { name: string }) {
   const parts = createMemo(() => splitWorkspaceFilename(props.name));
   const [overflow, setOverflow] = createSignal(false);
   let stem: HTMLSpanElement | undefined;
-  const measure = () => {
-    setOverflow(Boolean(stem && stem.scrollWidth > stem.clientWidth));
-  };
-  createEffect(() => props.name, measure);
+  const schedule = createLayoutMeasurement(
+    () => props.name,
+    () => {
+      const overflowing = Boolean(stem && stem.scrollWidth > stem.clientWidth);
+      return () => setOverflow(overflowing);
+    },
+    { targets: () => (stem ? [stem] : []) },
+  );
   onSettled(() => {
     if (!stem) {
       return undefined;
@@ -49,16 +55,12 @@ function WorkspaceFilename(props: { name: string }) {
     let active = true;
     const update = () => {
       if (active) {
-        measure();
+        schedule();
       }
     };
-    const observer = new ResizeObserver(update);
-    observer.observe(stem);
-    update();
     void document.fonts.ready.then(update);
     return () => {
       active = false;
-      observer.disconnect();
     };
   });
   return (
@@ -409,15 +411,10 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
     filter() !== "artifacts" &&
     Boolean(directoryBrowser(root()) || props.workspace.list?.browser || catalog().project.size);
   let restoreSearchFocus = false;
-  let searchWasOpen = false;
-  // Focus after visibility commits, only when search changes state, not on snapshot updates.
-  createEffect(
-    () => Boolean(navigation()?.searchOpen),
-    (open) => {
-      if (open === searchWasOpen) {
-        return;
-      }
-      searchWasOpen = open;
+  // Focus after visibility commits, only when search changes state.
+  createPendingFocus(() => Boolean(navigation()?.searchOpen), {
+    requested: (open, previous) => open !== (previous ?? false),
+    focus: (open) => {
       if (open) {
         searchField?.focus({ preventScroll: true });
       } else if (restoreSearchFocus) {
@@ -425,7 +422,8 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
         searchButton?.focus({ preventScroll: true });
       }
     },
-  );
+  });
+  // Reapply owner snapshots after catalog reveal, even when the saved offsets are unchanged.
   createEffect(
     () => [navigation()?.treeScroll, navigation()?.sessionScroll] as const,
     ([tree, session]) => {

@@ -281,7 +281,7 @@ describe("session workspace state", () => {
     expect(resolveSessionDiffSidebarContent(state)).not.toBe(oldDiff);
   });
 
-  it("retries a pending visible reload after the previous load failed", async () => {
+  it("retries a pending visible reload without publishing a retired load failure", async () => {
     const initialLoad = createDeferred();
     const listFiles = vi
       .fn()
@@ -292,12 +292,17 @@ describe("session workspace state", () => {
     workspaceProps(state, { expanded: true });
     expect(listFiles).toHaveBeenCalledTimes(1);
     refreshSessionWorkspace(state, true);
+    const retired = nextWorkspaceUpdate(state, () => !getSessionWorkspace(state).loading);
     initialLoad.reject(new Error("temporary failure"));
-    await vi.waitFor(() => expect(workspaceProps(state).error).toContain("temporary failure"));
+    await retired;
+    expect(getSessionWorkspace(state).pendingReload).toBe(true);
+    expect(getSessionWorkspace(state).error).toBeNull();
 
+    const reloaded = nextWorkspaceUpdate(state, () => !getSessionWorkspace(state).loading);
     workspaceProps(state, { expanded: true });
+    await reloaded;
 
-    await vi.waitFor(() => expect(workspaceProps(state).list).not.toBeNull());
+    expect(workspaceProps(state).list).not.toBeNull();
     expect(listFiles).toHaveBeenCalledTimes(2);
     expect(workspaceProps(state).error).toBeNull();
   });

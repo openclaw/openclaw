@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createEffect, createSignal, onSettled, Show, untrack } from "solid-js";
+import { listen } from "../../../lib/reactive/listener.ts";
 
 /** Retains only the exiting DOM; expansion and directory data remain with the workspace. */
 export function FolderDisclosure(props: {
@@ -8,14 +9,16 @@ export function FolderDisclosure(props: {
   instant: boolean;
   children: JSX.Element;
 }) {
-  const [present, setPresent] = createSignal(untrack(() => props.open));
+  // Parent scroll restoration needs the initial content height before child effects run.
+  const initialOpen = untrack(() => props.open);
+  const [present, setPresent] = createSignal(initialOpen);
   let shell!: HTMLDivElement;
   let content!: HTMLDivElement;
   let animation: Animation | undefined;
   let resizeFrame = 0;
   let targetHeight = 0;
   let ready = false;
-  let current = { open: untrack(() => props.open), active: false, instant: true };
+  let current = { open: initialOpen, active: false, instant: true };
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   const finish = () => {
     cancelAnimationFrame(resizeFrame);
@@ -67,7 +70,7 @@ export function FolderDisclosure(props: {
         finish();
       }
     };
-    reducedMotion.addEventListener("change", motionChanged);
+    const stopMotion = listen(reducedMotion, "change", motionChanged);
     // A lazy directory response may change the destination during its reveal.
     const observer = new ResizeObserver(() => {
       if (!animation || !current.open || resizeFrame) {
@@ -86,14 +89,14 @@ export function FolderDisclosure(props: {
       observer.disconnect();
       cancelAnimationFrame(resizeFrame);
       animation?.cancel();
-      reducedMotion.removeEventListener("change", motionChanged);
+      stopMotion();
     };
   });
   return (
     <div
       ref={(element) => {
         shell = element;
-        shell.hidden = !untrack(() => props.open);
+        shell.hidden = !initialOpen;
       }}
       class="workspace-desktop__disclosure"
       inert={!props.open || !props.active}
