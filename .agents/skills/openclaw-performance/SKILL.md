@@ -61,7 +61,8 @@ Done when the waste is gone from the counts, or the PR says which step stopped a
 
 - Rerun the step 1 workload on baseline and candidate under the same rule.
 - **Every user-facing metric holds or improves:** latency, p95/p99, frames, cold start, CPU, memory, counts. A worse metric needs the owner's explicit acceptance in the PR. A 20% move in one cell is a stop, never "within spread": five of six reverted performance PRs showed their regression in their own body.
-- Revert changes without a measurable gain. Add or extend a work-count test so the waste stays gone.
+- Revert changes without a measurable gain.
+- **Proof lives in the PR**, not in new tests: the before/after counts are the evidence. Extend a flow's existing work-count test only when this waste has come back before; [test-audit](../test-audit/SKILL.md) owns test value.
 - PR evidence: workload command, acceptance rule, before/after table (counts and times, median and p95, samples), waste removed, and any metric that moved the wrong way.
 
 Done when the table meets the rule written in step 1.
