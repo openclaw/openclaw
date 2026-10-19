@@ -44,28 +44,31 @@ function postResponse(payload: unknown) {
 function taskResponse(data: unknown) {
   fetchWithTimeoutMock.mockResolvedValueOnce(Response.json({ code: 200, data }));
 }
-function mockSuccess() {
-  postResponse({ code: 200, data: { taskId: "task /1" } });
-  taskResponse({ state: "success", response: { resultUrls: [OUTPUT] } });
+function mockSuccess(
+  tasks: unknown[] = [{ state: "success", response: { resultUrls: [OUTPUT] } }],
+) {
+  const release = postResponse({ code: 200, data: { taskId: "task /1" } });
+  tasks.forEach(taskResponse);
   fetchWithTimeoutMock.mockResolvedValueOnce(
     new Response("mp4-bytes", { headers: { "content-type": "video/mp4" } }),
   );
+  return release;
 }
 function submittedBody() {
   return requireFirstPostJsonRecordRequest(postJsonRequestMock, "Kie submission").body;
 }
 
+function expectPost(n: number, url: string, body: Record<string, unknown>) {
+  expect(postJsonRequestMock).toHaveBeenNthCalledWith(n, expect.objectContaining({ url, body }));
+}
+
 describe("Kie AI registered video provider", () => {
   it("submits, polls every documented pending state, decodes resultJson, and downloads without auth", async () => {
     vi.useFakeTimers();
-    const release = postResponse({ code: 200, data: { taskId: "task /1" } });
-    for (const state of ["waiting", "queuing", "generating"]) {
-      taskResponse({ state });
-    }
-    taskResponse({ state: "success", resultJson: JSON.stringify({ resultUrls: [OUTPUT] }) });
-    fetchWithTimeoutMock.mockResolvedValueOnce(
-      new Response("mp4-bytes", { headers: { "content-type": "video/mp4" } }),
-    );
+    const release = mockSuccess([
+      ...["waiting", "queuing", "generating"].map((state) => ({ state })),
+      { state: "success", resultJson: JSON.stringify({ resultUrls: [OUTPUT] }) },
+    ]);
     const pending = generate({ audio: true, durationSeconds: 10, timeoutMs: 20_000 });
     await vi.runAllTimersAsync();
     const result = await pending;
@@ -124,26 +127,14 @@ describe("Kie AI registered video provider", () => {
         { buffer: Buffer.from("png-bytes"), mimeType: "image/png", fileName: "same-name.png" },
       ],
     });
-    expect(postJsonRequestMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        url: "https://kieai.redpandaai.co/api/file-base64-upload",
-        body: {
-          base64Data: "data:image/png;base64,cG5nLWJ5dGVz",
-          uploadPath: "openclaw/video-inputs",
-        },
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        url: "https://api.kie.ai/api/v1/jobs/createTask",
-        body: {
-          model: "kling-2.6/image-to-video",
-          input: { prompt: PROMPT, duration: "5", sound: false, image_urls: [IMAGE] },
-        },
-      }),
-    );
+    expectPost(1, "https://kieai.redpandaai.co/api/file-base64-upload", {
+      base64Data: "data:image/png;base64,cG5nLWJ5dGVz",
+      uploadPath: "openclaw/video-inputs",
+    });
+    expectPost(2, "https://api.kie.ai/api/v1/jobs/createTask", {
+      model: "kling-2.6/image-to-video",
+      input: { prompt: PROMPT, duration: "5", sound: false, image_urls: [IMAGE] },
+    });
     expect(release).toHaveBeenCalledOnce();
   });
 
