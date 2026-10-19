@@ -17,7 +17,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { streamSimple } from "../../llm/stream.js";
-import type { Model } from "../../llm/types.js";
+import type { AssistantMessageEvent, Model } from "../../llm/types.js";
 import { resolveProviderStreamFn } from "../../plugins/provider-runtime.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -514,6 +514,47 @@ describe("resolveEmbeddedAgentStream", () => {
     await expect(stream.result()).resolves.toMatchObject({ stopReason: "error" });
     expect(inner).toHaveBeenCalledOnce();
     expect(refreshApiKey).not.toHaveBeenCalled();
+  });
+
+  it("closes the active provider iterator when the consumer cancels", async () => {
+    const providerStarted = createDeferredCore();
+    let resolveNext: ((result: IteratorResult<AssistantMessageEvent>) => void) | undefined;
+    const providerReturn = vi.fn(async (): Promise<IteratorResult<AssistantMessageEvent>> => {
+      return { done: true, value: undefined };
+    });
+    const innerStream = createAssistantMessageEventStream();
+    innerStream[Symbol.asyncIterator] = () => {
+      providerStarted.resolve();
+      return {
+        next: () =>
+          new Promise<IteratorResult<AssistantMessageEvent>>((resolve) => {
+            resolveNext = resolve;
+          }),
+        return: providerReturn,
+      };
+    };
+    const inner = vi.fn<StreamFn>(() => innerStream);
+    const { streamFn } = resolveEmbeddedAgentStream({
+      providerStreamFn: inner,
+      currentStreamFn: inner,
+      sessionId: "session-1",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.5",
+      } as never,
+      authStorage: { getApiKey: async () => "access", refreshApiKey: async () => false },
+    });
+
+    const stream = await streamFn({ provider: "openai", id: "gpt-5.5" } as never, {} as never, {});
+    await providerStarted.promise;
+    await stream[Symbol.asyncIterator]().return?.();
+    resolveNext?.({
+      done: false,
+      value: { type: "start", partial: makeAgentAssistantMessage({ content: [] }) },
+    });
+
+    await vi.waitFor(() => expect(providerReturn).toHaveBeenCalled());
   });
 
   it("propagates prompt cache identity into custom session streams", async () => {

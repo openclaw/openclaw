@@ -8,9 +8,12 @@ import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { admitProviderRateLimitStream } from "../../llm/provider-rate-limit-stream.js";
 import type { AssistantMessage, AssistantMessageEvent } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
+import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
-import "../ai-transport-runtime-host.js";
+import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
 import type { StreamFn } from "../runtime/index.js";
+import "../ai-transport-runtime-host.js";
+import { createStreamIteratorWrapper } from "../stream-iterator-wrapper.js";
 import { buildStreamErrorAssistantMessage } from "../stream-message-shared.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 import { wrapStreamFnWithSessionFork, type EmbeddedSessionForkIdentity } from "./session-fork.js";
@@ -350,6 +353,38 @@ function createAuthRecoveryStream(params: {
   assertCurrent?: () => void;
 }): ReturnType<StreamFn> {
   const outer = createAssistantMessageEventStream();
+  const trackCleanup = captureAsyncWorkTracker();
+  let activeIterator: AsyncIterator<AssistantMessageEvent> | undefined;
+  let consumerClosed = false;
+  const closeIterator = (iterator: AsyncIterator<AssistantMessageEvent>) => {
+    try {
+      const closing = iterator.return?.();
+      if (closing) {
+        void trackCleanup(() => closing).catch(() => recordAgentCleanupFailure());
+      }
+    } catch {
+      recordAgentCleanupFailure();
+    }
+  };
+  const originalAsyncIterator = outer[Symbol.asyncIterator].bind(outer);
+  outer[Symbol.asyncIterator] = function () {
+    return createStreamIteratorWrapper({
+      iterator: originalAsyncIterator(),
+      next: (iterator) => iterator.next(),
+      onReturn: async (iterator, value) => {
+        consumerClosed = true;
+        const active = activeIterator;
+        activeIterator = undefined;
+        // The pump owns the provider iterator; close it before releasing the consumer.
+        if (active) {
+          closeIterator(active);
+        }
+        // Release the outer iterator parked on the next event before forwarding return.
+        outer.end();
+        return (await iterator.return?.(value)) ?? { done: true, value: undefined };
+      },
+    });
+  };
   void Promise.resolve().then(async () => {
     let pendingStart: Extract<AssistantMessageEvent, { type: "start" }> | undefined;
     const flushStart = () => {
@@ -362,37 +397,64 @@ function createAuthRecoveryStream(params: {
       let acceptedContent = false;
       let refreshed = false;
       while (true) {
+        if (consumerClosed) {
+          return;
+        }
         const stream = await params.start(await params.resolveApiKey());
+        if (consumerClosed) {
+          closeIterator(stream[Symbol.asyncIterator]());
+          return;
+        }
+        const iterator = stream[Symbol.asyncIterator]();
+        activeIterator = iterator;
         let restart = false;
-        for await (const event of stream) {
-          if (event.type === "start" && !acceptedContent) {
-            pendingStart ??= event;
-            continue;
-          }
-          if (event.type === "error") {
-            let renew = false;
-            if (!refreshed && !acceptedContent && isStructuredTokenExpiredError(event.error)) {
-              try {
-                renew = await params.refreshAuth(event.error.errorMessage ?? "");
-              } catch {
-                renew = false;
-              }
-            }
-            if (renew) {
-              params.assertCurrent?.();
-              refreshed = true;
-              pendingStart = undefined;
-              restart = true;
+        try {
+          while (true) {
+            const next = await iterator.next();
+            if (next.done) {
               break;
+            }
+            const event = next.value;
+            if (consumerClosed) {
+              return;
+            }
+            if (event.type === "start" && !acceptedContent) {
+              pendingStart ??= event;
+              continue;
+            }
+            if (event.type === "error") {
+              let renew = false;
+              if (!refreshed && !acceptedContent && isStructuredTokenExpiredError(event.error)) {
+                try {
+                  renew = await params.refreshAuth(event.error.errorMessage ?? "");
+                } catch {
+                  renew = false;
+                }
+              }
+              if (renew) {
+                params.assertCurrent?.();
+                refreshed = true;
+                pendingStart = undefined;
+                restart = true;
+                break;
+              }
+              flushStart();
+              outer.push(event);
+              acceptedContent = true;
+              continue;
             }
             flushStart();
             outer.push(event);
             acceptedContent = true;
-            continue;
           }
-          flushStart();
-          outer.push(event);
-          acceptedContent = true;
+        } finally {
+          if (activeIterator === iterator) {
+            activeIterator = undefined;
+          }
+          closeIterator(iterator);
+        }
+        if (consumerClosed) {
+          return;
         }
         if (restart) {
           continue;

@@ -177,6 +177,10 @@ export function createEmbeddedRunAuthController(params: {
   log: LogLike;
 }) {
   const { state } = params;
+  // A request-local renewal consumes the same auth-retry budget as the outer
+  // assistant/prompt recovery path; a rejected retry must fall back normally
+  // instead of forcing a second independent refresh.
+  let requestAuthRefreshConsumed = false;
   // Runtime auth overlays are profile-scoped. Keep the pre-auth model so a
   // later profile cannot inherit an earlier profile's endpoint or headers.
   const baseRuntimeModel = state.models.runtime;
@@ -471,6 +475,9 @@ export function createEmbeddedRunAuthController(params: {
     attemptIndex?: number,
     forceRefresh = false,
   ): Promise<void> => {
+    if (!forceRefresh) {
+      requestAuthRefreshConsumed = false;
+    }
     const preparedModel = await params.prepareModelForAuthProfile?.(candidate, attemptIndex);
     const apiKeyInfo = await getApiKeyForModelCore({
       model: preparedModel?.runtimeModel ?? state.models.runtime,
@@ -592,7 +599,13 @@ export function createEmbeddedRunAuthController(params: {
             }
             return resolved.apiKey;
           },
-          refresh: (errorText) => maybeRefreshRuntimeAuthForAuthError(errorText, false),
+          refresh: async (errorText) => {
+            const refreshed = await maybeRefreshRuntimeAuthForAuthError(errorText, false);
+            if (refreshed) {
+              requestAuthRefreshConsumed = true;
+            }
+            return refreshed;
+          },
         });
       } else {
         params.authStorage.setRuntimeApiKey(runtimeModel.provider, sourceApiKey);
@@ -658,6 +671,10 @@ export function createEmbeddedRunAuthController(params: {
     errorText: string,
     retried: boolean,
   ): Promise<boolean> => {
+    if (requestAuthRefreshConsumed) {
+      requestAuthRefreshConsumed = false;
+      return false;
+    }
     if (retried || classifyFailoverReason(errorText, { provider: params.provider }) !== "auth") {
       return false;
     }

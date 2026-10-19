@@ -210,7 +210,17 @@ it.each([false, true])(
       refreshFails ? "synthetic-old-access" : "synthetic-renewed-access",
     );
     expect(setRuntimeApiKeyResolver).toHaveBeenCalledTimes(refreshFails ? 1 : 2);
-    await expect(controller.maybeRefreshRuntimeAuthForAuthError(error, true)).resolves.toBe(false);
+    if (refreshFails) {
+      await expect(controller.maybeRefreshRuntimeAuthForAuthError(error, true)).resolves.toBe(
+        false,
+      );
+    } else {
+      // A rejected retry shares the request-local renewal budget instead of
+      // forcing a second independent refresh.
+      await expect(controller.maybeRefreshRuntimeAuthForAuthError(error, false)).resolves.toBe(
+        false,
+      );
+    }
     expect(mocks.getApiKeyForModelCore).toHaveBeenCalledTimes(2);
     expect(harness.lastProfileId).toBe(auth.profileId);
     harness.lastProfileId = "openai:different";

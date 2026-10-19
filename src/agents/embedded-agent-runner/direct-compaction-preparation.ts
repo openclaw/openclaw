@@ -15,6 +15,7 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveApiKeyForProfile } from "../auth-profiles.js";
 import { describeFailoverError } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { MissingProviderAuthError } from "../model-auth.js";
@@ -42,6 +43,7 @@ import {
 import { log } from "./logger.js";
 import { resolveTieredModel } from "./model-resolution.js";
 import { resolveModelAsync } from "./model.js";
+import { isRenewableSiwcRequestAuth } from "./run/auth-store.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSessionParams & {
@@ -278,7 +280,39 @@ export async function prepareDirectCompactionAttempt(
       if (!runtimeApiKey) {
         throw new Error(`Provider "${runtimeModel.provider}" runtime auth returned no apiKey.`);
       }
-      authStorage.setRuntimeApiKey(runtimeModel.provider, runtimeApiKey);
+      if (
+        !hasRuntimeAuthExchange &&
+        isRenewableSiwcRequestAuth(apiKeyInfo) &&
+        apiKeyInfo.profileId &&
+        typeof authStorage.setRuntimeApiKeyResolver === "function"
+      ) {
+        const profileId = apiKeyInfo.profileId;
+        const resolveRequestCredential = async (forceRefresh: boolean) => {
+          const resolved = await resolveApiKeyForProfile({
+            cfg: params.config,
+            store: runtimeAuthProfileStore,
+            profileId,
+            agentDir,
+            forceRefresh,
+            signal: params.abortSignal,
+          });
+          if (!resolved || resolved.profileId !== profileId || !resolved.apiKey.trim()) {
+            throw new Error(
+              `Selected auth profile "${profileId}" has no renewable request credential.`,
+            );
+          }
+          return resolved.apiKey;
+        };
+        authStorage.setRuntimeApiKeyResolver(runtimeModel.provider, {
+          resolve: () => resolveRequestCredential(false),
+          refresh: async () => {
+            await resolveRequestCredential(true);
+            return true;
+          },
+        });
+      } else {
+        authStorage.setRuntimeApiKey(runtimeModel.provider, runtimeApiKey);
+      }
     } else if (apiKeyInfo.mode !== "aws-sdk") {
       throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
     }
