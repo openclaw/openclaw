@@ -117,20 +117,19 @@ describe("runSessionRegistryMaintenance", () => {
     }),
   );
 
-  it("maintains healthy stores while another agent waits for database admission, then resumes it", async () => {
-    await withMaintenanceState(async (state) => {
+  it(
+    "maintains healthy stores while another agent waits for database admission, then resumes it",
+    withMaintenanceState(async () => {
       const config: OpenClawConfig = {
         agents: { ownership: "explicit", entries: { slow: {}, healthy: {} } },
       };
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config);
-      const slowStorePath = path.join(state.sessionsDir("slow"), "sessions.json");
-      const healthyStorePath = path.join(state.sessionsDir("healthy"), "sessions.json");
-      const slowKey = await writeStaleCronSession(slowStorePath, "slow");
-      const healthyKey = await writeStaleCronSession(healthyStorePath, "healthy");
+      const slow = await writeStaleCronSession("slow");
+      const healthy = await writeStaleCronSession("healthy");
       const refusal = createAgentDatabaseInspectionRefusal({
         agentId: "slow",
-        paths: [resolveSqliteTargetFromSessionStorePath(slowStorePath).path],
+        paths: [resolveSqliteTargetFromSessionStorePath(slow.storePath).path],
         pending: true,
         reason: "Database integrity check is running",
       });
@@ -150,19 +149,17 @@ describe("runSessionRegistryMaintenance", () => {
           },
         ]),
       });
-      expect(
-        loadSessionEntry({ sessionKey: healthyKey, storePath: healthyStorePath }),
-      ).toBeUndefined();
+      expect(loadSessionEntry(healthy)).toBeUndefined();
       await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {
-        expect(loadSessionEntry({ sessionKey: slowKey, storePath: slowStorePath })).toBeDefined();
+        expect(loadSessionEntry(slow)).toBeDefined();
       });
 
       const resumed = await runSessionRegistryMaintenance(params);
 
       expect(resumed).toMatchObject({ pruned: 1, skippedStores: 0 });
-      expect(loadSessionEntry({ sessionKey: slowKey, storePath: slowStorePath })).toBeUndefined();
-    });
-  });
+      expect(loadSessionEntry(slow)).toBeUndefined();
+    }),
+  );
 
   it.each(["per-agent", "fixed selector", "exact database"])(
     "prunes every configured agent's stale cron rows with a %s store",
