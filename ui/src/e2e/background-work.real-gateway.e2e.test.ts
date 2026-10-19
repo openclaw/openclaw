@@ -304,7 +304,7 @@ suite.define(() => {
         expect(processRow).toMatchObject({ status: "running", canStop: true, truncated: false });
         const processOpen = processes.getByRole("button", { name: processRow.name, exact: true });
         await processOpen.click();
-        await processes.getByRole("heading", { name: "Recent output", exact: true }).waitFor();
+        await processes.getByLabel("Recent output", { exact: true }).waitFor();
         expect(await processes.locator("pre").textContent()).toContain(fixture.output);
         const processStop = processes.getByRole("button", {
           name: "Stop " + processRow.name,
@@ -431,7 +431,7 @@ suite.define(() => {
         await processes.getByText("Stopped", { exact: true }).waitFor();
         await processStop.waitFor({ state: "hidden" });
         await processes.getByRole("button", { name: "Back to Processes", exact: true }).click();
-        const finishedToggle = processes.getByRole("button", { name: "Finished (1)", exact: true });
+        const finishedToggle = processes.getByRole("button", { name: "Finished 1", exact: true });
         await finishedToggle.waitFor();
         expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
         expect(await processOpen.count()).toBe(0);

@@ -45,10 +45,14 @@ const ONE_PIXEL_PNG = Buffer.from(
   "base64",
 );
 
-type ColdOpenOutcome = {
-  outcome: "loading" | "content" | "generic-empty";
-  emptyStateOffersAction: boolean;
-};
+type ColdOpenOutcome =
+  | { outcome: "loading" | "content" }
+  | {
+      outcome: "generic-empty";
+      heading: string;
+      description: string;
+      emptyStateOffersAction: boolean;
+    };
 
 const offeredSlotLabels = [
   "Side chat",
@@ -63,11 +67,6 @@ const offeredSlotLabels = [
 ] as const;
 
 type OfferedSlotLabel = (typeof offeredSlotLabels)[number];
-
-const actionlessEmptyStateAllowlist = new Set<OfferedSlotLabel>([
-  // Discussion: no external URL, nothing to open.
-  "Discussion",
-]);
 
 const browserTabs = (
   running: boolean,
@@ -300,15 +299,22 @@ async function readColdOpenOutcome(page: Page): Promise<ColdOpenOutcome> {
   await activePanel.waitFor();
   await activePanel.locator(":scope > *").first().waitFor();
   if ((await activePanel.locator("openclaw-panel-loading-skeleton").count()) > 0) {
-    return { outcome: "loading", emptyStateOffersAction: false };
+    return { outcome: "loading" };
   }
   const emptyState = activePanel.locator("openclaw-panel-empty-state").first();
-  const genericEmptyState = (await emptyState.count()) > 0;
+  if (!(await emptyState.count())) {
+    return { outcome: "content" };
+  }
   return {
-    outcome: genericEmptyState ? "generic-empty" : "content",
+    outcome: "generic-empty",
+    heading: (await emptyState.locator(".empty-state__title").textContent())?.trim() ?? "",
+    description:
+      (await emptyState.locator(".empty-state__description").textContent())?.trim() ?? "",
     emptyStateOffersAction:
-      genericEmptyState &&
-      (await activePanel.locator('[slot="action"], a[href], button:not([disabled])').count()) > 0,
+      (await activePanel
+        .locator('a[href]:not([aria-disabled="true"]), button:enabled:not([aria-disabled="true"])')
+        .filter({ visible: true })
+        .count()) > 0,
   };
 }
 
@@ -340,7 +346,6 @@ async function readSlotColdOpenOutcome(
         await held.request;
         expect(await readColdOpenOutcome(page)).toEqual({
           outcome: "loading",
-          emptyStateOffersAction: false,
         });
       }
     } finally {
@@ -356,6 +361,10 @@ async function readSlotColdOpenOutcome(
           { exact: true },
         )
         .waitFor();
+      if (expectedOutcome !== "content") {
+        expect(await processes.getByRole("listitem").count()).toBe(0);
+        expect(await processes.getByRole("button", { name: /^Stop/ }).count()).toBe(0);
+      }
     }
     if (label === "Subagents") {
       const subagents = page.locator("openclaw-chat-subagents-panel");
@@ -812,20 +821,33 @@ suite.define(() => {
       expect(
         await readSlotColdOpenOutcome(label, coldOpenScenario(true), "content"),
         `${label} must render content when its backing capability has data`,
-      ).toEqual({ outcome: "content", emptyStateOffersAction: false });
+      ).toEqual({ outcome: "content" });
     }
   });
 
-  it("keeps generic empty states actionable or explicitly allowlisted", async () => {
-    const observedActionlessEmptyStates: OfferedSlotLabel[] = [];
+  it("finishes cold-open with content or an identified and explained empty state", async () => {
     for (const label of offeredSlotLabels) {
       const outcome = await readSlotColdOpenOutcome(label, coldOpenScenario());
-      if (outcome.outcome !== "generic-empty" || outcome.emptyStateOffersAction) {
-        continue;
+      expect(outcome.outcome, `${label} finishes loading`).not.toBe("loading");
+      if (outcome.outcome === "generic-empty") {
+        expect(outcome.heading, `${label} identifies its empty state`).not.toBe("");
+        expect(outcome.description, `${label} explains its empty state`).not.toBe("");
       }
-      observedActionlessEmptyStates.push(label);
+      if (label === "Processes") {
+        expect(outcome).toEqual({
+          outcome: "generic-empty",
+          heading: "No processes",
+          description: "No background processes in this conversation.",
+          emptyStateOffersAction: false,
+        });
+      } else if (label === "Discussion") {
+        expect(outcome).toMatchObject({
+          outcome: "generic-empty",
+          emptyStateOffersAction: false,
+        });
+      } else if (outcome.outcome === "generic-empty") {
+        expect(outcome.emptyStateOffersAction, `${label} offers an enabled action`).toBe(true);
+      }
     }
-
-    expect(observedActionlessEmptyStates).toEqual([...actionlessEmptyStateAllowlist]);
   });
 });
