@@ -46,6 +46,39 @@ function loadSessionRuntime() {
   return import("./session-utils.js");
 }
 
+function withRecoveryState(run: Parameters<typeof withOpenClawTestState>[1]) {
+  return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
+    await run(state);
+  });
+}
+
+function seedSession(fields: Parameters<typeof upsertSessionEntryCore>[1] = {}) {
+  return upsertSessionEntryCore(IDENTITY, {
+    sessionId: IDENTITY.sessionId,
+    updatedAt: 1,
+    ...fields,
+  });
+}
+
+const sessionHeader = { type: "session", id: IDENTITY.sessionId, version: CURRENT_SESSION_VERSION };
+const conflict = {
+  paths: ["edited.ts"],
+  stagedResultRef: "refs/openclaw/worker-results/result-1",
+  totalCount: 1,
+};
+function conflictEvent(id: string, parentId: string | null, details = conflict) {
+  return {
+    type: "custom_message",
+    id,
+    parentId,
+    customType: WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
+    content: "Conflict",
+    display: true,
+    details,
+  };
+}
+
 async function createHandlers(identity = IDENTITY) {
   const runtime = await loadSessionRuntime();
   const target = await runtime.resolveGatewaySessionStoreTargetInWorker({
@@ -86,31 +119,17 @@ describe("worker workspace recovery transcript reporting", () => {
   it.each(["reset", "opaque"])(
     "selects conflict reports through %s navigation without adopting an inactive clear",
     async (navigation) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        await captureRuntimeConfigAsyncReader()();
-        await upsertSessionEntryCore(IDENTITY, { sessionId: IDENTITY.sessionId, updatedAt: 1 });
-        const conflict = {
-          paths: ["edited.ts"],
-          stagedResultRef: "refs/openclaw/worker-results/result-1",
-          totalCount: 1,
-        };
+      await withRecoveryState(async () => {
+        await seedSession();
         await replaceTranscriptEvents(IDENTITY, [
-          { type: "session", id: IDENTITY.sessionId, version: CURRENT_SESSION_VERSION },
+          sessionHeader,
           {
             type: "message",
             id: "root",
             parentId: null,
             message: { role: "user", content: "Start" },
           },
-          {
-            type: "custom_message",
-            id: "conflict",
-            parentId: "root",
-            customType: WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
-            content: "Conflict",
-            display: true,
-            details: conflict,
-          },
+          conflictEvent("conflict", "root"),
           {
             type: "custom_message",
             id: "inactive-clear",
@@ -134,10 +153,7 @@ describe("worker workspace recovery transcript reporting", () => {
           navigation === "reset" ? { kind: "absent" } : { kind: "conflict", conflict },
         );
         await handlers.reportConflict(conflict);
-        expect(await handlers.resolveConflict()).toEqual({
-          kind: "conflict",
-          conflict,
-        });
+        expect(await handlers.resolveConflict()).toEqual({ kind: "conflict", conflict });
         await handlers.reportConflict({ cleared: true });
         await handlers.reportConflict({ cleared: true });
         expect(await handlers.resolveConflict()).toEqual({ kind: "absent" });
@@ -152,49 +168,30 @@ describe("worker workspace recovery transcript reporting", () => {
       });
     },
   );
-  it.each([
-    { label: "invalid staged ref", paths: ["edited.ts"], stagedResultRef: "refs/heads/main" },
-  ])(
-    "reports $label as unknown instead of treating a retained conflict as absent",
-    async (details) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        await captureRuntimeConfigAsyncReader()();
-        await upsertSessionEntryCore(IDENTITY, { sessionId: IDENTITY.sessionId, updatedAt: 1 });
-        await replaceTranscriptEvents(IDENTITY, [
-          { type: "session", id: IDENTITY.sessionId, version: CURRENT_SESSION_VERSION },
-          {
-            type: "custom_message",
-            id: "malformed-conflict",
-            parentId: null,
-            customType: WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
-            content: "Conflict",
-            display: true,
-            details: {
-              paths: details.paths,
-              stagedResultRef: details.stagedResultRef,
-              totalCount: 1,
-            },
-          },
-        ]);
-        const handlers = await createHandlers();
-        expect(await handlers.resolveConflict()).toEqual({
-          kind: "unknown",
-          reason: "malformed-report",
-        });
+  it("reports an invalid staged ref as unknown instead of treating a retained conflict as absent", async () => {
+    await withRecoveryState(async () => {
+      await seedSession();
+      await replaceTranscriptEvents(IDENTITY, [
+        sessionHeader,
+        conflictEvent("malformed-conflict", null, {
+          ...conflict,
+          stagedResultRef: "refs/heads/main",
+        }),
+      ]);
+      const handlers = await createHandlers();
+      expect(await handlers.resolveConflict()).toEqual({
+        kind: "unknown",
+        reason: "malformed-report",
       });
-    },
-  );
+    });
+  });
 
   it.each(["missing", "rebound"])(
     "reports a %s session as unavailable instead of treating its conflict as absent",
     async (sessionState) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        await captureRuntimeConfigAsyncReader()();
+      await withRecoveryState(async () => {
         if (sessionState === "rebound") {
-          await upsertSessionEntryCore(IDENTITY, {
-            sessionId: "replacement-workspace-session",
-            updatedAt: 1,
-          });
+          await seedSession({ sessionId: "replacement-workspace-session" });
         }
         const handlers = await createHandlers();
         expect(await handlers.resolveConflict()).toEqual({
@@ -206,8 +203,7 @@ describe("worker workspace recovery transcript reporting", () => {
   );
 
   it("records historical recovery failures while preserving the live pending-result owner", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await captureRuntimeConfigAsyncReader()();
+    await withRecoveryState(async (state) => {
       await upsertSessionEntryCore(REQUEST, { sessionId: REQUEST.sessionId, updatedAt: 1 });
       const workspacePath = state.statePath("recovery-workspace");
       await fs.mkdir(workspacePath, { recursive: true });
@@ -279,9 +275,8 @@ describe("worker workspace recovery transcript reporting", () => {
   });
 
   it("persists bounded recovery failures and deduplicates identical consecutive attempts", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await captureRuntimeConfigAsyncReader()();
-      await upsertSessionEntryCore(IDENTITY, { sessionId: IDENTITY.sessionId, updatedAt: 1 });
+    await withRecoveryState(async () => {
+      await seedSession();
       const { reportFailure } = await createHandlers();
       const secret = [
         String.fromCharCode(115, 107),
@@ -319,9 +314,8 @@ describe("worker workspace recovery transcript reporting", () => {
   });
 
   it("rejects a rebound session identity without touching its replacement transcript", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await captureRuntimeConfigAsyncReader()();
-      await upsertSessionEntryCore(IDENTITY, { sessionId: IDENTITY.sessionId, updatedAt: 1 });
+    await withRecoveryState(async () => {
+      await seedSession();
       const { reportFailure } = await createHandlers();
       await upsertSessionEntryCore(IDENTITY, {
         sessionId: "replacement-workspace-session",
@@ -341,13 +335,8 @@ describe("worker workspace recovery transcript reporting", () => {
   it.each(["session", "writer"])(
     "revalidates a rebound %s after waiting for the transcript writer",
     async (reboundKind) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        await captureRuntimeConfigAsyncReader()();
-        await upsertSessionEntryCore(IDENTITY, {
-          sessionId: IDENTITY.sessionId,
-          updatedAt: 1,
-          activeWriterRunId: "report-writer",
-        });
+      await withRecoveryState(async () => {
+        await seedSession({ activeWriterRunId: "report-writer" });
         const { reportFailure } = await createHandlers();
         const reportTarget = await (
           await loadSessionRuntime()
@@ -356,16 +345,13 @@ describe("worker workspace recovery transcript reporting", () => {
           key: IDENTITY.sessionKey,
           agentId: IDENTITY.agentId,
         });
-        let releaseWriter!: () => void;
         const { promise: writerHeld, resolve: signalWriterHeld } = createDeferred();
-        const release = new Promise<void>((resolve) => {
-          releaseWriter = resolve;
-        });
+        const release = createDeferred();
         const blocker = runExclusiveSqliteSessionWrite(
           { agentId: IDENTITY.agentId },
           async () => {
             signalWriterHeld();
-            await release;
+            await release.promise;
           },
           "session.transcript.batch",
         );
@@ -398,7 +384,7 @@ describe("worker workspace recovery transcript reporting", () => {
         );
         await Promise.resolve();
         await Promise.resolve();
-        releaseWriter();
+        release.resolve();
         await blocker;
         await rebound;
 

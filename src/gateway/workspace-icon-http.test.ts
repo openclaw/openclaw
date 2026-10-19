@@ -1,6 +1,4 @@
 import fs from "node:fs/promises";
-// Workspace icon tests cover conventional-path resolution, process-stable
-// caching, and the authenticated route's scoping, limits, and headers.
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
@@ -44,7 +42,6 @@ const {
   WORKSPACE_ICON_MAX_BYTES,
 } = await import("./workspace-icon-http.js");
 
-// 1x1 PNG, a 22-byte ICO header, and a minimal SVG document.
 const PNG_BYTES = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zb0YAAAAASUVORK5CYII=",
   "base64",
@@ -53,6 +50,26 @@ const ICO_BYTES = Buffer.from([
   0, 0, 1, 0, 1, 0, 16, 16, 0, 0, 1, 0, 32, 0, 0, 0, 0, 0, 22, 0, 0, 0,
 ]);
 const SVG_BYTES = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"></svg>');
+
+function expectHeaders(response: Response, headers: Record<string, string | null>) {
+  for (const [name, value] of Object.entries(headers)) {
+    expect(response.headers.get(name), name).toBe(value);
+  }
+}
+
+function holdIconRead() {
+  const reading = createDeferredCore();
+  const release = createDeferredCore();
+  const readFile = boundaryFileRead.readFileDescriptorBounded;
+  const read = vi
+    .spyOn(boundaryFileRead, "readFileDescriptorBounded")
+    .mockImplementationOnce(async (...args) => {
+      reading.resolve();
+      await release.promise;
+      return await readFile(...args);
+    });
+  return { reading: reading.promise, release: release.resolve, restore: () => read.mockRestore() };
+}
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 
@@ -72,40 +89,27 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("resolveWorkspaceIcon", () => {
   const rejected = [
-    { label: "an empty file", files: { "favicon.ico": Buffer.alloc(0) } },
-    { label: "bytes that are not an image", files: { "favicon.ico": Buffer.from("#!/bin/sh\n") } },
-    {
-      label: "an SVG carrying a doctype",
-      files: { "favicon.svg": Buffer.from('<!DOCTYPE svg><svg xmlns="x"></svg>') },
-    },
-    {
-      label: "an SVG referencing an external resource",
-      files: {
-        "favicon.svg": Buffer.from('<svg xmlns="x"><image href="https://x.test/a.png"/></svg>'),
-      },
-    },
-    {
-      label: "an SVG embedding a script element",
-      files: { "favicon.svg": Buffer.from('<svg xmlns="x"><script>alert(1)</script></svg>') },
-    },
-    {
-      label: "an SVG past the vector cap",
-      files: {
-        "favicon.svg": Buffer.concat([
-          Buffer.from('<svg xmlns="x"><path d="'),
-          Buffer.alloc(SVG_ICON_MAX_BYTES, 0x31),
-          Buffer.from('"/></svg>'),
-        ]),
-      },
-    },
-    {
-      label: "an icon past the size cap",
-      files: { "favicon.png": Buffer.alloc(WORKSPACE_ICON_MAX_BYTES + 1, 1) },
-    },
+    ["an empty file", "ico", Buffer.alloc(0)],
+    ["bytes that are not an image", "ico", Buffer.from("#!/bin/sh\n")],
+    ["an SVG carrying a doctype", "svg", '<!DOCTYPE svg><svg xmlns="x"></svg>'],
+    [
+      "an SVG referencing an external resource",
+      "svg",
+      '<svg xmlns="x"><image href="https://x.test/a.png"/></svg>',
+    ],
+    ["an SVG embedding a script element", "svg", '<svg xmlns="x"><script>alert(1)</script></svg>'],
+    [
+      "an SVG past the vector cap",
+      "svg",
+      `<svg xmlns="x"><path d="${"1".repeat(SVG_ICON_MAX_BYTES)}"/></svg>`,
+    ],
+    ["an icon past the size cap", "png", Buffer.alloc(WORKSPACE_ICON_MAX_BYTES + 1, 1)],
   ] as const;
 
-  it.each(rejected)("records no icon for $label", async ({ files }) => {
-    const root = await makeWorkspace({ ...files });
+  it.each(rejected)("records no icon for %s", async (_label, extension, body) => {
+    const root = await makeWorkspace({
+      [`favicon.${extension}`]: typeof body === "string" ? Buffer.from(body) : body,
+    });
     expect(await resolveWorkspaceIcon(root)).toBeNull();
   });
 
@@ -245,13 +249,11 @@ describe("handleWorkspaceIconHttpRequest", () => {
         headers: { "If-None-Match": typeof validator === "function" ? validator(etag) : validator },
       });
       expect(response.status).toBe(expectedStatus);
-      expect(response.headers.get("etag")).toBe(etag);
-      expect(response.headers.get("content-disposition")).toBe(
-        'attachment; filename="workspace-icon"',
-      );
-      expect(response.headers.get("content-length")).toBe(
-        expectedStatus === 304 ? null : String(PNG_BYTES.byteLength),
-      );
+      expectHeaders(response, {
+        etag,
+        "content-disposition": 'attachment; filename="workspace-icon"',
+        "content-length": expectedStatus === 304 ? null : String(PNG_BYTES.byteLength),
+      });
       if (expectedStatus === 200) {
         expect(response.headers.get("content-type")).toBe("image/png");
       }
@@ -261,16 +263,14 @@ describe("handleWorkspaceIconHttpRequest", () => {
     },
   );
 
-  const absent = [{ label: "a workspace with no icon", hasWorkspace: true }] as const;
-
-  it.each(absent)("briefly caches an authenticated 404 for $label", async ({ hasWorkspace }) => {
-    seedSession(hasWorkspace ? await makeWorkspace({}) : undefined);
+  it("briefly caches an authenticated 404 for a workspace with no icon", async () => {
+    seedSession(await makeWorkspace({}));
     const response = await fetch(iconRoute("agent:main:one"));
     expect(response.status).toBe(404);
-    expect(response.headers.get("cache-control")).toBe(
-      hasWorkspace ? "private, max-age=60" : "no-store",
-    );
-    expect(response.headers.get("vary")).toBe("Authorization, Cookie");
+    expectHeaders(response, {
+      "cache-control": "private, max-age=60",
+      vary: "Authorization, Cookie",
+    });
   });
 
   it("serves a cold canonical session through its main alias without chat startup", async () => {
@@ -278,14 +278,14 @@ describe("handleWorkspaceIconHttpRequest", () => {
     seedSession(root, "agent:main:main");
     const response = await fetch(iconRoute("main"));
     expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toBe("image/x-icon");
-    expect(response.headers.get("content-length")).toBe(String(ICO_BYTES.byteLength));
-    expect(response.headers.get("cache-control")).toBe("private, max-age=3600");
-    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-    expect(response.headers.get("cross-origin-resource-policy")).toBe("same-origin");
-    expect(response.headers.get("content-disposition")).toBe(
-      'attachment; filename="workspace-icon"',
-    );
+    expectHeaders(response, {
+      "content-type": "image/x-icon",
+      "content-length": String(ICO_BYTES.byteLength),
+      "cache-control": "private, max-age=3600",
+      "x-content-type-options": "nosniff",
+      "cross-origin-resource-policy": "same-origin",
+      "content-disposition": 'attachment; filename="workspace-icon"',
+    });
     expect(response.headers.get("content-security-policy")).toContain("sandbox");
     expect(Buffer.from(await response.arrayBuffer())).toEqual(ICO_BYTES);
   });
@@ -312,21 +312,12 @@ describe("handleWorkspaceIconHttpRequest", () => {
   it("rejects revoked authority while a workspace icon is being prepared", async () => {
     const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
     seedSession(root, "agent:main:revoked");
-    const reading = createDeferredCore();
-    const release = createDeferredCore();
-    const readFile = boundaryFileRead.readFileDescriptorBounded;
-    const read = vi
-      .spyOn(boundaryFileRead, "readFileDescriptorBounded")
-      .mockImplementationOnce(async (...args) => {
-        reading.resolve();
-        await release.promise;
-        return await readFile(...args);
-      });
+    const held = holdIconRead();
     try {
       const pending = fetch(iconRoute("agent:main:revoked"));
-      await reading.promise;
+      await held.reading;
       authorityCurrent = false;
-      release.resolve();
+      held.release();
 
       const response = await pending;
       expect(response.status).toBe(401);
@@ -335,8 +326,8 @@ describe("handleWorkspaceIconHttpRequest", () => {
         error: { message: "Unauthorized", type: "unauthorized" },
       });
     } finally {
-      release.resolve();
-      read.mockRestore();
+      held.release();
+      held.restore();
     }
   });
 
@@ -344,21 +335,12 @@ describe("handleWorkspaceIconHttpRequest", () => {
     const original = await makeWorkspace({ "favicon.png": PNG_BYTES });
     const replacement = await makeWorkspace({ "favicon.svg": SVG_BYTES });
     seedSession(original);
-    const reading = createDeferredCore();
-    const release = createDeferredCore();
-    const readFile = boundaryFileRead.readFileDescriptorBounded;
-    const read = vi
-      .spyOn(boundaryFileRead, "readFileDescriptorBounded")
-      .mockImplementationOnce(async (...args) => {
-        reading.resolve();
-        await release.promise;
-        return await readFile(...args);
-      });
+    const held = holdIconRead();
     const pending = fetch(iconRoute("agent:main:one"));
     try {
-      await reading.promise;
+      await held.reading;
       seedSession(replacement, "agent:main:one", { sessionId: "replacement-session" });
-      release.resolve();
+      held.release();
       const stale = await pending;
       expect(stale.status).toBe(503);
       expect(stale.headers.get("etag")).toBeNull();
@@ -367,9 +349,9 @@ describe("handleWorkspaceIconHttpRequest", () => {
       expect(current.status).toBe(200);
       expect(Buffer.from(await current.arrayBuffer())).toEqual(SVG_BYTES);
     } finally {
-      release.resolve();
+      held.release();
       await pending;
-      read.mockRestore();
+      held.restore();
     }
   });
 
@@ -447,10 +429,8 @@ describe("handleWorkspaceIconHttpRequest", () => {
     expect(reads).not.toHaveBeenCalled();
   });
 
-  const malformed = ["/__openclaw__/workspace-icon/"];
-
-  it.each(malformed)("claims %s as a 404 instead of falling through", async (pathname) => {
-    const response = await fetch(`http://127.0.0.1:${port}${pathname}`);
+  it("claims the empty icon path as a 404 instead of falling through", async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/__openclaw__/workspace-icon/`);
     expect(response.status).toBe(404);
   });
 
@@ -465,7 +445,7 @@ describe("handleWorkspaceIconHttpRequest", () => {
     expect(response.headers.get("allow")).toBe("GET, HEAD");
   });
 
-  it.each([401])("never reads a workspace when authorization answers %s", async (status) => {
+  it("never reads a workspace when authorization answers 401", async () => {
     seedSession(await makeWorkspace({ "favicon.png": PNG_BYTES }), "agent:main:hidden");
     const reads = vi.spyOn(boundaryFileRead, "openRootFile");
     // `sessions.list` hides incognito and non-owner draft sessions per client.
@@ -473,13 +453,13 @@ describe("handleWorkspaceIconHttpRequest", () => {
     // knows such a key pull bytes derived from a session it cannot list.
     mocks.authorize.mockImplementation(
       async (params: { res: { statusCode: number; end: () => void } }) => {
-        params.res.statusCode = status;
+        params.res.statusCode = 401;
         params.res.end();
         return null;
       },
     );
     const response = await fetch(iconRoute("agent:main:hidden"));
-    expect(response.status).toBe(status);
+    expect(response.status).toBe(401);
     expect(reads).not.toHaveBeenCalled();
   });
 });

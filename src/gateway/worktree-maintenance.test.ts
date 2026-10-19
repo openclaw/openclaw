@@ -25,6 +25,38 @@ function completedResult(): ManagedWorktreeGcResult {
   return { ...new WorktreeGcProgress().result, limitsSatisfied: true };
 }
 
+function maintenanceFixture(config: OpenClawConfig = {}) {
+  const clock = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const params = {
+    scheduler,
+    getRuntimeConfig: () => config,
+    onComplete: vi.fn(),
+    onError: vi.fn(),
+  };
+  return { clock, ...params, start: () => startWorktreeMaintenance(params) };
+}
+
+function holdGc(repeat = false) {
+  const entered = createDeferred<NonNullable<Parameters<typeof managedWorktrees.gc>[0]>>();
+  const release = createDeferred<ManagedWorktreeGcResult>();
+  const implementation = (params: NonNullable<Parameters<typeof managedWorktrees.gc>[0]> = {}) => {
+    entered.resolve(params);
+    return release.promise;
+  };
+  const gc = vi.spyOn(managedWorktrees, "gc");
+  if (repeat) {
+    gc.mockImplementation(implementation);
+  } else {
+    gc.mockImplementationOnce(implementation).mockResolvedValue(completedResult());
+  }
+  return { entered, release, gc };
+}
+
+function awaitCleanup<T>(entered: Promise<T>, running: Promise<void> | void) {
+  return awaitGateBeforeSettlement(entered, Promise.resolve(running), "cleanup never started");
+}
+
 afterEach(() => {
   resetConfigRuntimeState();
   resetGatewayWorkAdmission();
@@ -33,24 +65,14 @@ afterEach(() => {
 
 describe("worktree maintenance owner", () => {
   it("coalesces archive notifications into cleanup under the maintenance context", async () => {
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
+    const { clock, scheduler, getRuntimeConfig, start } = maintenanceFixture();
     const context = new AsyncLocalStorage<string>();
     const observed: Array<string | undefined> = [];
     const gc = vi.spyOn(managedWorktrees, "gc").mockImplementation(async () => {
       observed.push(context.getStore());
       return completedResult();
     });
-    const config: OpenClawConfig = {};
-    const getRuntimeConfig = () => config;
-    const owner = context.run("maintenance", () =>
-      startWorktreeMaintenance({
-        scheduler,
-        getRuntimeConfig,
-        onComplete: vi.fn(),
-        onError: vi.fn(),
-      }),
-    );
+    const owner = context.run("maintenance", start);
     try {
       context.run("archive-request", () => {
         notifyGatewayWorktreeArchive(getRuntimeConfig);
@@ -66,33 +88,13 @@ describe("worktree maintenance owner", () => {
   });
 
   it("sweeps again after archive commits during cleanup without overlapping passes", async () => {
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const entered = createDeferred();
-    const release = createDeferred<ManagedWorktreeGcResult>();
-    const gc = vi
-      .spyOn(managedWorktrees, "gc")
-      .mockImplementationOnce(() => {
-        entered.resolve();
-        return release.promise;
-      })
-      .mockResolvedValue(completedResult());
-    const config: OpenClawConfig = {};
-    const getRuntimeConfig = () => config;
-    const owner = startWorktreeMaintenance({
-      scheduler,
-      getRuntimeConfig,
-      onComplete: vi.fn(),
-      onError: vi.fn(),
-    });
+    const { clock, scheduler, getRuntimeConfig, start } = maintenanceFixture();
+    const { entered, release, gc } = holdGc();
+    const owner = start();
     notifyGatewayWorktreeArchive(getRuntimeConfig);
     const running = clock.advanceBy(0);
     try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        Promise.resolve(running),
-        "cleanup never started",
-      );
+      await awaitCleanup(entered.promise, running);
       notifyGatewayWorktreeArchive(getRuntimeConfig);
       notifyGatewayWorktreeArchive(getRuntimeConfig);
       await clock.advanceBy(0);
@@ -115,13 +117,9 @@ describe("worktree maintenance owner", () => {
   ])(
     "yields after $budget while coalescing requests and publishing progress",
     async ({ batchSize, elapsedMs }) => {
-      const clock = createGatewaySchedulerClock();
-      const scheduler = createTestGatewayScheduler(clock.clock);
-      const config: OpenClawConfig = {};
-      const getRuntimeConfig = () => config;
+      const { clock, scheduler, getRuntimeConfig, onComplete, onError, start } =
+        maintenanceFixture();
       const paused = createDeferred();
-      const onComplete = vi.fn();
-      const onError = vi.fn();
       const gc = vi.spyOn(managedWorktrees, "gc").mockImplementation(async (params = {}) => {
         const progress = completedResult();
         for (let index = 1; index <= batchSize + 1; index++) {
@@ -141,7 +139,7 @@ describe("worktree maintenance owner", () => {
         }
         return progress;
       });
-      const owner = startWorktreeMaintenance({ scheduler, getRuntimeConfig, onComplete, onError });
+      const owner = start();
       const receipt = requestGatewayWorktreeMaintenance(getRuntimeConfig, { retryDeferred: true });
       expect(owner.request()).toEqual(receipt);
       const running = clock.advanceBy(0);
@@ -190,29 +188,15 @@ describe("worktree maintenance owner", () => {
   );
 
   it("waits for admitted cleanup to settle when stopped and withdraws its authority immediately", async () => {
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const entered = createDeferred<NonNullable<Parameters<typeof managedWorktrees.gc>[0]>>();
-    const release = createDeferred<ManagedWorktreeGcResult>();
-    vi.spyOn(managedWorktrees, "gc").mockImplementation((params = {}) => {
-      entered.resolve(params);
-      return release.promise;
-    });
-    const config: OpenClawConfig = {};
-    const getRuntimeConfig = () => config;
-    const onComplete = vi.fn();
-    const onError = vi.fn();
-    const owner = startWorktreeMaintenance({ scheduler, getRuntimeConfig, onComplete, onError });
+    const { clock, scheduler, getRuntimeConfig, onComplete, onError, start } = maintenanceFixture();
+    const { entered, release } = holdGc(true);
+    const owner = start();
     owner.request();
     const running = clock.advanceBy(0);
     let stopped = false;
     let stopping: Promise<void> | undefined;
     try {
-      const guard = await awaitGateBeforeSettlement(
-        entered.promise,
-        Promise.resolve(running),
-        "cleanup never started",
-      );
+      const guard = await awaitCleanup(entered.promise, running);
       stopping = owner.stop().then(() => {
         stopped = true;
       });
@@ -238,33 +222,16 @@ describe("worktree maintenance owner", () => {
   });
 
   it("drains a replaced owner before its successor starts another sweep", async () => {
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const entered = createDeferred();
-    const release = createDeferred<ManagedWorktreeGcResult>();
-    const gc = vi
-      .spyOn(managedWorktrees, "gc")
-      .mockImplementationOnce(() => {
-        entered.resolve();
-        return release.promise;
-      })
-      .mockResolvedValue(completedResult());
-    const config: OpenClawConfig = {};
-    const getRuntimeConfig = () => config;
-    const onComplete = vi.fn();
-    const params = { scheduler, getRuntimeConfig, onComplete, onError: vi.fn() };
-    const first = startWorktreeMaintenance(params);
+    const { clock, scheduler, getRuntimeConfig, onComplete, start } = maintenanceFixture();
+    const { entered, release, gc } = holdGc();
+    const first = start();
     first.request();
     const oldRun = clock.advanceBy(0);
     let successor: ReturnType<typeof startWorktreeMaintenance> | undefined;
     let newRun: Promise<void> | void = undefined;
     try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        Promise.resolve(oldRun),
-        "cleanup never started",
-      );
-      successor = startWorktreeMaintenance(params);
+      await awaitCleanup(entered.promise, oldRun);
+      successor = start();
       const receipt = successor.request();
       newRun = clock.advanceBy(0);
       await Promise.resolve();
@@ -288,91 +255,39 @@ describe("worktree maintenance owner", () => {
     }
   });
 
-  it.each<{
-    name: string;
-    change: OpenClawConfig;
-    cancels: boolean;
-    inPlace?: boolean;
-  }>([
-    {
-      name: "UI sidebar preferences",
-      change: { ui: { prefs: { sidebarEntries: ["sessions"] } } },
-      cancels: false,
-    },
-    { name: "logging", change: { logging: { level: "debug" } }, cancels: false },
-    { name: "worktree capacity", change: { worktreeMaxCount: 8_192 }, cancels: true },
-    { name: "worktree root", change: { worktreeRoot: "/tmp/other-worktrees" }, cancels: true },
-    {
-      name: "session store",
-      change: { session: { store: "/tmp/other-sessions.db" } },
-      cancels: true,
-    },
-    { name: "session alias", change: { session: { mainKey: "other" } }, cancels: true },
-    { name: "session scope", change: { session: { scope: "global" } }, cancels: true },
-    {
-      name: "agent workspace",
-      change: { agents: { entries: { main: { workspace: "/tmp/other-workspace" } } } },
-      cancels: true,
-    },
-    {
-      name: "default sandbox mode",
-      change: { agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } } },
-      cancels: true,
-    },
-    {
-      name: "agent model",
-      change: { agents: { entries: { main: { model: "openai/gpt-5" } } } },
-      cancels: false,
-    },
-    {
-      name: "agent roster",
-      change: { agents: { entries: { main: {}, other: {} } } },
-      cancels: true,
-    },
-    {
-      name: "agent sandbox mode",
-      change: { agents: { entries: { main: { sandbox: { mode: "all" } } } } },
-      cancels: true,
-    },
-    {
-      name: "default workspace",
-      change: {
-        agents: { defaults: { workspace: "/tmp/other-workspace" }, entries: { main: {} } },
-      },
-      cancels: true,
-    },
-    {
-      name: "fixed session store owner",
-      change: {
-        agents: { defaults: { sessionStore: { agentId: "other" } }, entries: { main: {} } },
-      },
-      cancels: true,
-    },
-    {
-      name: "ACP session store roster",
-      change: { acp: { allowedAgents: ["other"] } },
-      cancels: true,
-    },
-    {
-      name: "same-object worktree capacity",
-      change: { worktreeMaxCount: 8_192 },
-      cancels: true,
-      inPlace: true,
-    },
+  it.each<[string, OpenClawConfig, boolean?, boolean?]>([
+    ["UI sidebar preferences", { ui: { prefs: { sidebarEntries: ["sessions"] } } }, false],
+    ["logging", { logging: { level: "debug" } }, false],
+    ["worktree capacity", { worktreeMaxCount: 8_192 }],
+    ["worktree root", { worktreeRoot: "/tmp/other-worktrees" }],
+    ["session store", { session: { store: "/tmp/other-sessions.db" } }],
+    ["session alias", { session: { mainKey: "other" } }],
+    ["session scope", { session: { scope: "global" } }],
+    ["agent workspace", { agents: { entries: { main: { workspace: "/tmp/other-workspace" } } } }],
+    [
+      "default sandbox mode",
+      { agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } } },
+    ],
+    ["agent model", { agents: { entries: { main: { model: "openai/gpt-5" } } } }, false],
+    ["agent roster", { agents: { entries: { main: {}, other: {} } } }],
+    ["agent sandbox mode", { agents: { entries: { main: { sandbox: { mode: "all" } } } } }],
+    [
+      "default workspace",
+      { agents: { defaults: { workspace: "/tmp/other-workspace" }, entries: { main: {} } } },
+    ],
+    [
+      "fixed session store owner",
+      { agents: { defaults: { sessionStore: { agentId: "other" } }, entries: { main: {} } } },
+    ],
+    ["ACP session store roster", { acp: { allowedAgents: ["other"] } }],
+    ["same-object worktree capacity", { worktreeMaxCount: 8_192 }, true, true],
   ])(
-    "handles a $name publication during cleanup (cancels=$cancels)",
-    async ({ change, cancels, inPlace = false }) => {
-      const clock = createGatewaySchedulerClock();
-      const scheduler = createTestGatewayScheduler(clock.clock);
-      const entered = createDeferred<NonNullable<Parameters<typeof managedWorktrees.gc>[0]>>();
-      const release = createDeferred<ManagedWorktreeGcResult>();
-      vi.spyOn(managedWorktrees, "gc").mockImplementation((params = {}) => {
-        entered.resolve(params);
-        return release.promise;
-      });
+    "handles a %s publication during cleanup",
+    async (_name, change, cancels = true, inPlace = false) => {
+      const { clock, scheduler, onComplete } = maintenanceFixture();
+      const { entered, release } = holdGc(true);
       const config: OpenClawConfig = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(config);
-      const onComplete = vi.fn();
       const owner = startWorktreeMaintenance({
         scheduler,
         getRuntimeConfig: () => getRuntimeConfigSnapshot()!,
@@ -382,11 +297,7 @@ describe("worktree maintenance owner", () => {
       const receipt = owner.request();
       const running = clock.advanceBy(0);
       try {
-        const guard = await awaitGateBeforeSettlement(
-          entered.promise,
-          Promise.resolve(running),
-          "cleanup never started",
-        );
+        const guard = await awaitCleanup(entered.promise, running);
         setRuntimeConfigSnapshot(
           inPlace ? Object.assign(config, change) : { ...config, ...change },
         );
