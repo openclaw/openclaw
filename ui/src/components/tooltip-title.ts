@@ -10,6 +10,9 @@ import {
 import { collectTooltipNameText, isTooltipTriggerElement } from "./tooltip-content.ts";
 import { resolveTransientContainer } from "./transient-container.ts";
 
+const DESCRIBABLE_SELECTOR =
+  'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
 function titleNamesElement(element: Element) {
   if (
     element.hasAttribute("aria-label") ||
@@ -263,6 +266,11 @@ export function installTitleTooltips(ownerDocument: Document) {
     if (!explicit && tooltipContent) {
       tooltip ??= ownerDocument.createElement("openclaw-tooltip");
       tooltip.disabled = dialogExpanded();
+      // Title hints adapt caller-owned DOM, including markdown and plugin output.
+      tooltip.descriptionTarget = () =>
+        anchor.matches(DESCRIBABLE_SELECTOR)
+          ? anchor
+          : (anchor.querySelector(DESCRIBABLE_SELECTOR) ?? anchor);
       if (active.filePath) {
         const current = active;
         const path = active.filePath;

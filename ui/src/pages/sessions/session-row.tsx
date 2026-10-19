@@ -155,6 +155,7 @@ function isRowControlTarget(target: EventTarget | null): boolean {
 
 export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
   let menuTrigger: HTMLButtonElement | null = null;
+  let sessionLink: HTMLAnchorElement | undefined;
   const row = createMemo(() => props.row);
   const updated = createMemo(() =>
     row().updatedAt ? formatRelativeTimestamp(row().updatedAt) : t("common.na"),
@@ -270,7 +271,10 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
           />
         </td>
         <td class="data-table-key-col">
-          <openclaw-tooltip prop:content={keyCellTitle()}>
+          <openclaw-tooltip
+            prop:content={keyCellTitle()}
+            prop:descriptionTarget={() => (canLink() ? (sessionLink ?? null) : null)}
+          >
             <div class={["session-key-cell", { mono: !friendlyKeyLabel() }]}>
               <div class="session-key-cell__text">
                 <span class="session-key-cell__primary">
@@ -283,6 +287,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                   ) : undefined}
                   {canLink() ? (
                     <a
+                      ref={(element) => (sessionLink = element)}
                       href={chatUrl()}
                       class="session-link"
                       onClick={(e: MouseEvent) => {

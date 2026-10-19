@@ -25,6 +25,8 @@ export interface TooltipPolicyProps {
   hoverDismissDelay?: number;
   delay?: number;
   describe?: boolean;
+  /** The described control can differ from the wrapper that owns hover geometry. */
+  descriptionTarget?: () => Element | null;
   /** Read-only cards must not block nearby actions when their surface overlaps them. */
   pointerThrough?: boolean;
   autoSize?: boolean;
@@ -476,6 +478,10 @@ export class TooltipOwner {
     const trigger = this.#triggerElement;
     if (!trigger) {
       return null;
+    }
+    const descriptionTarget = this.options.props().descriptionTarget;
+    if (descriptionTarget) {
+      return descriptionTarget() ?? trigger;
     }
     return trigger.matches(DESCRIBABLE_SELECTOR)
       ? trigger

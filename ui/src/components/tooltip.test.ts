@@ -256,21 +256,41 @@ describe("openclaw-tooltip", () => {
     await expectOpenCount(1);
   });
 
-  it("keeps a repeated-label tooltip when a nested label clips", async () => {
-    const provider = createProvider();
-    const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "");
-    const label = document.createElement("span");
-    label.textContent = "Claude Opus 4.7 Anthropic";
-    Object.defineProperty(label, "scrollWidth", { value: 160, configurable: true });
-    Object.defineProperty(label, "clientWidth", { value: 80, configurable: true });
-    trigger.append(label);
-    provider.append(tooltip);
-    document.body.append(provider);
-    await commitTooltip(tooltip);
+  it.each(["width", "height", "marker", "hidden descendant", "faded descendant"] as const)(
+    "keeps a repeated-label tooltip for nested overflow: %s",
+    async (overflow) => {
+      const provider = createProvider();
+      const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "");
+      const label = document.createElement("span");
+      label.textContent = "Claude Opus 4.7 Anthropic";
+      let target = label;
+      if (overflow === "hidden descendant" || overflow === "faded descendant") {
+        const wrapper = document.createElement("span");
+        wrapper.hidden = overflow === "hidden descendant";
+        wrapper.style.opacity = overflow === "faded descendant" ? "0" : "1";
+        target = document.createElement("span");
+        target.textContent = "Decorative text";
+        wrapper.append(target);
+        label.append(wrapper);
+      }
+      if (overflow === "width") {
+        Object.defineProperty(target, "scrollWidth", { value: 160, configurable: true });
+        Object.defineProperty(target, "clientWidth", { value: 80, configurable: true });
+      } else if (overflow === "height") {
+        Object.defineProperty(target, "scrollHeight", { value: 80, configurable: true });
+        Object.defineProperty(target, "clientHeight", { value: 40, configurable: true });
+      } else {
+        target.setAttribute("data-tooltip-overflow", "");
+      }
+      trigger.append(label);
+      provider.append(tooltip);
+      document.body.append(provider);
+      await commitTooltip(tooltip);
 
-    focusTrigger(trigger);
-    await expectOpenCount(1);
-  });
+      focusTrigger(trigger);
+      await expectOpenCount(1);
+    },
+  );
 
   it("does not reopen from pointer-origin focus after activation settles", async () => {
     const provider = createProvider();
@@ -479,6 +499,7 @@ describe("openclaw-tooltip", () => {
         wrapper.append(trigger);
         directTrigger.replaceWith(wrapper);
       }
+      tooltip.descriptionTarget = () => trigger;
       const action = document.createElement("button");
       action.textContent = "Card action";
       card.append(action);
