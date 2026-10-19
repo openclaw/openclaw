@@ -60,7 +60,6 @@ const sockets = new Set<WebSocket>();
 const connected = new Set<WebSocket>();
 const startedAt = performance.now();
 let accountedAt = startedAt;
-let phase: Phase;
 let measuring = true;
 let reconnect: "observed" | "offline-did-not-close-socket" | "not-attempted" = "not-attempted";
 let failure: string | undefined;
@@ -80,16 +79,17 @@ function accountSockets() {
     return;
   }
   const now = performance.now();
-  if (phase) {
-    phase.socketMs += (now - accountedAt) * connected.size;
-    phase.elapsedMs = now - startedAt - phase.startedAtMs;
+  const current = phases.at(-1);
+  if (current) {
+    current.socketMs += (now - accountedAt) * connected.size;
+    current.elapsedMs = now - startedAt - current.startedAtMs;
   }
   accountedAt = now;
 }
 
 function beginPhase(name: string) {
   accountSockets();
-  phase = {
+  const next: Phase = {
     name,
     startedAtMs: performance.now() - startedAt,
     elapsedMs: 0,
@@ -102,10 +102,11 @@ function beginPhase(name: string) {
       "cron.list": { calls: 0, responses: 0, errors: 0, responseBytes: 0 },
     },
   };
-  phases.push(phase);
+  phases.push(next);
+  return next;
 }
 
-beginPhase("cold-start");
+let phase = beginPhase("cold-start");
 const browser = await chromium.launch({
   executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
   headless: true,
@@ -190,7 +191,7 @@ try {
     await delay(5_000);
   };
   const idle = async (name: string) => {
-    beginPhase(name);
+    phase = beginPhase(name);
     if (await page.evaluate(() => document.visibilityState !== "visible")) {
       throw new Error("Measurement page is not visible");
     }
@@ -209,7 +210,7 @@ try {
   );
   await idle("warm-visible-idle");
 
-  beginPhase("reconnect");
+  phase = beginPhase("reconnect");
   const before = phase.helloCount;
   await context.setOffline(true);
   try {
@@ -228,11 +229,11 @@ try {
     }
   }
 
-  beginPhase("cron-navigation");
+  phase = beginPhase("cron-navigation");
   await page.evaluate(() => window.openclawControlUi!.navigate("cron"));
   await ready("cron");
   await idle("cron-visible-idle");
-  beginPhase("retained-navigation");
+  phase = beginPhase("retained-navigation");
   await page.evaluate(
     (route) => window.openclawControlUi!.navigate(route === "cron" ? "chat" : route),
     initialRoute,
