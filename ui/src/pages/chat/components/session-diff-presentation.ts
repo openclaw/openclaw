@@ -56,7 +56,11 @@ export type SessionDiffViewBindings = {
   canExpandGaps: (view: FileView) => boolean;
   collapseGap: (view: FileView, line: DiffLine) => void;
   registerPresentation: (path: string, presentation: DiffPresentation) => () => void;
-  registerFileElement: (path: string, element: HTMLElement) => void;
+  registerFileElement: (
+    path: string,
+    element: HTMLElement,
+    toggle: () => HTMLButtonElement | undefined,
+  ) => void;
   setTreeSearch: (element: HTMLInputElement) => void;
   setTreeSearchTrigger: (element: HTMLButtonElement) => void;
   setTreeQuery: (query: string) => void;

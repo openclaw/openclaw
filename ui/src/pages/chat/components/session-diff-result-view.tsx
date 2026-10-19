@@ -1,10 +1,11 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
-import { observeScrollState } from "../../../components/scroll-state-observer.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createResizeObserver } from "../../../lib/reactive/observers.ts";
+import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import type { SessionDiffViewBindings } from "./session-diff-presentation.ts";
 import { SessionDiffTree } from "./session-diff-tree.tsx";
 import type { DiffValue, FileView } from "./session-diff-types.ts";
@@ -41,25 +42,11 @@ export function createSessionDiffResultViews(
   } = bindings;
   const { File, MobileSummary, DesktopSummary, Summary } = renderers;
   function MobileResultBody(body: { value: DiffValue }) {
-    let viewport!: HTMLDivElement;
     const [edges, setEdges] = createSignal({ atStart: true, atEnd: true });
-    createEffect(
-      () => ({
-        active: props.active !== false,
-        value: body.value,
-        collapsed: collapsedPaths(),
-        wrap: mobileWrap(),
-        split: split(),
-        gaps: gapRevision(),
-      }),
-      ({ active }) => {
-        if (!active) {
-          return undefined;
-        }
-        const observation = observeScrollState(viewport, setEdges);
-        return () => observation.disconnect();
-      },
-    );
+    const viewportRef = createScrollStateRef((_, state) => setEdges(state), {
+      presented: () => props.active !== false,
+      content: () => [body.value, collapsedPaths(), mobileWrap(), split(), gapRevision()],
+    });
     const result = () => body.value.result;
     return (
       <div
@@ -67,12 +54,7 @@ export function createSessionDiffResultViews(
         data-at-start={edges().atStart ? "true" : "false"}
         data-at-end={edges().atEnd ? "true" : "false"}
       >
-        <div
-          class="session-diff-mobile__scroll"
-          ref={(element) => {
-            viewport = element;
-          }}
-        >
+        <div class="session-diff-mobile__scroll" ref={viewportRef}>
           <Show
             when={
               result().unavailableReason !== "not_git" &&
@@ -148,23 +130,19 @@ export function createSessionDiffResultViews(
     );
   }
   function ResultBody(body: { value: DiffValue }) {
-    let readingViewport: HTMLDivElement | undefined;
-    createEffect(
-      () =>
-        desktop() &&
-        props.active !== false &&
-        body.value.result.unavailableReason !== "not_git" &&
-        body.value.result.unavailableReason !== "unknown_session",
-      (enabled) => {
-        if (!enabled || !readingViewport) {
-          return undefined;
-        }
-        const observer = new ResizeObserver(([entry]) => {
-          setWide((entry?.contentRect.width ?? 0) >= 860);
-        });
-        observer.observe(readingViewport);
-        return () => observer.disconnect();
+    const [readingViewport, setReadingViewport] = createSignal<HTMLDivElement>();
+    createResizeObserver(
+      () => {
+        const element = readingViewport();
+        return element &&
+          desktop() &&
+          props.active !== false &&
+          body.value.result.unavailableReason !== "not_git" &&
+          body.value.result.unavailableReason !== "unknown_session"
+          ? [element]
+          : [];
       },
+      ([entry]) => setWide((entry?.contentRect.width ?? 0) >= 860),
     );
     const result = () => body.value.result;
     const footer = () =>
@@ -254,12 +232,7 @@ export function createSessionDiffResultViews(
                   />
                 </aside>
               </Show>
-              <div
-                class="session-diff__files"
-                ref={(element) => {
-                  readingViewport = element;
-                }}
-              >
+              <div class="session-diff__files" ref={setReadingViewport}>
                 {result().unavailableReason === "unknown_commit" ? (
                   <div class="session-diff__note">{t("chat.sessionDiff.unknownCommit")}</div>
                 ) : (

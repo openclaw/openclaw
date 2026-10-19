@@ -1,8 +1,8 @@
-import { createEffect, createSignal, Show, useContext } from "solid-js";
-import { observeScrollState } from "../../../components/scroll-state-observer.ts";
+import { createSignal, Show, useContext } from "solid-js";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import "../../../styles/chat/session-diff-sync-mobile.css";
 
@@ -45,18 +45,11 @@ function SyncContent(props: { data: SessionDiffSyncMobileData }) {
   const [wrap, setWrap] = createSignal(false);
   const [scroll, setScroll] = createSignal({ atStart: true, atEnd: true });
   const presented = useContext(ContentPresentation);
-  let commandElement!: HTMLPreElement;
-  createEffect(
-    () => ({ active: presented(), command: props.data.command, wrap: wrap() }),
-    ({ active }) => {
-      if (!active) {
-        return undefined;
-      }
-      // A new command can change scrollWidth without resizing the viewport.
-      const observation = observeScrollState(commandElement, setScroll, true);
-      return () => observation.disconnect();
-    },
-  );
+  const commandRef = createScrollStateRef((_, state) => setScroll(state), {
+    horizontal: true,
+    presented,
+    content: () => [props.data.command, wrap()],
+  });
   const wrapLabel = () =>
     t(wrap() ? "chat.sessionDiff.disableWrapping" : "chat.sessionDiff.enableWrapping");
 
@@ -98,9 +91,7 @@ function SyncContent(props: { data: SessionDiffSyncMobileData }) {
           data-at-end={scroll().atEnd ? "true" : "false"}
         >
           <pre
-            ref={(element) => {
-              commandElement = element;
-            }}
+            ref={commandRef}
             dir="ltr"
             tabindex={0}
             aria-label={t("chat.sessionDiff.syncCommandLabel")}

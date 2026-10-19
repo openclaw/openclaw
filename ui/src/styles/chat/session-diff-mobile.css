@@ -267,7 +267,7 @@ openclaw-session-diff:has(> .session-diff--mobile) {
   background: transparent;
   color: var(--muted);
   font: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .session-diff-mobile__commits svg {

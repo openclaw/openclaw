@@ -1,7 +1,8 @@
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import type { SessionDiffFile } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import { ReviewDisclosure } from "./session-diff-disclosure.tsx";
@@ -21,21 +22,13 @@ export function ReviewFilename(props: { name: string }) {
   });
   const [overflow, setOverflow] = createSignal(false);
   let basename: HTMLSpanElement | undefined;
-  createEffect(
+  createLayoutMeasurement(
     () => props.name,
     () => {
-      if (!basename) {
-        return undefined;
-      }
-      const element = basename;
-      const measure = () => {
-        setOverflow(element.scrollWidth > element.clientWidth);
-      };
-      const observer = new ResizeObserver(measure);
-      observer.observe(element);
-      measure();
-      return () => observer.disconnect();
+      const overflowing = Boolean(basename && basename.scrollWidth > basename.clientWidth);
+      return () => setOverflow(overflowing);
     },
+    { targets: () => (basename ? [basename] : []) },
   );
   return (
     <span class="session-diff__filename-label">
@@ -125,13 +118,11 @@ export function SessionDiffTree(props: {
   instant: boolean;
 }) {
   const nodes = createMemo(() => reviewTree(props.files, props.query));
-  const [closed, setClosed] = createSignal(new Set<string>());
-  createEffect(
-    () => props.query,
-    () => {
-      setClosed(new Set<string>());
-    },
-  );
+  // A new search opens matching directories; local toggles survive other refreshes.
+  const [closed, setClosed] = createSignal(() => {
+    void props.query;
+    return new Set<string>();
+  });
   function Rows(row: { nodes: ReviewNode[] }) {
     return (
       <ul>

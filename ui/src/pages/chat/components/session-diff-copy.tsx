@@ -4,7 +4,10 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuItem } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 
-export function desktopCopyPath(path: string): MenuItem {
+export function desktopCopyPath(
+  path: string,
+  onButtonRef: (button: HTMLButtonElement) => void,
+): MenuItem {
   const label = t("chat.sessionDiff.copyPath");
   return {
     id: "copy-path",
@@ -14,6 +17,7 @@ export function desktopCopyPath(path: string): MenuItem {
       <div class="session-diff-menu__copy-action">
         <button
           {...attributes}
+          ref={[attributes.ref, onButtonRef]}
           type="button"
           class="oc-menu-item session-menu__item"
           onClick={(event) => {

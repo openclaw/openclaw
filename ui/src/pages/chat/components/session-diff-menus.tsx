@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, onCleanup, Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { bindOverlayAnchor } from "../../../components/overlay-anchor.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
@@ -128,13 +128,11 @@ let nextMenuId = 0;
 export function SessionDiffMenu(props: SessionDiffMenuProps) {
   const id = `session-diff-menu-${++nextMenuId}`;
   const controls = createMenuControls();
-  const [jumpQuery, setJumpQuery] = createSignal("");
-  createEffect(
-    () => props.menu,
-    () => {
-      setJumpQuery("");
-    },
-  );
+  // Search belongs to one opened menu, not the next menu's target.
+  const [jumpQuery, setJumpQuery] = createSignal(() => {
+    void props.menu;
+    return "";
+  });
   const jumpSearch: MenuEntry = {
     kind: "content",
     id: "jump-search",
@@ -226,7 +224,10 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
       props.onAction(action);
     }
   }
-  function rawItems(menu: SessionDiffMenuData): MenuEntry[] {
+  function rawItems(
+    menu: SessionDiffMenuData,
+    onCopyButtonRef: (button: HTMLButtonElement) => void,
+  ): MenuEntry[] {
     if (menu.kind === "jump") {
       const query = jumpQuery().trim().toLocaleLowerCase();
       const matches = menu.paths.flatMap((path, index) => {
@@ -322,7 +323,7 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
       ];
       if (menu.desktop) {
         return [
-          desktopCopyPath(menu.path),
+          desktopCopyPath(menu.path, onCopyButtonRef),
           openActions[0]!,
           ...editActions,
           {
@@ -528,8 +529,11 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
         : []),
     ];
   }
-  function items(menu: SessionDiffMenuData): MenuEntry[] {
-    const entries = rawItems(menu);
+  function items(
+    menu: SessionDiffMenuData,
+    onCopyButtonRef: (button: HTMLButtonElement) => void,
+  ): MenuEntry[] {
+    const entries = rawItems(menu, onCopyButtonRef);
     if ("desktop" in menu && menu.desktop) {
       const icons: Record<string, IconName> = {
         "scope:all": "gitBranch",
@@ -597,10 +601,15 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
       <Show when={props.menu} keyed>
         {(menu) => {
           let handle: MenuHandle | undefined;
+          let copyPathButton: HTMLButtonElement | undefined;
           let releaseAnchor: (() => void) | undefined;
           onCleanup(() => releaseAnchor?.());
           const placement = menu.kind === "scope" ? (menu.placement ?? "top-start") : "bottom-end";
-          const entries = createMemo(() => items(menu));
+          const entries = createMemo(() =>
+            items(menu, (button) => {
+              copyPathButton = button;
+            }),
+          );
           const label = () =>
             menu.kind === "file"
               ? t("chat.sessionDiff.fileActions", { path: menu.path })
@@ -660,9 +669,7 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
                   // Keep its native outcome/status mounted through that focus-only dismissal.
                   if (
                     document.activeElement === document.body &&
-                    handle?.overlay.surface.querySelector(
-                      '.session-diff-menu__copy-action [data-copy-state="copying"]',
-                    )
+                    copyPathButton?.dataset.copyState === "copying"
                   ) {
                     event.preventDefault();
                   }
