@@ -10,11 +10,7 @@ import { createAuthProfileStoreFixture } from "../auth-profiles/credential-fixtu
 import { getApiKeyForModelCore, hasUsableCustomProviderApiKey } from "../model-auth.js";
 import { resolveImageToolFactoryAvailable } from "../openclaw-tools.media-factory-plan.js";
 import { createImageTool } from "./image-tool.js";
-import {
-  ONE_PIXEL_PNG_B64,
-  resolveImageModelConfigForTool,
-  testing,
-} from "./image-tool.test-support.js";
+import { ONE_PIXEL_PNG_B64, testing } from "./image-tool.test-support.js";
 import { hasProviderAuthForTool } from "./model-config.helpers.js";
 
 const buildProviderRegistry = buildMediaUnderstandingRegistry;
@@ -151,8 +147,17 @@ describe("image custom provider auth regression", () => {
     const cfg = createBedrockSdkConfig();
 
     expect(hasProviderAuthForTool({ provider: BEDROCK_PROVIDER, cfg })).toBe(true);
-    expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-      primary: `${BEDROCK_PROVIDER}/${BEDROCK_VISION_MODEL}`,
+    const tool = createImageTool({
+      config: cfg,
+      agentDir,
+      authProfileStore: createAuthProfileStoreFixture({}),
+    });
+    const result = await tool!.execute("bedrock-sdk", {
+      path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+    });
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: `seen:${BEDROCK_PROVIDER}/${BEDROCK_VISION_MODEL}`,
     });
     expect(
       resolveImageToolFactoryAvailable({
@@ -205,7 +210,6 @@ describe("image custom provider auth regression", () => {
     const cfg = createUserReportedConfig({ includeApiKey: false });
     expect(hasUsableCustomProviderApiKey(cfg, USER_PROVIDER)).toBe(false);
     expect(hasProviderAuthForTool({ provider: USER_PROVIDER, cfg })).toBe(false);
-    expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
 
     const tool = createImageTool({
       config: cfg,

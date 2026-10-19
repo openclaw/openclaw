@@ -204,7 +204,7 @@ export async function agentExecCommand(
   try {
     signal.throwIfAborted();
     const codeModeOverride = normalizeCodeMode(opts.codeMode);
-    const prompt = await resolveAgentExecPrompt(positionalMessage, opts.messageFile, process.stdin);
+    const prompt = await resolveAgentExecPrompt(positionalMessage, opts.messageFile);
     const cwd = await requireDirectory(opts.cwd ?? process.cwd(), "Working directory");
     const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
       await import("../infra/embedded-state-lock.js");
