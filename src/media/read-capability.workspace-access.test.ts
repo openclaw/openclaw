@@ -69,8 +69,6 @@ async function workspaceFixture() {
     reader,
     resolve,
     load,
-    text: async (source = file, access = resolve()) =>
-      (await load(source, access)).buffer.toString(),
     normalizer: () =>
       createReplyMediaPathNormalizer({ cfg, agentId: "writer", workspaceDir: workspace }),
     bind: (access = host) => {
@@ -114,12 +112,12 @@ describe("registered workspace outbound media", () => {
     expect(await fs.readFile(saved.path, "utf8")).toBe("Gateway attachment");
     expect(f.reader).not.toHaveBeenCalled();
     expect(f.host.bridge.readFile).not.toHaveBeenCalled();
-    expect(await f.text(saved.path)).toBe("Gateway attachment");
+    expect((await f.load(saved.path)).buffer.toString()).toBe("Gateway attachment");
   });
 
   it("preserves local delivery for a stopped document-only binding", async () => {
     f.bind({ bridge: f.host.bridge })();
-    expect(await f.text()).toBe("stale Gateway copy");
+    expect((await f.load()).buffer.toString()).toBe("stale Gateway copy");
     expect(f.reader).not.toHaveBeenCalled();
     expect(f.host.bridge.readFile).not.toHaveBeenCalled();
   });
@@ -210,11 +208,11 @@ describe("registered workspace outbound media", () => {
         cfg: { ...f.cfg, tools: { fs: { workspaceOnly } } },
         mediaAccess: { localRoots: [f.root] },
       });
-      expect(await f.text(generated, access)).toBe("local generated output");
-      expect(await f.text(f.file, access)).toBe("Harness output");
+      expect((await f.load(generated, access)).buffer.toString()).toBe("local generated output");
+      expect((await f.load(f.file, access)).buffer.toString()).toBe("Harness output");
       await expect(f.load(alias, access)).rejects.toMatchObject({ code: "path-not-allowed" });
       release();
-      expect(await f.text(generated, access)).toBe("local generated output");
+      expect((await f.load(generated, access)).buffer.toString()).toBe("local generated output");
       await expect(f.load(f.file, access)).rejects.toThrow("stopped or not ready");
     },
   );
@@ -235,7 +233,9 @@ describe("registered workspace outbound media", () => {
     });
     const relative = kind === "session" ? "report.txt" : "output/report.txt";
     for (const root of roots) {
-      expect(await f.text(path.join(root, relative), access)).toBe("current sandbox output");
+      expect((await f.load(path.join(root, relative), access)).buffer.toString()).toBe(
+        "current sandbox output",
+      );
     }
     expect(readFile).toHaveBeenCalledTimes(roots.length);
     expect(f.reader).not.toHaveBeenCalled();
