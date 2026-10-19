@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { closeChatDetails, openDetailsPullRequests } from "./chat-details.test-support.ts";
+import { closeChatDetails, openChatPublication } from "./chat-details.test-support.ts";
 import { exactButton as publicationAction } from "./chat-flow.test-support.ts";
 import {
   personalAccount,
@@ -122,7 +122,7 @@ export function defineGitHubPublicationAccountTests({
     });
     const discovered = await gateway.waitForRequest("sessions.github.options");
     expect(discovered.params).toEqual({ sessionKey: "agent:main:main", agentId: "main" });
-    await openDetailsPullRequests(page);
+    await openChatPublication(page);
     const publish = publicationAction(page, "Publish PR");
     await publish.waitFor();
     await expect.poll(() => publish.isEnabled()).toBe(Boolean(scenario.native));
@@ -166,7 +166,7 @@ export function defineGitHubPublicationAccountTests({
     "keeps the account menu compact and keyboard accessible at %ipx",
     async (width) => {
       const { page, gateway } = await openPublication({}, width);
-      await openDetailsPullRequests(page);
+      await openChatPublication(page);
       const arrow = page.getByRole("button", {
         name: "Publication account",
         includeHidden: true,
@@ -203,7 +203,7 @@ export function defineGitHubPublicationAccountTests({
         .poll(() => arrow.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await showPublicationBranch(gateway, "openclaw/updated-branch");
-      await openDetailsPullRequests(page);
+      await openChatPublication(page);
       await row
         .getByText("openclaw/updated-branch", { exact: true })
         .waitFor({ state: "attached" });
@@ -229,7 +229,7 @@ export function defineGitHubPublicationAccountTests({
           "false",
         );
       }
-      await openDetailsPullRequests(page);
+      await openChatPublication(page);
       expect(await personal.isVisible()).toBe(false);
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
     },
@@ -245,7 +245,7 @@ export function defineGitHubPublicationAccountTests({
         },
       },
     });
-    await openDetailsPullRequests(page);
+    await openChatPublication(page);
     const publish = publicationAction(page, "Publish as @alice-tools");
     await publish.waitFor();
     expect(await publish.isEnabled()).toBe(true);
@@ -292,7 +292,7 @@ export function defineGitHubPublicationAccountTests({
           }),
         ],
       });
-      await openDetailsPullRequests(page);
+      await openChatPublication(page);
       await selectPublicationAccount(page, "personal");
       const publish = page.getByRole("button", { name: "Publish PR" });
       await publish.waitFor();
@@ -302,7 +302,7 @@ export function defineGitHubPublicationAccountTests({
         const notice = page.locator(".chat-workspace-conflict-notice");
         await notice.getByRole("button", { name: "Dismiss workspace conflict notice" }).click();
         await notice.waitFor({ state: "hidden" });
-        await openDetailsPullRequests(page);
+        await openChatPublication(page);
         await page.getByRole("button", { name: "Publication account" }).click();
         await page.getByRole("menuitemradio", { name: "@alice-tools", exact: true }).waitFor();
       }

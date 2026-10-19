@@ -4,7 +4,7 @@ import { page, userEvent } from "vitest/browser";
 import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
 import { ChatPullRequests } from "./chat-pull-requests.tsx";
@@ -96,6 +96,7 @@ it.each(["props", "owner", "parked"])(
       flush();
     };
     draw(true);
+    await waitForSolid(() => expect(container.querySelector(".chat-pr__checks")).not.toBeNull());
     const disclosure = container.querySelector<HTMLDetailsElement>(".chat-pr__checks")!;
     const summary = disclosure.querySelector("summary")!;
     const menu = page.elementLocator(
@@ -185,7 +186,7 @@ it.each([
       ),
       { container },
     );
-    flush();
+    await waitForSolid(() => expect(container.querySelector(".chat-pr")).not.toBeNull());
     const row = container.querySelector<HTMLElement>(".chat-pr")!;
     const label = row.querySelector<HTMLElement>(".chat-pr__link")!;
     const branchLabel = row.querySelector<HTMLElement>(".chat-pr__branch")!;
@@ -299,6 +300,7 @@ it.each([
     );
     const host = container.querySelector("openclaw-chat-details-session")!;
     await host.updateComplete;
+    await waitForSolid(() => expect(container.querySelector(".chat-pr")).not.toBeNull());
     const group = container.querySelector<HTMLDetailsElement>(
       '[data-details-group="pull-requests"]',
     )!;

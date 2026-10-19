@@ -96,7 +96,7 @@ describe("pull request renderer loading", () => {
   it.each(["current", "hidden", "session changed", "dismissed", "unmounted"] as const)(
     "reloads a stale PR view only for a current owner (%s)",
     async (state) => {
-      // Mock the lazy export access so Vitest does not wrap the transport error in its factory error.
+      // mock-isolation: fail lazy export access without Vitest wrapping the transport error.
       vi.doMock("./chat-pull-requests-content.tsx", () => ({
         get ChatPullRequestsContent() {
           throw new TypeError("Failed to fetch dynamically imported module: /assets/pr.js");

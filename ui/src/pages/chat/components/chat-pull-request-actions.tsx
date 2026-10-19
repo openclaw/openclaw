@@ -1,7 +1,12 @@
 import { createMemo, createSignal, createUniqueId, Show, useContext } from "solid-js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
+import {
+  createMenuControls,
+  Menu,
+  type MenuEntry,
+  type MenuHandle,
+} from "../../../components/solid/menu.tsx";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -28,6 +33,7 @@ export function PullRequestActions(props: {
   owner: ChatPullRequestsProps;
 }) {
   const id = createUniqueId();
+  const controls = createMenuControls();
   const parentPresented = useContext(ContentPresentation);
   let menu: MenuHandle | undefined;
   const [copying, setCopying] = createSignal(false);
@@ -148,6 +154,7 @@ export function PullRequestActions(props: {
         prop:presented={presented() && menuOpen() && page() === "checks"}
         prop:inline={true}
         prop:menuControls={true}
+        prop:controls={controls}
       />
     </div>
   );
@@ -166,6 +173,7 @@ export function PullRequestActions(props: {
         prop:presented={presented() && menuOpen() && page() === "monitoring"}
         prop:inline={true}
         prop:menuPresentation={true}
+        prop:controls={controls}
       />
     </div>
   );
@@ -272,7 +280,13 @@ export function PullRequestActions(props: {
                     {t(STATE_LABEL_KEYS[props.pullRequest.state])}
                   </span>
                 </div>
-                <StatusWarning status={props.owner.status} text />
+                <Show
+                  when={
+                    props.pullRequest.state !== "merged" || props.owner.status === "unavailable"
+                  }
+                >
+                  <StatusWarning status={props.owner.status} text />
+                </Show>
               </div>
             ),
           },
@@ -390,6 +404,7 @@ export function PullRequestActions(props: {
   );
   return (
     <Menu
+      controls={controls}
       id={"chat-pr-actions-" + id}
       class="chat-pr__actions"
       label={props.label}

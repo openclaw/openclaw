@@ -9,7 +9,7 @@ import {
   controlUiSessionUrl,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { openDetailsPullRequests } from "./chat-details.test-support.ts";
+import { openChatPublication } from "./chat-details.test-support.ts";
 import {
   defineGitHubPublicationAccountTests,
   installPublicationGateway,
@@ -99,7 +99,7 @@ async function openPublicationPage(
       : `${suite.server.baseUrl}chat`,
   );
   await showPublicationBranch(gateway, branch, options.sessionKey);
-  await openDetailsPullRequests(page);
+  await openChatPublication(page);
   return { page, gateway };
 }
 
@@ -164,7 +164,7 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:research:main"));
         await showPublicationBranch(gateway, confirmation.branch);
-        await openDetailsPullRequests(page);
+        await openChatPublication(page);
         const optionRequest = await gateway.waitForRequest("sessions.github.options");
         expect(optionRequest.params).toEqual(target);
         await selectPublicationAccount(page, "personal");
@@ -238,10 +238,10 @@ suite.define(() => {
     await expect.poll(() => panes.count()).toBe(2);
     const first = panes.nth(0);
     const second = panes.nth(1);
-    await openDetailsPullRequests(second);
+    await openChatPublication(second);
 
     await publicationAction(second, "Publish PR").waitFor();
-    await openDetailsPullRequests(first);
+    await openChatPublication(first);
     await publicationAction(first, "Publish PR").waitFor();
     // Only the focused pane's Details is open. Its sibling must still project the
     // admitted publication state before another user interaction reconciles it.
@@ -265,7 +265,7 @@ suite.define(() => {
     // Exercise the normal pointer/focus path separately: it may reconcile a
     // stale pane, but it must never create another publication identity.
     await second.click({ position: { x: 20, y: 80 } });
-    await openDetailsPullRequests(second);
+    await openChatPublication(second);
     const retry = publicationAction(second, "Retry publication");
     await retry.waitFor();
     await gateway.deferNext("sessions.github.publish");
@@ -320,7 +320,7 @@ suite.define(() => {
     await sessionLink(sessionA).click();
     await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionA));
     await showPublicationBranch(gateway, undefined, sessionA);
-    await openDetailsPullRequests(page);
+    await openChatPublication(page);
     const publication = activePane.locator('.chat-pr[data-state="branch"]');
     await publication.waitFor();
     await expect
@@ -561,7 +561,7 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
       await page.reload();
       await showPublicationBranch(gateway);
-      await openDetailsPullRequests(page);
+      await openChatPublication(page);
       const details = page.locator(".chat-pr__publication-outcome");
       await expectText(details, "Publish as @alice-tools");
       await expectText(details, "team/demo → main");
@@ -676,7 +676,7 @@ suite.define(() => {
       after: previousSubscriptions,
     });
     await showPublicationBranch(gateway);
-    await openDetailsPullRequests(page);
+    await openChatPublication(page);
     await expect.poll(() => publicationAction(page, "Publication account").count()).toBe(0);
     await gateway.resolveDeferred("sessions.github.publish", {
       ...published("stale", "team/demo", "feature/old"),

@@ -10,9 +10,9 @@ it.each([
     load: () => import("../pages/chat/components/chat-github-publication.tsx"),
   },
   {
-    surface: "pull requests",
+    surface: "pull request content",
     settings: false,
-    load: () => import("../pages/chat/components/chat-pull-requests.tsx"),
+    load: () => import("../pages/chat/components/chat-pull-requests-content.tsx"),
   },
   {
     surface: "connections",

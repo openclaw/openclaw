@@ -5,6 +5,7 @@ import type {
   ControlUiSessionPullRequestCheckStep,
 } from "../../../../../src/gateway/control-ui-contract.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import type { MenuControls } from "../../../components/solid/menu.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { registerChatCiEnglish } from "../../../i18n/locales/en-chat-ci.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
@@ -307,10 +308,13 @@ function createCiDetails(host: ChatCiDetailsElement) {
 type ChatCiDetailsProps = ChatCiDisclosureProps & {
   /** Opt summaries into the containing Menu's native control navigation. */
   menuControls?: boolean;
+  controls?: MenuControls;
 };
 
 export type ChatCiDetailsElement = SolidBridgeElement<ChatCiDetailsProps>;
 function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElement) {
+  const retryRef = props.controls?.ref();
+  const skippedRef = props.controls?.ref();
   const model = createCiDetails(host);
   const state = model.state;
   const retryWait = () => Math.max(0, state.retryAt - Date.now());
@@ -328,6 +332,8 @@ function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElem
     result()?.status === "unavailable" ||
     result()?.error;
   const job = (check: () => ControlUiSessionPullRequestCheck) => {
+    const summaryRef = props.controls?.ref();
+    const linkRef = props.controls?.ref();
     const jobState = (): CheckState =>
       check().state === "running" && check().status !== "in_progress" ? "queued" : check().state;
     const url = () =>
@@ -348,6 +354,7 @@ function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElem
         }}
       >
         <summary
+          ref={(element) => summaryRef?.(element)}
           class="chat-ci__job-summary"
           data-form-control={props.menuControls ? "" : undefined}
         >
@@ -390,7 +397,13 @@ function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElem
           </Show>
           <Show when={url()}>
             {(href) => (
-              <a class="chat-ci__job-link" href={href()} target="_blank" rel="noopener noreferrer">
+              <a
+                ref={(element) => linkRef?.(element)}
+                class="chat-ci__job-link"
+                href={href()}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
                 {t(
                   check().source === "actions"
                     ? "chat.pullRequests.openJob"
@@ -431,6 +444,7 @@ function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElem
                   : undefined}
               </span>
               <button
+                ref={(element) => retryRef?.(element)}
                 class="chat-ci__retry"
                 type="button"
                 disabled={state.loading || retryWait() > 0}
@@ -454,7 +468,10 @@ function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElem
         </For>
         <Show when={skipped().length}>
           <details class="chat-ci__skipped">
-            <summary data-form-control={props.menuControls ? "" : undefined}>
+            <summary
+              ref={(element) => skippedRef?.(element)}
+              data-form-control={props.menuControls ? "" : undefined}
+            >
               <CheckStatus state="skipped" />
               <span>
                 {t("chat.pullRequests.checksSkippedCount", { count: String(skipped().length) })}
@@ -492,5 +509,6 @@ defineSolidBridge<ChatCiDetailsProps>("openclaw-chat-ci-details", ChatCiDetailsC
     presented: { default: true, type: Boolean },
     inline: { default: false, attribute: false },
     menuControls: { default: false, attribute: false },
+    controls: { default: undefined, attribute: false },
   },
 });

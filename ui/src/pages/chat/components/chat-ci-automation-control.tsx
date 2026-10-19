@@ -1,6 +1,7 @@
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import { createMemo, createStore } from "solid-js";
 import type { CronStatus } from "../../../api/types.ts";
+import type { MenuControls } from "../../../components/solid/menu.tsx";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
@@ -21,7 +22,11 @@ import { ChatCiAutomationView, type ChatCiAutomationProps } from "./chat-ci-auto
 import { createCiDisclosure, type ChatCiDisclosureProps } from "./chat-ci-disclosure.ts";
 
 /** Cron owns durable settings and execution; this element retains only the visible projection. */
-type Props = ChatCiDisclosureProps & { sessionId: string; menuPresentation?: boolean };
+type Props = ChatCiDisclosureProps & {
+  sessionId: string;
+  menuPresentation?: boolean;
+  controls?: MenuControls;
+};
 const inputHandlers = new WeakMap<HTMLElement, (key: keyof Props) => void>();
 
 type AutomationState = {
@@ -385,7 +390,13 @@ export type ChatCiAutomationElement = SolidBridgeElement<Props>;
 
 function ChatCiAutomationContent(props: Props, host: SolidBridgeElement<Props>) {
   const read = createCiAutomation(props, host);
-  return <ChatCiAutomationView {...read()} menuPresentation={props.menuPresentation} />;
+  return (
+    <ChatCiAutomationView
+      {...read()}
+      menuPresentation={props.menuPresentation}
+      controls={props.controls}
+    />
+  );
 }
 
 defineSolidBridge<Props>("openclaw-chat-ci-automation", ChatCiAutomationContent, {
@@ -398,5 +409,6 @@ defineSolidBridge<Props>("openclaw-chat-ci-automation", ChatCiAutomationContent,
     presented: { default: true, type: Boolean },
     inline: { default: false, attribute: false },
     menuPresentation: { default: false, attribute: false },
+    controls: { default: undefined, attribute: false },
   },
 });
