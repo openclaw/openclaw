@@ -130,16 +130,11 @@ it.each([
     return result;
   });
   const service = resolveGatewayService();
+  const command = service.readCommand(process.env, { requireEffective: true });
   if (scenario.platform === "linux") {
-    await expect
-      .soft(service.readCommand(process.env, { requireEffective: true }))
-      .rejects.toMatchObject({
-        reason: scenario.reason,
-      });
+    await expect.soft(command).rejects.toMatchObject({ reason: scenario.reason });
   } else {
-    await expect(
-      service.readCommand(process.env, { requireEffective: true }),
-    ).resolves.toMatchObject({
+    await expect(command).resolves.toMatchObject({
       programArguments: ["/usr/bin/node", "/opt/openclaw/openclaw.mjs", "gateway"],
     });
   }

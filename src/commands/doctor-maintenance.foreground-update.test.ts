@@ -92,6 +92,8 @@ it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
     let authorized = true;
     const waiting = createDeferredCore();
     let settled = false;
+    let maintenance: Awaited<ReturnType<typeof beginDoctorMaintenance>>;
+    let failure: unknown;
     const result = beginDoctorMaintenance({
       options: { repair: true, nonInteractive: true },
       root: null,
@@ -102,17 +104,16 @@ it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
         }
       },
     }).then(
-      (maintenance) => {
+      (value) => {
         settled = true;
-        return { maintenance };
+        maintenance = value;
       },
       (error: unknown) => {
         settled = true;
         waiting.resolve();
-        return { error };
+        failure = error;
       },
     );
-    let maintenance: Awaited<ReturnType<typeof beginDoctorMaintenance>>;
     try {
       await waiting.promise;
       expect(settled).toBe(false);
@@ -147,22 +148,20 @@ it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
         monotonicMs = GATEWAY_SHUTDOWN_RESERVE_MS;
       }
       await vi.advanceTimersToNextTimerAsync();
-      const completed = await result;
-      maintenance = "maintenance" in completed ? completed.maintenance : undefined;
+      await result;
       if (released) {
         expect(maintenance).toBeDefined();
         await maintenance?.finish({});
       } else {
-        expect(completed).toMatchObject({
-          error: { message: expect.stringContaining("update owner was revoked") },
+        expect(failure).toMatchObject({
+          message: expect.stringContaining("update owner was revoked"),
         });
       }
     } finally {
       predecessor?.release();
       if (!settled) {
         await vi.runOnlyPendingTimersAsync();
-        const completed = await result;
-        maintenance = "maintenance" in completed ? completed.maintenance : undefined;
+        await result;
       }
       await maintenance?.release();
       if (outcome === "rowless-released") {

@@ -165,18 +165,16 @@ function expectRegisteredContent(env: NodeJS.ProcessEnv) {
   const manifests = listSessionSqliteMigrationManifestPaths(env);
   expect(manifests).toHaveLength(1);
   const manifest = readSessionSqliteMigrationManifest(manifests[0]!)!;
-  for (const target of manifest.targets) {
-    for (const move of target.completedMoves) {
-      const bytes = fs.readFileSync(move.archivePath);
-      const stat = fs.lstatSync(move.archivePath, { bigint: true });
-      expect(move.artifact?.identity).toEqual({
-        dev: String(stat.dev),
-        ino: String(stat.ino),
-        mtimeNs: String(stat.mtimeNs),
-        size: bytes.length,
-        sha256: createHash("sha256").update(bytes).digest("hex"),
-      });
-    }
+  for (const move of manifest.targets.flatMap((target) => target.completedMoves)) {
+    const bytes = fs.readFileSync(move.archivePath);
+    const stat = fs.lstatSync(move.archivePath, { bigint: true });
+    expect(move.artifact?.identity).toEqual({
+      dev: String(stat.dev),
+      ino: String(stat.ino),
+      mtimeNs: String(stat.mtimeNs),
+      size: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    });
   }
 }
 
