@@ -22,8 +22,7 @@ import { logWarn } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
-import type { ManagedRun } from "../process/supervisor/index.js";
-import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput, TerminationReason } from "../process/supervisor/types.js";
 import type {
   SecretEgressProcessGrant,
@@ -49,6 +48,7 @@ import {
   addSession,
   appendOutput,
   isProcessSessionIdTaken,
+  markCancellationRequested,
   resolveProcessCleanupMs,
   waitForExecSession,
 } from "./bash-process-registry.js";
@@ -700,7 +700,7 @@ export async function runExecProcess({
   let managedRun: ManagedRun | null = null;
   const onRequestCancelled = () => {
     session.requestCancelled = true;
-    session.cancellationRequested = true;
+    markCancellationRequested(session);
     onUpdate = undefined;
     if (managedRun) {
       managedRun.cancel("manual-cancel");

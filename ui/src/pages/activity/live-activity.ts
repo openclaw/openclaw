@@ -1,5 +1,6 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { notifyGatewayObservers } from "../../app/gateway-observers.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -19,6 +20,7 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
   let snapshot: LiveActivitySnapshot = { entries, revision: 0, error: null };
   const errors = new Map<string, string>();
   let eventLogRevision = gateway.eventLogRevision;
+  let presentationScope = gatewayPresentationScope(gateway);
   let disposed = false;
   let rows: readonly GatewaySessionRow[] = [];
   let client = gateway.snapshot.client;
@@ -100,10 +102,12 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
 
   const retireChangedContext = () => {
     const revision = gateway.eventLogRevision;
-    if (revision === eventLogRevision) {
+    const nextPresentationScope = gatewayPresentationScope(gateway);
+    if (revision === eventLogRevision && nextPresentationScope === presentationScope) {
       return;
     }
     eventLogRevision = revision;
+    presentationScope = nextPresentationScope;
     rows = [];
     syncSubscriptions();
     publish([], true);
@@ -122,10 +126,12 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
     }
     const eventClient = gateway.snapshot.client;
     const revision = gateway.eventLogRevision;
+    const eventPresentationScope = gatewayPresentationScope(gateway);
     retireChangedContext();
     if (
       disposed ||
       eventClient !== gateway.snapshot.client ||
+      eventPresentationScope !== gatewayPresentationScope(gateway) ||
       revision !== gateway.eventLogRevision
     ) {
       return;

@@ -3,8 +3,6 @@ import {
   dropMemoryChunkFtsTriggers,
   dropMemoryPathFtsTriggers,
   ensureMemoryChunkFtsTriggers,
-  ensureMemoryChunkProvenance,
-  ensureMemoryRecallMetadataSchema,
   ensureMemoryPathFtsTriggers,
   MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
@@ -90,9 +88,6 @@ type MemoryDatabasePublication = {
 
 /** The admitted connection owns ATTACH, atomic replacement, COMMIT and DETACH. */
 export function publishMemoryDatabaseTables(params: MemoryDatabasePublication): void {
-  ensureMemoryRecallMetadataSchema(params.targetDb);
-  // Existing pre-provenance databases need this before the publication writes it.
-  ensureMemoryChunkProvenance(params.targetDb);
   // Admission precedes ATTACH; no shadow attachment or transaction crosses an await.
   params.targetDb.prepare(`ATTACH DATABASE ? AS ${MEMORY_REINDEX_SCHEMA}`).run(params.sourcePath);
   try {

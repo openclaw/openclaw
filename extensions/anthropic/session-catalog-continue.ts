@@ -42,7 +42,10 @@ export async function continueClaudeSession(
   threadId: string,
   allowProcessHomeFallback?: boolean,
 ): Promise<{ sessionKey: string }> {
-  const scanOptions = gatewayClaudeScanOptions(allowProcessHomeFallback);
+  const scanOptions = {
+    ...gatewayClaudeScanOptions(allowProcessHomeFallback),
+    sessionId: threadId,
+  };
   const sourceKey = adoptedSourceKey(hostId, threadId);
   const operationKey = `${agentId}\0${sourceKey}`;
   const linkSession = async (sessionKey: string, history?: ClaudeTranscriptItem[]) =>
@@ -51,7 +54,8 @@ export async function continueClaudeSession(
       hostId,
       threadId,
       ...(history ? { history } : {}),
-      listLocalSessions: () => listClaudeSessions(resolveClaudeCatalogHomeDir(), scanOptions),
+      listLocalSessions: async () =>
+        (await listClaudeSessions(resolveClaudeCatalogHomeDir(), scanOptions)).records,
       readRemote: async () =>
         (
           await readClaudeSessionTranscript({
@@ -75,9 +79,9 @@ export async function continueClaudeSession(
       let nodeId: string | undefined;
       let record: ClaudeSessionCatalogSession | undefined;
       if (hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
-        record = (await listClaudeSessions(resolveClaudeCatalogHomeDir(), scanOptions)).find(
-          (candidate) => candidate.threadId === threadId,
-        );
+        record = (
+          await listClaudeSessions(resolveClaudeCatalogHomeDir(), scanOptions)
+        ).records.find((candidate) => candidate.threadId === threadId);
         if (!record || !isResumableClaudeSource(record.source)) {
           throw new ClaudeCatalogParamsError("only local Claude Code sessions can be continued");
         }

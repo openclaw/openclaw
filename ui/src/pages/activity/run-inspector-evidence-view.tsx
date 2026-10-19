@@ -146,11 +146,17 @@ export function renderRunInspectorPagination(
   kind: "candidates" | "decisions",
   status: "loading" | "error" | undefined,
   onLoad: () => void,
+  disabled = false,
 ) {
   return (
     <div class="run-inspector__pagination">
       <span>{t(`activity.runInspector.${kind}.more`)}</span>
-      <button type="button" class="btn" disabled={status === "loading"} onClick={onLoad}>
+      <button
+        type="button"
+        class="btn"
+        disabled={disabled || status === "loading"}
+        onClick={onLoad}
+      >
         {t(`activity.runInspector.${kind}.${status === "loading" ? "loadingMore" : "loadMore"}`)}
       </button>
       {status === "error" ? (
@@ -263,6 +269,7 @@ export function renderRunInspectorDecisions(
   selectorId: string | null,
   basePath: string,
   onLoadMoreDecisions: () => void,
+  disabled = false,
 ) {
   const result = state.result;
   const selectedReceipt = selectorId
@@ -319,7 +326,12 @@ export function renderRunInspectorDecisions(
         </ol>
       ) : undefined}
       {result.nextDecisionCursor ? (
-        renderRunInspectorPagination("decisions", state.decisionPageStatus, onLoadMoreDecisions)
+        renderRunInspectorPagination(
+          "decisions",
+          state.decisionPageStatus,
+          onLoadMoreDecisions,
+          disabled,
+        )
       ) : (
         <div class="run-inspector__pagination" role="note">
           {t("activity.runInspector.decisions.bounded")}

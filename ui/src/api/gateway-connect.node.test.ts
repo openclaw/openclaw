@@ -199,6 +199,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS,
       GATEWAY_CLIENT_CAPS.PRESENCE_DELTAS,
       GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS,
+      GATEWAY_CLIENT_CAPS.SESSION_EVENT_FIELD_REFS,
       GATEWAY_CLIENT_CAPS.ROSTER_MESSAGE_BODIES_OPTIONAL,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
@@ -223,6 +224,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     });
     const { connectFrame } = await startConnect(client);
     expect(connectFrame.params.caps).not.toContain(GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS);
+    expect(connectFrame.params.caps).not.toContain(GATEWAY_CLIENT_CAPS.SESSION_EVENT_FIELD_REFS);
     expect(connectFrame.params.caps).not.toContain(
       GATEWAY_CLIENT_CAPS.ROSTER_MESSAGE_BODIES_OPTIONAL,
     );

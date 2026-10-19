@@ -1,6 +1,6 @@
 import { getSessionRowProjection } from "../../gateway/session-row-projection-access.js";
 import { captureSessionPortalTarget } from "../../gateway/worker-environments/session-portal-target.js";
-import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
+import { resolveGatewayOwnerOnlyToolDenylist } from "../../security/dangerous-tools.js";
 import {
   bindActiveCronCreatorAuthorityResolver,
   bindCronManagementGrant,
@@ -38,15 +38,12 @@ export function prepareSessionPortalToolAccess(input: {
       : undefined;
   // Sessions owns its assignment/control action gates; portal and automation
   // remain scoped exceptions. Other control-plane tools require owner authority.
-  const ownerOnlyCoreToolDenylist =
-    input.senderIsOwner === false
-      ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
-          (name) =>
-            (name !== "portal" || !sessionPortalTarget) &&
-            name !== "sessions" &&
-            (name !== AUTOMATIONS_TOOL_NAME || !hasAutomationGrant),
-        )
-      : [];
+  const ownerOnlyCoreToolDenylist = resolveGatewayOwnerOnlyToolDenylist(input.senderIsOwner).filter(
+    (name) =>
+      (name !== "portal" || !sessionPortalTarget) &&
+      name !== "sessions" &&
+      (name !== AUTOMATIONS_TOOL_NAME || !hasAutomationGrant),
+  );
   return {
     sessionPortalTarget,
     ownerOnlyCoreToolDenylist,

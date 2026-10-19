@@ -448,41 +448,46 @@ it("passes a replaced pinned engine to a new presentation", async () => {
   expect(first.context.signal.aborted).toBe(true);
 });
 
-it.each([["main"], ["research", "main"]])(
-  "keeps newer sidebar intent when a pending Memory link mounts (%j)",
-  async (...choices: string[]) => {
-    const { element, settingsAgentSelection, settingsViews } = createPage(
-      {
-        agents: [{ id: "main" }, { id: "research" }],
-        routeData: memoryRoute("/settings/memory?agent=research"),
-      },
-      false,
-    );
-    for (const agentId of choices) {
-      settingsAgentSelection.set(agentId);
-    }
-    mountMemoryPage(element);
-    await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.agentId).toBe("main"));
-    expect(settingsAgentSelection.state.selectedId).toBe("main");
-    expect(settingsViews.some((view) => view.snapshot.agentId === "research")).toBe(false);
-  },
-);
-
-it("honors a fresh explicit Memory navigation after the sidebar changed the same URL's agent", async () => {
-  const { element, settingsAgentSelection } = createPage({
-    agents: [{ id: "main" }, { id: "research" }],
-    routeData: memoryRoute("/settings/memory?agent=research"),
+it("publishes a completed catalog to the mounted Settings presentation", async () => {
+  const catalog = deferred<{ plugins: PluginCatalogItem[] }>();
+  const { settingsViews } = createPage({
+    configObject: { plugins: { slots: { memory: "synthetic-memory" } } },
+    routeData: memoryTabRoute("overview"),
+    listCatalog: () => catalog.promise,
   });
-  await waitForSolid(() => expect(settingsAgentSelection.state.selectedId).toBe("research"));
-  settingsAgentSelection.set("main");
-  element.routeData = {
-    ...memoryRoute("/settings/memory?agent=research"),
-    agentSelectionIntent: {
-      owner: settingsAgentSelection,
-      revision: settingsAgentSelection.intentRevision,
-    },
-  };
-  await waitForSolid(() => expect(settingsAgentSelection.state.selectedId).toBe("research"));
+  try {
+    await waitForSolid(() =>
+      expect(settingsViews.at(-1)?.snapshot.engine.availability).toBe("loading"),
+    );
+    const view = settingsViews.at(-1)!;
+    catalog.resolve({ plugins: [] });
+    await waitForSolid(() => expect(view.snapshot.engine.availability).toBe("missing"));
+    expect(settingsViews.at(-1)).toBe(view);
+  } finally {
+    catalog.resolve({ plugins: [] });
+  }
+});
+
+it("retires callbacks and pending RPCs when Config admits a same-agent Memory route", async () => {
+  const reply = deferred<unknown>();
+  const { element, settingsViews } = createPage({
+    routeData: memoryRoute("/settings/memory?agent=main&filter=first"),
+    settingsRequest: () => reply.promise,
+  });
+  await waitForSolid(() => expect(settingsViews.length).toBeGreaterThan(0));
+  const first = settingsViews.at(-1)!;
+  const pending = first.context.request("settings.test");
+  element.routeData = memoryRoute("/settings/memory?agent=main&filter=second");
+  // Raw route input is not admitted until Config's existing route effect applies it.
+  expect(first.context.signal.aborted).toBe(false);
+  flush();
+  expect(first.context.signal.aborted).toBe(true);
+  expect(() => first.context.navigate("settings")).toThrow();
+  reply.resolve("obsolete");
+  await expect(pending).rejects.toThrow();
+  await waitForSolid(() => expect(settingsViews.at(-1)?.context).not.toBe(first.context));
+  expect(settingsViews.at(-1)?.snapshot.agentId).toBe("main");
+  expect(settingsViews.at(-1)?.snapshot.routeIntent).toContain("filter=second");
 });
 
 it.each([

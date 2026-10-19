@@ -42,7 +42,7 @@ function terminal(id: string, resolvedAtMs: number): ApprovalHistoryResult["item
 
 function createPage(
   request: GatewayBrowserClient["request"],
-  auth?: { role: string; scopes?: string[] },
+  auth?: { role: string; scopes?: string[]; recoveryScope?: string },
 ): {
   page: TestApprovalsPage;
   emitGatewayEvent: (event: string, payload: unknown) => void;
@@ -118,6 +118,63 @@ function standingGrant(name: string): ExecApprovalStandingGrant {
 }
 
 describe("ApprovalsPage", () => {
+  it("keeps history and grants through a blip without allowing offline actions", async () => {
+    const refreshedHistory = createDeferred<ApprovalHistoryResult>();
+    let historyReads = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "exec.approval.grants.list") {
+        return Promise.resolve({ grants: [standingGrant("Retained automation")] });
+      }
+      historyReads += 1;
+      return historyReads === 1
+        ? Promise.resolve({ items: [terminal("retained", 2_000)], nextCursor: "next" })
+        : refreshedHistory.promise;
+    });
+    const { page, updateGateway } = createPage(request as GatewayBrowserClient["request"], {
+      role: "operator",
+      scopes: ["operator.approvals"],
+    });
+    await waitForSolid(() =>
+      expect(page.querySelector(".standing-grants-table")?.textContent).toContain(
+        "Retained automation",
+      ),
+    );
+
+    updateGateway({ phase: "reconnecting", hello: null });
+    flush();
+    expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo retained");
+    expect(page.querySelector(".standing-grants-table")?.textContent).toContain(
+      "Retained automation",
+    );
+    expect(page.querySelector<HTMLButtonElement>(".standing-grants-table button")?.disabled).toBe(
+      true,
+    );
+    expect(page.querySelector<HTMLButtonElement>(".data-table-pagination button")?.disabled).toBe(
+      true,
+    );
+
+    updateGateway({
+      phase: "connected",
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    flush();
+    expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo retained");
+    refreshedHistory.resolve({ items: [terminal("fresh", 3_000)] });
+    await waitForSolid(() =>
+      expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo fresh"),
+    );
+
+    updateGateway({
+      client: { request } as unknown as GatewayBrowserClient,
+      phase: "reconnecting",
+    });
+    flush();
+    expect(page.textContent).not.toContain("echo fresh");
+    expect(page.textContent).not.toContain("Retained automation");
+  });
+
   it("does not claim an empty history when the load failed", async () => {
     const request = vi.fn().mockRejectedValueOnce(new Error("boom"));
     const { page } = createPage(stubGrants(request));
@@ -240,7 +297,7 @@ describe("ApprovalsPage", () => {
     expect(page.querySelector(".approval-history-table")?.textContent).not.toContain("echo stale");
   });
 
-  it.each(["client", "source"] as const)(
+  it.each(["client", "source", "account", "recovery scope"] as const)(
     "clears standing grants while a replacement %s loads its ledger",
     async (replacement) => {
       const nextGrants = createDeferred<ExecApprovalGrantsListResult>();
@@ -255,7 +312,9 @@ describe("ApprovalsPage", () => {
       });
       const { page, updateGateway, replaceGatewaySource } = createPage(
         request as GatewayBrowserClient["request"],
+        { role: "operator", recoveryScope: "scope-first" },
       );
+      updateGateway({ selfUser: { id: "first" } });
       await waitForSolid(() =>
         expect(page.querySelector(".standing-grants-table")?.textContent).toContain(
           "Old Gateway automation",
@@ -268,6 +327,14 @@ describe("ApprovalsPage", () => {
       replaced = true;
       if (replacement === "source") {
         replaceGatewaySource();
+      } else if (replacement === "account") {
+        updateGateway({ selfUser: { id: "second" } });
+      } else if (replacement === "recovery scope") {
+        updateGateway({
+          hello: {
+            auth: { role: "operator", recoveryScope: "scope-second" },
+          } as ApplicationGatewaySnapshot["hello"],
+        });
       } else {
         updateGateway({ client: { request } as unknown as GatewayBrowserClient });
       }

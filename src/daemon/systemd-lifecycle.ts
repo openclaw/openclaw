@@ -1,4 +1,3 @@
-/** systemd start, stop, restart, and obsolete-unit removal. */
 import fs from "node:fs/promises";
 import { hasErrnoCode } from "../infra/errno.js";
 import { LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES } from "./constants.js";

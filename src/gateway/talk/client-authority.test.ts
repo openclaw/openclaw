@@ -145,6 +145,7 @@ it.each([true, false])(
                 operation,
               );
               const runTarget = beforePublication ? queuedTarget : captureTarget();
+              expect(runTarget?.isCurrent(params.sessionId)).toBe(true);
               const steer = (source: "reply" | "attempt" | undefined, current = authority) =>
                 controlRealtimeVoiceAgentRun({
                   sessionKey: sessionTarget.canonicalKey,

@@ -20,7 +20,10 @@ function setup(identity?: () => AgentIdentityResult) {
   const { gateway, current } = createGatewayStoreTestStore();
   onTestFinished(() => gateway.stop());
   gateway.start();
-  current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+  current().opts.onHello?.({
+    ...GATEWAY_STORE_TEST_HELLO,
+    auth: { role: "operator", scopes: ["operator.sessions.read"] },
+  });
   const requests: Array<{
     params: unknown;
     resolve: (history: ChatHistoryResponse) => void;
@@ -94,6 +97,11 @@ it("refreshes visible message avatars from identity and stops hydrating while hi
 
   avatar = "data:image/png;base64,bmV3";
   element.agentIdentity!.invalidate(["main"]);
+  await avatarLoaded();
+
+  const replacement = createAgentIdentityCapability(element.gateway!);
+  element.agentIdentity = replacement;
+  await vi.waitFor(() => expect(replacement.get("main")?.avatar).toBe(avatar));
   await avatarLoaded();
 
   element.presented = false;

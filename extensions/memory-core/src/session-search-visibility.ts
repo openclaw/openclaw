@@ -26,6 +26,7 @@ import {
   normalizeOptionalLowercaseString as normalizeAgentIdForCompare,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isActiveMemoryRecallSessionKey } from "./active-memory-recall-session.js";
 import {
   readSessionArchiveReasonFromHitPath,
   type SessionResetRecallCutoff,
@@ -69,7 +70,7 @@ function isPrivateConversation(params: {
   );
   if (
     chatTypes.some((chatType) => chatType === "group" || chatType === "channel") ||
-    /:active-memory:[a-f0-9]{12}$/i.test(key)
+    isActiveMemoryRecallSessionKey(key)
   ) {
     return false;
   }

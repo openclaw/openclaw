@@ -117,15 +117,18 @@ describe.runIf("__vitest_browser__" in globalThis)("widget action placement", ()
       let rerendered = false;
       rerenderObserver = new ResizeObserver(() => {
         rerenderObserver?.disconnect();
-        container!.style.width = "480px";
         draw();
         rerendered = true;
       });
       rerenderObserver.observe(preview);
-      await vi.waitFor(() => {
-        expect(rerendered).toBe(true);
-        expect(actions.getBoundingClientRect().left).toBe(preview.getBoundingClientRect().right);
-      });
+      await vi.waitFor(() => expect(rerendered).toBe(true));
+      expect(errors).toEqual([]);
+
+      // Resize the observed ancestor after delivery; doing it in the callback creates a loop.
+      container.style.width = "480px";
+      await vi.waitFor(() =>
+        expect(actions.getBoundingClientRect().left).toBe(preview.getBoundingClientRect().right),
+      );
       expect(errors).toEqual([]);
 
       container.style.width = "420px";

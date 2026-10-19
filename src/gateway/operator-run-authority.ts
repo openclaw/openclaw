@@ -14,6 +14,7 @@ import { composeSessionSourceAssertion } from "../config/sessions/session-source
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
@@ -57,6 +58,18 @@ type OperatorSource = {
 
 // Comparison records live only while captured work retains their original authority.
 const operatorSources = new WeakMap<GatewayClient, Set<OperatorSource>>();
+const continuationAuthorities = resolveGlobalSingleton(
+  Symbol.for("openclaw.gatewayOperatorContinuationAuthorities"),
+  () => new WeakMap<AdmittedRunOperatorAuthority, AdmittedRunOperatorAuthority>(),
+);
+
+/** Accepted continuations retain policy custody independently of a recovered work claim. */
+export function bindGatewayOperatorContinuationAuthority(
+  work: AdmittedRunOperatorAuthority,
+  source: AdmittedRunOperatorAuthority,
+): void {
+  continuationAuthorities.set(work, source);
+}
 
 function getOperatorSources(client: GatewayClient): Set<OperatorSource> {
   let sources = operatorSources.get(client);
@@ -245,6 +258,8 @@ export async function captureGatewayOperatorRunAuthority(input: {
     "getRuntimeConfig" | "getCommittedRuntimeConfig" | "resolveGatewayContext"
   >;
   hasCurrentClientAuthority?: () => boolean;
+  /** Only an accepting continuation owner may outlive the original recovery claim. */
+  independentContinuation?: true;
   sourceAuthority?: Readonly<{
     assertCurrent: () => void;
     signal?: AbortSignal;
@@ -259,26 +274,32 @@ export async function captureGatewayOperatorRunAuthority(input: {
     assertAdmittedRunOperatorAuthority(inherited);
     inherited.assertCurrent();
     const scopes = intersectOperatorScopes(inherited.scopes, params.client?.connect.scopes ?? []);
+    const continuation = continuationAuthorities.get(inherited);
+    const source = params.independentContinuation ? (continuation ?? inherited) : inherited;
     const authority = roleScopesAllow({
       role: "operator",
-      requestedScopes: inherited.scopes,
+      requestedScopes: source.scopes,
       allowedScopes: scopes,
     })
-      ? inherited
+      ? source
       : createAdmittedRunOperatorAuthority({
-          ...inherited,
+          ...source,
           scopes,
           get modelPolicy() {
-            return inherited.modelPolicy;
+            return source.modelPolicy;
           },
         });
-    return { authority, release: inherited.retain?.() ?? (() => {}) };
+    if (continuation && !params.independentContinuation && authority !== inherited) {
+      continuationAuthorities.set(authority, continuation);
+    }
+    return { authority, release: source.retain?.() ?? (() => {}) };
   }
   const actor = resolveGatewayOperatorRoleActor(params.client);
   const client = params.client;
   const ingressPrincipal = client?.internal?.remoteIngressPrincipal;
   // An owner subject requires a real socket or the host-bound ingress grant.
   // Autonomous/synthetic system callers must not acquire the owner profile.
+  // Ephemeral shared-secret sockets attest the owner without display attribution.
   const isAuthenticatedOwner = (currentActor: typeof actor) =>
     client?.internal?.authenticatedOperator === true &&
     (currentActor === undefined || currentActor.kind === "system") &&
@@ -293,7 +314,14 @@ export async function captureGatewayOperatorRunAuthority(input: {
     !client.internal.syntheticClient &&
     !client.internal.agentRuntimeIdentity &&
     !client.internal.agentToolCaller &&
-    client.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID;
+    (client.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID ||
+      (currentActor?.kind === "system" &&
+        !client.authenticatedUserProfile &&
+        !client.authenticatedUserId &&
+        client.usesSharedGatewayAuth === true &&
+        Boolean(client.sharedGatewaySessionGeneration) &&
+        (client.authPolicy?.authMethod === "token" ||
+          client.authPolicy?.authMethod === "password")));
   const authenticatedOwner = isAuthenticatedOwner(actor);
   if (!client || (actor?.kind !== "operator" && !authenticatedOwner)) {
     return undefined;

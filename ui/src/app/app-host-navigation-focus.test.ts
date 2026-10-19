@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createConnectedShellOwner as createShellOwner } from "./app-host-solid.test-support.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
+import { handleNavDrawerKeydown, navDrawerFocusableElements } from "./navigation-surface.ts";
 
 afterEach(resetAppHostTestGlobals);
 
@@ -49,6 +50,53 @@ describe("navigation drawer focus ownership", () => {
       expect(document.activeElement).toBe(open ? trigger : composer);
     } finally {
       shell.element.remove();
+    }
+  });
+
+  it("wraps Tab across composed drawer controls using the modal focus order", () => {
+    const drawer = document.createElement("nav");
+    drawer.tabIndex = -1;
+    const inert = document.createElement("div");
+    inert.setAttribute("inert", "");
+    const inertButton = inert.appendChild(document.createElement("button"));
+    const skipped = document.createElement("button");
+    skipped.tabIndex = -2;
+    const first = document.createElement("button");
+    const control = document.createElement("div");
+    const shadow = control.attachShadow({ mode: "open" });
+    const last = shadow.appendChild(document.createElement("button"));
+    for (const button of [inertButton, skipped, first, last]) {
+      Object.defineProperty(button, "checkVisibility", { value: () => true });
+    }
+    drawer.append(inert, skipped, first, control);
+    const host = { navDrawerElement: drawer, closeNavDrawer: vi.fn() };
+    drawer.addEventListener("keydown", (event) => handleNavDrawerKeydown(host, event));
+    document.body.append(drawer);
+    try {
+      expect(navDrawerFocusableElements(drawer)).toEqual([first, last]);
+      last.focus();
+      const forward = new KeyboardEvent("keydown", {
+        key: "Tab",
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      });
+      last.dispatchEvent(forward);
+      expect(forward.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(first);
+
+      const reverse = new KeyboardEvent("keydown", {
+        key: "Tab",
+        shiftKey: true,
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      });
+      first.dispatchEvent(reverse);
+      expect(reverse.defaultPrevented).toBe(true);
+      expect(shadow.activeElement).toBe(last);
+    } finally {
+      drawer.remove();
     }
   });
 });

@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createUniqueId, onSettled, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createUniqueId, onSettled, Show } from "solid-js";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import {
@@ -20,7 +20,6 @@ import {
   resolveWebSearchToolOverrideState,
 } from "../../../lib/sessions/tool-overrides.ts";
 import { uploadsEnabled } from "../../../lib/uploads.ts";
-import { handleChatAttachmentMenuSelection } from "./chat-attachment-inputs.ts";
 import { useSingleAttachmentPicker } from "./chat-attachment-picker-policy.ts";
 import { ComposerContent } from "./chat-composer-content.tsx";
 import {
@@ -333,15 +332,17 @@ function toolItems(menu: ChatComposerPlusMenuContentProps, serverName: string): 
 function handleMenuSelection(
   { id: value }: MenuItem,
   event: CustomEvent<MenuItem>,
-  overlay: MenuHandle["overlay"],
+  menu: MenuHandle,
   ownerProps: { menu: ChatComposerPlusMenuContentProps },
 ) {
   const props = ownerProps.menu;
-  const { surface, trigger } = overlay;
+  const overlay = menu.overlay;
+  const { surface } = overlay;
   if (
     uploadsEnabled(props.attachments.uploadConfig) &&
-    handleChatAttachmentMenuSelection(surface, value, trigger)
+    (value === "camera" || value === "photo" || value === "file")
   ) {
+    props.inputHandle.open(value);
     return;
   }
   const rootToggle = props.rootToggles?.find((toggle) => toggle.value === value);
@@ -363,7 +364,7 @@ function handleMenuSelection(
         ownerProps.menu.open &&
         (active === focused || (active === surface.ownerDocument.body && !focused?.isConnected))
       ) {
-        surface.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])')?.focus();
+        menu.focusFirst();
       }
     });
   };
@@ -485,9 +486,15 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
   let handle!: MenuHandle;
   let host!: HTMLDivElement;
   const id = createUniqueId();
+  let releaseAnchor = () => {};
+  onSettled(() => () => releaseAnchor());
   const view = createMemo(() => (props.menu.showCapabilities ? props.menu.view : "root"));
   const inputs = createMemo(
-    () => ({ view: view(), values: menuRenderInputs(props.menu, view()) }),
+    () => {
+      const current = view();
+      const menu = props.menu;
+      return { view: current, menu, values: menuRenderInputs(menu, current) };
+    },
     {
       lazy: true,
       equals: (previous, next) =>
@@ -498,19 +505,17 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
   );
   const items = createMemo(
     () => {
-      const current = inputs().view;
-      // Actions keep reading current props; only presentation owns these retained nodes.
-      return untrack(() =>
-        current === "skills"
-          ? skillItems(props.menu)
-          : current === "connectors"
-            ? connectorItems(props.menu)
-            : current.startsWith("tools:")
-              ? toolItems(props.menu, current.slice("tools:".length))
-              : current.startsWith("library:")
-                ? composerLibraryMenuItems(props.menu.library, current.slice("library:".length))
-                : rootItems(props.menu),
-      );
+      // Only a changed presentation snapshot recreates owned nodes; actions read live props.
+      const { view: current, menu } = inputs();
+      return current === "skills"
+        ? skillItems(menu)
+        : current === "connectors"
+          ? connectorItems(menu)
+          : current.startsWith("tools:")
+            ? toolItems(menu, current.slice("tools:".length))
+            : current.startsWith("library:")
+              ? composerLibraryMenuItems(menu.library, current.slice("library:".length))
+              : rootItems(menu);
     },
     { lazy: true },
   );
@@ -538,8 +543,10 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
           items={items()}
           ref={(next) => {
             handle = next;
+            releaseAnchor();
+            releaseAnchor = props.menu.inputHandle.bindAnchor(next.overlay.trigger);
           }}
-          onSelect={(item, event) => handleMenuSelection(item, event, handle.overlay, props)}
+          onSelect={(item, event) => handleMenuSelection(item, event, handle, props)}
           onNavigate={({ value }) =>
             props.menu.onNavigate(value === "manage-skills" ? "skills" : "plugins")
           }

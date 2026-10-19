@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { setDeepgramQueryParam } from "./audio-query.js";
 
 const DEEPGRAM_FLUX_SAMPLE_RATE = 16_000;
 // Deepgram recommends 80 ms chunks. 16 kHz mono linear16 contains 32 bytes per millisecond.
@@ -48,7 +49,7 @@ function buildDeepgramFluxUrl(params: {
   baseUrl: string;
   language?: string;
   model: string;
-  query?: Record<string, string | number | boolean | undefined>;
+  query?: Record<string, string | number | boolean | string[] | undefined>;
 }): string {
   const url = URL.parse(params.baseUrl);
   if (!url) {
@@ -77,7 +78,7 @@ function buildDeepgramFluxUrl(params: {
       : undefined;
   for (const [key, value] of Object.entries(query)) {
     if (value !== undefined && DEEPGRAM_FLUX_QUERY_KEYS.has(key)) {
-      url.searchParams.set(key, String(value));
+      setDeepgramQueryParam(url.searchParams, key, value);
     }
   }
   return url.toString();

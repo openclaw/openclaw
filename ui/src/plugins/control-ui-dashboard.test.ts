@@ -155,6 +155,7 @@ it.each([
     const context = {
       agentSelection: { state: { selectedId: "main" } },
       gateway: {
+        subscribe: () => () => undefined,
         snapshot: {
           phase: "connected",
           hello: {
@@ -180,6 +181,7 @@ it.each([
     const initial: BoardGetParams = hydrateOwner ? { sessionKey } : session;
     const element = await mountDashboard(initial, client, {}, provider);
 
+    await customElements.whenDefined("openclaw-board-view");
     await vi.waitFor(() => expect(nativeOwner(element)).not.toBeNull());
     expect(request).toHaveBeenCalledWith("board.get", initial);
     expect(nativeOwner(element)?.textContent).toBe(`${initial.agentId}/${sessionKey}`);
@@ -217,7 +219,7 @@ it("waits for the initial gateway snapshot before choosing its expanded state", 
   expect(element.querySelector("openclaw-board-view")).not.toBeNull();
 });
 
-it("updates mounted dashboard controls immediately when gateway permissions change", async () => {
+it("updates mounted dashboard controls immediately when gateway permissions or connectivity change", async () => {
   const { client, request } = createClient([widget({ grantState: "pending" })]);
   const element = await mountDashboard({ sessionKey: "agent:main:workboard-live-scopes" }, client, {
     canMutate: true,
@@ -233,10 +235,22 @@ it("updates mounted dashboard controls immediately when gateway permissions chan
   expect([board.canMutate, board.canGrant]).toEqual([true, true]);
   expect(allow.disabled).toBe(false);
 
+  toggle(element).click();
+  await element.updateComplete;
+  expect(expanded(element)).toBe("false");
+
   for (const permitted of [false, true]) {
     await setPermissions(element, permitted);
     expect(allow.disabled).toBe(!permitted);
+    expect(expanded(element)).toBe("false");
   }
+  element.connected = false;
+  await settle(element);
+  await board.querySelector("openclaw-board-widget-cell")?.updateComplete;
+  expect(element.querySelector("openclaw-board-view")).toBe(board);
+  expect(board.canMutate).toBe(false);
+  expect(board.canGrant).toBe(false);
+  expect(allow.disabled).toBe(true);
   expect(request).toHaveBeenCalledOnce();
 });
 

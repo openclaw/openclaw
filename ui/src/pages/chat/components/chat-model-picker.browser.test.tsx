@@ -47,15 +47,16 @@ function mountPicker(optionsReady = true) {
         setProps(() => ({ ...params }));
         flush();
       };
+      let textarea!: HTMLTextAreaElement;
       return (
         <div
           class="agent-chat__input"
-          onPointerDown={(event) => focusComposerFromChrome(event, true)}
-          onClick={(event) => focusComposerFromChrome(event, true)}
+          onPointerDown={(event) => focusComposerFromChrome(event, true, textarea)}
+          onClick={(event) => focusComposerFromChrome(event, true, textarea)}
           onKeyDown={(event) => focusChatComposerFromPrintableKeydown(container, event)}
         >
           <div class="agent-chat__composer-combobox">
-            <textarea />
+            <textarea ref={(element) => (textarea = element)} />
           </div>
           <ChatModelPicker {...props()} />
         </div>

@@ -57,7 +57,7 @@ function renderSurface(
   variant: "inline" | "modal" | "sidebar" = "modal",
   onDecision: ExecApprovalCardProps["onDecision"] = vi.fn(),
 ) {
-  const props = { approval: request, busy: false, canGrant: true, error: null };
+  const props = { approval: request, busy: false, connected: true, canGrant: true, error: null };
   const view = mountSolid(
     () =>
       variant === "sidebar"

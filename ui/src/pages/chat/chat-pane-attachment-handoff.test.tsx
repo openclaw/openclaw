@@ -35,6 +35,7 @@ import {
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatAttachmentControlsProps } from "./components/chat-attachment-controls.types.ts";
+import { createChatAttachmentInputHandle } from "./components/chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./components/chat-attachment-inputs.tsx";
 import { AttachmentPreview } from "./components/chat-attachments.tsx";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
@@ -228,11 +229,12 @@ describe("cross-region Home composer ownership", () => {
       const { context, owner, page } = fixture;
       page.edit("Keep this draft and file");
       const container = document.createElement("div");
+      const inputHandle = createChatAttachmentInputHandle();
       const view = mountSolid(
         (props: { controls: ChatAttachmentControlsProps; showInputs: boolean }) => (
           <>
             <Show when={props.showInputs}>
-              <ChatAttachmentInputs {...props.controls} />
+              <ChatAttachmentInputs {...props.controls} inputHandle={inputHandle} />
             </Show>
             <AttachmentPreview {...props.controls} />
           </>
