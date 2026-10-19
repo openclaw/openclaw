@@ -394,6 +394,11 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
   const searchResults = createMemo(() =>
     workspaceCatalogSearch(props.workspace.list, props.workspace.browserSearch),
   );
+  const searchTruncated = () => {
+    const query = props.workspace.browserSearch.trim().toLowerCase();
+    const browser = props.workspace.list?.browser;
+    return Boolean(query && browser?.truncated && browser.search?.toLowerCase() === query);
+  };
   const attachmentsVisible = () =>
     !props.workspace.folderView &&
     filter() === "all" &&
@@ -537,10 +542,16 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
             />
           )}
         </Show>
+        <Show when={searchTruncated()}>
+          <div class="workspace-desktop__notice" role="status">
+            {t("chat.workspaceFiles.truncated")}
+          </div>
+        </Show>
         <Show
           when={
             Boolean(props.workspace.browserSearch.trim()) &&
             !props.workspace.loading &&
+            !searchTruncated() &&
             !searchResults().length &&
             !attachmentSearchVisible()
           }

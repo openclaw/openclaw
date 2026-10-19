@@ -486,7 +486,7 @@ it("desktop browses lazy directories and restores activity after global search c
   }
 });
 
-it("desktop preserves directory limits without displaying the partial-search notice", () => {
+it("desktop distinguishes incomplete matching searches from empty complete results", () => {
   setupDesktopLayout();
   const warning = "Showing the first matching files. Refine the search to narrow results.";
   const navigation = {
@@ -545,9 +545,21 @@ it("desktop preserves directory limits without displaying the partial-search not
       browserSearch: "report",
       navigation: { ...navigation, searchOpen: true },
     });
-    expect(
-      mounted.container.querySelector(".workspace-desktop__results")?.textContent,
-    ).not.toContain(warning);
+    const results = () =>
+      mounted.container.querySelector(".workspace-desktop__results")?.textContent;
+    expect(results()).toContain(warning);
+    expect(results()).not.toContain("No matching files.");
+    mounted.update({
+      ...workspace,
+      browserSearch: "report",
+      navigation: { ...navigation, searchOpen: true },
+      list: {
+        ...workspace.list!,
+        browser: { path: "", search: "report", entries: [] },
+      },
+    });
+    expect(results()).not.toContain(warning);
+    expect(results()).toContain("No matching files.");
   } finally {
     mounted.unmount();
   }
