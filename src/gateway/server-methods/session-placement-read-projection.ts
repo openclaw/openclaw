@@ -38,7 +38,8 @@ export function readSessionRowFacts(params: {
   activitySummaryEnabled?: boolean;
   databaseFacts: Pick<SessionRowDatabaseFacts, "hasBoard" | "activitySummaryWatermark">;
 }) {
-  const { cfg, entry, placementFactsReader, activitySummaryEnabled } = params;
+  const { cfg, entry, preparedRuntimeOwnership, placementFactsReader, activitySummaryEnabled } =
+    params;
   const { key, agentId } = params.target;
   const context = params.context ?? {};
   let placementSource = placementFactsReader?.getProjectionFacts(entry.sessionId);
@@ -82,7 +83,7 @@ export function readSessionRowFacts(params: {
       sessionModelRevision: sessionModelRevision(
         entry,
         identity?.inference,
-        params.preparedRuntimeOwnership,
+        preparedRuntimeOwnership,
       ),
       failedRecoveryAction,
       retryOnSend,
