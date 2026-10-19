@@ -31,11 +31,8 @@ function findExistingDiskSpacePath(targetPath: string): string | null {
   }
 }
 
-/** Reads available bytes for the volume containing a target path when statfs is available. */
+/** Reads available bytes for the volume containing a target path. */
 export function tryReadDiskSpace(targetPath: string): DiskSpaceSnapshot | null {
-  if (typeof fs.statfsSync !== "function") {
-    return null;
-  }
   // Install/update targets may not exist yet; statfs needs the nearest existing
   // ancestor to identify the backing volume.
   const checkedPath = findExistingDiskSpacePath(targetPath);
