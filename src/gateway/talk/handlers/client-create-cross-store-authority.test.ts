@@ -8,11 +8,14 @@ import {
 import { applySessionEntryOperation } from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { addSessionMember } from "../../../config/sessions/session-sharing-store.js";
 import { removeSessionMember as removeSessionMemberSync } from "../../../config/sessions/session-sharing-store.native.js";
+import * as sourcePredicates from "../../../config/sessions/session-source-predicate.worker.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { getOpenClawAgentDatabaseIfOpen } from "../../../state/openclaw-agent-db.js";
 import * as voiceSources from "../../../talk/client-voice-session-source.js";
 import * as voiceSessions from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
+import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { makeClient } from "../../server-broadcast.test-helpers.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
@@ -42,11 +45,14 @@ describe("cross-store voice creation authority", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it.each([
-    ["membership", "before"],
-    ["membership", "after"],
-    ["session", "before"],
-    ["session", "after"],
-  ] as const)("honors %s revocation %s cross-store voice admission", async (revocation, timing) => {
+    ["membership", "before", "worker"],
+    ["membership", "after", "worker"],
+    ["session", "before", "worker"],
+    ["session", "after", "worker"],
+    ["membership", "after", "native"],
+    ["session", "after", "native"],
+    ["unchanged", "after", "native"],
+  ] as const)("checks %s authority %s %s admission", async (revocation, timing, writer) => {
     await withOpenClawTestState(
       { scenario: "minimal", prepareProfileCatalog: true },
       async ({ stateDir }) => {
@@ -95,26 +101,9 @@ describe("cross-store voice creation authority", () => {
           await addSessionMember(scope, { identityId, addedBy: "other-creator" });
           using authority = browserAuthority(fixture.context, client);
           const voiceSessionId = `admitted-${revocation}`;
-          const respond = vi.fn();
-          const options: GatewayRequestHandlerOptions = {
-            req: { type: "req", id: "admitted-voice", method: "talk.client.create" },
-            params: { sessionKey, voiceSessionId },
-            respond,
-            context: createDirectChatContext({
-              getRuntimeConfig: fixture.context.getRuntimeConfig,
-              getClientConnIds: (filter) =>
-                new Set(!filter || filter(client) ? [client.connId] : []),
-              broadcastToConnIds: fixture.context.broadcastToConnIds,
-            }),
-            client,
-            isWebchatConnect: () => false,
-          };
-          authority.bind(options);
-          const admission = await authorizeBrowserCreate(options, true);
-          expect(admission.error).toBeNull();
-          authorization = admission.authorization!;
           let creating = false;
           let revoked = false;
+          let nativeGuardReached = false;
           const revoke = () => {
             if (revoked) {
               return;
@@ -130,6 +119,55 @@ describe("cross-store voice creation authority", () => {
               });
             }
           };
+          const respond = vi.fn();
+          const options: GatewayRequestHandlerOptions = {
+            req: { type: "req", id: "admitted-voice", method: "talk.client.create" },
+            params: { sessionKey, voiceSessionId },
+            respond,
+            context: createDirectChatContext({
+              getRuntimeConfig: fixture.context.getRuntimeConfig,
+              getClientConnIds: (filter) =>
+                new Set(!filter || filter(client) ? [client.connId] : []),
+              broadcastToConnIds: fixture.context.broadcastToConnIds,
+            }),
+            client,
+            isWebchatConnect: () => false,
+            ...(writer === "native"
+              ? {
+                  sessionMutationCommitGuard: () => {
+                    if (
+                      creating &&
+                      getOpenClawAgentDatabaseIfOpen({ agentId: "main" })?.db.isTransaction &&
+                      clientVoiceSessionTesting.readRecord("main", voiceSessionId)
+                    ) {
+                      nativeGuardReached = true;
+                      if (revocation !== "unchanged") {
+                        revoke();
+                      }
+                    }
+                  },
+                }
+              : {}),
+          };
+          authority.bind(options);
+          const admission = await authorizeBrowserCreate(options, true);
+          expect(admission.error).toBeNull();
+          authorization = admission.authorization!;
+          let sourceSqlCalls = 0;
+          if (writer === "native") {
+            const validate = sourcePredicates.readSessionSourceValidation;
+            vi.spyOn(sourcePredicates, "readSessionSourceValidation").mockImplementation(
+              (...args) => {
+                const observed = observeMainThreadSql();
+                try {
+                  return validate(...args);
+                } finally {
+                  sourceSqlCalls += observed.count();
+                  observed.restore();
+                }
+              },
+            );
+          }
           const prepareSources = voiceSources.prepareClientVoiceSessionSourceChecks;
           vi.spyOn(voiceSources, "prepareClientVoiceSessionSourceChecks").mockImplementation(
             (...args) => {
@@ -155,15 +193,22 @@ describe("cross-store voice creation authority", () => {
           vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
             (admit, attachment) =>
               admitOperation((request, grant) => {
-                if (creating && timing === "after" && request.stage === "commit") {
+                if (
+                  creating &&
+                  writer === "worker" &&
+                  timing === "after" &&
+                  request.stage === "commit"
+                ) {
                   revoke();
                 }
                 admit(request, grant);
               }, attachment),
           );
           await createTalkClient(admission.handler);
-          expect(revoked).toBe(true);
-          const committed = timing === "after";
+          expect(revoked).toBe(revocation !== "unchanged");
+          expect(nativeGuardReached).toBe(writer === "native");
+          const committed =
+            revocation === "unchanged" || (timing === "after" && writer === "worker");
           expect({
             persistedId,
             recorded: clientVoiceSessionTesting.readRecord("main", voiceSessionId) !== undefined,
@@ -171,10 +216,17 @@ describe("cross-store voice creation authority", () => {
           }).toEqual({
             persistedId: committed ? voiceSessionId : undefined,
             recorded: committed,
-            ok: false,
+            ok: revocation === "unchanged",
           });
-          expect(fixture.cancelBrowserSession).toHaveBeenCalledOnce();
-          expect(() => authorization?.assertCurrent()).toThrow();
+          expect(fixture.cancelBrowserSession).toHaveBeenCalledTimes(
+            revocation === "unchanged" ? 0 : 1,
+          );
+          if (revocation === "unchanged") {
+            expect(() => authorization?.assertCurrent()).not.toThrow();
+          } else {
+            expect(() => authorization?.assertCurrent()).toThrow();
+          }
+          expect(sourceSqlCalls, "published foreign source checks must not read SQLite").toBe(0);
         } finally {
           authorization?.release?.();
           if (persistedId) {
