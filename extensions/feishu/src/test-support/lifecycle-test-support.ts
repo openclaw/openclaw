@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { EventDispatcher } from "@larksuiteoapi/node-sdk";
+import type { InboundDebounceCreateParams } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import {
   createPluginRuntimeMock,
   createTestInboundDebounceFlush,
@@ -33,7 +34,6 @@ export async function stopFeishuLifecycleMonitors(): Promise<void> {
   activeMonitors.clear();
 }
 type ChannelRuntime = PluginRuntime["channel"];
-type InboundDebouncerParams = Parameters<ChannelRuntime["debounce"]["createInboundDebouncer"]>[0];
 type LifecycleMocks = ReturnType<typeof getFeishuLifecycleTestMocks>;
 type RuntimeReplyDispatcher = NonNullable<
   Parameters<ChannelRuntime["reply"]["withReplyDispatcher"]>[0]["dispatcher"]
@@ -77,9 +77,9 @@ export function installFeishuLifecycleReplyRuntime(params: {
     channel: {
       debounce: {
         resolveInboundDebounceMs: vi.fn(() => 0),
-        createInboundDebouncer: (options: Pick<InboundDebouncerParams, "onFlush" | "onError">) => ({
+        createInboundDebouncer: <T>(options: InboundDebounceCreateParams<T>) => ({
           shouldBuffer: () => false,
-          enqueue: async (item: unknown) => {
+          enqueue: async (item: T) => {
             try {
               await options.onFlush?.([item], createTestInboundDebounceFlush).completion;
             } catch (err) {
@@ -374,9 +374,9 @@ export async function setupFeishuLifecycleHandler(params: {
   void completion.catch(started.reject);
   await started.promise;
 
-  const handler = register.mock.calls.at(0)?.[0]?.[params.handlerKey] as
-    | ((data: unknown) => Promise<void>)
-    | undefined;
+  const handler = Object.entries(register.mock.calls.at(0)?.[0] ?? {}).find(
+    ([key]) => key === params.handlerKey,
+  )?.[1] as ((data: unknown) => Promise<void>) | undefined;
   if (!handler) {
     throw new Error(params.missingHandlerMessage);
   }

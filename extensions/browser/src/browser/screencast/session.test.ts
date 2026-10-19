@@ -31,7 +31,9 @@ function hold<T>(mock: { mockReturnValueOnce(value: Promise<T>): unknown }) {
 
 class FakeCdp extends EventEmitter {
   send = vi.fn(async (_method: string, _params?: unknown) => ({}));
-  detach = vi.fn(async () => void this.emit("close", this));
+  detach = vi.fn(async (): Promise<void> => {
+    this.emit("close", this);
+  });
 
   paint(sessionId = 1, data = jpeg): void {
     this.emit("Page.screencastFrame", {

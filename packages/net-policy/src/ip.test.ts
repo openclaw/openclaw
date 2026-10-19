@@ -32,6 +32,9 @@ it.each([
       "2001:2::1",
       "100::1",
       "2001:20::1",
+      "64:ff9b:1:7f00:0:100:808:808",
+      "64:ff9b:1:a9fe:a9:fe00:808:808",
+      "64:ff9b:1:808:808:808:808:808",
       "64:ff9b:1:808:808:808:a9fe:a9fe",
       ...blockedIpv6MulticastLiterals,
     ],
@@ -106,6 +109,10 @@ it.each([
   ["2001::f7f7:f7f7", "8.8.8.8"],
   ["2001:4860:1::5efe:7f00:1", "127.0.0.1"],
   ["64:ff9b:1:808:808:808:a9fe:a9fe", undefined],
+  ["64:ff9b:1:a00:0:100::", undefined],
+  ["64:ff9b:1:a9fe:a9:fe00:808:808", undefined],
+  ["64:ff9b:1:7f00:0:100:808:808", undefined],
+  ["64:ff9b:1::8.8.8.8", undefined],
 ])("extracts embedded IPv4 from %s without guessing local-use NAT64", (literal, expected) => {
   const extracted = ip.extractEmbeddedIpv4FromIpv6(ipv6(literal));
   expect(extracted === undefined ? extracted : extracted.toString()).toBe(expected);

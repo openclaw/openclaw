@@ -361,14 +361,17 @@ describe("validateToolArguments", () => {
   });
 
   it("keeps invalid and oversized strings out of referenced containers", () => {
-    for (const definition of [{ type: "array", items: integer }, requiredCount]) {
+    for (const [definition, kind] of [
+      [{ type: "array", items: integer }, "array"],
+      [requiredCount, "object"],
+    ] as const) {
       const validate = rootValidator({ $ref: "#/$defs/value" }, { value: definition });
       for (const invalid of [
         "not-json",
         "false",
         "null",
-        definition.type === "array" ? '{"not":"array"}' : "[]",
-        " ".repeat(64 * 1024) + (definition.type === "array" ? "[1]" : '{"count":1}'),
+        kind === "array" ? '{"not":"array"}' : "[]",
+        " ".repeat(64 * 1024) + (kind === "array" ? "[1]" : '{"count":1}'),
       ]) {
         expect(() => validate({ value: invalid })).toThrow(/Validation failed/);
       }

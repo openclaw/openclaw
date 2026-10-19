@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   OpenBlobStoreOptions,
   OpenKeyedStoreOptions,
@@ -52,13 +53,14 @@ function migrationParams(params: { stateDir: string; vaultRoot: string; agentIds
     path: params.vaultRoot,
     ...(params.agentIds ? { scope: "agent" as const } : {}),
   };
+  const config: OpenClawConfig = {
+    ...(params.agentIds
+      ? { agents: { entries: Object.fromEntries(params.agentIds.map((id) => [id, {}])) } }
+      : {}),
+    plugins: { entries: { "memory-wiki": { config: { vault } } } },
+  };
   return {
-    config: {
-      ...(params.agentIds
-        ? { agents: { entries: Object.fromEntries(params.agentIds.map((id) => [id, {}])) } }
-        : {}),
-      plugins: { entries: { "memory-wiki": { config: { vault } } } },
-    },
+    config,
     env,
     stateDir: params.stateDir,
     oauthDir: path.join(params.stateDir, "credentials"),

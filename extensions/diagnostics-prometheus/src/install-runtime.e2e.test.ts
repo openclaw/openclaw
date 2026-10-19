@@ -21,7 +21,7 @@ const pluginId = "diagnostics-prometheus";
 const pluginVersion = manifest.version.trim();
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const pluginRoot = path.resolve(import.meta.dirname, "..");
-const cleanups: (() => Promise<void>)[] = [];
+const cleanups: (() => Promise<unknown>)[] = [];
 const children: ChildProcess[] = [];
 
 afterEach(async () => {

@@ -2,6 +2,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import type {
   WorkerHelloOk,
   WorkerLiveEvent,
+  WorkerLiveEventErrorShape,
   WorkerTranscriptMessage,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
@@ -29,7 +30,7 @@ function successResponse<T>(payload: T) {
   return { type: "res", id: "response", ok: true, payload } as const;
 }
 
-function failureResponse(error: Extract<LiveResponse, { ok: false }>["error"]): LiveResponse {
+function failureResponse(error: WorkerLiveEventErrorShape): LiveResponse {
   return { type: "res", id: "response", ok: false, error };
 }
 
