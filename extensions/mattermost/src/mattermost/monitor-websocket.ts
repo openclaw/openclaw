@@ -7,7 +7,7 @@ import {
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+import { type RawData, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { z } from "zod";
 import { MattermostPostSchema, type MattermostPost } from "./client.js";
 import type { ChannelAccountSnapshot, RuntimeEnv } from "./runtime-api.js";
@@ -248,7 +248,7 @@ export function createMattermostConnectOnce(
           scheduleProtocolPing();
         });
 
-        ws.on("message", async (data) => {
+        const onMessage = async (data: RawData) => {
           const raw = rawDataToString(data);
           captureEvent({
             direction: "inbound",
@@ -295,6 +295,9 @@ export function createMattermostConnectOnce(
             );
             ws.terminate();
           }
+        };
+        ws.on("message", (data) => {
+          void onMessage(data);
         });
 
         ws.on("close", (code, reason) => {
