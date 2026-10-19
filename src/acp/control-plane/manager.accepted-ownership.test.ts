@@ -1,25 +1,22 @@
 /** Accepted cancellation retains exact turn, actor, and late-runtime custody. */
-import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import { describe, expect, it } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
-import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { stopAcpControllerTurns } from "./manager.controller-test-support.js";
 import {
-  AcpSessionManager,
+  cancelledEvent,
+  createAcceptedFixture as fixture,
+  gate,
+} from "./manager.ownership.test-support.js";
+import {
   baseCfg,
-  createRuntime,
   disposeAcpSessionManagerInstance,
   extractStatesFromUpserts,
   hoisted,
   installAcpSessionManagerTestLifecycle,
-  mockMutableSession,
-  mockParentedAcpSessionEntries,
-  readySessionMeta,
 } from "./manager.test-helpers.js";
 
-const cancelledEvent = { type: "done", status: "cancelled", stopReason: "cancel" };
 const cancelFailure = { message: "cancel transport failure" };
 const rejectedCancellation = [{ status: "rejected", reason: cancelFailure }];
 const rejectedStop = [
@@ -28,66 +25,6 @@ const rejectedStop = [
     reason: { message: "Session source cleanup failed", errors: [cancelFailure] },
   },
 ];
-
-function gate() {
-  const entered = createDeferred();
-  const release = createDeferred();
-  return {
-    entered: entered.promise,
-    release: release.resolve,
-    wait() {
-      entered.resolve();
-      return release.promise;
-    },
-  };
-}
-
-function fixture({ sessionKey = "agent:codex:acp:accepted-ownership", parented = false } = {}) {
-  const runtime = createRuntime();
-  hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: runtime.runtime });
-  const metadata = { currentMeta: readySessionMeta() };
-  mockMutableSession(sessionKey, metadata);
-  if (parented) {
-    mockParentedAcpSessionEntries({
-      childSessionKey: sessionKey,
-      parentSessionKey: "agent:main:main",
-      state: metadata,
-    });
-  }
-  const manager = new AcpSessionManager();
-  const target = { cfg: baseCfg, sessionKey };
-  return {
-    ...runtime,
-    manager,
-    target,
-    async recordedEvents() {
-      return (await listSessionStateEventsSince(sessionKey, "codex", 0, 200)).events;
-    },
-    startTurn(
-      requestId: string,
-      options: Partial<
-        Pick<
-          Parameters<AcpSessionManager["runTurn"]>[0],
-          "text" | "signal" | "admittedRunContext" | "cfg" | "agentId" | "sessionKey"
-        >
-      > = {},
-    ) {
-      const events: AcpRuntimeEvent[] = [];
-      const turn = manager.runTurn({
-        ...target,
-        provenance: "system",
-        mode: "prompt",
-        text: requestId,
-        requestId,
-        onEvent: (event) => {
-          events.push(event);
-        },
-        ...options,
-      });
-      return { turn, events };
-    },
-  };
-}
 
 describe("ACP accepted cancellation ownership", () => {
   installAcpSessionManagerTestLifecycle();

@@ -12,6 +12,8 @@ import {
   withAcpCancellationFixture,
 } from "./manager.cancel-session.worker.test-support.js";
 import {
+  cancelSession,
+  createGate,
   expectSuccessor,
   locatorSessionKey,
   expectNoRuntimeEffects,
@@ -47,17 +49,14 @@ it("preserves replacement metadata when a cancelled late handle fails its applie
       undefined,
       authority,
     );
-    const ensureEntered = createDeferred();
-    const releaseEnsure = createDeferred();
+    const ensureGate = createGate("ensureGate settled before its controlled boundary");
     const stopAdmitted = createDeferred();
-    const publicationReadEntered = createDeferred();
-    const releasePublicationRead = createDeferred();
+    const publicationGate = createGate("publicationGate settled before its controlled boundary");
     let ensureReturned = false;
     let controlPrepared = false;
     let gated = false;
     f.ensureSession.mockImplementationOnce(async () => {
-      ensureEntered.resolve();
-      await releaseEnsure.promise;
+      await ensureGate.wait();
       ensureReturned = true;
       return {
         sessionKey: f.target.sessionKey,
@@ -78,8 +77,7 @@ it("preserves replacement metadata when a cancelled late handle fails its applie
           readCurrent: async (cfg: typeof f.target.cfg) => {
             if (ensureReturned && !gated) {
               gated = true;
-              publicationReadEntered.resolve();
-              await releasePublicationRead.promise;
+              await publicationGate.wait();
             }
             return read.readCurrent(cfg);
           },
@@ -95,11 +93,7 @@ it("preserves replacement metadata when a cancelled late handle fails its applie
         text: "late policy locator",
       });
       turnResult = Promise.allSettled([turn]);
-      await awaitGateBeforeSettlement(
-        ensureEntered.promise,
-        turnResult,
-        "Policy turn settled before backend ensure.",
-      );
+      await ensureGate.reached(turnResult);
       const cancellation = stopAcpControllerTurns({
         ...f.target,
         assertActive: () => {
@@ -114,27 +108,23 @@ it("preserves replacement metadata when a cancelled late handle fails its applie
         cancelResult,
         "Stop settled before accepting late-handle cleanup.",
       );
-      releaseEnsure.resolve();
-      await awaitGateBeforeSettlement(
-        publicationReadEntered.promise,
-        turnResult,
-        "Policy failure did not reach terminal publication validation.",
-      );
+      ensureGate.open();
+      await publicationGate.reached(turnResult);
       expect(f.runTurn).not.toHaveBeenCalled();
       const successorIdentity = createIdentityFromStatus({
         status: { agentSessionId: "successor-agent" },
         now: 200,
       });
       await replaceRuntime(f, { identity: successorIdentity });
-      releasePublicationRead.resolve();
+      publicationGate.open();
       await Promise.all([turnResult, cancelResult]);
       expect(await turnResult).toMatchObject([{ status: "rejected" }]);
       await expectSuccessor(f, { identity: successorIdentity });
       expect(readDurableAcpSignals(f, "policy-locator")).toEqual([]);
       expectNoRuntimeEffects(f, close);
     } finally {
-      releaseEnsure.resolve();
-      releasePublicationRead.resolve();
+      ensureGate.open();
+      publicationGate.open();
       await Promise.allSettled([turnResult, cancelResult]);
       reader.mockRestore();
       close.mockRestore();
@@ -146,27 +136,18 @@ it("preserves replacement metadata when a cancelled late handle fails its applie
 it("preserves a durable replacement while cold cancellation ensure normalizes its handle", async () => {
   await withAcpCancellationFixture(
     async (f) => {
-      const entered = createDeferred();
-      const release = createDeferred();
+      const ensureGate = createGate("ensureGate settled before its controlled boundary");
       f.ensureSession.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
+        await ensureGate.wait();
         return runtimeHandle(f, "normalized-runtime");
       });
       const close = vi.spyOn(f.runtime, "close");
-      const cancellation = f.manager.cancelSession({
-        ...f.target,
-        reason: "cold-ensure-replacement",
-      });
+      const cancellation = cancelSession(f, "cold-ensure-replacement");
       const result = Promise.allSettled([cancellation]);
       try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          result,
-          "Cold cancellation settled before runtime ensure.",
-        );
+        await ensureGate.reached(result);
         await replaceRuntime(f);
-        release.resolve();
+        ensureGate.open();
         const outcomes = await result;
         await expectSuccessor(f);
         expect(outcomes).toMatchObject([{ status: "rejected" }]);
@@ -174,7 +155,7 @@ it("preserves a durable replacement while cold cancellation ensure normalizes it
         expect(f.cancel).not.toHaveBeenCalled();
         expect(close).not.toHaveBeenCalled();
       } finally {
-        release.resolve();
+        ensureGate.open();
         await result;
         close.mockRestore();
       }
@@ -195,13 +176,13 @@ it.each([
     await withAcpCancellationFixture(
       async (f) => {
         const assertMemoryCurrent = memoryGuard(f, sourceKind);
-        const reached = createDeferred();
-        const release = createDeferred();
+        const normalizationGate = createGate(
+          "normalizationGate settled before its controlled boundary",
+        );
         const admitted = createDeferred();
         f.ensureSession.mockImplementationOnce(async () => {
           if (boundary === "ensure") {
-            reached.resolve();
-            await release.promise;
+            await normalizationGate.wait();
           }
           return runtimeHandle(f, "normalized-runtime");
         });
@@ -210,8 +191,7 @@ it.each([
           boundary === "ensure"
             ? undefined
             : vi.spyOn(DEFAULT_DEPS, "upsertSessionMeta").mockImplementationOnce(async (params) => {
-                reached.resolve();
-                await release.promise;
+                await normalizationGate.wait();
                 return upsert(params);
               });
         const prepare = DEFAULT_DEPS.prepareSessionControlRead;
@@ -235,11 +215,7 @@ it.each([
         });
         let cancelResult: Promise<PromiseSettledResult<void>[]> | undefined;
         try {
-          await awaitGateBeforeSettlement(
-            reached.promise,
-            turnResult,
-            "Normalization settled before its write gate.",
-          );
+          await normalizationGate.reached(turnResult);
           expect((await readAcpSessionEntryAsync(f.target))?.acp?.runtimeSessionName).toBe(
             "retained-runtime",
           );
@@ -263,7 +239,7 @@ it.each([
           );
           await replaceRuntime(f);
           expect([turnSettled, cancelSettled]).toEqual([false, false]);
-          release.resolve();
+          normalizationGate.open();
           await Promise.all([turnResult, cancelResult]);
           expect([turnSettled, cancelSettled]).toEqual([true, true]);
           await expectSuccessor(f);
@@ -271,7 +247,7 @@ it.each([
           expectNoRuntimeEffects(f, close);
           assertMemoryCurrent();
         } finally {
-          release.resolve();
+          normalizationGate.open();
           await Promise.allSettled([turnResult, cancelResult]);
           reader.mockRestore();
           writer?.mockRestore();

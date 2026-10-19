@@ -1,11 +1,12 @@
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { readAcpSessionEntryAsync } from "../runtime/session-meta.js";
 import {
   readDurableAcpSignals,
   withAcpCancellationFixture,
 } from "./manager.cancel-session.worker.test-support.js";
 import {
+  cancelSession,
+  createGate,
   expectSuccessor,
   locatorSessionKey,
   memoryGuard,
@@ -29,45 +30,34 @@ it.each([
         // Prime the real cache so ensure cannot publish a new handle over the replacement.
         await f.manager.getSessionStatus(f.target);
         expect(f.ensureSession).toHaveBeenCalledOnce();
-        const entered = createDeferred();
-        const release = createDeferred();
+        const runtimeGate = createGate("runtimeGate settled before its controlled boundary");
         if (boundary === "cached-status") {
           f.getStatus.mockImplementationOnce(async () => {
-            entered.resolve();
-            await release.promise;
+            await runtimeGate.wait();
             return { summary: "ready" };
           });
         } else if (boundary === "cancel-rpc") {
           f.cancel.mockImplementationOnce(async () => {
-            entered.resolve();
-            await release.promise;
+            await runtimeGate.wait();
           });
         }
         const upsert = DEFAULT_DEPS.upsertSessionMeta;
         const writer =
           boundary === "metadata-write"
             ? vi.spyOn(DEFAULT_DEPS, "upsertSessionMeta").mockImplementationOnce(async (params) => {
-                entered.resolve();
-                await release.promise;
+                await runtimeGate.wait();
                 return upsert(params);
               })
             : undefined;
         const close = vi.spyOn(f.runtime, "close");
-        const cancellation = f.manager.cancelSession({
-          ...f.target,
-          reason: "locator-replacement",
-        });
+        const cancellation = cancelSession(f, "locator-replacement");
         const result = Promise.allSettled([cancellation]);
         try {
           const initialCancelCalls = boundary === "cached-status" ? 0 : 1;
-          await awaitGateBeforeSettlement(
-            entered.promise,
-            result,
-            "Cancellation settled before the held runtime boundary.",
-          );
+          await runtimeGate.reached(result);
           expect(f.cancel).toHaveBeenCalledTimes(initialCancelCalls);
           await replaceRuntime(f);
-          release.resolve();
+          runtimeGate.open();
           const outcomes = await result;
           const current = await readAcpSessionEntryAsync(f.target);
           expect(current?.acp).toMatchObject({
@@ -94,10 +84,7 @@ it.each([
           assertMemoryCurrent();
 
           f.ensureSession.mockImplementationOnce(async () => runtimeHandle(f, "successor-runtime"));
-          await f.manager.cancelSession({
-            ...f.target,
-            reason: "successor-retry",
-          });
+          await cancelSession(f, "successor-retry");
           expect(f.ensureSession).toHaveBeenCalledTimes(2);
           expect(f.cancel).toHaveBeenCalledTimes(initialCancelCalls + 1);
           expect(f.cancel).toHaveBeenLastCalledWith({
@@ -111,7 +98,7 @@ it.each([
           expect(close).not.toHaveBeenCalled();
           assertMemoryCurrent();
         } finally {
-          release.resolve();
+          runtimeGate.open();
           await result;
           writer?.mockRestore();
           // Fixture disposal owns its ordinary close after the cancellation assertions.
@@ -141,10 +128,7 @@ it.each([
         }));
         const close = vi.spyOn(f.runtime, "close");
         try {
-          await f.manager.cancelSession({
-            ...f.target,
-            reason: "normalized-cancel",
-          });
+          await cancelSession(f, "normalized-cancel");
           expect(f.cancel).toHaveBeenCalledExactlyOnceWith({
             handle: expect.objectContaining({
               backend: "cancellation-proof",
@@ -180,23 +164,18 @@ it.each([
     await withAcpCancellationFixture(
       async (f) => {
         const assertMemoryCurrent = memoryGuard(f, sourceKind);
-        const turnEntered = createDeferred();
-        const releaseTurn = createDeferred();
-        const readEntered = createDeferred();
-        const releaseRead = createDeferred();
-        const cancelEntered = createDeferred();
-        const releaseCancel = createDeferred();
+        const turnGate = createGate("turnGate settled before its controlled boundary");
+        const readGate = createGate("readGate settled before its controlled boundary");
+        const cancelGate = createGate("cancelGate settled before its controlled boundary");
         let signal: AbortSignal | undefined;
         f.runTurn.mockImplementationOnce(async function* (input) {
           signal = input.signal;
-          turnEntered.resolve();
           // The producer reports its own outcome independently of cancellation RPC settlement.
-          await releaseTurn.promise;
+          await turnGate.wait();
           yield { type: "done", status: terminalStatus };
         });
         f.cancel.mockImplementationOnce(async () => {
-          cancelEntered.resolve();
-          await releaseCancel.promise;
+          await cancelGate.wait();
         });
         const prepare = DEFAULT_DEPS.prepareSessionControlRead;
         let gated = false;
@@ -209,8 +188,7 @@ it.each([
               readCurrent: async (cfg: typeof f.target.cfg) => {
                 if (boundary === "post-abort-read" && signal?.aborted && !gated) {
                   gated = true;
-                  readEntered.resolve();
-                  await releaseRead.promise;
+                  await readGate.wait();
                 }
                 return read.readCurrent(cfg);
               },
@@ -232,11 +210,7 @@ it.each([
         });
         let cancelResult: Promise<PromiseSettledResult<void>[]> | undefined;
         try {
-          await awaitGateBeforeSettlement(
-            turnEntered.promise,
-            turnResult,
-            "Turn settled before runtime entry.",
-          );
+          await turnGate.reached(turnResult);
           const cancellation = stopAcpControllerTurns({
             ...f.target,
             reason: "active-locator-replacement",
@@ -245,16 +219,12 @@ it.each([
             cancelSettled = true;
             return result;
           });
-          await awaitGateBeforeSettlement(
-            boundary === "post-abort-read" ? readEntered.promise : cancelEntered.promise,
-            cancelResult,
-            "Stop settled before its held cancellation boundary.",
-          );
+          await (boundary === "post-abort-read" ? readGate : cancelGate).reached(cancelResult);
           expect(signal?.aborted).toBe(true);
           expect(f.cancel).toHaveBeenCalledTimes(boundary === "post-abort-read" ? 0 : 1);
           await replaceRuntime(f);
-          releaseRead.resolve();
-          releaseTurn.resolve();
+          readGate.open();
+          turnGate.open();
           if (boundary === "cancel-rpc") {
             await new Promise<void>((resolve) => {
               setImmediate(resolve);
@@ -262,7 +232,7 @@ it.each([
             expect([turnSettled, cancelSettled]).toEqual([false, false]);
           }
           expect(close).not.toHaveBeenCalled();
-          releaseCancel.resolve();
+          cancelGate.open();
           await Promise.all([turnResult, cancelResult]);
           expect([turnSettled, cancelSettled]).toEqual([true, true]);
           await expectSuccessor(f, { mode: "persistent" });
@@ -279,9 +249,9 @@ it.each([
           expect(close).not.toHaveBeenCalled();
           assertMemoryCurrent();
         } finally {
-          releaseRead.resolve();
-          releaseTurn.resolve();
-          releaseCancel.resolve();
+          readGate.open();
+          turnGate.open();
+          cancelGate.open();
           await Promise.allSettled([turnResult, cancelResult]);
           reader.mockRestore();
           close.mockRestore();

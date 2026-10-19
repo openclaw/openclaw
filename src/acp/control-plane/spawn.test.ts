@@ -39,9 +39,7 @@ import { cleanupFailedAcpSpawn } from "./spawn.js";
 const backendId = "provisional-cleanup-fixture";
 const agentId = "main";
 const sessionKey = "agent:main:acp:provisional-cleanup";
-type Initialized = Awaited<
-  ReturnType<ReturnType<typeof getAcpSessionManager>["initializeSession"]>
->;
+type Initialized = Awaited<ReturnType<AcpSessionManager["initializeSession"]>>;
 const session = { sessionKey, agentId };
 const readEntry = () => loadSessionEntry(session);
 const initializeSession = (manager: AcpSessionManager, cfg: OpenClawConfig) =>
@@ -91,18 +89,100 @@ beforeAll(async () => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+function createCleanupFixture(cfg: OpenClawConfig) {
+  const close = vi.fn<AcpRuntime["close"]>(async () => {});
+  const ensureSession = vi.fn<AcpRuntime["ensureSession"]>(async (input) => ({
+    agentId: input.agentId,
+    sessionKey: input.sessionKey,
+    backend: backendId,
+    runtimeSessionName: input.sessionKey,
+    backendSessionId: `runtime:${input.sessionKey}`,
+  }));
+  const prepareFreshSession = vi.fn<NonNullable<AcpRuntime["prepareFreshSession"]>>(async () => {});
+  const runtime: AcpRuntime = {
+    ownerAwareSessions: 1,
+    ensureSession,
+    close,
+    prepareFreshSession,
+    async cancel() {},
+    runTurn() {
+      throw new Error("No provider turn belongs in this cleanup fixture");
+    },
+  };
+  const bindings = new Map<string, SessionBindingRecord>();
+  const bind = vi.fn<NonNullable<SessionBindingAdapter["bind"]>>(async (input) => {
+    const binding: SessionBindingRecord = {
+      bindingId: `binding:${input.targetSessionKey}`,
+      targetSessionKey: input.targetSessionKey,
+      targetKind: input.targetKind,
+      conversation: input.conversation,
+      status: "active",
+      boundAt: Date.now(),
+      metadata: input.metadata,
+    };
+    bindings.set(input.targetSessionKey, binding);
+    return binding;
+  });
+  const adapter: SessionBindingAdapter = {
+    channel: "discord",
+    accountId: "default",
+    capabilities: {
+      placements: ["current", "child"],
+      bindSupported: true,
+      unbindSupported: true,
+    },
+    bind,
+    listBySession: (key) => (bindings.has(key) ? [bindings.get(key)!] : []),
+    resolveByConversation: () => null,
+    unbind: async (input) => {
+      const removed = [...bindings.values()].filter(
+        (record) => record.targetSessionKey === input.targetSessionKey,
+      );
+      for (const record of removed) {
+        bindings.delete(record.targetSessionKey);
+      }
+      return removed;
+    },
+  };
+  registerSessionBindingAdapter(adapter);
+  registerAcpRuntimeBackend({ id: backendId, runtime });
+  managerTesting.resetAcpSessionManagerForTests();
+  const manager = getAcpSessionManager();
+  const socket = vi
+    .spyOn(gatewayCall, "callGateway")
+    .mockRejectedValue(new Error("Raw WebSocket transport is unavailable"));
+  // Only deadline scenarios advance the RPC clock; filesystem work must not consume it.
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  return {
+    cfg,
+    manager,
+    close,
+    ensureSession,
+    prepareFreshSession,
+    bindings,
+    bind,
+    initialize: () => initializeSession(manager, cfg),
+    cleanup: (initialized: Initialized) =>
+      cleanupFailedAcpSpawn({
+        cfg,
+        ...session,
+        sessionEntry: initialized.sessionEntry,
+        deleteTranscript: true,
+        closeRuntimeOnFailure: initialized.closeRuntimeOnFailure,
+      }),
+    verify: () => expect(socket).not.toHaveBeenCalled(),
+    dispose: async () => {
+      vi.useRealTimers();
+      await disposeAcpSessionManagerInstance(manager, "fixture-cleanup");
+      managerTesting.resetAcpSessionManagerForTests();
+      unregisterAcpRuntimeBackend(backendId);
+      unregisterSessionBindingAdapter({ channel: "discord", accountId: "default", adapter });
+    },
+  };
+}
+
 async function withCleanupFixture(
-  run: (fixture: {
-    cfg: OpenClawConfig;
-    manager: ReturnType<typeof getAcpSessionManager>;
-    initialize: () => Promise<Initialized>;
-    cleanup: (initialized: Initialized) => Promise<void>;
-    close: ReturnType<typeof vi.fn<AcpRuntime["close"]>>;
-    ensureSession: ReturnType<typeof vi.fn<AcpRuntime["ensureSession"]>>;
-    prepareFreshSession: ReturnType<typeof vi.fn<NonNullable<AcpRuntime["prepareFreshSession"]>>>;
-    bindings: Map<string, SessionBindingRecord>;
-    bind: ReturnType<typeof vi.fn<NonNullable<SessionBindingAdapter["bind"]>>>;
-  }) => Promise<void>,
+  run: (fixture: ReturnType<typeof createCleanupFixture>) => Promise<void>,
 ) {
   return await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
@@ -116,99 +196,14 @@ async function withCleanupFixture(
     };
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
-    const close = vi.fn<AcpRuntime["close"]>(async () => {});
-    const ensureSession = vi.fn<AcpRuntime["ensureSession"]>(async (input) => ({
-      agentId: input.agentId,
-      sessionKey: input.sessionKey,
-      backend: backendId,
-      runtimeSessionName: input.sessionKey,
-      backendSessionId: `runtime:${input.sessionKey}`,
-    }));
-    const prepareFreshSession = vi.fn<NonNullable<AcpRuntime["prepareFreshSession"]>>(
-      async () => {},
-    );
-    const runtime: AcpRuntime = {
-      ownerAwareSessions: 1,
-      ensureSession,
-      close,
-      prepareFreshSession,
-      async cancel() {},
-      runTurn() {
-        throw new Error("No provider turn belongs in this cleanup fixture");
-      },
-    };
-    const bindings = new Map<string, SessionBindingRecord>();
-    const bind = vi.fn<NonNullable<SessionBindingAdapter["bind"]>>(async (input) => {
-      const binding: SessionBindingRecord = {
-        bindingId: `binding:${input.targetSessionKey}`,
-        targetSessionKey: input.targetSessionKey,
-        targetKind: input.targetKind,
-        conversation: input.conversation,
-        status: "active",
-        boundAt: Date.now(),
-        metadata: input.metadata,
-      };
-      bindings.set(input.targetSessionKey, binding);
-      return binding;
-    });
-    const adapter: SessionBindingAdapter = {
-      channel: "discord",
-      accountId: "default",
-      capabilities: {
-        placements: ["current", "child"],
-        bindSupported: true,
-        unbindSupported: true,
-      },
-      bind,
-      listBySession: (key) => (bindings.has(key) ? [bindings.get(key)!] : []),
-      resolveByConversation: () => null,
-      unbind: async (input) => {
-        const removed = [...bindings.values()].filter(
-          (record) => record.targetSessionKey === input.targetSessionKey,
-        );
-        for (const record of removed) {
-          bindings.delete(record.targetSessionKey);
-        }
-        return removed;
-      },
-    };
-    registerSessionBindingAdapter(adapter);
-    registerAcpRuntimeBackend({ id: backendId, runtime });
-    managerTesting.resetAcpSessionManagerForTests();
-    const manager = getAcpSessionManager();
-    const socket = vi
-      .spyOn(gatewayCall, "callGateway")
-      .mockRejectedValue(new Error("Raw WebSocket transport is unavailable"));
-    // Only deadline scenarios advance the RPC clock; filesystem work must not consume it.
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const fixture = createCleanupFixture(cfg);
     try {
       await withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
-        run({
-          cfg,
-          manager,
-          close,
-          ensureSession,
-          prepareFreshSession,
-          bindings,
-          bind,
-          initialize: () => initializeSession(manager, cfg),
-          cleanup: (initialized) =>
-            cleanupFailedAcpSpawn({
-              cfg,
-              ...session,
-              sessionEntry: initialized.sessionEntry,
-              deleteTranscript: true,
-              closeRuntimeOnFailure: initialized.closeRuntimeOnFailure,
-            }),
-        }),
+        run(fixture),
       );
-      expect(socket).not.toHaveBeenCalled();
+      fixture.verify();
     } finally {
-      vi.useRealTimers();
-      await disposeAcpSessionManagerInstance(manager, "fixture-cleanup");
-      managerTesting.resetAcpSessionManagerForTests();
-      unregisterAcpRuntimeBackend(backendId);
-      unregisterSessionBindingAdapter({ channel: "discord", accountId: "default", adapter });
+      await fixture.dispose();
     }
   });
 }

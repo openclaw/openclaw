@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { expect } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
@@ -9,8 +10,26 @@ import type { withAcpCancellationFixture } from "./manager.cancel-session.worker
 
 type Fixture = Parameters<Parameters<typeof withAcpCancellationFixture>[0]>[0];
 
+export function createGate(label: string) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  return {
+    open: release.resolve,
+    wait() {
+      entered.resolve();
+      return release.promise;
+    },
+    reached: (operation: PromiseLike<unknown>) =>
+      awaitGateBeforeSettlement(entered.promise, operation, label),
+  };
+}
+
 export function runtimeHandle(f: Fixture, runtimeSessionName: string) {
   return { sessionKey: f.target.sessionKey, backend: "cancellation-proof", runtimeSessionName };
+}
+
+export function cancelSession(f: Fixture, reason: string) {
+  return f.manager.cancelSession({ ...f.target, reason });
 }
 
 export function replaceRuntime(f: Fixture, patch: Partial<SessionAcpMeta> = {}) {
