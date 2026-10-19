@@ -1,6 +1,6 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { PluginUiCapability } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
+import { validatePluginUiCapabilities } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import type {
   PluginDeclaredSurface,
   PluginOverviewCapabilities,
@@ -14,18 +14,22 @@ import { parsePluginCacheJson, readPluginCacheFile } from "./plugin-cache-files.
 /** Project a selected manifest's summary, never its package-wide consent union. */
 export function projectPluginOverviewCapabilities(
   declared: Pick<PluginDeclaredSurface, "providers" | "channels" | "contracts">,
-  uiCapabilities?: PluginUiCapability[],
+  uiCapabilities?: unknown,
 ): PluginOverviewCapabilities {
   const contracts: PluginOverviewCapabilities["contracts"] = {};
   for (const contract of declared.contracts) {
     const separator = contract.indexOf(": ");
     (contracts[contract.slice(0, separator)] ??= []).push(contract.slice(separator + 2));
   }
+  const ui = validatePluginUiCapabilities(uiCapabilities);
+  if (!ui.ok) {
+    throw new Error(`Invalid plugin uiCapabilities: ${ui.error}`);
+  }
   return {
     providers: declared.providers,
     channels: declared.channels,
     contracts,
-    ...(uiCapabilities !== undefined ? { ui: uiCapabilities } : {}),
+    ...(ui.capabilities !== undefined ? { ui: ui.capabilities } : {}),
   };
 }
 
