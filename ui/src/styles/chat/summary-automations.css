@@ -207,7 +207,7 @@ openclaw-chat-summary-automations .chat-summary__automation-retry {
   font-size: 12px;
   line-height: 24px;
   text-decoration: none;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 openclaw-chat-summary-automations .chat-summary__automation-more {
