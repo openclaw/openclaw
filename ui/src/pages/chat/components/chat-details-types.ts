@@ -22,7 +22,7 @@ export type ChatDetailsDesktopSectionId =
   | "processes"
   | "outputs";
 
-export type ChatDetailsEnvironmentData = Pick<
+type ChatDetailsEnvironmentData = Pick<
   ChatDetailsEnvironmentDesktopProps,
   | "onOpenProject"
   | "onOpenMachine"
