@@ -159,7 +159,7 @@ export function resolveExecApprovalsState(input: DevicesProps) {
 
 export function ExecApprovals(props: ExecApprovalsState) {
   const ready = createMemo(() => props.ready);
-  const targetReady = createMemo(() => props.target !== "node" || Boolean(props.targetNodeId));
+  const targetReady = () => props.target !== "node" || Boolean(props.targetNodeId);
   const saveButton = (
     <button
       class="btn"
@@ -228,11 +228,6 @@ export function ExecApprovals(props: ExecApprovalsState) {
 
 function NativeExecApprovals(props: { snapshot: NativeExecApprovalsSnapshot }) {
   const rules = createMemo(() => (props.snapshot.enabled ? props.snapshot.rules : []));
-  const defaultAction = createMemo(() =>
-    props.snapshot.enabled
-      ? props.snapshot.defaultAction
-      : (props.snapshot.message ?? "unavailable"),
-  );
   return (
     <>
       <SettingsRow
@@ -242,7 +237,11 @@ function NativeExecApprovals(props: { snapshot: NativeExecApprovalsSnapshot }) {
       />
       <SettingsRow
         title={t("devices.execApprovals.defaultAction")}
-        description={defaultAction()}
+        description={
+          props.snapshot.enabled
+            ? props.snapshot.defaultAction
+            : (props.snapshot.message ?? "unavailable")
+        }
         control={
           <SettingsValue
             value={t(
