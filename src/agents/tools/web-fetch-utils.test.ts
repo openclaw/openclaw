@@ -123,6 +123,23 @@ describe("web-fetch-utils", () => {
     );
   });
 
+  it("preserves entity-decoded prose that resembles preformatted markers", () => {
+    const malformed = "&lt;p>Keep&#0;openclaw-pre-bad&#0; tail&lt;/p><pre>x</pre>";
+    const validIndex = "&lt;p>Keep&#0;openclaw-pre-0&#0; tail&lt;/p><pre>x</pre>";
+
+    expect(htmlToMarkdown(malformed).text).toContain("Keep\u0000openclaw-pre-bad\u0000 tail");
+    expect(htmlToMarkdown(validIndex).text).toContain("Keep\u0000openclaw-pre-0\u0000 tail");
+    expect(htmlToMarkdown(validIndex).text).toContain("```\nx\n```");
+  });
+
+  it("keeps preformatted marker handling bounded for long NUL runs", () => {
+    const markerLikeProse = `\u0000openclaw-pre-${"\u0000".repeat(16_384)}`;
+    const rendered = htmlToMarkdown(`<p>${markerLikeProse}</p><pre>x</pre>`).text;
+
+    expect(rendered).toContain(markerLikeProse);
+    expect(rendered).toContain("```\nx\n```");
+  });
+
   it("round-trips longer fences through basic HTML text extraction", async () => {
     const marker = "`".repeat(3);
     const code = `def summarize():

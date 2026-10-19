@@ -31,6 +31,9 @@ const BLOCK_BREAK_TAGS = new Set([
 // Keep malformed nested markup from making end-of-document context unwind quadratic.
 // web_fetch favors bounded, auditable text over preserving deep broken HTML structure.
 const MAX_RENDER_CONTEXT_DEPTH = 32;
+// A fixed sentinel plus escaped text keeps placeholder restoration in one pass. Avoid
+// repeated whole-response searches: fetched HTML is untrusted and the scanner stays forward-only.
+const PRE_MARKER_PREFIX = "\u0000openclaw-pre-";
 
 type RenderContext =
   | { kind: "root"; parts: string[] }
@@ -43,7 +46,6 @@ type RenderContext =
 type RenderState = {
   title?: string;
   preBlocks: string[];
-  preMarkerPrefix: string;
 };
 
 function decodeEntities(value: string): string {
@@ -57,10 +59,17 @@ function readAnchorHref(rawTag: string): string | undefined {
   return value === undefined ? undefined : decodeEntities(value);
 }
 
+function escapePreMarkerText(value: string): string {
+  // Internal pre markers use single NULs. Double NULs in fetched text so even
+  // entity-decoded marker-like prose cannot be mistaken for a placeholder.
+  return value.replaceAll("\u0000", "\u0000\u0000");
+}
+
 function appendText(stack: RenderContext[], value: string): void {
   const context = stack[stack.length - 1];
-  context?.parts.push(value);
-  if (context?.kind === "anchor" && /\S/.test(value)) {
+  const safeValue = context?.kind === "pre" ? value : escapePreMarkerText(value);
+  context?.parts.push(safeValue);
+  if (context?.kind === "anchor" && /\S/.test(safeValue)) {
     context.hasText = true;
   }
 }
@@ -82,40 +91,49 @@ function formatPreformattedMarkdown(value: string): string {
 }
 
 function restorePreformattedMarkdown(value: string, state: RenderState): string {
-  if (state.preBlocks.length === 0) {
-    return value;
-  }
-
   const parts: string[] = [];
   let cursor = 0;
-  while (cursor < value.length) {
-    const start = value.indexOf(state.preMarkerPrefix, cursor);
-    if (start === -1) {
-      break;
-    }
-    const indexStart = start + state.preMarkerPrefix.length;
-    const end = value.indexOf("\u0000", indexStart);
-    if (end === -1) {
-      break;
-    }
-    const indexText = value.slice(indexStart, end);
-    if (!/^\d+$/.test(indexText)) {
-      cursor = indexStart;
+  let scan = 0;
+  while (scan < value.length) {
+    if (value.charCodeAt(scan) !== 0) {
+      scan += 1;
       continue;
     }
-    const code = state.preBlocks[Number(indexText)];
+    if (value.charCodeAt(scan + 1) === 0) {
+      scan += 2;
+      continue;
+    }
+    if (!value.startsWith(PRE_MARKER_PREFIX, scan)) {
+      scan += 1;
+      continue;
+    }
+
+    const indexStart = scan + PRE_MARKER_PREFIX.length;
+    let end = indexStart;
+    while (end < value.length && value.charCodeAt(end) >= 48 && value.charCodeAt(end) <= 57) {
+      end += 1;
+    }
+    if (end === indexStart || value.charCodeAt(end) !== 0) {
+      // Keep malformed marker-like content as ordinary text.
+      scan += 1;
+      continue;
+    }
+    const index = Number(value.slice(indexStart, end));
+    const code = Number.isSafeInteger(index) ? state.preBlocks[index] : undefined;
     if (code === undefined) {
-      cursor = end + 1;
+      scan += 1;
       continue;
     }
-    const preceding = value.slice(cursor, start).trimEnd();
+
+    const preceding = value.slice(cursor, scan).replaceAll("\u0000\u0000", "\u0000").trimEnd();
     if (preceding) {
       parts.push(preceding, "\n\n");
     }
     parts.push(formatPreformattedMarkdown(code), "\n\n");
     cursor = end + 1;
+    scan = cursor;
   }
-  const trailing = value.slice(cursor).trimStart();
+  const trailing = value.slice(cursor).replaceAll("\u0000\u0000", "\u0000").trimStart();
   if (trailing) {
     parts.push(trailing);
   }
@@ -127,7 +145,7 @@ function closeContext(context: RenderContext, parent: RenderContext, state: Rend
     const code = context.parts.join("");
     if (code.trim()) {
       const index = state.preBlocks.push(code) - 1;
-      parent.parts.push(`${state.preMarkerPrefix}${index}\u0000\n`);
+      parent.parts.push(`${PRE_MARKER_PREFIX}${index}\u0000\n`);
     } else {
       parent.parts.push("\n");
     }
@@ -150,7 +168,9 @@ function closeContext(context: RenderContext, parent: RenderContext, state: Rend
       return;
     case "anchor":
       parent.parts.push(
-        context.href && label ? `[${label}](${context.href})` : label || context.href || "",
+        context.href && label
+          ? `[${label}](${escapePreMarkerText(context.href)})`
+          : label || escapePreMarkerText(context.href || ""),
       );
       return;
     case "heading":
@@ -209,11 +229,7 @@ function pushContext(
 export function htmlToMarkdown(html: string): { text: string; title?: string } {
   const root: RenderContext = { kind: "root", parts: [] };
   const stack: RenderContext[] = [root];
-  let preMarkerPrefix = "\u0000openclaw-pre-";
-  while (html.includes(preMarkerPrefix)) {
-    preMarkerPrefix += "\u0000";
-  }
-  const state: RenderState = { preBlocks: [], preMarkerPrefix };
+  const state: RenderState = { preBlocks: [] };
   const tableRowCellCounts: number[] = [];
 
   for (let i = 0; i < html.length;) {
