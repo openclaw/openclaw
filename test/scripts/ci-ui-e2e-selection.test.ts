@@ -15,6 +15,7 @@ import {
   CI_MANIFEST_FIXTURE_TARGETS,
   runCiManifestFixture,
 } from "./ci-workflow-manifest.test-support.js";
+import { expectIncludes, expectExcludes } from "./ci-workflow.test-support.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterAll);
 const cron = "ui/src/e2e/cron-descriptions.e2e.test.ts";
@@ -23,6 +24,23 @@ const unknown = "ui/src/e2e/new-unmapped-flow.e2e.test.ts";
 const staleBuild = "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts";
 const teamScale = "ui/src/e2e/team-scale-cold-load.e2e.test.ts";
 let fixtureCwd: string | undefined;
+
+function runManifest(options: Omit<Parameters<typeof runCiManifestFixture>[0], "bundledPlanner">) {
+  return runCiManifestFixture({
+    bundledPlanner: true,
+    historicalCompatibility: false,
+    changedPlannerSource:
+      "export const hasUiE2eAffectingChange = (_paths, {family}) => family === 'control-ui'; export const createChangedNodeTestShards = () => [];",
+    ...options,
+    scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "true", ...options.scopeEnv },
+  });
+}
+function selectedFiles(result: ReturnType<typeof runCiManifestFixture>) {
+  expect(result.status, result.output).toBe(0);
+  return resolveShardPlans({
+    OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: result.outputs.ui_e2e_test_groups_gzip_base64!,
+  }).flatMap((entry) => (entry.kind === "group" ? (entry.plan.includePatterns ?? []) : []));
+}
 
 function fixture() {
   if (fixtureCwd) {
@@ -57,12 +75,8 @@ describe("Control UI PR owner selection", () => {
     const cwd = fixture();
     const selected = resolveUiE2ePrTestSelection(["ui/src/lib/cron/view.ts"], { cwd });
     expect(selected.mode).toBe("owners");
-    expect(selected.files).toContain(cron);
-    expect(selected.files).not.toContain(appearance);
-    expect(selected.files).not.toContain(unknown);
-    for (const smoke of UI_E2E_SMOKE_TEST_FILES) {
-      expect(selected.files).toContain(smoke);
-    }
+    expectIncludes(selected.files, [cron, ...UI_E2E_SMOKE_TEST_FILES]);
+    expectExcludes(selected.files, [appearance, unknown]);
     expect(selected.reasons[cron]).toContain(
       "direct route/component dependency: ui/src/pages/cron/route.ts",
     );
@@ -84,18 +98,16 @@ describe("Control UI PR owner selection", () => {
   );
 
   it.each([
-    { changed: null, forceFull: false },
-    { changed: [], forceFull: false },
-    { changed: ["ui/src/app/bootstrap.ts"], forceFull: false },
-    { changed: [cron], forceFull: true },
-  ])(
+    [null, false],
+    [[], false],
+    [["ui/src/app/bootstrap.ts"], false],
+    [[cron], true],
+  ] as const)(
     "selects the full inventory for missing/shared inputs or a forced run: %j",
-    ({ changed, forceFull }) => {
+    (changed, forceFull) => {
       const selected = resolveUiE2ePrTestSelection(changed, { cwd: fixture(), forceFull });
       expect(selected.mode).toBe("full");
-      expect(selected.files).toContain(cron);
-      expect(selected.files).toContain(appearance);
-      expect(selected.files).toContain(unknown);
+      expectIncludes(selected.files, [cron, appearance, unknown]);
     },
   );
 
@@ -133,15 +145,11 @@ it.each([
 ] as const)(
   "keeps stale-build recovery in its selected UI tier: $event / edited=$edited",
   ({ event, edited, selected }) => {
-    const result = runCiManifestFixture({
-      bundledPlanner: true,
-      historicalCompatibility: false,
+    const result = runManifest({
       eventName: event,
       changedPaths: edited ? [staleBuild] : ["ui/src/app/stale-chunk-reload.ts"],
       selectedTestTargets: [staleBuild, cron],
       targetFiles: [staleBuild, cron],
-      changedPlannerSource:
-        "export const hasUiE2eAffectingChange = (_paths, {family}) => family === 'control-ui'; export const createChangedNodeTestShards = () => [];",
       uiTestGroupsSource: `export { createUiTestShardGroups } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-node-test-plan.mts")).href)};`,
       uiE2eSelectorSource: `
         export const resolveUiE2ePrTestSelection = () => ({
@@ -149,15 +157,11 @@ it.each([
           reasons: {${JSON.stringify(staleBuild)}: ['fixture stale-build owner'], ${JSON.stringify(cron)}: ['fixture source owner']},
         });`,
       scopeEnv: {
-        OPENCLAW_CI_RUN_UI_TESTS: "true",
         OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
         ...(event === "schedule" ? { OPENCLAW_CI_VALIDATION_TIER: "main" } : {}),
       },
     });
-    expect(result.status, result.output).toBe(0);
-    const files = resolveShardPlans({
-      OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: result.outputs.ui_e2e_test_groups_gzip_base64!,
-    }).flatMap((entry) => (entry.kind === "group" ? (entry.plan.includePatterns ?? []) : []));
+    const files = selectedFiles(result);
     expect(files).toContain(cron);
     expect(files.includes(staleBuild)).toBe(selected);
     expect(result.summary).toContain(`Selected files: ${selected ? 2 : 1}`);
@@ -183,32 +187,24 @@ it.each([
       (_, index) => `ui/src/e2e/fixture-${index + 1}.e2e.test.ts`,
     );
     const expected = full ? CI_MANIFEST_FIXTURE_TARGETS.mocked : selection;
-    const result = runCiManifestFixture({
-      bundledPlanner: true,
-      historicalCompatibility: false,
+    const result = runManifest({
       eventName: event,
       releaseGate: event === "workflow_dispatch",
       changedPaths: ["ui/src/pages/cron/route.ts"],
       selectedTestTargets: [...CI_MANIFEST_FIXTURE_TARGETS.mocked],
-      changedPlannerSource:
-        "export const hasUiE2eAffectingChange = (_paths, {family}) => family === 'control-ui'; export const createChangedNodeTestShards = () => [];",
       uiE2eSelectorSource: `
       export const resolveUiE2ePrTestSelection = (_paths, {forceFull}) => {
         const files = forceFull ? ${JSON.stringify(CI_MANIFEST_FIXTURE_TARGETS.mocked)} : ${JSON.stringify(selection)};
         return {mode: forceFull ? 'full' : 'owners', files, reasons: Object.fromEntries(files.map(file => [file, ['fixture owner']]))};
       };`,
       scopeEnv: {
-        OPENCLAW_CI_RUN_UI_TESTS: "true",
         OPENCLAW_CI_UI_E2E_FULL: kill,
         GITHUB_STEP_SUMMARY: summary,
       },
     });
-    expect(result.status, result.output).toBe(0);
-    const files = resolveShardPlans({
-      OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: result.outputs.ui_e2e_test_groups_gzip_base64!,
-    })
-      .flatMap((entry) => (entry.kind === "group" ? (entry.plan.includePatterns ?? []) : []))
-      .filter((file) => !CI_MANIFEST_FIXTURE_TARGETS.real.includes(file));
+    const files = selectedFiles(result).filter(
+      (file) => !CI_MANIFEST_FIXTURE_TARGETS.real.includes(file),
+    );
     expect(files).toEqual(expected);
     const rows = JSON.parse(result.outputs.ui_e2e_matrix!) as {
       include: { task: string }[];

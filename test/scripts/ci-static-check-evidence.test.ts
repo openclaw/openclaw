@@ -45,40 +45,39 @@ function stepLog(output: string, exitCode = 2) {
     .join("\n");
 }
 
-function fixtureRow(rows: { phase: string; data: Record<string, unknown> }[], index: number) {
+type EvidenceRow = { phase: string; data: Record<string, unknown> };
+function rowData(rows: EvidenceRow[], index: number) {
   const row = rows[index];
   assert.ok(row, `Missing static evidence fixture row ${index}`);
-  return row;
+  return row.data;
+}
+function expectBlocked(log: string, kind: "tsgo" | "oxlint" = "tsgo") {
+  expect(parseStaticFailureReport(log, kind)).toEqual([]);
+  expect(parseStaticFailureReport(log, kind, true)).toEqual([]);
 }
 
 function completeStaticLog(
   kind: "tsgo" | "oxlint" = "tsgo",
-  change: (rows: { phase: string; data: Record<string, unknown> }[]) => void = () => {},
+  change: (rows: EvidenceRow[]) => void = () => {},
 ) {
+  const leaf = (index: number, exitCode: number, stdout: string) => ({
+    phase: "leaf",
+    data: {
+      version: 1,
+      id: `batch:${index}`,
+      config: `test/tsconfig/tsconfig.core.test.${index === 0 ? "state-logging" : "agents-tools"}.json`,
+      exitCode,
+      stdout,
+      stderr: "",
+    },
+  });
   const rows = [
-    {
-      phase: "leaf",
-      data: {
-        version: 1,
-        id: "batch:0",
-        config: "test/tsconfig/tsconfig.core.test.state-logging.json",
-        exitCode: kind === "tsgo" ? 2 : 1,
-        stdout:
-          kind === "tsgo" ? realTypeDiagnostic : JSON.stringify({ diagnostics: [lintDiagnostic] }),
-        stderr: "",
-      },
-    },
-    {
-      phase: "leaf",
-      data: {
-        version: 1,
-        id: "batch:1",
-        config: "test/tsconfig/tsconfig.core.test.agents-tools.json",
-        exitCode: 0,
-        stdout: kind === "tsgo" ? "" : JSON.stringify({ diagnostics: [] }),
-        stderr: "",
-      },
-    },
+    leaf(
+      0,
+      kind === "tsgo" ? 2 : 1,
+      kind === "tsgo" ? realTypeDiagnostic : JSON.stringify({ diagnostics: [lintDiagnostic] }),
+    ),
+    leaf(1, 0, kind === "tsgo" ? "" : JSON.stringify({ diagnostics: [] })),
     {
       phase: "completion",
       data: { version: 1, id: "batch", planned: 2, completed: 2, leaves: ["batch:0", "batch:1"] },
@@ -142,11 +141,7 @@ describe("static CI diagnostic evidence", () => {
       "extensions/codex/src/app-server/native-subagent-inventory.retirement.test.ts:20:3: error: Promises must be awaited. (typescript(no-floating-promises))\n" +
       "Found 0 warnings and 1 error.";
     expect(parseStaticFailureReport(stepLog(output, 1), "oxlint")).toEqual([
-      {
-        kind: "oxlint",
-        file: "extensions/workboard/browser/lib/workboard/card-alerts.ts",
-        test: "(1,10) error eslint(no-unused-vars): 'unused' is imported but never used.\n  Consider removing this import.",
-      },
+      lintSignature,
       {
         kind: "oxlint",
         file: "extensions/codex/src/app-server/native-subagent-inventory.retirement.test.ts",
@@ -216,44 +211,38 @@ describe("static CI diagnostic evidence", () => {
         log.replace('"completed":2', '"completed":1'),
         log.replace('"groups":1', '"groups":2'),
       ]) {
-        expect(parseStaticFailureReport(invalid, kind)).toEqual([]);
-        expect(parseStaticFailureReport(invalid, kind, true)).toEqual([]);
+        expectBlocked(invalid, kind);
       }
     },
   );
 
   it.each([
     ["missing leaf", (rows) => rows.splice(1, 1)],
-    ["duplicate leaf", (rows) => rows.splice(1, 0, fixtureRow(rows, 0))],
-    ["duplicate step", (rows) => rows.push(fixtureRow(rows, 3))],
-    ["duplicate group", (rows) => rows.splice(3, 0, fixtureRow(rows, 2))],
+    ["duplicate leaf", (rows) => rows.splice(1, 0, rows[0]!)],
+    ["duplicate step", (rows) => rows.push(rows[3]!)],
+    ["duplicate group", (rows) => rows.splice(3, 0, rows[2]!)],
     ["missing step", (rows) => rows.pop()],
     [
       "orphan leaf",
       (rows) => {
-        fixtureRow(rows, 2).data.leaves = ["batch:0"];
-        fixtureRow(rows, 2).data.planned = 1;
-        fixtureRow(rows, 2).data.completed = 1;
+        Object.assign(rowData(rows, 2), { leaves: ["batch:0"], planned: 1, completed: 1 });
       },
     ],
-    ["unfinished graph", (rows) => (fixtureRow(rows, 2).data.completed = 1)],
-    ["missing group", (rows) => (fixtureRow(rows, 3).data.groups = 2)],
-    [
-      "duplicate graph coverage",
-      (rows) => (fixtureRow(rows, 2).data.leaves = ["batch:0", "batch:0"]),
-    ],
-    ["non-diagnostic failure", (rows) => (fixtureRow(rows, 1).data.exitCode = 137)],
-    ["signaled compiler", (rows) => (fixtureRow(rows, 0).data.signal = "SIGTERM")],
-    ["skipped compiler", (rows) => (fixtureRow(rows, 1).data.skipped = true)],
-    ["compiler stderr", (rows) => (fixtureRow(rows, 0).data.stderr = "panic: worker stopped")],
+    ["unfinished graph", (rows) => (rowData(rows, 2).completed = 1)],
+    ["missing group", (rows) => (rowData(rows, 3).groups = 2)],
+    ["duplicate graph coverage", (rows) => (rowData(rows, 2).leaves = ["batch:0", "batch:0"])],
+    ["non-diagnostic failure", (rows) => (rowData(rows, 1).exitCode = 137)],
+    ["signaled compiler", (rows) => (rowData(rows, 0).signal = "SIGTERM")],
+    ["skipped compiler", (rows) => (rowData(rows, 1).skipped = true)],
+    ["compiler stderr", (rows) => (rowData(rows, 0).stderr = "panic: worker stopped")],
     [
       "unparsed compiler output",
-      (rows) => (fixtureRow(rows, 0).data.stdout = `${realTypeDiagnostic}\nworker crashed`),
+      (rows) => (rowData(rows, 0).stdout = `${realTypeDiagnostic}\nworker crashed`),
     ],
-    ["false successful compiler", (rows) => (fixtureRow(rows, 1).data.stdout = realTypeDiagnostic)],
-    ["failure without diagnostics", (rows) => (fixtureRow(rows, 0).data.stdout = "")],
+    ["false successful compiler", (rows) => (rowData(rows, 1).stdout = realTypeDiagnostic)],
+    ["failure without diagnostics", (rows) => (rowData(rows, 0).stdout = "")],
     ["step before completion", (rows) => rows.unshift(...rows.splice(-1))],
-  ] satisfies [string, (rows: { phase: string; data: Record<string, unknown> }[]) => void][])(
+  ] satisfies [string, (rows: EvidenceRow[]) => void][])(
     "keeps %s blocking despite another matching diagnostic",
     (_name, change) => {
       expect(parseStaticFailureReport(completeStaticLog("tsgo", change), "tsgo", true)).toEqual([]);

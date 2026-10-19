@@ -14,10 +14,26 @@ import {
   readWorkflowOutputs,
   runWorkflowShellScript,
   type WorkflowStep,
+  requiredWorkflowStep,
   writeExecutable,
 } from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const updateJob = () =>
+  readWorkflow(".github/workflows/ci-published-driver-update.yml").jobs.update;
+const updateStep = (name: string) => requiredWorkflowStep(updateJob().steps, name);
+const actionStep = (job: ReturnType<typeof updateJob>, action: string) =>
+  job.steps.find((step: WorkflowStep) =>
+    action.endsWith("@") ? step.uses?.startsWith(action) : step.uses === action,
+  );
+const baseContext = {
+  eventName: "workflow_dispatch",
+  repository: "openclaw/openclaw",
+  runAttempt: 1,
+} as const;
+const candidatePackage = "synthetic candidate package\n";
+const cellScript = 'bash "$CELL_SCRIPT" "$CANDIDATE" "$ARTIFACTS"';
+const fixturePath = (bin: string) => `${bin}${path.delimiter}${process.env.PATH ?? ""}`;
 
 describe("published-driver update selection", () => {
   it.each([
@@ -38,80 +54,63 @@ describe("published-driver update selection", () => {
   });
 
   it.each([
-    {
-      eventName: "pull_request",
-      file: "src/infra/update-managed-service-handoff.ts",
-      selected: false,
-    },
-    { eventName: "pull_request", file: "src/state/openclaw-state-lease.ts", selected: false },
-    { eventName: "push", file: "src/agents/context-window-guard.ts", selected: true },
-    {
-      eventName: "workflow_dispatch",
-      file: "src/plugins/plugin-native-assignments.ts",
-      selected: true,
-    },
-    { eventName: "schedule", file: "src/state/openclaw-state-db-open.ts", selected: true },
-    { eventName: "pull_request", file: "scripts/update-gateway.sh", selected: false },
-    {
-      eventName: "workflow_dispatch",
-      file: "src/infra/update-runner.ts",
-      selected: false,
-      historical: true,
-    },
-  ] as const)("connects $eventName $file to the required job", (scenario) => {
-    const { eventName, file, selected } = scenario;
-    const historical = "historical" in scenario && scenario.historical;
-    const result = runCiManifestFixture({
-      bundledPlanner: true,
-      historicalCompatibility: historical,
-      publishedDriverUpdateCapability: !historical,
-      eventName,
-      changedPaths: [file],
-      runNode: file !== "scripts/update-gateway.sh",
-      scopeEnv:
-        eventName === "schedule"
-          ? {
-              OPENCLAW_CI_VALIDATION_TIER: "main",
-              OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
-            }
-          : {},
-    });
-    expect(result.status, result.output).toBe(0);
-    expect(result.outputs.run_published_driver_update).toBe(String(selected));
-    if (selected) {
-      expect(result.outputs.run_build_artifacts).toBe("true");
-    }
-    const job = readCiWorkflow().jobs["published-driver-update"];
-    const revision = "a".repeat(40);
-    expect(
-      evaluateWorkflowCondition(job.if, {
+    ["pull_request", "src/infra/update-managed-service-handoff.ts", false],
+    ["pull_request", "src/state/openclaw-state-lease.ts", false],
+    ["push", "src/agents/context-window-guard.ts", true],
+    ["workflow_dispatch", "src/plugins/plugin-native-assignments.ts", true],
+    ["schedule", "src/state/openclaw-state-db-open.ts", true],
+    ["pull_request", "scripts/update-gateway.sh", false],
+    ["workflow_dispatch", "src/infra/update-runner.ts", false, true],
+  ] as const)(
+    "connects %s %s to the required job",
+    (eventName, file, selected, historical = false) => {
+      const result = runCiManifestFixture({
+        bundledPlanner: true,
+        historicalCompatibility: historical,
+        publishedDriverUpdateCapability: !historical,
         eventName,
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-        sha: revision,
-        additionalNeeds: {
-          "build-artifacts": {
-            result: "failure",
-            outputs: { published_driver_artifact_id: "fixture-run-artifact" },
+        changedPaths: [file],
+        runNode: file !== "scripts/update-gateway.sh",
+        scopeEnv:
+          eventName === "schedule"
+            ? {
+                OPENCLAW_CI_VALIDATION_TIER: "main",
+                OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
+              }
+            : {},
+      });
+      expect(result.status, result.output).toBe(0);
+      expect(result.outputs.run_published_driver_update).toBe(String(selected));
+      if (selected) {
+        expect(result.outputs.run_build_artifacts).toBe("true");
+      }
+      const job = readCiWorkflow().jobs["published-driver-update"];
+      const revision = "a".repeat(40);
+      expect(
+        evaluateWorkflowCondition(job.if, {
+          ...baseContext,
+          eventName,
+          sha: revision,
+          additionalNeeds: {
+            "build-artifacts": {
+              result: "failure",
+              outputs: { published_driver_artifact_id: "fixture-run-artifact" },
+            },
           },
-        },
-        preflightOutputs: { ...result.outputs, checkout_revision: revision },
-      }),
-    ).toBe(selected);
-  });
+          preflightOutputs: { ...result.outputs, checkout_revision: revision },
+        }),
+      ).toBe(selected);
+    },
+  );
 
   it("keeps candidate execution in the caller revision and cache scope", () => {
     const workflow = readWorkflow(".github/workflows/ci-published-driver-update.yml");
     const job = workflow.jobs.update;
-    const checkout = job.steps.find((step: WorkflowStep) =>
-      step.uses?.startsWith("actions/checkout@"),
-    );
+    const checkout = actionStep(job, "actions/checkout@");
     const revision = "a".repeat(40);
     expect(
       evaluateWorkflowExpression(checkout.with.ref, {
-        eventName: "workflow_dispatch",
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
+        ...baseContext,
         sha: revision,
         targetRef: "b".repeat(40),
       }),
@@ -119,11 +118,7 @@ describe("published-driver update selection", () => {
     expect(workflow.on.workflow_call.inputs.target_sha).toBeUndefined();
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(checkout.with["persist-credentials"]).toBe(false);
-    expect(
-      job.steps.find((step: WorkflowStep) => step.uses === "./.github/actions/setup-node-env").with[
-        "cache-mode"
-      ],
-    ).toBe("off");
+    expect(actionStep(job, "./.github/actions/setup-node-env").with["cache-mode"]).toBe("off");
   });
 
   it("consumes only the candidate artifact produced by this run", () => {
@@ -143,41 +138,32 @@ describe("published-driver update selection", () => {
     expect(producer.outputs.published_driver_sha256).toBe(
       "${{ steps.published_driver_package.outputs.sha256 }}",
     );
-    const consumer = readWorkflow(".github/workflows/ci-published-driver-update.yml").jobs.update;
-    const download = consumer.steps.find((step: WorkflowStep) =>
-      step.uses?.startsWith("actions/download-artifact@"),
-    );
+    const consumer = updateJob();
+    const download = actionStep(consumer, "actions/download-artifact@");
     expect(download.with["artifact-ids"]).toBe("${{ inputs.candidate_artifact_id }}");
     expect(download.with["run-id"]).toBeUndefined();
     expect(download.with["github-token"]).toBeUndefined();
-    expect(
-      consumer.steps.find((step: WorkflowStep) => step.uses === "./.github/actions/setup-node-env")
-        .with["install-deps"],
-    ).toBe("false");
+    expect(actionStep(consumer, "./.github/actions/setup-node-env").with["install-deps"]).toBe(
+      "false",
+    );
   });
 
-  it.each<{
-    commandExit: number;
-    expectedExit: number;
-    timedOut: boolean;
-    expired: boolean;
-    checksumMismatch?: boolean;
-  }>([
-    { commandExit: 124, expectedExit: 1, timedOut: true, expired: false },
-    { commandExit: 137, expectedExit: 1, timedOut: true, expired: false },
-    { commandExit: 42, expectedExit: 42, timedOut: false, expired: false },
-    { commandExit: 0, expectedExit: 0, timedOut: false, expired: false },
-    { commandExit: 0, expectedExit: 1, timedOut: false, expired: true },
-    { commandExit: 0, expectedExit: 1, timedOut: false, expired: false, checksumMismatch: true },
-  ])(
-    "reports command exit $commandExit with expired=$expired checksumMismatch=$checksumMismatch without cancelling the workflow",
-    ({ commandExit, expectedExit, timedOut, expired, checksumMismatch }) => {
+  it.each([
+    [124, 1, true, false],
+    [137, 1, true, false],
+    [42, 42, false, false],
+    [0, 0, false, false],
+    [0, 1, false, true],
+    [0, 1, false, false, true],
+  ] as const)(
+    "reports command exit %s (expected=%s timeout=%s expired=%s checksum=%s) without cancelling the workflow",
+    (commandExit, expectedExit, timedOut, expired, checksumMismatch = false) => {
       const root = tempDirs.make("openclaw-published-driver-budget-");
       const packageDirectory = path.join(root, ".artifacts/published-driver-package");
       const bin = path.join(root, "bin");
       mkdirSync(packageDirectory, { recursive: true });
       mkdirSync(bin);
-      const candidate = "synthetic candidate package\n";
+      const candidate = candidatePackage;
       const actualSha256 = createHash("sha256").update(candidate).digest("hex");
       const expectedSha256 = checksumMismatch ? "0".repeat(64) : actualSha256;
       writeFileSync(path.join(packageDirectory, "openclaw-candidate.tgz"), candidate);
@@ -189,16 +175,13 @@ describe("published-driver update selection", () => {
         "printf '%s\\n' update > .artifacts/published-driver-update/phase.txt",
         `exit ${commandExit}`,
       ]);
-      const job = readWorkflow(".github/workflows/ci-published-driver-update.yml").jobs.update;
-      const step = job.steps.find(
-        (candidateStep: WorkflowStep) =>
-          candidateStep.name === "Update published driver to candidate",
-      );
+      const job = updateJob();
+      const step = updateStep("Update published driver to candidate");
       const result = runWorkflowShellScript(step.run, {
         cwd: root,
         env: {
           ...process.env,
-          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+          PATH: fixturePath(bin),
           CELL_DEADLINE_EPOCH_SECONDS: expired ? "999" : "1525",
           CANDIDATE_SHA256: expectedSha256,
           DRIVER_VERSION: "2026.9.7",
@@ -250,22 +233,16 @@ describe("published-driver update selection", () => {
       repository: "contributor/openclaw",
     },
   ])("writes driver cache for $eventName $ref hit=$hit: $allowed", (scenario) => {
-    const job = readWorkflow(".github/workflows/ci-published-driver-update.yml").jobs.update;
-    const prepare = job.steps.find(
-      (step: WorkflowStep) => step.name === "Prepare main published driver seed",
-    );
-    const save = job.steps.find((step: WorkflowStep) =>
-      step.uses?.startsWith("actions/cache/save@"),
-    );
-    const restore = job.steps.find((step: WorkflowStep) =>
-      step.uses?.startsWith("actions/cache/restore@"),
-    );
+    const job = updateJob();
+    const prepare = updateStep("Prepare main published driver seed");
+    const save = actionStep(job, "actions/cache/save@");
+    const restore = actionStep(job, "actions/cache/restore@");
     const driver = job.steps.find((step: WorkflowStep) => step.id === "driver");
     const context = {
+      ...baseContext,
       eventName: scenario.eventName,
       ref: scenario.ref,
       repository: scenario.repository ?? "openclaw/openclaw",
-      runAttempt: 1,
     };
     const cacheMode = String(evaluateWorkflowExpression(driver.env.DRIVER_CACHE_MODE, context));
     const root = tempDirs.make("openclaw-published-driver-cache-mode-");
@@ -279,7 +256,7 @@ describe("published-driver update selection", () => {
     const resolved = runWorkflowShellScript(driver.run, {
       cwd: root,
       env: {
-        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        PATH: fixturePath(bin),
         SystemRoot: process.env.SystemRoot,
         BASH_ENV: "",
         ENV: "",
@@ -322,7 +299,7 @@ describe("published-driver update selection", () => {
       mkdirSync(path.dirname(script), { recursive: true });
       mkdirSync(helpers);
       copyFileSync("scripts/e2e/published-driver-update-docker.sh", script);
-      writeFileSync(candidate, "synthetic candidate package\n");
+      writeFileSync(candidate, candidatePackage);
       writeFileSync(imageState, "openclaw-published-driver-update-e2e\n");
       // Exercise the wrapper's volume ownership; the shared container owner has
       // its own tests. No helper in this fixture can fall through to host Docker.
@@ -364,10 +341,10 @@ docker_e2e_run_with_harness() {
         'printf "unexpected host Docker request\\n" > "$HOST_DOCKER_ATTEMPT"',
         "exit 97",
       ]);
-      const result = runWorkflowShellScript('bash "$CELL_SCRIPT" "$CANDIDATE" "$ARTIFACTS"', {
+      const result = runWorkflowShellScript(cellScript, {
         cwd: root,
         env: {
-          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+          PATH: fixturePath(bin),
           SystemRoot: process.env.SystemRoot,
           HOME: root,
           BASH_ENV: "",
@@ -406,7 +383,7 @@ docker_e2e_run_with_harness() {
     const candidate = path.join(root, "candidate.tgz");
     mkdirSync(bin);
     writeFileSync(githubEnv, "");
-    writeFileSync(candidate, "synthetic candidate package\n");
+    writeFileSync(candidate, candidatePackage);
     writeExecutable(path.join(bin, "docker"), [
       `#!${process.execPath}`,
       'const fs = require("node:fs");',
@@ -418,9 +395,7 @@ docker_e2e_run_with_harness() {
       "}",
     ]);
     const { CELL_DEADLINE_EPOCH_SECONDS: _inherited, ...env } = process.env;
-    const budgetStep = readWorkflow(
-      ".github/workflows/ci-published-driver-update.yml",
-    ).jobs.update.steps.find((step: WorkflowStep) => step.name === "Start cell budget");
+    const budgetStep = updateStep("Start cell budget");
 
     const ciStarted = Math.floor(Date.now() / 1000);
     const ci = runWorkflowShellScript(budgetStep.run, {
@@ -432,11 +407,11 @@ docker_e2e_run_with_harness() {
     const ciBudget = Number(ciDeadline?.[1]) - ciStarted;
 
     const directStarted = Math.floor(Date.now() / 1000);
-    const direct = runWorkflowShellScript('bash "$CELL_SCRIPT" "$CANDIDATE" "$ARTIFACTS"', {
+    const direct = runWorkflowShellScript(cellScript, {
       cwd: root,
       env: {
         ...env,
-        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        PATH: fixturePath(bin),
         CELL_SCRIPT: path.resolve("scripts/e2e/published-driver-update-docker.sh"),
         CANDIDATE: candidate,
         ARTIFACTS: path.join(root, "artifacts"),
@@ -455,9 +430,7 @@ docker_e2e_run_with_harness() {
   it("records the omitted cell when a dispatch fallback selects a different revision", () => {
     const workflow = readCiWorkflow();
     const context = {
-      eventName: "workflow_dispatch" as const,
-      repository: "openclaw/openclaw",
-      runAttempt: 1,
+      ...baseContext,
       sha: "a".repeat(40),
       additionalNeeds: {
         "build-artifacts": { outputs: { published_driver_artifact_id: "fixture-run-artifact" } },

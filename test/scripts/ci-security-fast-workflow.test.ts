@@ -5,7 +5,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { evaluateWorkflowCondition } from "./ci-workflow.test-support.js";
+import {
+  evaluateWorkflowCondition,
+  expectIncludes,
+  readWorkflowOutputs as readGitHubEnvironment,
+  requiredWorkflowStep,
+} from "./ci-workflow.test-support.js";
 
 type WorkflowStep = {
   env?: Record<string, string>;
@@ -40,19 +45,12 @@ function securityJob() {
 }
 
 function securityStep(name: string): WorkflowStep {
-  const step = securityJob().steps.find((candidate) => candidate.name === name);
-  if (!step) {
-    throw new Error(`security-fast step is missing: ${name}`);
-  }
-  return step;
+  return requiredWorkflowStep(securityJob().steps, name);
 }
 
 function securityStepIndex(name: string): number {
-  const index = securityJob().steps.findIndex((candidate) => candidate.name === name);
-  if (index < 0) {
-    throw new Error(`security-fast step is missing: ${name}`);
-  }
-  return index;
+  const steps = securityJob().steps;
+  return steps.indexOf(requiredWorkflowStep(steps, name));
 }
 
 function writeExecutable(filePath: string, source: string): void {
@@ -76,32 +74,11 @@ function runStep(
   if (!step.run) {
     throw new Error(`workflow step has no shell body: ${step.name ?? "unknown"}`);
   }
-  const result = spawnSync("bash", ["-euo", "pipefail", "-c", step.run], {
+  return spawnSync("bash", ["-euo", "pipefail", "-c", step.run], {
     cwd,
     encoding: "utf8",
     env: { ...process.env, ...step.env, ...env },
   });
-  return {
-    status: result.status,
-    stderr: result.stderr,
-    stdout: result.stdout,
-  };
-}
-
-function readGitHubEnvironment(filePath: string): Record<string, string> {
-  if (!existsSync(filePath)) {
-    return {};
-  }
-  return Object.fromEntries(
-    readFileSync(filePath, "utf8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const separator = line.indexOf("=");
-        return [line.slice(0, separator), line.slice(separator + 1)];
-      }),
-  );
 }
 
 function createFixture() {
@@ -110,10 +87,16 @@ function createFixture() {
   const bin = join(root, "bin");
   const runnerTemp = join(root, "runner");
   const githubEnv = join(root, "github-env");
-  mkdirSync(join(repo, ".github"), { recursive: true });
-  mkdirSync(join(repo, "scripts"));
-  mkdirSync(bin);
-  mkdirSync(runnerTemp);
+  for (const dir of [join(repo, ".github"), join(repo, "scripts"), bin, runnerTemp]) {
+    mkdirSync(dir, { recursive: true });
+  }
+  const writeFiles = (files: Record<string, string | Buffer>) => {
+    for (const [file, contents] of Object.entries(files)) {
+      const destination = join(repo, file);
+      mkdirSync(join(destination, ".."), { recursive: true });
+      writeFileSync(destination, contents);
+    }
+  };
 
   runGit(repo, "init", "--initial-branch=main");
   runGit(repo, "config", "user.name", "CI Fixture");
@@ -129,23 +112,19 @@ function createFixture() {
 
   // The candidate poisons every input it could: policy, hook config, and the
   // scanner itself, while adding a key the neutered scanner would let through.
-  writeFileSync(join(repo, ".github", "zizmor.yml"), "rules:\n  candidate-poison: {}\n");
-  writeFileSync(
-    join(repo, ".pre-commit-config.yaml"),
-    "repos:\n  - repo: https://example.invalid/poison.git\n",
-  );
-  writeFileSync(join(repo, scannerPath), neuteredScanner);
-  writeFileSync(join(repo, "leaked.pem"), "-----BEGIN RSA PRIVATE KEY-----\nfixture only\n");
+  writeFiles({
+    ".github/zizmor.yml": "rules:\n  candidate-poison: {}\n",
+    ".pre-commit-config.yaml": "repos:\n  - repo: https://example.invalid/poison.git\n",
+    [scannerPath]: neuteredScanner,
+    "leaked.pem": "-----BEGIN RSA PRIVATE KEY-----\nfixture only\n",
+  });
   runGit(repo, "add", ".");
   runGit(repo, "commit", "-m", "candidate policy");
 
-  mkdirSync(join(repo, ".ci-harness", ".github"), { recursive: true });
-  mkdirSync(join(repo, ".ci-harness", "scripts"), { recursive: true });
-  writeFileSync(
-    join(repo, ".ci-harness", ".github", "zizmor.yml"),
-    "rules:\n  trusted-harness: {}\n",
-  );
-  writeFileSync(join(repo, ".ci-harness", scannerPath), realScanner);
+  writeFiles({
+    ".ci-harness/.github/zizmor.yml": "rules:\n  trusted-harness: {}\n",
+    [`.ci-harness/${scannerPath}`]: realScanner,
+  });
 
   const realGit = execFileSync("sh", ["-c", "command -v git"], {
     encoding: "utf8",
@@ -297,14 +276,12 @@ describe("security-fast workflow", () => {
         join(repo, "scripts", "pre-commit", "pnpm-audit-prod.mjs"),
         `console.log("audit report"); process.exit(${auditExit});\n`,
       );
-      writeFileSync(
-        join(repo, ".ci-harness", "scripts", "ci-production-audit.mjs"),
-        readFileSync("scripts/ci-production-audit.mjs"),
-      );
-      writeFileSync(
-        join(repo, "scripts", "ci-production-audit.mjs"),
-        readFileSync("scripts/ci-production-audit.mjs"),
-      );
+      for (const directory of [".ci-harness/scripts", "scripts"]) {
+        writeFileSync(
+          join(repo, directory, "ci-production-audit.mjs"),
+          readFileSync("scripts/ci-production-audit.mjs"),
+        );
+      }
       expect(securityStep("Checkout trusted CI harness").with?.["sparse-checkout"]).toContain(
         "scripts/ci-production-audit.mjs",
       );
@@ -324,21 +301,21 @@ describe("security-fast workflow", () => {
         if (auditExit === 0) {
           expect(result.stdout).not.toContain("::warning");
         } else {
-          expect(result.stdout).toContain("::warning title=Dependency audit is non-blocking::");
-          expect(result.stdout).toContain(`Production dependency audit exited ${auditExit}.`);
-          expect(result.stdout).toContain("daily Dependency Audit workflow");
-          expect(result.stdout).toContain("dependency bump on main");
+          expectIncludes(result.stdout, [
+            "::warning title=Dependency audit is non-blocking::",
+            `Production dependency audit exited ${auditExit}.`,
+            "daily Dependency Audit workflow",
+            "dependency bump on main",
+          ]);
         }
       }
       const scheduled = parse(readFileSync(".github/workflows/dependency-audit.yml", "utf8")) as {
         jobs: { audit: { steps: WorkflowStep[] } };
       };
-      const strictStep = scheduled.jobs.audit.steps.find(
-        (step) => step.name === "Audit production dependencies",
+      const strictStep = requiredWorkflowStep(
+        scheduled.jobs.audit.steps,
+        "Audit production dependencies",
       );
-      if (!strictStep) {
-        throw new Error("scheduled production audit step is missing");
-      }
       const summary = join(repo, "summary.md");
       const strict = runStep(strictStep, repo, { GITHUB_STEP_SUMMARY: summary });
       expect(strict.status).toBe(auditExit);
@@ -354,10 +331,11 @@ describe("security-fast workflow", () => {
     const detect = securityStep("Detect committed private keys");
     const zizmor = securityStep("Audit changed GitHub workflows with zizmor");
 
-    expect(checkoutHarness.with?.ref).toBe("${{ github.workflow_sha }}");
-    expect(checkoutHarness.with?.["persist-credentials"]).toBe(false);
-    expect(checkoutHarness.with?.["sparse-checkout"]).toContain(".github/zizmor.yml");
-    expect(checkoutHarness.with?.["sparse-checkout"]).toContain(scannerPath);
+    expect(checkoutHarness.with).toMatchObject({
+      ref: "${{ github.workflow_sha }}",
+      "persist-credentials": false,
+    });
+    expectIncludes(checkoutHarness.with?.["sparse-checkout"], [".github/zizmor.yml", scannerPath]);
     expect(job.steps.some((step) => step.name === "Resolve Python runtime")).toBe(false);
     expect(install.run).toContain("python3 --version");
     expect(install.run).toContain("pre-commit==4.6.2 zizmor==1.30.1");
@@ -418,8 +396,10 @@ describe("security-fast workflow", () => {
       ...prepared.githubEnvironment,
     });
     expect(scanned.status).toBe(1);
-    expect(scanned.stderr).toContain("Private key found: leaked.pem (BEGIN RSA PRIVATE KEY)");
-    expect(scanned.stderr).toContain("[detect-private-keys] FAILED (exit 1)");
+    expectIncludes(scanned.stderr, [
+      "Private key found: leaked.pem (BEGIN RSA PRIVATE KEY)",
+      "[detect-private-keys] FAILED (exit 1)",
+    ]);
   });
 
   it("fails closed for a missing exact-base policy and trusts the harness otherwise", () => {

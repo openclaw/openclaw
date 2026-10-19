@@ -134,6 +134,17 @@ it("splits measured full-release hosted rows without losing their execution cont
     expect(before).toHaveLength(1);
     const owner = before[0]!;
     const parentKey = `release-full-${owner.shardName}`;
+    const measure = (stripes: string[][], seconds: number[]) => {
+      const generation = shardMetadata.createCompactSplitTimingGeneration({
+        configs: owner.configs,
+        env: owner.env,
+        parentShardName: parentKey,
+        stripes,
+      });
+      generation.timingKeys.forEach((key, index) => {
+        measurements[key] = seconds[index]!;
+      });
+    };
     measurements[parentKey] = 1800;
     const split = releaseRows();
     expect(split).toHaveLength(3);
@@ -173,15 +184,7 @@ it("splits measured full-release hosted rows without losing their execution cont
       delete measurements[key];
     }
     weights.mockImplementation((file) => (files.slice(0, 2).includes(file) ? 200 : 25));
-    const sampledGeneration = shardMetadata.createCompactSplitTimingGeneration({
-      configs: owner.configs,
-      env: owner.env,
-      parentShardName: parentKey,
-      stripes: [[files[0]!], [files[1]!], files.slice(2, 4), files.slice(4)],
-    });
-    sampledGeneration.timingKeys.forEach((key, index) => {
-      measurements[key] = [240, 269, 941, 1111][index]!;
-    });
+    measure([[files[0]!], [files[1]!], files.slice(2, 4), files.slice(4)], [240, 269, 941, 1111]);
     const repriced = releaseRows();
     expect(repriced.flatMap(rowFiles).toSorted()).toEqual(files);
     expect(repriced.every((row) => row.predictedSeconds! <= 720)).toBe(true);
@@ -199,15 +202,10 @@ it("splits measured full-release hosted rows without losing their execution cont
       delete measurements[key];
     }
     weights.mockReturnValue(10);
-    const knownGeneration = shardMetadata.createCompactSplitTimingGeneration({
-      configs: owner.configs,
-      env: owner.env,
-      parentShardName: parentKey,
-      stripes: files.toReversed().map((file) => [file]),
-    });
-    for (const key of knownGeneration.timingKeys) {
-      measurements[key] = 100;
-    }
+    measure(
+      files.toReversed().map((file) => [file]),
+      files.map(() => 100),
+    );
     measurements[parentKey] = 1200;
     const allKnown = releaseRows();
     expect(allKnown.every((row) => row.predictedSeconds! <= 720)).toBe(true);
@@ -221,15 +219,11 @@ it("splits measured full-release hosted rows without losing their execution cont
     for (const key of Object.keys(measurements)) {
       delete measurements[key];
     }
-    const oldGeneration = shardMetadata.createCompactSplitTimingGeneration({
-      configs: owner.configs,
-      env: owner.env,
-      parentShardName: parentKey,
-      stripes: [files.slice(0, 2), ...files.slice(2).map((file) => [file])],
-    });
-    oldGeneration.timingKeys.forEach((key, index) => {
-      measurements[key] = index === 1 ? 2000 : 10;
-    });
+    const oldStripes = [files.slice(0, 2), ...files.slice(2).map((file) => [file])];
+    measure(
+      oldStripes,
+      oldStripes.map((_, index) => (index === 1 ? 2000 : 10)),
+    );
     expect(releaseRows).toThrow("indivisible test above the hosted budget");
   } finally {
     fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...original);

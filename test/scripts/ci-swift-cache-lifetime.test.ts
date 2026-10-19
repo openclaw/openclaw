@@ -1,35 +1,20 @@
 import { spawnSync } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
-import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  readCiWorkflow,
+  readWorkflowOutputs,
+  requiredWorkflowStep,
+  type WorkflowStep,
+} from "./ci-workflow.test-support.js";
 
-type Step = {
-  name: string;
-  id?: string;
-  if?: string;
-  run?: string;
-  uses?: string;
-  env?: Record<string, string>;
-  with?: Record<string, string>;
-  "continue-on-error"?: boolean;
-  "timeout-minutes"?: number;
-};
-const repo = path.resolve(import.meta.dirname, "../..");
-const job = parse(fs.readFileSync(path.join(repo, ".github/workflows/ci.yml"), "utf8")).jobs[
-  "macos-swift"
-];
+type Step = WorkflowStep & { "timeout-minutes"?: number };
+const job = readCiWorkflow().jobs["macos-swift"];
 const steps: Step[] = job.steps;
 const temps = useAutoCleanupTempDirTracker(afterEach);
-const step = (name: string): Step => {
-  const found = steps.find((candidate) => candidate.name === name);
-  if (!found) {
-    throw new Error(`Missing Swift workflow step: ${name}`);
-  }
-  return found;
-};
+const step = (name: string) => requiredWorkflowStep(steps, name);
 const clock = step("Start Swift cache clock");
 const budget = step("Check Swift cache save budget");
 const packageSave = step("Save SwiftPM cache");
@@ -50,13 +35,7 @@ function runClockStep(owner: Step, now: number, started = "") {
     },
   );
   expect(result.status, result.stderr).toBe(0);
-  return Object.fromEntries(
-    fs
-      .readFileSync(output, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => line.split("=")),
-  );
+  return readWorkflowOutputs(output);
 }
 
 type Context = {
@@ -103,8 +82,7 @@ function selected(owner: Step, context: Context = {}) {
 describe("macOS optional Swift cache lifetime", () => {
   it("starts its clock before checkout and admits the bounded tail only after required artifacts", () => {
     expect(steps[0]).toBe(clock);
-    expect(clock["continue-on-error"]).toBe(true);
-    expect(clock["timeout-minutes"]).toBe(1);
+    expect(clock).toMatchObject({ "continue-on-error": true, "timeout-minutes": 1 });
     const started = runClockStep(clock, 1234.5).started;
     expect(started).toBe("1234.5");
     expect(runClockStep(budget, 1235, started).allowed).toBe("true");
