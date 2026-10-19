@@ -186,7 +186,10 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
         await openChatSidePanelType(page, "Subagents");
         const panel = page.locator("openclaw-chat-subagents-panel");
-        await panel.getByRole("button", { name: child.label, exact: true }).click();
+        await panel
+          .locator(".subagents-desktop__open")
+          .filter({ has: page.getByText(child.label, { exact: true }) })
+          .click();
         const detail = panel.locator(".chat-subagent-detail");
         const copy = detail.getByText(
           "Ready: the navigation preference repair is implemented and verified.",
@@ -239,13 +242,13 @@ suite.define(() => {
       const waitingRow = panel.locator(`[data-session-key="${waiting.key}"]`);
       await waitingRow.waitFor();
 
-      expect(await panel.locator(".chat-subagents__running").getByText(waiting.label).count()).toBe(
+      expect(await panel.locator('[data-group="waiting"]').getByText(waiting.label).count()).toBe(
         1,
       );
       expect(await waitingRow.getByRole("button", { name: `Stop ${waiting.label}` }).count()).toBe(
         0,
       );
-      await panel.locator(".chat-subagents__finished").getByText(finished.label).waitFor();
+      await panel.locator('[data-group="done"]').getByText(finished.label).waitFor();
       const settled = { ...waiting, hasActiveSubagentRun: false, updatedAt: Date.now() + 1 };
       await gateway.setSessionsListResponse({ sessions: [parent, child, settled, finished] });
       await gateway.emitGatewayEvent("sessions.changed", {
@@ -255,7 +258,7 @@ suite.define(() => {
         session: settled,
         ancestorSessions: [parent],
       });
-      await panel.locator(".chat-subagents__finished").getByText(waiting.label).waitFor();
+      await panel.locator('[data-group="done"]').getByText(waiting.label).waitFor();
       expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
     });
   });
@@ -378,20 +381,23 @@ suite.define(() => {
         await openChatSidePanelType(page, "Subagents");
         const panel = parentPane.locator("openclaw-chat-subagents-panel");
         const row = panel.locator(`[data-session-key="${child.key}"]`);
-        await row.getByRole("button", { name: child.label, exact: true }).waitFor();
-        await expect.poll(() => panel.locator(".chat-subagents__item").count()).toBe(5);
+        await row
+          .locator(".subagents-desktop__open")
+          .filter({ has: page.getByText(child.label, { exact: true }) })
+          .waitFor();
+        await expect.poll(() => panel.locator(".subagents-desktop__row").count()).toBe(5);
         await panel
-          .locator(`.chat-subagents__running [data-session-key="${queued.key}"]`)
+          .locator(`[data-group="waiting"][data-session-key="${queued.key}"]`)
           .getByText("Queued", { exact: true })
           .waitFor();
         await panel
-          .locator(".chat-subagents__running")
+          .locator('[data-group="active"]')
           .getByText(swarm.label, { exact: true })
           .waitFor();
         expect(await panel.getByText(persistent.label, { exact: true }).count()).toBe(0);
         await expect
-          .poll(() => row.locator(".chat-subagents__calls").textContent())
-          .toBe("2 calls");
+          .poll(() => row.locator(".subagents-desktop__open").getAttribute("title"))
+          .toContain("2 calls");
 
         const activity = {
           sessionKey: child.key,
@@ -413,10 +419,12 @@ suite.define(() => {
         };
         await gateway.emitGatewayEvent("agent", activity);
         await expect
-          .poll(() => row.locator(".chat-subagents__activity").textContent())
-          .toBe("Reading notice component");
+          .poll(() => row.locator(".subagents-desktop__open").getAttribute("title"))
+          .toContain("Reading notice component");
         await gateway.emitGatewayEvent("agent", activity);
-        expect(await row.locator(".chat-subagents__calls").textContent()).toBe("2 calls");
+        expect(await row.locator(".subagents-desktop__open").getAttribute("title")).toContain(
+          "2 calls",
+        );
         await gateway.emitGatewayEvent("agent", {
           sessionKey: other.key,
           agentId: "main",
@@ -427,21 +435,27 @@ suite.define(() => {
           data: { ...keyboardActivity, phase: "update" },
         });
         const otherRow = panel.locator(`[data-session-key="${other.key}"]`);
-        await otherRow.locator(".chat-subagents__activity").waitFor();
+        await otherRow.locator(".subagents-desktop__open").waitFor();
         await expect
-          .poll(() => otherRow.locator(".chat-subagents__activity").textContent())
-          .toBe("Retry failed benchmark targets");
+          .poll(() => otherRow.locator(".subagents-desktop__open").getAttribute("title"))
+          .toContain("Retry failed benchmark targets");
         await expect
-          .poll(() => otherRow.locator(".chat-subagents__calls").textContent())
-          .toBe("1+ calls");
-        expect(await row.locator("svg").count()).toBe(1);
+          .poll(() => otherRow.locator(".subagents-desktop__open").getAttribute("title"))
+          .toContain("1+ calls");
+        expect(await row.locator(".subagents-desktop__avatar").count()).toBe(1);
 
-        await panel.getByRole("button", { name: swarm.label, exact: true }).click();
+        await panel
+          .locator(".subagents-desktop__open")
+          .filter({ has: page.getByText(swarm.label, { exact: true }) })
+          .click();
         await panel.getByText("Comparing concurrent task results.", { exact: true }).waitFor();
         expect(page.url()).toBe(controlUiSessionUrl(suite.server.baseUrl, parent.key));
         expect(await draft.inputValue()).toBe("Keep this parent draft");
         await panel.getByRole("button", { name: "Back to Subagents", exact: true }).click();
-        await row.getByRole("button", { name: child.label, exact: true }).click();
+        await row
+          .locator(".subagents-desktop__open")
+          .filter({ has: page.getByText(child.label, { exact: true }) })
+          .click();
         const detail = panel.locator(".chat-subagent-detail");
         await detail.getByText("Inspecting the notice component.", { exact: true }).waitFor();
         await expectAbsent(detail, [
@@ -549,7 +563,8 @@ suite.define(() => {
         await openChatSidePanelType(page, "Subagents");
         await parentPane
           .locator("openclaw-chat-subagents-panel")
-          .getByRole("button", { name: child.label, exact: true })
+          .locator(".subagents-desktop__open")
+          .filter({ has: page.getByText(child.label, { exact: true }) })
           .click();
         const detail = parentPane.locator(".chat-subagent-detail");
         await detail.locator('.chat-bubble[data-entry-id="fork-request"]').waitFor();
