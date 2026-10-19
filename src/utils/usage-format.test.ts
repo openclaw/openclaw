@@ -34,12 +34,12 @@ function sourceConfig(provider: string, models: SourceModel[]): OpenClawConfig {
 async function writePricing(
   agentDir: string,
   provider: string,
-  models: ModelDefinitionConfig[],
+  models: SourceModel[],
 ): Promise<void> {
   await fs.mkdir(agentDir, { recursive: true });
   await fs.writeFile(
     path.join(agentDir, "models.json"),
-    JSON.stringify(pricingConfig(provider, models).models),
+    JSON.stringify({ providers: { [provider]: { models } } }),
     "utf8",
   );
 }
@@ -67,9 +67,7 @@ describe("usage-format", () => {
   });
 
   it("formats USD values", () => {
-    expect(formatUsd(1.234)).toBe("$1.23");
-    expect(formatUsd(0.5)).toBe("$0.50");
-    expect(formatUsd(0.0042)).toBe("$0.0042");
+    expect([1.234, 0.5, 0.0042].map(formatUsd)).toEqual(["$1.23", "$0.50", "$0.0042"]);
   });
 
   it("uses the sole agent directory from a canonical roster", async () => {
@@ -100,10 +98,9 @@ describe("usage-format", () => {
         agentDir: scopedAgentDir,
       })?.input;
 
-    expect(resolveInputPrice(agentDir)).toBe(10);
-    expect(resolveInputPrice(secondAgentDir)).toBe(20);
-    expect(resolveInputPrice(configuredOnlyAgentDir)).toBe(30);
-    expect(resolveInputPrice()).toBe(10);
+    expect(
+      [agentDir, secondAgentDir, configuredOnlyAgentDir, undefined].map(resolveInputPrice),
+    ).toEqual([10, 20, 30, 10]);
   });
 
   it("skips manifest model normalization for raw cost lookup", () => {
@@ -179,16 +176,10 @@ describe("usage-format", () => {
     metadataOnlyModel.cost = { input: 9, output: 8, cacheRead: 7, cacheWrite: 6 };
     expect(resolve("metadata-only", structuredClone(config))?.input).toBe(9);
 
-    await fs.writeFile(
-      path.join(agentDir, "models.json"),
-      JSON.stringify(
-        sourceConfig("demo-metadata-json", [
-          { id: "metadata-only" },
-          { id: "priced-model", cost: { input: 5, output: 6, cacheRead: 7, cacheWrite: 8 } },
-        ]).models,
-      ),
-      "utf8",
-    );
+    await writePricing(agentDir, "demo-metadata-json", [
+      { id: "metadata-only" },
+      { id: "priced-model", cost: { input: 5, output: 6, cacheRead: 7, cacheWrite: 8 } },
+    ]);
 
     expect(
       resolveModelCostConfig({

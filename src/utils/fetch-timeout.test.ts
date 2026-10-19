@@ -24,7 +24,7 @@ function fetchTimeout(init: RequestInit = {}, fetchFn = fetchUntilAborted, delay
 async function captureTimeoutLogUrl(url: string): Promise<Record<string, unknown>> {
   timeout({ url });
   await vi.advanceTimersByTimeAsync(25);
-  return requireWarnRecord(0);
+  return warn.mock.calls[0]![1];
 }
 
 function abortingBody(signal?: AbortSignal | null, chunk?: string) {
@@ -40,12 +40,6 @@ function abortingBody(signal?: AbortSignal | null, chunk?: string) {
 
 const SYNTHETIC_TELEGRAM_BOT_TOKEN = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd";
 const timeoutMessage = "fetch timeout after 25ms (elapsed 25ms)";
-
-function requireWarnRecord(callIndex: number): Record<string, unknown> {
-  const call = warn.mock.calls[callIndex];
-  expect(call).toBeDefined();
-  return call![1];
-}
 
 const fetchUntilAborted: typeof fetch = async (_input, init) =>
   await new Promise<Response>((_resolve, reject) => {
@@ -65,9 +59,7 @@ describe("fetch timeouts", () => {
   it("preserves the default AbortError reason when used as an event listener", () => {
     const parent = new AbortController();
     const child = new AbortController();
-    const onAbort = bindAbortRelay(child);
-
-    parent.signal.addEventListener("abort", onAbort, { once: true });
+    parent.signal.addEventListener("abort", bindAbortRelay(child), { once: true });
     parent.abort();
 
     expect(child.signal).toMatchObject({ aborted: true, reason: { name: "AbortError" } });
@@ -79,31 +71,29 @@ describe("fetch timeouts", () => {
   });
 
   afterEach(() => {
-    for (const cleanup of cleanups.splice(0)) {
-      cleanup();
-    }
+    cleanups.splice(0).forEach((cleanup) => cleanup());
     vi.useRealTimers();
   });
 
-  it("logs when its own timeout aborts the signal", async () => {
+  it.each([true, false])("logs timeout aborts with context=%s (#79195)", async (context) => {
     const { signal } = timeout({
-      url: "https://user:pass@example.com/v1/responses?api-key=secret#fragment",
+      operation: context ? "unit-test" : undefined,
+      url: context
+        ? "https://user:pass@example.com/v1/responses?api-key=secret#fragment"
+        : undefined,
     });
-
     await vi.advanceTimersByTimeAsync(25);
-
     expect(signal).toMatchObject({
       aborted: true,
       reason: { name: "TimeoutError", message: "request timed out" },
     });
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toBe("fetch timeout reached; aborting operation");
-    const record = requireWarnRecord(0);
-    expect(record).toMatchObject({
+    expect(warn).toHaveBeenCalledExactlyOnceWith("fetch timeout reached; aborting operation", {
       timeoutMs: 25,
-      operation: "unit-test",
-      url: "https://example.com/v1/responses",
-      consoleMessage: `${timeoutMessage} operation=unit-test url=https://example.com/v1/responses`,
+      elapsedMs: 25,
+      consoleMessage:
+        timeoutMessage +
+        (context ? " operation=unit-test url=https://example.com/v1/responses" : ""),
+      ...(context ? { operation: "unit-test", url: "https://example.com/v1/responses" } : {}),
     });
   });
 
@@ -116,9 +106,7 @@ describe("fetch timeouts", () => {
     const stream = Stream.fromSSEResponse(response, new AbortController());
     const iterator = stream[Symbol.asyncIterator]();
 
-    const firstChunk = await iterator.next();
-    expect(firstChunk.done).toBe(false);
-    expect(firstChunk.value).toEqual({ ok: true });
+    expect(await iterator.next()).toEqual({ done: false, value: { ok: true } });
     const pending = iterator.next().catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(25);
 
@@ -132,7 +120,7 @@ describe("fetch timeouts", () => {
     vi.setSystemTime(2_000);
     await vi.advanceTimersByTimeAsync(25);
 
-    const record = requireWarnRecord(0);
+    const record = warn.mock.calls[0]![1];
     const hint = "timer delayed 2000ms, likely event-loop starvation";
     expect(record).toMatchObject({
       timerDelayMs: 2000,
@@ -187,10 +175,10 @@ describe("fetch timeouts", () => {
     const parent = new AbortController();
     const reason = new Error("caller stopped after headers");
     let fetchSignal: AbortSignal | null | undefined;
-    const fetchFn = vi.fn<typeof fetch>(async (_input, init) => {
+    const fetchFn: typeof fetch = async (_input, init) => {
       fetchSignal = init?.signal;
       return new Response(abortingBody(fetchSignal));
-    });
+    };
 
     const response = await fetchTimeout({ signal: parent.signal }, fetchFn);
     const body = response.text();
@@ -207,23 +195,19 @@ describe("fetch timeouts", () => {
 
   it("clamps oversized fetchWithTimeout delays before fetch starts", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    cleanups.push(() => timeoutSpy.mockRestore());
     const response = new Response("ok");
     const fetchFn = vi.fn<typeof fetch>(async (_input, init) => {
       expect(init?.signal?.aborted).toBe(false);
       return response;
     });
 
-    try {
-      await expect(fetchTimeout({}, fetchFn, MAX_SAFE_TIMEOUT_DELAY_MS + 1)).resolves.toBe(
-        response,
-      );
-
-      expect(fetchFn).toHaveBeenCalledTimes(1);
-      expect(timeoutSpy.mock.calls[0]?.[1]).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
-      expect(timeoutSpy.mock.calls[0]?.[3]).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
-    } finally {
-      timeoutSpy.mockRestore();
-    }
+    await expect(fetchTimeout({}, fetchFn, MAX_SAFE_TIMEOUT_DELAY_MS + 1)).resolves.toBe(response);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect([timeoutSpy.mock.calls[0]?.[1], timeoutSpy.mock.calls[0]?.[3]]).toEqual([
+      MAX_SAFE_TIMEOUT_DELAY_MS,
+      MAX_SAFE_TIMEOUT_DELAY_MS,
+    ]);
   });
 
   it("preserves the parent reason when a parent signal aborts first", async () => {
@@ -237,19 +221,6 @@ describe("fetch timeouts", () => {
     expect(signal?.aborted).toBe(true);
     expect(signal?.reason).toBe(reason);
     expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("emits a warning without operation or url when callers omit context (#79195)", async () => {
-    const { signal } = timeout({ operation: undefined });
-
-    await vi.advanceTimersByTimeAsync(25);
-
-    expect(signal?.aborted).toBe(true);
-    expect(warn).toHaveBeenCalledTimes(1);
-    const record = requireWarnRecord(0);
-    expect(record).not.toHaveProperty("operation");
-    expect(record).not.toHaveProperty("url");
-    expect(record.consoleMessage).toBe(timeoutMessage);
   });
 
   it("refreshes its timeout when progress is observed", async () => {

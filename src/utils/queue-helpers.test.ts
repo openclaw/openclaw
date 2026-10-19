@@ -20,55 +20,36 @@ const runtimeSettings = () => ({
 });
 type Item = { id: string; protected?: boolean };
 function dropItems(queue: ReturnType<typeof createQueue<Item>>, inFlight?: Set<Item>) {
-  const onDrop = vi.fn<(items: Item[]) => void>();
+  const dropped: string[] = [];
   const admitted = applyQueueDropPolicy({
     queue,
     inFlight,
     summarize: (item) => item.id,
     isProtected: (item) => item.protected === true,
-    onDrop,
+    onDrop: (items) => dropped.push(...items.map((item) => item.id)),
   });
-  return {
-    admitted,
-    dropped: onDrop.mock.calls.flatMap(([items]) => items.map((item) => item.id)),
-  };
+  return { admitted, dropped };
 }
 
 describe("applyQueueRuntimeSettings", () => {
-  it("updates runtime queue settings with normalization", () => {
+  it.each([
+    { mode: "collect", debounceMs: -12, cap: 9.8, dropPolicy: "new" },
+    { mode: "queue", cap: 0 },
+  ] as const)("normalizes supplied settings and retains omitted/invalid values: %j", (settings) => {
     const target = runtimeSettings();
-    applyQueueRuntimeSettings({
-      target,
-      settings: { mode: "collect", debounceMs: -12, cap: 9.8, dropPolicy: "new" },
-    });
-
-    expect(target).toEqual({
-      mode: "collect",
-      debounceMs: 0,
-      cap: 9,
-      dropPolicy: "new",
-    });
-  });
-
-  it("keeps existing values when optional settings are missing/invalid", () => {
-    const target = runtimeSettings();
-    applyQueueRuntimeSettings({ target, settings: { mode: "queue", cap: 0 } });
-
-    expect(target).toEqual({
-      mode: "queue",
-      debounceMs: 1000,
-      cap: 20,
-      dropPolicy: "summarize",
-    });
+    applyQueueRuntimeSettings({ target, settings });
+    expect(target).toEqual(
+      settings.mode === "collect"
+        ? { mode: "collect", debounceMs: 0, cap: 9, dropPolicy: "new" }
+        : { mode: "queue", debounceMs: 1000, cap: 20, dropPolicy: "summarize" },
+    );
   });
 });
 
 describe("queue summary helpers", () => {
   it("preserves ordered summary elisions at the default limit", () => {
     const queue = {
-      items: ["new"],
-      cap: 1,
-      dropPolicy: "summarize" as const,
+      ...createQueue(["new"], 1, "summarize"),
       droppedCount: 2,
       summaryLines: ["first", "second"],
     };
@@ -150,10 +131,7 @@ describe("queue overflow protection", () => {
   });
 
   it("skips in-flight items when selecting drop victims", () => {
-    const m1: Item = { id: "m1" };
-    const m2: Item = { id: "m2" };
-    const m3: Item = { id: "m3" };
-    const m4: Item = { id: "m4" };
+    const [m1, m2, m3, m4] = ["m1", "m2", "m3", "m4"].map((id) => ({ id }));
     const queue = createQueue([m1, m2, m3, m4], 2);
     expect(dropItems(queue, new Set([m1])).dropped).toEqual(["m2", "m3"]);
     expect(queue.items).toEqual([m1, m4]);
@@ -161,27 +139,23 @@ describe("queue overflow protection", () => {
 
   it("skips protected items when selecting drop victims", () => {
     const protectedItem: Item = { id: "priority", protected: true };
-    const normalA: Item = { id: "a" };
-    const normalB: Item = { id: "b" };
-    const normalC: Item = { id: "c" };
+    const [normalA, normalB, normalC] = ["a", "b", "c"].map((id) => ({ id }));
     const queue = createQueue([protectedItem, normalA, normalB, normalC], 3);
     expect(dropItems(queue)).toEqual({ admitted: true, dropped: ["a", "b"] });
     expect(queue.items).toEqual([protectedItem, normalC]);
   });
 
-  it("rejects admission without mutating when only protected items can be dropped", () => {
-    const priority: Item = { id: "priority", protected: true };
-    const alsoProtected: Item = { id: "also", protected: true };
-    const queue = createQueue([priority, alsoProtected], 1);
-    expect(dropItems(queue)).toEqual({ admitted: false, dropped: [] });
-    expect(queue.items).toEqual([priority, alsoProtected]);
-  });
-
-  it("rejects when pending work is only in-flight or protected", () => {
-    const active: Item = { id: "active" };
-    const priority: Item = { id: "priority", protected: true };
-    const queue = createQueue([active, priority], 1);
-    expect(dropItems(queue, new Set([active]))).toEqual({ admitted: false, dropped: [] });
-    expect(queue.items).toEqual([active, priority]);
-  });
+  it.each([false, true])(
+    "rejects protected-only pending work without mutation (in-flight=%s)",
+    (active) => {
+      const priority: Item = { id: "priority", protected: true };
+      const first: Item = active ? { id: "active" } : { id: "also", protected: true };
+      const queue = createQueue([first, priority], 1);
+      expect(dropItems(queue, active ? new Set([first]) : undefined)).toEqual({
+        admitted: false,
+        dropped: [],
+      });
+      expect(queue.items).toEqual([first, priority]);
+    },
+  );
 });

@@ -28,28 +28,19 @@ describe("delivery context helpers", () => {
     expect(normalizeDeliveryContext({ channel: "  " })).toBeUndefined();
   });
 
-  it("does not inherit route fields from fallback when channels conflict", () => {
-    const merged = mergeDeliveryContext(
-      { channel: "demo-primary" },
-      { channel: "demo-fallback", to: "channel:def", accountId: "acct", threadId: "99" },
-    );
-
-    expect(merged).toEqual({ channel: "demo-primary", to: undefined, accountId: undefined });
-  });
-
-  it("does not inherit route fields from a different account on the same channel", () => {
-    const merged = mergeDeliveryContext(
-      { channel: "telegram", accountId: "bot-a" },
-      { channel: "telegram", to: "123", accountId: "bot-b", threadId: "99" },
-    );
-    expect(merged).toEqual({ channel: "telegram", to: undefined, accountId: "bot-a" });
-
+  it.each([
+    { channel: "other" },
+    { channel: "telegram", accountId: "bot-a" },
+    { accountId: "bot-a" },
+  ])("does not inherit fallback route fields across owners: %j", (primary) => {
     expect(
-      mergeDeliveryContext(
-        { accountId: "bot-a" },
-        { channel: "telegram", to: "123", accountId: "bot-b", threadId: "99" },
-      ),
-    ).toEqual({ channel: undefined, to: undefined, accountId: "bot-a" });
+      mergeDeliveryContext(primary, {
+        channel: "telegram",
+        to: "123",
+        accountId: "bot-b",
+        threadId: "99",
+      }),
+    ).toEqual({ channel: primary.channel, to: undefined, accountId: primary.accountId });
   });
 
   it("builds stable keys only when channel and to are present", () => {
