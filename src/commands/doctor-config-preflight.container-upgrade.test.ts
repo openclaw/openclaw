@@ -71,6 +71,25 @@ async function withContainerState(run: (stateDir: string, workspace: string) => 
   });
 }
 
+function readDatabase<T>(file: string, read: (db: DatabaseSync) => T): T {
+  using db = new DatabaseSync(file, { readOnly: true });
+  return read(db);
+}
+
+const sessionRows = "SELECT session_key, current_session_id FROM session_nodes";
+const schemaMarker = "SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'";
+const retainedSession = [{ session_key: "agent:main:upgrade", current_session_id: "upgrade" }];
+function expectSchema(db: DatabaseSync, version: number, marker = version) {
+  expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
+  expect(db.prepare(schemaMarker).get()?.schema_version).toBe(marker);
+}
+
+function migrationBackups(file: string) {
+  return fs
+    .readdirSync(path.dirname(file))
+    .filter((name) => name.startsWith(`${path.basename(file)}.pre-startup-migration-`));
+}
+
 function seedSchema19Agent(stateDir: string, unsafe = false): string {
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
@@ -127,35 +146,16 @@ describe("container image replacement Doctor repair and startup readiness", () =
         },
         { deferInspections: false },
       );
-      const backups = fs
-        .readdirSync(path.dirname(databasePath))
-        .filter((name) => name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`));
+      const backups = migrationBackups(databasePath);
       expect(backups).toHaveLength(1);
-      const before = new DatabaseSync(path.join(path.dirname(databasePath), backups[0]!), {
-        readOnly: true,
-      });
-      try {
+      readDatabase(path.join(path.dirname(databasePath), backups[0]!), (before) => {
         expect(before.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
         expect(before.prepare("SELECT count(*) AS count FROM session_nodes").get()?.count).toBe(1);
-      } finally {
-        before.close();
-      }
-      const database = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
-          OPENCLAW_AGENT_SCHEMA_VERSION,
-        );
-        expect(
-          database
-            .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
-            .get()?.schema_version,
-        ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-        expect(
-          database.prepare("SELECT session_key, current_session_id FROM session_nodes").all(),
-        ).toEqual([{ session_key: "agent:main:upgrade", current_session_id: "upgrade" }]);
-      } finally {
-        database.close();
-      }
+      });
+      readDatabase(databasePath, (db) => {
+        expectSchema(db, OPENCLAW_AGENT_SCHEMA_VERSION);
+        expect(db.prepare(sessionRows).all()).toEqual(retainedSession);
+      });
       await cleanupSessionStateForTest();
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const inspect = () => inspectSessionSqliteRecovery({ cfg: {}, env });
@@ -203,8 +203,7 @@ describe("container image replacement Doctor repair and startup readiness", () =
         readConfig: async () => ({}),
         confirm: async () => true,
       });
-      expect(retired.status).toBe("complete");
-      expect(retired.totals.removedFiles).toBe(3);
+      expect(retired).toMatchObject({ status: "complete", totals: { removedFiles: 3 } });
       expect(fs.existsSync(legacyBackup)).toBe(true);
       expect(fs.existsSync(databasePath)).toBe(true);
     });
@@ -238,32 +237,13 @@ describe("container image replacement Doctor repair and startup readiness", () =
           .readdirSync(workspace)
           .some((name) => name.startsWith("openclaw-workspace-state.json.migrated.")),
       ).toBe(true);
-      const backups = fs
-        .readdirSync(path.dirname(databasePath))
-        .filter((name) => name.startsWith("openclaw.sqlite.pre-startup-migration-"));
+      const backups = migrationBackups(databasePath);
       expect(backups).toHaveLength(1);
-      const before = new DatabaseSync(path.join(path.dirname(databasePath), backups[0]!), {
-        readOnly: true,
-      });
-      try {
+      readDatabase(path.join(path.dirname(databasePath), backups[0]!), (before) => {
         expect(before.prepare("PRAGMA user_version").get()?.user_version).toBe(1);
         expect(before.prepare("SELECT count(*) AS count FROM state_leases").get()?.count).toBe(0);
-      } finally {
-        before.close();
-      }
-      const database = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
-          OPENCLAW_STATE_SCHEMA_VERSION,
-        );
-        expect(
-          database
-            .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
-            .get()?.schema_version,
-        ).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-      } finally {
-        database.close();
-      }
+      });
+      readDatabase(databasePath, (db) => expectSchema(db, OPENCLAW_STATE_SCHEMA_VERSION));
     });
   });
 
@@ -278,13 +258,7 @@ describe("container image replacement Doctor repair and startup readiness", () =
         },
       });
       const mainPath = seedSchema19Agent(stateDir);
-      const auxiliaryPath = path.join(
-        stateDir,
-        "agents",
-        "auxiliary",
-        "agent",
-        "openclaw-agent.sqlite",
-      );
+      const auxiliaryPath = path.join(stateDir, "agents/auxiliary/agent/openclaw-agent.sqlite");
       fs.mkdirSync(path.dirname(auxiliaryPath), { recursive: true });
       fs.copyFileSync(mainPath, auxiliaryPath, fs.constants.COPYFILE_EXCL);
       const auxiliary = new DatabaseSync(auxiliaryPath);
@@ -311,9 +285,7 @@ describe("container image replacement Doctor repair and startup readiness", () =
       expect(main.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
         OPENCLAW_AGENT_SCHEMA_VERSION,
       );
-      expect(
-        main.db.prepare("SELECT session_key, current_session_id FROM session_nodes").all(),
-      ).toEqual([{ session_key: "agent:main:upgrade", current_session_id: "upgrade" }]);
+      expect(main.db.prepare(sessionRows).all()).toEqual(retainedSession);
 
       const retiredPath = path.join(stateDir, "settings", "voicewake.json");
       const retiredBytes = '{"triggers":["leave-for-doctor"]}\n';
@@ -383,20 +355,10 @@ describe("container image replacement Doctor repair and startup readiness", () =
         });
       });
       expect(fs.readFileSync(databasePath)).toEqual(original);
-      const database = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
-        expect(database.prepare("SELECT count(*) AS count FROM session_nodes").get()?.count).toBe(
-          1,
-        );
-        expect(
-          database
-            .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
-            .get()?.schema_version,
-        ).toBe(18);
-      } finally {
-        database.close();
-      }
+      readDatabase(databasePath, (db) => {
+        expectSchema(db, 19, 18);
+        expect(db.prepare("SELECT count(*) AS count FROM session_nodes").get()?.count).toBe(1);
+      });
     });
   });
 });

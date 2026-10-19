@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
-import { makeStateMigrationResult } from "./doctor-config-preflight.state-migration.test-helpers.js";
+import {
+  makePreflightConfigSnapshot,
+  makeStateMigrationResult,
+} from "./doctor-config-preflight.state-migration.test-helpers.js";
 import { prepareLegacyConfigMigrationRuntime } from "./doctor/shared/legacy-config-migrate.test-support.js";
 
 const autoMigrateLegacyState = vi.hoisted(() =>
@@ -15,20 +18,16 @@ const migrateLegacyConfigMachineState = vi.hoisted(() =>
 const repairLegacyCronStoreWithoutPrompt = vi.hoisted(() =>
   vi.fn(async () => ({ changes: ["cron-imported"], warnings: [] })),
 );
+const note = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshot = vi.hoisted(() =>
   vi.fn(async () => ({
-    exists: true,
-    valid: true,
-    config: { gateway: { mode: "local", port: 19091 } } as Record<string, unknown>,
-    sourceConfig: { gateway: { mode: "local", port: 19091 } } as Record<string, unknown>,
-    parsed: { gateway: { mode: "local", port: 19091 } } as Record<string, unknown>,
+    ...makePreflightConfigSnapshot({ gateway: { mode: "local", port: 19091 } }),
     includedPaths: [] as string[],
     legacyIssues: [] as Array<{ path: string; message: string }>,
     warnings: [] as Array<{ path: string; message: string }>,
     issues: [] as Array<{ path: string; message: string }>,
   })),
 );
-const note = vi.hoisted(() => vi.fn());
 
 vi.mock("../infra/state-migrations.doctor.js", async () => ({
   ...(await vi.importActual<typeof import("../infra/state-migrations.doctor.js")>(
@@ -88,15 +87,10 @@ function useInvalidConfig(
   overrides: Partial<Awaited<ReturnType<typeof readConfigFileSnapshot>>> = {},
 ) {
   readConfigFileSnapshot.mockResolvedValue({
-    exists: true,
+    ...makePreflightConfigSnapshot(config),
     valid: false,
-    config,
-    sourceConfig: config,
-    parsed: config,
     includedPaths: [],
     legacyIssues: [legacyIssue],
-    warnings: [],
-    issues: [],
     ...overrides,
   });
 }

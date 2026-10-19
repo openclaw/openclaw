@@ -27,6 +27,36 @@ const tempDirs = createFixtureLifetime();
 afterAll(() => tempDirs.cleanup());
 const DOCTOR_CHILD_TIMEOUT_MS = 60_000;
 
+function fixture(prefix: string) {
+  const root = fs.realpathSync(tempDirs.createTempDir(`openclaw-doctor-${prefix}-`));
+  const stateDir = path.join(root, "state");
+  const configPath = path.join(root, "openclaw.json");
+  fs.mkdirSync(stateDir);
+  fs.writeFileSync(configPath, "{}\n");
+  const env = {
+    PATH: process.env.PATH,
+    HOME: root,
+    USERPROFILE: root,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+    NO_COLOR: "1",
+    CI: "1",
+  };
+  return { root, stateDir, configPath, env };
+}
+
+function runDoctor(root: string, env: NodeJS.ProcessEnv) {
+  return tempDirs.track(
+    runBuiltRuntime(
+      createBuiltRuntime(root),
+      env,
+      ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
+      DOCTOR_CHILD_TIMEOUT_MS,
+    ),
+  );
+}
+
 describe("Doctor CLI migration refusal", () => {
   it("refuses missing deferral metadata with the 2026.9.2 row only in WAL", async () => {
     const root = fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-update-wal-"));
@@ -119,13 +149,10 @@ describe("Doctor CLI migration refusal", () => {
   it(
     "fails closed with manual recovery for an unsupported workspace and conflicting exec policy",
     async () => {
-      const root = fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-unsupported-state-"));
-      const stateDir = path.join(root, "state");
+      const { root, stateDir, configPath, env } = fixture("unsupported-state");
       const workspaceDir = path.join(root, "workspace");
-      const configPath = path.join(root, "openclaw.json");
       const sourcePath = path.join(stateDir, "exec-approvals.json");
       const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-      fs.mkdirSync(stateDir, { recursive: true });
       fs.mkdirSync(workspaceDir);
       fs.writeFileSync(
         configPath,
@@ -136,17 +163,6 @@ describe("Doctor CLI migration refusal", () => {
       );
       const legacy = JSON.stringify({ version: 1, defaults: { security: "full" }, agents: {} });
       fs.writeFileSync(sourcePath, legacy);
-      const env = {
-        PATH: process.env.PATH,
-        HOME: root,
-        USERPROFILE: root,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_SERVICE_REPAIR_POLICY: "external",
-        NO_COLOR: "1",
-        CI: "1",
-      };
-      const runtimeRoot = createBuiltRuntime(root);
       const seeded = openOpenClawStateDatabase({ env });
       try {
         const identity = resolveWorkspaceStateIdentity(workspaceDir);
@@ -162,14 +178,7 @@ describe("Doctor CLI migration refusal", () => {
       } finally {
         closeOpenClawStateDatabaseForTest();
       }
-      const result = await tempDirs.track(
-        runBuiltRuntime(
-          runtimeRoot,
-          env,
-          ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
-          DOCTOR_CHILD_TIMEOUT_MS,
-        ),
-      );
+      const result = await runDoctor(root, env);
       const output = `${result.stdout}\n${result.stderr}`;
       const text = output.replaceAll("│", " ").replace(/\s+/g, " ");
       expect(result.code, output).toBe(1);
@@ -203,9 +212,7 @@ describe("Doctor CLI migration refusal", () => {
   it(
     "stops the ordered graph at a refused TUI migration",
     async () => {
-      const root = fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-refusal-"));
-      const stateDir = path.join(root, "state");
-      const configPath = path.join(root, "openclaw.json");
+      const { root, stateDir, env } = fixture("refusal");
       const tuiPath = path.join(stateDir, "tui", "last-session.json");
       const approvalsPath = path.join(stateDir, "exec-approvals.json");
       const tuiRaw = "not json\n";
@@ -216,27 +223,9 @@ describe("Doctor CLI migration refusal", () => {
           agents: { main: { allowlist: [{ pattern: "/usr/bin/rg" }] } },
         }) + "\n";
       fs.mkdirSync(path.dirname(tuiPath), { recursive: true });
-      fs.writeFileSync(configPath, "{}\n");
       fs.writeFileSync(tuiPath, tuiRaw);
       fs.writeFileSync(approvalsPath, approvalsRaw);
-      const runtimeRoot = createBuiltRuntime(root);
-      const result = await tempDirs.track(
-        runBuiltRuntime(
-          runtimeRoot,
-          {
-            PATH: process.env.PATH,
-            HOME: root,
-            USERPROFILE: root,
-            OPENCLAW_STATE_DIR: stateDir,
-            OPENCLAW_CONFIG_PATH: configPath,
-            OPENCLAW_SERVICE_REPAIR_POLICY: "external",
-            NO_COLOR: "1",
-            CI: "1",
-          },
-          ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
-          DOCTOR_CHILD_TIMEOUT_MS,
-        ),
-      );
+      const result = await runDoctor(root, env);
       const output = `${result.stdout}\n${result.stderr}`;
       expect(result.signal, output).toBeNull();
       const db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
@@ -304,39 +293,25 @@ describe("doctor schema-17 repair atomicity", () => {
     expect(output).toContain("Skipped agent database migration");
     expect(output).toContain("Participant migration cannot rebuild unknown indexes");
 
-    const rejected = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(rejected.prepare("PRAGMA user_version").get()?.user_version).toBe(17);
-      expect(
-        rejected
-          .prepare(
-            "SELECT name FROM pragma_table_info('session_conversations') WHERE name = 'route_context_json'",
-          )
-          .get(),
-      ).toBeUndefined();
-      expect(
-        rejected
-          .prepare(
-            "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND name = 'session_conversations_route_context_invalidate_after_update'",
-          )
-          .get(),
-      ).toBeUndefined();
-      expect(
-        rejected
-          .prepare(
-            "SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'idx_agent_transcript_event_identity_sequence'",
-          )
-          .get(),
-      ).toBeUndefined();
-      expect(
-        rejected
-          .prepare(
-            "SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'idx_test_participant_dependency'",
-          )
-          .get(),
-      ).toEqual({ name: "idx_test_participant_dependency" });
-    } finally {
-      rejected.close();
-    }
+    using rejected = new DatabaseSync(databasePath, { readOnly: true });
+    expect(rejected.prepare("PRAGMA user_version").get()?.user_version).toBe(17);
+    expect(
+      rejected
+        .prepare(
+          "SELECT name FROM pragma_table_info('session_conversations') WHERE name = 'route_context_json'",
+        )
+        .get(),
+    ).toBeUndefined();
+    const schemaObject = (type: string, name: string) =>
+      rejected
+        .prepare("SELECT name FROM sqlite_schema WHERE type = ? AND name = ?")
+        .get(type, name);
+    expect(
+      schemaObject("trigger", "session_conversations_route_context_invalidate_after_update"),
+    ).toBeUndefined();
+    expect(schemaObject("index", "idx_agent_transcript_event_identity_sequence")).toBeUndefined();
+    expect(schemaObject("index", "idx_test_participant_dependency")).toEqual({
+      name: "idx_test_participant_dependency",
+    });
   });
 });
