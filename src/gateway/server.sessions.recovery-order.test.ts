@@ -32,6 +32,7 @@ test.each([false, true])(
     const { storePath } = await createSessionStoreDir();
     const sourceKey = "agent:main:dashboard:concurrent-cloud-recovery";
     const sourceSessionId = "concurrent-cloud-recovery-source";
+    const source = { agentId: "main", sessionKey: sourceKey, storePath };
     await writeSessionStore({
       entries: {
         [sourceKey]: sessionStoreEntry(sourceSessionId, {
@@ -47,10 +48,8 @@ test.each([false, true])(
       },
     });
     await seedSessionTranscript({
-      agentId: "main",
+      ...source,
       sessionId: sourceSessionId,
-      sessionKey: sourceKey,
-      storePath,
       messages: [{ role: "user", content: "recover the interrupted cloud workspace" }],
     });
     let placement = {
@@ -100,11 +99,9 @@ test.each([false, true])(
       workerSessionPlacementService: { getMany: () => new Map([[sourceSessionId, placement]]) },
     };
     type RecoveryPayload = { key: string; sessionId: string };
-    const first = directSessionReq<RecoveryPayload>(
-      "sessions.recover",
-      { key: sourceKey },
-      { context },
-    );
+    const recover = (options: Parameters<typeof directSessionReq>[2]) =>
+      directSessionReq<RecoveryPayload>("sessions.recover", { key: sourceKey }, options);
+    const first = recover({ context });
     await reclaimEntered.promise;
     const secondQueued = createDeferredCore();
     const secondRead = createDeferredCore();
@@ -138,22 +135,18 @@ test.each([false, true])(
       });
     let authorityActive = true;
     let secondSettled = false;
-    const second = directSessionReq<RecoveryPayload>(
-      "sessions.recover",
-      { key: sourceKey },
-      {
-        client: {
-          connect: { scopes: ["operator.write"] },
-          internal: {
-            agentRuntimeIdentity: { kind: "agentRuntime", agentId: "main", sessionKey: sourceKey },
-          },
-        } as never,
-        context: {
-          ...context,
-          validateAgentRuntimeApprovalAuthority: () => authorityActive,
+    const second = recover({
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: {
+          agentRuntimeIdentity: { kind: "agentRuntime", agentId: "main", sessionKey: sourceKey },
         },
+      } as never,
+      context: {
+        ...context,
+        validateAgentRuntimeApprovalAuthority: () => authorityActive,
       },
-    ).finally(() => {
+    }).finally(() => {
       secondSettled = true;
     });
     let settledBeforeCommit = false;
@@ -191,7 +184,7 @@ test.each([false, true])(
         payload: { key: winner.payload?.key, sessionId: winner.payload?.sessionId },
       });
     }
-    expect(loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath })).toMatchObject({
+    expect(loadSessionEntry(source)).toMatchObject({
       mainRestartRecovery: {
         tombstone: {
           recoveredSessionKey: winner.payload?.key,
@@ -199,9 +192,10 @@ test.each([false, true])(
         },
       },
     });
-    expect(
-      loadSessionEntry({ agentId: "main", sessionKey: winner.payload!.key, storePath }),
-    ).toMatchObject({ sessionId: winner.payload?.sessionId, previousSessionId: sourceSessionId });
+    expect(loadSessionEntry({ ...source, sessionKey: winner.payload!.key })).toMatchObject({
+      sessionId: winner.payload?.sessionId,
+      previousSessionId: sourceSessionId,
+    });
   },
 );
 
@@ -222,48 +216,30 @@ test.each([
     const cycleId = "orphaned-recovery-cycle";
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const target = { agentId: "main", sessionKey, storePath };
+    const run = { sessionId, runId, lifecycleGeneration };
+    const commit = (command: Parameters<typeof commitMainSessionRecovery>[0]["command"]) =>
+      commitMainSessionRecovery({ target, command });
     await writeSessionStore({ entries: { [sessionKey]: { sessionId, updatedAt: 1_000 } } });
     await persistGatewaySessionLifecycleEvent({
       sessionKey,
       event: {
         ts: 1_000,
-        runId,
-        sessionId,
-        lifecycleGeneration,
+        ...run,
         data: { phase: "start", startedAt: 1_000 },
       },
     });
-    await commitMainSessionRecovery({
-      target,
-      command: { kind: "mark_interrupted", cycleId, now: 2_000 },
+    await commit({ kind: "mark_interrupted", cycleId, now: 2_000 });
+    await commit({
+      kind: "prepare_attempt",
+      attempt: 1,
+      lifecycleGeneration,
+      now: 3_000,
+      observation: { sessionId, cycleId, revision: 1 },
+      runId,
+      executionIdentity: { state: "disabled" },
     });
-    await commitMainSessionRecovery({
-      target,
-      command: {
-        kind: "prepare_attempt",
-        attempt: 1,
-        lifecycleGeneration,
-        now: 3_000,
-        observation: { sessionId, cycleId, revision: 1 },
-        runId,
-        executionIdentity: { state: "disabled" },
-      },
-    });
-    await commitMainSessionRecovery({
-      target,
-      command: { kind: "admit_recovery", sessionId, runId, lifecycleGeneration, now: 3_000 },
-    });
-    await commitMainSessionRecovery({
-      target,
-      command: {
-        kind: "register_recovery_turn",
-        sessionId,
-        runId,
-        lifecycleGeneration,
-        cycleId,
-        attempt: 1,
-      },
-    });
+    await commit({ kind: "admit_recovery", ...run, now: 3_000 });
+    await commit({ kind: "register_recovery_turn", ...run, cycleId, attempt: 1 });
     await claimAgentSessionWriter({
       sessionId,
       sessionKey,

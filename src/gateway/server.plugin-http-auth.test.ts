@@ -43,28 +43,37 @@ function respond(res: ServerResponse, body: string) {
   res.end(body);
   return true;
 }
+function expectResponse(
+  response: Awaited<ReturnType<typeof sendRequest>>,
+  status: number,
+  body: string,
+) {
+  expect(response.res.statusCode).toBe(status);
+  expect(response.getBody()).toBe(body);
+}
 function claimingPlugin(paths?: string[]) {
   return vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
     const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
     return !paths || paths.includes(pathname) ? respond(res, "plugin-owned") : false;
   });
 }
-function withMattermost(callbackPath: string, run: ServerOptions["run"]) {
+const callbackPath = "/api/channels/mattermost/command";
+const profilePath = "/api/channels/nostr/default/profile";
+function withMattermost(
+  path: string,
+  plugin: ReturnType<typeof claimingPlugin>,
+  run: ServerOptions["run"],
+) {
   return withTempConfig({
     cfg: {
       gateway: { trustedProxies: [] },
-      channels: { mattermost: { commands: { callbackPath } } },
+      channels: { mattermost: { commands: { callbackPath: path } } },
     },
     run: async () =>
       run(
         createTestGatewayServer({
           resolvedAuth: AUTH_TOKEN,
-          overrides: {
-            handlePluginRequest: claimingPlugin([
-              "/api/channels/mattermost/command",
-              "/api/channels/nostr/default/profile",
-            ]),
-          },
+          overrides: { handlePluginRequest: plugin },
         }),
       ),
   });
@@ -169,8 +178,7 @@ describe("gateway plugin HTTP auth boundary", () => {
             authorization: "Bearer test-token",
             headers: header === undefined ? {} : { "x-openclaw-scopes": header },
           });
-          expect(response.res.statusCode).toBe(200);
-          expect(response.getBody()).toBe("ok");
+          expectResponse(response, 200, "ok");
         },
         { handlePluginRequest, shouldEnforcePluginGatewayAuth: () => true },
         AUTH_TOKEN,
@@ -183,41 +191,25 @@ describe("gateway plugin HTTP auth boundary", () => {
   );
 
   test("allows unauthenticated Mattermost callbacks while protecting other channel routes", async () => {
-    await withMattermost("/api/channels/mattermost/command", async (server) => {
-      const callback = await sendRequest(server, {
-        path: "/api/channels/mattermost/command",
-        method: "POST",
-      });
-      expect(callback.res.statusCode).toBe(200);
-      expect(callback.getBody()).toBe("plugin-owned");
-      expectUnauthorizedResponse(
-        await sendRequest(server, { path: "/api/channels/nostr/default/profile" }),
-      );
-    });
+    await withMattermost(
+      callbackPath,
+      claimingPlugin([callbackPath, profilePath]),
+      async (server) => {
+        expectResponse(
+          await sendRequest(server, { path: callbackPath, method: "POST" }),
+          200,
+          "plugin-owned",
+        );
+        expectUnauthorizedResponse(await sendRequest(server, { path: profilePath }));
+      },
+    );
   });
 
   test("does not bypass auth when mattermost callbackPath names another channel", async () => {
-    const plugin = claimingPlugin(["/api/channels/nostr/default/profile"]);
-    await withTempConfig({
-      cfg: {
-        gateway: { trustedProxies: [] },
-        channels: {
-          mattermost: { commands: { callbackPath: "/api/channels/nostr/default/profile" } },
-        },
-      },
-      run: async () => {
-        const server = createTestGatewayServer({
-          resolvedAuth: AUTH_TOKEN,
-          overrides: { handlePluginRequest: plugin },
-        });
-        expectUnauthorizedResponse(
-          await sendRequest(server, {
-            path: "/api/channels/nostr/default/profile",
-            method: "POST",
-          }),
-        );
-        expect(plugin).not.toHaveBeenCalled();
-      },
+    const plugin = claimingPlugin([profilePath]);
+    await withMattermost(profilePath, plugin, async (server) => {
+      expectUnauthorizedResponse(await sendRequest(server, { path: profilePath, method: "POST" }));
+      expect(plugin).not.toHaveBeenCalled();
     });
   });
 
@@ -256,9 +248,7 @@ describe("gateway plugin HTTP auth boundary", () => {
           });
         expect((await proxy("/googlechat", "POST")).res.statusCode).toBe(200);
         expect(ips).toEqual(["127.0.0.1"]);
-        const prefix = await proxy("/plugins/diffs/view");
-        expect(prefix.res.statusCode).toBe(200);
-        expect(prefix.getBody()).toBe("plugin-prefix");
+        expectResponse(await proxy("/plugins/diffs/view"), 200, "plugin-prefix");
         expect(hooks).not.toHaveBeenCalled();
         const gateway = await proxy("/ready");
         expect(gateway.res.statusCode).toBe(403);
@@ -278,7 +268,7 @@ describe("gateway plugin HTTP auth boundary", () => {
   test("protects canonical and encoded channel paths while leaving wildcard routes ungated", async () => {
     const plugin = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const path = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (canonicalizePathVariant(path) === "/api/channels/nostr/default/profile") {
+      if (canonicalizePathVariant(path) === profilePath) {
         return respond(res, "channel");
       }
       return path === "/googlechat" ? respond(res, "wildcard") : false;
@@ -287,14 +277,13 @@ describe("gateway plugin HTTP auth boundary", () => {
       async (server) => {
         for (const path of [
           "/googlechat",
-          "/api/channels/nostr/default/profile",
+          profilePath,
           "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile",
         ]) {
           const isPublic = path === "/googlechat";
           const unauthenticated = await sendRequest(server, { path });
           if (isPublic) {
-            expect(unauthenticated.res.statusCode).toBe(200);
-            expect(unauthenticated.getBody()).toBe("wildcard");
+            expectResponse(unauthenticated, 200, "wildcard");
           } else {
             expectUnauthorizedResponse(unauthenticated);
           }
@@ -302,8 +291,7 @@ describe("gateway plugin HTTP auth boundary", () => {
             path,
             authorization: "Bearer test-token",
           });
-          expect(authenticated.res.statusCode).toBe(200);
-          expect(authenticated.getBody()).toBe(isPublic ? "wildcard" : "channel");
+          expectResponse(authenticated, 200, isPublic ? "wildcard" : "channel");
         }
       },
       { handlePluginRequest: plugin },

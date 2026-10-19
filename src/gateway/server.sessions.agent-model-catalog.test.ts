@@ -52,6 +52,20 @@ function createAgentModelCatalogLoader() {
 
 const mainRef = "main-provider/main-only";
 const workRef = "work-provider/work-only";
+const selectedWork = { providerOverride: "work-provider", modelOverride: "work-only" };
+
+async function seedWorkSession(
+  storePath: string,
+  key: string,
+  sessionId: string,
+  entry: Partial<SessionEntry>,
+) {
+  await writeSessionStore({
+    agentId: "work",
+    storePath,
+    entries: { [key]: sessionStoreEntry(sessionId, { label: "Original label", ...entry }) },
+  });
+}
 
 type ModelSelectionCase = {
   label: string;
@@ -159,30 +173,19 @@ test.each(cases)("$method $label", async (scenario) => {
       manifest: { activation: { onAgentHarnesses: ["fixture-harness"] } },
     });
     const { writeConfigFile } = await getGatewayConfigModule();
-    await writeConfigFile({
-      plugins: {
-        load: { paths: [rootDir] },
-        ...(scenario.harness === "denied"
-          ? {}
-          : { entries: { "fixture-harness": { enabled: true } } }),
-        ...(scenario.harness === "denied" ? { deny: ["fixture-harness"] } : {}),
-      },
-    });
+    const policy =
+      scenario.harness === "denied"
+        ? { deny: ["fixture-harness"] }
+        : { entries: { "fixture-harness": { enabled: true } } };
+    await writeConfigFile({ plugins: { load: { paths: [rootDir] }, ...policy } });
   }
   const key = "agent:work:dashboard:catalog-owner";
   const access = { agentId: "work", sessionKey: key, storePath: workStorePath };
   if (method === "sessions.patch") {
-    await writeSessionStore({
-      agentId: "work",
-      storePath: workStorePath,
-      entries: {
-        [key]: sessionStoreEntry("work-catalog-patch", {
-          label: "Original label",
-          providerOverride: "synthetic",
-          modelOverride: "previous",
-          modelOverrideSource: "user",
-        }),
-      },
+    await seedWorkSession(workStorePath, key, "work-catalog-patch", {
+      providerOverride: "synthetic",
+      modelOverride: "previous",
+      modelOverrideSource: "user",
     });
   }
   const before = loadSessionEntry(access);
@@ -230,7 +233,7 @@ test.each([
     globalAllow: [mainRef],
     agentAllow: [workRef],
     model: "agent-choice",
-    expected: { providerOverride: "work-provider", modelOverride: "work-only" },
+    expected: selectedWork,
   },
   {
     name: "target agent denial despite unrestricted defaults",
@@ -283,48 +286,31 @@ test.each([
   });
   const key = `agent:work:${subagent ? "subagent" : "dashboard"}:adopt-selection`;
   const access = { agentId: "work", sessionKey: key, storePath: workStorePath };
-  await writeSessionStore({
-    agentId: "work",
-    storePath: workStorePath,
-    entries: {
-      [key]: sessionStoreEntry("existing-selection", {
-        label: "Original label",
-        ...(subagent ? {} : { providerOverride: "work-provider", modelOverride: "work-only" }),
-      }),
-    },
-  });
+  await seedWorkSession(workStorePath, key, "existing-selection", subagent ? {} : selectedWork);
   const context = { loadGatewayModelCatalogSnapshot: createAgentModelCatalogLoader() };
   const writeClient = { connect: { scopes: ["operator.write"] } } as never;
-  const sameSelection = await directSessionReq<{ entry?: SessionEntry }>(
-    "sessions.create",
-    { key, model: subagent ? workRef : "agent-choice" },
-    { client: writeClient, context },
-  );
+  const create = (
+    model: string,
+    client: NonNullable<Parameters<typeof directSessionReq>[2]>["client"] = writeClient,
+    extra: { label?: string } = {},
+  ) => directSessionReq("sessions.create", { key, model, ...extra }, { client, context });
+  const sameSelection = await create(subagent ? workRef : "agent-choice");
 
   expect(sameSelection.ok, sameSelection.error?.message).toBe(true);
   expect(loadSessionEntry(access)).toMatchObject({
     sessionId: "existing-selection",
-    providerOverride: "work-provider",
-    modelOverride: "work-only",
+    ...selectedWork,
     modelOverrideSource: "user",
   });
   const beforeChange = loadSessionEntry(access);
-  const denied = await directSessionReq(
-    "sessions.create",
-    { key, model: otherRef, label: "Must not change" },
-    { client: writeClient, context },
-  );
+  const denied = await create(otherRef, writeClient, { label: "Must not change" });
   expect(denied).toMatchObject({
     ok: false,
     error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
   });
   expect(loadSessionEntry(access)).toEqual(beforeChange);
 
-  const changed = await directSessionReq(
-    "sessions.create",
-    { key, model: otherRef },
-    { client: { connect: { scopes: ["operator.admin"] } } as never, context },
-  );
+  const changed = await create(otherRef, { connect: { scopes: ["operator.admin"] } } as never);
   expect(changed.ok, changed.error?.message).toBe(true);
   expect(loadSessionEntry(access)).toMatchObject({
     sessionId: "existing-selection",

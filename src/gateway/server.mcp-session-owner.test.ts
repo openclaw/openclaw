@@ -154,6 +154,15 @@ it("assigns and reads back a created session through admitted non-owner Discord 
           toolName = "sessions",
           targetSessionKey = targetKey,
         ) => {
+          const args =
+            toolName === "sessions_list"
+              ? { search: targetKey }
+              : {
+                  action: "assign_owner",
+                  sessionKey: targetSessionKey,
+                  ownerType: "human",
+                  ownerId,
+                };
           const response = await fetch("http://127.0.0.1:" + runtime.port + "/mcp", {
             method: "POST",
             headers: {
@@ -165,22 +174,7 @@ it("assigns and reads back a created session through admitted non-owner Discord 
               jsonrpc: "2.0",
               id: 1,
               method,
-              ...(method === "tools/call"
-                ? {
-                    params: {
-                      name: toolName,
-                      arguments:
-                        toolName === "sessions_list"
-                          ? { search: targetKey }
-                          : {
-                              action: "assign_owner",
-                              sessionKey: targetSessionKey,
-                              ownerType: "human",
-                              ownerId,
-                            },
-                    },
-                  }
-                : {}),
+              ...(method === "tools/call" ? { params: { name: toolName, arguments: args } } : {}),
             }),
           });
           expect(response.status).toBe(200);
@@ -194,13 +188,15 @@ it("assigns and reads back a created session through admitted non-owner Discord 
             error?: unknown;
           };
         };
+        const call = (ownerId = profile.id, toolName = "sessions", key = targetKey) =>
+          request(grant.token, false, "tools/call", ownerId, toolName, key);
+        const listsSessions = async (token: string, attached: boolean) =>
+          (await request(token, attached, "tools/list")).result?.tools?.some(
+            (tool) => tool.name === "sessions",
+          );
         try {
-          expect(
-            (await request(grant.token, false, "tools/list")).result?.tools?.some(
-              (tool) => tool.name === "sessions",
-            ),
-          ).toBe(true);
-          expect(await request(grant.token, false, "tools/call")).toMatchObject({
+          expect(await listsSessions(grant.token, false)).toBe(true);
+          expect(await call()).toMatchObject({
             result: { isError: false },
           });
           expect(loadSessionEntry(scope)).toMatchObject({
@@ -211,13 +207,7 @@ it("assigns and reads back a created session through admitted non-owner Discord 
             createdActor: { type: "agent", id: "main" },
             visibility: "shared",
           });
-          const listed = await request(
-            grant.token,
-            false,
-            "tools/call",
-            profile.id,
-            "sessions_list",
-          );
+          const listed = await call(profile.id, "sessions_list");
           expect(listed).toMatchObject({ result: { isError: false } });
           expect(JSON.parse(listed.result?.content?.[0]?.text ?? "")).toMatchObject({
             sessions: [
@@ -234,9 +224,9 @@ it("assigns and reads back a created session through admitted non-owner Discord 
           await fs.mkdir(personalDir, { recursive: true });
           await fs.writeFile(path.join(state.workspaceDir, "USER.md"), "Shared preferences.");
           await fs.writeFile(path.join(personalDir, "USER.md"), "Assignee preferences.");
-          expect(
-            await request(grant.token, false, "tools/call", next.id, "sessions", sessionKey),
-          ).toMatchObject({ result: { isError: false } });
+          expect(await call(next.id, "sessions", sessionKey)).toMatchObject({
+            result: { isError: false },
+          });
           const assigned = loadSessionEntry({ agentId: "main", sessionKey });
           expect(assigned).toMatchObject({
             owner: { actor: { type: "human", id: next.id } },
@@ -298,13 +288,7 @@ it("assigns and reads back a created session through admitted non-owner Discord 
             },
           });
           expect.soft(loadSessionEntry(scope)?.owner).toEqual(before);
-          expect
-            .soft(
-              (await request(attach.token, true, "tools/list")).result?.tools?.some(
-                (tool) => tool.name === "sessions",
-              ),
-            )
-            .toBe(false);
+          expect.soft(await listsSessions(attach.token, true)).toBe(false);
           let revoke = true;
           gateway.getRuntimeConfig = () => {
             if (revoke) {
@@ -313,7 +297,7 @@ it("assigns and reads back a created session through admitted non-owner Discord 
             }
             return cfg;
           };
-          const retired = await request(grant.token, false, "tools/call", next.id);
+          const retired = await call(next.id);
           expect(retired).toMatchObject({
             result: {
               isError: true,

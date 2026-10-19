@@ -27,59 +27,64 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const origin = "https://control.example.invalid";
+async function configureWriters(identityScopes: Record<string, string[]>, required = true) {
+  const dedicated = { provider: "device", settings: { device: "paired", inference: "worker" } };
+  const auth: GatewayAuthConfig = {
+    mode: "trusted-proxy",
+    identityScopes,
+    trustedProxy: {
+      userHeader: "x-forwarded-user",
+      requiredHeaders: ["x-forwarded-proto"],
+      allowLoopback: true,
+      allowUsers: Object.keys(identityScopes),
+    },
+  };
+  testState.gatewayAuth = auth;
+  testState.gatewayControlUi = { allowedOrigins: [origin] };
+  await writeConfigFile({
+    gateway: { auth, trustedProxies: ["127.0.0.1"], controlUi: { allowedOrigins: [origin] } },
+    ...(required
+      ? { cloudWorkers: { requiredProfile: "dedicated", profiles: { dedicated } } }
+      : {}),
+  });
+  if (required) {
+    vi.stubEnv("OPENCLAW_TEST_MINIMAL_GATEWAY", "0");
+  }
+}
+
+async function connectWriter(port: number, email: string, scopes: string[]) {
+  const ws = await openWs(port, {
+    origin,
+    "x-forwarded-user": email,
+    "x-forwarded-for": "203.0.113.50",
+    "x-forwarded-proto": "https",
+  });
+  try {
+    const connected = await connectReq(ws, {
+      prePairDevice: true,
+      client: CONTROL_UI_CLIENT,
+      browserOrigin: origin,
+      skipDefaultAuth: true,
+      scopes,
+      deviceIdentityPath: path.join(temps.make("policy-writer-"), "device.sqlite"),
+    });
+    expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
+    return { ws, connected };
+  } catch (error) {
+    ws.close();
+    throw error;
+  }
+}
+
 test.each([false, true])(
   "session writers read only requested placement policy over authenticated RPC (required=%s)",
   async (required) => {
-    const origin = "https://control.example.invalid";
     const email = "writer@example.invalid";
-    const auth: GatewayAuthConfig = {
-      mode: "trusted-proxy",
-      identityScopes: { [email]: ["operator.sessions.write"] },
-      trustedProxy: {
-        userHeader: "x-forwarded-user",
-        requiredHeaders: ["x-forwarded-proto"],
-        allowLoopback: true,
-        allowUsers: [email],
-      },
-    };
-    testState.gatewayAuth = auth;
-    testState.gatewayControlUi = { allowedOrigins: [origin] };
-    await writeConfigFile({
-      gateway: { auth, trustedProxies: ["127.0.0.1"], controlUi: { allowedOrigins: [origin] } },
-      ...(required
-        ? {
-            cloudWorkers: {
-              requiredProfile: "dedicated",
-              profiles: {
-                dedicated: {
-                  provider: "device",
-                  settings: { device: "paired", inference: "worker" },
-                },
-              },
-            },
-          }
-        : {}),
-    });
-    if (required) {
-      vi.stubEnv("OPENCLAW_TEST_MINIMAL_GATEWAY", "0");
-    }
+    await configureWriters({ [email]: ["operator.sessions.write"] }, required);
     await withGatewayServer(async ({ port }) => {
-      const ws = await openWs(port, {
-        origin,
-        "x-forwarded-user": email,
-        "x-forwarded-for": "203.0.113.50",
-        "x-forwarded-proto": "https",
-      });
+      const { ws, connected } = await connectWriter(port, email, ["operator.sessions.write"]);
       try {
-        const connected = await connectReq(ws, {
-          prePairDevice: true,
-          client: CONTROL_UI_CLIENT,
-          browserOrigin: origin,
-          skipDefaultAuth: true,
-          scopes: ["operator.sessions.write"],
-          deviceIdentityPath: path.join(temps.make("policy-writer-"), "device.sqlite"),
-        });
-        expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
         expect((connected.payload as HelloOk).auth.scopes).not.toContain("operator.write");
         const self = await rpcReq<{ profile: { id: string } }>(ws, "users.self", {});
         expect(self.ok, JSON.stringify(self.error)).toBe(true);
@@ -116,40 +121,18 @@ test.each([false, true])(
 );
 
 test("required placement survives disconnect but stops setup when committed caller authority ends", async () => {
-  const origin = "https://control.example.invalid";
   const admin = "admin@example.invalid";
   const writers = {
     disconnect: "disconnect@example.invalid",
     scope: "scope@example.invalid",
     profile: "profile@example.invalid",
   };
-  const auth: GatewayAuthConfig = {
-    mode: "trusted-proxy",
-    identityScopes: {
-      [admin]: ["operator.admin"],
-      ...Object.fromEntries(
-        Object.values(writers).map((email) => [email, ["operator.sessions.write"]]),
-      ),
-    },
-    trustedProxy: {
-      userHeader: "x-forwarded-user",
-      requiredHeaders: ["x-forwarded-proto"],
-      allowLoopback: true,
-      allowUsers: [admin, ...Object.values(writers)],
-    },
-  };
-  testState.gatewayAuth = auth;
-  testState.gatewayControlUi = { allowedOrigins: [origin] };
-  await writeConfigFile({
-    gateway: { auth, trustedProxies: ["127.0.0.1"], controlUi: { allowedOrigins: [origin] } },
-    cloudWorkers: {
-      requiredProfile: "dedicated",
-      profiles: {
-        dedicated: { provider: "device", settings: { device: "paired", inference: "worker" } },
-      },
-    },
+  await configureWriters({
+    [admin]: ["operator.admin"],
+    ...Object.fromEntries(
+      Object.values(writers).map((email) => [email, ["operator.sessions.write"]]),
+    ),
   });
-  vi.stubEnv("OPENCLAW_TEST_MINIMAL_GATEWAY", "0");
 
   // Observe the production service's provider-side setup entry points without replacing them.
   const setupCalls: string[] = [];
@@ -232,24 +215,8 @@ test("required placement survives disconnect but stops setup when committed call
   });
 
   await withGatewayServer(async ({ port }) => {
-    const connect = async (email: string, scopes: string[]) => {
-      const ws = await openWs(port, {
-        origin,
-        "x-forwarded-user": email,
-        "x-forwarded-for": "203.0.113.50",
-        "x-forwarded-proto": "https",
-      });
-      const connected = await connectReq(ws, {
-        prePairDevice: true,
-        client: CONTROL_UI_CLIENT,
-        browserOrigin: origin,
-        skipDefaultAuth: true,
-        scopes,
-        deviceIdentityPath: path.join(temps.make("required-placement-"), "device.sqlite"),
-      });
-      expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
-      return ws;
-    };
+    const connect = async (email: string, scopes: string[]) =>
+      (await connectWriter(port, email, scopes)).ws;
     const adminWs = await connect(admin, ["operator.admin"]);
     const commitConfigPatch = async (patch: Record<string, unknown>) => {
       const current = await rpcReq<{ hash: string }>(adminWs, "config.get", {});
