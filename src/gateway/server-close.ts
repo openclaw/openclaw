@@ -12,6 +12,7 @@ import { memorySessionActorOwners } from "../config/sessions/session-actor-memor
 import { closeSessionTranscriptReconcileWorkerPool } from "../config/sessions/session-transcript-reconcile-pool.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { GatewayPluginMetadataOwner } from "../plugins/plugin-metadata-lifecycle.js";
@@ -176,7 +177,6 @@ export type GatewayCloseParams = {
   maintenance: GatewayMaintenanceHandles | null;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   agentUnsub: (() => Promise<void> | void) | null;
-  heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
   clients: Set<{
@@ -440,9 +440,7 @@ async function closeGatewayResources(
     if (params.agentUnsub) {
       await shutdownStep("agent-unsub", () => params.agentUnsub!());
     }
-    if (params.heartbeatUnsub) {
-      await shutdownStep("heartbeat-unsub", () => params.heartbeatUnsub!());
-    }
+    heartbeatNotifications.onEvent = () => {};
     if (params.transcriptUnsub) {
       await shutdownStep("transcript-unsub", () => params.transcriptUnsub!());
     }

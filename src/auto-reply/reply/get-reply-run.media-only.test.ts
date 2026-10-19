@@ -70,7 +70,7 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import { hasControlCommand } from "../command-detection.js";
 import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
 import { runReplyAgent } from "./agent-runner-run.js";
-import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
+import { routeReplyDirectivesForTest } from "./get-reply-directives-routing.test-support.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import {
   loadAgentRunnerRuntime,
@@ -219,7 +219,8 @@ vi.mock("../../agents/harness/selection-decision.js", () => ({
   resolveAgentHarnessDeliveryDefaults: resolveAgentHarnessDeliveryDefaultsMock,
 }));
 
-vi.mock("../../agents/model-selection.js", () => ({
+vi.mock("../../agents/model-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/model-selection.js")>()),
   buildModelAliasIndex: vi.fn(
     (params: { cfg: { agents?: { defaults?: { models?: unknown } } } }) => {
       if (params.cfg.agents?.defaults?.models) {
@@ -1306,19 +1307,11 @@ describe("runPreparedReply media-only handling", () => {
       allowTextCommands: true,
     });
     params.command = { ...params.command, isAuthorizedSender: true };
-    const inbound = finalizeInboundContext(params.ctx);
-    const routed = resolveReplyDirectiveRouting({
-      commandText: inbound.commandText,
-      agentText: inbound.agentText,
-      modelAliases: [],
-      canInterpretTextDirectives: true,
-      isAuthorizedSender: true,
-      isGroup: false,
-      wasMentioned: false,
-      ctx: inbound,
+    const inbound = finalizeInboundContext({ ...params.ctx, CommandAuthorized: true });
+    const routed = await routeReplyDirectivesForTest(inbound, {
       cfg: params.cfg,
       agentId: params.agentId,
-      resetTriggered: false,
+      sessionKey: params.sessionKey,
     });
     params.directives = routed.directives;
     params.sessionCtx.agentText = routed.cleanedBody;

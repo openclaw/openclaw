@@ -398,11 +398,7 @@ export async function buildStatusReplyParts(
           Boolean(usageEntry.billing?.length) ||
           Boolean(usageEntry.summary?.trim()))
       ) {
-        const summaryLine = formatUsageWindowSummary(usageEntry, {
-          now: Date.now(),
-          maxWindows: 2,
-          includeResets: true,
-        });
+        const summaryLine = formatUsageWindowSummary(usageEntry);
         if (summaryLine) {
           usageLine = `📊 Usage: ${summaryLine}`;
         }

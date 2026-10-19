@@ -29,7 +29,7 @@ type SidebarSnapshotHost = {
 };
 
 export function createSidebarSnapshot(host: SidebarSnapshotHost) {
-  const listeners = new Set<() => void>();
+  let publish: (() => void) | undefined;
   let pending = false;
   let saved = false;
   const store = new SessionSnapshotStore();
@@ -45,14 +45,14 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
   let cancelCapture: (() => void) | undefined;
 
   function subscribe(listener: () => void): () => void {
-    listeners.add(listener);
-    return () => listeners.delete(listener);
+    publish = listener;
+    return () => {
+      publish = undefined;
+    };
   }
 
   function notify(): void {
-    for (const listener of listeners) {
-      listener();
-    }
+    publish?.();
   }
 
   function connect(): void {
@@ -111,6 +111,7 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
             notify();
           });
         }
+        // Connection receipts retire stale snapshot capture and restore the new scope.
         stopGateway = gateway.subscribe(() => {
           synchronize();
           notify();

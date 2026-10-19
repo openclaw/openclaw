@@ -32,6 +32,7 @@ function harness() {
     eventLog: [],
     eventLogRevision: 0,
     connect: vi.fn(),
+    defer: () => false,
     setSessionKey: vi.fn(),
     start: vi.fn(),
     stop: vi.fn(),

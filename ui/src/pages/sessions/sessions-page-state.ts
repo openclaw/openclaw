@@ -24,7 +24,8 @@ import { watchAgentScope } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
-import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { observeState } from "../../lib/reactive/observe-state.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccessRequest,
@@ -102,7 +103,6 @@ export function createSessionsPage(
 ) {
   let routeData = initialRouteData;
   let active = true;
-  let publish = () => {};
   const menuOwner = {};
   const [presentation, setPresentation] = createStore<
     Pick<SessionsProps, "sortColumn" | "sortDir" | "groupBy" | "page" | "pageSize">
@@ -129,36 +129,26 @@ export function createSessionsPage(
   }
 
   // Query and mutation decisions read these facts synchronously; the projection only observes.
-  const state = new Proxy<SessionsPageState>(
-    {
-      result: null,
-      loading: false,
-      refreshing: false,
-      error: null,
-      activeMinutes: "",
-      limit: String(SESSIONS_PAGE_DEFAULT_LIMIT),
-      includeGlobal: true,
-      includeUnknown: false,
-      statusFilter: "active",
-      searchQuery: "",
-      transcriptSearchQuery: "",
-      selectedSessions: new Map<string, SessionDeleteRow>(),
-      sessionMenu: null,
-      sessionMenuWork: null,
-      expandedSessionKey: null,
-      transcriptSearch: { status: "idle" },
-    },
-    {
-      set: (target, key, value) => {
-        const changed = !Object.is(Reflect.get(target, key), value);
-        Reflect.set(target, key, value);
-        if (changed && active) {
-          publish();
-        }
-        return true;
-      },
-    },
-  );
+  const observation = observeState<SessionsPageState>({
+    result: null,
+    loading: false,
+    refreshing: false,
+    error: null,
+    activeMinutes: "",
+    limit: String(SESSIONS_PAGE_DEFAULT_LIMIT),
+    includeGlobal: true,
+    includeUnknown: false,
+    statusFilter: "active",
+    searchQuery: "",
+    transcriptSearchQuery: "",
+    selectedSessions: new Map<string, SessionDeleteRow>(),
+    sessionMenu: null,
+    sessionMenuWork: null,
+    expandedSessionKey: null,
+    transcriptSearch: { status: "idle" },
+  });
+  const state = observation.state;
+  const publish = observation.invalidate;
   // Route deep-link target (?session=...); unlike expandedSessionKey it also
   // narrows sessionListOptions so the linked session is guaranteed to load.
   let deepLinkSessionKey: string | null = null;
@@ -1052,15 +1042,15 @@ export function createSessionsPage(
               request,
             })
           : await request();
-      if (patched) {
+      if (patched && !("queued" in patched)) {
         options.onConfirmed?.(patched);
       }
       if (!isRequestScopeCurrent(scope)) {
         return "stale";
       }
-      if (!patched) {
-        state.error = scope.sessions.state.error;
-        return "failed";
+      if (!patched || "queued" in patched) {
+        state.error = patched ? null : scope.sessions.state.error;
+        return patched ? "completed" : "failed";
       }
       await refreshSessionList(scope);
       if (!isRequestScopeCurrent(scope)) {
@@ -1530,16 +1520,7 @@ export function createSessionsPage(
     openSessionMenu,
     archive: archiveActions.archive,
   };
-  const projection = projectSource(application, {
-    read: () => state,
-    subscribe: (_source, notify) => {
-      publish = notify;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
+
   const presentationSources = [
     application.agentIdentity,
     application.navigation,
@@ -1547,14 +1528,14 @@ export function createSessionsPage(
     application.plugins,
   ].map((owner) => projectOwner(owner, (source) => source));
   const revision = () =>
-    presentationSources.reduce((sum, source) => sum + source.revision(), projection.revision());
+    presentationSources.reduce((sum, source) => sum + source.revision(), observation.revision());
   onSettled(() => {
     const stopScope = observeAgentScope(application.agentSelection);
     applyRouteData();
     gatewayLifecycle.connect();
     return () => {
       active = false;
-      publish = () => {};
+      observation.dispose();
       stopScope();
       unsubscribeList?.();
       pluginActionLifetime.abort();

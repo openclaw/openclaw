@@ -10,7 +10,6 @@ import {
   Switch,
   untrack,
 } from "solid-js";
-import { registerListener } from "../../../../../src/shared/listeners.js";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../../lib/presentation.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
@@ -130,15 +129,15 @@ function TranscriptRows(props: {
         >
           <For each={virtualRows()} keyed={(row) => row.key}>
             {(virtualRow, renderedIndex) => {
-              const index = createMemo(() => virtualRow().index);
-              const row = createMemo(() => props.snapshot.rows[index()]);
+              const index = () => virtualRow().index;
+              const row = () => props.snapshot.rows[index()];
               const content = createMemo(() => props.snapshot.getContent(index()));
-              const gap = createMemo(() => {
+              const gap = () => {
                 const previous = virtualRows()[renderedIndex() - 1];
                 return previous && virtualRow().index > previous.index + 1
                   ? virtualRow().start - previous.end
                   : 0;
-              });
+              };
               // The keyed row owns one measurement binding for its entire mounted lifetime.
               const initialKey = untrack(() => String(virtualRow().key));
               const measureRef = props.measureRowRefFor(initialKey);
@@ -184,7 +183,7 @@ export class ChatTranscriptRenderer {
   private commitQueued = false;
   private readonly layoutEffects = new Set<() => void>();
   private readonly mediaDisconnect = new Set<() => void>();
-  private readonly listeners = new Set<() => void>();
+  private publish?: () => void;
   private readonly presentationChanged = () => this.publishPresentation?.();
 
   get columnElement(): HTMLDivElement | undefined {
@@ -192,7 +191,10 @@ export class ChatTranscriptRenderer {
   }
 
   subscribe(listener: () => void): () => void {
-    return registerListener(this.listeners, listener);
+    this.publish = listener;
+    return () => {
+      this.publish = undefined;
+    };
   }
 
   private isPresented(): boolean {
@@ -296,7 +298,8 @@ export class ChatTranscriptRenderer {
       element.className = "chat-thread-inner chat-thread-inner--virtual";
       element.style.visibility = next.initialPositionPending() ? "hidden" : "";
       this.element = element;
-      // A session outlives the render computation that first introduces its DOM.
+      // This retained transcript island outlives the computation that introduces its DOM.
+      // Its session owner disposes the detached root, including while the pane is parked.
       this.disposeRoot = runWithOwner(null, () =>
         render(() => {
           const [presented, setPresented] = createSignal(this.isPresented(), { ownedWrite: true });
@@ -345,9 +348,7 @@ export class ChatTranscriptRenderer {
       );
     } else {
       this.publishPresentation?.();
-      for (const listener of this.listeners) {
-        listener();
-      }
+      this.publish?.();
     }
     this.commit();
     next.scrollElementRef(this.element);

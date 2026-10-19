@@ -7,7 +7,6 @@ import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
-import { formatUiError } from "../lib/format-error.ts";
 import { isGatewayAvailable } from "../lib/gateway-availability.ts";
 import { projectPresencePayload } from "../lib/presence-users.ts";
 import type { CatalogSessionContinuedDetail } from "../lib/sessions/catalog-key.ts";
@@ -20,6 +19,7 @@ import {
   finishSidebarChildSessionLoad,
   type SidebarChildSessionQuery,
   retireStaleChildSessionRows,
+  retrySidebarChildSessions,
   scheduleSidebarChildSessions,
 } from "./app-sidebar-child-session-data.ts";
 import {
@@ -46,7 +46,9 @@ import {
 } from "./session-data-catalog.ts";
 import {
   hasSidebarListFilter,
+  clearSidebarSessionError,
   publishSidebarSessionError,
+  publishScopedSessionError,
   publishSidebarSessionList,
   refreshSidebarSessionList,
   scheduleFilteredSidebarSessions,
@@ -57,6 +59,10 @@ import {
   subscribeSessionCatalogBrowserEvents,
 } from "./session-data-events.ts";
 import { SessionLineageOwner } from "./session-lineage.ts";
+import {
+  captureSessionMutationScope,
+  isSessionMutationScopeCurrent,
+} from "./session-mutation-scope.ts";
 import { SidebarOwnerSessionCounts } from "./sidebar-owner-session-counts.ts";
 
 /** Gateway-backed session-list and external-catalog data ownership. */
@@ -253,6 +259,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       this.stopRoster?.();
       this.roster?.setInvolvingMe(false);
       this.roster = roster;
+      // Adopt roster facts synchronously before frame-coalesced view publication.
       this.stopRoster = roster?.subscribe(this.requestSessionDataUpdate);
       this.updateSessions(this.context.sessions);
       this.requestSessionDataUpdate();
@@ -632,14 +639,13 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   }
 
   retireStaleChildSessions(revalidating: ReadonlySet<string>): void {
-    for (const [key, query] of this.childSessionQueries) {
-      if (!revalidating.has(key) && !query.refresh && !query.hydration) {
-        query.observation?.dispose();
-        this.childSessionQueries.delete(key);
-        this.finishChildSessionLoad(key);
-      }
-    }
-    retireStaleChildSessionRows(this, this.lineage.routeKey, revalidating);
+    retireStaleChildSessionRows(
+      this,
+      this.lineage.routeKey,
+      revalidating,
+      this.childSessionQueries,
+      this.finishChildSessionLoad,
+    );
   }
 
   needsChildSessionLoad(parentKey: string): boolean {
@@ -706,10 +712,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   private readonly finishChildSessionLoad = finishSidebarChildSessionLoad.bind(
     null,
     this,
-    (parentKey: string) => {
-      this.childSessionQueries.get(parentKey)?.observation?.dispose();
-      this.childSessionQueries.delete(parentKey);
-    },
+    this.childSessionQueries,
   );
 
   loadActiveSessionLineage = this.lineage.load.bind(this.lineage);
@@ -719,10 +722,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     this.requestSessionDataUpdate();
   }
 
-  dismissSessionMutationError(): void {
-    publishSidebarSessionError(this, null, "action");
-    this.requestSessionDataUpdate();
-  }
+  dismissSessionMutationError = clearSidebarSessionError.bind(null, this);
 
   resetSessionList(): void {
     this.retireFilteredSessions();
@@ -744,16 +744,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
 
   discardEmptyChildSessionSnapshot = discardEmptyChildSessionSnapshot.bind(null, this);
 
-  retryChildSessions(sessionKey: string): void {
-    const retry = this.childSessionErrorsByParent.has(sessionKey);
-    if (retry) {
-      this.finishChildSessionLoad(sessionKey);
-      const errors = new Map(this.childSessionErrorsByParent);
-      errors.delete(sessionKey);
-      this.childSessionErrorsByParent = errors;
-    }
-    void this.loadChildSessions(sessionKey, retry);
-  }
+  retryChildSessions = retrySidebarChildSessions.bind(null, this, this.finishChildSessionLoad);
 
   private invalidateSessionMutations(): void {
     this.sessionMutationEpoch += 1;
@@ -774,46 +765,22 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     this.sessionDraftAbortController = new AbortController();
   }
 
-  beginSessionMutation(): SidebarSessionMutationScope | null {
-    const context = this.context;
-    if (!context || !this.inputs.connected) {
-      return null;
-    }
-    const gateway = context.gateway;
-    const client = gateway.snapshot.client;
-    if (gateway.snapshot.phase !== "connected" || !client) {
-      return null;
-    }
-    this.dismissSessionMutationError();
-    return {
+  beginSessionMutation(allowDeferred = false): SidebarSessionMutationScope | null {
+    const scope = captureSessionMutationScope(this.context, {
       epoch: this.sessionMutationEpoch,
-      context,
-      gateway,
-      sessions: context.sessions,
-      client,
+      allowDeferred,
       selectedAgentId: this.inputs.selectedAgentIdForSessions(),
       signal: this.sessionMutationAbortController.signal,
-    };
+    });
+    if (scope) {
+      this.dismissSessionMutationError();
+    }
+    return scope;
   }
 
   isSessionMutationScopeCurrent(scope: SidebarSessionMutationScope): boolean {
-    const context = this.context;
-    const gateway = context?.gateway;
-    return (
-      this.inputs.connected &&
-      this.sessionMutationEpoch === scope.epoch &&
-      context === scope.context &&
-      gateway === scope.gateway &&
-      context.sessions === scope.sessions &&
-      gateway.snapshot.phase === "connected" &&
-      gateway.snapshot.client === scope.client
-    );
+    return isSessionMutationScopeCurrent(this.context, scope, this.sessionMutationEpoch);
   }
 
-  publishSessionMutationError(scope: SidebarSessionMutationScope, error: unknown): void {
-    if (this.isSessionMutationScopeCurrent(scope)) {
-      publishSidebarSessionError(this, formatUiError(error), "action");
-      this.requestSessionDataUpdate();
-    }
-  }
+  publishSessionMutationError = publishScopedSessionError.bind(null, this);
 }

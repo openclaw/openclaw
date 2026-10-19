@@ -17,11 +17,10 @@ import {
   clearChatComposerMemoryFallback,
   ownsChatComposerMemoryFallback,
   retainChatComposerMemoryFallback,
-  type ChatComposerMemoryFallbackOwnership,
 } from "./chat-composer-memory-fallback.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { excludeComposerAttachments } from "./chat-queue.ts";
-import type { ChatComposerRecoveryOwner, ChatHost } from "./chat-send-contract.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { chatAttachmentDraftSignature } from "./durable-composer-persistence.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
@@ -94,18 +93,7 @@ export function snapshotChatAttachments(attachments: readonly ChatAttachment[]):
   });
 }
 
-export type ChatCommandComposerRecovery = {
-  client: ChatHost["client"];
-  clientGeneration: number | undefined;
-  owner?: ChatComposerRecoveryOwner;
-  composer?: PendingComposerSnapshot & {
-    previousAttachments: ChatAttachment[];
-    previousDraft: string;
-    fallbackOwnership?: ChatComposerMemoryFallbackOwnership;
-  };
-  connectionEpoch: ChatHost["connectionEpoch"];
-  scope: StoredChatOutboxScope;
-};
+export type ChatCommandComposerRecovery = ReturnType<typeof captureChatCommandComposerRecovery>;
 
 function chatCommandRecoveryHost(host: ChatHost): ChatPageHost | undefined {
   return "chatComposerFallbackByScope" in host &&
@@ -119,7 +107,7 @@ export function captureChatCommandComposerRecovery(
   host: ChatHost,
   scope: StoredChatOutboxScope,
   snapshot?: PendingComposerSnapshot,
-): ChatCommandComposerRecovery {
+) {
   const fallbackHost = chatCommandRecoveryHost(host);
   return {
     client: host.client,

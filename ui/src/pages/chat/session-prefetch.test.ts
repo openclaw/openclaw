@@ -12,7 +12,6 @@ import {
   clearChatMessagesFromCache,
   readChatSessionSnapshot,
   type ChatMessageCache,
-  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import {
   createSessionPrefetchFixture,
@@ -27,6 +26,7 @@ import {
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 const cacheKey = (sessionKey: string) => resolveChatSnapshotKey(snapshotHost, { sessionKey });
 function historySnapshot(message: string, sessionId = `session-${message}`): ChatSessionSnapshot {

@@ -152,7 +152,13 @@ describe("conversation registry", () => {
       label: "@peer-a's agent",
     });
     const receipts: ConversationPublication[] = [];
-    observe(conversationPublication.subscribe((receipt) => receipts.push(receipt)));
+    observe(
+      conversationPublication.subscribeFacts((receipt) => {
+        if ("facts" in receipt) {
+          receipts.push(receipt);
+        }
+      }),
+    );
     await registerConversationAddresses(registryScope(), [identity!], 100);
     expect(receipts).toHaveLength(1);
     expectPostimage(
@@ -523,7 +529,6 @@ describe("conversation registry", () => {
       }, options);
     write(0, 10);
     const installed = new Map<string, unknown>();
-    const snapshots: string[][] = [];
     observe(
       conversationPublication.subscribeFacts((receipt) => {
         if ("facts" in receipt) {
@@ -532,9 +537,6 @@ describe("conversation registry", () => {
           }
         }
       }),
-    );
-    observe(
-      conversationPublication.subscribe(() => snapshots.push([...installed.keys()].toSorted())),
     );
     const database = openOpenClawAgentDatabase(options);
     const associationReads = trackSqliteStatementExecutions(
@@ -566,17 +568,14 @@ describe("conversation registry", () => {
     ] as const) {
       expectPostimage(installed.get(key), { role, first_seen_at, last_seen_at: 20 });
     }
-    expect(snapshots).toHaveLength(2);
-    for (const keys of snapshots) {
-      expect(keys).toEqual(expect.arrayContaining([oldPrimary, oldRelated, newPrimary]));
-    }
+    const committedFacts = new Map(installed);
     expect(() =>
       runOpenClawAgentWriteTransaction(() => {
         write(0, 30);
         throw new Error("rollback conversation");
       }, options),
     ).toThrow("rollback conversation");
-    expect(snapshots).toHaveLength(2);
+    expect(installed).toEqual(committedFacts);
     expect(
       openOpenClawAgentDatabase(options)
         .db.prepare(

@@ -78,8 +78,8 @@ describe("memory MMR", () => {
     },
   );
 
-  it.each([{ mmr: { enabled: true }, paths: ["/a", "/c", "/b", "/d"] }])(
-    "applies hybrid MMR defaults for $mmr",
+  it.each([{ mmr: { enabled: true, lambda: 0.7 }, paths: ["/a", "/c", "/b", "/d"] }])(
+    "applies configured hybrid MMR for $mmr",
     async ({ mmr, paths }) => {
       const results = [
         { path: "/a", startLine: 1, endLine: 1, score: 1, snippet: "same", source: "memory" },
@@ -105,6 +105,7 @@ describe("memory MMR", () => {
         vectorWeight: 1,
         textWeight: 0,
         mmr,
+        temporalDecay: { enabled: false, halfLifeDays: 30 },
       });
       expect(merged).toEqual(
         paths.map((path) =>

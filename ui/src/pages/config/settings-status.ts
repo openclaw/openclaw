@@ -129,6 +129,7 @@ export function createSettingsStatus<T>(
       },
     );
   }
+  // Config receipts admit a new status read after the current write has settled.
   onCleanup(configProjection.subscribe(scheduleRefresh));
   onSettled(refreshIfChanged);
   onCleanup(() => {

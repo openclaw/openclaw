@@ -177,18 +177,15 @@ export function AppearanceSection(props: ConfigProps) {
       themeOptions().find((option) => option.id === props.themeResetValue)?.label ??
       t("configView.themes.claw.label"),
   );
-  const themeModeDefault = createMemo(() =>
+  const themeModeDefault = () =>
     props.themeModeResetValue === "light"
       ? t("common.light")
       : props.themeModeResetValue === "dark"
         ? t("common.dark")
-        : t("common.system"),
-  );
-  const themeProvenance = createMemo(() => serverUiPrefProvenanceHint(props.themeProvenance));
-  const themeModeProvenance = createMemo(() =>
-    serverUiPrefProvenanceHint(props.themeModeProvenance),
-  );
-  const accentProvenance = createMemo(() => serverUiPrefProvenanceHint(props.accentProvenance));
+        : t("common.system");
+  const themeProvenance = () => serverUiPrefProvenanceHint(props.themeProvenance);
+  const themeModeProvenance = () => serverUiPrefProvenanceHint(props.themeModeProvenance);
+  const accentProvenance = () => serverUiPrefProvenanceHint(props.accentProvenance);
   // The theme swatch is selected whenever resetting would land on the current
   // accent. A boolean `overridden` cannot express that: the resolver reports an
   // inherited server or profile accent as overridden too, which is what left the
@@ -446,7 +443,7 @@ export function AppearanceSection(props: ConfigProps) {
                       ? defaultAccentSelected()
                       : !defaultAccentSelected() && preset.hex === props.accent,
                   );
-                  const label = createMemo(() => t(`configView.appearance.accents.${preset.id}`));
+                  const label = () => t(`configView.appearance.accents.${preset.id}`);
                   const themeChipScope = createMemo(() =>
                     isDefault
                       ? `settings-accent-theme--${presentedTheme().id.includes("/") ? "custom" : presentedTheme().id}`

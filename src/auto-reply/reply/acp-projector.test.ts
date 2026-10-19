@@ -203,6 +203,7 @@ describe("createAcpReplyProjector", () => {
 
     await vi.advanceTimersByTimeAsync(1200);
     expect(deliveries).toStrictEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
 
     await emitText(projector, "`wd-cli` searches right away. ");
     await projector.flush();

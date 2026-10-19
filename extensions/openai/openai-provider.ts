@@ -143,7 +143,6 @@ type BuildOpenAILiveProviderConfigParams = {
   discoveryApiKey?: string;
   env?: Record<string, string | undefined>;
   fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
 };
 
 function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionConfig[] {
@@ -215,7 +214,6 @@ async function buildOpenAILiveProviderConfig(
       apiKey: params.apiKey,
       discoveryApiKey: params.discoveryApiKey,
       fetchGuard: params.fetchGuard,
-      signal: params.signal,
       ttlMs: OPENAI_MODELS_CACHE_TTL_MS,
       auditContext: "openai-model-discovery",
     });
@@ -367,7 +365,6 @@ async function buildOpenAICodexLiveProviderConfig(params: {
   accountId?: string;
   catalogContext?: OpenAICodexModelsEndpointContext;
   fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
 }): Promise<OpenAILiveProviderCatalog> {
   const catalogRuntime = await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
   const { getCachedLiveCatalogValue } = await import("openclaw/plugin-sdk/provider-catalog-shared");
@@ -375,7 +372,6 @@ async function buildOpenAICodexLiveProviderConfig(params: {
   const endpoint = await resolveOpenAICodexModelsEndpoint(params.catalogContext);
   try {
     return await getCachedLiveCatalogValue({
-      signal: params.signal,
       ttlMs: OPENAI_CODEX_MODELS_CACHE_TTL_MS,
       keyParts: [
         PROVIDER_ID,

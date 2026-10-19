@@ -99,23 +99,21 @@ type MediaEntryRunParams = {
 
 function resolveMaxChars(params: MediaEntryRunParams): number | undefined {
   const { capability, entry, cfg } = params;
-  const configured =
-    entry.maxChars ?? params.config?.maxChars ?? cfg.tools?.media?.[capability]?.maxChars;
-  if (typeof configured === "number") {
-    return configured;
-  }
-  return DEFAULT_MAX_CHARS_BY_CAPABILITY[capability];
+  return (
+    entry.maxChars ??
+    params.config?.maxChars ??
+    cfg.tools?.media?.[capability]?.maxChars ??
+    DEFAULT_MAX_CHARS_BY_CAPABILITY[capability]
+  );
 }
 
 export function resolveMaxBytes(params: MediaEntryRunParams): number {
-  const configured =
+  return (
     params.entry.maxBytes ??
     params.config?.maxBytes ??
-    params.cfg.tools?.media?.[params.capability]?.maxBytes;
-  if (typeof configured === "number") {
-    return configured;
-  }
-  return DEFAULT_MAX_BYTES[params.capability];
+    params.cfg.tools?.media?.[params.capability]?.maxBytes ??
+    DEFAULT_MAX_BYTES[params.capability]
+  );
 }
 
 export function resolveEntryRunOptions(params: MediaEntryRunParams): {
@@ -152,19 +150,6 @@ export function resolveEntryRunOptions(params: MediaEntryRunParams): {
   };
 }
 
-type MediaUnderstandingScopeDecision = "allow" | "deny";
-
-function normalizeDecision(value?: string | null): MediaUnderstandingScopeDecision | undefined {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "allow") {
-    return "allow";
-  }
-  if (normalized === "deny") {
-    return "deny";
-  }
-  return undefined;
-}
-
 export function resolveScopeDecision(params: {
   scope?: MediaUnderstandingScopeConfig;
   ctx: MsgContext;
@@ -181,10 +166,6 @@ export function resolveScopeDecision(params: {
   for (const rule of scope.rules ?? []) {
     // Rules are first-match-wins so operators can place specific denials before
     // broader default allow rules.
-    if (!rule) {
-      continue;
-    }
-    const action = normalizeDecision(rule.action) ?? "allow";
     const match = rule.match ?? {};
     const matchChannel = normalizeOptionalLowercaseString(match.channel);
     const matchChatType = normalizeChatType(match.chatType);
@@ -199,10 +180,10 @@ export function resolveScopeDecision(params: {
     if (matchPrefix && !sessionKey.startsWith(matchPrefix)) {
       continue;
     }
-    return action;
+    return rule.action;
   }
 
-  return normalizeDecision(scope.default) ?? "allow";
+  return scope.default ?? "allow";
 }
 
 export function resolveModelEntries(params: {
@@ -231,7 +212,7 @@ export function resolveModelEntries(params: {
       entries.push({ entry, secretOwnerId: runtimeMediaModelSecretOwnerId(index) });
     }
   });
-  const preferred = config?.preferredModel?.trim();
+  const preferred = config?.preferredModel;
   if (preferred) {
     entries.sort(
       (left, right) =>
@@ -257,9 +238,5 @@ function preferredMediaModelRank(entry: MediaUnderstandingModelConfig, preferred
 }
 
 export function resolveConcurrency(cfg: OpenClawConfig): number {
-  const configured = cfg.tools?.media?.concurrency;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured);
-  }
-  return DEFAULT_MEDIA_CONCURRENCY;
+  return cfg.tools?.media?.concurrency ?? DEFAULT_MEDIA_CONCURRENCY;
 }

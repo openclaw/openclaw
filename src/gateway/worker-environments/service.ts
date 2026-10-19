@@ -1,5 +1,6 @@
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { throwCollectedErrors } from "../../infra/error-graph-internal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { WorkerExecutionMode, WorkerProvider } from "../../plugins/types.js";
@@ -440,7 +441,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     options.nodeTunnelManager?.beginClose();
     providerLifecycle.clearDedicatedNodeLeases();
     sessionAttachments.cancelSessionAttachmentCreations();
-    providerLifecycle.clearMachineShapeListeners();
+    providerLifecycle.machineShapeNotifications.onChanged = () => {};
     scope.beginClose();
     options.stopNodeEnrollmentWaits?.();
     unsubscribeSessionIdentityMutation?.();
@@ -510,12 +511,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         failures.push(error);
       }
     }
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length > 1) {
-      throw new AggregateError(failures, "Worker environment shutdown failed");
-    }
+    throwCollectedErrors(failures, "Worker environment shutdown failed");
   };
 
   const providerSupportsExecutionMode = (providerId: string, mode: WorkerExecutionMode) =>
@@ -617,7 +613,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     setHumanPresence: preparedPool.setHumanPresence,
     inventoryVersion: store.inventoryVersion,
     machineShapeVersion: providerLifecycle.machineShapeVersion,
-    subscribeMachineShapeChanged: providerLifecycle.subscribeMachineShapeChanged,
+    machineShapeNotifications: providerLifecycle.machineShapeNotifications,
     readMachineShape: (environmentId: string, prepared?: WorkerEnvironmentPlacementFacts) =>
       providerLifecycle.readMachineShape(prepared ?? store.get(environmentId)),
     supportsNodePortal: async (environmentId: string, ownerEpoch: number) =>

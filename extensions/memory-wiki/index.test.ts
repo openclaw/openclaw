@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenBlobStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./api.js";
@@ -178,6 +179,19 @@ describe("memory-wiki plugin", () => {
     await fs.writeFile(path.join(rootDir, ".openclaw-wiki", "log.jsonl"), "", "utf8");
     const { api, registerService } = createPluginApi();
     api.pluginConfig = { vault: { path: rootDir } };
+    const registrationEntered = deferred();
+    const releaseRegistration = deferred();
+    const openBlobStore = api.runtime.state.openBlobStore;
+    api.runtime.state.openBlobStore = <T>(options: OpenBlobStoreOptions) => {
+      const store = openBlobStore<T>(options);
+      const register = store.register.bind(store);
+      store.register = async (...args) => {
+        await register(...args);
+        registrationEntered.resolve();
+        await releaseRegistration.promise;
+      };
+      return store;
+    };
     plugin.register(api);
     const config = resolveMemoryWikiConfig(api.pluginConfig);
     const service = registerService.mock.calls[0]?.[0];
@@ -187,8 +201,6 @@ describe("memory-wiki plugin", () => {
       throw new Error("Expected an active Memory Wiki vault generation");
     }
     const snapshot = emptyCompiledSnapshot();
-    const validationEntered = deferred();
-    const releaseValidation = deferred();
     const commitPublication = vi.fn();
     const publicationId = randomUUID();
     const publication = writeMemoryWikiCompiledCache(
@@ -196,20 +208,16 @@ describe("memory-wiki plugin", () => {
       snapshot,
       publicationId,
       null,
-      async () => {
-        validationEntered.resolve();
-        await releaseValidation.promise;
-      },
       commitPublication,
       async () => ({
         vaultGeneration: identity.vaultGeneration,
         compiledCachePublicationId: publicationId,
       }),
     );
-    await validationEntered.promise;
+    await registrationEntered.promise;
 
     await service?.stop?.();
-    releaseValidation.resolve();
+    releaseRegistration.resolve();
 
     await expect(publication).rejects.toThrow("cache owner retired before publication");
     expect(commitPublication).not.toHaveBeenCalled();
@@ -263,7 +271,6 @@ describe("memory-wiki plugin", () => {
           randomUUID(),
           null,
           async () => {},
-          async () => {},
           () => loadMemoryWikiValidatedVaultIdentity(rootDir),
         ),
       ).rejects.toThrow("vault is not active");
@@ -308,7 +315,6 @@ describe("memory-wiki plugin", () => {
       snapshot,
       publicationId,
       parentPublicationId,
-      async () => {},
       async () => {},
       () => loadMemoryWikiValidatedVaultIdentity(rootDir),
     );

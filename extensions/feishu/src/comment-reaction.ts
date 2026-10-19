@@ -95,7 +95,7 @@ async function requestCommentTypingReaction(params: {
   runtime?: RuntimeEnv;
 }): Promise<boolean> {
   const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
-  if (!account.configured || !(account.config.typingIndicator ?? true)) {
+  if (!account.configured || !account.config.typingIndicator) {
     return false;
   }
   return requestCommentTypingReactionWithClient({

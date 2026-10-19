@@ -91,6 +91,8 @@ const repositoryScriptEntries = [
   "scripts/perf/checkout-diff-measure.ts!",
   // scripts/perf/README.md invokes this isolated viewer-presence measurement CLI.
   "scripts/perf/presence-churn-measure.ts!",
+  // scripts/perf/README.md invokes this isolated session-roster measurement CLI.
+  "scripts/perf/session-roster-churn-measure.ts!",
   "scripts/perf/seal-version-restart.ts!",
   // Worker-environment shutdown proof invokes this measurement CLI by path.
   "scripts/perf/worker-environment-shutdown-measure.ts!",
@@ -219,6 +221,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/native-assignment-app-server.mjs!",
   // package-activation-recovery.sh preloads this observer into the released updater.
   "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs!",
+  // run.sh preloads this fixture adapter through NODE_OPTIONS by path.
+  "scripts/e2e/lib/upgrade-survivor/plugin-registry-redirect.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",

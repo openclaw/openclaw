@@ -268,6 +268,13 @@ If local session state requires Doctor, status prints any installation drift to 
 - Missing log files are omitted from `status --all`. Unreadable logs show an
   unavailable message with guidance to check the file path and permissions.
 
+## Plugin health
+
+Plugin-health collection warns when persisted quarantine records cannot be read
+and continues with the available health information. The inventory may be
+incomplete; run `openclaw doctor` to inspect state storage. The warning does not
+include stored records or raw database errors.
+
 ## Plugin reload
 
 While the Gateway replaces plugins, status shows a **Plugin reload** overview

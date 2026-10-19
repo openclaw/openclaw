@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, createSignal } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { SystemEventGroup, SystemEventItem } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -21,9 +21,8 @@ function SystemEvent(props: { item: SystemEventItem }) {
 
 export function ChatSystemEvents(props: { item: SystemEventGroup }) {
   const [expanded, setExpanded] = createSignal(false);
-  const deliveryWarning = createMemo(() =>
-    props.item.events.some((event) => event.systemEvent === "delivery-warning"),
-  );
+  const deliveryWarning = () =>
+    props.item.events.some((event) => event.systemEvent === "delivery-warning");
   return (
     <details
       class="chat-system-events"

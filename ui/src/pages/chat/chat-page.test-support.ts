@@ -92,6 +92,7 @@ export function setViewerPresenceContext(page: HTMLElementTagNameMap["openclaw-c
     eventLogRevision: 0,
     loadSelfProfile: async () => null,
     connect: vi.fn(),
+    defer: () => false,
     setSessionKey: vi.fn(),
     start: vi.fn(),
     stop: vi.fn(),

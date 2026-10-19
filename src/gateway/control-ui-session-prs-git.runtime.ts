@@ -235,34 +235,47 @@ async function readCheckoutDiffRevision(root: string): Promise<string | null> {
     );
     return stat;
   };
-  const names = (directory: string) => {
+  const entries = (directory: string) => {
     const handle = fs.opendirSync(directory);
-    const entries: string[] = [];
+    const children: fs.Dirent[] = [];
     try {
       for (let entry; (entry = handle.readSync());) {
-        if (entries.length >= remaining) {
+        if (children.length >= remaining) {
           throw new Error("Checkout diff revision exceeds its metadata budget");
         }
-        entries.push(entry.name);
+        children.push(entry);
       }
     } finally {
       handle.closeSync();
     }
-    return entries.toSorted();
+    return children;
   };
   const walk = (directory: string, tree = false) => {
     if (!observe(directory, tree)?.isDirectory()) {
       return;
     }
-    for (const name of names(directory)) {
-      const file = nodePath.join(directory, name);
-      if (tree && name === ".git") {
-        if (directory !== root) {
-          throw new Error("Nested repositories require a fresh diff");
+    // Inventory first: oversized trees cannot yield a revision, so do not stat/hash their files.
+    const pendingDirectories = [directory];
+    const files: string[] = [];
+    for (const parent of pendingDirectories) {
+      for (const entry of entries(parent)) {
+        if (tree && entry.name === ".git") {
+          if (parent !== root) {
+            throw new Error("Nested repositories require a fresh diff");
+          }
+          continue;
         }
-      } else {
-        walk(file, tree);
+        const file = nodePath.join(parent, entry.name);
+        if (files.push(file) > remaining) {
+          throw new Error("Checkout diff revision exceeds its metadata budget");
+        }
+        if (entry.isDirectory()) {
+          pendingDirectories.push(file);
+        }
       }
+    }
+    for (const file of files.toSorted()) {
+      observe(file, tree);
     }
   };
   walk(root, true);
@@ -326,7 +339,9 @@ async function readCheckoutDiffRevision(root: string): Promise<string | null> {
     return null;
   }
   if (observe(objects)?.isDirectory()) {
-    for (const child of names(objects)) {
+    for (const child of entries(objects)
+      .map((entry) => entry.name)
+      .toSorted()) {
       observe(nodePath.join(objects, child));
     }
   }

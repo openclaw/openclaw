@@ -1,7 +1,7 @@
 import { onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import type {
   LogbookDaysPayload,
   LogbookStatusPayload,
@@ -24,7 +24,7 @@ export function shiftDay(day: string, deltaDays: number): string {
   return localDayKey(base);
 }
 
-export function createLogbook() {
+export function createLogbook(initialClient: GatewayBrowserClient | null) {
   // Request admission and selected-day custody must change before the next Solid flush.
   const state: LogbookUiState = {
     day: localDayKey(),
@@ -41,23 +41,14 @@ export function createLogbook() {
     askLoading: false,
     actionPending: false,
   };
-  let client: GatewayBrowserClient | null = null;
+  let client = initialClient;
   let dayPinned = false;
   let backgroundRefresh: Promise<void> | null = null;
   let backgroundRefreshQueued = false;
-  let pollTimer: ReturnType<typeof setInterval> | undefined;
-  let frameLoads = new Set<number>();
+  const frameLoads = new Set<number>();
   let notify = () => {};
-  const projection = projectSource(state, {
-    read: (source) => source,
-    subscribe: (_source, listener) => {
-      notify = listener;
-      return () => {
-        notify = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const projection = projectMutableSource(state, (source) => source);
+  notify = projection.publish;
   onCleanup(() => {
     clearInterval(pollTimer);
     client = null;
@@ -147,9 +138,7 @@ export function createLogbook() {
     const refresh = load({ silent: true });
     backgroundRefresh = refresh;
     void refresh.finally(() => {
-      if (backgroundRefresh === refresh) {
-        backgroundRefresh = null;
-      }
+      backgroundRefresh = null;
       drainRefresh();
     });
     return refresh;
@@ -182,29 +171,15 @@ export function createLogbook() {
     }
   }
 
+  // PluginPage remounts this model for each connection; polling shares the analysis refresh owner.
+  const pollTimer = client
+    ? setInterval(() => void refreshSilently(), POLL_INTERVAL_MS)
+    : undefined;
   return {
     get state() {
       return projection.read();
     },
     load,
-    // Returns whether the connected source needs its initial load.
-    connect(next: GatewayBrowserClient | null): boolean {
-      if (client !== next) {
-        clearInterval(pollTimer);
-        client = next;
-        state.loading = false;
-        backgroundRefresh = null;
-        backgroundRefreshQueued = false;
-        state.actionPending = false;
-        state.standupLoading = false;
-        state.askLoading = false;
-        frameLoads = new Set();
-        // Polls and analysis completion share one background request owner.
-        pollTimer = next ? setInterval(() => void refreshSilently(), POLL_INTERVAL_MS) : undefined;
-        notify();
-      }
-      return next !== null && !state.timeline && !state.loading && !state.error;
-    },
     async loadFrame(frameId: number) {
       const current = client;
       if (

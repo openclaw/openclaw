@@ -21,6 +21,7 @@ import {
   type LobsterSceneTravel,
 } from "./lobster-pet-scene.ts";
 import { Balloon, BottleSvg, PASSER_SPRITES, PASSER_TITLES } from "./lobster-pet-sprites.tsx";
+import { PluginThemeArtwork } from "./plugin-theme-artwork.tsx";
 import {
   THEME_CRITTER_SPRITES,
   THEME_CRITTER_TITLES,
@@ -108,22 +109,6 @@ export type LobsterPetSceneProps = {
   onContextMenu: (event: MouseEvent) => void;
   onBottleOpen: () => void;
 };
-
-function PluginArtwork(props: { url: string }) {
-  const src = createMemo(
-    async () => {
-      const url = props.url;
-      try {
-        const { fetchPluginThemeArtworkBlobUrl } = await import("../pages/plugins/icon-loader.ts");
-        return await fetchPluginThemeArtworkBlobUrl({ url });
-      } catch {
-        return null;
-      }
-    },
-    { loadingValue: null },
-  );
-  return <Show when={src()}>{(url) => <img class="lobster-pet__svg" alt="" src={url()} />}</Show>;
-}
 
 export function LobsterPetScene(props: { scene: LobsterPetSceneProps | null }) {
   return <Show when={props.scene}>{(scene) => <Scene {...scene()} />}</Show>;
@@ -400,7 +385,7 @@ function Scene(args: LobsterPetSceneProps) {
                 </Show>
               }
             >
-              {(artwork) => <PluginArtwork url={artwork().url} />}
+              {(artwork) => <PluginThemeArtwork url={artwork().url} class="lobster-pet__svg" />}
             </Show>
           </div>
         </div>

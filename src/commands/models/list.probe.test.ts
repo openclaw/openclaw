@@ -5,7 +5,11 @@ import { afterAll, afterEach, assert, beforeEach, expect, it, vi } from "vitest"
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as embeddedStateLock from "../../infra/embedded-state-lock.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../../infra/gateway-lock.js";
+
+const acquireNativeStateLock = embeddedStateLock.acquireEmbeddedStateLock;
+afterEach(() => vi.restoreAllMocks());
 
 type ProbeModule = typeof import("./list.probe.js");
 type ProbeParams = Parameters<ProbeModule["runAuthProbes"]>[0];
@@ -143,14 +147,14 @@ it("refuses CLI probes while a live Gateway owns canonical state", async () => {
     readProcessStartTime: () => 123_456,
     timeoutMs: 100,
   };
+  vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockImplementation((params) =>
+    acquireNativeStateLock({ ...params, options: lockOptions }),
+  );
   const lock = await acquireGatewayLock({ ...lockOptions, port: 28789 });
   assert(lock, "Expected live Gateway fixture lock");
   try {
     await expect(
-      probe.withAuthProbeStateOwnership(
-        { mode: "exclusive", gatewayLockOptions: lockOptions },
-        async () => undefined,
-      ),
+      probe.withAuthProbeStateOwnership({ mode: "exclusive" }, async () => undefined),
     ).rejects.toThrow(
       `A Gateway is running for this state directory (pid ${process.pid}, port 28789). Stop the Gateway first (openclaw gateway stop), then rerun models status --probe.`,
     );

@@ -75,7 +75,7 @@ export async function handleFeishuCommentEvent(
       cfg: candidateCfg,
       accountId: account.accountId,
     });
-    const candidateDmPolicy = candidateAccount.config.dmPolicy ?? "pairing";
+    const candidateDmPolicy = candidateAccount.config.dmPolicy;
     const ingress = await resolveFeishuDmIngressAccess({
       cfg: candidateCfg,
       accountId: candidateAccount.accountId,

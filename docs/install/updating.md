@@ -33,6 +33,10 @@ backup.
 
 ## Update implementation contract
 
+Background discovery failures are logged and retried at the next scheduled check.
+Gateway shutdown cancellation stays quiet; unexpected scheduled task failures
+are reported by the scheduler without restarting the Gateway.
+
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
 
 Before replacing a Git checkout's build or an installed package, the updater
@@ -40,6 +44,10 @@ retains its running runtime. Late module imports and background workers keep
 using that generation through finalization, rollback, and CLI cleanup, even when
 the new build has different chunk filenames. The new Gateway starts from the
 activated build.
+
+Managed update helpers route diagnostic logs to stderr so debug logging cannot
+interrupt their control handshake. This applies to the installed updater; a newer
+candidate cannot change an older updater's pre-activation handshake.
 
 If native service inspection becomes unavailable after admission, the updater
 refuses activation before stopping the Gateway or replacing its package. When

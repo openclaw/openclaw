@@ -18,6 +18,7 @@ import { createColdLoadProbeInitScript } from "../ui/src/test-helpers/control-ui
 import {
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
+  controlUiSessionPath,
   controlUiSessionUrl,
   controlUiBundledSettingsStorageKey,
   prepareControlUiMockGatewayScenario,
@@ -224,11 +225,13 @@ const { values } = parseArgs({
     "cpu-profile-compare": { type: "string" },
     "warm-reload": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
+    "transcript-messages": { type: "string" },
     "overlay-probe": { type: "boolean", default: false },
     untraced: { type: "boolean", default: false },
     "probe-dir": { type: "string" },
     "live-events": { type: "boolean", default: false },
     "streaming-reply": { type: "boolean", default: false },
+    "session-switch": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
     "sidebar-list-churn": { type: "boolean", default: false },
     "sidebar-live-churn": { type: "boolean", default: false },
@@ -244,8 +247,13 @@ const { values } = parseArgs({
     "bundle-dir": { type: "string" },
     port: { type: "string" },
     "sandbox-port": { type: "string" },
+    "compare-bundle-dir": { type: "string", multiple: true, default: [] },
     runs: { type: "string", default: "3" },
     "latency-ms": { type: "string", default: "35" },
+    "method-latency-ms": { type: "string", multiple: true, default: [] },
+    face: { type: "string", default: "dashboard" },
+    "short-route": { type: "boolean", default: false },
+    "full-uuid-route": { type: "boolean", default: false },
     "frame-gap-ms": { type: "string", default: "4" },
     "sidebar-view": { type: "string", default: "sessions" },
     output: { type: "string", default: ".artifacts/control-ui-cold-load" },
@@ -286,13 +294,35 @@ const baselineCpu = values["cpu-profile-compare"]
       "reload",
       ...(values["live-events"] ? ["live"] : []),
       ...(values["streaming-reply"] ? ["streaming"] : []),
+      ...(values["session-switch"] ? ["session-switch"] : []),
     ])
   : undefined;
 const cpuRuns: Record<string, ColdLoadCpuTables[]> = {};
 const runs = Number(values.runs);
 const latencyMs = Number(values["latency-ms"]);
+const methodLatencyMs: Record<string, number> = {};
+for (const value of values["method-latency-ms"]) {
+  const [method, delay, ...extra] = value.split("=");
+  const milliseconds = Number(delay);
+  if (
+    !method ||
+    delay === undefined ||
+    extra.length ||
+    !Number.isFinite(milliseconds) ||
+    milliseconds < 0
+  ) {
+    throw new Error("Expected method-latency-ms method=nonnegative-milliseconds");
+  }
+  methodLatencyMs[method] = milliseconds;
+}
+const face = values.face;
+if (face !== "chat" && face !== "dashboard") {
+  throw new Error("Expected face chat or dashboard");
+}
 const frameGapMs = Number(values["frame-gap-ms"]);
 const captureMs = Number(values["capture-ms"]);
+const transcriptMessages =
+  values["transcript-messages"] === undefined ? undefined : Number(values["transcript-messages"]);
 const sessionEventDurationMs = Number(values["session-event-duration-ms"]);
 const fixtureNowMs =
   values["fixture-now-ms"] === undefined ? undefined : Number(values["fixture-now-ms"]);
@@ -317,13 +347,15 @@ if (
 if (
   !Number.isInteger(runs) ||
   runs < 1 ||
-  runs > 20 ||
+  runs > (values["compare-bundle-dir"].length ? 60 : 20) ||
   !Number.isFinite(latencyMs) ||
   latencyMs < 0 ||
   !Number.isFinite(frameGapMs) ||
   frameGapMs < 0 ||
   !Number.isFinite(captureMs) ||
   captureMs < 0 ||
+  (transcriptMessages !== undefined &&
+    (!Number.isSafeInteger(transcriptMessages) || transcriptMessages < 1)) ||
   !Number.isSafeInteger(sessionEventDurationMs) ||
   sessionEventDurationMs < 250 ||
   sessionEventDurationMs % 125 !== 0 ||
@@ -332,7 +364,20 @@ if (
   )
 ) {
   throw new Error(
-    "Expected 1–20 runs, nonnegative wire delays/timestamps, and session duration in 125ms steps (at least 250ms)",
+    "Expected a bounded run count, positive transcript size, nonnegative wire delays/timestamps, and session duration in 125ms steps (at least 250ms)",
+  );
+}
+if (
+  values["compare-bundle-dir"].length &&
+  (!values["bundle-dir"] ||
+    !values["warm-reload"] ||
+    !values.untraced ||
+    cpuProfile ||
+    values["compare-bundle-dir"].length > 2 ||
+    runs % (values["compare-bundle-dir"].length + 1))
+) {
+  throw new Error(
+    "Bundle comparison requires complete cycles of two or three unprofiled warm bundles",
   );
 }
 if (sidebarRowTransfer === "interleaved" && (runs < 14 || runs % 2 !== 0)) {
@@ -357,6 +402,19 @@ const bundleDir = values["bundle-dir"]
 const server = values["bundle-dir"]
   ? await startBuiltControlUiE2eServer(bundleDir, undefined, port)
   : await startProductionControlUiE2eServer(bundleDir, buildId);
+const comparisonBundleDirs = values["compare-bundle-dir"].map((directory) =>
+  path.resolve(directory),
+);
+const parkedBaselineDir = path.join(artifactDir, "baseline-bundle");
+const bundleSlots = [parkedBaselineDir, ...comparisonBundleDirs];
+let activeBundle = 0;
+async function selectComparisonBundle(index: number) {
+  if (!comparisonBundleDirs.length || activeBundle === index) {
+    return;
+  }
+  await server.replaceBuild(bundleSlots[index]!, bundleSlots[activeBundle]!);
+  activeBundle = index;
+}
 const sandbox = createSandboxHostHttpServer();
 await new Promise<void>((resolve, reject) => {
   sandbox.once("error", reject);
@@ -380,6 +438,7 @@ const fixture = createControlUiTeamScaleFixture({
   duplicateBootReads: values["duplicate-boot-reads"],
   closedMenuMembers: values["closed-menu-members"],
   largeSnapshot: values["large-snapshot"],
+  transcriptMessages,
 });
 const streamingReply = values["streaming-reply"] ? createControlUiStreamingReply() : undefined;
 const extraInitScripts = await Promise.all(
@@ -519,9 +578,16 @@ try {
   );
   const warmProbes = values["warm-reload"] ? `\n(${warmReloadProbe.toString()})();` : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !values["session-event-churn"] })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
+    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${createColdLoadProbeInitScript({ latencyMs, methodLatencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !values["session-event-churn"] })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
   });
-  const url = controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, "dashboard");
+  const url = values["full-uuid-route"]
+    ? new URL(
+        `/${face}/main/${fixture.selectedSessionKey.split(":").at(-1)!.replaceAll("-", "")}`,
+        server.baseUrl,
+      ).href
+    : values["short-route"]
+      ? new URL(controlUiSessionPath(fixture.selectedSessionKey, "", face), server.baseUrl).href
+      : controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, face);
   async function settle() {
     try {
       await page.locator(".chat-pane__header").first().waitFor();
@@ -540,21 +606,25 @@ try {
       if (sidebarView === "online") {
         await page.locator('[data-online-user-id="team-person-120"]').waitFor();
       }
-      await page
-        .frameLocator(".board-widget__frame")
-        .frameLocator("iframe")
-        .getByText("Team metric 1", { exact: true })
-        .waitFor();
+      if (face === "dashboard") {
+        await page
+          .frameLocator(".board-widget__frame")
+          .frameLocator("iframe")
+          .getByText("Team metric 1", { exact: true })
+          .waitFor();
+      }
       await page
         .frameLocator(".chat-tool-card__preview-frame")
         .last()
         .frameLocator("iframe")
         .getByText("Team metric 12", { exact: true })
         .waitFor();
-      await page.waitForFunction(() => {
-        const ready = Reflect.get(window, "__readWidgetReadiness")();
-        return ready.firstBoardReadyMs !== null;
-      });
+      if (face === "dashboard") {
+        await page.waitForFunction(() => {
+          const ready = Reflect.get(window, "__readWidgetReadiness")();
+          return ready.firstBoardReadyMs !== null;
+        });
+      }
       await page.waitForFunction(
         (eventCount) => {
           const state = Reflect.get(window, "__coldLoad")?.read();
@@ -614,6 +684,13 @@ try {
     persistColdLoadWarmState,
     warmInput,
   );
+  for (let index = 1; index < bundleSlots.length; index++) {
+    await restoreColdLoadWarmState(page, warmStorage);
+    await selectComparisonBundle(index);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await settle();
+  }
+  await selectComparisonBundle(0);
   for (let run = 0; run < runs; run++) {
     const cpuPhases: Record<string, ColdLoadCpuTables> = {};
     async function recordCpu(phase: string, profile: Parameters<typeof mapColdLoadCpuProfile>[0]) {
@@ -642,6 +719,7 @@ try {
       return { ...mapped, summary };
     }
     await restoreColdLoadWarmState(page, warmStorage);
+    await selectComparisonBundle(run % bundleSlots.length);
     runTransfer =
       sidebarRowTransfer === "delta" || (sidebarRowTransfer === "interleaved" && run % 2 === 1)
         ? "delta"
@@ -1105,9 +1183,70 @@ try {
             : undefined,
         )
       : undefined;
+    let sessionSwitch;
+    if (values["session-switch"]) {
+      if (sidebarView !== "sessions") {
+        await page.locator('[data-navigation-view="sessions"]').click();
+      }
+      const target = fixture.scenario.sessions![1]!;
+      const link = page.locator(
+        `.sidebar-recent-session[data-session-key="${target.key}"] a.sidebar-recent-session__link`,
+      );
+      await link.waitFor({ state: "visible" });
+      const rpcOffset = await page.evaluate(
+        () => Reflect.get(window, "__coldLoad").read().rpcs.length,
+      );
+      await cdp.send("Performance.enable");
+      const cpuBefore = (await cdp.send("Performance.getMetrics")).metrics;
+      if (cpuProfile) {
+        await cdp.send("Profiler.start");
+      }
+      const started = await page.evaluate(() => performance.now());
+      await link.click();
+      await page.waitForFunction(
+        (key) =>
+          [...document.querySelectorAll("openclaw-chat-pane")].some(
+            (pane) => Reflect.get(pane, "sessionKey") === key,
+          ),
+        target.key,
+      );
+      await page.locator(".chat-tool-card__preview-frame").last().waitFor({ state: "visible" });
+      await page.waitForFunction(() => {
+        const state = Reflect.get(window, "__coldLoad").read();
+        return !state.pending && !state.queued && state.idleMs > 750;
+      });
+      const elapsedMs = await page.evaluate((start) => performance.now() - start, started);
+      const cpuAfter = (await cdp.send("Performance.getMetrics")).metrics;
+      if (cpuProfile) {
+        await recordCpu("session-switch", (await cdp.send("Profiler.stop")).profile);
+      }
+      sessionSwitch = {
+        from: fixture.selectedSessionKey,
+        to: target.key,
+        elapsedMs,
+        milliseconds: Object.fromEntries(
+          ["TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration"].map(
+            (name) => [
+              name,
+              1000 *
+                (cpuAfter.find((metric) => metric.name === name)!.value -
+                  cpuBefore.find((metric) => metric.name === name)!.value),
+            ],
+          ),
+        ),
+        rpcs: await page.evaluate(
+          (offset) => Reflect.get(window, "__coldLoad").read().rpcs.slice(offset),
+          rpcOffset,
+        ),
+      };
+      await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.session-switch.png`) });
+    }
     await cdp.detach();
     const result = {
       run: run + 1,
+      ...(comparisonBundleDirs.length
+        ? { variant: ["base", "candidate", "candidate-2"][activeBundle] }
+        : {}),
       head,
       sidebarRowTransfer: values["sidebar-list-churn"] ? runTransfer : undefined,
       ...metrics,
@@ -1119,6 +1258,7 @@ try {
       visual,
       live,
       streaming,
+      sessionSwitch,
       warmReload,
       snapshotSave,
       overlays,
@@ -1164,6 +1304,7 @@ try {
   await context.close();
 } finally {
   await browser?.close();
+  await selectComparisonBundle(0);
   await server.close();
   sandbox.closeAllConnections();
   await new Promise<void>((resolve, reject) => {
@@ -1177,9 +1318,11 @@ try {
         buildId,
         dirty,
         bundleDir,
+        comparisonBundleDirs,
         fixture: fixture.counts,
         sidebarView,
         streamingReply: values["streaming-reply"],
+        sessionSwitch: values["session-switch"],
         sidebarListChurn: values["sidebar-list-churn"],
         sidebarLiveChurn: fixture.sidebarLiveChurn,
         duplicateBootReads: values["duplicate-boot-reads"],
@@ -1191,6 +1334,10 @@ try {
           ? "Same final client bundle; full/delta wire response A/B using the production presenter and one synthetic query/history owner. This does not measure real Gateway selection, history reset/fallback lifecycle, or server projection CPU. Node IPC is outside the measured application response task."
           : undefined,
         latencyMs,
+        methodLatencyMs,
+        face,
+        shortRoute: values["short-route"],
+        fullUuidRoute: values["full-uuid-route"],
         frameGapMs,
         captureMs,
         sessionEventDurationMs,

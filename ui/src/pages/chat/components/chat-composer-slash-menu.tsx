@@ -557,9 +557,8 @@ function CommandOption(props: {
 
 export function SlashMenu(props: { menu: SlashMenu; host: SlashMenuHost; draft: string }) {
   const state = () => props.menu.state;
-  const mode = createMemo(() =>
-    isSlashMenuVisible(state()) ? (state().slashMenuMode === "args" ? "args" : "command") : null,
-  );
+  const mode = () =>
+    isSlashMenuVisible(state()) ? (state().slashMenuMode === "args" ? "args" : "command") : null;
   const grouped = createMemo(() => {
     const commands = state().slashMenuItems.filter((command) => command.source !== "skill");
     const skills = state().slashMenuItems.filter((command) => command.source === "skill");

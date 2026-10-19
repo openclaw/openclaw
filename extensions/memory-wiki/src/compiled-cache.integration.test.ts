@@ -160,7 +160,6 @@ async function publishSnapshot(
     publicationId,
     parentPublicationId,
     async () => {},
-    async () => {},
     () => loadMemoryWikiValidatedVaultIdentity(config.vault.path),
   );
   return publicationId;
@@ -481,7 +480,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
         republishedId,
         preRestorePublicationId,
         async () => {},
-        async () => {},
         () => loadMemoryWikiValidatedVaultIdentity(config.vault.path),
       ),
     ).rejects.toThrow("vault changed");
@@ -518,7 +516,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
         compiledAfterBackup,
         reservedPublicationId,
         parentPublicationId,
-        async () => {},
         async () => {
           await appendMemoryWikiLog(rootDir, {
             type: "compile",
@@ -558,7 +555,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
       staleSnapshot,
       stalePublicationId,
       parentPublicationId,
-      async () => {},
       async () => {
         callbackEntered.resolve();
         await releaseCallback.promise;
