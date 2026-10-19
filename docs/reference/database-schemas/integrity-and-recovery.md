@@ -756,6 +756,7 @@ clears the agent's pending refusal without requiring a restart. Recovery discove
 and cron session maintenance exclude pending stores before acquiring their readers,
 so healthy agents continue. Cron retries after the admission owner publishes the
 agent's availability; it does not log an admission failure while inspection is pending.
+Database admission refusals do not schedule periodic sweeps of healthy stores.
 Session requests retain the typed, retryable inspection-pending response until
 preparation completes. No ordinary reads or writes bypass the integrity gate.
 New database opens wait for an available worker before selecting their execution

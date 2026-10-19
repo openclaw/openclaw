@@ -201,10 +201,10 @@ export async function runSessionRegistryMaintenance(params: {
           ? store.nextSweepAtMs === null
             ? []
             : [store.nextSweepAtMs]
-          : store.skippedReason === "agent-deletion-complete" ||
-              store.skippedReason === "agent-database-inspection-pending"
-            ? []
-            : [Date.now() + 60_000],
+          : store.skippedReason === "agent-deletion-pending" ||
+              store.skippedReason === "agent-store-held"
+            ? [Date.now() + 60_000]
+            : [],
       );
       return {
         nextSweepAtMs: deadlines.length > 0 ? Math.min(...deadlines) : null,

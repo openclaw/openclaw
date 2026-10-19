@@ -12,6 +12,7 @@ import {
   createAgentDatabaseInspectionRefusal,
   preparePendingAgentDatabase,
   recordAgentDatabaseAdmissions,
+  type AgentDatabaseAdmissionRefusal,
 } from "../state/agent-database-admission.js";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
 import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
@@ -117,9 +118,13 @@ describe("runSessionRegistryMaintenance", () => {
     }),
   );
 
-  it(
-    "maintains healthy stores while another agent waits for database admission, then resumes it",
-    withMaintenanceState(async () => {
+  it.each([
+    "agent-database-inspection-pending",
+    "agent-database-inspection-failed",
+    "agent-database-ownership-mismatch",
+  ] as const)(
+    "maintains healthy stores and their retention deadlines while another agent has %s",
+    withMaintenanceState(async (code: AgentDatabaseAdmissionRefusal["code"]) => {
       const config: OpenClawConfig = {
         agents: { ownership: "explicit", entries: { slow: {}, healthy: {} } },
       };
@@ -127,12 +132,16 @@ describe("runSessionRegistryMaintenance", () => {
       setRuntimeConfigSnapshot(config);
       const slow = await writeStaleCronSession("slow");
       const healthy = await writeStaleCronSession("healthy");
-      const refusal = createAgentDatabaseInspectionRefusal({
+      const inspection = createAgentDatabaseInspectionRefusal({
         agentId: "slow",
         paths: [resolveSqliteTargetFromSessionStorePath(slow.storePath).path],
-        pending: true,
-        reason: "Database integrity check is running",
+        pending: code === "agent-database-inspection-pending",
+        reason: "Database is unavailable",
       });
+      const refusal: AgentDatabaseAdmissionRefusal =
+        code === "agent-database-ownership-mismatch"
+          ? { ...inspection, code, embeddedOwnerId: "other-owner" }
+          : inspection;
       recordAgentDatabaseAdmissions([refusal]);
       const params = { apply: true, cronStorePath: state.statePath("cron/jobs.json") };
 
@@ -141,15 +150,28 @@ describe("runSessionRegistryMaintenance", () => {
       expect(waiting).toMatchObject({
         pruned: 1,
         skippedStores: 1,
+        nextSweepAtMs: null,
         stores: expect.arrayContaining([
           {
             agentId: "slow",
             storePath: refusal.paths[0],
-            skippedReason: "agent-database-inspection-pending",
+            skippedReason: code,
           },
         ]),
       });
       expect(loadSessionEntry(healthy)).toBeUndefined();
+      const updatedAt = Date.now();
+      await replaceSessionEntry(healthy, { sessionId: "healthy-recent-run", updatedAt });
+      const retained = await runSessionRegistryMaintenance(params);
+      expect(retained).toMatchObject({
+        pruned: 0,
+        skippedStores: 1,
+        nextSweepAtMs: updatedAt + 7 * DAY_MS + 1,
+      });
+      expect(loadSessionEntry(healthy)).toBeDefined();
+      if (code !== "agent-database-inspection-pending") {
+        return;
+      }
       await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {
         expect(loadSessionEntry(slow)).toBeDefined();
       });

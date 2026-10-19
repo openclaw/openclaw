@@ -14,7 +14,9 @@ node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts \
   --runs 1 --warmup 0 --timeout-ms 90000 --output /path/to/result.json
 ```
 
-The fixture contains five agents with one interrupted subagent each. Four agent
+The fixture contains five agents with one interrupted subagent each. All runs
+belong to independent requester sessions owned by the first healthy agent, so
+one parent's unrelated conversations must recover independently. Four agent
 databases are small; the fifth contains the requested MiB of synthetic cache
 payload. Its clean-close seal is removed under offline fixture custody, forcing
 the real integrity scan. A benchmark-only preload delays that scan by the

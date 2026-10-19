@@ -180,22 +180,30 @@ function createRestorer(
 }
 
 it.for([
-  { preparing: true, closeGateway: false },
-  { preparing: false, closeGateway: false },
-  { preparing: true, closeGateway: true },
+  { sameRequesterAgent: false, preparing: true, closeGateway: false },
+  { sameRequesterAgent: false, preparing: false, closeGateway: false },
+  { sameRequesterAgent: false, preparing: true, closeGateway: true },
+  { sameRequesterAgent: true, preparing: true, closeGateway: false },
+  { sameRequesterAgent: true, preparing: false, closeGateway: false },
 ])(
-  "recovers a healthy agent during a database open (preparing: $preparing, close: $closeGateway)",
-  async ({ preparing, closeGateway }, { signal }) => {
+  "recovers an independent requester session during a database open (same requester agent: $sameRequesterAgent, preparing: $preparing, close: $closeGateway)",
+  async ({ sameRequesterAgent, preparing, closeGateway }, { signal }) => {
     const { manager } = createRegistrationFixture();
-    for (const agentId of ["slow", "healthy"]) {
+    for (const [runId, childAgentId, requester] of [
+      ["slow-child", "slow", "slow"],
+      ["slow-peer", "healthy", "slow"],
+      ["healthy-child", "healthy", "healthy"],
+    ] as const) {
+      const requesterAgentId = sameRequesterAgent ? "main" : requester;
       await manager.registerSubagentRun({
-        runId: `${agentId}-child`,
-        childSessionKey: `agent:${agentId}:subagent:child`,
-        childAgentId: agentId,
+        runId,
+        childSessionKey: `agent:${childAgentId}:subagent:${runId}`,
+        childAgentId,
         sessionEntry: fixture,
-        requesterSessionKey: `agent:${agentId}:main`,
-        requesterAgentId: agentId,
-        requesterDisplayKey: agentId,
+        requesterSessionKey: `agent:${requesterAgentId}:${requester}`,
+        requesterAgentId,
+        requesterTurnRunId: `${runId}-turn`,
+        requesterDisplayKey: requesterAgentId,
         task: "Restore independently after database integrity admission",
         cleanup: "keep",
       });
@@ -258,13 +266,16 @@ it.for([
         }
       },
     );
-    expect(recovered).toEqual(closeGateway ? ["healthy-child"] : ["healthy-child", "slow-child"]);
+    expect(recovered).toEqual(
+      closeGateway ? ["healthy-child"] : ["healthy-child", "slow-child", "slow-peer"],
+    );
     if (closeGateway) {
       expect(resumeRun).toHaveBeenCalledExactlyOnceWith("healthy-child");
     } else {
-      expect(resumeRun.mock.calls).toEqual([["healthy-child"], ["slow-child"]]);
+      expect(resumeRun.mock.calls).toEqual([["healthy-child"], ["slow-child"], ["slow-peer"]]);
     }
   },
+  10_000,
 );
 
 it.each(["restartRecovery", "killIntent", "killReconciliation"] as const)(
@@ -804,7 +815,7 @@ it.each(["current", "during hydration"] as const)(
         await restorer.restoreOnce();
         await expect(restorer.activate()).rejects.toBe(failure);
       }
-      expect(ensureListener).toHaveBeenCalledOnce();
+      expect(ensureListener).toHaveBeenCalledTimes(2);
       expect(startSweeper).toHaveBeenCalledOnce();
       expect(resumeRun.mock.calls).toEqual([["first-child"], ["later-child"]]);
       expect(subagentRuns.get("first-child")?.requesterTurnRunId).toBe("first-child-turn");
@@ -814,7 +825,7 @@ it.each(["current", "during hydration"] as const)(
       expect(firstAttempts).toBe(2);
       expect(subagentRuns.get("first-child")?.requesterTurnRunId).toBeUndefined();
       expect(settleRequesterTurn).toHaveBeenCalledTimes(3);
-      expect(ensureListener).toHaveBeenCalledOnce();
+      expect(ensureListener).toHaveBeenCalledTimes(2);
       expect(startSweeper).toHaveBeenCalledOnce();
       expect(resumeRun).toHaveBeenCalledTimes(2);
     } finally {

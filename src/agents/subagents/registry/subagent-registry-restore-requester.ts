@@ -106,7 +106,7 @@ async function settleRestoredRequesterTurns({
   return transferFailures;
 }
 
-/** Isolate each requester agent while keeping its cohort and mailbox ordering intact. */
+/** Isolate requester sessions while keeping each session's cohort and mailbox order intact. */
 export function createRestoredRequesterActivator(config: {
   runs: Map<string, SubagentRunRecord>;
   bindGatewayOwners: (
@@ -141,12 +141,15 @@ export function createRestoredRequesterActivator(config: {
       alreadyActivated: boolean;
     }): Promise<{ resumeNeeded: boolean; failures: unknown[] }> {
       if (!groups || alreadyActivated) {
-        const requesters = new Map<string | undefined, SubagentRunRecord[]>();
+        const requesters = new Map<string, SubagentRunRecord[]>();
         for (const entry of getSubagentActivationRuns(config.runs)) {
-          const agentId = resolveSubagentRequesterAgentId(cfg, entry);
-          const entries = requesters.get(agentId) ?? [];
+          const identity = JSON.stringify([
+            resolveSubagentRequesterAgentId(cfg, entry),
+            entry.requesterSessionKey,
+          ]);
+          const entries = requesters.get(identity) ?? [];
           entries.push(entry);
-          requesters.set(agentId, entries);
+          requesters.set(identity, entries);
         }
         groups = [...requesters.values()].map((entries) => ({
           entries,

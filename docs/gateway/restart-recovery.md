@@ -1315,7 +1315,8 @@ existing restart delivery and continuation behavior.
   at the normal info level. Recovery no longer prewarms every agent's readers
   before starting; `readersMs` remains zero. Delivery, exec notification, and
   subagent recovery run independently, and subagent activation preserves ordering
-  within each requester while other agents continue through a slow database open.
+  within each requester session. Independent sessions, including those owned by
+  the same agent, continue through a slow database open in another session.
   Their tails remain tracked through shutdown. These elapsed times overlap and
   include dependency loading and waits for workers or database admission. Within `deliveryMs`,
   `deliveryNoticesMs` measures blocked-notice selection and persistence, and

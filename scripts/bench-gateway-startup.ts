@@ -821,20 +821,26 @@ async function seedSlowAgentFixture(root: string, mib: number, gateDelayMs: numb
         import("../src/agents/subagents/registry/subagent-registry.store.kernel.js"),
       ]);
     const now = Date.now() - 60_000;
-    const databases: Array<{ agentId: string; bytes: number }> = [];
+    const requesterAgentId = SLOW_DATABASE_AGENT_IDS[0];
+    const databases: Array<{ agentId: string; path: string }> = [];
     let slowPath = "";
     try {
       for (const agentId of SLOW_DATABASE_AGENT_IDS) {
         const database = agentDb.openOpenClawAgentDatabase({ agentId, env });
         const runId = `slow-db-bench-${agentId}`;
         const childSessionKey = `agent:${agentId}:subagent:${runId}`;
-        const requesterSessionKey = `agent:${agentId}:main`;
+        const requesterSessionKey = `agent:${requesterAgentId}:requester:${agentId}`;
         agentDb.runOpenClawAgentWriteTransaction(
           (writable) => {
             writeSessionEntry(writable, requesterSessionKey, {
               sessionId: `requester-${agentId}`,
               updatedAt: now,
             });
+          },
+          { agentId: requesterAgentId, env },
+        );
+        agentDb.runOpenClawAgentWriteTransaction(
+          (writable) => {
             writeSessionEntry(writable, childSessionKey, {
               sessionId: runId,
               lifecycleRevision: runId,
@@ -856,7 +862,7 @@ async function seedSlowAgentFixture(root: string, mib: number, gateDelayMs: numb
                   childAgentId: agentId,
                   childSessionIdentity: { sessionId: runId, lifecycleRevision: runId },
                   requesterSessionKey,
-                  requesterAgentId: agentId,
+                  requesterAgentId,
                   requesterDisplayKey: requesterSessionKey,
                   task: "Synthetic interrupted startup recovery",
                   cleanup: "keep",
@@ -893,7 +899,7 @@ async function seedSlowAgentFixture(root: string, mib: number, gateDelayMs: numb
           }
         }
         database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-        databases.push({ agentId, bytes: statSync(database.path).size });
+        databases.push({ agentId, path: database.path });
       }
     } finally {
       await agentDb.closeOpenClawAgentDatabasesAsync();
@@ -903,7 +909,17 @@ async function seedSlowAgentFixture(root: string, mib: number, gateDelayMs: numb
     rmSync(`${slowPath}.seal`, { force: true });
     writeFileSync(
       path.join(root, "slow-agent-fixture.json"),
-      JSON.stringify({ databases, gateDelayMs }, null, 2),
+      JSON.stringify(
+        {
+          databases: databases.map(({ agentId, path: databasePath }) => ({
+            agentId,
+            bytes: statSync(databasePath).size,
+          })),
+          gateDelayMs,
+        },
+        null,
+        2,
+      ),
     );
     writeFileSync(
       path.join(root, "slow-agent-preload.mjs"),
