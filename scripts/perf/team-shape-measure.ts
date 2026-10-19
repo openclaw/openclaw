@@ -339,22 +339,29 @@ if (isMainThread) {
       await controlGatewayProfile(child, "cpu", "start", profilePath);
       const before = await readGatewayCpuUsage(child);
       let mutations = 0;
+      // Exclude the final cohort's tick so response speed cannot change the workload.
+      const mutationTarget =
+        mutationMs && phase === "steady"
+          ? Math.max(0, Math.ceil(((count - 1) * pollMs) / mutationMs) - 1)
+          : 0;
       let mutationFailure: unknown;
       let mutation: Promise<void> = Promise.resolve();
       let mutationBusy = false;
       const timer =
-        mutationMs && phase === "steady"
+        mutationTarget > 0
           ? setInterval(() => {
-              if (mutationBusy) {
+              if (mutationBusy || mutationFailure || mutations >= mutationTarget) {
                 return;
               }
               mutationBusy = true;
               mutation = rpc(clients[0]!, "sessions.patch", {
                 key: `agent:main:team-shape-session-${1 + (mutations % 999)}`,
-                label: `Synthetic ${variant.name} mutation ${mutations++}`,
+                label: `Synthetic ${variant.name} mutation ${mutations}`,
               })
                 .then(
-                  () => {},
+                  () => {
+                    mutations++;
+                  },
                   (error: unknown) => {
                     mutationFailure = error;
                   },
@@ -410,6 +417,13 @@ if (isMainThread) {
             await delay(Math.max(0, pollMs - (performance.now() - started)));
           }
         }
+        const mutationDeadline = performance.now() + 5_000;
+        while (performance.now() < mutationDeadline) {
+          if (mutations >= mutationTarget || mutationFailure) {
+            break;
+          }
+          await delay(20);
+        }
       } finally {
         clearInterval(timer);
         await mutation;
@@ -418,6 +432,9 @@ if (isMainThread) {
         throw mutationFailure instanceof Error
           ? mutationFailure
           : new Error("Synthetic metadata mutation failed", { cause: mutationFailure });
+      }
+      if (mutations !== mutationTarget) {
+        throw new Error(`Incomplete mutation workload: ${mutations}/${mutationTarget}`);
       }
       const cpu = measureGatewayCpuUsage(before, await readGatewayCpuUsage(child));
       const capture = new Promise<unknown>((resolve, reject) => {

@@ -109,7 +109,10 @@ than `--poll-ms`; 35 clients at five seconds produces about 420 list calls per
 minute during steady blocks. Requests use the normal conditional/delta revision
 handshake. `--mutation-ms 1000` adds one synthetic label edit per second through
 `sessions.patch` during steady blocks, including that work in CPU totals. Each
-block records the completed mutation count; compare matching counts. This is a
+block schedules only the ticks strictly before its nominal final cohort (19
+edits for five cohorts at five seconds and one-second mutations), waits up to
+five extra seconds for delayed ticks, and rejects an incomplete mutation count.
+This keeps the recorded workload independent of response speed. This is a
 controlled shared-query workload, not a complete browser scheduler replay.
 
 Results in `list-measure-*/result.json` include per-variant reconnect/steady
