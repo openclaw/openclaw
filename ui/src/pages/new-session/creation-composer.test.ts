@@ -1,8 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { createComponent, createSignal, flush } from "solid-js";
+import { createComponent, createEffect, createSignal, flush, useContext } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
+import {
+  SessionBackgroundLayoutContext,
+  SessionBackgroundLayoutScope,
+} from "../../components/session-background-layout-context.tsx";
+import { createBackgroundFadeLayout } from "../../components/session-background-layout.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -71,6 +76,58 @@ describe("creation-owned follow-up input", () => {
     next.flushInput?.();
     expect(next.message).toBe("edited next creation");
     expect(composer.message).toBe("first creation");
+  });
+
+  it("keeps the background fade on the visible follow-up input through replacement and removal", () => {
+    const { context, composer } = fixture();
+    const next = new CreationComposer(context, "main", false, vi.fn());
+    onTestFinished(() => next.dispose());
+    const [current, setCurrent] = createSignal<CreationComposer | undefined>(composer);
+    let inputTop = 200;
+    let registeredCount = () => 0;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains("agent-chat__input")
+        ? DOMRect.fromRect({ y: inputTop, height: 100 })
+        : DOMRect.fromRect({ height: 1000 });
+    });
+    const background = document.createElement("div");
+    function Layout() {
+      const scope = useContext(SessionBackgroundLayoutContext)!;
+      registeredCount = () => scope.targets().length;
+      const layout = createBackgroundFadeLayout(background);
+      createEffect(scope.targets, (targets) => layout.update(true, targets));
+      return background;
+    }
+    mountSolid(
+      () =>
+        createComponent(SessionBackgroundLayoutScope, {
+          get children() {
+            return [
+              createComponent(Layout, {}),
+              createComponent(CreationComposerView, {
+                get composer() {
+                  return current();
+                },
+                onOpenImage: vi.fn(),
+              }),
+            ];
+          },
+        }),
+      { wrapper: createSolidApplicationContextProvider(context).wrapper },
+    );
+    expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("250px");
+    expect(registeredCount()).toBe(1);
+    inputTop = 400;
+    setCurrent(next);
+    flush();
+    expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("450px");
+    expect(registeredCount()).toBe(1);
+    setCurrent(undefined);
+    flush();
+    expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("550px");
+    expect(registeredCount()).toBe(0);
   });
 
   it("stages ordered messages and files without a destination, persistence, or RPC", () => {

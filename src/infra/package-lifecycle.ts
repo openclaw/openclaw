@@ -412,7 +412,6 @@ export async function completePendingPackageLifecycle(params: {
     const finalizeLegacyMarker = !(await pathExists(
       path.join(packageRoot, PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH),
     ));
-    await assertOwnership();
     // Promote the shipped 2026.8.1 dist guard before preinstall removes it.
     // Modern postinstall clears the canonical marker after all lifecycle work succeeds.
     await ensurePendingMarker(paths, packageDirectory, lock);

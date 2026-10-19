@@ -1,4 +1,4 @@
-import { createMemo, For, Show, untrack } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type {
   SessionCatalog,
   SessionCatalogHost,
@@ -64,8 +64,6 @@ function renderCatalogHostGroup(
     sectionId: string;
     projectChild?: boolean;
   }) {
-    // Project and flat rows have separate mounted branches for their entire lifetime.
-    const initialProjectChild = untrack(() => rowProps.projectChild === true);
     const expanded = () =>
       (params.visibleSessionLimits.get(rowProps.sectionId) ?? CATALOG_SESSION_GROUP_LIMIT) >
       CATALOG_SESSION_GROUP_LIMIT;
@@ -90,7 +88,7 @@ function renderCatalogHostGroup(
             session,
             readLiveRowsByKey,
             params,
-            initialProjectChild,
+            rowProps.projectChild === true,
           )
         }
       </For>

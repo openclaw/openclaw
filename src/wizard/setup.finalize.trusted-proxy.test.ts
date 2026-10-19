@@ -5,7 +5,6 @@ import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
-import type { RuntimeEnv } from "../runtime.js";
 
 type DefaultModelAuthStatus = Awaited<
   ReturnType<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>
@@ -286,60 +285,8 @@ vi.mock("./setup.completion.js", () => ({
   setupWizardShellCompletion,
 }));
 
+import { createFinalizeArgs, createRuntime } from "./setup.finalize.fixtures.test-support.js";
 import { finalizeSetupWizard } from "./setup.finalize.js";
-
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
-
-type FinalizeArgs = Parameters<typeof finalizeSetupWizard>[0];
-
-type FinalizeArgsOverrides = Omit<Partial<FinalizeArgs>, "flow" | "opts" | "settings"> & {
-  opts?: Partial<FinalizeArgs["opts"]>;
-  settings?: Partial<FinalizeArgs["settings"]>;
-};
-
-function createLaterPrompter() {
-  return buildWizardPrompter({
-    select: vi.fn(async () => "later") as never,
-    confirm: vi.fn(async () => false),
-  });
-}
-
-function createFinalizeArgs(
-  flow: FinalizeArgs["flow"],
-  overrides: FinalizeArgsOverrides = {},
-): FinalizeArgs {
-  const { opts, settings, ...rest } = overrides;
-  return {
-    flow,
-    opts: {
-      acceptRisk: true,
-      authChoice: "skip",
-      installDaemon: false,
-      skipHealth: true,
-      skipUi: flow === "advanced",
-      ...opts,
-    },
-    baseConfig: {},
-    nextConfig: {},
-    workspaceDir: "/tmp",
-    settings: {
-      port: 18789,
-      bind: "loopback",
-      authMode: "token",
-      gatewayToken: undefined,
-      ...settings,
-    },
-    prompter: createLaterPrompter(),
-    runtime: createRuntime(),
-    ...rest,
-  };
-}
 
 function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
   const call = mock.mock.calls[callIndex];

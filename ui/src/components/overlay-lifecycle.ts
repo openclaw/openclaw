@@ -278,11 +278,7 @@ export function createOverlay(
         }
         const target = returnTarget ?? trigger;
         if (focus === "return" && target?.isConnected) {
-          if (options.onReturnFocus) {
-            options.onReturnFocus(target);
-          } else {
-            target.focus({ preventScroll: true });
-          }
+          target.focus({ preventScroll: true });
         }
         return true;
       }
@@ -431,7 +427,6 @@ export function createOverlay(
       if (next) {
         native.show(surface, trigger);
       } else {
-        options.beforeNativeHide?.();
         native.hide(surface);
       }
     } catch (error) {

@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
+import type { SqliteCleanCloseSealRefusal } from "./sqlite-clean-close-seal.js";
 import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "./sqlite-error-diagnostics.js";
 import {
@@ -36,7 +37,7 @@ export type SqliteIntegrityDiagnostics = {
     | "stale-lease-full"
     | "process-death"
     | "dirty-receipt"
-    | "no-proof"
+    | SqliteCleanCloseSealRefusal
     | "lease-class";
   integrityGateMode?: "quick" | "full" | "deferred";
   integrityGateMs?: number;

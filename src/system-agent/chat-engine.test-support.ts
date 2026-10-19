@@ -16,10 +16,10 @@ import {
   SystemAgentChatEngine as RuntimeSystemAgentChatEngine,
   type SystemAgentChatEngineOptions,
 } from "./chat-engine.js";
-import type { ChatWizardHostDependencies } from "./chat-wizard-host.js";
 import {
   resolveSystemAgentConfiguredRouteFromConfig as resolveRouteImpl,
   type SystemAgentConfiguredRoute,
+  type SystemAgentConfigSnapshot,
 } from "./inference-route.js";
 import type { SystemAgentOverview } from "./overview.js";
 import {
@@ -199,8 +199,12 @@ function testHarnessBinding(route: SystemAgentConfiguredRoute) {
 
 type ProfileCredential = Parameters<typeof fingerprintAuthProfileCredential>[0]["credential"];
 
-async function createVerifiedBinding(config: OpenClawConfig, credential?: ProfileCredential) {
-  const route = await resolveRoute(config);
+async function createVerifiedBinding(
+  config: OpenClawConfig,
+  credential?: ProfileCredential,
+  snapshot?: SystemAgentConfigSnapshot,
+) {
+  const route = await resolveRoute(config, undefined, {}, snapshot);
   if (!route) {
     throw new Error("missing test route");
   }
@@ -228,11 +232,16 @@ async function createVerifiedBinding(config: OpenClawConfig, credential?: Profil
   return makeBinding({ configuredRoute: route, executionRoute: route, auth });
 }
 
-export const createAmbientVerifiedBinding = (config: OpenClawConfig) =>
-  createVerifiedBinding(config);
+export const createAmbientVerifiedBinding = (
+  config: OpenClawConfig,
+  snapshot?: SystemAgentConfigSnapshot,
+) => createVerifiedBinding(config, undefined, snapshot);
 
-export const createOAuthVerifiedBinding = (config: OpenClawConfig, credential: ProfileCredential) =>
-  createVerifiedBinding(config, credential);
+export const createOAuthVerifiedBinding = (
+  config: OpenClawConfig,
+  credential: ProfileCredential,
+  snapshot?: SystemAgentConfigSnapshot,
+) => createVerifiedBinding(config, credential, snapshot);
 
 export async function createCliVerifiedBinding(config: OpenClawConfig) {
   const route = await resolveRoute(config);
@@ -270,11 +279,9 @@ export async function createCliVerifiedBinding(config: OpenClawConfig) {
   return { binding };
 }
 
-type TestSystemAgentChatEngineOptions = Omit<SystemAgentChatEngineOptions, "verifiedInference"> &
-  ChatWizardHostDependencies & {
-    executeOperation?: typeof import("./operations.js").executeSystemAgentOperation;
-    verifiedInference?: SystemAgentVerifiedInferenceBinding;
-  };
+type TestSystemAgentChatEngineOptions = Omit<SystemAgentChatEngineOptions, "verifiedInference"> & {
+  verifiedInference?: SystemAgentVerifiedInferenceBinding;
+};
 
 export class SystemAgentChatEngine extends RuntimeSystemAgentChatEngine {
   override answerWizard = scoped(super.answerWizard.bind(this));
@@ -287,22 +294,15 @@ export class SystemAgentChatEngine extends RuntimeSystemAgentChatEngine {
   override handle = scoped(super.handle.bind(this));
 
   constructor(opts: TestSystemAgentChatEngineOptions = {}) {
-    const { executeOperation, ...engineOptions } = opts;
-    const explicitBinding = engineOptions.verifiedInference;
-    super(
-      {
-        ...engineOptions,
-        verifiedInference: explicitBinding ?? sharedFixture.binding,
-        deps: {
-          readConfigFileSnapshot: async () => sharedSnapshot(),
-          ...engineOptions.deps,
-        },
+    const explicitBinding = opts.verifiedInference;
+    super({
+      ...opts,
+      verifiedInference: explicitBinding ?? sharedFixture.binding,
+      deps: {
+        readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+        ...opts.deps,
       },
-      {
-        wizardDependencies: opts,
-        ...(executeOperation ? { executeOperation } : {}),
-      },
-    );
+    });
   }
 }
 

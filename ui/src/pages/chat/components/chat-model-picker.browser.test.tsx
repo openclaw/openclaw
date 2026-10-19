@@ -2,7 +2,7 @@ import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
 import { focusChatComposerFromPrintableKeydown } from "../chat-pane-shared.ts";
@@ -76,6 +76,11 @@ function mountPicker(optionsReady = true) {
     await toggled;
     flush();
     await new Promise(requestAnimationFrame);
+    if (picker.open) {
+      await waitForSolid(() =>
+        expect(picker.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+      );
+    }
   };
   return { params, update, picker, trigger, composer, toggle, modelOptions };
 }
