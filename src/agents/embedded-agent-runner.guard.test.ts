@@ -285,7 +285,12 @@ describe("guardSessionManager integration", () => {
       privateCompletion: true,
       onMessagePersisted,
     });
-    await sm.appendMessageAsync(assistantToolCall("unfinished"));
+    await sm.appendMessageAsync(
+      makeAgentAssistantMessage({
+        content: [{ type: "toolCall", id: "unfinished", name: "n", arguments: {} }],
+        stopReason: "toolUse",
+      }),
+    );
     sm.clearTranscriptRunCallbacks?.();
     await sm.flushPendingToolResultsAsync?.();
 
