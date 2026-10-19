@@ -1,4 +1,4 @@
-import { describe, expect, it, onTestFinished, vi, afterEach } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   readReplyPayloadSourceOccurrence,
   type ReplyPayloadSourceOccurrence,
@@ -83,37 +83,35 @@ describe("fenced block streaming", () => {
       text: `<final>\n~~~txt\n${"code\n".repeat(300)}<final>literal</final>\n~~~\n\nAfter</final>`,
       expected: `${"code".repeat(300)}<final>literal</final>After`,
     },
-  ])("preserves wrapped fence semantics in $name", ({ enforceFinalTag, text, expected }) => {
+    {
+      name: "a long fence",
+      enforceFinalTag: false,
+      text: `\`\`\`txt\n${"code\n\n".repeat(600)}\`\`\`\n\nAfter`,
+      expected: `${"code".repeat(600)}After`,
+    },
+  ])("preserves wrapped fence semantics in $name", ({ name, enforceFinalTag, text, expected }) => {
     const harness = fenceHarness(enforceFinalTag);
     harness.delta(text);
+    if (name === "a long fence") {
+      expect(harness.chunks().length).toBeGreaterThan(1);
+    }
     harness.end(text);
     const chunks = harness.chunks();
     expect(chunks.every((chunk) => chunk.length <= 1_200)).toBe(true);
-    expect(
-      chunks
-        .flatMap((chunk) => chunk.split("\n").filter((line) => !line.startsWith("~~~")))
-        .join(""),
-    ).toBe(expected);
-  });
-
-  it("preserves fenced code and final prose in a long fence", () => {
-    const text = `\`\`\`txt\n${"code\n\n".repeat(600)}\`\`\`\n\nAfter`;
-    const harness = fenceHarness();
-    harness.delta(text);
-    expect(harness.chunks().length).toBeGreaterThan(1);
-    harness.end(text);
-    const chunks = harness.chunks();
-    expect(chunks.at(-1)).toBe("After");
-    expect(chunks.every((chunk) => chunk.length <= 1_200)).toBe(true);
-    for (const chunk of chunks.slice(0, -1)) {
-      expect(chunk.startsWith("```txt\n")).toBe(true);
-      expect(chunk.trimEnd().endsWith("```")).toBe(true);
+    const longFence = name === "a long fence";
+    if (longFence) {
+      expect(chunks.at(-1)).toBe("After");
+      for (const chunk of chunks.slice(0, -1)) {
+        expect(chunk.startsWith("```txt\n")).toBe(true);
+        expect(chunk.trimEnd().endsWith("```")).toBe(true);
+      }
     }
     const rendered = chunks
-      .flatMap((chunk) => chunk.split("\n").filter((line) => !line.startsWith("```")))
-      .join("")
-      .replace(/\s/g, "");
-    expect(rendered).toBe(`${"code".repeat(600)}After`);
+      .flatMap((chunk) =>
+        chunk.split("\n").filter((line) => !line.startsWith(longFence ? "```" : "~~~")),
+      )
+      .join("");
+    expect(longFence ? rendered.replace(/\s/g, "") : rendered).toBe(expected);
   });
 
   it("delivers identical fenced chunks as distinct source occurrences with coalescing", async () => {
@@ -173,16 +171,12 @@ function deltas(emit: ReturnType<typeof subscribe>, chunks: string[]) {
 }
 
 describe("streamed final tags", () => {
-  it("closes hidden reasoning fences split across deltas", () => {
-    const reply = vi.fn();
-    const emit = subscribe({ enforceFinalTag: true, onPartialReply: reply });
-    deltas(emit, ["<think>\n```ts\nconst hidden = true;\n``", "`\n</think><final>Answer</final>"]);
-    const payloads = reply.mock.calls.map(([p]) => p);
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("Answer");
-  });
-
   it.each([
+    {
+      name: "hidden reasoning fences split across deltas",
+      deltas: ["<think>\n```ts\nconst hidden = true;\n``", "`\n</think><final>Answer</final>"],
+      expected: "Answer",
+    },
     {
       name: "self-closing final closer",
       deltas: ["<final data-model='gemma'>Visible<final data-model='x' />hidden"],
@@ -191,16 +185,21 @@ describe("streamed final tags", () => {
       name: "leading self-closing final opener",
       deltas: ["<final data-model=openrouter/google/gemini/>Visible"],
     },
-  ])("preserves enforced content with a $name", ({ deltas: chunks }) => {
+  ])("preserves enforced content with a $name", ({ deltas: chunks, expected }) => {
     const onPartialReply = vi.fn();
     const emit = subscribe({ enforceFinalTag: true, onPartialReply });
     deltas(emit, chunks);
-    expect(
-      onPartialReply.mock.calls
-        .map(([p]) => p.delta)
-        .filter((delta) => typeof delta === "string")
-        .join(""),
-    ).toBe("Visible");
+    if (expected) {
+      expect(onPartialReply.mock.calls).toHaveLength(1);
+      expect(onPartialReply.mock.calls[0]?.[0].text).toBe(expected);
+    } else {
+      expect(
+        onPartialReply.mock.calls
+          .map(([p]) => p.delta)
+          .filter((delta) => typeof delta === "string")
+          .join(""),
+      ).toBe("Visible");
+    }
   });
 
   it("strips split final tags without remnants or replacement events", () => {
@@ -210,8 +209,6 @@ describe("streamed final tags", () => {
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     const text = payloads.map((payload) => payload.delta).join("");
     expect(text).toBe("Title\nLine one\nLine two");
-    expect(text).not.toContain("<");
-    expect(text).not.toContain("final>");
     expect(payloads.some((payload) => payload.replace)).toBe(false);
   });
 
@@ -240,13 +237,6 @@ describe("streamed final tags", () => {
 });
 
 type Reply = Parameters<NonNullable<SubscribeEmbeddedAgentSessionParams["onBlockReply"]>>[0];
-const subscriptions: Array<ReturnType<typeof createSubscribedSessionHarness>["subscription"]> = [];
-afterEach(async () => {
-  for (const subscription of subscriptions.splice(0)) {
-    subscription.unsubscribe();
-    await subscription.waitForPendingEvents();
-  }
-});
 function replies() {
   const onReply = vi.fn<(payload: Reply) => void>();
   const harness = createSubscribedSessionHarness({
@@ -255,19 +245,17 @@ function replies() {
     blockReplyBreak: "text_end",
     blockReplyChunking: { minChars: 1, maxChars: 50, breakPreference: "newline" },
   });
-  subscriptions.push(harness.subscription);
+  onTestFinished(async () => {
+    harness.subscription.unsubscribe();
+    await harness.subscription.waitForPendingEvents();
+  });
   const message = { role: "assistant", phase: "final_answer", content: [] };
   harness.emit({ type: "message_start", message });
   return {
     ...harness,
-    onReply,
     payloads: () => onReply.mock.calls.map(([payload]) => payload),
     delta: (delta: string) => emitAssistantTextDelta({ emit: harness.emit, delta }),
-    end: (text: string) =>
-      harness.emit({
-        type: "message_end",
-        message: { role: "assistant", content: [{ type: "text", text }] },
-      }),
+    end: (text: string) => harness.emit({ type: "message_end", message: textAssistant(text) }),
     message,
   };
 }

@@ -25,9 +25,11 @@ function assistant(texts: string[]): NativeMessage {
 }
 function setup(options: Options = {}) {
   const onBlockReply = vi.fn();
+  const onAgentEvent = vi.fn();
   const harness = createSubscribedSessionHarness({
     runId: "run",
     onBlockReply,
+    onAgentEvent,
     blockReplyBreak: "text_end",
     ...options,
   });
@@ -55,13 +57,15 @@ function setup(options: Options = {}) {
     ...harness,
     onBlockReply,
     texts: readTexts,
-    flush: async (expected: string[]) => {
+    flush: async (expected: readonly string[], history = false, calls?: number) => {
       await harness.subscription.waitForPendingEvents();
       expect(readTexts()).toEqual(expected);
-    },
-    expectAssistantTexts: (expected: readonly string[]) => {
-      expect(readTexts()).toEqual(expected);
-      expect(harness.subscription.assistantTexts).toEqual(expected);
+      if (history) {
+        expect(harness.subscription.assistantTexts).toEqual(expected);
+      }
+      if (calls !== undefined) {
+        expect(onBlockReply).toHaveBeenCalledTimes(calls);
+      }
     },
     finish: (texts: string[]) => emit({ type: "message_end", message: assistant(texts) }),
     start: () => emit({ type: "message_start", message: assistant([]) }),
@@ -70,6 +74,12 @@ function setup(options: Options = {}) {
     end: (texts: string[], index: number) =>
       nativeEvent("text_end", assistant(texts), index, texts[index] ?? ""),
     nativeEvent,
+    expectEvent: (text: string) =>
+      expect(onAgentEvent.mock.calls.at(-1)?.[0]).toMatchObject({
+        stream: "assistant",
+        data: { text },
+      }),
+    events: onAgentEvent,
     toolStart: (toolName: string, toolCallId: string, args: Record<string, unknown> = {}) =>
       emit({ type: "tool_execution_start", toolName, toolCallId, args }),
   };
@@ -95,8 +105,7 @@ describe("native snapshot reconciliation", () => {
   });
 
   it("preserves an orphan-close replacement after a drained raw prefix", async () => {
-    const onAgentEvent = vi.fn();
-    const h = setup({ onAgentEvent, blockReplyChunking: sentenceChunking });
+    const h = setup({ blockReplyChunking: sentenceChunking });
     const answer = "This is the complete visible answer.";
     let raw = "";
     h.start();
@@ -115,27 +124,20 @@ describe("native snapshot reconciliation", () => {
     expect(delivered.slice(1).join(" ")).toBe(answer);
     h.finish([raw]);
     await h.flush(delivered);
-    expect(onAgentEvent.mock.calls.at(-1)?.[0]).toMatchObject({
-      stream: "assistant",
-      data: { text: answer },
-    });
+    h.expectEvent(answer);
   });
 
   it("terminal checkpoint replaces code with real reply intent", async () => {
-    const onAgentEvent = vi.fn();
-    const h = setup({ onAgentEvent });
+    const h = setup();
     const draft = "```text\n[[reply_to:example-id]]\n```\n\nThe original draft continues here.";
     h.start();
     h.delta([draft], 0);
-    expect(onAgentEvent.mock.calls.at(-1)?.[0]).toMatchObject({
-      stream: "assistant",
-      data: { text: draft },
-    });
-    onAgentEvent.mockClear();
+    h.expectEvent(draft);
+    h.events.mockClear();
     h.end(["[[reply_to:replacement]]Corrected"], 0);
     await h.subscription.waitForPendingEvents();
     expect({
-      events: onAgentEvent.mock.calls.map(([event]) => event),
+      events: h.events.mock.calls.map(([event]) => event),
       blocks: h.texts(),
       assistantTexts: h.subscription.assistantTexts,
     }).toMatchObject({
@@ -164,12 +166,9 @@ describe("native snapshot reconciliation", () => {
       second += delta;
       h.delta([first, second], 1, delta);
     }
-    await h.subscription.waitForPendingEvents();
-    h.expectAssistantTexts(delivered);
+    await h.flush(delivered, true);
     h.end([first, checkpoint], 1);
-    await h.subscription.waitForPendingEvents();
-    h.expectAssistantTexts(delivered);
-    expect(h.onBlockReply).toHaveBeenCalledTimes(delivered.length);
+    await h.flush(delivered, true, delivered.length);
   });
 
   it("keeps native code continuation fenced after a shortened open-fence checkpoint", async () => {
@@ -185,8 +184,7 @@ describe("native snapshot reconciliation", () => {
     }
     await h.flush([firstChunk]);
     h.end([shortened], 0);
-    await h.flush([firstChunk]);
-    expect(h.onBlockReply).toHaveBeenCalledTimes(1);
+    await h.flush([firstChunk], false, 1);
     h.delta([shortened, continuation], 1);
     h.end([shortened, continuation], 1);
     await h.subscription.waitForPendingEvents();
@@ -200,31 +198,22 @@ describe("native snapshot reconciliation", () => {
     });
     expect(bodies.join("")).toBe("defghijklmnopqrstuvwxyz");
     h.finish([shortened, continuation]);
-    await h.flush(delivered);
-    expect(h.onBlockReply).toHaveBeenCalledTimes(delivered.length);
+    await h.flush(delivered, false, delivered.length);
   });
 
   it("delivers identical text first seen in a distinct block at message_end", async () => {
-    const onAgentEvent = vi.fn();
-    const h = setup({ onAgentEvent });
+    const h = setup();
     h.start();
     h.delta(["Same"], 0);
     h.end(["Same"], 0);
-    await h.subscription.waitForPendingEvents();
-    h.expectAssistantTexts(["Same"]);
+    await h.flush(["Same"], true);
     h.finish(["Same", "Same"]);
-    await h.subscription.waitForPendingEvents();
-    h.expectAssistantTexts(["Same", "Same"]);
-    expect(h.onBlockReply).toHaveBeenCalledTimes(2);
-    expect(onAgentEvent.mock.calls.at(-1)?.[0]).toMatchObject({
-      stream: "assistant",
-      data: { text: "Same\nSame" },
-    });
+    await h.flush(["Same", "Same"], true, 2);
+    h.expectEvent("Same\nSame");
   });
 
   it("does not read future blocks from shared mutable text_end partials", async () => {
-    const onAgentEvent = vi.fn();
-    const h = setup({ onAgentEvent });
+    const h = setup();
     const partial: NativeMessage = {
       ...assistant([]),
       content: [
@@ -240,17 +229,11 @@ describe("native snapshot reconciliation", () => {
     ] as const) {
       h.nativeEvent("text_delta", partial, index, text);
       h.nativeEvent("text_end", partial, index, text);
-      await h.subscription.waitForPendingEvents();
-      h.expectAssistantTexts(expected);
-      expect(onAgentEvent.mock.calls.at(-1)?.[0]).toMatchObject({
-        stream: "assistant",
-        data: { text: expected.join("\n") },
-      });
+      await h.flush(expected, true);
+      h.expectEvent(expected.join("\n"));
     }
     h.emit({ type: "message_end", message: partial });
-    await h.subscription.waitForPendingEvents();
-    h.expectAssistantTexts(["First", "Second"]);
-    expect(h.onBlockReply).toHaveBeenCalledTimes(2);
+    await h.flush(["First", "Second"], true, 2);
   });
 
   it.each([
@@ -275,10 +258,9 @@ describe("native snapshot reconciliation", () => {
   ])(
     "preserves $name split across native blocks at a checkpoint",
     async ({ chunks, enforceFinalTag, expected }) => {
-      const onAgentEvent = vi.fn();
-      const h = setup({ onAgentEvent, enforceFinalTag });
+      const h = setup({ enforceFinalTag });
       const visibleUpdates = () =>
-        onAgentEvent.mock.calls
+        h.events.mock.calls
           .filter(([event]) => event.stream === "assistant")
           .map(([event]) => event.data.text);
       h.start();
@@ -329,7 +311,8 @@ describe("text_end replay and tool handoff", () => {
       await h.subscription.waitForPendingEvents();
       expect(h.onBlockReply).toHaveBeenCalledTimes(index + 1);
     }
-    h.expectAssistantTexts(expected);
+    expect(h.texts()).toEqual(expected);
+    expect(h.subscription.assistantTexts).toEqual(expected);
   });
 
   it("does not safety-send a cumulative reply whose suffix a messaging tool sent", async () => {

@@ -28,6 +28,10 @@ const commentaryPartial = (text: string, id = "item-commentary") =>
     signaturePhase: "commentary",
     partialPhase: "commentary",
   });
+const preamble = (progressText: string, phase: string, itemId = "item-commentary") => ({
+  stream: "item",
+  data: { kind: "preamble", title: "Preamble", progressText, phase, itemId },
+});
 
 describe("handleMessageUpdate text signatures", () => {
   afterEach(() => vi.useRealTimers());
@@ -94,12 +98,9 @@ describe("handleMessageUpdate text signatures", () => {
   });
 
   it.each([
-    { chunks: ["NO_", "REPLY", "\nHello ", "world"], text: "Hello world" },
-    {
-      chunks: ["NO_", "REPLY", " is literal ", "text"],
-      text: "NO_REPLY is literal text",
-    },
-  ])("preserves visible text after a split protocol prefix: $text", async ({ chunks, text }) => {
+    [["NO_", "REPLY", "\nHello ", "world"], "Hello world"],
+    [["NO_", "REPLY", " is literal ", "text"], "NO_REPLY is literal text"],
+  ] as const)("preserves visible text after a split protocol prefix: %j", async (chunks, text) => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
     for (const delta of chunks) {
@@ -129,22 +130,12 @@ describe("handleMessageUpdate text signatures", () => {
       partialPhase: "final_answer",
     });
 
-    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
-      {
-        stream: "assistant",
-        data: {
-          text: "Hello",
-          delta: "",
-          replace: true,
-          phase: "commentary",
-          itemId: "item-commentary",
-        },
-      },
-      {
-        stream: "assistant",
-        data: { text: "Hello world", delta: "Hello world", phase: "final_answer" },
-      },
-    ]);
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject(
+      [
+        { text: "Hello", delta: "", replace: true, phase: "commentary", itemId: "item-commentary" },
+        { text: "Hello world", delta: "Hello world", phase: "final_answer" },
+      ].map((data) => ({ stream: "assistant", data })),
+    );
   });
 
   it.each([
@@ -178,16 +169,7 @@ describe("handleMessageUpdate text signatures", () => {
 
       expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual(
         [...updates.map((text) => [text, "update"]), ["Working...", "end"]].map(
-          ([progressText, phase]) => ({
-            stream: "item",
-            data: {
-              kind: "preamble",
-              title: "Preamble",
-              progressText,
-              phase,
-              itemId: "item-commentary",
-            },
-          }),
+          ([progressText, phase]) => preamble(progressText, phase),
         ),
       );
 
@@ -216,10 +198,7 @@ describe("handleMessageUpdate text signatures", () => {
     await endMessage(context, { message: extendedPartial });
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual(
-      ["Working", "Working now"].map((progressText) => ({
-        stream: "item",
-        data: { kind: "preamble", title: "Preamble", progressText, phase: "end", itemId: "item-1" },
-      })),
+      ["Working", "Working now"].map((text) => preamble(text, "end", "item-1")),
     );
 
     expect(context.state.lastAssistantStreamItemId).toBe("item-1");
@@ -283,12 +262,13 @@ describe("handleMessageUpdate current-source message-tool previews", () => {
         text,
         visibleDelta: text,
       });
-    expect(partial("QA-MSTEAMS")).toEqual({ hold: true, text: "QA-MSTEAMS" });
-    expect(partial("-DM-OK")).toEqual({ hold: true, text: "QA-MSTEAMS-DM-OK" });
-    expect(partial(" with more detail")).toEqual({
-      hold: false,
-      text: "QA-MSTEAMS-DM-OK with more detail",
-    });
+    for (const [fragment, hold, text] of [
+      ["QA-MSTEAMS", true, "QA-MSTEAMS"],
+      ["-DM-OK", true, "QA-MSTEAMS-DM-OK"],
+      [" with more detail", false, "QA-MSTEAMS-DM-OK with more detail"],
+    ] as const) {
+      expect(partial(fragment)).toEqual({ hold, text });
+    }
     expect(state.currentSourceMessagingToolHeldPartial).toBeUndefined();
   });
 

@@ -42,11 +42,18 @@ const skipped = {
   reason: "threshold",
   outcome: { status: "skipped", reason: "Nothing to compact (session too small)" },
 } as const;
-function assistant(input: number, stopReason: AssistantMessage["stopReason"] = "stop") {
+const usage = (input: number, output = 0, cacheRead = 0) => ({
+  ...makeZeroUsageSnapshot(),
+  input,
+  output,
+  cacheRead,
+  totalTokens: input + output + cacheRead,
+});
+function assistant(input: number, overrides: Partial<AssistantMessage> = {}) {
   return makeAgentAssistantMessage({
     content: [{ type: "text", text: "model reply" }],
-    usage: { ...makeZeroUsageSnapshot(), input, totalTokens: input },
-    stopReason,
+    usage: usage(input),
+    ...overrides,
   });
 }
 type Emit = ReturnType<typeof harness>["emit"];
@@ -56,46 +63,36 @@ function message(emit: Emit, value: AssistantMessage) {
 }
 
 describe("compaction accounting", () => {
-  it.each([
-    {
-      name: "unavailable provider context despite billing usage",
-      events: [
-        completed(false, 90_000, 12_000),
-        makeAgentAssistantMessage({
-          content: [{ type: "text", text: "context unavailable" }],
-          usage: {
-            ...makeZeroUsageSnapshot(),
-            input: 90_000,
-            totalTokens: 90_000,
-            contextUsage: { state: "unavailable" },
-          },
-        }),
-      ],
-      expected: [{ kind: "model", contextTokens: undefined, successful: false }],
-    },
-    {
-      name: "failed zero-usage retry without old assistant backfill",
-      events: [assistant(90_000), completed(true, 90_000, 12_000), assistant(0, "error")],
-      expected: [
-        { kind: "model", contextTokens: 90_000, successful: false },
-        { kind: "model", contextTokens: undefined, successful: false },
-      ],
-    },
-  ])("records $name in producer order", ({ events, expected }) => {
-    const observed: EmbeddedContextAccountingEvent[] = [];
-    const { emit } = harness({
-      sessionPersistence: "detached",
-      onContextAccountingEvent: (event) => observed.push(event),
-    });
-    for (const event of events) {
-      if ("role" in event) {
-        message(emit, event);
-      } else {
-        emit(event);
+  it.each([false, true])(
+    "records unavailable context without old usage backfill (failed retry=%s)",
+    (failedRetry) => {
+      const observed: EmbeddedContextAccountingEvent[] = [];
+      const { emit } = harness({
+        sessionPersistence: "detached",
+        onContextAccountingEvent: (event) => observed.push(event),
+      });
+      if (failedRetry) {
+        message(emit, assistant(90_000));
       }
-    }
-    expect(observed).toEqual(expected);
-  });
+      emit(completed(failedRetry, 90_000, 12_000));
+      message(
+        emit,
+        failedRetry
+          ? assistant(0, { stopReason: "error" })
+          : assistant(90_000, {
+              content: [{ type: "text", text: "context unavailable" }],
+              usage: { ...usage(90_000), contextUsage: { state: "unavailable" } },
+            }),
+      );
+      expect(observed).toEqual(
+        (failedRetry ? [90_000, undefined] : [undefined]).map((contextTokens) => ({
+          kind: "model",
+          contextTokens,
+          successful: false,
+        })),
+      );
+    },
+  );
 
   it("captures repaired model usage before queued delivery and throwing cleanup", async () => {
     const deliveryStarted = createDeferred();
@@ -137,7 +134,7 @@ describe("compaction accounting", () => {
       emit({ type: "message_start", message: after });
       const partial = {
         ...after,
-        usage: { ...makeZeroUsageSnapshot(), input: 18_000, cacheRead: 2_000, totalTokens: 20_000 },
+        usage: usage(18_000, 0, 2_000),
       };
       emit({
         type: "message_update",
@@ -209,15 +206,9 @@ describe("compaction accounting", () => {
 
   it("clears the assistant and its exact usage when compaction starts a new attempt", () => {
     const { emit, subscription } = harness();
-    const reply = makeAgentAssistantMessage({
+    const reply = assistant(100, {
       content: [{ type: "text", text: "before compaction" }],
-      usage: {
-        ...makeZeroUsageSnapshot(),
-        input: 100,
-        output: 20,
-        cacheRead: 300,
-        totalTokens: 420,
-      },
+      usage: usage(100, 20, 300),
     });
     emit({ type: "message_end", message: reply });
     expect(subscription.getCurrentAttemptAssistant()).toEqual(reply);
@@ -238,15 +229,13 @@ describe("compaction accounting", () => {
     const { emit, subscription } = harness();
     emit({ type: "compaction_start" });
     expect(subscription.isCompacting()).toBe(true);
-    let resolved = false;
-    const pending = subscription.waitForCompactionRetry().then(() => {
-      resolved = true;
-    });
+    const resolved = vi.fn();
+    const pending = subscription.waitForCompactionRetry().then(resolved);
     await Promise.resolve();
-    expect(resolved).toBe(false);
+    expect(resolved).not.toHaveBeenCalled();
     emit(skipped);
     await pending;
-    expect(resolved).toBe(true);
+    expect(resolved).toHaveBeenCalledOnce();
     expect(subscription.isCompacting()).toBe(false);
   });
 
@@ -259,18 +248,16 @@ describe("compaction accounting", () => {
     expect(subscription.getLastCompactionTokensAfter()).toBe(12_345);
     emit(completed());
     expect(subscription.getCompactionCount()).toBe(2);
-    let resolved = false;
-    const pending = subscription.waitForCompactionRetry().then(() => {
-      resolved = true;
-    });
+    const resolved = vi.fn();
+    const pending = subscription.waitForCompactionRetry().then(resolved);
     await Promise.resolve();
-    expect(resolved).toBe(false);
+    expect(resolved).not.toHaveBeenCalled();
     emit({ type: "agent_end" });
     await Promise.resolve();
-    expect(resolved).toBe(false);
+    expect(resolved).not.toHaveBeenCalled();
     emit({ type: "agent_end" });
     await pending;
-    expect(resolved).toBe(true);
+    expect(resolved).toHaveBeenCalledOnce();
   });
 
   it("rejects compaction waits with AbortError when unsubscribed", async () => {
@@ -291,44 +278,51 @@ describe("compaction accounting", () => {
 });
 
 describe("tool summaries", () => {
-  it("honors shouldEmitToolResult over disabled verbose mode", async () => {
-    const onToolResult = vi.fn();
-    const { subscription, startTool } = harness({
-      verboseLevel: "off",
-      shouldEmitToolResult: () => true,
-      onToolResult,
-    });
-    startTool("read", { path: "/tmp/c.txt" });
-    await subscription.waitForPendingEvents();
-    expect(onToolResult).toHaveBeenCalledTimes(1);
-  });
-
-  it("hides command metadata for exec outside full verbose mode", async () => {
-    const onToolResult = vi.fn<NonNullable<SubscribeEmbeddedAgentSessionParams["onToolResult"]>>();
-    const { subscription, startTool } = harness({ verboseLevel: "on", onToolResult });
-    startTool("exec", { command: "echo private-sentinel" });
-    await subscription.waitForPendingEvents();
-    const payload = onToolResult.mock.calls[0]?.[0];
-    expect(payload?.text).toContain("Exec");
-    expect(payload?.text).not.toContain("private-sentinel");
-  });
+  it.each(["off", "on"] as const)(
+    "emits requested tool summaries with verbosity %s",
+    async (verboseLevel) => {
+      const onToolResult =
+        vi.fn<NonNullable<SubscribeEmbeddedAgentSessionParams["onToolResult"]>>();
+      const off = verboseLevel === "off";
+      const { subscription, startTool } = harness({
+        verboseLevel,
+        onToolResult,
+        ...(off ? { shouldEmitToolResult: () => true } : {}),
+      });
+      startTool(
+        off ? "read" : "exec",
+        off ? { path: "/tmp/c.txt" } : { command: "echo private-sentinel" },
+      );
+      await subscription.waitForPendingEvents();
+      if (off) {
+        expect(onToolResult).toHaveBeenCalledTimes(1);
+      } else {
+        const payload = onToolResult.mock.calls[0]?.[0];
+        expect(payload?.text).toContain("Exec");
+        expect(payload?.text).not.toContain("private-sentinel");
+      }
+    },
+  );
 
   it("emits exec and read output in full verbose mode with the PTY indicator", async () => {
     const onToolResult = vi.fn<NonNullable<SubscribeEmbeddedAgentSessionParams["onToolResult"]>>();
     const { subscription, startTool, endTool } = harness({ verboseLevel: "full", onToolResult });
-    startTool("exec", { command: "claude", pty: true });
-    await subscription.waitForPendingEvents();
-    expect(onToolResult).toHaveBeenCalledTimes(1);
-    expect(onToolResult.mock.calls[0]?.[0].text).toContain("pty");
-    expect(onToolResult.mock.calls[0]?.[0].text).toContain("claude");
-    endTool("exec", "hello\nworld");
-    await subscription.waitForPendingEvents();
-    expect(onToolResult).toHaveBeenCalledTimes(2);
-    expect(onToolResult.mock.calls[1]?.[0].text).toContain("hello");
-    expect(onToolResult.mock.calls[1]?.[0].text).toContain("```txt");
-    endTool("read", "file data");
-    await subscription.waitForPendingEvents();
-    expect(onToolResult).toHaveBeenCalledTimes(3);
-    expect(onToolResult.mock.calls[2]?.[0].text).toContain("file data");
+    const steps = [
+      ["exec", { command: "claude", pty: true }, ["pty", "claude"]],
+      ["exec", "hello\nworld", ["hello", "```txt"]],
+      ["read", "file data", ["file data"]],
+    ] as const;
+    for (const [index, [toolName, input, expected]] of steps.entries()) {
+      if (typeof input === "string") {
+        endTool(toolName, input);
+      } else {
+        startTool(toolName, input);
+      }
+      await subscription.waitForPendingEvents();
+      expect(onToolResult).toHaveBeenCalledTimes(index + 1);
+      for (const fragment of expected) {
+        expect(onToolResult.mock.calls[index]?.[0].text).toContain(fragment);
+      }
+    }
   });
 });

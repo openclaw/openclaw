@@ -29,11 +29,8 @@ const plugins: ExtractionPlugin[] = [
         if (typeof toolSend?.to !== "string" || !toolSend.to) {
           return null;
         }
-        const threadId = typeof toolSend.threadId === "string" ? toolSend.threadId : undefined;
         return {
           to: toolSend.to,
-          ...(threadId ? { threadId } : {}),
-          ...(toolSend.threadImplicit === true ? { threadImplicit: true } : {}),
           ...(toolSend.threadSuppressed === true ? { threadSuppressed: true } : {}),
         };
       },
@@ -42,15 +39,7 @@ const plugins: ExtractionPlugin[] = [
   },
   {
     ...createChannelTestPluginBase({ id: "telegram" }),
-    messaging: { normalizeTarget: (raw) => (raw.trim() ? "telegram:" + raw.trim() : undefined) },
-    actions: {
-      extractToolSend: ({ args }) =>
-        args.action === "sendMessage" && typeof args.to === "string" ? { to: args.to } : null,
-    },
-    threading: {
-      resolveAutoThreadId: ({ to, toolContext }) =>
-        to.includes(":topic:") ? undefined : toolContext?.currentThreadTs,
-    },
+    threading: { resolveAutoThreadId: () => undefined },
   },
   {
     ...createChannelTestPluginBase({ id: "slack" }),
@@ -61,32 +50,20 @@ const plugins: ExtractionPlugin[] = [
       },
       extractToolSend: ({ args }) => {
         if (
-          (args.action !== "sendMessage" &&
-            args.action !== "uploadFile" &&
-            args.action !== "send" &&
-            args.action !== "upload-file") ||
+          (args.action !== "sendMessage" && args.action !== "send") ||
           typeof args.to !== "string"
         ) {
           return null;
         }
-        const nativeThreadId =
-          typeof args.threadTs === "string"
-            ? args.threadTs
-            : typeof args.threadId === "string"
-              ? args.threadId
-              : undefined;
-        const replyTo = typeof args.replyTo === "string" ? args.replyTo : undefined;
-        const threadId =
-          args.action === "send"
-            ? (replyTo ?? nativeThreadId)
-            : args.action === "upload-file"
-              ? (nativeThreadId ?? replyTo)
-              : nativeThreadId;
+        const threadId = [
+          args.action === "send" ? args.replyTo : undefined,
+          args.threadTs,
+          args.threadId,
+        ].find((value): value is string => typeof value === "string");
         const threadSuppressed =
           args.topLevel === true || args.threadTs === null || args.threadId === null;
         return {
           to: args.to,
-          accountId: typeof args.accountId === "string" ? args.accountId : undefined,
           threadId,
           threadSuppressed,
           threadImplicit: !threadId && !threadSuppressed,
@@ -180,20 +157,7 @@ describe("extractMessagingToolSend", () => {
     expect(result?.threadImplicit).toBeUndefined();
   });
 
-  it("does not infer native threads without a reply mode", () => {
-    const result = extractMessagingToolSend(
-      "slack",
-      { action: "sendMessage", to: "Channel:C1" },
-      {
-        currentChannelId: "channel:c1",
-        currentThreadId: "171.222",
-      },
-    );
-    expect(result?.threadId).toBeUndefined();
-    expect(result?.threadImplicit).toBeUndefined();
-  });
-
-  it("infers a native first-mode thread without consuming reply state", () => {
+  it.each([false, true])("infers a native thread only with reply mode (first=%s)", (first) => {
     const hasRepliedRef = { value: false };
     const result = extractMessagingToolSend(
       "slack",
@@ -201,23 +165,22 @@ describe("extractMessagingToolSend", () => {
       {
         currentChannelId: "channel:c1",
         currentThreadId: "171.222",
-        replyToMode: "first",
-        hasRepliedRef,
+        ...(first ? { replyToMode: "first" as const, hasRepliedRef } : {}),
       },
     );
-    expect(result?.threadId).toBe("171.222");
-    expect(result?.threadImplicit).toBe(true);
+    expect({ threadId: result?.threadId, threadImplicit: result?.threadImplicit }).toMatchObject({
+      threadId: first ? "171.222" : undefined,
+      threadImplicit: first ? true : undefined,
+    });
     expect(hasRepliedRef.value).toBe(false);
   });
 
   it("records explicit suppression of implicit message threading", () => {
-    const target = { provider: "telegram", to: "123" };
-    const topLevel = send({ ...target, topLevel: true });
-    const nullThread = send({ ...target, threadId: null });
-    expect(topLevel?.threadSuppressed).toBe(true);
-    expect(topLevel?.threadImplicit).toBeUndefined();
-    expect(nullThread?.threadSuppressed).toBe(true);
-    expect(nullThread?.threadImplicit).toBeUndefined();
+    for (const override of [{ topLevel: true }, { threadId: null }]) {
+      const result = send({ provider: "telegram", to: "123", ...override });
+      expect(result?.threadSuppressed).toBe(true);
+      expect(result?.threadImplicit).toBeUndefined();
+    }
   });
 });
 

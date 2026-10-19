@@ -83,6 +83,11 @@ function textBlock(text: string, id: string, phase: "commentary" | "final_answer
 function toolBlock(id: string, name: string) {
   return { type: "toolCall" as const, id, name, arguments: {} };
 }
+function responseMessage(...content: TestAssistant["content"]): TestAssistant {
+  return { role: "assistant", api: "openai-responses", content };
+}
+const containingEvent = (data: Record<string, unknown>, stream = "assistant") =>
+  expect.objectContaining({ stream, data: expect.objectContaining(data) });
 describe("commentary preambles", () => {
   it.each(["anthropic-messages", "openai-responses"] as const)(
     "coalesces %s commentary and preserves its complete boundary text",
@@ -156,47 +161,44 @@ describe("commentary preambles", () => {
   ] satisfies Array<{ phaseKnownAt: "text_delta" | "text_end"; deferred: boolean }>)(
     "preserves an explicit final-answer block when sibling commentary is identified at $phaseKnownAt (deferred=$deferred)",
     async ({ phaseKnownAt, deferred }) => {
+      const answerText = "Accepted answer.";
+      const commentaryText = "Checking a detail.";
+      const continuationText = "Continuing answer.";
+      const interimText = `${answerText}\n${commentaryText}`;
+      const correctedLive = phaseKnownAt === "text_end" && !deferred;
       const onAgentEvent = vi.fn();
       const { emit, subscription, snapshot, finishing, broadcast, drain } = commentaryHarness({
         onAgentEvent,
         ...(deferred ? { onBeforeTerminalDelivery: () => undefined } : {}),
       });
-      const answer: TestAssistant = {
-        role: "assistant",
-        api: "openai-responses",
-        content: [textBlock("Accepted answer.", "answer-0", "final_answer")],
-      };
+      const answerBlock = textBlock(answerText, "answer-0", "final_answer");
+      const commentaryBlock = textBlock(commentaryText, "commentary-0", "commentary");
+      const answer = responseMessage(answerBlock);
       emit({ type: "message_start", message: answer });
-      update(emit, answer, "text_delta", "Accepted answer.", 0);
-      const mixed: TestAssistant = {
-        ...answer,
-        content: [...answer.content, textBlock("Checking a detail.", "commentary-0", "commentary")],
-      };
-      const partial: TestAssistant =
+      update(emit, answer, "text_delta", answerText, 0);
+      const mixed = responseMessage(answerBlock, commentaryBlock);
+      const partial =
         phaseKnownAt === "text_delta"
           ? mixed
-          : {
-              ...answer,
-              content: [...answer.content, { type: "text", text: "Checking a detail." }],
-            };
-      update(emit, partial, "text_delta", "Checking a detail.", 1);
-      if (phaseKnownAt === "text_end" && !deferred) {
+          : responseMessage(answerBlock, { type: "text", text: commentaryText });
+      update(emit, partial, "text_delta", commentaryText, 1);
+      if (correctedLive) {
         expect(onAgentEvent.mock.calls.at(-1)?.[0]).toMatchObject({
           stream: "assistant",
           data: { text: expect.stringContaining("Checking a detail.") },
         });
-        expect(await snapshot()).toBe("Accepted answer.\nChecking a detail.");
+        expect(await snapshot()).toBe(interimText);
         expect(broadcast.mock.calls.findLast(([event]) => event === "chat")?.[1]).toMatchObject({
           message: {
-            content: [{ type: "text", text: "Accepted answer.\nChecking a detail." }],
+            content: [{ type: "text", text: interimText }],
           },
         });
         broadcast.mockClear();
       }
-      update(emit, mixed, "text_end", "Checking a detail.", 1);
+      update(emit, mixed, "text_end", commentaryText, 1);
       await subscription.waitForPendingEvents();
       await drain();
-      if (phaseKnownAt === "text_end" && !deferred) {
+      if (correctedLive) {
         const correction = broadcast.mock.calls.findIndex(([event]) => event === "chat");
         const preamble = broadcast.mock.calls.findIndex(
           ([event, payload]) => event === "agent" && payload.data?.kind === "preamble",
@@ -213,25 +215,18 @@ describe("commentary preambles", () => {
       if (deferred) {
         expect(current).toBeUndefined();
       } else {
-        expect(current?.data.text).toBe(
-          phaseKnownAt === "text_delta"
-            ? "Accepted answer."
-            : "Accepted answer.\nChecking a detail.",
-        );
+        expect(current?.data.text).toBe(phaseKnownAt === "text_delta" ? answerText : interimText);
       }
       expect(await snapshot()).toBe("Accepted answer.");
-      const continued =
-        phaseKnownAt === "text_end" && !deferred
-          ? {
-              ...mixed,
-              content: [
-                ...mixed.content,
-                textBlock("Continuing answer.", "answer-1", "final_answer"),
-              ],
-            }
-          : mixed;
+      const continued = correctedLive
+        ? responseMessage(
+            answerBlock,
+            commentaryBlock,
+            textBlock(continuationText, "answer-1", "final_answer"),
+          )
+        : mixed;
       if (continued !== mixed) {
-        update(emit, continued, "text_delta", "Continuing answer.", 2);
+        update(emit, continued, "text_delta", continuationText, 2);
         await subscription.waitForPendingEvents();
         await drain();
         expect(await snapshot()).toBe("Accepted answer.\nContinuing answer.");
@@ -248,30 +243,16 @@ describe("commentary preambles", () => {
       const events = onAgentEvent.mock.calls.map(([event]) => event);
       const assistant = events.filter((event) => event.stream === "assistant");
       const expectedAnswer =
-        continued === mixed ? "Accepted answer." : "Accepted answer.\nContinuing answer.";
+        continued === mixed ? answerText : `${answerText}\n${continuationText}`;
       expect(assistant.length).toBeGreaterThan(0);
       if (phaseKnownAt === "text_delta") {
         expect(assistant.every((event) => event.data.text === "Accepted answer.")).toBe(true);
       } else {
-        expect(assistant).toContainEqual(
-          expect.objectContaining({
-            data: expect.objectContaining({ text: "Accepted answer.\nChecking a detail." }),
-          }),
-        );
-        expect(assistant).toContainEqual(
-          expect.objectContaining({
-            data: expect.objectContaining({ text: expectedAnswer, replace: true }),
-          }),
-        );
+        expect(assistant).toContainEqual(containingEvent({ text: interimText }));
+        expect(assistant).toContainEqual(containingEvent({ text: expectedAnswer, replace: true }));
       }
       expect(events).toContainEqual(
-        expect.objectContaining({
-          stream: "item",
-          data: expect.objectContaining({
-            itemId: "commentary-0",
-            progressText: "Checking a detail.",
-          }),
-        }),
+        containingEvent({ itemId: "commentary-0", progressText: commentaryText }, "item"),
       );
       expect(await snapshot()).toBe(expectedAnswer);
     },
