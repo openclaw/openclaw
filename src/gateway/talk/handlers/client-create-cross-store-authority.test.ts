@@ -8,6 +8,7 @@ import {
 import { applySessionEntryOperation } from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { addSessionMember } from "../../../config/sessions/session-sharing-store.js";
 import { removeSessionMember as removeSessionMemberSync } from "../../../config/sessions/session-sharing-store.native.js";
+import * as sourceAuthorities from "../../../config/sessions/session-source-authority.js";
 import * as sourcePredicates from "../../../config/sessions/session-source-predicate.worker.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
@@ -53,6 +54,7 @@ describe("cross-store voice creation authority", () => {
     ["membership", "after", "native"],
     ["session", "after", "native"],
     ["unchanged", "after", "native"],
+    ["unpublished", "after", "native"],
     ["membership", "after", "wrapper"],
     ["session", "after", "wrapper"],
     ["unchanged", "after", "wrapper"],
@@ -113,7 +115,9 @@ describe("cross-store voice creation authority", () => {
               return;
             }
             revoked = true;
-            if (revocation === "membership") {
+            if (revocation === "unpublished") {
+              vi.spyOn(sourceAuthorities, "admitPublishedSessionSource").mockReturnValue(false);
+            } else if (revocation === "membership") {
               expect(removeSessionMemberSync(scope, identityId)).toMatchObject({ identityId });
             } else {
               replaceSessionEntrySync(scope, {
@@ -254,7 +258,7 @@ describe("cross-store voice creation authority", () => {
           expect(fixture.cancelBrowserSession).toHaveBeenCalledTimes(
             revocation === "unchanged" ? 0 : 1,
           );
-          if (revocation === "unchanged") {
+          if (revocation === "unchanged" || revocation === "unpublished") {
             expect(() => authorization?.assertCurrent()).not.toThrow();
           } else {
             expect(() => authorization?.assertCurrent()).toThrow();

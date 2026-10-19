@@ -180,7 +180,11 @@ export async function prepareClientVoiceSessionSourceChecks(
   }
   const assertAuthoritiesCurrent = () => {
     authorities.forEach((authority) => authority.assertCurrent());
-    publishedChecks.forEach(({ predicate }) => admitPublishedSessionSource(predicate));
+    publishedChecks.forEach(({ predicate }) => {
+      if (!admitPublishedSessionSource(predicate)) {
+        throw new Error("Voice session source is unavailable");
+      }
+    });
   };
   if (foreign.size === 0) {
     return {
