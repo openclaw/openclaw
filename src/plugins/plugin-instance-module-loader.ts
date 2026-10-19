@@ -217,7 +217,10 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   const reusedArtifact = retained?.artifact;
   let artifact: PluginGenerationArtifact;
   try {
-    params.preparedArtifact?.attachModuleSource(moduleSource);
+    params.preparedArtifact?.attachModuleSource(
+      moduleSource,
+      retained ? retainedNativeEsmExecution(retained) : (run) => params.instance.run(run),
+    );
     artifact =
       reusedArtifact ??
       params.preparedArtifact?.artifact ??

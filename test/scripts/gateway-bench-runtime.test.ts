@@ -134,6 +134,8 @@ describe("gateway benchmark discovery isolation", () => {
     );
     vi.stubEnv("OPENCLAW_WIDE_AREA_DOMAIN", "inherited.example.test");
     const childEnv = createGatewayBenchEnv(root, configPath, {});
+    expect(childEnv).toMatchObject({ TMPDIR: root, TMP: root, TEMP: root });
+    expect(childEnv.NODE_COMPILE_CACHE).toBeUndefined();
     for (const key of [
       "HOME",
       "OPENCLAW_HOME",

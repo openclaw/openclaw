@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { performance } from "node:perf_hooks";
 import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
 import { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.ts";
+import type { getTrackedWorkerPoolSnapshot } from "../../src/infra/worker-cpu.ts";
 
 export type GatewayRpc = <T>(method: string, params: unknown, timeoutMs?: number) => Promise<T>;
 
@@ -18,6 +19,13 @@ export type GatewayMemorySample = {
 };
 
 const PROBE_REQUEST_TIMEOUT_MS = 100;
+
+export async function readGatewayWorkers(rpc: GatewayRpc) {
+  const { workerCount, workerPoolCount, workerPools } = await rpc<
+    ReturnType<typeof getTrackedWorkerPoolSnapshot>
+  >("diagnostics.lanes", {});
+  return { workerCount, workerPoolCount, workerPools };
+}
 
 export async function readGatewayMemory(
   rpc: GatewayRpc,

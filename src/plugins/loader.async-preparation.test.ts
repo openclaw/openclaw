@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { getTrackedWorkerPoolSnapshot } from "../infra/worker-cpu.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { loadOpenClawPlugins, loadOpenClawPluginsAsync } from "./loader.js";
 import {
@@ -142,5 +145,55 @@ it("reuses a loaded registry without reacquiring its external sources", async ()
     const second = await loadOpenClawPluginsAsync(options);
     expect(second).toBe(first);
     expect(second.providers.map(({ provider }) => provider.label)).toEqual(["First", "Second"]);
+  });
+});
+
+it("retires preparation workers while registered tools keep their captured lazy imports", async () => {
+  useNoBundledPlugins();
+  const plugin = writePlugin({
+    id: "prepared-lazy",
+    registration: `api.registerTool({
+      name: "prepared_lazy", description: "Read a captured helper",
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        return { content: [{ type: "text", text: (await import("./lazy.mjs")).value }] };
+      }
+    });`,
+  });
+  const helper = path.join(plugin.dir, "lazy.mjs");
+  fs.writeFileSync(
+    path.join(plugin.dir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: plugin.id,
+      configSchema: { type: "object", properties: {} },
+      contracts: { tools: ["prepared_lazy"] },
+    }),
+  );
+  fs.writeFileSync(helper, 'export const value = "captured";');
+  await isolated(async () => {
+    const registry = await loadOpenClawPluginsAsync({
+      activate: false,
+      config: {
+        plugins: {
+          allow: [plugin.id],
+          load: { paths: [plugin.file] },
+          slots: { memory: "none" },
+        },
+      },
+    });
+    expect(registry.plugins.find(({ id }) => id === plugin.id)?.status).toBe("loaded");
+    const tool = registry.tools[0]?.factory({});
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("Expected one registered lazy-import probe");
+    }
+    expect(
+      getTrackedWorkerPoolSnapshot().workerPools.filter(({ script }) =>
+        script.includes("plugin-generation-preparation"),
+      ),
+    ).toEqual([]);
+    fs.writeFileSync(helper, 'export const value = "changed after preparation";');
+    await expect(tool.execute("first-lazy-import", {})).resolves.toMatchObject({
+      content: [{ type: "text", text: "captured" }],
+    });
   });
 });

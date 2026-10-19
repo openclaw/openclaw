@@ -1,11 +1,21 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
+import { isBuiltin } from "node:module";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
 import { getPluginCache } from "./plugin-cache.js";
+import type { createPluginCaptureResolver } from "./plugin-capture-resolution.js";
+import type {
+  CapturedModuleState,
+  PluginSourceLinkCapture,
+} from "./plugin-generation-capture.types.js";
 import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
-import type { PluginNativeRecovery } from "./plugin-native-admission.js";
+import type {
+  createPluginNativeAdmission,
+  PluginNativeRecovery,
+} from "./plugin-native-admission.js";
 import {
   createPluginNativeReferenceValidator,
   linkPluginNativeReference,
@@ -16,19 +26,213 @@ import {
   type PluginModuleCapture,
   type createPluginPackageMetadataCapture,
   findPluginCapturedPackage,
+  isPluginPackageFile as inPackage,
+  packageName,
   type PluginPackageCapture,
 } from "./plugin-package-metadata-capture.js";
 import type { PluginNativeArtifactFact } from "./plugin-source-admission.types.js";
+import type { createPluginPackageMapReferences } from "./plugin-source-references.js";
 import type { PluginCapturedSourceFact } from "./plugin-source-verification.js";
-// These owner-defined operations copy captured source trees; their cost scales with
-// package size and filesystem latency rather than the ordinary method deadline.
-const sourceCaptureOperations = new WeakSet<object>();
-export function markPluginSourceCaptureOperation<T extends () => unknown>(operation: T): T {
-  sourceCaptureOperations.add(operation);
-  return operation;
-}
-export function isPluginSourceCaptureOperation(operation: object): boolean {
-  return sourceCaptureOperations.has(operation);
+
+/** Resolve observed references against the live generation's captured facts and policy. */
+export function createPluginGenerationReferenceCapture({
+  moduleState,
+  resolution,
+  moduleSource,
+  originalSources,
+  nativeAdmission,
+  references,
+  packageMap,
+  boundary,
+  capturedPaths,
+  captureFile,
+  resolveDependency,
+  executable,
+  captureExecutableFile,
+  lexicalBoundary,
+  root,
+  destination,
+  owner,
+  sourceLinks,
+}: {
+  moduleState: CapturedModuleState;
+  resolution: ReturnType<typeof createPluginCaptureResolver>;
+  moduleSource?: (filename: string) => string;
+  originalSources: Map<string, string>;
+  nativeAdmission: ReturnType<typeof createPluginNativeAdmission>;
+  references: Map<string, Set<string>>;
+  packageMap: ReturnType<typeof createPluginPackageMapReferences>;
+  boundary: string;
+  capturedPaths: Map<string, string>;
+  captureFile: (source: string) => void;
+  resolveDependency: ReturnType<typeof createPluginDependencyResolver>;
+  executable: boolean;
+  captureExecutableFile: (filename: string) => string | undefined;
+  lexicalBoundary: string;
+  root: string;
+  destination: string;
+  owner: PluginPackageCapture;
+  sourceLinks: PluginSourceLinkCapture;
+}) {
+  const { source, scope } = moduleState;
+  return (
+    reference: string,
+    kind: "asset" | "import" | "require",
+    conditions?: readonly string[],
+  ): string | null | undefined => {
+    const module = kind !== "asset";
+    const importUrl =
+      kind === "import" && reference.startsWith(".")
+        ? new URL(reference, pathToFileURL(source))
+        : undefined;
+    const value = importUrl
+      ? `./${path.relative(path.dirname(source), fileURLToPath(importUrl))}`
+      : module && reference.startsWith("file:")
+        ? fileURLToPath(reference)
+        : reference;
+    const resolve = (specifier: string) => {
+      const resolved = resolution.resolve(
+        source,
+        specifier,
+        conditions ?? ["node", "module-sync", kind === "require" ? "require" : "import"],
+      );
+      if (!resolved?.startsWith("file:")) {
+        return resolved;
+      }
+      // Native resolution may return this generation's compiler output, not a new input.
+      const url = new URL(resolved);
+      const filename = fileURLToPath(url);
+      const captured = moduleSource?.(filename) ?? filename;
+      url.pathname = pathToFileURL(
+        originalSources.get(captured) ?? nativeAdmission.sourceForPrepared(captured) ?? captured,
+      ).pathname;
+      return url.href;
+    };
+    const addDependency = (name: string, importer = source) => {
+      const imports = references.get(importer) ?? new Set<string>();
+      imports.add(name);
+      references.set(importer, imports);
+    };
+    if (module && !value.startsWith(".") && !path.isAbsolute(value)) {
+      if (isBuiltin(value)) {
+        return undefined;
+      }
+      const name = packageName(value);
+      const self = scope?.manifest.exports != null && scope.manifest.name === name;
+      const resolved =
+        value.startsWith("#") || self
+          ? packageMap.resolveReference(value, source, conditions ?? ["node", "module-sync", kind])
+          : resolve(value);
+      const input = resolved?.startsWith("file:") ? fileURLToPath(resolved) : resolved;
+      if (
+        moduleState.tsconfigPaths &&
+        name !== "openclaw" &&
+        name !== "@openclaw/plugin-sdk" &&
+        resolved?.startsWith("file:") &&
+        input
+      ) {
+        if (
+          inPackage(boundary, input) &&
+          (capturedPaths.has(path.resolve(input)) || inPackage(boundary, fs.realpathSync(input)))
+        ) {
+          captureFile(input);
+          return input;
+        }
+        if (!isPathInside(resolveDependency(name, source)?.root ?? boundary, input)) {
+          return conditions && executable ? captureExecutableFile(input) : null;
+        }
+      }
+      if (!value.startsWith("#") && !self) {
+        if (conditions && !resolved) {
+          return undefined;
+        }
+        addDependency(name);
+        return resolved?.startsWith("file:") ? input : undefined;
+      }
+      if (!input || isBuiltin(input)) {
+        return undefined;
+      }
+      let external = false;
+      if (!self && scope) {
+        // Package-map resolution selects the target; string leaves identify lookup aliases only;
+        // preserve every matching alias when several names share one physical package.
+        for (const alias of scope.aliases) {
+          const dependency = resolveDependency(alias, scope.source);
+          if (dependency && isPathInside(dependency.root, input)) {
+            // Package aliases retain metadata now; execution captures the selected body.
+            if (conditions || !executable) {
+              addDependency(alias, scope.source);
+            }
+            external = true;
+          }
+        }
+      }
+      if (!external) {
+        captureFile(input);
+      }
+      return input;
+    }
+    const requested = path.resolve(path.dirname(source), value);
+    const local =
+      module && path.isAbsolute(value) && isPathInside(lexicalBoundary, requested)
+        ? path.join(boundary, path.relative(lexicalBoundary, requested))
+        : requested;
+    if (module && !isPathInside(boundary, local)) {
+      if (!conditions || !executable) {
+        return null;
+      }
+      const selected = resolve(local);
+      if (!selected?.startsWith("file:")) {
+        return undefined;
+      }
+      return captureExecutableFile(fileURLToPath(selected));
+    }
+    if (
+      !value ||
+      (!module && path.isAbsolute(value)) ||
+      !isPathInside(boundary, local) ||
+      local === boundary
+    ) {
+      return undefined;
+    }
+    // Dependency files retain their package owner, rather than becoming public source inputs.
+    if (
+      module &&
+      path.isAbsolute(value) &&
+      path.relative(boundary, local).split(path.sep).includes("node_modules")
+    ) {
+      return undefined;
+    }
+    // Captured local peers survive edits; deferred links enter only on executable demand.
+    const fromCopy = owner.state === "body" && !sourceLinks.contains(local);
+    const moduleRequest =
+      nativeAdmission.resolvePreparedSource(local)?.path ??
+      (fromCopy ? path.join(destination, path.relative(root, local)) : local);
+    const resolved = module ? resolve(moduleRequest) : undefined;
+    if (module && !resolved) {
+      return undefined;
+    }
+    const input = resolved?.startsWith("file:") ? fileURLToPath(resolved) : (resolved ?? local);
+    const capturedInput = capturedPaths.has(path.resolve(input));
+    const preparedInput = nativeAdmission.resolvePreparedSource(input);
+    if (capturedInput || fs.existsSync(preparedInput?.path ?? input)) {
+      if (
+        module &&
+        executable &&
+        !capturedInput &&
+        !preparedInput &&
+        !isPathInside(boundary, fs.realpathSync(input))
+      ) {
+        return conditions ? captureExecutableFile(input) : null;
+      }
+      captureFile(input);
+      if (module && path.isAbsolute(value)) {
+        capturedPaths.set(requested, capturedPaths.get(path.resolve(input))!);
+      }
+      return input;
+    }
+    return undefined;
+  };
 }
 
 type SourceCustody = {
@@ -150,11 +354,12 @@ export function createPluginGenerationCapture<
 export function createPluginSourceFacts(
   dependencyLookupBoundary: Parameters<typeof createPluginDependencyResolver>[0],
   captureForCustody: boolean,
+  dependencyRoots?: Parameters<typeof createPluginDependencyResolver>[1],
 ) {
   const files = new Map<string, PluginCapturedSourceFact>();
   return {
     files: captureForCustody ? files : undefined,
-    resolveDependency: createPluginDependencyResolver(dependencyLookupBoundary),
+    resolveDependency: createPluginDependencyResolver(dependencyLookupBoundary, dependencyRoots),
     captureCustody: (capture: () => PluginRecoverySource): SourceCustody => ({
       source: capture(),
       files,
@@ -178,27 +383,6 @@ function getCapturedSource(
   return sources.get(lexical) ?? sources.get(canonicalSource(rootDir, sourceRoot, lexical));
 }
 
-export type PluginRecoverySourceResolverSnapshot = {
-  rootDir: string;
-  sourceRoot: string;
-  sources: ReadonlyMap<string, string>;
-};
-const recoverySourceResolvers = new WeakMap<object, PluginRecoverySourceResolverSnapshot>();
-
-/** Transfer only immutable lookup facts, never a call back into a retired source owner. */
-export function snapshotPluginRecoverySourceResolver(
-  resolve: object,
-): PluginRecoverySourceResolverSnapshot | undefined {
-  const snapshot = recoverySourceResolvers.get(resolve);
-  return snapshot && { ...snapshot, sources: new Map(snapshot.sources) };
-}
-
-export function restorePluginRecoverySourceResolver(
-  snapshot: PluginRecoverySourceResolverSnapshot,
-) {
-  return createRecoverySourceResolver(snapshot.rootDir, snapshot.sourceRoot, snapshot.sources);
-}
-
 // A recovery resolver outlives its producer. Its closure contains copied path
 // facts, never the producer's availability callback or live captured graph.
 function createRecoverySourceResolver(
@@ -214,7 +398,6 @@ function createRecoverySourceResolver(
     }
     return captured;
   };
-  recoverySourceResolvers.set(resolve, snapshot);
   return resolve;
 }
 
@@ -286,7 +469,7 @@ function copyRecoverySource({
       sourceCapture,
       resolve: createRecoverySourceResolver(rootDir, sourceRoot, copiedSources),
       native,
-      fork: markPluginSourceCaptureOperation(() => {
+      fork: () => {
         if (disposed) {
           throw new Error("Plugin source recovery has been disposed");
         }
@@ -298,7 +481,7 @@ function copyRecoverySource({
           sources: copiedSources,
           native: native?.fork(),
         });
-      }),
+      },
       dispose() {
         if (!disposed) {
           disposed = true;
@@ -368,7 +551,7 @@ export function createPluginGenerationSourceLookup({
       assertModuleAvailable(captured);
       return captured;
     },
-    captureRecoverySource: markPluginSourceCaptureOperation(() => {
+    captureRecoverySource: () => {
       for (const captured of new Set(capturedPaths.values())) {
         assertModuleAvailable(captured);
       }
@@ -380,7 +563,7 @@ export function createPluginGenerationSourceLookup({
         sources: new Map(capturedPaths),
         native: captureNativeRecovery?.(),
       });
-    }),
+    },
   };
 }
 

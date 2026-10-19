@@ -1542,6 +1542,7 @@ src/plugins/plugin-config-trust.ts
 src/plugins/plugin-control-plane-context.ts
 src/plugins/plugin-generation-artifact.ts
 src/plugins/plugin-generation-capture.ts
+src/plugins/plugin-generation-capture.types.ts
 src/plugins/plugin-generation-file-capture.ts
 src/plugins/plugin-generation-receipt.ts
 src/plugins/plugin-generation-source-lookup.ts

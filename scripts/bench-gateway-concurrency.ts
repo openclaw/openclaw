@@ -56,6 +56,7 @@ import {
   type GatewayRpc,
   getFreePort,
   readGatewayMemory,
+  readGatewayWorkers,
   readProcessRssMb,
 } from "./lib/gateway-bench-probes.ts";
 import {
@@ -75,6 +76,7 @@ import {
   CliArgumentError,
   createGatewayBenchEnv,
   hasHelpFlag,
+  collectTraceLine,
   parseNonNegativeInt,
   parsePositiveInt,
   resolveEntry,
@@ -174,6 +176,7 @@ type BenchmarkRun = {
   };
   heapProfile?: GatewayHeapProfile & MainProfileArtifacts;
   loadCpuProfile?: GatewayCpuProfile & MainProfileArtifacts;
+  startupTrace?: Record<string, number>;
   controlPlane: Array<TimedProbe & { method: string }>;
   controlUi: ControlUiProbe[];
   cpuUsage: GatewayCpuUsage;
@@ -194,6 +197,10 @@ type BenchmarkRun = {
   loadWindow?: { startMonotonicMicros: number; endMonotonicMicros: number };
   history: Array<TimedProbe & { sessionKey?: string }>;
   memory: { after: GatewayMemorySample; before: GatewayMemorySample; peakRssMb: number };
+  workers?: {
+    before: Awaited<ReturnType<typeof readGatewayWorkers>>;
+    after: Awaited<ReturnType<typeof readGatewayWorkers>>;
+  };
   messageSubscriptions: TimedProbe[];
   messageSubscriptionsDuringLoad: TimedProbe[];
   mockRequests?: ReturnType<typeof summarizeMockRequests>;
@@ -236,9 +243,14 @@ type BenchmarkPartialRun = Partial<
     | "loadWindow"
     | "agentWarmup"
     | "liveProof"
+    | "workers"
   >
 > & {
   controlUiResources?: unknown;
+  workers?: {
+    before: Awaited<ReturnType<typeof readGatewayWorkers>>;
+    after: Awaited<ReturnType<typeof readGatewayWorkers>> | null;
+  };
   memory: {
     before: GatewayMemorySample | null;
     after: GatewayMemorySample | null;
@@ -2024,11 +2036,11 @@ async function runGatewaySample(
       );
       if (options.controlUiLoad) {
         gatewayArgs[gatewayArgs.indexOf("--auth") + 1] = "token";
-        const stopPreload = new URL("./lib/gateway-bench-stop-preload.mjs", import.meta.url);
-        stopPreload.searchParams.set("parentPid", String(process.pid));
-        stopPreload.searchParams.set("entry", path.resolve(options.entry));
-        gatewayArgs.unshift("--import", stopPreload.href);
       }
+      const stopPreload = new URL("./lib/gateway-bench-stop-preload.mjs", import.meta.url);
+      stopPreload.searchParams.set("parentPid", String(process.pid));
+      stopPreload.searchParams.set("entry", path.resolve(options.entry));
+      gatewayArgs.unshift("--import", stopPreload.href);
       if (heapProfilePath || loadCpuProfilePath) {
         for (const profilePath of [heapProfilePath, loadCpuProfilePath]) {
           if (profilePath) {
@@ -2090,6 +2102,33 @@ async function runGatewaySample(
         options.deadlineAt,
         options.signal,
       );
+      const startupTrace: Record<string, number> = {};
+      for (const line of gatewayOutput.readOutput().split("\n")) {
+        let message = line;
+        if (line.trimStart().startsWith("{")) {
+          try {
+            const log: unknown = JSON.parse(line);
+            if (!isRecord(log) || typeof log.message !== "string") {
+              continue;
+            }
+            message = log.message;
+          } catch {
+            continue;
+          }
+        }
+        collectTraceLine(message, "startup trace", startupTrace);
+      }
+      partialRun.startupTrace = startupTrace;
+      for (let index = 0; index < options.pluginCount; index += 1) {
+        const id = `bench-plugin-${String(index + 1).padStart(2, "0")}`;
+        const phase = `plugins.gateway-load.plugin.${id}`;
+        if (
+          startupTrace[`${phase}.loadFailedCount`] !== 0 ||
+          startupTrace[`${phase}.registerFailedCount`] !== 0
+        ) {
+          throw new Error(`Benchmark plugin did not finish loading and registration: ${id}`);
+        }
+      }
       if (options.controlUiLoad && loadResources && controlUiToken) {
         if (!gateway.pid) {
           throw new Error("Gateway PID missing");
@@ -2475,6 +2514,9 @@ async function runGatewaySample(
             }
           : undefined;
       partialRun.processPlacement = processPlacement;
+      const workersBefore = await readGatewayWorkers(rpc);
+      // Preserve the first census if the workload or the second census fails.
+      partialRun.workers = { before: workersBefore, after: null };
       const cpuBefore = await readGatewayCpuUsage(gateway);
       const turnsStartedAt = performance.now();
       // Keep the live artifact intact: buffered setup writes can arrive after this boundary.
@@ -2694,6 +2736,8 @@ async function runGatewaySample(
       };
       const turnsDurationMs = performance.now() - turnsStartedAt;
       partialRun.turnsDurationMs = turnsDurationMs;
+      const workersAfter = await readGatewayWorkers(rpc);
+      partialRun.workers = { before: workersBefore, after: workersAfter };
       if (!live) {
         providerAfterLoad = readProviderRequestLog(requestLogPath).length;
       }
@@ -2768,6 +2812,8 @@ async function runGatewaySample(
           endMonotonicMicros: loadEndMonotonicMicros,
         },
         memory: { after: memoryAfter, before: memoryBefore, peakRssMb },
+        workers: { before: workersBefore, after: workersAfter },
+        startupTrace,
         messageSubscriptions,
         messageSubscriptionsDuringLoad,
         turnAccounting,
@@ -2815,35 +2861,19 @@ async function runGatewaySample(
         await captureFailure("cleanup", () => auxiliaryClient.close());
       }
       await captureFailure("cleanup", async () => {
-        if (
-          gateway &&
-          options.cpuProfDir &&
-          gateway.exitCode === null &&
-          gateway.signalCode === null
-        ) {
-          // V8 flushes the main-isolate CPU profile on its normal interrupt path.
-          const profileFlushed = new Promise<void>((resolve) => {
-            gateway!.once("exit", () => resolve());
-          });
-          gateway.kill("SIGINT");
-          await Promise.race([profileFlushed, delay(2_000)]);
-        }
-      });
-      await captureFailure("cleanup", async () => {
         if (gateway) {
+          const exitedBeforeTeardown = gateway.exitCode !== null || gateway.signalCode !== null;
           try {
-            if (options.controlUiLoad) {
-              shutdown = await stopGatewayGracefully(gateway, GATEWAY_SERVICE_STOP_TIMEOUT_MS);
-            }
+            shutdown = await stopGatewayGracefully(gateway, GATEWAY_SERVICE_STOP_TIMEOUT_MS);
           } finally {
             gatewayExit = await stopChild(gateway, {
               onForceKill: () => {
                 forcedCleanup = true;
               },
             });
-            if (shutdown) {
-              gatewayExit.exitedBeforeTeardown = false;
-            }
+            // The fallback observes an already-exited child even when graceful
+            // shutdown caused that exit; classify it at the first stop request.
+            gatewayExit.exitedBeforeTeardown = exitedBeforeTeardown;
           }
         }
       });
@@ -2945,7 +2975,11 @@ async function runGatewaySample(
   } finally {
     await captureFailure("cleanup", async () => {
       if (mockProvider) {
-        mockProviderExit = await stopChild(mockProvider);
+        mockProviderExit = await stopChild(mockProvider, {
+          onForceKill: () => {
+            forcedCleanup = true;
+          },
+        });
       }
     });
     await captureFailure("cleanup", async () => {
@@ -2967,6 +3001,9 @@ async function runGatewaySample(
       }
     });
   }
+  if (forcedCleanup) {
+    errors.push({ phase: "cleanup", error: "Forced benchmark child cleanup" });
+  }
   if (controlUiRun) {
     if (
       options.gatewayCpus &&
@@ -2979,10 +3016,10 @@ async function runGatewaySample(
         error: "Observed Gateway thread outside requested CPU affinity",
       });
     }
-    if (forcedCleanup || resourceReport?.errors.length) {
+    if (resourceReport?.errors.length) {
       errors.push({
         phase: "cleanup",
-        error: "Forced Gateway cleanup or incomplete resource observations",
+        error: "Incomplete resource observations",
       });
     }
     return {

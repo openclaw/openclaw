@@ -19,8 +19,9 @@ it("bounds native source reads across capture misses and preserves canonical com
     fs.writeFileSync(companion, "companion fixture");
     fs.symlinkSync(companion, path.join(root, "a-companion.txt"));
     const cache = createPluginCache();
+    let admission: ReturnType<typeof createPluginNativeAdmission> | undefined;
     try {
-      const admission = withPluginCache(cache, () => {
+      admission = withPluginCache(cache, () => {
         const value = createPluginNativeAdmission(root, capture);
         value.materialize(
           native,
@@ -57,6 +58,7 @@ it("bounds native source reads across capture misses and preserves canonical com
         path.join(namespace.capturedRoot, "content", "companion.txt"),
       );
     } finally {
+      await admission?.disposeAsync();
       await retirePluginCache(cache);
     }
   });

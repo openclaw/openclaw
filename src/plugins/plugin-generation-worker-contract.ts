@@ -1,41 +1,47 @@
 import type { MessagePort } from "node:worker_threads";
+import type { JitiOptions } from "jiti";
 import type { PluginInstallRoots } from "./install-root-context.js";
-import type { GenerationWireValue } from "./plugin-generation-worker-codec.js";
+import type { PluginGenerationCaptureState } from "./plugin-generation-capture.types.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
-import type { AdmissionState } from "./plugin-native-admission-state.js";
+import type {
+  AdmissionState,
+  PluginNativeAdmissionTransfer,
+} from "./plugin-native-admission-state.js";
 
-export type GenerationWorkerInput = (
+export type GenerationWorkerInput = {
+  operation: "capture";
+  rootDir: string;
+  entryFile?: string;
+  storage: PluginSourceCaptureStorage;
+  installRoots: PluginInstallRoots;
+  readOnly: boolean;
+  sourceCapture: { directory: string; outputRoot?: string };
+  admission: Pick<AdmissionState, "owners" | "managedRoots" | "receipts" | "files" | "namespaces">;
+  callbackPort: MessagePort;
+};
+export type GenerationWorkerReply =
   | {
-      operation: "capture";
-      captureId: number;
-      rootDir: string;
-      entryFile?: string;
-      storage: PluginSourceCaptureStorage;
-      installRoots: PluginInstallRoots;
-      readOnly: boolean;
-      scratch: string;
-      managedRoot?: string;
-      admission: Pick<
-        AdmissionState,
-        "owners" | "managedRoots" | "receipts" | "files" | "namespaces"
-      >;
-      callbackPort?: MessagePort;
+      state: PluginGenerationCaptureState;
+      admission: Omit<PluginNativeAdmissionTransfer, "roots"> & { roots: number[] };
     }
-  | { operation: "call"; handle: number; args: GenerationWireValue[]; asynchronous: boolean }
-  | { operation: "close" }
-) & { nativeLoads?: string[] };
-export type GenerationWorkerReply = (
-  | { value: GenerationWireValue; resources: number; admission?: GenerationWireValue }
-  | { error: { message: string; name: string; stack?: string }; resources: number }
-) & { released?: number[] };
+  | { error: { message: string; name: string; stack?: string } };
+
 export type GenerationWorkerCallback =
-  | { kind: "mapping"; id: number; captureId: number; filename: string; signal: Int32Array }
+  | { kind: "resolution-policy"; id: number; source: string; signal: Int32Array }
+  | {
+      kind: "resolve";
+      id: number;
+      source: string;
+      reference: string;
+      conditions: readonly string[];
+      signal: Int32Array;
+    }
   | { kind: "native-root"; id: number; signal: Int32Array }
   | {
       kind: "callback-result";
       id: number;
-      filename?: string;
+      options?: Omit<JitiOptions, "transform">;
+      resolved?: string;
       root?: { id: number; directory: string };
-      error?: string;
-    }
-  | { kind: "native-load"; filename: string };
+      error?: { message: string; name: string; stack?: string };
+    };

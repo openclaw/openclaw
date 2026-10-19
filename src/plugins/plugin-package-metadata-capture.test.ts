@@ -55,6 +55,7 @@ function capturedPackage(root: string, links: string[] = []): PluginPackageCaptu
     links: new Set(links.map((link) => path.resolve(link))),
     state: "body",
     materialize() {},
+    captureDependency() {},
     captureTarget() {},
   };
 }

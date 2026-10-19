@@ -75,6 +75,7 @@ export function createPluginCaptureResolver(options?: JitiOptions) {
   };
   return {
     get,
+    hasTsconfigPaths: (source: string) => Boolean(get(source).options.tsconfigPaths),
     clear() {
       shared = undefined;
       scoped.clear();

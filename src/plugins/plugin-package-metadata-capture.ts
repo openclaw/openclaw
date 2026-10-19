@@ -9,6 +9,13 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside } from "../infra/path-guards.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { escapeRegExp } from "../shared/regexp.js";
+import type {
+  PluginDependencyResolution,
+  PluginNativeDependencyScopeState,
+  PluginPackageCaptureState,
+  PluginPackageMetadataState,
+  PluginPackageScope,
+} from "./plugin-generation-capture.types.js";
 import {
   retainLoadedPluginSourceCapture,
   retainPluginSourceCaptureInstance,
@@ -19,13 +26,13 @@ import {
 } from "./plugin-source-capture-path.js";
 import { isPluginSourceEntry } from "./plugin-source-file.js";
 
-export type PluginDependencyResolution = { root: string; lookupDirectory: string };
-
-export function createPluginDependencyResolver(lookupBoundary?: {
-  root: string;
-  onUnresolvable: (name: string, importer: string) => void;
-}) {
-  const roots = new Map<string, PluginDependencyResolution | undefined>();
+export function createPluginDependencyResolver(
+  lookupBoundary?: {
+    root: string;
+    onUnresolvable: (name: string, importer: string) => void;
+  },
+  roots = new Map<string, PluginDependencyResolution | undefined>(),
+) {
   return (name: string, importer: string): PluginDependencyResolution | undefined => {
     const key = `${path.dirname(importer)}\0${name}`;
     if (roots.has(key)) {
@@ -72,8 +79,8 @@ export function createPluginDependencyLookup(
   manifest: Record<string, unknown> | undefined,
   resolve: ReturnType<typeof createPluginDependencyResolver>,
   capture: (name: string, dependency: PluginDependencyResolution) => void,
+  prepared = new Map<string, boolean>(),
 ) {
-  const prepared = new Map<string, boolean>();
   return (specifier: string): boolean | "package-map" | undefined => {
     if (
       !specifier ||
@@ -128,26 +135,38 @@ export type PluginModuleCapture = {
 export function createPluginNativeDependencyScopes(
   resolve: ReturnType<typeof createPluginDependencyResolver>,
   capture: (name: string, dependency: PluginDependencyResolution) => void,
+  states = new Map<string, PluginNativeDependencyScopeState>(),
 ) {
   const scopes = new Map<string, PluginNativeDependencyScope>();
   return (source: string, manifest: Record<string, unknown> | undefined) => {
     const key = path.dirname(source);
     let scope = scopes.get(key);
     if (!scope) {
-      const dependencies = [...pluginDependencyNames(manifest)].filter(
-        (name) => name !== "openclaw" && name !== "@openclaw/plugin-sdk",
-      );
+      let state = states.get(key);
+      if (!state) {
+        state = {
+          source,
+          dependencies: [...pluginDependencyNames(manifest)].filter(
+            (name) => name !== "openclaw" && name !== "@openclaw/plugin-sdk",
+          ),
+          prepared: false,
+        };
+        states.set(key, state);
+      }
+      const pending = state;
       scope = {
-        prepareDependencies: dependencies.length
-          ? () => {
-              for (const name of dependencies) {
-                const dependency = resolve(name, source);
-                if (dependency) {
-                  capture(name, dependency);
+        prepareDependencies:
+          !pending.prepared && pending.dependencies.length
+            ? () => {
+                for (const name of pending.dependencies) {
+                  const dependency = resolve(name, pending.source);
+                  if (dependency) {
+                    capture(name, dependency);
+                  }
                 }
+                pending.prepared = true;
               }
-            }
-          : undefined,
+            : undefined,
       };
       scopes.set(key, scope);
     }
@@ -376,7 +395,6 @@ function visitPluginPackageTargetFiles(params: {
   visit(matcher ? path.dirname(parts[0]! + "_") : filename);
 }
 
-type PluginPackageCaptureState = "metadata" | "entry" | "body" | { error: unknown };
 export type PluginPackageCapture = {
   /** Absolute normalized root captured by the artifact producer. */
   readonly capturedRoot: string;
@@ -386,6 +404,11 @@ export type PluginPackageCapture = {
   state: PluginPackageCaptureState;
   materialize(entry?: string): void;
   captureTarget(filename: string): void;
+  captureDependency(
+    name: string,
+    dependency: PluginDependencyResolution,
+    metadataOnly: boolean,
+  ): void;
 };
 
 export const isPluginPackageFile = (root: string, file: string) =>
@@ -434,6 +457,8 @@ export function findPluginCapturedPackage(
 
 /** Captured metadata and declared target preparation share the artifact lifetime. */
 export function createPluginPackageMetadataCapture(params: {
+  state?: PluginPackageMetadataState;
+  prepareAliases(metadata: string, source: string, manifest: Record<string, unknown>): void;
   sourceForCaptured: (filename: string) => string | undefined;
   isRetainedReference?: (source: string, real: string) => boolean;
   resolveSource?: (source: string) => { path: string; boundary: string } | undefined;
@@ -445,14 +470,15 @@ export function createPluginPackageMetadataCapture(params: {
       }
     | undefined;
 }) {
-  const metadataScopes = new Map<
-    string,
-    {
-      manifest?: Record<string, unknown> | null;
-      prepareAliases(manifest: Record<string, unknown>): void;
+  const metadataScopes: PluginPackageMetadataState["scopes"] = params.state?.scopes ?? new Map();
+  const pendingScopes = params.state?.pending ?? new Set<string>();
+  const prepareAliases = (metadata: string, manifest: Record<string, unknown>) => {
+    const scope = metadataScopes.get(metadata)!;
+    if (!scope.aliasesPrepared) {
+      params.prepareAliases(metadata, scope.source, manifest);
+      scope.aliasesPrepared = true;
     }
-  >();
-  const pendingScopes = new Set<string>();
+  };
   const prepareNativeScopes = () => {
     for (const metadata of pendingScopes) {
       pendingScopes.delete(metadata);
@@ -473,7 +499,7 @@ export function createPluginPackageMetadataCapture(params: {
       if (!manifest || !owner) {
         continue;
       }
-      scope.prepareAliases(manifest);
+      prepareAliases(metadata, manifest);
       // Whole package captures already contain every local target, including nested scopes.
       if (owner.state === "body") {
         continue;
@@ -515,19 +541,11 @@ export function createPluginPackageMetadataCapture(params: {
   };
 
   return {
-    record(metadata: string, prepareAliases: (manifest: Record<string, unknown>) => void) {
+    record(metadata: string, source: string) {
       if (metadataScopes.has(metadata)) {
         return;
       }
-      let aliasesPrepared = false;
-      metadataScopes.set(metadata, {
-        prepareAliases(manifest) {
-          if (!aliasesPrepared) {
-            prepareAliases(manifest);
-            aliasesPrepared = true;
-          }
-        },
-      });
+      metadataScopes.set(metadata, { source, aliasesPrepared: false });
       pendingScopes.add(metadata);
     },
     setManifest(metadata: string, manifest: Record<string, unknown> | null | undefined) {
@@ -550,46 +568,26 @@ export function createPluginPackageMetadataCapture(params: {
       boundary,
       copy,
       hasSource,
+      capturedScopes = new Map<string, string | undefined>(),
     }: {
       root: string;
       destination: string;
       boundary: string;
       copy: (source: string, target: string) => void;
       hasSource: (source: string) => boolean;
+      capturedScopes?: Map<string, string | undefined>;
     }) {
-      type PackageScope = {
-        source: string;
-        manifest: Record<string, unknown>;
-        aliases: Set<string>;
-      };
-      const capturedScopes = new Map<string, (() => PackageScope) | undefined>();
-      const captureScopeMetadata = (scopeDirectory: string): (() => PackageScope) | undefined => {
+      const parsedScopes = new Map<string, PluginPackageScope>();
+      const captureScopeMetadata = (scopeDirectory: string): string | undefined => {
         if (capturedScopes.has(scopeDirectory)) {
           return capturedScopes.get(scopeDirectory);
         }
-        let scope: (() => PackageScope) | undefined;
+        let scope: string | undefined;
         const source = path.join(scopeDirectory, "package.json");
         if (hasSource(source) || fs.existsSync(params.resolveSource?.(source)?.path ?? source)) {
           const target = path.join(destination, path.relative(root, source));
           copy(source, target);
-          let parsed: PackageScope | undefined;
-          scope = () => {
-            if (!parsed) {
-              const metadata = metadataScopes.get(target)!;
-              const data =
-                asOptionalRecord(metadata.manifest) ??
-                asOptionalRecord(JSON.parse(fs.readFileSync(target, "utf8"))) ??
-                {};
-              metadata.manifest = data;
-              metadata.prepareAliases(data);
-              parsed = {
-                source,
-                manifest: data,
-                aliases: new Set(importTargetNames(data.imports)),
-              };
-            }
-            return parsed;
-          };
+          scope = source;
         } else if (
           scopeDirectory !== boundary &&
           isPathInside(boundary, path.dirname(scopeDirectory))
@@ -601,7 +599,26 @@ export function createPluginPackageMetadataCapture(params: {
       };
       return {
         captureMetadata: captureScopeMetadata,
-        resolve: (scopeDirectory: string) => captureScopeMetadata(scopeDirectory)?.(),
+        resolve(scopeDirectory: string): PluginPackageScope | undefined {
+          const source = captureScopeMetadata(scopeDirectory);
+          if (!source) {
+            return undefined;
+          }
+          let parsed = parsedScopes.get(source);
+          if (!parsed) {
+            const target = path.join(destination, path.relative(root, source));
+            const metadata = metadataScopes.get(target)!;
+            const data =
+              asOptionalRecord(metadata.manifest) ??
+              asOptionalRecord(JSON.parse(fs.readFileSync(target, "utf8"))) ??
+              {};
+            metadata.manifest = data;
+            prepareAliases(target, data);
+            parsed = { source, manifest: data, aliases: new Set(importTargetNames(data.imports)) };
+            parsedScopes.set(source, parsed);
+          }
+          return parsed;
+        },
       };
     },
     clear() {
@@ -623,23 +640,27 @@ export function withPluginSourceCaptureDirectory<T>(
 }
 
 /** Admissions and failed-input receipts belong to one source acquisition lifetime. */
-export function createPluginSourceCapture() {
+export function createPluginSourceCapture(borrowed?: { directory: string; outputRoot?: string }) {
   const override = sourceCaptureDirectory.getStore();
-  const instance = override === undefined ? retainPluginSourceCaptureInstance() : undefined;
+  const instance =
+    !borrowed && override === undefined ? retainPluginSourceCaptureInstance() : undefined;
   let created: string | undefined;
   let directory: string;
   try {
     created =
-      override !== undefined
+      borrowed?.directory ??
+      (override !== undefined
         ? mkdtempPluginCaptureSync(path.join(override.directory, PLUGIN_SOURCE_CAPTURE_PREFIX))
-        : instance!.createDirectory();
+        : instance!.createDirectory());
     // Copies admit only targets already in native spelling (Windows 8.3 names expanded).
-    directory = fs.realpathSync.native(created);
-    fs.chmodSync(directory, 0o700);
+    directory = borrowed ? created : fs.realpathSync.native(created);
+    if (!borrowed) {
+      fs.chmodSync(directory, 0o700);
+    }
   } catch (error) {
     const cleanupErrors: unknown[] = [];
     try {
-      if (created) {
+      if (created && !borrowed) {
         fs.rmSync(created, { recursive: true, force: true });
       }
     } catch (cleanupError) {
@@ -702,7 +723,7 @@ export function createPluginSourceCapture() {
     capture: acquire,
     assertModuleAvailable,
     directory,
-    outputRoot: override?.managedRoot ?? instance?.managedRoot,
+    outputRoot: borrowed?.outputRoot ?? override?.managedRoot ?? instance?.managedRoot,
     linkHost: (hostRoot: string) => {
       const modules = path.join(directory, "node_modules");
       fs.mkdirSync(modules, { recursive: true, mode: 0o700 });
@@ -711,14 +732,16 @@ export function createPluginSourceCapture() {
     },
     dispose() {
       beginDisposal();
-      if (!retainLoadedPluginSourceCapture(directory)) {
+      // A preparation worker borrows the host's exact directory. Only the host
+      // can remove it, after confirmed worker exit or the live artifact's disposal.
+      if (!borrowed && !retainLoadedPluginSourceCapture(directory)) {
         fs.rmSync(directory, { recursive: true, force: true });
       }
       instance?.release();
     },
     async disposeAsync() {
       beginDisposal();
-      if (!retainLoadedPluginSourceCapture(directory)) {
+      if (!borrowed && !retainLoadedPluginSourceCapture(directory)) {
         await fsPromises.rm(directory, { recursive: true, force: true });
       }
       await instance?.releaseAsync();

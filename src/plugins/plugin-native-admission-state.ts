@@ -51,6 +51,7 @@ export type AdmissionState = {
   publications: Map<string, { data: PluginSourceAdmissionPublication; run(): Promise<void> }>;
   publishing: Set<string>;
   borrowers: Set<object>;
+  closing?: Promise<void>;
 };
 const admissions = new WeakMap<PluginCache, Map<string, AdmissionState>>();
 const admissionScopes = new WeakMap<PluginCache, Set<AdmissionState>>();
@@ -125,6 +126,80 @@ export async function settlePluginNativeAdmissionState(state: AdmissionState): P
   await Promise.all(state.pending);
 }
 
+function releasableAdmissionRoots(state: AdmissionState): NativeSnapshot[] {
+  for (const release of state.pins.values()) {
+    release();
+  }
+  state.pins.clear();
+  return [...state.roots].filter((root) => {
+    const owners = snapshotOwners.get(root)!;
+    owners.delete(state);
+    if (owners.size === 0) {
+      return true;
+    }
+    state.roots.delete(root);
+    return false;
+  });
+}
+
+function closePluginNativeAdmissionState(state: AdmissionState): Promise<void> {
+  if (state.borrowers.size > 0) {
+    return Promise.resolve();
+  }
+  return (state.closing ??= (async () => {
+    try {
+      await settlePluginNativeAdmissionState(state);
+      // A retained source can acquire this view while publication settlement yields.
+      if (state.borrowers.size > 0) {
+        return;
+      }
+      await Promise.all(
+        releasableAdmissionRoots(state).map(async (root) => {
+          await root.disposeAsync();
+          state.roots.delete(root);
+        }),
+      );
+    } finally {
+      state.closing = undefined;
+    }
+  })());
+}
+
+/** A live source borrows admission custody independently of its discovery cache. */
+export function retainPluginNativeAdmissionState(state: AdmissionState) {
+  const borrower = {};
+  state.borrowers.add(borrower);
+  let closing: Promise<void> | undefined;
+  const disposeAsync = () => {
+    state.borrowers.delete(borrower);
+    return (closing ??= closePluginNativeAdmissionState(state).catch((error: unknown) => {
+      closing = undefined;
+      throw error;
+    }));
+  };
+  return {
+    disposeAsync,
+    dispose(this: void) {
+      state.borrowers.delete(borrower);
+      if (closing || state.borrowers.size > 0) {
+        return;
+      }
+      if (state.closing || state.pending.size > 0 || state.publications.size > 0) {
+        // The synchronous source API cannot join publication; async disposal still
+        // joins this same cleanup, and native bytes remain owned until it settles.
+        void disposeAsync().catch((error: unknown) =>
+          process.emitWarning(`Plugin source admission cleanup failed: ${String(error)}`),
+        );
+        return;
+      }
+      for (const root of releasableAdmissionRoots(state)) {
+        root.dispose();
+        state.roots.delete(root);
+      }
+    },
+  };
+}
+
 /** Publication intent belongs to admission custody, independently of source execution. */
 export function queuePluginNativeAdmissionPublication(
   state: AdmissionState,
@@ -182,21 +257,7 @@ function bindAdmissionState(cache: PluginCache, state: AdmissionState): Admissio
         for (const owned of held) {
           await Promise.all(owned.pending);
           owned.borrowers.delete(held);
-          if (owned.borrowers.size > 0) {
-            continue;
-          }
-          await settlePluginNativeAdmissionState(owned);
-          for (const release of owned.pins.values()) {
-            release();
-          }
-          owned.pins.clear();
-          const released = [...owned.roots].filter((root) => {
-            const owners = snapshotOwners.get(root)!;
-            owners.delete(owned);
-            return owners.size === 0;
-          });
-          await Promise.all(released.map((root) => root.disposeAsync()));
-          owned.roots.clear();
+          await closePluginNativeAdmissionState(owned);
         }
         held.clear();
         admissions.delete(cache);

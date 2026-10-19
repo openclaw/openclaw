@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { createServer } from "node:http";
 import path from "node:path";
 import { WebSocketServer } from "ws";
+import { rawDataToString } from "../../../packages/gateway-client/src/websocket-data.ts";
 
 const scenario = path.basename(process.argv[1], ".mjs");
 const attemptPath = path.join(path.dirname(process.argv[1]), "attempt.json");
@@ -48,7 +49,7 @@ const server = createServer((request, response) => {
 const sockets = new WebSocketServer({ server });
 sockets.on("connection", (socket) => {
   socket.on("message", (data) => {
-    const frame = JSON.parse(data.toString());
+    const frame = JSON.parse(rawDataToString(data));
     const reply = (payload) =>
       socket.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload }));
     switch (frame.method) {
@@ -65,6 +66,9 @@ sockets.on("connection", (socket) => {
             rssBytes: 16_777_216,
           },
         });
+        break;
+      case "diagnostics.lanes":
+        reply({ workerCount: 0, workerPoolCount: 0, workerPools: [] });
         break;
       case "agent":
         agentStarted = true;
@@ -140,14 +144,29 @@ sockets.on("connection", (socket) => {
     }
   });
 });
-process.on("SIGTERM", () => {
+function stop() {
   for (const socket of sockets.clients) {
     socket.terminate();
   }
   sockets.close();
-  server.close(() => process.exit(failure === "teardown" ? 23 : 0));
+  server.close(() => {
+    setTimeout(
+      () => process.exit(failure === "teardown" ? 23 : 0),
+      failure === "profile" ? 2_200 : 0,
+    );
+  });
   server.closeAllConnections();
-});
+}
+process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
 server.listen(port, "127.0.0.1", () => {
+  if (scenario === "diagnostic") {
+    console.log(
+      JSON.stringify({
+        message:
+          "startup trace: plugins.gateway-load.plugin.bench-plugin-01 loadFailedCount=0 registerFailedCount=0",
+      }),
+    );
+  }
   console.log("startup trace: sidecars.ready 1ms total=1ms");
 });

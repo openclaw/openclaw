@@ -62,8 +62,7 @@ export function resolvePluginPackageMapTarget(
 }
 
 /** Missing physical inputs stay absent without poisoning another condition's selected target. */
-export function createPluginPackageMapReferences() {
-  const missingTargets = new Set<string>();
+export function createPluginPackageMapReferences(missingTargets = new Set<string>()) {
   const recordMissingTarget = (filename: string) => {
     missingTargets.add(path.resolve(filename));
   };

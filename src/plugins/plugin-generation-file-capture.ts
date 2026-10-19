@@ -7,6 +7,7 @@ import {
   type RootFileOpenBatchSync,
 } from "@openclaw/fs-safe/advanced";
 import { isPathInside } from "../infra/path-guards.js";
+import type { PluginSourceLinkCapture } from "./plugin-generation-capture.types.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
 import type { createPluginNativeAdmission } from "./plugin-native-admission.js";
@@ -17,8 +18,7 @@ import {
   type PluginCapturedSourceFact,
 } from "./plugin-source-verification.js";
 
-export function createPluginSourceLinkCapture() {
-  const links = new Set<string>();
+export function createPluginSourceLinkCapture(links = new Set<string>()): PluginSourceLinkCapture {
   return {
     defer(filename: string, root: string, source = filename): boolean {
       if (

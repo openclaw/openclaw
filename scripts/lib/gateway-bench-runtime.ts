@@ -259,7 +259,11 @@ export function createGatewayBenchEnv(
     NO_COLOR: "1",
     PATH: process.env.PATH,
     SHELL: process.env.SHELL,
-    TMPDIR: process.env.TMPDIR,
+    // Worker bytecode caches follow the temp directory. Sharing it across fixtures
+    // makes cold-start measurements depend on which build ran first.
+    TMPDIR: root,
+    TMP: root,
+    TEMP: root,
     USER: process.env.USER ?? "openclaw-bench",
     npm_config_update_notifier: "false",
     OPENCLAW_CONFIG_PATH: configPath,
