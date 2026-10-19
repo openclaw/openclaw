@@ -390,10 +390,11 @@ export default definePluginEntry({
         const { refreshMiniMaxPortalOAuthCredential } = await import("./oauth.runtime.js");
         return await refreshMiniMaxPortalOAuthCredential(
           credential,
-          getProviderBaseUrl(
-            config === undefined ? api.runtime.config.current() : config,
-            PORTAL_PROVIDER_ID,
-          ),
+          config === undefined
+            ? normalizeOptionalString(
+                api.runtime.config.current().models?.providers?.[PORTAL_PROVIDER_ID]?.baseUrl,
+              )
+            : getProviderBaseUrl(config, PORTAL_PROVIDER_ID),
         );
       },
       ...MINIMAX_PROVIDER_HOOKS,
