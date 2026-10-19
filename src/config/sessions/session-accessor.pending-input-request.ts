@@ -3,6 +3,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { readSessionSendDelivery } from "../../gateway/session-send-delivery.js";
+import {
+  prepareUserTurnTranscriptAnnotation,
+  readUserTurnTranscriptAnnotation,
+} from "../../sessions/user-turn-transcript-annotation-message.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionPendingInputRow } from "./session-accessor.sqlite-pending-inputs.js";
@@ -208,8 +212,12 @@ export function resolveCommittedPendingInputRequestHash(
   if (!prepared) {
     return undefined;
   }
-  const { timestamp: _preparedTimestamp, ...stablePrepared } =
-    sanitizeTranscriptMessageForStorage(prepared);
+  const storedPrepared = sanitizeTranscriptMessageForStorage(prepared);
+  const annotation = readUserTurnTranscriptAnnotation(committedMessage, options.runId);
+  // Replay the same validated annotation, then compare every original message field too.
+  const { timestamp: _preparedTimestamp, ...stablePrepared } = annotation
+    ? prepareUserTurnTranscriptAnnotation(storedPrepared, annotation, options.runId)
+    : storedPrepared;
   const { timestamp: _committedTimestamp, ...stableCommitted } = committedMessage;
   if (stableStringify(stablePrepared) !== stableStringify(stableCommitted)) {
     throw new Error("Input completion retry conflicts with the committed input");
