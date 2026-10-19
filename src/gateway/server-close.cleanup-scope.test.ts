@@ -35,8 +35,11 @@ const createGatewayCloseTestDeps = createGatewayCloseTestDepsFactory({
   drainRetainedEmbeddingProviders: async () => {},
 });
 
-function closeGateway(params = createGatewayCloseTestDeps()) {
-  return prepareGatewayClose(params, { reason: "test" }).then((preparation) =>
+function closeGateway(
+  params = createGatewayCloseTestDeps(),
+  options: Parameters<typeof prepareGatewayClose>[1] = { reason: "test" },
+) {
+  return prepareGatewayClose(params, options).then((preparation) =>
     completeGatewayClose(params, preparation),
   );
 }
@@ -44,11 +47,11 @@ function closeGateway(params = createGatewayCloseTestDeps()) {
 async function observeMediaDrain(entered: Deferred) {
   const media = await import("./server-media-cleanup-lifecycle.js");
   const wait = media.waitForMediaCleanupDrainsToSettle;
-  const spy = vi.spyOn(media, "waitForMediaCleanupDrainsToSettle").mockImplementation(() => {
+  vi.spyOn(media, "waitForMediaCleanupDrainsToSettle").mockImplementation(() => {
     entered.resolve();
     return wait();
   });
-  return { wait, spy };
+  return wait;
 }
 
 beforeEach(() => {
@@ -56,6 +59,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
 });
 
@@ -64,7 +68,7 @@ it("finalizes capture after media drains even when stopping media cleanup fails"
   const releaseMedia = createDeferredCore();
   const drainEntered = createDeferredCore();
   mediaCleanup.registerMediaCleanupDrain(releaseMedia.promise);
-  const { spy: drainSpy } = await observeMediaDrain(drainEntered);
+  await observeMediaDrain(drainEntered);
   const captureEntered = createDeferredCore();
   const releaseCapture = createDeferredCore();
   const finalizeCapture = vi.fn(async () => {
@@ -104,7 +108,6 @@ it("finalizes capture after media drains even when stopping media cleanup fails"
     releaseCapture.resolve();
     await closing.catch(() => {});
     unregisterCapture();
-    drainSpy.mockRestore();
   }
 });
 
@@ -143,11 +146,8 @@ it("owns plugin cleanup and its descendants after the requesting connection drai
     closePluginRegistry: owner.close,
     pluginMetadata: metadata,
   });
-  const closing = requestContext(async () =>
-    completeGatewayClose(
-      params,
-      await prepareGatewayClose(params, { restartExpectedMs: 0, drainTimeoutMs: 0 }),
-    ),
+  const closing = requestContext(() =>
+    closeGateway(params, { restartExpectedMs: 0, drainTimeoutMs: 0 }),
   );
   try {
     await Promise.race([entered.promise, closing]);
@@ -186,17 +186,15 @@ it("joins detached request attachment cleanup before shared state closes", async
     const deletionEntered = createDeferredCore();
     const releaseDeletion = createDeferredCore();
     const deleteMediaBuffer = mediaStore.deleteMediaBuffer;
-    const deleteSpy = vi
-      .spyOn(mediaStore, "deleteMediaBuffer")
-      .mockImplementation(async (id, subdir) => {
-        if (id === uploaded.id) {
-          deletionEntered.resolve();
-          await releaseDeletion.promise;
-        }
-        await deleteMediaBuffer(id, subdir);
-      });
+    vi.spyOn(mediaStore, "deleteMediaBuffer").mockImplementation(async (id, subdir) => {
+      if (id === uploaded.id) {
+        deletionEntered.resolve();
+        await releaseDeletion.promise;
+      }
+      await deleteMediaBuffer(id, subdir);
+    });
     const drainEntered = createDeferredCore();
-    const { wait: waitForDrains, spy: drainSpy } = await observeMediaDrain(drainEntered);
+    const waitForDrains = await observeMediaDrain(drainEntered);
     const discarded = attachments.discardPreparedInboundMedia(parsed.offloadedRefs);
     await deletionEntered.promise;
     const closing = closeGateway();
@@ -217,8 +215,6 @@ it("joins detached request attachment cleanup before shared state closes", async
       await discarded;
       await observedDrain;
       await closing;
-      drainSpy.mockRestore();
-      deleteSpy.mockRestore();
     }
     await expect(fs.stat(uploaded.path)).rejects.toMatchObject({ code: "ENOENT" });
     expect(sharedStateLifecycle.size).toBe(0);

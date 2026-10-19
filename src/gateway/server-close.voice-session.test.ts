@@ -287,35 +287,31 @@ it("settles accepted voice work with diagnostics disabled even when provider cle
         payloads: [{ text: "Voice call changes\n- message: succeeded" }],
       }),
     );
-    const database = new DatabaseSync(
+    using database = new DatabaseSync(
       resolveOpenClawAgentSqlitePath({ agentId: target.agentId, env: fixture.state.env }),
       { readOnly: true },
     );
-    try {
-      expect(readVoiceSessionRecordInTransaction({ db: database }, voiceSessionId)).toMatchObject({
-        hasUserTranscript: true,
-        transcriptFailureKeys: [],
-      });
-      expect(
-        readVoiceSessionRecordInTransaction({ db: database }, relay.relaySessionId),
-      ).toMatchObject({
-        status: "closed",
-        hasUserTranscript: true,
-        transcriptFailureKeys: [],
-        digestDeliveredAt: expect.any(Number),
-        effects: [expect.objectContaining({ toolCallId: "delayed-tool", status: "succeeded" })],
-      });
-      expect(
-        database
-          .prepare(
-            "SELECT event_id FROM transcript_event_identities WHERE event_id LIKE ? ORDER BY seq",
-          )
-          .all(`voice:${relay.relaySessionId}:%`)
-          .map((row) => row.event_id),
-      ).toEqual([1, 2, 3].map((sequence) => `voice:${relay.relaySessionId}:${sequence}`));
-    } finally {
-      database.close();
-    }
+    expect(readVoiceSessionRecordInTransaction({ db: database }, voiceSessionId)).toMatchObject({
+      hasUserTranscript: true,
+      transcriptFailureKeys: [],
+    });
+    expect(
+      readVoiceSessionRecordInTransaction({ db: database }, relay.relaySessionId),
+    ).toMatchObject({
+      status: "closed",
+      hasUserTranscript: true,
+      transcriptFailureKeys: [],
+      digestDeliveredAt: expect.any(Number),
+      effects: [expect.objectContaining({ toolCallId: "delayed-tool", status: "succeeded" })],
+    });
+    expect(
+      database
+        .prepare(
+          "SELECT event_id FROM transcript_event_identities WHERE event_id LIKE ? ORDER BY seq",
+        )
+        .all(`voice:${relay.relaySessionId}:%`)
+        .map((row) => row.event_id),
+    ).toEqual([1, 2, 3].map((sequence) => `voice:${relay.relaySessionId}:${sequence}`));
   } finally {
     vi.useRealTimers();
     release.resolve();

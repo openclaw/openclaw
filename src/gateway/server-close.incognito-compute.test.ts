@@ -176,8 +176,7 @@ it("settles accepted memory usage and trajectory work across the real close prel
           expect(usage).toMatchObject([
             { sessionId: target.sessionId, rollup: { valueJson: expect.any(String) } },
           ]);
-          expect(published).toHaveBeenCalledOnce();
-          expect(published).toHaveBeenCalledWith({
+          expect(published).toHaveBeenCalledExactlyOnceWith({
             agentId: "main",
             usageUpdatedAt: expect.any(Number),
           });
