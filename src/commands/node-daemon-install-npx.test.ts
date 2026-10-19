@@ -10,6 +10,7 @@ import { readLaunchAgentProgramArgumentsFromFile } from "../daemon/launchd-plist
 import type { GatewayServiceInstallArgs } from "../daemon/service-types.js";
 import { buildSystemdUnit, parseSystemdExecStart } from "../daemon/systemd-unit.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
 const { serviceInstall, writeJson } = vi.hoisted(() => ({
   serviceInstall: vi.fn<(args: GatewayServiceInstallArgs) => Promise<void>>(),
@@ -49,6 +50,7 @@ afterEach(() => {
 it.skipIf(process.platform === "win32")(
   "keeps generated node commands runnable after npm removes its exec cache",
   async () => {
+    const nodePath = resolveTestNodeExecPath();
     const home = tempDirs.make("openclaw-npx-node-");
     const sourceRoot = path.join(home, ".npm", "_npx", "hash", "node_modules", "openclaw");
     const state = path.join(home, "profile-state");
@@ -75,7 +77,7 @@ it.skipIf(process.platform === "win32")(
       path.join(sourceRoot, "dist", "index.js"),
       'console.log("node service fixture");',
     );
-    process.argv = [process.execPath, path.join(sourceRoot, "dist", "index.js")];
+    process.argv = [nodePath, path.join(sourceRoot, "dist", "index.js")];
     const durableRoot = path.join(state, "npm", "lib", "node_modules", "openclaw");
     await fs.cp(sourceRoot, durableRoot, { recursive: true });
     await withEnvAsync(env, () =>
@@ -83,7 +85,7 @@ it.skipIf(process.platform === "win32")(
         host: "127.0.0.1",
         port: 19872,
         runtime: "node",
-        runtimePath: process.execPath,
+        runtimePath: nodePath,
         force: true,
         json: true,
       }),

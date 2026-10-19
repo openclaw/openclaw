@@ -595,7 +595,7 @@ export function registerCronEditCommand(cron: Command) {
             if (typeof opts.failureAlertCooldown === "string") {
               let cooldownMs: number;
               try {
-                cooldownMs = parseDurationMs(String(opts.failureAlertCooldown));
+                cooldownMs = parseDurationMs(opts.failureAlertCooldown);
               } catch {
                 throw new CronCliError("Invalid --failure-alert-cooldown.");
               }

@@ -181,13 +181,14 @@ export async function modelsListCommand(
     runtime.log("No models found.");
   } else if (opts.json) {
     const providerOutcomes = result.providerOutcomes?.map(
-      ({ provider, profileId, status, unlistedConfiguredModelIds }) => ({
-        provider,
-        ...(profileId ? { profileId } : {}),
+      ({ provider: outcomeProvider, profileId, status, unlistedConfiguredModelIds }) => ({
+        provider: outcomeProvider,
+        profileId: profileId || undefined,
         status,
-        ...(status === "ready" && unlistedConfiguredModelIds?.length
-          ? { unlistedConfiguredModelIds }
-          : {}),
+        unlistedConfiguredModelIds:
+          status === "ready" && unlistedConfiguredModelIds?.length
+            ? unlistedConfiguredModelIds
+            : undefined,
       }),
     );
     writeRuntimeJson(runtime, {
