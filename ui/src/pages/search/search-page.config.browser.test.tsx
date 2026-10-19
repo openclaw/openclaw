@@ -1,54 +1,41 @@
 import { flush } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import type {
-  WebSearchStatusResult,
-  WebSearchTestResult,
-} from "../../../../packages/gateway-protocol/src/schema/web-search.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WebSearchTestResult } from "../../../../packages/gateway-protocol/src/schema/web-search.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
-import { ApplicationProvider } from "../../lib/reactive/context.ts";
-import {
-  createGatewayRequestMock,
-  createTestGatewayClient,
-} from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { createApplicationGateway } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { SearchPage } from "./search-page.tsx";
+import {
+  atPath,
+  mountSearch,
+  providerPath as pathForProvider,
+  searchPath,
+  searchStatus,
+} from "./search-page.test-support.tsx";
 
-const providerPath = ["plugins", "entries", "example", "config", "webSearch"];
+const providerPath = pathForProvider("example");
 const endpointPath = [...providerPath, "baseUrl"];
 const config = {
-  tools: { web: { search: { provider: "example" } } },
-  plugins: {
-    entries: {
-      example: {
-        config: {
-          webSearch: { baseUrl: "https://initial.example.test", apiKey: "synthetic-original-key" },
-        },
-      },
-    },
+  ...atPath([...searchPath, "provider"], "example"),
+  ...atPath(providerPath, {
+    baseUrl: "https://initial.example.test",
+    apiKey: "synthetic-original-key",
+  }),
+};
+const ready = searchStatus(
+  "example",
+  "Example Search",
+  {
+    hint: "Synthetic provider",
+    requiresCredential: true,
+    credentialSource: "config",
+    credential: { path: [...providerPath, "apiKey"], label: "Example API key", envVars: [] },
   },
-};
-const provider: WebSearchStatusResult["providers"][number] = {
-  id: "example",
-  pluginId: "example",
-  label: "Example Search",
-  hint: "Synthetic provider",
-  configured: true,
-  installed: true,
-  available: true,
-  requiresCredential: true,
-  credentialSource: "config",
-  configPath: providerPath,
-  credential: { path: [...providerPath, "apiKey"], label: "Example API key", envVars: [] },
-};
+  { provider: "example", model: { provider: "example", id: "local", runtime: "openclaw" } },
+);
 const testResult: WebSearchTestResult = {
   status: "ok",
   provider: "example",
@@ -76,7 +63,7 @@ async function mount(options: { advanced?: boolean } = {}) {
     properties: {
       ...providerSchema.properties,
       ...(options.advanced
-        ? schemaAt(["tools", "web", "search"], {
+        ? schemaAt(searchPath, {
             enabled: { type: "boolean" },
             provider: { type: "string" },
             maxResults: { type: "integer", title: "Result limit", default: 5 },
@@ -97,8 +84,6 @@ async function mount(options: { advanced?: boolean } = {}) {
   const save = createDeferred<unknown>();
   const writeStarted = createDeferred<{ raw: string; baseHash: string }>();
   const searchResponse = Promise.resolve(testResult);
-  const reads: Promise<unknown>[] = [];
-  const tests: Promise<unknown>[] = [];
   const responses: Record<string, (params: unknown) => Promise<unknown>> = {
     "config.get": async () => structuredClone(stored),
     "config.schema": async () => ({ schema, uiHints: {}, version: "test-1", generatedAt: "" }),
@@ -111,40 +96,20 @@ async function mount(options: { advanced?: boolean } = {}) {
       baseHash: stored.hash,
       credential: { kind: "literal" },
     }),
-    "webSearch.status": async () =>
-      ({
-        enabled: true,
-        provider: "example",
-        agentId: "main",
-        model: { provider: "example", id: "local", runtime: "openclaw" },
-        route: {
-          kind: "managed",
-          provider: "example",
-          label: `Runtime ${stored.appliedConfigHash}`,
-          testable: true,
-        },
-        providers: [provider],
-      }) satisfies WebSearchStatusResult,
+    "webSearch.status": async () => ({
+      ...ready,
+      route: { ...ready.route, label: `Runtime ${stored.appliedConfigHash}` },
+    }),
     "webSearch.test": () => searchResponse,
   };
-  const request = createGatewayRequestMock((method, params) => {
-    const respond = Object.hasOwn(responses, method) ? responses[method] : undefined;
-    if (!respond) {
-      throw new Error(`Unexpected request: ${method}`);
-    }
-    const response = respond(params);
-    if (method === "webSearch.test") {
-      tests.push(response);
-    } else if (method !== "config.set") {
-      reads.push(response);
-    }
-    return response;
-  });
-  let client = createTestGatewayClient(request);
-  const connection = createApplicationGateway({
-    client,
-    phase: "connected",
-    sessionKey: "main",
+  const fixture = await mountSearch({
+    respond: (method, params) => {
+      const respond = Object.hasOwn(responses, method) ? responses[method] : undefined;
+      if (!respond) {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return respond(params);
+    },
     hello: gatewayHelloForMethods([
       "config.get",
       "config.schema",
@@ -156,78 +121,29 @@ async function mount(options: { advanced?: boolean } = {}) {
       "webSearch.test",
       "plugins.credentials.inspect",
     ]),
-  } as ApplicationGatewaySnapshot);
-  const { gateway } = connection;
-  const runtime = createRuntimeConfigCapability(gateway);
-  await runtime.ensureLoaded();
-  await runtime.ensureSchemaLoaded();
-  const context = {
-    basePath: "",
-    gateway,
-    runtimeConfig: runtime,
-    agents: {
-      state: { agentsList: { agents: [{ id: "main", name: "Main" }] } },
-      subscribe: () => () => {},
+    agents: ["main"],
+    runtime: async (gateway) => {
+      const runtime = createRuntimeConfigCapability(gateway);
+      await runtime.ensureLoaded();
+      await runtime.ensureSchemaLoaded();
+      return runtime;
     },
-    settingsAgentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
-    navigate: vi.fn(),
-  } as unknown as ApplicationContext;
-  const view = mountSolid(() => (
-    <ApplicationProvider value={context}>
-      <SearchPage />
-    </ApplicationProvider>
-  ));
-  const element = view.container;
-  onTestFinished(() => {
-    view.unmount();
-    runtime.dispose();
+    cleanup: (runtime) => runtime.dispose(),
   });
-  const settle = async (includeTests = false) => {
-    flush();
-    await settleModelCatalogRequests(client, { agentId: "main" });
-    await Promise.allSettled(reads);
-    if (includeTests) {
-      await Promise.allSettled(tests);
-    }
-    flush();
-  };
-  await settle();
   return {
-    element,
-    runtime,
-    calls: (method: string) => request.mock.calls.filter(([name]) => name === method),
-    input: (label: string) =>
-      element.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!,
-    testButton: () => testButton(element),
+    ...fixture,
+    testButton: () => fixture.button("Test search"),
     save,
+    rejectSave: () =>
+      save.reject(
+        new GatewayRequestError({ code: "INVALID_REQUEST", message: "Synthetic save rejected" }),
+      ),
     writeStarted,
-    settle,
-    replaceConnection: () => {
-      client = createTestGatewayClient(request);
-      connection.publish({ ...gateway.snapshot, client });
-    },
     setStored: (snapshot: ConfigSnapshot) => {
       stored = snapshot;
     },
     stored: () => stored,
   };
-}
-
-function testButton(element: Element) {
-  const button = [...element.querySelectorAll("button")].find(
-    (candidate) => candidate.textContent?.trim() === "Test search",
-  );
-  expect(button).toBeDefined();
-  return button!;
-}
-function edit(element: Element, label: string, value: string) {
-  const input = element.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
-  expect(input).not.toBeNull();
-  input.focus();
-  input.value = value;
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  input.blur();
-  return input;
 }
 
 describe("Search configuration lifecycle", () => {
@@ -249,16 +165,13 @@ describe("Search configuration lifecycle", () => {
     await fixture.runtime.refresh({ background: true });
     await fixture.settle();
     expect(fixture.input(label)).toBe(field);
-    field.focus();
-    field.value = value;
-    field.dispatchEvent(new Event("input", { bubbles: true }));
+    fixture.edit(label, value, false);
 
     fixture.replaceConnection();
     await fixture.settle();
     const current = fixture.input(label);
-    expect(current).not.toBeNull();
+    expect(current).toMatchObject({ disabled: false });
     expect(current).not.toBe(field);
-    expect(current.disabled).toBe(false);
     expect(field.isConnected).toBe(false);
     field.dispatchEvent(new FocusEvent("blur"));
     await fixture.settle();
@@ -268,14 +181,14 @@ describe("Search configuration lifecycle", () => {
     if (label === "Result limit") {
       fixture.element.querySelector<HTMLDetailsElement>("details")!.open = true;
     }
-    edit(fixture.element, label, value);
+    fixture.edit(label, value);
     const submitted = await fixture.writeStarted.promise;
     expect(submitted.baseHash).toBe("saved-1");
-    expect(JSON.parse(submitted.raw)).toMatchObject(
+    const expected =
       label === "Search endpoint"
-        ? { plugins: { entries: { example: { config: { webSearch: { baseUrl: value } } } } } }
-        : { tools: { web: { search: { maxResults: Number(value) } } } },
-    );
+        ? atPath(endpointPath, value)
+        : atPath([...searchPath, "maxResults"], Number(value));
+    expect(JSON.parse(submitted.raw)).toMatchObject(expected);
     expect(fixture.element.querySelectorAll('select[aria-label="Search provider"]')).toHaveLength(
       1,
     );
@@ -291,16 +204,14 @@ describe("Search configuration lifecycle", () => {
     { label: "Example API key", phase: "rejected" },
   ])("blocks tests for a $phase $label save while allowing repair", async ({ label, phase }) => {
     const fixture = await mount();
-    const field = edit(fixture.element, label, "synthetic-replacement");
+    const field = fixture.edit(label, "synthetic-replacement");
     const committed = fixture.runtime.flushFormChanges();
     await fixture.writeStarted.promise;
     if (phase === "pending reverted") {
       fixture.runtime.patchForm(endpointPath, "https://initial.example.test");
     }
     if (phase === "rejected") {
-      fixture.save.reject(
-        new GatewayRequestError({ code: "INVALID_REQUEST", message: "Synthetic save rejected" }),
-      );
+      fixture.rejectSave();
       await committed;
     }
     flush();
@@ -315,22 +226,15 @@ describe("Search configuration lifecycle", () => {
       expect(fixture.calls("webSearch.test")).toHaveLength(0);
       if (phase === "rejected") {
         await waitForSolid(() => {
-          expect(field.isConnected).toBe(true);
+          expect(field).toMatchObject({ isConnected: true, disabled: false });
           expect(fixture.input(label)).toBe(field);
-          expect(field.disabled).toBe(false);
         });
         expect(fixture.element.textContent).toContain("Synthetic save rejected");
-        expect(
-          [...fixture.element.querySelectorAll("button")].some(
-            (button) => button.textContent?.trim() === "Retry",
-          ),
-        ).toBe(true);
+        expect(fixture.button("Retry")).toBeDefined();
       }
     } finally {
       if (phase !== "rejected") {
-        fixture.save.reject(
-          new GatewayRequestError({ code: "INVALID_REQUEST", message: "Synthetic save rejected" }),
-        );
+        fixture.rejectSave();
         await committed;
       }
     }
@@ -350,7 +254,7 @@ describe("Search configuration lifecycle", () => {
 
   it("waits for activation and refreshes automatically when only the applied revision advances", async () => {
     const fixture = await mount();
-    edit(fixture.element, "Search endpoint", "https://next.example.test");
+    fixture.edit("Search endpoint", "https://next.example.test");
     const committed = fixture.runtime.flushFormChanges();
     const submitted = await fixture.writeStarted.promise;
     const saved = JSON.parse(submitted.raw) as Record<string, unknown>;
