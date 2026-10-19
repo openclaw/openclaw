@@ -47,14 +47,14 @@ export function registerUpdatePreflightTests({
   profileStateDir,
   makeTempDir,
 }: UpdatePreflightFixture) {
+  const latestRun = () => listUpdateRuns({ limit: 1 })[0];
+  const containingStep = (step: object) => expect.arrayContaining([expect.objectContaining(step)]);
+
   it("reports low disk space before target lookup and persists it after admission", async () => {
     await mockPackageInstallAtCaseDir();
     const historyBefore = listUpdateRuns();
     vi.spyOn(fsSync, "statfsSync").mockReturnValue(
-      statfsFixture({
-        bavail: 256,
-        bsize: 1024 * 1024,
-      }),
+      statfsFixture({ bavail: 256, bsize: 1024 * 1024 }),
     );
     const targetLookups: Array<{ output: string; history: UpdateRunRecord[] }> = [];
     const resolveTag = vi.mocked(resolveNpmChannelTag).getMockImplementation()!;
@@ -72,8 +72,8 @@ export function registerUpdatePreflightTests({
       output: expect.stringContaining("Low disk space near"),
       history: historyBefore,
     });
-    expect(listUpdateRuns({ limit: 1 })[0]?.steps).toContainEqual(
-      expect.objectContaining({
+    expect(latestRun()?.steps).toEqual(
+      containingStep({
         step: "warning:disk-space-preflight",
         status: "completed",
         detail: expect.stringContaining("256 MiB available"),
@@ -83,13 +83,11 @@ export function registerUpdatePreflightTests({
     const preflightParams = vi
       .mocked(fetchNpmPackageTargetStatus)
       .mock.calls.find(([params]) => params.target === "9999.0.0")?.[0];
-    expect(preflightParams).toEqual(
-      expect.objectContaining({
-        target: "9999.0.0",
-        spec: "openclaw@9999.0.0",
-        cwd: process.cwd(),
-      }),
-    );
+    expect(preflightParams).toMatchObject({
+      target: "9999.0.0",
+      spec: "openclaw@9999.0.0",
+      cwd: process.cwd(),
+    });
     expect(packageInstallCommandCall()?.[1].env).toBe(preflightParams?.env);
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
@@ -107,8 +105,8 @@ export function registerUpdatePreflightTests({
     retainUpdateRuntime.mockImplementationOnce(async ({ assertCurrent, installTarget }) => {
       assertCurrent();
       expect(installTarget).toMatchObject({ manager: "npm", packageRoot });
-      expect(listUpdateRuns({ limit: 1 })[0]?.steps).toContainEqual(
-        expect.objectContaining({
+      expect(latestRun()?.steps).toEqual(
+        containingStep({
           step: "updater-runtime-retention",
           status: "in_progress",
           startedAtMs: expect.any(Number),
@@ -121,29 +119,23 @@ export function registerUpdatePreflightTests({
 
     expect(retainUpdateRuntime).toHaveBeenCalledOnce();
     expect(lastWriteJsonCall()).toMatchObject({
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          name: "updater-runtime-retention",
-          command: "retain running updater runtime",
-          cwd: packageRoot,
-          durationMs: expect.any(Number),
-          exitCode: 0,
-          diagnostics: [JSON.stringify(retention)],
-        }),
-      ]),
+      steps: containingStep({
+        name: "updater-runtime-retention",
+        command: "retain running updater runtime",
+        cwd: packageRoot,
+        durationMs: expect.any(Number),
+        exitCode: 0,
+        diagnostics: [JSON.stringify(retention)],
+      }),
     });
-    expect(
-      listUpdateRuns({ limit: 1 })[0]?.steps.filter(
-        (step) => step.step === "updater-runtime-retention",
-      ),
-    ).toEqual([
+    expect(latestRun()?.steps.filter((step) => step.step === "updater-runtime-retention")).toEqual([
       expect.objectContaining({
         status: "completed",
         endedAtMs: expect.any(Number),
       }),
     ]);
     expect(
-      listUpdateRuns({ limit: 1 })[0]
+      latestRun()
         ?.steps.filter((step) => step.step === "diagnostic:updater-runtime-retention")
         .map((step) => JSON.parse(step.detail!)),
     ).toEqual([retention]);
@@ -162,9 +154,7 @@ export function registerUpdatePreflightTests({
           signal?.addEventListener(
             "abort",
             () => reject(toErrorObject(signal.reason, "Runtime retention cancelled")),
-            {
-              once: true,
-            },
+            { once: true },
           );
           void release.promise.then(resolve);
           signal?.throwIfAborted();
@@ -187,12 +177,10 @@ export function registerUpdatePreflightTests({
       expect(retainUpdateRuntime).toHaveBeenCalledOnce();
       expect(retentionSettled).toBe(true);
       expect(lastWriteJsonCall()).toMatchObject({ reason: "update-activation-timeout" });
-      expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
+      expect(latestRun()).toMatchObject({
         status: "failed",
         phase: "finished",
-        steps: expect.arrayContaining([
-          expect.objectContaining({ step: "updater-runtime-retention", status: "failed" }),
-        ]),
+        steps: containingStep({ step: "updater-runtime-retention", status: "failed" }),
       });
       expect(await fs.readFile(`${packageRoot}/package.json`, "utf8")).toBe(manifest);
     } finally {
@@ -218,7 +206,7 @@ export function registerUpdatePreflightTests({
     const update = updateCommand({ yes: true, json: true });
     await expect(update).rejects.toMatchObject({ code: 1 });
 
-    const record = listUpdateRuns({ limit: 1 })[0];
+    const record = latestRun();
     const snapshotFailure = expect.objectContaining({
       name: "snapshot-space-preflight",
       exitCode: 1,

@@ -26,6 +26,24 @@ export function registerCurrentCoreRuntimeRefreshTests(
   fixture: () => FinishUpdateParams,
   mocks: RuntimeRefreshMocks,
 ) {
+  function currentCore() {
+    const params = fixture();
+    params.coreAlreadyCurrent = true;
+    params.preManagedServiceStop!.stopped = false;
+    params.result.status = "skipped";
+    params.result.reason = "already-current";
+    params.result.before = params.result.after;
+    return params;
+  }
+  const converged = (
+    params: FinishUpdateParams,
+    result: FinishUpdateParams["result"],
+    changed: boolean,
+  ) => ({
+    resultWithPostUpdate: { ...result, postUpdate: { plugins: { status: "ok", changed } } },
+    postUpdateConfigSnapshot: params.configSnapshot,
+  });
+
   it.each([
     { mode: "refresh", changed: false, activate: true },
     { mode: "refresh", changed: true, activate: true },
@@ -37,16 +55,11 @@ export function registerCurrentCoreRuntimeRefreshTests(
   ] as const)(
     "activates current-core runtime refresh exactly once ($mode, changed=$changed)",
     async ({ mode, changed, activate }) => {
-      const params = fixture();
-      params.coreAlreadyCurrent = true;
+      const params = currentCore();
       params.mutationStarted = false;
-      params.result.status = "skipped";
-      params.result.reason = "already-current";
-      params.result.before = params.result.after;
       params.serviceRuntimeRefreshRequired = mode !== "healthy" && mode !== "operator-restart";
       params.packageUpdateNodeRunner = "/supported-node/bin/node";
       params.shouldRestart = mode !== "no-restart";
-      params.preManagedServiceStop!.stopped = false;
       params.preManagedServiceStop!.running = mode !== "not-running" && mode !== "absent";
       if (mode === "absent") {
         params.preManagedServiceStop!.serviceUpdateVerdict = { kind: "absent" };
@@ -83,13 +96,7 @@ export function registerCurrentCoreRuntimeRefreshTests(
       });
       mocks.converge.mockImplementation(async (input: { result: FinishUpdateParams["result"] }) => {
         order.push("converge");
-        return {
-          resultWithPostUpdate: {
-            ...input.result,
-            postUpdate: { plugins: { status: "ok", changed } },
-          },
-          postUpdateConfigSnapshot: params.configSnapshot,
-        };
+        return converged(params, input.result, changed);
       });
       mocks.restart.mockImplementation(async () => {
         order.push("restart");
@@ -100,8 +107,10 @@ export function registerCurrentCoreRuntimeRefreshTests(
       expect(mocks.restart).toHaveBeenCalledTimes(activate ? 1 : 0);
       if (activate) {
         expect(order).toEqual(["inspect", "converge", "inspect", "restart"]);
-        expect(mocks.restart.mock.calls[0]?.[0].refreshServiceEnv).toBe(true);
-        expect(mocks.restart.mock.calls[0]?.[0].nodeRunner).toBe("/supported-node/bin/node");
+        expect(mocks.restart.mock.calls[0]?.[0]).toMatchObject({
+          refreshServiceEnv: true,
+          nodeRunner: "/supported-node/bin/node",
+        });
       }
       if (mode === "operator-restart") {
         expect(mocks.stop).not.toHaveBeenCalled();
@@ -112,12 +121,7 @@ export function registerCurrentCoreRuntimeRefreshTests(
   );
 
   it("terminalizes a failed final native read after current-core plugin parking", async () => {
-    const params = fixture();
-    params.coreAlreadyCurrent = true;
-    params.preManagedServiceStop!.stopped = false;
-    params.result.status = "skipped";
-    params.result.reason = "already-current";
-    params.result.before = params.result.after;
+    const params = currentCore();
     mocks.stop.mockResolvedValue({ ...params.preManagedServiceStop!, stopped: true });
     mocks.converge.mockImplementation(
       async (convergence: {
@@ -126,13 +130,7 @@ export function registerCurrentCoreRuntimeRefreshTests(
       }) => {
         await convergence.beforeDoctor?.();
         mocks.readService.mockRejectedValueOnce(new Error("final native query failed"));
-        return {
-          resultWithPostUpdate: {
-            ...convergence.result,
-            postUpdate: { plugins: { status: "ok", changed: true } },
-          },
-          postUpdateConfigSnapshot: params.configSnapshot,
-        };
+        return converged(params, convergence.result, true);
       },
     );
     await expect(finishUpdate(params)).rejects.toMatchObject({
