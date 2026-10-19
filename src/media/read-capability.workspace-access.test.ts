@@ -9,18 +9,15 @@ import {
   type AgentWorkspaceAccess,
 } from "../agents/workspace-access.js";
 import { createReplyMediaPathNormalizer } from "../auto-reply/reply/reply-media-paths.js";
-import type { OpenClawConfig } from "../config/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readOutboundMediaFile } from "./bounded-read-file.js";
 import { buildOutboundMediaLoadOptions } from "./load-options.js";
-import { resolveAgentScopedOutboundMediaAccess } from "./read-capability.js";
+import { resolveAgentScopedOutboundMediaAccess as resolveMediaAccess } from "./read-capability.js";
 import { saveMediaBuffer } from "./store.js";
 import { loadWebMediaRaw } from "./web-media.js";
 
-vi.mock("../agents/sandbox/context.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/sandbox/context.js")>(
-    "../agents/sandbox/context.js",
-  )),
+vi.mock("../agents/sandbox/context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/sandbox/context.js")>()),
   ensureSandboxWorkspaceForSession: vi.fn(async () => undefined),
 }));
 vi.mock("../channels/plugins/index.js", () => ({
@@ -31,44 +28,61 @@ vi.mock("../channels/plugins/index.js", () => ({
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const releases: (() => void)[] = [];
 const harnessBytes = Buffer.from("Harness output");
-let workspaceDir: string;
-let outputRoot: string;
-let filePath: string;
-let parent: string;
-let cfg: OpenClawConfig;
-let host: AgentWorkspaceAccess;
-let remoteRead: ReturnType<
-  typeof vi.fn<NonNullable<AgentWorkspaceAccess["outboundMedia"]>["readFile"]>
->;
+let f: Awaited<ReturnType<typeof workspaceFixture>>;
 
-beforeEach(async () => {
+async function workspaceFixture() {
   const root = await fs.realpath(tempDirs.make("outbound-workspace-"));
-  workspaceDir = path.join(root, "gateway-workspace");
-  parent = path.dirname(workspaceDir);
-  outputRoot = path.join(workspaceDir, "output");
-  filePath = path.join(outputRoot, "report.txt");
-  await fs.mkdir(outputRoot, { recursive: true });
-  await fs.writeFile(filePath, "stale Gateway copy");
+  const workspace = path.join(root, "gateway-workspace");
+  const output = path.join(workspace, "output");
+  const file = path.join(output, "report.txt");
+  await fs.mkdir(output, { recursive: true });
+  await fs.writeFile(file, "stale Gateway copy");
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "gateway-state"));
-  cfg = { agents: { entries: { writer: { workspace: workspaceDir } } } };
-  remoteRead = vi.fn(async (_filePath, maxBytes) => {
+  const cfg = { agents: { entries: { writer: { workspace } } } };
+  const reader = vi.fn(async (_file: string, maxBytes: number) => {
     if (harnessBytes.length > maxBytes) {
       throw new Error("Remote media exceeds maxBytes");
     }
     return Buffer.from(harnessBytes);
   });
-  host = {
+  const host: AgentWorkspaceAccess = {
     bridge: {
-      readFile: vi.fn(async () => {
-        throw new Error("Owner documents only");
-      }),
+      readFile: vi
+        .fn<AgentWorkspaceAccess["bridge"]["readFile"]>()
+        .mockRejectedValue(new Error("Owner documents only")),
       stat: vi.fn(async () => null),
       writeFile: vi.fn(async () => {}),
     },
-    outboundMedia: { localRoots: [outputRoot], readFile: remoteRead },
+    outboundMedia: { localRoots: [output], readFile: reader },
   };
+  const resolve = (overrides: Partial<Parameters<typeof resolveMediaAccess>[0]> = {}) =>
+    resolveMediaAccess({ cfg, agentId: "writer", ...overrides });
+  const load = (source = file, access = resolve(), maxBytes?: number) =>
+    loadWebMediaRaw(source, buildOutboundMediaLoadOptions({ mediaAccess: access, maxBytes }));
+  return {
+    root,
+    workspace,
+    output,
+    file,
+    cfg,
+    host,
+    reader,
+    resolve,
+    load,
+    text: async (source = file, access = resolve()) =>
+      (await load(source, access)).buffer.toString(),
+    normalizer: () =>
+      createReplyMediaPathNormalizer({ cfg, agentId: "writer", workspaceDir: workspace }),
+    bind: (access = host) => {
+      const release = registerAgentWorkspaceAccess(workspace, access);
+      releases.push(release);
+      return release;
+    },
+  };
+}
+beforeEach(async () => {
+  f = await workspaceFixture();
 });
-
 afterEach(() => {
   for (const release of releases.splice(0)) {
     release();
@@ -76,199 +90,154 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function bind(access = host) {
-  const release = registerAgentWorkspaceAccess(workspaceDir, access);
-  releases.push(release);
-  return release;
-}
-
-function resolveAccess(
-  overrides: Partial<Parameters<typeof resolveAgentScopedOutboundMediaAccess>[0]> = {},
-) {
-  return resolveAgentScopedOutboundMediaAccess({ cfg, agentId: "writer", ...overrides });
-}
-
-function normalizer() {
-  return createReplyMediaPathNormalizer({ cfg, agentId: "writer", workspaceDir });
-}
-
-function load(source: string, mediaAccess = resolveAccess(), maxBytes?: number) {
-  return loadWebMediaRaw(source, buildOutboundMediaLoadOptions({ mediaAccess, maxBytes }));
-}
-
-async function loadText(source: string, mediaAccess = resolveAccess()) {
-  return (await load(source, mediaAccess)).buffer.toString();
-}
-
-function expectNoHostReads() {
-  expect(remoteRead).not.toHaveBeenCalled();
-  expect(host.bridge.readFile).not.toHaveBeenCalled();
-}
-
 describe("registered workspace outbound media", () => {
-  it("stages Harness bytes for a relative reply path without using the document bridge", async () => {
-    // Normalizers may be created before service start; access is acquired per source.
-    const normalize = normalizer();
-    bind();
+  it("stages remote bytes without reading the stale mirror or document bridge", async () => {
+    const normalize = f.normalizer(); // Capture before the workspace service starts.
+    f.bind();
     const result = await normalize({ mediaUrl: "output/report.txt" });
     expect(result.mediaUrl).toBeDefined();
-    expect(result.mediaUrl).not.toBe(filePath);
+    expect(result.mediaUrl).not.toBe(f.file);
     expect(await fs.readFile(result.mediaUrl!, "utf8")).toBe("Harness output");
-    expect(await fs.readFile(filePath, "utf8")).toBe("stale Gateway copy");
-    expect(remoteRead).toHaveBeenCalledWith(filePath, expect.any(Number));
-    expect(host.bridge.readFile).not.toHaveBeenCalled();
+    expect(await fs.readFile(f.file, "utf8")).toBe("stale Gateway copy");
+    expect(f.reader).toHaveBeenCalledWith(f.file, expect.any(Number));
+    expect(f.host.bridge.readFile).not.toHaveBeenCalled();
   });
 
-  it("fails stopped workspace output while preserving managed Gateway media and HTTP references", async () => {
-    bind()();
+  it("preserves managed and HTTP attachments after remote shutdown", async () => {
+    f.bind()();
     const attachment = Buffer.from("Gateway attachment");
     const saved = await saveMediaBuffer(attachment, "text/plain", "outbound");
     const url = "https://example.com/report.txt";
-    const result = await normalizer()({
-      mediaUrls: [filePath, saved.path, url],
+    expect(await f.normalizer()({ mediaUrls: [f.file, saved.path, url] })).toMatchObject({
+      mediaUrls: [saved.path, url],
     });
-    expect(result.mediaUrls).toEqual([saved.path, url]);
     expect(await fs.readFile(saved.path, "utf8")).toBe("Gateway attachment");
-    expectNoHostReads();
-    // Queue/channel loaders also remain usable without invoking the offline host.
-    expect(await loadText(saved.path)).toBe("Gateway attachment");
+    expect(f.reader).not.toHaveBeenCalled();
+    expect(f.host.bridge.readFile).not.toHaveBeenCalled();
+    expect(await f.text(saved.path)).toBe("Gateway attachment");
   });
 
-  it("preserves local attachment delivery for a stopped document-only binding", async () => {
-    bind({ bridge: host.bridge })();
-    expect(await loadText(filePath)).toBe("stale Gateway copy");
-    expectNoHostReads();
+  it("preserves local delivery for a stopped document-only binding", async () => {
+    f.bind({ bridge: f.host.bridge })();
+    expect(await f.text()).toBe("stale Gateway copy");
+    expect(f.reader).not.toHaveBeenCalled();
+    expect(f.host.bridge.readFile).not.toHaveBeenCalled();
   });
 
   it("bounds remote output before loading", async () => {
-    bind();
-    await expect(load(filePath, resolveAccess(), 4)).rejects.toThrow(
-      "Remote media exceeds maxBytes",
-    );
-    expect(remoteRead).toHaveBeenCalledWith(filePath, 4);
+    f.bind();
+    await expect(f.load(f.file, f.resolve(), 4)).rejects.toThrow("Remote media exceeds maxBytes");
+    expect(f.reader).toHaveBeenCalledWith(f.file, 4);
   });
 
   it("denies remote output for a blocked sender", async () => {
-    bind();
-    const access = resolveAccess({
-      cfg: { ...cfg, tools: { toolsBySender: { "id:blocked": { deny: ["read"] } } } },
+    f.bind();
+    const access = f.resolve({
+      cfg: { ...f.cfg, tools: { toolsBySender: { "id:blocked": { deny: ["read"] } } } },
       messageProvider: "requestchat",
       requesterSenderId: "blocked",
     });
-    await expect(load(filePath, access)).rejects.toMatchObject({ code: "path-not-allowed" });
-    expect(remoteRead).not.toHaveBeenCalled();
+    await expect(f.load(f.file, access)).rejects.toMatchObject({ code: "path-not-allowed" });
+    expect(f.reader).not.toHaveBeenCalled();
   });
 
   it("never rebinds a reader captured before start", async () => {
-    declareAgentWorkspaceAccess(workspaceDir);
-    const retained = resolveAccess();
-    bind();
-    await expect(retained.readFile!(filePath)).rejects.toThrow("stopped or not ready");
-    expect(remoteRead).not.toHaveBeenCalled();
+    declareAgentWorkspaceAccess(f.workspace);
+    const retained = f.resolve();
+    f.bind();
+    await expect(retained.readFile!(f.file)).rejects.toThrow("stopped or not ready");
+    expect(f.reader).not.toHaveBeenCalled();
   });
 
   it("rejects an in-flight read after rebinding", async () => {
     const pending = createDeferredCore<Buffer>();
-    const release = bind();
-    const retained = resolveAccess();
-    remoteRead.mockReturnValueOnce(pending.promise);
-    const rejected = expect(retained.readFile!(filePath)).rejects.toThrow("stopped or not ready");
+    const release = f.bind();
+    const retained = f.resolve();
+    f.reader.mockReturnValueOnce(pending.promise);
+    const rejected = expect(retained.readFile!(f.file)).rejects.toThrow("stopped or not ready");
     release();
-    bind();
+    f.bind();
     pending.resolve(Buffer.from("late output"));
     await rejected;
-    await expect(retained.readFile!(filePath)).rejects.toThrow("stopped or not ready");
-    expect(remoteRead).toHaveBeenCalledTimes(1);
-    await expect(resolveAccess().readFile!(filePath)).resolves.toEqual(harnessBytes);
+    await expect(retained.readFile!(f.file)).rejects.toThrow("stopped or not ready");
+    expect(f.reader).toHaveBeenCalledTimes(1);
+    await expect(f.resolve().readFile!(f.file)).resolves.toEqual(harnessBytes);
   });
 
-  it("snapshots outbound roots and honors remote aliases without expanding document access", async () => {
-    const aliasRoot = path.join(parent, "remote-output");
-    const roots = [outputRoot, aliasRoot];
-    host.outboundMedia!.localRoots = roots;
-    bind();
-    roots.push(workspaceDir);
-    expect(getAgentWorkspaceAccess(workspaceDir)!.outboundMedia!.localRoots).toEqual([
-      outputRoot,
-      aliasRoot,
+  it("snapshots remote roots without expanding document access", async () => {
+    const alias = path.join(f.root, "remote-output");
+    const roots = [f.output, alias];
+    f.host.outboundMedia!.localRoots = roots;
+    f.bind();
+    roots.push(f.workspace);
+    expect(getAgentWorkspaceAccess(f.workspace)!.outboundMedia!.localRoots).toEqual([
+      f.output,
+      alias,
     ]);
-    const access = resolveAccess();
-    expect(access.localRoots).not.toContain(workspaceDir);
+    const access = f.resolve();
+    expect(access.localRoots).not.toContain(f.workspace);
     await expect(
-      readOutboundMediaFile(access.readFile!, path.join(aliasRoot, "report.txt"), { maxBytes: 20 }),
+      readOutboundMediaFile(access.readFile!, path.join(alias, "report.txt"), { maxBytes: 20 }),
     ).resolves.toEqual(harnessBytes);
-    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "stale document");
-    await expect(load(path.join(workspaceDir, "AGENTS.md"), access)).rejects.toMatchObject({
-      code: "path-not-allowed",
-    });
+    const document = path.join(f.workspace, "AGENTS.md");
+    await fs.writeFile(document, "stale document");
+    await expect(f.load(document, access)).rejects.toMatchObject({ code: "path-not-allowed" });
   });
 
-  it("routes the selected workspace instead of another agent or caller-local fallback", async () => {
-    bind();
+  it("routes the selected workspace ahead of another agent or local fallback", async () => {
+    f.bind();
     const fallback = vi.fn(async () => Buffer.from("wrong local bytes"));
-    const access = resolveAccess({
+    const access = f.resolve({
       agentId: "other",
-      workspaceDir,
-      mediaAccess: { localRoots: [parent], readFile: fallback },
+      workspaceDir: f.workspace,
+      mediaAccess: { localRoots: [f.root], readFile: fallback },
     });
-    expect(access.localRoots).toContain(parent);
-    await expect(access.readFile!(filePath)).resolves.toEqual(harnessBytes);
+    expect(access.localRoots).toContain(f.root);
+    await expect(access.readFile!(f.file)).resolves.toEqual(harnessBytes);
     expect(fallback).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
-    "preserves granted sibling files and rejects stale workspace aliases (workspaceOnly=%s)",
+    "isolates remote aliases from granted siblings (workspaceOnly=%s)",
     async (workspaceOnly) => {
-      const generated = path.join(parent, "generated", "report.txt");
+      const generated = path.join(f.root, "generated", "report.txt");
+      const alias = path.join(f.root, "alias", "report.txt");
       await fs.mkdir(path.dirname(generated));
       await fs.writeFile(generated, "local generated output");
-      await fs.symlink(outputRoot, path.join(parent, "alias"), "dir");
-      const release = bind();
-      const access = resolveAccess({
-        cfg: { ...cfg, tools: { fs: { workspaceOnly } } },
-        mediaAccess: { localRoots: [parent] },
+      await fs.symlink(f.output, path.dirname(alias), "dir");
+      const release = f.bind();
+      const access = f.resolve({
+        cfg: { ...f.cfg, tools: { fs: { workspaceOnly } } },
+        mediaAccess: { localRoots: [f.root] },
       });
-      expect(await loadText(generated, access)).toBe("local generated output");
-      expect(await loadText(filePath, access)).toBe("Harness output");
-      await expect(load(path.join(parent, "alias", "report.txt"), access)).rejects.toMatchObject({
-        code: "path-not-allowed",
-      });
+      expect(await f.text(generated, access)).toBe("local generated output");
+      expect(await f.text(f.file, access)).toBe("Harness output");
+      await expect(f.load(alias, access)).rejects.toMatchObject({ code: "path-not-allowed" });
       release();
-      expect(await loadText(generated, access)).toBe("local generated output");
-      await expect(load(filePath, access)).rejects.toThrow("stopped or not ready");
+      expect(await f.text(generated, access)).toBe("local generated output");
+      await expect(f.load(f.file, access)).rejects.toThrow("stopped or not ready");
     },
   );
 
-  it.each(["overlapping", "session"] as const)(
-    "preserves the explicit %s workspace reader",
-    async (kind) => {
-      bind();
-      // rw sandboxes use the agent workspace as their host root.
-      const sessionRoot = path.join(parent, "session-sandbox");
-      const localRoots = kind === "overlapping" ? [workspaceDir, "/workspace"] : [sessionRoot];
-      const bytes = Buffer.from("current sandbox output");
-      const readSandbox = vi.fn(async () => bytes);
-      const access = resolveAccess({
-        ...(kind === "session" ? { sessionWorkspaceDir: sessionRoot } : {}),
-        workspaceMediaAccess: {
-          localRoots,
-          readFile: readSandbox,
-          ...(kind === "overlapping" ? { workspaceDir } : {}),
-        },
-      });
-      if (kind === "session") {
-        await expect(access.readFile!(path.join(sessionRoot, "report.txt"))).resolves.toEqual(
-          bytes,
-        );
-      } else {
-        for (const root of localRoots) {
-          expect(await loadText(path.join(root, "output/report.txt"), access)).toBe(
-            "current sandbox output",
-          );
-        }
-        expect(readSandbox).toHaveBeenCalledTimes(2);
-      }
-      expect(remoteRead).not.toHaveBeenCalled();
-    },
-  );
+  it.each(["overlapping", "session"] as const)("preserves the explicit %s reader", async (kind) => {
+    f.bind();
+    const session = path.join(f.root, "session-sandbox");
+    const roots = kind === "overlapping" ? [f.workspace, "/workspace"] : [session];
+    const bytes = Buffer.from("current sandbox output");
+    const readFile = vi.fn(async () => bytes);
+    const access = f.resolve({
+      sessionWorkspaceDir: kind === "session" ? session : undefined,
+      workspaceMediaAccess: {
+        localRoots: roots,
+        readFile,
+        workspaceDir: kind === "overlapping" ? f.workspace : undefined,
+      },
+    });
+    const relative = kind === "session" ? "report.txt" : "output/report.txt";
+    for (const root of roots) {
+      expect(await f.text(path.join(root, relative), access)).toBe("current sandbox output");
+    }
+    expect(readFile).toHaveBeenCalledTimes(roots.length);
+    expect(f.reader).not.toHaveBeenCalled();
+  });
 });

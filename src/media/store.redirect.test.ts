@@ -44,10 +44,7 @@ describe("media store remote sources", () => {
   let testState: OpenClawTestState;
 
   beforeAll(async () => {
-    testState = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "openclaw-media-store-remote-",
-    });
+    testState = await createOpenClawTestState({ layout: "state-only" });
   });
 
   beforeEach(() => {
@@ -118,11 +115,7 @@ describe("media store remote sources", () => {
             request.socket.once("close", () => socketClosed.resolve());
           }
           response.writeHead(503, "Service Unavailable", { "content-type": "text/plain" });
-          if (unfinished) {
-            response.write(body);
-          } else {
-            response.end(body);
-          }
+          response[unfinished ? "write" : "end"](body);
         },
         async (url) => {
           const matchedUrls: string[] = [];
@@ -145,9 +138,8 @@ describe("media store remote sources", () => {
           if (unfinished) {
             expect(matchedUrls).toEqual([url]);
             // Observe closure before withServer's cleanup can close the socket itself.
-            expect((await Promise.all([responseClosed.promise, socketClosed.promise]))[0]).toBe(
-              false,
-            );
+            const [finished] = await Promise.all([responseClosed.promise, socketClosed.promise]);
+            expect(finished).toBe(false);
             await expect(
               fs.readdir(testState.statePath("media", "real-http-error")),
             ).resolves.toEqual([]);
@@ -174,11 +166,8 @@ describe("media store remote sources", () => {
     expect(cancel).toHaveBeenCalledOnce();
     expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
     const secondInit = runtimeFetchMock.mock.calls[1]?.[1] as RequestInit;
-    const secondHeaders = new Headers(secondInit.headers);
-    expect({
-      authorization: secondHeaders.get("authorization"),
-      accept: secondHeaders.get("accept"),
-    }).toEqual({ authorization: null, accept: "text/plain" });
+    const { authorization = null, accept } = Object.fromEntries(new Headers(secondInit.headers));
+    expect({ authorization, accept }).toEqual({ authorization: null, accept: "text/plain" });
     await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("redirected");
     const expectedMode = process.platform === "win32" ? 0o666 : 0o644 & ~process.umask();
     expect((await fs.stat(saved.path)).mode & 0o777).toBe(expectedMode);
