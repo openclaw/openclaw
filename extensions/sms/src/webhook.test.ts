@@ -113,17 +113,13 @@ function createPendingRequest(): IncomingMessage {
 }
 
 type TestResponse = ServerResponse & {
-  body?: string;
   setHeaderMock: ReturnType<typeof vi.fn>;
   endMock: ReturnType<typeof vi.fn>;
 };
 
 function createResponse(): TestResponse {
   const setHeaderMock = vi.fn();
-  const endMock = vi.fn(function (this: ServerResponse & { body?: string }, body?: string) {
-    this.body = body;
-    return this;
-  });
+  const endMock = vi.fn();
   return {
     statusCode: 200,
     setHeader: setHeaderMock,
@@ -431,12 +427,8 @@ describe("createSmsWebhookHandler", () => {
       publicWebhookUrl: "https://gateway.example.com/webhooks/sms/support",
     });
     const defaultAccount = createSmsTestAccount();
-    const supportHandler = createHandler({
-      account: supportAccount,
-    });
-    const defaultHandler = createHandler({
-      account: defaultAccount,
-    });
+    const supportHandler = createHandler({ account: supportAccount });
+    const defaultHandler = createHandler({ account: defaultAccount });
 
     for (let i = 0; i < 30; i += 1) {
       const valid = createSignedBody({

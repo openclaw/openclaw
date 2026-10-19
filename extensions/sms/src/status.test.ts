@@ -37,22 +37,14 @@ function probeDelivery(
   outbound: Pick<SmsDeliveryRecord, "messageSid" | "status" | "lastObservedAt" | "errorCode">,
   fetchImpl = createFetch([createWebhookResponse(), { messages: [] }]),
 ) {
-  return probe(
-    [],
-    {},
-    {
-      fetchImpl,
-      deliveryRecords: [
-        {
-          accountId: "default",
-          accountSidHash: "account-sid-hash",
-          firstObservedAt: 1,
-          observations: [],
-          ...outbound,
-        },
-      ],
-    },
-  );
+  const record: SmsDeliveryRecord = {
+    accountId: "default",
+    accountSidHash: "account-sid-hash",
+    firstObservedAt: 1,
+    observations: [],
+    ...outbound,
+  };
+  return probe([], {}, { fetchImpl, deliveryRecords: [record] });
 }
 
 function expectUnavailable(result: Awaited<ReturnType<typeof probe>>, error: string) {
@@ -182,12 +174,7 @@ describe("SMS status probe", () => {
         error: "Recent inbound SMS SM11200 has Twilio error 11200.",
         webhook: { status: "matches", configuredUrl: "https://gateway.example.com/webhooks/sms" },
         recentInbound: { sid: "SM11200", status: "received", errorCode: "11200" },
-        recentOutbound: {
-          messageSid: "SM-outbound",
-          status: "undelivered",
-          errorCode: "30005",
-          lastObservedAt: 1,
-        },
+        recentOutbound: { messageSid: "SM-outbound", status: "undelivered", errorCode: "30005" },
         hints: ["Check the public route."],
       }),
     ).toEqual([
@@ -206,7 +193,7 @@ describe("SMS status probe", () => {
     expect(
       formatSmsProbeLines({
         ok: true,
-        recentOutbound: { messageSid: "SM-canceled", status: "canceled", lastObservedAt: 1 },
+        recentOutbound: { messageSid: "SM-canceled", status: "canceled" },
         hints: [],
       }),
     ).toContainEqual({ text: "Recent outbound: canceled", tone: "error" });
