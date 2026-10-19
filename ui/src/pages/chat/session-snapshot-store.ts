@@ -17,7 +17,6 @@ import {
   MAX_CACHED_CHAT_WEIGHT,
   type ChatCacheObserver,
   type ChatMessageCache,
-  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import {
   isPersistableChatSnapshotKey,
@@ -42,6 +41,7 @@ import {
   discardPrewarmedChatSnapshot,
   peekPrewarmedChatSnapshot,
 } from "./session-snapshot-prewarm.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 const CHAT_SNAPSHOT_PROJECTION_VERSION = 3;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 const CHAT_SNAPSHOT_WRITE_DELAY_MS = 500;

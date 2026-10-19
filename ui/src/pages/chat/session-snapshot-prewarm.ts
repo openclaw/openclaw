@@ -4,12 +4,12 @@ import {
   type BootRecord,
 } from "../../app/boot-record.ts";
 import type { SidebarSnapshotModel } from "../../components/sidebar-snapshot-data.ts";
-import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import {
   sidebarSnapshotInvalidationMatches,
   snapshotStoreGeneration,
   subscribeSnapshotInvalidation,
 } from "./session-snapshot-invalidation-events.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 type PrewarmedSnapshot = {
   cacheKey: string;

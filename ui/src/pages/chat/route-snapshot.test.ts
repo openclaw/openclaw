@@ -12,7 +12,7 @@ import {
 import * as database from "./session-snapshot-database.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
-import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+import { readPrewarmedChatSnapshot, SessionSnapshotStore } from "./session-snapshot-store.ts";
 
 const prefix = 'scope:["ws://snapshot.example","account-a"]\u0000';
 const snapshot = {
@@ -66,7 +66,9 @@ it.each([sessionRouteUuid, sessionRouteUuid.replaceAll("-", "")])(
     });
     expect(result).not.toHaveProperty("canonicalLocation");
     expect(request).not.toHaveBeenCalled();
-    expect(await new SessionSnapshotStore().read(prefix + sessionRouteKey)).toEqual(snapshot);
+    const prewarmed = await readPrewarmedChatSnapshot(prefix + sessionRouteKey);
+    expect(prewarmed).toEqual(snapshot);
+    expect(await new SessionSnapshotStore().read(prefix + sessionRouteKey)).toBe(prewarmed);
   },
 );
 

@@ -37,10 +37,8 @@ import {
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
-import {
-  projectChatTranscriptMetadata,
-  type ChatSessionSnapshot,
-} from "./session-message-cache.ts";
+import { projectChatTranscriptMetadata } from "./session-message-cache.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 export const CHAT_HISTORY_REQUEST_LIMIT = 80;
 const CHAT_HISTORY_REQUEST_MAX_BYTES = 256 * 1024;
