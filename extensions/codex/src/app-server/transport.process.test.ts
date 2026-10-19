@@ -27,6 +27,21 @@ const delay = (ms: number) =>
     setTimeout(resolve, ms);
   });
 
+const repeat = (rows: PosixProcess[], times = 2) => Array.from({ length: times }, () => rows);
+const closeOptions = { forceKillDelayMs: 500, exitTimeoutMs: 2_000 };
+
+function spawnRoot(file: string, args: string[]) {
+  return spawn(process.execPath, [file, ...args], {
+    detached: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+}
+
+async function cleanupFixture(tempDir: string) {
+  await removeTaskOwnedFixtureProcesses(tempDir);
+  await fs.rm(tempDir, { recursive: true, force: true });
+}
+
 async function listProcesses(tempDir: string): Promise<ProcessRow[]> {
   // Stream and retain only owned fixtures: unrelated host command lines can
   // exceed execFileSync's buffer and must not leak into a failed assertion.
@@ -185,10 +200,7 @@ process.stdin.on("end", () => process.exit(0));
 `,
     );
 
-    const root = spawn(process.execPath, [rootPath, logPath, leaderPath, descendantPath], {
-      detached: true,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const root = spawnRoot(rootPath, [logPath, leaderPath, descendantPath]);
 
     const ready = fixtureReadiness(root, 5);
     const closed = once(root, "close");
@@ -210,20 +222,16 @@ process.stdin.on("end", () => process.exit(0));
       expect(separateDescendant?.pgid).toBe(separateLeader?.pgid);
       expect(sharedLeader?.pgid).toBe(rootEvent?.pgid);
       expect(sharedDescendant?.pgid).toBe(rootEvent?.pgid);
-      await expect(
-        closeCodexAppServerTransportAndWait(root, {
-          forceKillDelayMs: 500,
-          exitTimeoutMs: 2_000,
-        }),
-      ).resolves.toEqual({ exited: true, cleanup: "closed" });
-      expect(root.exitCode).toBe(0);
-      expect(root.signalCode).toBeNull();
+      await expect(closeCodexAppServerTransportAndWait(root, closeOptions)).resolves.toEqual({
+        exited: true,
+        cleanup: "closed",
+      });
+      expect(root).toMatchObject({ exitCode: 0, signalCode: null });
 
       const survivors = await listProcesses(tempDir);
       expect(survivors).toEqual([]);
     } finally {
-      await removeTaskOwnedFixtureProcesses(tempDir);
-      await fs.rm(tempDir, { recursive: true, force: true });
+      await cleanupFixture(tempDir);
     }
   });
 
@@ -265,10 +273,7 @@ process.stdin.resume();
 process.stdin.on("end", () => process.exit(0));
 `,
     );
-    const root = spawn(process.execPath, [rootPath, sentinelPath, sentinelPidPath], {
-      detached: true,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const root = spawnRoot(rootPath, [sentinelPath, sentinelPidPath]);
     const ready = fixtureReadiness(root, 1);
     const rootClosed = once(root, "close");
     let restoreInspection: (() => void) | undefined;
@@ -295,64 +300,31 @@ process.stdin.on("end", () => process.exit(0));
         state: "S",
         startedAt: "Mon Jan 1 00:00:00 2001",
       };
-      const stoppedOldSentinel = { ...oldSentinel, state: "T" };
       const stoppedSentinel = { ...sentinelIdentity, state: "T" };
       const runningTree = [rootIdentity, sentinelIdentity];
       const rootStoppedTree = [stoppedRoot, sentinelIdentity];
       const stoppedTree = [stoppedRoot, stoppedSentinel];
+      const quiescing = [...repeat(runningTree), ...repeat(rootStoppedTree)];
+      const blockedTree = [stoppedRoot, { ...sentinelIdentity, state: "U" }];
       const scenarios: Record<typeof mode, Array<PosixProcess[] | undefined | "deadline">> = {
         reuse: [
-          [rootIdentity, oldSentinel],
-          [rootIdentity, oldSentinel],
-          [stoppedRoot, oldSentinel],
-          [stoppedRoot, oldSentinel],
-          [stoppedRoot, stoppedOldSentinel],
+          ...repeat([rootIdentity, oldSentinel]),
+          ...repeat([stoppedRoot, oldSentinel]),
+          [stoppedRoot, { ...oldSentinel, state: "T" }],
           stoppedTree,
         ],
-        late: [[rootIdentity], [rootIdentity], rootStoppedTree, rootStoppedTree, stoppedTree],
+        late: [...repeat([rootIdentity]), ...repeat(rootStoppedTree), stoppedTree],
         reparented: [
-          runningTree,
-          runningTree,
-          rootStoppedTree,
-          rootStoppedTree,
+          ...quiescing,
           [stoppedRoot, { ...stoppedSentinel, ppid: 1, pgid: stoppedSentinel.pgid + 1 }],
         ],
-        "root-resumed": [
-          runningTree,
-          runningTree,
-          runningTree,
-          runningTree,
-          rootStoppedTree,
-          rootStoppedTree,
-          stoppedTree,
-        ],
-        traced: [
-          runningTree,
-          runningTree,
-          rootStoppedTree,
-          rootStoppedTree,
-          [stoppedRoot, { ...stoppedSentinel, state: "t" }],
-        ],
-        uninterruptible: [
-          runningTree,
-          runningTree,
-          [stoppedRoot, { ...sentinelIdentity, state: "U" }],
-          [stoppedRoot, { ...sentinelIdentity, state: "U" }],
-        ],
-        "unconfirmed-termination": [
-          runningTree,
-          runningTree,
-          [stoppedRoot, { ...sentinelIdentity, state: "U" }],
-          [stoppedRoot, { ...sentinelIdentity, state: "U" }],
-        ],
-        "snapshot-failure": [runningTree, runningTree, rootStoppedTree, rootStoppedTree, undefined],
-        "inspection-timeout": [runningTree, runningTree, "deadline"],
-        extended: [
-          runningTree,
-          runningTree,
-          ...Array.from({ length: 16 }, () => rootStoppedTree),
-          stoppedTree,
-        ],
+        "root-resumed": [...repeat(runningTree, 4), ...repeat(rootStoppedTree), stoppedTree],
+        traced: [...quiescing, [stoppedRoot, { ...stoppedSentinel, state: "t" }]],
+        uninterruptible: [...repeat(runningTree), ...repeat(blockedTree)],
+        "unconfirmed-termination": [...repeat(runningTree), ...repeat(blockedTree)],
+        "snapshot-failure": [...quiescing, undefined],
+        "inspection-timeout": [...repeat(runningTree), "deadline"],
+        extended: [...repeat(runningTree), ...repeat(rootStoppedTree, 16), stoppedTree],
       };
       const snapshots = scenarios[mode];
       let inspection = 0;
@@ -414,10 +386,7 @@ process.stdin.on("end", () => process.exit(0));
         processSpy.mockRestore();
         killSpy.mockRestore();
       };
-      const closed = await closeCodexAppServerTransportAndWait(root, {
-        forceKillDelayMs: 500,
-        exitTimeoutMs: 2_000,
-      });
+      const closed = await closeCodexAppServerTransportAndWait(root, closeOptions);
       restoreInspection();
       expect(closed).toEqual({
         exited: true,
@@ -438,8 +407,7 @@ process.stdin.on("end", () => process.exit(0));
       }
     } finally {
       restoreInspection?.();
-      await removeTaskOwnedFixtureProcesses(tempDir);
-      await fs.rm(tempDir, { recursive: true, force: true });
+      await cleanupFixture(tempDir);
     }
   });
 });

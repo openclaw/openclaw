@@ -44,10 +44,33 @@ vi.mock("./transport-process-containment.js", () => ({
 }));
 
 const children: RegistrationTestChildProcess[] = [];
+const transportOptions = {
+  transport: "stdio",
+  command: "codex",
+  args: [],
+  headers: {},
+} satisfies Parameters<typeof createStdioTransport>[0];
 function child() {
   const spawned = new RegistrationTestChildProcess(500002);
   children.push(spawned);
   return spawned;
+}
+function queueSpawn(spawned: RegistrationTestChildProcess) {
+  state.spawn.mockImplementation(() => {
+    queueMicrotask(() => spawned.emit("spawn"));
+    return spawned;
+  });
+}
+function holdRegistration(fail = false) {
+  const admission = createDeferred<void>();
+  state.register.mockImplementation(async (key, value) => {
+    await admission.promise;
+    if (fail) {
+      throw new Error("registration refused");
+    }
+    state.rows.set(key, value);
+  });
+  return admission;
 }
 function exit(spawned: RegistrationTestChildProcess) {
   Object.defineProperty(spawned, "exitCode", { value: 0, configurable: true });
@@ -97,17 +120,8 @@ describe("Codex registration settlement", () => {
     let now = performance.now();
     vi.spyOn(performance, "now").mockImplementation(() => now);
     const spawned = child();
-    state.spawn.mockImplementation(() => {
-      queueMicrotask(() => spawned.emit("spawn"));
-      return spawned;
-    });
-
-    const starting = createStdioTransport({
-      transport: "stdio",
-      command: "codex",
-      args: [],
-      headers: {},
-    });
+    queueSpawn(spawned);
+    const starting = createStdioTransport(transportOptions);
     const started = expect(starting).resolves.toBe(spawned);
     await vi.waitFor(() => expect(state.entries).toHaveBeenCalledOnce());
     expect(state.spawn).not.toHaveBeenCalled();
@@ -127,11 +141,7 @@ describe("Codex registration settlement", () => {
   });
 
   it("keeps startup pending until the durable registration commits", async () => {
-    const admission = createDeferred<void>();
-    state.register.mockImplementation(async (key, value) => {
-      await admission.promise;
-      state.rows.set(key, value);
-    });
+    const admission = holdRegistration();
     const spawned = child();
     const { registered } = await startRegistration(spawned);
     let published = false;
@@ -150,11 +160,7 @@ describe("Codex registration settlement", () => {
   });
 
   it("orders an early exit after the pending insertion and rejects startup", async () => {
-    const admission = createDeferred<void>();
-    state.register.mockImplementation(async (key, value) => {
-      await admission.promise;
-      state.rows.set(key, value);
-    });
+    const admission = holdRegistration();
     const spawned = child();
     const { registered } = await startRegistration(spawned);
     const rejected = expect(registered).rejects.toThrow("exited during registration");
@@ -201,32 +207,18 @@ describe("Codex registration settlement", () => {
   it.for(["revoked", "commit failure"])(
     "closes an unpublished transport after %s",
     async (mode) => {
-      const admission = createDeferred<void>();
-      state.register.mockImplementation(async (key, value) => {
-        await admission.promise;
-        if (mode === "commit failure") {
-          throw new Error("registration refused");
-        }
-        state.rows.set(key, value);
-      });
+      const admission = holdRegistration(mode === "commit failure");
       const spawned = child();
       spawned.stdout.resume();
       spawned.stderr.resume();
       spawned.stdin.on("finish", () => exit(spawned));
-      state.spawn.mockImplementation(() => {
-        queueMicrotask(() => spawned.emit("spawn"));
-        return spawned;
-      });
+      queueSpawn(spawned);
       let active = true;
-      const starting = createStdioTransport(
-        { transport: "stdio", command: "codex", args: [], headers: {} },
-        {},
-        () => {
-          if (!active) {
-            throw new Error("owner closed");
-          }
-        },
-      );
+      const starting = createStdioTransport(transportOptions, {}, () => {
+        if (!active) {
+          throw new Error("owner closed");
+        }
+      });
       const rejected = expect(starting).rejects.toThrow(
         mode === "revoked" ? "owner closed" : "registration refused",
       );

@@ -51,6 +51,11 @@ const child = identity(500002);
 const neighbor = 500003;
 const command = "/opt/codex app-server --listen stdio://";
 const commandFingerprint = createHash("sha256").update(command).digest("hex");
+const registration = { parent, child: { ...child, commandFingerprint } };
+
+function failStat(pid: number, code: string) {
+  procfs.files.set(`/proc/${pid}/stat`, Object.assign(new Error("inspection failed"), { code }));
+}
 
 function addProcess(pid: number, ppid: number, state = "S", threads = 1) {
   procfs.files.set(
@@ -62,12 +67,7 @@ function addProcess(pid: number, ppid: number, state = "S", threads = 1) {
 
 describe("Codex registration procfs boundary", () => {
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
-  let store: ReturnType<
-    typeof createPluginStateSyncKeyedStore<{
-      parent: ReturnType<typeof identity>;
-      child: ReturnType<typeof identity> & { commandFingerprint: string };
-    }>
-  >;
+  let store: ReturnType<typeof createPluginStateSyncKeyedStore<typeof registration>>;
   let kill: MockInstance<typeof process.kill>;
 
   beforeEach(async () => {
@@ -86,10 +86,7 @@ describe("Codex registration procfs boundary", () => {
     addProcess(process.pid, process.ppid);
     addProcess(parent.pid, 1);
     addProcess(child.pid, parent.pid);
-    procfs.files.set(
-      `/proc/${neighbor}/stat`,
-      Object.assign(new Error("unreadable neighbor"), { code: "EACCES" }),
-    );
+    failStat(neighbor, "EACCES");
   });
 
   afterEach(async () => {
@@ -100,7 +97,6 @@ describe("Codex registration procfs boundary", () => {
   });
 
   it("preserves a threaded zombie owner's registration despite an unreadable unrelated process", async () => {
-    const registration = { parent, child: { ...child, commandFingerprint } };
     store.register("owned", registration);
     addProcess(parent.pid, 1, "Z", 2);
 
@@ -171,11 +167,7 @@ describe("Codex registration procfs boundary", () => {
       if (mode !== "startup" && mode !== "slow-inspection") {
         await expect(registered).rejects.toMatchObject({
           reason:
-            mode === "exhausted-inspection"
-              ? "deadline"
-              : mode === "deadline"
-                ? "deadline"
-                : "unavailable",
+            mode === "exhausted-inspection" || mode === "deadline" ? "deadline" : "unavailable",
         });
         expect(store.entries()).toEqual([]);
         expect(kill).not.toHaveBeenCalled();
@@ -199,12 +191,8 @@ describe("Codex registration procfs boundary", () => {
   ])(
     "retains registrations when required identity inspection fails with $code",
     async ({ code, reason }) => {
-      const registration = { parent, child: { ...child, commandFingerprint } };
       store.register("owned", registration);
-      procfs.files.set(
-        `/proc/${parent.pid}/stat`,
-        Object.assign(new Error("required inspection failed"), { code }),
-      );
+      failStat(parent.pid, code);
 
       await expect(prepareCodexAppServerProcessRegistration()).rejects.toMatchObject({ reason });
       expect(store.lookup("owned")).toEqual(registration);
@@ -257,7 +245,7 @@ describe("Codex registration procfs boundary", () => {
   );
 
   it("retires a verified dead identity despite an unreadable unrelated process", async () => {
-    store.register("orphan", { parent, child: { ...child, commandFingerprint } });
+    store.register("orphan", registration);
     procfs.files.delete(`/proc/${parent.pid}/stat`);
     addProcess(child.pid, 1, "Z");
 
@@ -267,7 +255,7 @@ describe("Codex registration procfs boundary", () => {
   });
 
   it("confirms an orphan's exit without rereading unrelated processes after containment", async () => {
-    store.register("orphan", { parent, child: { ...child, commandFingerprint } });
+    store.register("orphan", registration);
     procfs.files.delete(`/proc/${parent.pid}/stat`);
     addProcess(child.pid, 1);
     procfs.files.delete(`/proc/${neighbor}/stat`);
@@ -276,10 +264,7 @@ describe("Codex registration procfs boundary", () => {
         addProcess(child.pid, 1, "T");
       } else if (pid === -child.pid && signal === "SIGKILL") {
         procfs.files.delete(`/proc/${child.pid}/stat`);
-        procfs.files.set(
-          `/proc/${neighbor}/stat`,
-          Object.assign(new Error("unreadable neighbor"), { code: "EACCES" }),
-        );
+        failStat(neighbor, "EACCES");
       } else {
         throw new Error("unexpected signal");
       }

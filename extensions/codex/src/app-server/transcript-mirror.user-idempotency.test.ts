@@ -12,6 +12,7 @@ import {
   type TranscriptEntryAnchor,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   castAgentMessage,
   makeAgentAssistantMessage,
@@ -30,6 +31,33 @@ import {
 } from "./upstream-prompt-provenance.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "codex-mirror-user-race-");
+
+async function createTarget(sessionId: string, withSessionFile = false) {
+  const target = {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath: path.join(sessionDirs.make(), "openclaw-agent.sqlite"),
+  };
+  await upsertSessionEntry({
+    ...target,
+    entry: {
+      sessionId,
+      updatedAt: 1,
+      ...(withSessionFile
+        ? { sessionFile: `sqlite:${target.agentId}:${sessionId}:${target.storePath}` }
+        : {}),
+    },
+  });
+  return target;
+}
+
+function assistant(text: string, timestamp: number, identity: string) {
+  return attachCodexMirrorIdentity(
+    makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp }),
+    identity,
+  );
+}
 
 const transcriptRace = vi.hoisted(() => ({
   competingMessage: undefined as unknown,
@@ -106,16 +134,7 @@ it("publishes each committed assistant before a later mirror append can stall", 
   transcriptRace.publish.mockImplementation(
     transcriptRuntime.publishSessionTranscriptUpdateByIdentity,
   );
-  const target = {
-    agentId: "main",
-    sessionId: "commit-publication",
-    sessionKey: "agent:main:commit-publication",
-    storePath: path.join(sessionDirs.make(), "openclaw-agent.sqlite"),
-  };
-  await upsertSessionEntry({
-    ...target,
-    entry: { sessionId: target.sessionId, updatedAt: 1 },
-  });
+  const target = await createTarget("commit-publication");
   const reachedSecond = Promise.withResolvers<void>();
   const releaseSecond = Promise.withResolvers<void>();
   transcriptRace.beforeAppend.mockResolvedValueOnce(undefined).mockImplementationOnce(async () => {
@@ -127,16 +146,7 @@ it("publishes each committed assistant before a later mirror append can stall", 
     runId: "run-1",
     idempotencyScope: "codex-app-server:thread-1",
     messages: ["first", "second"].map((itemId, index) =>
-      attachCodexAssistantItemIds(
-        attachCodexMirrorIdentity(
-          makeAgentAssistantMessage({
-            content: [{ type: "text", text: itemId }],
-            timestamp: index,
-          }),
-          `turn-1:assistant:${itemId}`,
-        ),
-        [itemId],
-      ),
+      attachCodexAssistantItemIds(assistant(itemId, index, `turn-1:assistant:${itemId}`), [itemId]),
     ),
   });
   try {
@@ -159,23 +169,7 @@ it("publishes each committed assistant before a later mirror append can stall", 
 });
 
 it("adopts a competing indexed user without duplicating writes or slowing assistant mirrors", async () => {
-  const root = sessionDirs.make();
-  const target = {
-    agentId: "main",
-    sessionId: "user-race",
-    sessionKey: "agent:main:user-race",
-    storePath: path.join(root, "openclaw-agent.sqlite"),
-  };
-  await upsertSessionEntry({
-    agentId: target.agentId,
-    sessionKey: target.sessionKey,
-    storePath: target.storePath,
-    entry: {
-      sessionFile: `sqlite:${target.agentId}:${target.sessionId}:${target.storePath}`,
-      sessionId: target.sessionId,
-      updatedAt: 1,
-    },
-  });
+  const target = await createTarget("user-race", true);
 
   const beforeMessageWrite = vi.fn((...args: unknown[]) => {
     const event = args[0] as { message: AgentMessage };
@@ -213,54 +207,40 @@ it("adopts a competing indexed user without duplicating writes or slowing assist
     }),
     userFingerprint,
   );
-  const sourceAssistant = attachCodexMirrorIdentity(
-    makeAgentAssistantMessage({
-      content: [{ type: "text", text: "answer" }],
-      timestamp: 2,
-    }),
-    "turn-1:assistant",
-  );
-
   const result = await codexTranscriptMirrorRuntime.mirror({
     ...target,
-    messages: [sourceUser, sourceAssistant],
+    messages: [sourceUser, assistant("answer", 2, "turn-1:assistant")],
     idempotencyScope: "codex-app-server:thread-1",
   });
 
   const messageEvents = (await readSessionTranscriptEvents(target)).filter(
-    (event): event is { id: string; type: "message"; message: AgentMessage } => {
-      return Boolean(
-        event &&
-        typeof event === "object" &&
-        "id" in event &&
-        typeof event.id === "string" &&
-        "type" in event &&
-        event.type === "message",
-      );
-    },
+    (event): event is { id: string; type: "message"; message: AgentMessage } =>
+      isRecord(event) && typeof event.id === "string" && event.type === "message",
   );
   const messages = messageEvents.map((event) => event.message);
 
   expect(messages.filter((message) => message.role === "user")).toHaveLength(1);
   expect(messages.filter((message) => message.role === "assistant")).toHaveLength(1);
-  expect(result.userMessageReceipts.map((receipt) => receipt.message)).toEqual([
-    expect.objectContaining({
-      role: "user",
-      content: [{ type: "text", text: "[redacted by hook]" }],
-      idempotencyKey: "codex-user-race:prompt",
-      __openclaw: expect.objectContaining({
-        mirrorOrigin: "codex-app-server",
-        mirrorSourceFingerprint: userFingerprint,
+  expect(result.userMessageReceipts).toMatchObject([
+    {
+      appended: false,
+      message: expect.objectContaining({
+        role: "user",
+        content: [{ type: "text", text: "[redacted by hook]" }],
+        idempotencyKey: "codex-user-race:prompt",
+        __openclaw: expect.objectContaining({
+          mirrorOrigin: "codex-app-server",
+          mirrorSourceFingerprint: userFingerprint,
+        }),
       }),
-    }),
+      anchor: {
+        entryId: messageEvents.find((event) => event.message.role === "user")?.id,
+      },
+    },
   ]);
-  expect(result.userMessageReceipts).toHaveLength(1);
-  expect(result.userMessageReceipts[0]?.appended).toBe(false);
-  expect(result.userMessageReceipts[0]?.message).toBe(result.messagesPresent[0]);
-  expect(result.userMessageReceipts[0]?.anchor).toBe(transcriptRace.userAnchor);
-  expect(result.userMessageReceipts[0]?.anchor.entryId).toBe(
-    messageEvents.find((event) => event.message.role === "user")?.id,
-  );
+  const [receipt] = result.userMessageReceipts;
+  expect(receipt?.message).toBe(result.messagesPresent[0]);
+  expect(receipt?.anchor).toBe(transcriptRace.userAnchor);
   expect(result.assistantMirrorIdentitiesOwned).toEqual(["turn-1:assistant"]);
   expect(transcriptRace.lookups).toEqual(["scan", "scan"]);
   expect(transcriptRace.publish).toHaveBeenCalledTimes(1);
