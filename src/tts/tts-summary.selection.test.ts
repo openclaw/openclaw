@@ -1,5 +1,10 @@
 import { createServer } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+  readRequestText,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { requireApiKey } from "../agents/model-auth.js";
 import { acquireAgentRunPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
@@ -44,41 +49,23 @@ async function withSummaryFixture(
   const pluginId = modelProvider;
   await withOpenClawTestState({ label: "tts-summary-selection" }, async (state) => {
     const requests: string[] = [];
-    const server = createServer((request, response) => {
-      let body = "";
-      request.setEncoding("utf8");
-      request.on("data", (chunk: string) => {
-        body += chunk;
-      });
-      request.on("end", () => {
-        const { model } = JSON.parse(body) as { model: string };
-        requests.push(model);
-        response.writeHead(200, { "content-type": "text/event-stream" });
-        response.end(
-          `data: ${JSON.stringify({
-            id: "tts-selection-response",
-            object: "chat.completion.chunk",
-            model,
-            choices: [
-              { index: 0, delta: { content: `materialized:${model}` }, finish_reason: "stop" },
-            ],
-          })}\n\ndata: [DONE]\n\n`,
-        );
-      });
+    const server = createServer(async (request, response) => {
+      const { model } = JSON.parse(await readRequestText(request)) as { model: string };
+      requests.push(model);
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        `data: ${JSON.stringify({
+          id: "tts-selection-response",
+          object: "chat.completion.chunk",
+          model,
+          choices: [
+            { index: 0, delta: { content: `materialized:${model}` }, finish_reason: "stop" },
+          ],
+        })}\n\ndata: [DONE]\n\n`,
+      );
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.removeListener("error", reject);
-        resolve();
-      });
-    });
+    const baseUrl = `${await listenLoopback(server)}/v1`;
     try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Summary fixture did not expose a TCP port");
-      }
-      const baseUrl = `http://127.0.0.1:${address.port}/v1`;
       const nativeFetch = globalThis.fetch;
       vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
         const url = new URL(input instanceof Request ? input.url : input);
@@ -110,13 +97,11 @@ async function withSummaryFixture(
         providers: [modelProvider],
         modelSupport: { modelPrefixes: ["entry", "fast"] },
         configSchema: { type: "object", properties: {}, additionalProperties: false },
-        ...(!options.runtimeHook
+        modelIdNormalization: !options.runtimeHook
           ? {
-              modelIdNormalization: {
-                providers: { [modelProvider]: { aliases: { entry: "middle", middle: "final" } } },
-              },
+              providers: { [modelProvider]: { aliases: { entry: "middle", middle: "final" } } },
             }
-          : {}),
+          : undefined,
         modelCatalog: {
           discovery: { [modelProvider]: "static" },
           providers: { [modelProvider]: { api: "openai-completions", baseUrl, models } },
@@ -185,10 +170,7 @@ module.exports = {
       await state.writeConfig(cfg);
       await run(cfg, state, requests);
     } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeHttpServer(server);
     }
   });
 }
