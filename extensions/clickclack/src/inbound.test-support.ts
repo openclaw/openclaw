@@ -18,52 +18,34 @@ import type {
 const location = { baseUrl: "http://127.0.0.1:8080", workspace: "wsp_1" };
 
 export function createInboundRuntime(includeExecution: boolean): PluginRuntime {
-  const runtime = createPluginRuntimeMock({
-    agent: {
-      session: {
-        getSessionEntry: vi.fn(() => ({ sessionId: "session-id", updatedAt: 1 })),
-        getSessionEntryAsync: vi.fn(async () => ({ sessionId: "session-id", updatedAt: 1 })),
-      },
-    },
-    channel: {
-      routing: {
-        resolveAgentRoute: vi.fn(resolveAgentRoute),
-        buildAgentSessionKey: vi.fn(buildAgentSessionKey),
-      },
-    },
-    llm: {
-      complete: vi.fn().mockResolvedValue({
-        text: "service bot online",
-        provider: "openai",
-        model: "gpt-5.4-mini",
-        agentId: "service-bot",
-        usage: {},
-        ...(includeExecution && {
-          execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
-        }),
-        audit: { caller: { kind: "plugin", id: "clickclack" } },
-      }),
-    },
-  } as unknown as PluginRuntime);
-  configureDiscussionStore(runtime);
-  return runtime;
-}
-
-function configureDiscussionStore(runtime: PluginRuntime): void {
+  const runtime = createPluginRuntimeMock();
+  const sessionEntry = () => ({ sessionId: "session-id", updatedAt: 1 });
+  runtime.agent.session.getSessionEntry = vi.fn(sessionEntry);
+  runtime.agent.session.getSessionEntryAsync = vi.fn(async () => sessionEntry());
+  runtime.channel.routing.resolveAgentRoute = vi.fn(resolveAgentRoute);
+  runtime.channel.routing.buildAgentSessionKey = vi.fn(buildAgentSessionKey);
+  runtime.llm.complete = vi.fn().mockResolvedValue({
+    text: "service bot online",
+    provider: "openai",
+    model: "gpt-5.4-mini",
+    agentId: "service-bot",
+    usage: {},
+    ...(includeExecution && {
+      execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
+    }),
+    audit: { caller: { kind: "plugin", id: "clickclack" } },
+  });
   const stores = new Map<string, PluginStateSyncKeyedStore<unknown>>();
   runtime.state.openSyncKeyedStore = vi.fn((options: { namespace: string }) => {
-    const existing = stores.get(options.namespace);
-    if (existing) {
-      return existing;
-    }
-    const created = createDiscussionMemoryStore<unknown>();
-    stores.set(options.namespace, created);
-    return created;
+    const store = stores.get(options.namespace) ?? createDiscussionMemoryStore<unknown>();
+    stores.set(options.namespace, store);
+    return store;
   }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"];
   runtime.state.openKeyedStoreV2 = <T>(
     options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
     authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
   ) => asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, options, authority);
+  return runtime;
 }
 
 export function createInboundMessage(
