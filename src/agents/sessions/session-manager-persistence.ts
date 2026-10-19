@@ -306,11 +306,21 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
             }
           },
         });
+      const authority = { assertCurrent, authorize: assertCurrent };
+      let mutationAt =
+        expectedMutationAt !== undefined ? expectedMutationAt : this.transcriptMutationAt;
+      if (retryMutationConflicts && expectedMutationAt === undefined) {
+        // Rewrites can publish a watermark before the manager adopts it. This pre-adoption
+        // matches the retry below: same parent/content, with the DB check authoritative.
+        // Remove it if retries ever recompute parent/content from a fresh view.
+        const current = actor.snapshot(authority);
+        if (current) {
+          mutationAt = current.transcript.version.updatedAt;
+        }
+      }
       let outcome;
       try {
-        outcome = await append(
-          expectedMutationAt !== undefined ? expectedMutationAt : this.transcriptMutationAt,
-        );
+        outcome = await append(mutationAt);
       } catch (error) {
         if (
           !retryMutationConflicts ||
@@ -319,7 +329,6 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
         ) {
           throw error;
         }
-        const authority = { assertCurrent, authorize: assertCurrent };
         const current = actor.snapshot(authority) ?? (await actor.read(authority));
         outcome = await append(current.transcript.version.updatedAt);
       }

@@ -22,6 +22,7 @@ import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.t
 import {
   controlGatewayProfile,
   readGatewayCpuProfile,
+  readGatewayHeapProfile,
   readGatewayCpuUsage,
   startGatewayDiagnostics,
   readGatewayResources,
@@ -42,7 +43,9 @@ const { values } = parseArgs({
     allocations: { type: "boolean", default: false },
     diagnostics: { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
+    "trace-gc": { type: "boolean", default: false },
     "stream-start-diagnostics": { type: "boolean", default: false },
+    "stream-start-allocations": { type: "boolean", default: false },
     "active-work-diagnostics": { type: "boolean", default: false },
     scenario: { type: "string", default: "transcript-broadcast" },
     revision: { type: "string" },
@@ -96,7 +99,12 @@ if (
 const retentionScenario = scenario === "attempt-retention";
 const turnScenario =
   scenario === "chat.send" || scenario === "transcript-broadcast" || retentionScenario;
-if (!values.allocations && scenario !== "transcript-broadcast" && !retentionScenario) {
+if (
+  !values.allocations &&
+  !values["stream-start-allocations"] &&
+  scenario !== "transcript-broadcast" &&
+  !retentionScenario
+) {
   throw new Error("--scenario requires --allocations");
 }
 const operations = integer(
@@ -120,6 +128,9 @@ const chunkIntervalMs = integer(values["chunk-interval-ms"], "--chunk-interval-m
 const listIntervalMs = integer(values["list-interval-ms"], "--list-interval-ms", 0);
 if ((values["cpu-profile"] || values["stream-start-diagnostics"]) && !turnScenario) {
   throw new Error("--cpu-profile and --stream-start-diagnostics require a turn scenario");
+}
+if (values["stream-start-allocations"] && (!turnScenario || values.allocations)) {
+  throw new Error("--stream-start-allocations requires a turn scenario without --allocations");
 }
 if (values["poll-seed"] !== undefined && !listIntervalMs) {
   throw new Error("--poll-seed requires --list-interval-ms");
@@ -262,6 +273,7 @@ async function readActiveWorkCounts() {
     if (running && queued) {
       lastCounts = { running: Number(running[1]), queued: Number(queued[1]) };
       if (lastCounts.running === runCount && lastCounts.queued === 0) {
+        writeFileSync(path.join(output, `held-streams-${cohort?.id}.prom`), metrics);
         return lastCounts;
       }
     }
@@ -703,6 +715,17 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
   if (profilePath) {
     await controlGatewayProfile(child, "cpu", "start", profilePath);
   }
+  const heapProfilePath =
+    measuredRound !== undefined && values["stream-start-allocations"]
+      ? path.join(output, `stream-start-${measuredRound}.heapprofile`)
+      : undefined;
+  const deliveredSessionEvents = () =>
+    (perClientCounters[0]?.get("session.message") ?? 0) +
+    (perClientCounters[0]?.get("sessions.changed") ?? 0);
+  const eventsBeforeProfile = deliveredSessionEvents();
+  if (heapProfilePath) {
+    await controlGatewayProfile(child, "heap", "start", heapProfilePath);
+  }
   let finishAdmissionDiagnostics =
     measuredRound !== undefined && values["stream-start-diagnostics"]
       ? await startGatewayDiagnostics(child, `stream-admission-${measuredRound}`)
@@ -717,6 +740,8 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
   let capture:
     | {
         cpuProfile?: ReturnType<typeof summarizeCpuProfile>;
+        heapProfile?: ReturnType<typeof readGatewayHeapProfile>;
+        observedSessionPublications?: number;
         admissionDiagnostics?: typeof admissionDiagnostics;
         releaseDiagnostics?: typeof admissionDiagnostics;
       }
@@ -752,7 +777,7 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
   const current = cohort;
   // Include the first response processing after the mock releases the whole cohort.
   const captureWork =
-    profilePath || finishAdmissionDiagnostics
+    profilePath || heapProfilePath || finishAdmissionDiagnostics
       ? (async () => {
           try {
             await cohortReady;
@@ -763,6 +788,11 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
             }
             const releaseDiagnostics = await finishReleaseDiagnostics?.();
             capture = { admissionDiagnostics, releaseDiagnostics };
+            if (heapProfilePath) {
+              await controlGatewayProfile(child, "heap", "stop", heapProfilePath);
+              capture.heapProfile = readGatewayHeapProfile(heapProfilePath);
+              capture.observedSessionPublications = deliveredSessionEvents() - eventsBeforeProfile;
+            }
             if (profilePath) {
               await controlGatewayProfile(child, "cpu", "stop", profilePath);
               capture.cpuProfile = summarizeCpuProfile(profilePath);
@@ -882,6 +912,7 @@ try {
   await ready(mockPort, "/health");
   gateway = launch(
     buildGatewayBenchChildArgs(values.entry, port, [
+      ...(values["trace-gc"] ? ["--trace-gc"] : []),
       "--import",
       "./scripts/tsx.mjs",
       "--import",
@@ -1380,7 +1411,9 @@ try {
     pollSeed: values["poll-seed"] ?? null,
     diagnostics: values.diagnostics,
     cpuProfile: values["cpu-profile"],
+    traceGc: values["trace-gc"],
     streamStartDiagnostics: values["stream-start-diagnostics"],
+    streamStartAllocations: values["stream-start-allocations"],
     activeWorkDiagnostics: values["active-work-diagnostics"],
     measurementStartedAt,
     initialFullFrame,

@@ -487,6 +487,18 @@ latency alone can hide a burst. Existing completion, concurrency, event-order,
 and fanout checks still apply. This fixture uses synthetic model streams;
 provider latency and external tool execution are outside this comparison.
 
+Use `--stream-start-allocations` to sample main-isolate allocations, including
+collected objects, from before admission through release plus 500 ms. This writes
+`stream-start-<round>.heapprofile` and diagnostics sidecars. It cannot be combined
+with whole-round `--allocations`. Divide sampled bytes by `runCount` for bytes per
+started stream; `observedSessionPublications` counts `session.message` and
+`sessions.changed` received by the first viewer during capture. This is a received
+publication denominator, so events still in flight at the boundary are excluded.
+Sampling and stopping/serializing the profile add overhead; keep these attribution
+runs separate from unprofiled acceptance timing. `--trace-gc` adds V8 GC logging to
+the owned Gateway's log only. With `--active-work-diagnostics`, each successful
+held-stream scrape is retained as `held-streams-<cohort>.prom` for GC counter context.
+
 `eventBytes` measures the exact received, uncompressed JSON frame bytes,
 including the event envelope, before parsing. `sessionEventSizes` splits session
 frame counts and bytes by the existing bounded reason labels and the fixture's

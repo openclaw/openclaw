@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 const monitorTaskSignal = new AsyncLocalStorage<AbortSignal>();
 const MATRIX_MONITOR_IDLE_TIMEOUT_MS = 30_000;
@@ -43,15 +44,12 @@ export function createMatrixMonitorTaskRunner(params: {
   const waitForIdle = async (): Promise<void> => {
     // The window resets when a task settles. A hung join must not block shutdown.
     while (inFlight.size > 0) {
-      let timer: NodeJS.Timeout | undefined;
-      const timedOut = await Promise.race([
-        new Promise<true>((resolve) => {
-          timer = setTimeout(() => resolve(true), MATRIX_MONITOR_IDLE_TIMEOUT_MS);
-          timer.unref();
-        }),
-        ...inFlight,
-      ]);
-      clearTimeout(timer);
+      const timedOut = await raceWithTimeout(
+        Promise.race(inFlight),
+        MATRIX_MONITOR_IDLE_TIMEOUT_MS,
+        () => true,
+        { ref: false },
+      );
       if (timedOut) {
         shutdownController.abort();
         params.logger.warn("matrix waitForIdle timed out", {

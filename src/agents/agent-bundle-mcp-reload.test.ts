@@ -659,24 +659,39 @@ it("accounts for config cleanup with concurrent replacement", async () => {
       sessionId,
       cfg: { ...cfg, mcp: { servers: { second: server } } },
     });
-  for (let index = 0; index < 255; index += 1) {
-    await acquire(`other-${index}`);
+  const leases = [];
+  try {
+    for (let index = 0; index < 255; index += 1) {
+      leases.push(
+        await manager.acquire({
+          ...params,
+          sessionId: `other-${index}`,
+          cfg: { ...cfg, mcp: { servers: { second: server } } },
+        }),
+      );
+    }
+    const reload = manager.reloadConfig({
+      cfg: { ...cfg, mcp: { servers: { second: server } } },
+      manifestRegistry: params.manifestRegistry,
+    });
+    await closing.promise;
+    const replacement = acquire(params.sessionId);
+    const blocked = await acquire("overflow");
+    expect((await blocked.getCatalog()).diagnostics?.[0]?.message).toContain(
+      "all 256 Gateway MCP runtimes are in use",
+    );
+    expect(manager.peekSession({ sessionId: "overflow" })).toBeUndefined();
+    releaseClose.resolve();
+    await reload;
+    const replaced = await replacement;
+    await acquire("overflow");
+    expect(manager.peekSession({ sessionId: params.sessionId })).toBeUndefined();
+    await manager.disposeSession("overflow");
+    expect(await acquire(params.sessionId)).not.toBe(replaced);
+  } finally {
+    releaseClose.resolve();
+    leases.forEach((lease) => lease.releaseLease());
   }
-  const reload = manager.reloadConfig({
-    cfg: { ...cfg, mcp: { servers: { second: server } } },
-    manifestRegistry: params.manifestRegistry,
-  });
-  await closing.promise;
-  const replacement = acquire(params.sessionId);
-  await expect(acquire("overflow")).rejects.toThrow("live runtime limit (256)");
-  releaseClose.resolve();
-  await reload;
-  await replacement;
-  await expect(acquire("overflow")).rejects.toThrow("live runtime limit (256)");
-  await manager.disposeSession(params.sessionId);
-  await acquire("overflow");
-  // The cached empty facade must reserve capacity again before gaining a server.
-  await expect(acquire(params.sessionId)).rejects.toThrow("live runtime limit (256)");
 });
 
 it("joins config retirement cleanup before installing a replacement transport", async () => {

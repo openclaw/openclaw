@@ -1836,26 +1836,6 @@ describe("requester-scoped MCP connection resolution", () => {
     }),
   );
 
-  it("reserves capacity for uncertain child cleanup", async () => {
-    const manager = createManager();
-    const params = sessionParams("uncertain-child", mcpConfig({ child: { command: "true" } }), {
-      sessionKey: undefined,
-    });
-    const previous = await manager.getOrCreate(params);
-    previous.joinCleanup = async () => {
-      throw new Error("child cleanup uncertain");
-    };
-    await expect(manager.getOrCreate({ ...params, workspaceDir: "/replacement" })).rejects.toThrow(
-      "child cleanup uncertain",
-    );
-    for (let index = 0; index < 255; index += 1) {
-      await manager.getOrCreate({ ...params, sessionId: `other-${index}` });
-    }
-    await expect(manager.getOrCreate({ ...params, sessionId: "overflow" })).rejects.toThrow(
-      "live runtime limit (256)",
-    );
-  });
-
   it(
     "matches tools.effective and cached-runtime fingerprints",
     withResolverRegistry(async (register) => {

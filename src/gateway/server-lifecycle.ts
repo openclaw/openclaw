@@ -522,11 +522,8 @@ export async function prepareGatewayLifecycle(params: {
           });
         },
         cancelReceivedWork: (reason) => {
-          // Publish cancellation before retained principals lose their authority,
-          // so interrupted preparation observes the exact restart reason.
+          // Entry is fenced; retained principals still need their binding to settle.
           runtime.connectionWork.beginClose(reason);
-          kernel.setDispatchReady(false);
-          gatewayInstanceRuntimeRef.current?.close();
         },
         getPendingReplyCount: getTotalPendingReplies,
         disposeAllCodeModeRuns: shutdownRuntime.disposeAllCodeModeRuns,
@@ -539,6 +536,9 @@ export async function prepareGatewayLifecycle(params: {
     // Startup may still publish cleanup owners while received work settles.
     // Resolve their handles only when the caller reaches final teardown.
     return async () => {
+      // The close plan has joined received execution and its finalizers.
+      kernel.setDispatchReady(false);
+      gatewayInstanceRuntimeRef.current?.close();
       const channelIds = listLoadedChannelPluginsForRegistry(pluginRuntime.registry).map(
         (plugin) => plugin.id,
       );
