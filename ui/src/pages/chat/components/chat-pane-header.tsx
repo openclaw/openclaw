@@ -1,3 +1,4 @@
+import { dynamic } from "@solidjs/web";
 import { Show, createMemo, createUniqueId, onSettled } from "solid-js";
 import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
@@ -612,7 +613,10 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
           </Show>
           <div class="chat-pane__actions">
             <Show when={!props.narrow}>
-              <RunningSubagents count={props.runningSubagentCount} />
+              <RunningSubagents
+                count={props.runningSubagentCount}
+                onOpen={props.detailsControl?.chat?.onOpenSubagents}
+              />
             </Show>
             <Show when={props.runAction}>{(action) => <PaneSubagentStop {...action()} />}</Show>
             <Show when={props.sharingControl}>
@@ -632,7 +636,10 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
           </div>
         </div>
         <Show when={props.narrow}>
-          <RunningSubagents count={props.runningSubagentCount} />
+          <RunningSubagents
+            count={props.runningSubagentCount}
+            onOpen={props.detailsControl?.chat?.onOpenSubagents}
+          />
         </Show>
       </div>
       <Show when={incognito()}>
@@ -671,15 +678,20 @@ export function resolveChatPaneWorkspaceIcon(
   };
 }
 
-function RunningSubagents(props: { count?: number }) {
+function RunningSubagents(props: { count?: number; onOpen?: (focus?: boolean) => void }) {
+  const Status = dynamic(() => (props.onOpen ? "button" : "span"));
   return (
     <Show when={(props.count ?? 0) > 0}>
-      <span class="chat-pane__subagents-running">
+      <Status
+        class={["chat-pane__subagents-running", { "btn btn--ghost": Boolean(props.onOpen) }]}
+        type={props.onOpen ? "button" : undefined}
+        onClick={(event: MouseEvent) => props.onOpen?.(event.detail === 0)}
+      >
         <span aria-hidden="true">
           <Icon name="bot" />
         </span>
         {t("chat.sessionHeader.subagentsRunning", { count: String(props.count) })}
-      </span>
+      </Status>
     </Show>
   );
 }
