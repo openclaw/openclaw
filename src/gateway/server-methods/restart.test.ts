@@ -1,6 +1,3 @@
-// Restart method tests cover the read-only compatibility preview plus safe
-// restart scheduling, deferral flags, and request response payloads.
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,48 +15,53 @@ const requestGatewayRestartWithSignalAdmission = vi.hoisted(() => vi.fn());
 const readActiveGatewayLockIdentity = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/restart-coordinator.js", () => ({
-  createSafeGatewayRestartPreflight: () => createSafeGatewayRestartPreflight(),
-  scheduleSafeGatewayRestart: (opts: unknown) => scheduleSafeGatewayRestart(opts),
+  createSafeGatewayRestartPreflight,
+  scheduleSafeGatewayRestart,
 }));
 
 vi.mock("../../infra/restart.js", () => ({
-  requestGatewayRestartWithSignalAdmission: (reason: unknown, intent: unknown) =>
-    requestGatewayRestartWithSignalAdmission(reason, intent),
+  requestGatewayRestartWithSignalAdmission,
 }));
 
 vi.mock("../../infra/gateway-lock.js", () => ({
-  readActiveGatewayLockIdentity: () => readActiveGatewayLockIdentity(),
+  readActiveGatewayLockIdentity,
 }));
 
 const restartTarget = { pid: process.pid, ownerId: "gateway-owner", port: 18_789 };
+const lockIdentity = { ...restartTarget, createdAt: "2026-07-16T12:00:00.000Z" };
 
-function invokeRestartRequest(params: unknown) {
+async function invokeHandler(method: string, params: unknown) {
   const respond = vi.fn();
-  const handler = expectDefined(
-    restartHandlers["gateway.restart.request"],
-    'restartHandlers["gateway.restart.request"] test invariant',
-  );
-  return Promise.resolve(
-    handler({
-      respond,
-      params,
-      // The handler only reads `params` and `respond`; remaining fields are unused.
-    } as unknown as Parameters<typeof handler>[0]),
-  ).then(() => respond);
+  const handler = expectDefined(restartHandlers[method], `handler ${method}`);
+  // These handlers only read params/respond; the router tests below supply full requests.
+  await handler({ respond, params } as Parameters<typeof handler>[0]);
+  return respond;
 }
 
-function invokeRestartPreflight() {
-  const respond = vi.fn();
-  const handler = expectDefined(
-    restartHandlers["gateway.restart.preflight"],
-    'restartHandlers["gateway.restart.preflight"] test invariant',
-  );
-  return Promise.resolve(
-    handler({
-      respond,
-      params: {},
-    } as unknown as Parameters<typeof handler>[0]),
-  ).then(() => respond);
+function invokeRestartRequest(params: unknown) {
+  return invokeHandler("gateway.restart.request", params);
+}
+
+function invokeTargetedRestart(params: Record<string, unknown> = {}) {
+  return invokeRestartRequest({ reason: "operator", target: restartTarget, ...params });
+}
+
+function expectEmitted(respond: ReturnType<typeof vi.fn>) {
+  expect(respond).toHaveBeenCalledWith(true, { ok: true, status: "emitted", pid: process.pid });
+}
+
+function expectRejected(
+  respond: ReturnType<typeof vi.fn>,
+  message: string,
+  code = "INVALID_REQUEST",
+) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, { code, message });
+}
+
+function prepareSuspension() {
+  const suspension = tryBeginGatewaySuspendAdmission(() => {});
+  expect(suspension?.commit()).toBe(true);
+  return suspension;
 }
 
 async function invokeRestartRequestThroughGateway(params: unknown) {
@@ -101,23 +103,6 @@ function mockScheduledRestart(preflight: { safe: boolean; summary: string }) {
     ok: true,
     status: "scheduled",
     preflight: { ...preflight, counts: {}, blockers: [] },
-    restart: {
-      ok: true,
-      pid: 0,
-      signal: "SIGUSR2",
-      delayMs: 0,
-      mode: "emit",
-      coalesced: false,
-      cooldownMsApplied: 0,
-    },
-  });
-}
-
-function expectRestartRequest(skipDeferral: boolean) {
-  expect(scheduleSafeGatewayRestart).toHaveBeenCalledWith({
-    reason: "operator",
-    delayMs: 0,
-    skipDeferral,
   });
 }
 
@@ -129,12 +114,7 @@ describe("gateway restart handlers", () => {
     requestGatewayRestartWithSignalAdmission.mockReset();
     requestGatewayRestartWithSignalAdmission.mockReturnValue({ status: "emitted" });
     readActiveGatewayLockIdentity.mockReset();
-    readActiveGatewayLockIdentity.mockResolvedValue({
-      pid: process.pid,
-      ownerId: "gateway-owner",
-      createdAt: "2026-07-16T12:00:00.000Z",
-      port: 18_789,
-    });
+    readActiveGatewayLockIdentity.mockResolvedValue(lockIdentity);
   });
 
   afterEach(() => {
@@ -161,7 +141,7 @@ describe("gateway restart handlers", () => {
     };
     createSafeGatewayRestartPreflight.mockReturnValueOnce(preflight);
 
-    const respond = await invokeRestartPreflight();
+    const respond = await invokeHandler("gateway.restart.preflight", {});
 
     expect(respond).toHaveBeenCalledWith(true, preflight);
     expect(scheduleSafeGatewayRestart).not.toHaveBeenCalled();
@@ -172,39 +152,31 @@ describe("gateway restart handlers", () => {
     { restartIntent: { waitMs: 0 }, expected: { waitMs: 0 } },
     { restartIntent: { force: true }, expected: { force: true } },
     { restartIntent: { force: true, drainBudgetMs: 0 }, expected: { force: true, waitMs: 0 } },
+    { restartIntent: { waitMs: MAX_TIMER_TIMEOUT_MS }, expected: { waitMs: MAX_TIMER_TIMEOUT_MS } },
   ])(
     "delivers a targeted restart only to the matching lock owner ($restartIntent)",
     async ({ restartIntent, expected }) => {
-      const respond = await invokeRestartRequest({
-        reason: "operator",
-        target: restartTarget,
-        restartIntent,
-      });
+      const respond = await invokeTargetedRestart({ restartIntent });
 
       expect(scheduleSafeGatewayRestart).not.toHaveBeenCalled();
       expect(requestGatewayRestartWithSignalAdmission).toHaveBeenCalledWith("operator", {
         reason: "operator",
         ...expected,
       });
-      expect(respond).toHaveBeenCalledWith(true, {
-        ok: true,
-        status: "emitted",
-        pid: process.pid,
-      });
+      expectEmitted(respond);
     },
   );
 
   it("schedules a safe restart only after matching the target lock owner", async () => {
     mockScheduledRestart({ safe: false, summary: "restart deferred" });
 
-    const respond = await invokeRestartRequest({
-      reason: "operator",
-      safe: true,
-      skipDeferral: true,
-      target: restartTarget,
-    });
+    const respond = await invokeTargetedRestart({ safe: true, skipDeferral: true });
 
-    expectRestartRequest(true);
+    expect(scheduleSafeGatewayRestart).toHaveBeenCalledWith({
+      reason: "operator",
+      delayMs: 0,
+      skipDeferral: true,
+    });
     expect(requestGatewayRestartWithSignalAdmission).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -213,27 +185,19 @@ describe("gateway restart handlers", () => {
   });
 
   it("rejects an invalid targeted safe mode without restarting", async () => {
-    const respond = await invokeRestartRequest({
-      safe: "true",
-      target: restartTarget,
-    });
+    const respond = await invokeTargetedRestart({ safe: "true" });
 
     expect(scheduleSafeGatewayRestart).not.toHaveBeenCalled();
     expect(requestGatewayRestartWithSignalAdmission).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(false, undefined, {
-      code: "INVALID_REQUEST",
-      message: "invalid safe targeted restart mode",
-    });
+    expectRejected(respond, "invalid safe targeted restart mode");
   });
 
   it("retains prepared suspension when the exact restart target is stale", async () => {
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
+    const suspension = prepareSuspension();
     readActiveGatewayLockIdentity.mockResolvedValue({
-      pid: process.pid,
+      ...lockIdentity,
       ownerId: "replacement-owner",
       createdAt: "2026-07-16T12:00:01.000Z",
-      port: 18_789,
     });
 
     const respond = await invokeRestartRequestThroughGateway({
@@ -243,17 +207,13 @@ describe("gateway restart handlers", () => {
 
     expect(readActiveGatewayLockIdentity).toHaveBeenCalledOnce();
     expect(requestGatewayRestartWithSignalAdmission).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(false, undefined, {
-      code: "INVALID_REQUEST",
-      message: "target gateway no longer owns the active lock",
-    });
+    expectRejected(respond, "target gateway no longer owns the active lock");
     expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
     expect(suspension?.release()).toBe(true);
   });
 
   it("retains prepared suspension when exact restart delivery fails", async () => {
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
+    const suspension = prepareSuspension();
     requestGatewayRestartWithSignalAdmission.mockReturnValueOnce({ status: "failed" });
 
     const respond = await invokeRestartRequestThroughGateway({
@@ -263,10 +223,7 @@ describe("gateway restart handlers", () => {
 
     expect(readActiveGatewayLockIdentity).toHaveBeenCalledOnce();
     expect(requestGatewayRestartWithSignalAdmission).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(false, undefined, {
-      code: "UNAVAILABLE",
-      message: "target gateway restart delivery failed",
-    });
+    expectRejected(respond, "target gateway restart delivery failed", "UNAVAILABLE");
     expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
     expect(suspension?.release()).toBe(true);
   });
@@ -278,8 +235,7 @@ describe("gateway restart handlers", () => {
         resolveLock = resolve;
       }),
     );
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
+    const suspension = prepareSuspension();
 
     const request = invokeRestartRequestThroughGateway({
       reason: "operator",
@@ -287,69 +243,22 @@ describe("gateway restart handlers", () => {
     });
     await vi.waitFor(() => expect(readActiveGatewayLockIdentity).toHaveBeenCalledOnce());
     expect(suspension?.release()).toBe(true);
-    resolveLock({
-      pid: process.pid,
-      ownerId: "gateway-owner",
-      createdAt: "2026-07-16T12:00:00.000Z",
-      port: 18_789,
-    });
+    resolveLock(lockIdentity);
 
     const respond = await request;
     expect(requestGatewayRestartWithSignalAdmission).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(true, {
-      ok: true,
-      status: "emitted",
-      pid: process.pid,
-    });
-  });
-
-  it("rejects conflicting targeted restart force and wait options", async () => {
-    const respond = await invokeRestartRequest({
-      reason: "operator",
-      target: restartTarget,
-      restartIntent: { force: true, waitMs: 30_000 },
-    });
-
-    expect(requestGatewayRestartWithSignalAdmission).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(false, undefined, {
-      code: "INVALID_REQUEST",
-      message: "invalid targeted gateway restart intent",
-    });
+    expectEmitted(respond);
   });
 
   it.each([
+    { force: true, waitMs: 30_000 },
     { waitMs: MAX_TIMER_TIMEOUT_MS + 1 },
     { force: true, drainBudgetMs: MAX_TIMER_TIMEOUT_MS + 1 },
-  ])("rejects an invalid targeted restart budget: %j", async (restartIntent) => {
-    const respond = await invokeRestartRequest({
-      reason: "operator",
-      target: restartTarget,
-      restartIntent,
-    });
+  ])("rejects an invalid targeted restart intent: %j", async (restartIntent) => {
+    const respond = await invokeTargetedRestart({ restartIntent });
 
     expect(requestGatewayRestartWithSignalAdmission).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(false, undefined, {
-      code: "INVALID_REQUEST",
-      message: "invalid targeted gateway restart intent",
-    });
-  });
-
-  it("accepts the maximum timer-safe targeted restart wait", async () => {
-    const respond = await invokeRestartRequest({
-      reason: "operator",
-      target: restartTarget,
-      restartIntent: { waitMs: MAX_TIMER_TIMEOUT_MS },
-    });
-
-    expect(requestGatewayRestartWithSignalAdmission).toHaveBeenCalledWith("operator", {
-      reason: "operator",
-      waitMs: MAX_TIMER_TIMEOUT_MS,
-    });
-    expect(respond).toHaveBeenCalledWith(true, {
-      ok: true,
-      status: "emitted",
-      pid: process.pid,
-    });
+    expectRejected(respond, "invalid targeted gateway restart intent");
   });
 
   it("backs off before an emoji that crosses the reason limit", async () => {
@@ -368,15 +277,9 @@ describe("gateway restart handlers", () => {
     const respond = await invokeRestartRequest("operator");
 
     expect(scheduleSafeGatewayRestart).not.toHaveBeenCalled();
-    expect(respond.mock.calls).toEqual([
-      [
-        false,
-        undefined,
-        {
-          code: "INVALID_REQUEST",
-          message: "invalid gateway.restart.request params",
-        },
-      ],
-    ]);
+    expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
+      code: "INVALID_REQUEST",
+      message: "invalid gateway.restart.request params",
+    });
   });
 });

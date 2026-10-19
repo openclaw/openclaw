@@ -60,6 +60,43 @@ async function invoke(
 }
 
 const resolveSecrets = async () => ({ assignments: [], diagnostics: [], inactiveRefPaths: [] });
+const scope = { kind: "team" } as const;
+const readSecret = (name: string) => readSecretStoreValue({ scope, name });
+const seedSecret = (name: string, value: string) =>
+  writeSecretStoreEntry({ scope, name, value, kind: "secret", updatedBy: "test" });
+
+function createHandlers(
+  reloadSecrets: Parameters<typeof createSecretsHandlers>[0]["reloadSecrets"],
+  log?: Parameters<typeof createSecretsHandlers>[0]["log"],
+) {
+  return createSecretsHandlers({
+    reloadSecrets,
+    resolveSecrets,
+    storeWriteService: createSecretStoreWriteService({ reloadSecrets }),
+    log,
+  });
+}
+
+function claimRun(name: string) {
+  const runId = `${name}-run`;
+  const authority = claimAgentRunDelegatedAuthority({ instanceId: `${name}-instance`, runId });
+  const identity = {
+    kind: "agentRuntime" as const,
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    operationalRunInstance: authority.operationalRunInstance,
+    delegatedAuthority: { kind: "local" as const, ...authority },
+  };
+  return {
+    authority,
+    identity,
+    client: { internal: { agentRuntimeIdentity: identity } } as GatewayClient,
+    close: () => {
+      releaseAgentRunDelegatedAuthority(authority);
+      clearAgentRunContext(runId);
+    },
+  };
+}
 
 describe("secret store mutation lifecycle", () => {
   it("rejects a redaction sentinel without replacing the stored credential", async () => {
@@ -67,19 +104,9 @@ describe("secret store mutation lifecycle", () => {
       setRuntimeConfigSnapshot({});
       const name = "OPENCLAW_GATEWAY_TOKEN";
       const value = "synthetic-gateway-token";
-      await writeSecretStoreEntry({
-        scope: { kind: "team" },
-        name,
-        value,
-        kind: "secret",
-        updatedBy: "test",
-      });
+      await seedSecret(name, value);
       const reloadSecrets = vi.fn(async () => ({ warningCount: 0 }));
-      const handlers = createSecretsHandlers({
-        reloadSecrets,
-        resolveSecrets,
-        storeWriteService: createSecretStoreWriteService({ reloadSecrets }),
-      });
+      const handlers = createHandlers(reloadSecrets);
 
       expect(
         await invoke(handlers, "secrets.store.set", {
@@ -92,10 +119,7 @@ describe("secret store mutation lifecycle", () => {
         undefined,
         { code: "INVALID_REQUEST", message: expect.stringContaining(name) },
       ]);
-      expect(await readSecretStoreValue({ scope: { kind: "team" }, name })).toEqual({
-        ok: true,
-        value,
-      });
+      expect(await readSecret(name)).toEqual({ ok: true, value });
       expect(reloadSecrets).not.toHaveBeenCalled();
     });
   });
@@ -107,36 +131,15 @@ describe("secret store mutation lifecycle", () => {
         setRuntimeConfigSnapshot({});
         const name = "SYNTHETIC_DELETE_KEY";
         const value = "test-secret-delete-must-survive";
-        await writeSecretStoreEntry({
-          scope: { kind: "team" },
-          name,
-          value,
-          kind: "secret",
-          updatedBy: "test",
-        });
-        const authority = claimAgentRunDelegatedAuthority({
-          instanceId: "delete-instance",
-          runId: "delete-run",
-        });
-        const identity = {
-          kind: "agentRuntime" as const,
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          operationalRunInstance: authority.operationalRunInstance,
-          delegatedAuthority: { kind: "local" as const, ...authority },
-        };
-        const client = { internal: { agentRuntimeIdentity: identity } } as GatewayClient;
+        await seedSecret(name, value);
+        const run = claimRun("delete");
+        const { authority, identity, client } = run;
         const reloadSecrets = vi.fn(async () => ({ warningCount: 0 }));
-        const handlers = createSecretsHandlers({
-          reloadSecrets,
-          resolveSecrets,
-          storeWriteService: createSecretStoreWriteService({ reloadSecrets }),
-          log: {
-            debug: () => {
-              if (closure === "mutation logging") {
-                releaseAgentRunDelegatedAuthority(authority);
-              }
-            },
+        const handlers = createHandlers(reloadSecrets, {
+          debug: () => {
+            if (closure === "mutation logging") {
+              releaseAgentRunDelegatedAuthority(authority);
+            }
           },
         });
         try {
@@ -148,20 +151,16 @@ describe("secret store mutation lifecycle", () => {
             releaseAgentRunDelegatedAuthority(authority);
           }
           expect(await dispatched).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
-          expect(await readSecretStoreValue({ scope: { kind: "team" }, name })).toEqual({
-            ok: true,
-            value,
-          });
+          expect(await readSecret(name)).toEqual({ ok: true, value });
           expect(reloadSecrets).not.toHaveBeenCalled();
           // A normal human administrator has no delegated run claim to revoke.
           expect(await invoke(handlers, "secrets.store.delete", { name })).toMatchObject([
             true,
             { ok: true },
           ]);
-          expect((await readSecretStoreValue({ scope: { kind: "team" }, name })).ok).toBe(false);
+          expect((await readSecret(name)).ok).toBe(false);
         } finally {
-          releaseAgentRunDelegatedAuthority(authority);
-          clearAgentRunContext("delete-run");
+          run.close();
         }
       });
     },
@@ -170,21 +169,10 @@ describe("secret store mutation lifecycle", () => {
   it("reports only committed safe facts when the operator replaces proposed hosts", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
-      const authority = claimAgentRunDelegatedAuthority({
-        instanceId: "tool-instance",
-        runId: "tool-run",
-      });
+      const run = claimRun("tool");
       const client = {
+        ...run.client,
         connect: { scopes: ["operator.admin"] },
-        internal: {
-          agentRuntimeIdentity: {
-            kind: "agentRuntime",
-            agentId: "main",
-            sessionKey: "agent:main:main",
-            operationalRunInstance: authority.operationalRunInstance,
-            delegatedAuthority: { kind: "local", ...authority },
-          },
-        },
       } as GatewayClient;
       const scheduler = createTestGatewayScheduler();
       const manager = new QuestionManager(scheduler);
@@ -246,8 +234,7 @@ describe("secret store mutation lifecycle", () => {
         expect(methods).toEqual(["question.request", "question.waitAnswer", "secrets.store.list"]);
       } finally {
         manager.close();
-        releaseAgentRunDelegatedAuthority(authority);
-        clearAgentRunContext("tool-run");
+        run.close();
       }
     });
   });
@@ -305,11 +292,7 @@ describe("secret store mutation lifecycle", () => {
             return { warningCount: snapshot.warnings.length };
           },
         );
-        const handlers = createSecretsHandlers({
-          reloadSecrets,
-          resolveSecrets,
-          storeWriteService: createSecretStoreWriteService({ reloadSecrets }),
-        });
+        const handlers = createHandlers(reloadSecrets);
         for (const value of ["test-secret-created", "test-secret-rotated"]) {
           expect(
             await invoke(handlers, "secrets.store.set", { name, value, kind: "secret" }),
@@ -336,9 +319,7 @@ describe("secret store mutation lifecycle", () => {
           }),
         ).toMatchObject([true, { ok: true, reloaded: false }]);
         expect(reloadSecrets).toHaveBeenCalledTimes(3);
-        expect(
-          await readSecretStoreValue({ scope: { kind: "team" }, name: "UNRELATED_SETTING" }),
-        ).toEqual({ ok: true, value: "enabled" });
+        expect(await readSecret("UNRELATED_SETTING")).toEqual({ ok: true, value: "enabled" });
         clearSecretsRuntimeSnapshot();
       });
     },

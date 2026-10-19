@@ -327,19 +327,13 @@ describe("requester continuation persisted automation management", () => {
                 }
               });
             try {
-              let writeResult: unknown;
-              let writeError: unknown;
-              try {
-                writeResult = await tools.invoke("write", { path: committedPath, content });
-              } catch (error) {
-                writeError = error;
-              }
-              expect(revokedAcrossWrite).toBe(true);
-              expect(await readFile(committedPath, "utf8")).toBe(content);
-              expect(writeError).toBeUndefined();
-              expect(writeResult).toMatchObject({
+              await expect(
+                tools.invoke("write", { path: committedPath, content }),
+              ).resolves.toMatchObject({
                 content: [{ type: "text", text: expect.stringContaining("Successfully wrote") }],
               });
+              expect(revokedAcrossWrite).toBe(true);
+              expect(await readFile(committedPath, "utf8")).toBe(content);
               expect(isCronCurrent()).toBe(false);
               expect(getAdmittedRunDelegatedAuthority(admitted)).toBe(delegated);
               expect(assertRunActive).not.toThrow();
