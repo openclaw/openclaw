@@ -15,14 +15,11 @@ import {
 } from "./route-args.js";
 
 const argv = (command: string) => ["node", "openclaw", ...command.split(" ")];
+const healthOptions = { json: true, verbose: false, timeoutMs: 5000 };
 
 describe("route-args", () => {
   it("parses health and status route args", () => {
-    expect(parseHealthRouteArgs(argv("health --json --timeout 5000"))).toEqual({
-      json: true,
-      verbose: false,
-      timeoutMs: 5000,
-    });
+    expect(parseHealthRouteArgs(argv("health --json --timeout 5000"))).toEqual(healthOptions);
     expect(
       parseStatusRouteArgs(argv("status --json --deep --all --usage --agent beta --timeout 5000")),
     ).toEqual({
@@ -84,11 +81,9 @@ describe("route-args", () => {
   });
 
   it("preserves equals forms and root options on routed argv", () => {
-    expect(parseHealthRouteArgs(argv("--profile work health --timeout=5000 --json"))).toEqual({
-      json: true,
-      verbose: false,
-      timeoutMs: 5000,
-    });
+    expect(parseHealthRouteArgs(argv("--profile work health --timeout=5000 --json"))).toEqual(
+      healthOptions,
+    );
     expect(parseSessionsRouteArgs(argv("sessions --agent=default --limit=25"))).toMatchObject({
       agent: "default",
       limit: "25",
