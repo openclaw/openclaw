@@ -261,22 +261,19 @@ it.skipIf(process.platform === "win32").each([
     });
     child.stdout!.resume();
     const closed = once(child, "close");
-    try {
-      const ready = await Promise.race([
+    const message = () =>
+      Promise.race([
         once(child, "message"),
         closed.then(() => {
-          throw new Error("Doctor exited before stopping its service: " + stderr);
+          throw new Error("Doctor exited before its next IPC message: " + stderr);
         }),
       ]);
+    try {
+      const ready = await message();
       expect(ready[0]).toBe("stopped");
       const terminationSignal = interruption === "SIGINT during archives" ? "SIGINT" : "SIGTERM";
       if (pendingApproval || restoringApproval) {
-        const approval = Promise.race([
-          once(child, "message"),
-          closed.then(() => {
-            throw new Error("Doctor exited before requesting approval: " + stderr);
-          }),
-        ]);
+        const approval = message();
         child.send("continue", () => {});
         expect((await approval)[0]).toBe("approval");
         child.kill("SIGTERM");

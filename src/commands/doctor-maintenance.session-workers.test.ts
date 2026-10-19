@@ -114,19 +114,15 @@ describe("Doctor maintenance with session workers", () => {
           };
           await state.writeConfig(cfg);
           const sessionId = "doctor-migrated-history";
-          const source = {
-            agentId: "main",
+          const sessionScope = (agentId: string) => ({
+            agentId,
             env: state.env,
             sessionId,
-            sessionKey: "agent:main:doctor",
-            storePath: sharedStore ?? path.join(state.sessionsDir("main"), "sessions.json"),
-          };
-          const destination = {
-            ...source,
-            agentId: "ops",
-            sessionKey: "agent:ops:doctor",
-            storePath: sharedStore ?? path.join(state.sessionsDir("ops"), "sessions.json"),
-          };
+            sessionKey: `agent:${agentId}:doctor`,
+            storePath: sharedStore ?? path.join(state.sessionsDir(agentId), "sessions.json"),
+          });
+          const source = sessionScope("main");
+          const destination = sessionScope("ops");
           const events = [
             { type: "session", id: sessionId, version: 3 },
             {

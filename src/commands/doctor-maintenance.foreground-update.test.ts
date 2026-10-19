@@ -35,7 +35,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-function fixture(mode: "foreground" | "supervised" = "foreground", published = true) {
+function fixture(published: boolean) {
   const stateDir = dirs.make("doctor-foreground-settlement-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
@@ -58,8 +58,8 @@ function fixture(mode: "foreground" | "supervised" = "foreground", published = t
         JSON.stringify({
           owner,
           port: 19483,
-          mode,
-          supervisor: mode === "supervised" ? { kind: "external", name: "fixture" } : null,
+          mode: "foreground",
+          supervisor: null,
         }),
         Date.now(),
         Date.now(),
@@ -84,7 +84,7 @@ function fixture(mode: "foreground" | "supervised" = "foreground", published = t
 it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
   "settles the foreground state owner before update Doctor admission: %s",
   async (outcome) => {
-    const { databasePath, predecessor } = fixture("foreground", !outcome.startsWith("rowless-"));
+    const { databasePath, predecessor } = fixture(outcome !== "rowless-released");
     const before = fs.readFileSync(databasePath);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     let monotonicMs = 0;
@@ -133,15 +133,13 @@ it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
         expect(settled).toBe(false);
       }
       const released = outcome === "slow-released" || outcome === "rowless-released";
-      if (released) {
-        if (outcome === "slow-released") {
-          withOpenClawStateStartupMigrationCheckpointDatabase((db) => {
-            db.prepare(
-              "DELETE FROM state_leases WHERE scope = 'gateway-owner' AND lease_key = 'global' AND owner = 'previous-gateway'",
-            ).run();
-          });
-        }
-      } else {
+      if (outcome === "slow-released") {
+        withOpenClawStateStartupMigrationCheckpointDatabase((db) => {
+          db.prepare(
+            "DELETE FROM state_leases WHERE scope = 'gateway-owner' AND lease_key = 'global' AND owner = 'previous-gateway'",
+          ).run();
+        });
+      } else if (!released) {
         authorized = false;
       }
       predecessor?.release();
