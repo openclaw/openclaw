@@ -872,7 +872,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
   color: inherit;
   font: inherit;
   text-align: start;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 .chat-environment__action > span:not(.chat-environment__counts) {
   flex: 1;
