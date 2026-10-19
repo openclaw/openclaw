@@ -3,34 +3,19 @@ import fs from "node:fs/promises";
 import { createServer, type RequestListener } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { json } from "node:stream/consumers";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createMSTeamsQaTransportAdapter } from "./adapter.runtime.js";
 
-const sleep = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("node:timers/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:timers/promises")>()),
-  setTimeout: sleep,
+  setTimeout: vi.fn(async () => undefined),
 }));
-
-const createdDirs: string[] = [];
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await Promise.all(
-    createdDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
-});
 
 async function listenOnLoopback(handler: RequestListener): Promise<string> {
   const server = createServer(handler);
-  onTestFinished(async () => {
-    if (server.listening) {
-      const closed = once(server, "close");
-      server.close();
-      await closed;
-    }
-  });
+  onTestFinished(() => server[Symbol.asyncDispose]());
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -63,9 +48,9 @@ async function prepareAdapterFlow(
 }
 
 async function createAdapter(requireGroupMention = false) {
-  // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers; afterEach removes it.
+  // openclaw-temp-dir: allow extension tests cannot import repo-only helpers; onTestFinished removes it.
   const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-qa-"));
-  createdDirs.push(outputDir);
+  onTestFinished(() => fs.rm(outputDir, { recursive: true, force: true }));
   const addInboundMessage = vi.fn(async (input) => ({
     ...input,
     id: "bus-inbound-1",
@@ -79,14 +64,17 @@ async function createAdapter(requireGroupMention = false) {
     timestamp: Date.now(),
   }));
   const adapter = await createMSTeamsQaTransportAdapter({
-    adapterOptions: { transportPolicy: { requireGroupMention } },
+    adapterOptions: requireGroupMention ? { transportPolicy: { requireGroupMention: true } } : {},
     channelId: "msteams",
     credentials: {} as never,
     driver: "live",
     messages: { addInboundMessage, addOutboundMessage, editMessage: vi.fn() },
     outputDir,
   });
-  return { adapter, outputDir, addInboundMessage, addOutboundMessage };
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = () => (cleanupPromise ??= adapter.cleanup?.());
+  onTestFinished(cleanup);
+  return { adapter, outputDir, addInboundMessage, addOutboundMessage, cleanup };
 }
 
 const channelMessage = {
@@ -96,176 +84,144 @@ const channelMessage = {
   text: "qa ingress",
 };
 
-describe("Microsoft Teams QA transport adapter", () => {
-  it("sends ready ingress to the prepared Gateway, not the Lab origin, and cleans up", async () => {
-    const lab = vi.fn<RequestListener>((_request, response) => response.writeHead(404).end());
-    const labUrl = await listenOnLoopback(lab);
-    let inboundActivity: Record<string, unknown> | undefined;
-    let inboundAuthorization: string | undefined;
-    let inboundPath: string | undefined;
-    const webhookUrl = await listenOnLoopback((request, response) => {
-      inboundAuthorization = request.headers.authorization;
-      inboundPath = request.url;
-      void (async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        }
-        inboundActivity = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-        response.writeHead(202).end();
-      })();
-    });
-    const { adapter, outputDir, addInboundMessage, addOutboundMessage } = await createAdapter(true);
-    let bootstrapPath: string;
-    try {
-      const env = adapter.createRuntimeEnvPatch?.();
-      expect(env?.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
-      expect(env).not.toHaveProperty("OPENCLAW_QA_MSTEAMS_CONNECTOR_URL");
-      const [bootstrapUrl] = adapter.createRuntimePreloads?.() ?? [];
-      expect(bootstrapUrl).toMatch(/^file:/u);
-      expect(env?.NODE_OPTIONS).toContain(`--import=${bootstrapUrl}`);
-      bootstrapPath = fileURLToPath(bootstrapUrl!);
-      const bootstrap = await fs.readFile(bootstrapPath, "utf8");
-      expect(bootstrap).toContain('Symbol.for("openclaw.msteams.privateQaRuntime")');
-      const bootstrapConfig = JSON.parse(
-        /globalThis\[key\] = (.+);$/mu.exec(bootstrap)?.[1] ?? "{}",
-      ) as { connectorUrl?: string; nonce?: string; botToken?: string };
-      expect(bootstrapConfig).toMatchObject({
-        connectorUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/$/u),
-        nonce: expect.any(String),
-        botToken: expect.any(String),
-      });
-      expect(bootstrapConfig.botToken?.split(".")).toHaveLength(3);
+it("sends ready ingress to the prepared Gateway, not the Lab origin, and cleans up", async () => {
+  const lab = vi.fn<RequestListener>((_request, response) => response.writeHead(404).end());
+  const labUrl = await listenOnLoopback(lab);
+  let inboundActivity: Record<string, unknown> | undefined;
+  let inboundAuthorization: string | undefined;
+  let inboundPath: string | undefined;
+  const webhookUrl = await listenOnLoopback(async (request, response) => {
+    inboundAuthorization = request.headers.authorization;
+    inboundPath = request.url;
+    inboundActivity = await json(request);
+    response.writeHead(202).end();
+  });
+  const { adapter, outputDir, addInboundMessage, addOutboundMessage, cleanup } =
+    await createAdapter(true);
+  const env = adapter.createRuntimeEnvPatch?.();
+  expect(env?.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
+  expect(env).not.toHaveProperty("OPENCLAW_QA_MSTEAMS_CONNECTOR_URL");
+  const [bootstrapUrl] = adapter.createRuntimePreloads?.() ?? [];
+  expect(env?.NODE_OPTIONS).toContain(`--import=${bootstrapUrl}`);
+  const bootstrapPath = fileURLToPath(bootstrapUrl!);
+  const bootstrap = await fs.readFile(bootstrapPath, "utf8");
+  expect(bootstrap).toContain('Symbol.for("openclaw.msteams.privateQaRuntime")');
+  const bootstrapConfig = JSON.parse(
+    /globalThis\[key\] = (.+);$/mu.exec(bootstrap)?.[1] ?? "{}",
+  ) as { connectorUrl?: string; nonce?: string; botToken?: string };
+  expect(bootstrapConfig.connectorUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/u);
+  expect(bootstrapConfig.botToken?.split(".")).toHaveLength(3);
 
-      const config = adapter.createGatewayConfig({ baseUrl: labUrl });
-      expect(config.channels?.msteams?.webhook).toEqual({ path: "/api/messages" });
-      expect(config.channels?.msteams).toMatchObject({
-        legacyWebhook: false,
-        requireMention: true,
-        dmPolicy: "allowlist",
-        allowFrom: ["00000000-0000-4000-8000-000000000002"],
-      });
-      const ready = {
-        accountId: "default",
-        running: true,
-        connected: true,
-        lifecycle: "ready",
-        restartPending: false,
-      };
-      const statuses = [
-        { ...ready, lifecycle: "starting", connected: false },
-        // A new task can retain its predecessor's connected flag until it publishes readiness.
-        { ...ready, lifecycle: "starting" },
-        { ...ready, connected: false },
-        { ...ready, restartPending: true },
-        ready,
-      ];
-      const call = vi.fn().mockRejectedValue(new Error("unexpected extra readiness poll"));
-      for (const status of statuses) {
-        call.mockResolvedValueOnce({ channelAccounts: { msteams: [status] } });
-      }
-      await adapter.waitReady({ gateway: { call } });
-      expect(call).toHaveBeenCalledTimes(statuses.length);
-      expect(inboundActivity).toBeUndefined();
-      await prepareAdapterFlow(adapter, webhookUrl, outputDir);
+  const config = adapter.createGatewayConfig({ baseUrl: labUrl });
+  expect(config.channels?.msteams?.webhook).toEqual({ path: "/api/messages" });
+  expect(config.channels?.msteams).toMatchObject({
+    legacyWebhook: false,
+    requireMention: true,
+    dmPolicy: "allowlist",
+    allowFrom: ["00000000-0000-4000-8000-000000000002"],
+  });
+  const ready = { accountId: "default", running: true, connected: true, lifecycle: "ready" };
+  const statuses = [
+    // A new task can retain its predecessor's connected flag until it publishes readiness.
+    { ...ready, lifecycle: "starting" },
+    { ...ready, connected: false },
+    { ...ready, restartPending: true },
+    { ...ready, restartPending: false },
+  ];
+  const call = vi.fn().mockRejectedValue(new Error("unexpected extra readiness poll"));
+  for (const status of statuses) {
+    call.mockResolvedValueOnce({ channelAccounts: { msteams: [status] } });
+  }
+  await adapter.waitReady({ gateway: { call } });
+  expect(call).toHaveBeenCalledTimes(statuses.length);
+  expect(inboundActivity).toBeUndefined();
+  await prepareAdapterFlow(adapter, webhookUrl, outputDir);
 
-      await adapter.sendInbound({
-        ...channelMessage,
-        senderName: "Driver",
-        text: "@openclaw qa ingress",
-        threadId: "thread-root",
-        replyToId: "quoted-parent",
-      });
-      expect(lab).not.toHaveBeenCalled();
-      expect(inboundPath).toBe("/api/messages");
-      expect(inboundAuthorization).toBe(`Bearer ${bootstrapConfig.botToken}`);
-      expect(inboundActivity).toMatchObject({
-        text: "<at>openclaw</at> qa ingress",
-        entities: [
-          {
-            type: "mention",
-            text: "<at>openclaw</at>",
-            mentioned: { id: "qa-msteams-app", name: "OpenClaw QA" },
-          },
-        ],
-        serviceUrl: "https://smba.trafficmanager.net/qa",
-        replyToId: "quoted-parent",
-        from: { id: "qa-msteams-driver", aadObjectId: "00000000-0000-4000-8000-000000000002" },
-        conversation: {
-          id: "19:qa-primary@thread.tacv2;messageid=thread-root",
-          conversationType: "channel",
-        },
-        channelData: {
-          team: { id: "qa-msteams-team" },
-          channel: { id: "19:qa-primary@thread.tacv2" },
-        },
-      });
-      expect(addInboundMessage).toHaveBeenCalledTimes(1);
+  await adapter.sendInbound({
+    ...channelMessage,
+    senderName: "Driver",
+    text: "@openclaw qa ingress",
+    threadId: "thread-root",
+    replyToId: "quoted-parent",
+  });
+  expect(inboundPath).toBe("/api/messages");
+  expect(inboundAuthorization).toBe(`Bearer ${bootstrapConfig.botToken}`);
+  const nativeThread = "19:qa-primary@thread.tacv2;messageid=thread-root";
+  expect(inboundActivity).toMatchObject({
+    text: "<at>openclaw</at> qa ingress",
+    entities: [
+      {
+        type: "mention",
+        text: "<at>openclaw</at>",
+        mentioned: { id: "qa-msteams-app", name: "OpenClaw QA" },
+      },
+    ],
+    serviceUrl: "https://smba.trafficmanager.net/qa",
+    replyToId: "quoted-parent",
+    from: { id: "qa-msteams-driver", aadObjectId: "00000000-0000-4000-8000-000000000002" },
+    conversation: { id: nativeThread, conversationType: "channel" },
+    channelData: {
+      team: { id: "qa-msteams-team" },
+      channel: { id: "19:qa-primary@thread.tacv2" },
+    },
+  });
+  expect(addInboundMessage).toHaveBeenCalledTimes(1);
 
-      const outboundResponse = await fetch(
-        `${bootstrapConfig.connectorUrl}qa/v3/conversations/${encodeURIComponent(
-          "19:qa-primary@thread.tacv2;messageid=thread-root",
-        )}/activities`,
-        {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${bootstrapConfig.botToken}`,
-            "content-type": "application/json",
-            "x-openclaw-msteams-qa-nonce": bootstrapConfig.nonce!,
-          },
-          body: JSON.stringify({ type: "message", text: "qa outbound" }),
-        },
-      );
-      expect(outboundResponse.status).toBe(200);
-      expect(addOutboundMessage).toHaveBeenCalledWith({
-        accountId: "default",
-        senderId: "qa-msteams-app",
-        text: "qa outbound",
-        threadId: "thread-root",
-        timestamp: expect.any(Number),
-        to: "channel:qa-primary",
-      });
-
-      for (const [kind, conversationType] of [
-        ["direct", "personal"],
-        ["group", "groupChat"],
-      ] as const) {
-        await adapter.sendInbound({
-          ...channelMessage,
-          conversation: { id: `qa-${kind}`, kind },
-          text: "qa chat ingress",
-        });
-        expect(inboundActivity).toMatchObject({ conversation: { conversationType } });
-        // Team/channel markers make a personal chat fail the Gateway's scope admission.
-        expect(inboundActivity?.channelData).toEqual({ tenant: { id: "qa-msteams-tenant" } });
-      }
-      expect(lab).not.toHaveBeenCalled();
-    } finally {
-      await adapter.cleanup?.();
-    }
-    await expect(fs.access(bootstrapPath)).rejects.toThrow();
+  const outboundResponse = await fetch(
+    `${bootstrapConfig.connectorUrl}qa/v3/conversations/${encodeURIComponent(nativeThread)}/activities`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${bootstrapConfig.botToken}`,
+        "content-type": "application/json",
+        "x-openclaw-msteams-qa-nonce": bootstrapConfig.nonce!,
+      },
+      body: JSON.stringify({ type: "message", text: "qa outbound" }),
+    },
+  );
+  expect(outboundResponse.status).toBe(200);
+  expect(addOutboundMessage).toHaveBeenCalledWith({
+    accountId: "default",
+    senderId: "qa-msteams-app",
+    text: "qa outbound",
+    threadId: "thread-root",
+    timestamp: expect.any(Number),
+    to: "channel:qa-primary",
   });
 
-  it("does not follow webhook redirects to another loopback origin", async () => {
-    const redirectTarget = vi.fn<RequestListener>((_request, response) =>
-      response.writeHead(200).end(),
-    );
-    const targetUrl = await listenOnLoopback(redirectTarget);
-    const webhookUrl = await listenOnLoopback((_request, response) => {
-      response.writeHead(302, { location: `${targetUrl}/internal` }).end();
+  for (const [kind, conversationType] of [
+    ["direct", "personal"],
+    ["group", "groupChat"],
+  ] as const) {
+    await adapter.sendInbound({
+      ...channelMessage,
+      conversation: { id: `qa-${kind}`, kind },
+      text: "qa chat ingress",
     });
-    const { adapter, outputDir, addInboundMessage } = await createAdapter();
-    try {
-      const config = adapter.createGatewayConfig({ baseUrl: targetUrl });
-      expect(config.channels?.msteams?.requireMention).toBe(false);
-      await prepareAdapterFlow(adapter, webhookUrl, outputDir);
-      await expect(adapter.sendInbound(channelMessage)).rejects.toThrow(
-        "Too many redirects (limit: 0)",
-      );
-      expect(redirectTarget).not.toHaveBeenCalled();
-      expect(addInboundMessage).not.toHaveBeenCalled();
-    } finally {
-      await adapter.cleanup?.();
-    }
+    expect(inboundActivity).toMatchObject({ conversation: { conversationType } });
+    // Team/channel markers make a personal chat fail the Gateway's scope admission.
+    expect(inboundActivity?.channelData).toEqual({ tenant: { id: "qa-msteams-tenant" } });
+  }
+  expect(lab).not.toHaveBeenCalled();
+  await cleanup();
+  await expect(fs.access(bootstrapPath)).rejects.toThrow();
+});
+
+it("does not follow webhook redirects to another loopback origin", async () => {
+  const redirectTarget = vi.fn<RequestListener>((_request, response) =>
+    response.writeHead(200).end(),
+  );
+  const targetUrl = await listenOnLoopback(redirectTarget);
+  const webhookUrl = await listenOnLoopback((_request, response) => {
+    response.writeHead(302, { location: `${targetUrl}/internal` }).end();
   });
+  const { adapter, outputDir, addInboundMessage } = await createAdapter();
+  const config = adapter.createGatewayConfig({ baseUrl: targetUrl });
+  expect(config.channels?.msteams?.requireMention).toBe(false);
+  await prepareAdapterFlow(adapter, webhookUrl, outputDir);
+  await expect(adapter.sendInbound(channelMessage)).rejects.toThrow(
+    "Too many redirects (limit: 0)",
+  );
+  expect(redirectTarget).not.toHaveBeenCalled();
+  expect(addInboundMessage).not.toHaveBeenCalled();
 });
