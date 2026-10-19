@@ -191,7 +191,7 @@ export async function startSessionDesignSandbox() {
 export function createSessionDesignDesktopFixturePlugin(): Plugin {
   const endpoint = "/__fixtures/session-design/desktop";
   const leases = new Map<string, { control: boolean; expiresAtMs: number; socket?: WebSocket }>();
-  const sockets = new WebSocketServer({ noServer: true });
+  const sockets = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   // Reuse the canonical Desktop harness's Raw rectangle and mark its pixels as synthetic.
   const stamp = Buffer.from(createRfbRawFrame());
   const glyphs = ["110101101101110", "111100110100111", "101111111101101", "111101101101111"];
@@ -302,6 +302,7 @@ export function createSessionDesignDesktopFixturePlugin(): Plugin {
         }
         sockets.handleUpgrade(request, socket, head, (peer) => {
           lease.socket = peer;
+          peer.on("error", () => peer.terminate());
           let stage = 0;
           peer.send("RFB 003.008\n", { binary: true });
           peer.on("message", (data) => {
