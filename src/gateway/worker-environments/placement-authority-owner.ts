@@ -50,7 +50,6 @@ export function closePlacementAuthorityOwner(owner: PlacementAuthorityOwner): vo
   owner.claims.clear();
   owner.placements.clear();
   owner.observations.clear();
-  owner.placementReaders.clear();
   owner.projections.clear();
   owner.preservation = undefined;
   owner.recoveryCandidatesEmpty = undefined;
@@ -96,7 +95,6 @@ export function placementAuthorityOwnerFor(
     claims: new Map(),
     placements: new Map(),
     observations: new Map(),
-    placementReaders: new Map(),
     pending: new Set(),
     sequence: 0,
     published: new Map(),

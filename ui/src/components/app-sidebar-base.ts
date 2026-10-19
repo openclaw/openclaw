@@ -147,13 +147,9 @@ export abstract class AppSidebarBase {
   declare onPairMobile: AppSidebarProps["onPairMobile"];
   declare onNavigate: AppSidebarProps["onNavigate"];
   declare onPreloadRoute: AppSidebarProps["onPreloadRoute"];
-  declare readonly ownerDocument: HTMLElement["ownerDocument"];
-  declare readonly classList: HTMLElement["classList"];
-  declare readonly querySelector: HTMLElement["querySelector"];
-  declare readonly querySelectorAll: HTMLElement["querySelectorAll"];
-  declare readonly addEventListener: HTMLElement["addEventListener"];
-  declare readonly removeEventListener: HTMLElement["removeEventListener"];
-  declare readonly contains: HTMLElement["contains"];
+  get ownerDocument(): Document {
+    return this.hostElement.ownerDocument;
+  }
 
   readonly navigationViewElements = new Map<AppSidebarProps["navigationView"], HTMLElement>();
 
@@ -191,20 +187,6 @@ export abstract class AppSidebarBase {
         set: (value: unknown) => {
           Reflect.set(hostElement, key, value);
         },
-      });
-    }
-    for (const key of [
-      "ownerDocument",
-      "classList",
-      "querySelector",
-      "querySelectorAll",
-      "addEventListener",
-      "removeEventListener",
-      "contains",
-    ] as const) {
-      const value = hostElement[key];
-      Object.defineProperty(this, key, {
-        value: typeof value === "function" ? value.bind(hostElement) : value,
       });
     }
   }

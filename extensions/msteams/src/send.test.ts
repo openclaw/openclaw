@@ -311,7 +311,7 @@ describe("sendMessageMSTeams", () => {
       sharePointSiteId: "site-456",
     });
     mockPdf();
-    mockState.uploadAndShareSharePoint.mockResolvedValue({ itemId: "item-2", shareUrl: "shared" });
+    mockState.uploadAndShareSharePoint.mockResolvedValue({ itemId: "item-2" });
     mockState.getDriveItemProperties.mockResolvedValue({ name: "report.pdf" });
     mockState.buildTeamsFileInfoCard.mockReturnValue({
       contentType: "application/vnd.microsoft.teams.card.file.info",

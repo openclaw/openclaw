@@ -48,6 +48,7 @@ export function createMcpAppView(
   host: McpAppViewElement,
   context: ApplicationContext,
   afterSettlement: (callback: () => void) => void,
+  publishState: () => void,
 ) {
   let inactive: "ended" | "reconstructed" | null = null;
   let errorState: unknown = null;
@@ -57,8 +58,6 @@ export function createMcpAppView(
   let setupAbort: AbortController | undefined;
   let requestAbort = new AbortController();
   const confirmation = createMcpAppConfirm();
-  const listeners = new Set<() => void>();
-  const publishState = () => listeners.forEach((listener) => listener());
   let started = false;
   let disposed = false;
   let retired = false;
@@ -726,10 +725,6 @@ export function createMcpAppView(
     read: () => ({ inactive, error: errorState }),
     setMount: (element: HTMLDivElement) => {
       mountElement = element;
-    },
-    subscribe(notify: () => void) {
-      listeners.add(notify);
-      return () => listeners.delete(notify);
     },
   };
 }

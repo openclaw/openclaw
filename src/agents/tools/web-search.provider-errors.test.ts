@@ -1,23 +1,35 @@
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   PluginWebSearchProviderEntry,
   WebSearchProviderPlugin,
 } from "../../plugins/web-provider-types.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
-import { executeWebSearchCandidates } from "../../web-search/runtime-execution.js";
-import type { RunWebSearchParams } from "../../web-search/runtime-types.js";
 import { OAuthRefreshFailureError } from "../auth-profiles/oauth-refresh-failure.js";
 import { createWebSearchTool } from "./web-search.js";
 
-const mocks = vi.hoisted(() => ({ runWebSearch: vi.fn(), endpoint: vi.fn() }));
-vi.mock("../../web-search/runtime.js", () => ({ runWebSearch: mocks.runWebSearch }));
+const mocks = vi.hoisted(() => ({ endpoint: vi.fn() }));
+// mock-isolation: Exercise the real search runtime against one synthetic provider registry.
+vi.mock("../../plugins/bundled-discovery-state.js", () => ({
+  prepareBundledDiscoveryMode: async () => () => {},
+  readBundledDiscoveryModeMemoized: () => undefined,
+}));
+vi.mock("../../plugins/web-search-providers.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/web-search-providers.runtime.js")>()),
+  resolvePluginWebSearchProviders: () => [provider],
+  resolveRuntimeWebSearchProviders: () => [provider],
+}));
+vi.mock("../../plugins/plugin-registry-contributions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/plugin-registry-contributions.js")>()),
+  resolveManifestContractOwnerPluginId: () => "perplexity",
+}));
 vi.mock("./web-guarded-fetch.js", () => ({ withTrustedWebToolsEndpoint: mocks.endpoint }));
 
 const API_KEY = "pplx-synthetic-search-status-key";
 const BODY = `private upstream diagnostic for ${API_KEY}`;
 const config: OpenClawConfig = {
-  tools: { web: { search: { provider: "perplexity" } } },
+  tools: { web: { search: { provider: "perplexity", cacheTtlMinutes: 0 } } },
   plugins: { entries: { perplexity: { config: { webSearch: { apiKey: API_KEY } } } } },
 };
 let provider: PluginWebSearchProviderEntry;
@@ -33,15 +45,8 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  clearRuntimeConfigSnapshot();
   mocks.endpoint.mockReset();
-  mocks.runWebSearch.mockReset().mockImplementationOnce((params: RunWebSearchParams) =>
-    executeWebSearchCandidates({
-      ...params,
-      candidates: [provider],
-      searchConfig: { cacheTtlMinutes: 0 },
-      allowFallback: false,
-    }),
-  );
 });
 
 it("web_search preserves provider HTTP 403 guidance without exposing the response body", async () => {

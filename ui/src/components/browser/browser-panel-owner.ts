@@ -227,7 +227,7 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         }
         // A mutation may adopt the same tab while this snapshot is pending.
         // Reconcile its tab strip, but never let it own document or loading state.
-        if (!operations.canCaptureSnapshot(invocation)) {
+        if (!invocation.isCurrent()) {
           return;
         }
         if (!snapshot.running) {

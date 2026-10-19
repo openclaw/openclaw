@@ -8,6 +8,7 @@ import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controlle
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import { log } from "../embedded-agent-runner/logger.js";
 import { reserveMcpFormQuestion } from "../mcp-form-resource-context.js";
 import {
   getGatewayToolCallerIdentity,
@@ -519,7 +520,12 @@ function runAgentHarnessSecretInput(
       params.delivery,
       params.questions,
       params.promptOptions,
-    ).catch(() => finish());
+    ).catch(() => {
+      if (finish()) {
+        // Delivery errors can contain secret prompt data; record only the failed outcome.
+        log.warn("Secret input prompt delivery failed; the pending input request was cancelled.");
+      }
+    });
   });
 }
 
@@ -550,7 +556,6 @@ async function runScopedAgentHarnessQuestion(
   const gatewayCall = resolveAgentQuestionGatewayCall(params.gatewayCall);
   const questionId = params.questionId ?? `ask_${randomBytes(16).toString("hex")}`;
   const questions = buildAgentQuestionRequestQuestions(params.questions);
-  let aborted = false;
   const watchdogAttempt = getGatewayToolCallerIdentity()?.watchdogAttempt;
   const assertCurrent = captureGatewayToolCallerAssertion();
   let watchdogWait: ReturnType<NonNullable<typeof watchdogAttempt>["beginWait"]> | undefined;
@@ -606,7 +611,6 @@ async function runScopedAgentHarnessQuestion(
     }
   };
   const onAbort = () => {
-    aborted = true;
     prompt.close();
     // Release the session slot synchronously so a replacement request can register
     // while the best-effort gateway cancellation finishes.
@@ -626,10 +630,8 @@ async function runScopedAgentHarnessQuestion(
     }
     // Cancellation can race registration. Retry against the committed ID and
     // never present a stale prompt after the inbound message took another route.
-    if (aborted || claim.isCancellationRequested() || params.signal?.aborted) {
-      const terminal = await cancel(
-        aborted || params.signal?.aborted ? "run-abort" : "superseded-input",
-      );
+    if (claim.isCancellationRequested() || params.signal?.aborted) {
+      const terminal = await cancel(params.signal?.aborted ? "run-abort" : "superseded-input");
       if (terminal?.status === "answered") {
         return terminal;
       }
@@ -641,7 +643,7 @@ async function runScopedAgentHarnessQuestion(
       isCurrent: () => {
         params.signal?.throwIfAborted();
         assertCurrent?.();
-        return !aborted && !claim.isCancellationRequested();
+        return !claim.isCancellationRequested();
       },
     });
     const answer = gatewayCall(

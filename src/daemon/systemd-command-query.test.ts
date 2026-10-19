@@ -9,6 +9,7 @@ vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
 vi.mock("./systemd-exec.js", async (original) => ({
   ...(await original<typeof import("./systemd-exec.js")>()),
   execBusctlUser: busctl,
+  execBusctlSystem: (...args: unknown[]) => busctl(undefined, ...args),
   bindSystemdManagerOwner: vi.fn(),
 }));
 vi.mock("./systemd-peer-native.js", async (original) => ({
@@ -73,6 +74,37 @@ beforeEach(() => {
   vi.mocked(openSystemdUserManager).mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
+
+it.each(["before query", "during query"])(
+  "names the expired effective-command probe: %s",
+  async (phase) => {
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const commandReader = await createSystemdCommandQuery(
+      queryEnv,
+      unitName,
+      {
+        timeoutMs: 100,
+        systemdReadTarget: {
+          scope: "system",
+          unitName,
+          unitPath: `/etc/systemd/system/${unitName}`,
+        },
+      },
+      unavailable,
+    );
+    busctl.mockImplementation(async () => {
+      now = 101;
+      return success('o "/unit"');
+    });
+    if (phase === "before query") {
+      now = 101;
+    }
+    await expect(commandReader.query(callArgs, ["o"])).rejects.toThrow(
+      /Stalled check: (?:effective command LoadUnit|busctl call .* LoadUnit)\./,
+    );
+  },
+);
 
 it("does not infer ownership from expanded specifiers or normalized working directories", async () => {
   const home = queryEnv.HOME;
