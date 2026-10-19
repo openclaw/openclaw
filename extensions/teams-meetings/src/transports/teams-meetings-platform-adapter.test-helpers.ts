@@ -223,74 +223,48 @@ export async function runStatusScript(params: StatusScriptParams) {
     },
     title: "Teams",
     querySelector(selector: string) {
-      if (selector.includes("toggle-mute")) {
-        return params.microphone;
-      }
-      if (selector.includes("toggle-video")) {
-        return params.camera;
-      }
-      if (selector.includes("prejoin-join-button")) {
-        return params.join;
-      }
-      if (selector.includes("call-hangup")) {
-        return params.leave;
-      }
-      if (selector.includes("hangup-button")) {
-        return params.leave;
-      }
-      if (selector.includes("More")) {
-        return params.captionRows ? moreActions : undefined;
-      }
-      if (selector.includes("closed-captions-button") || selector.includes("title*=")) {
-        return params.captionRows && captionMenuOpen ? captionButton : undefined;
-      }
-      if (selector.includes("closed-caption-renderer-wrapper")) {
-        return params.captionRows && captionsOn ? captionRenderer : undefined;
-      }
-      if (selector.includes("closed-caption-v2-virtual-list-content")) {
-        return params.captionRows && captionsOn ? captionContent : undefined;
-      }
-      if (
-        selector.includes("audio-button-configure") ||
-        selector.includes("Open audio options") ||
-        selector.includes("device-settings-button")
-      ) {
-        return params.deviceSettings;
-      }
-      if (
-        selector.includes("selected-microphone-display") ||
-        selector.includes("microphone-select") ||
-        selector.includes("audio-device-input") ||
-        selector.includes("device-settings-microphone")
-      ) {
-        return params.deviceSettings?.clicks
-          ? (params.microphoneDeviceAfterSettings ?? params.microphoneDevice)
-          : params.microphoneDevice;
-      }
-      if (selector.includes("microphone-settings")) {
-        return params.deviceSettings?.clicks
-          ? (params.microphoneDeviceMenuAfterSettings ?? params.microphoneDeviceAfterSettings)
-          : undefined;
-      }
-      if (selector.includes("permission-prompt") || selector.includes("permission-error")) {
-        return params.permissionPrompt;
-      }
       if (selector === '[role="option"][aria-selected="true"]') {
         return params.globalSelectedOption;
       }
-      return undefined;
+      const selected = params.deviceSettings?.clicks
+        ? (params.microphoneDeviceAfterSettings ?? params.microphoneDevice)
+        : params.microphoneDevice;
+      const menu = params.deviceSettings?.clicks
+        ? (params.microphoneDeviceMenuAfterSettings ?? params.microphoneDeviceAfterSettings)
+        : undefined;
+      const captionsVisible = params.captionRows && captionsOn;
+      const matches: Array<[string, PageControl | undefined]> = [
+        ["toggle-mute", params.microphone],
+        ["toggle-video", params.camera],
+        ["prejoin-join-button", params.join],
+        ["call-hangup|hangup-button", params.leave],
+        ["More", params.captionRows ? moreActions : undefined],
+        [
+          "closed-captions-button|title*=",
+          params.captionRows && captionMenuOpen ? captionButton : undefined,
+        ],
+        ["closed-caption-renderer-wrapper", captionsVisible ? captionRenderer : undefined],
+        ["closed-caption-v2-virtual-list-content", captionsVisible ? captionContent : undefined],
+        ["audio-button-configure|Open audio options|device-settings-button", params.deviceSettings],
+        [
+          "selected-microphone-display|microphone-select|audio-device-input|device-settings-microphone",
+          selected,
+        ],
+        ["microphone-settings", menu],
+        ["permission-prompt|permission-error", params.permissionPrompt],
+      ];
+      return matches.find(([needles]) =>
+        needles.split("|").some((needle) => selector.includes(needle)),
+      )?.[1];
     },
     querySelectorAll(selector: string) {
-      if (selector === "button") {
-        return controls;
-      }
-      if (selector === "audio, video") {
-        return params.media ?? [];
-      }
-      if (selector.includes('[role="option"]')) {
-        return params.globalSelectedOption ? [params.globalSelectedOption] : [];
-      }
-      return [];
+      return selector === "button"
+        ? controls
+        : selector === "audio, video"
+          ? (params.media ?? [])
+          : selector.includes('[role="option"]') && params.globalSelectedOption
+            ? [params.globalSelectedOption]
+            : [];
     },
   };
   const window: Record<string, unknown> = {};
@@ -361,16 +335,13 @@ export async function runStatusScript(params: StatusScriptParams) {
 
 type StatusOverrides = Omit<StatusScriptParams, "allowMicrophone">;
 
-function runInCallStatusScript(params: StatusOverrides = {}) {
+export function runCaptionStatusScript(params: StatusOverrides = {}) {
   return runStatusScript({
     allowMicrophone: false,
+    captureCaptions: true,
     leave: control({ label: "Leave" }),
     ...params,
   });
-}
-
-export function runCaptionStatusScript(params: StatusOverrides = {}) {
-  return runInCallStatusScript({ captureCaptions: true, ...params });
 }
 
 type StatusScriptPage = Awaited<ReturnType<typeof runStatusScript>>;

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./teams-meetings-platform-adapter.js";
 import {
   CONSUMER_URL,
+  abortingMedia,
   MEETING_STATE_KEY,
   consumerLightMeetingUrl,
   status,
@@ -13,6 +14,24 @@ import {
   runLeaveScript,
   type PageMedia,
 } from "./teams-meetings-platform-adapter.test-helpers.js";
+
+const meetingOwner = () => ({
+  identity: "teams-work:19:meeting_test@thread.v2",
+  sessionId: "session-1",
+});
+const afterCall = (params: Parameters<typeof runLeaveScript>[0]) =>
+  runLeaveScript({
+    postCall: control({ label: "Rejoin" }),
+    priorMeeting: meetingOwner(),
+    ...params,
+  });
+const audioEntry = (source: object, bridge: object, extra: Record<string, unknown>) => ({
+  bridge,
+  sessionId: "session-1",
+  source,
+  sourceMuted: false,
+  ...extra,
+});
 
 describe("Microsoft Teams meeting platform adapter", () => {
   it.each([true, false])(
@@ -41,24 +60,14 @@ describe("Microsoft Teams meeting platform adapter", () => {
 
   it("retries transient in-call audio routing while Teams renders its media controls", () => {
     const pending = { ...status("teams-audio-choice-required"), inCall: true };
+    const retry = (overrides: Partial<typeof pending> = {}) =>
+      TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.({ ...pending, ...overrides });
 
-    expect(TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.(pending)).toBe(false);
+    expect(retry()).toBe(false);
+    expect(retry({ audioInputRouted: true, audioOutputRouteRetryable: true })).toBe(true);
+    expect(retry({ audioOutputRouteError: "sink failed" })).toBe(false);
     expect(
-      TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.({
-        ...pending,
-        audioInputRouted: true,
-        audioOutputRouteRetryable: true,
-      }),
-    ).toBe(true);
-    expect(
-      TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.({
-        ...pending,
-        audioOutputRouteError: "sink failed",
-      }),
-    ).toBe(false);
-    expect(
-      TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.shouldRetryJoinStatus?.({
-        ...pending,
+      retry({
         audioInputRouted: true,
         audioOutputRouteError: "play interrupted",
         audioOutputRouteRetryable: true,
@@ -79,11 +88,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
     });
     const join = control({ label: "Join now" });
 
-    const { result } = await runStatusScript({
-      camera,
-      join,
-      microphone,
-    });
+    const { result } = await runStatusScript({ camera, join, microphone });
 
     expect(result).toMatchObject({ cameraOff: true, clickedJoin: true, micMuted: true });
     expect(camera.clicks).toBe(1);
@@ -98,10 +103,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
       camera: control({ label: "Turn camera on", pressed: false }),
       join,
       microphone: control({ label: "Turn microphone on", pressed: false }),
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        sessionId: "session-1",
-      },
+      priorMeeting: meetingOwner(),
     });
 
     expect(join.clicks).toBe(1);
@@ -128,11 +130,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
     const camera = control({ label: "Turn camera on", pressed: false });
     const join = control({ label: "Join now" });
 
-    const { result } = await runStatusScript({
-      allowMicrophone: true,
-      camera,
-      join,
-    });
+    const { result } = await runStatusScript({ allowMicrophone: true, camera, join });
 
     expect(result).toMatchObject({
       manualAction: { reason: "teams-microphone-required" },
@@ -336,10 +334,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
     const { result } = runLeaveScript({
       leave,
       meetingSessionId: "",
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        sessionId: "session-1",
-      },
+      priorMeeting: meetingOwner(),
     });
 
     expect(result).toEqual({ departed: false, leaveAction: "leave", urlMatched: true });
@@ -374,29 +369,12 @@ describe("Microsoft Teams meeting platform adapter", () => {
     };
     const detachedBridge = { pause: vi.fn(), remove: vi.fn(), srcObject: {} };
     const foreignBridge = { sessionId: "session-2" };
-    const { result, window } = runLeaveScript({
-      postCall: control({ label: "Rejoin" }),
+    const { result, window } = afterCall({
       priorAudioOutputs: [
-        {
-          bridge,
-          sessionId: "session-1",
-          source,
-          sourceMuted: false,
-          sourceUrl: source.currentSrc,
-        },
-        {
-          bridge: detachedBridge,
-          sessionId: "session-1",
-          source: detachedSource,
-          sourceMuted: false,
-          stream: detachedSource.srcObject,
-        },
+        audioEntry(source, bridge, { sourceUrl: source.currentSrc }),
+        audioEntry(detachedSource, detachedBridge, { stream: detachedSource.srcObject }),
         foreignBridge,
       ],
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        sessionId: "session-1",
-      },
     });
 
     expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
@@ -416,21 +394,8 @@ describe("Microsoft Teams meeting platform adapter", () => {
     const replacementStream = liveMediaStream();
     const source = { muted: true, srcObject: replacementStream };
     const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: bridgedStream };
-    const { result } = runLeaveScript({
-      postCall: control({ label: "Rejoin" }),
-      priorAudioOutputs: [
-        {
-          bridge,
-          sessionId: "session-1",
-          source,
-          sourceMuted: false,
-          stream: bridgedStream,
-        },
-      ],
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        sessionId: "session-1",
-      },
+    const { result } = afterCall({
+      priorAudioOutputs: [audioEntry(source, bridge, { stream: bridgedStream })],
     });
 
     expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
@@ -443,21 +408,10 @@ describe("Microsoft Teams meeting platform adapter", () => {
   it("does not unmute a reused URL-backed element during leave cleanup", () => {
     const source = { currentSrc: "blob:https://teams.live.com/replacement", muted: true };
     const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: null };
-    const { result } = runLeaveScript({
-      postCall: control({ label: "Rejoin" }),
+    const { result } = afterCall({
       priorAudioOutputs: [
-        {
-          bridge,
-          sessionId: "session-1",
-          source,
-          sourceMuted: false,
-          sourceUrl: "blob:https://teams.live.com/original",
-        },
+        audioEntry(source, bridge, { sourceUrl: "blob:https://teams.live.com/original" }),
       ],
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        sessionId: "session-1",
-      },
     });
 
     expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
@@ -469,8 +423,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
   it("restores pending and legacy sources-array entries during leave cleanup", () => {
     const pending = { muted: true };
     const legacy = { currentSrc: "blob:https://teams.live.com/legacy", muted: true };
-    const { result } = runLeaveScript({
-      postCall: control({ label: "Rejoin" }),
+    const { result } = afterCall({
       priorAudioOutputs: [
         {
           sessionId: "session-1",
@@ -480,10 +433,6 @@ describe("Microsoft Teams meeting platform adapter", () => {
           ],
         },
       ],
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        sessionId: "session-1",
-      },
     });
 
     expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
@@ -495,22 +444,9 @@ describe("Microsoft Teams meeting platform adapter", () => {
     const stream = liveMediaStream();
     const source = { muted: true, srcObject: stream };
     const bridge = { pause: vi.fn(), remove: vi.fn(), srcObject: stream };
-    const { result, window } = runLeaveScript({
+    const { result, window } = afterCall({
       meetingSessionId: "",
-      postCall: control({ label: "Rejoin" }),
-      priorAudioOutputs: [
-        {
-          bridge,
-          sessionId: "session-1",
-          source,
-          sourceMuted: false,
-          stream,
-        },
-      ],
-      priorMeeting: {
-        identity: "teams-work:19:meeting_test@thread.v2",
-        sessionId: "session-1",
-      },
+      priorAudioOutputs: [audioEntry(source, bridge, { stream })],
     });
 
     expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
@@ -524,14 +460,9 @@ describe("Microsoft Teams meeting platform adapter", () => {
     const bodyText =
       "Alice: meeting ended — rejoin after lunch; allow Teams to use your microphone; device permissions are blocked";
     const leave = control({ label: "Leave" });
-    const { result } = await runStatusScript({
-      bodyText,
-      leave,
-    });
+    const { result } = await runStatusScript({ bodyText, leave });
 
-    expect(result).toMatchObject({
-      inCall: true,
-    });
+    expect(result).toMatchObject({ inCall: true });
     expect(result.manualAction).toBeUndefined();
   });
 
@@ -662,14 +593,11 @@ describe("Microsoft Teams meeting platform adapter", () => {
   });
 
   it("bridges a live Teams MediaStream when its unloaded audio element rejects setSinkId", async () => {
-    const source: PageMedia = {
+    const source = abortingMedia("The element has no supported source.", {
       muted: false,
       sinkId: "built-in-output",
       srcObject: liveMediaStream(),
-      async setSinkId() {
-        throw new DOMException("The element has no supported source.", "AbortError");
-      },
-    };
+    });
     const routingOrder: string[] = [];
     const bridge: PageMedia = {
       isConnected: false,

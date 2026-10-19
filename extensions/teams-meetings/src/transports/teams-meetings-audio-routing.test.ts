@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   abortingMedia,
   audioStatusParams,
@@ -18,6 +18,51 @@ function unloadedRemoteMedia(stream = liveMediaStream()) {
     srcObject: stream,
   });
 }
+
+function pendingSource() {
+  const source = pageMedia({
+    muted: false,
+    sinkId: "built-in-output",
+    async setSinkId(value) {
+      if (!source.srcObject) {
+        throw new DOMException("The element has no supported source.", "AbortError");
+      }
+      source.sinkId = value;
+    },
+  });
+  return source;
+}
+
+const playableBridge = () => pageMedia({ isConnected: false, async play() {} });
+const mutedSource = (stream = liveMediaStream()) =>
+  pageMedia({
+    muted: true,
+    sinkId: "built-in-output",
+    srcObject: stream,
+    async setSinkId() {},
+  });
+function trackedBridge(params: Partial<PageMedia> = {}) {
+  return {
+    ...pageMedia({ sinkId: "blackhole-output", async setSinkId() {}, ...params }),
+    pause: vi.fn(),
+    remove: vi.fn(),
+  };
+}
+function expectCleanup(bridge: ReturnType<typeof trackedBridge>, count = 1) {
+  expect(bridge.pause).toHaveBeenCalledTimes(count);
+  expect(bridge.remove).toHaveBeenCalledTimes(count);
+}
+function expectOutputs(window: Record<string, unknown>, entry: Record<string, unknown>) {
+  expect(window["__openclawTeamsAudioOutputs"]).toEqual([expect.objectContaining(entry)]);
+}
+const ownedOutput = (source: PageMedia, bridge: PageMedia) => ({
+  bridge,
+  playing: true,
+  sessionId: "session-1",
+  source,
+  sourceMuted: false,
+  stream: source.srcObject,
+});
 
 describe("Microsoft Teams meeting audio routing", () => {
   it("retries bridge playback instead of trusting a previously selected sink", async () => {
@@ -49,35 +94,20 @@ describe("Microsoft Teams meeting audio routing", () => {
   });
 
   it("keeps an unloaded source muted until its attached MediaStream is routed", async () => {
-    const source: PageMedia = {
-      muted: false,
-      sinkId: "built-in-output",
-      async setSinkId(value) {
-        if (!source.srcObject) {
-          throw new DOMException("The element has no supported source.", "AbortError");
-        }
-        source.sinkId = value;
-      },
-    };
-    const params = audioStatusParams({
-      media: [source],
-    });
+    const source = pendingSource();
+    const params = audioStatusParams({ media: [source] });
     const first = await runStatusScript(params);
     expect(first.result.audioOutputRouted).toBe(false);
     expect(first.result.audioOutputRouteError).toBeUndefined();
     expect(first.result.audioOutputRouteRetryable).toBe(true);
     expect(source.muted).toBe(true);
-    expect(first.window["__openclawTeamsAudioOutputs"]).toEqual([
-      expect.objectContaining({ pending: true, source, sourceMuted: false }),
-    ]);
+    expectOutputs(first.window, { pending: true, source, sourceMuted: false });
 
     const stream = liveMediaStream();
     source.srcObject = stream;
     expect(source.sinkId).toBe("built-in-output");
     expect(source.muted).toBe(true);
-    expect(first.window["__openclawTeamsAudioOutputs"]).toEqual([
-      expect.objectContaining({ pending: true, source, sourceMuted: false }),
-    ]);
+    expectOutputs(first.window, { pending: true, source, sourceMuted: false });
 
     const second = await continueStatusScript(first, params);
     expect(second.result.audioOutputRouted).toBe(true);
@@ -86,19 +116,8 @@ describe("Microsoft Teams meeting audio routing", () => {
   });
 
   it("does not route a pending source after the tab changes meetings", async () => {
-    const source: PageMedia = {
-      muted: false,
-      sinkId: "built-in-output",
-      async setSinkId(value) {
-        if (!source.srcObject) {
-          throw new DOMException("The element has no supported source.", "AbortError");
-        }
-        source.sinkId = value;
-      },
-    };
-    const params = audioStatusParams({
-      media: [source],
-    });
+    const source = pendingSource();
+    const params = audioStatusParams({ media: [source] });
     const first = await runStatusScript(params);
 
     source.srcObject = liveMediaStream();
@@ -185,10 +204,7 @@ describe("Microsoft Teams meeting audio routing", () => {
       sinkId: "built-in-output",
       srcObject: firstStream,
     });
-    const bridge = pageMedia({
-      isConnected: false,
-      async play() {},
-    });
+    const bridge = playableBridge();
     const params = audioStatusParams({
       bridgeMedia: bridge,
       media: [source, directSource],
@@ -197,17 +213,13 @@ describe("Microsoft Teams meeting audio routing", () => {
     expect(first.result.audioOutputRouted).toBe(true);
     expect(source.muted).toBe(true);
     expect(directSource.muted).toBe(false);
-    expect(first.window["__openclawTeamsAudioOutputs"]).toEqual([
-      expect.objectContaining({ source, stream: firstStream }),
-    ]);
+    expectOutputs(first.window, { source, stream: firstStream });
 
     source.srcObject = undefined;
     const second = await continueStatusScript(first, params);
     expect(second.result.audioOutputRouted).toBe(false);
     expect(source.muted).toBe(true);
-    expect(second.window["__openclawTeamsAudioOutputs"]).toEqual([
-      expect.objectContaining({ pending: true, source, sourceMuted: false }),
-    ]);
+    expectOutputs(second.window, { pending: true, source, sourceMuted: false });
 
     source.srcObject = replacementStream;
     const third = await continueStatusScript(second, params);
@@ -226,13 +238,8 @@ describe("Microsoft Teams meeting audio routing", () => {
       sinkId: "built-in-output",
       srcObject: stream,
     });
-    const bridge = pageMedia({
-      isConnected: false,
-      async play() {},
-    });
-    const params = audioStatusParams({
-      bridgeMedia: bridge,
-    });
+    const bridge = playableBridge();
+    const params = audioStatusParams({ bridgeMedia: bridge });
     const first = await runStatusScript({ ...params, media: [source] });
     expect(source.muted).toBe(true);
 
@@ -242,9 +249,7 @@ describe("Microsoft Teams meeting audio routing", () => {
     });
     expect(second.result.audioOutputRouted).toBe(true);
     expect(source.muted).toBe(true);
-    expect(second.window["__openclawTeamsAudioOutputs"]).toEqual([
-      expect.objectContaining({ detached: true, source, sourceMuted: false, suspended: true }),
-    ]);
+    expectOutputs(second.window, { detached: true, source, sourceMuted: false, suspended: true });
 
     source.srcObject = undefined;
     const third = await continueStatusScript(second, {
@@ -257,14 +262,7 @@ describe("Microsoft Teams meeting audio routing", () => {
 
   it("tears down audio bridges and restores sources after the call ends", async () => {
     const source = unloadedRemoteMedia();
-    let pauses = 0;
-    let removals = 0;
-    const bridge = pageMedia({
-      isConnected: false,
-      async play() {},
-      pause: () => (pauses += 1),
-      remove: () => (removals += 1),
-    });
+    const bridge = { ...playableBridge(), pause: vi.fn(), remove: vi.fn() };
     const first = await runAudioStatusScript({
       bridgeMedia: bridge,
       media: [source],
@@ -273,120 +271,50 @@ describe("Microsoft Teams meeting audio routing", () => {
 
     const ended = await continueStatusScript(first, { allowMicrophone: true });
     expect(source.muted).toBe(false);
-    expect(pauses).toBe(1);
-    expect(removals).toBe(1);
+    expectCleanup(bridge);
     expect(ended.window).not.toHaveProperty("__openclawTeamsAudioOutputs");
   });
 
   it("suspends bridge ownership while an in-call media list is temporarily empty", async () => {
     const stream = liveMediaStream();
-    const source: PageMedia = {
-      muted: true,
-      sinkId: "built-in-output",
-      srcObject: stream,
-      async setSinkId() {},
-    };
-    let pauses = 0;
-    let removals = 0;
-    const bridge: PageMedia = {
-      sinkId: "blackhole-output",
-      pause: () => (pauses += 1),
-      remove: () => (removals += 1),
-      async setSinkId() {},
-    };
+    const source = mutedSource(stream);
+    const bridge = trackedBridge();
 
     const { result, window } = await runStatusScript({
       allowMicrophone: true,
       devices: [{ deviceId: "blackhole-output", kind: "audiooutput", label: "BlackHole 2ch" }],
       leave: control({ label: "Leave" }),
       media: [],
-      priorAudioOutputs: [
-        {
-          bridge,
-          playing: true,
-          sessionId: "session-1",
-          source,
-          sourceMuted: false,
-          stream,
-        },
-      ],
+      priorAudioOutputs: [ownedOutput(source, bridge)],
       priorMeeting: { identity: "teams-work:19:meeting_test@thread.v2" },
     });
 
     expect(source.muted).toBe(true);
     expect(result.audioOutputRouteRetryable).toBe(true);
     expect(source.srcObject).toBe(stream);
-    expect(pauses).toBe(1);
-    expect(removals).toBe(1);
-    expect(window["__openclawTeamsAudioOutputs"]).toEqual([
-      expect.objectContaining({ source, sourceMuted: false, stream, suspended: true }),
-    ]);
+    expectCleanup(bridge);
+    expectOutputs(window, { source, sourceMuted: false, stream, suspended: true });
   });
 
   it("tears down a bridge when the BlackHole output disappears in-call", async () => {
-    const source: PageMedia = {
-      muted: true,
-      sinkId: "built-in-output",
-      srcObject: liveMediaStream(),
-      async setSinkId() {},
-    };
-    let pauses = 0;
-    let removals = 0;
-    const bridge: PageMedia = {
-      isConnected: true,
-      sinkId: "blackhole-output",
-      pause: () => (pauses += 1),
-      remove: () => (removals += 1),
-      async setSinkId() {},
-    };
+    const source = mutedSource();
+    const bridge = trackedBridge({ isConnected: true });
     const { result, window } = await runAudioStatusScript({
       devices: [{ deviceId: "blackhole-input", kind: "audioinput", label: "BlackHole 2ch" }],
       media: [source],
-      priorAudioOutputs: [
-        {
-          bridge,
-          playing: true,
-          sessionId: "session-1",
-          source,
-          sourceMuted: false,
-          stream: source.srcObject,
-        },
-      ],
+      priorAudioOutputs: [ownedOutput(source, bridge)],
     });
 
     expect(source.muted).toBe(true);
     expect(result.audioOutputRouteRetryable).toBe(false);
-    expect(pauses).toBe(1);
-    expect(removals).toBe(1);
-    expect(window["__openclawTeamsAudioOutputs"]).toEqual([
-      expect.objectContaining({ source, sourceMuted: false, suspended: true }),
-    ]);
+    expectCleanup(bridge);
+    expectOutputs(window, { source, sourceMuted: false, suspended: true });
   });
 
   it("does not tear down audio bridges during read-only inspection", async () => {
-    const source: PageMedia = {
-      muted: true,
-      sinkId: "built-in-output",
-      srcObject: liveMediaStream(),
-      async setSinkId() {},
-    };
-    let pauses = 0;
-    let removals = 0;
-    const bridge: PageMedia = {
-      isConnected: true,
-      sinkId: "blackhole-output",
-      pause: () => (pauses += 1),
-      remove: () => (removals += 1),
-      async setSinkId() {},
-    };
-    const activeBridge = {
-      bridge,
-      playing: true,
-      sessionId: "session-1",
-      source,
-      sourceMuted: false,
-      stream: source.srcObject,
-    };
+    const source = mutedSource();
+    const bridge = trackedBridge({ isConnected: true });
+    const activeBridge = ownedOutput(source, bridge);
     const { window } = await runAudioStatusScript({
       devices: [{ deviceId: "blackhole-input", kind: "audioinput", label: "BlackHole 2ch" }],
       media: [source],
@@ -395,8 +323,7 @@ describe("Microsoft Teams meeting audio routing", () => {
     });
 
     expect(source.muted).toBe(true);
-    expect(pauses).toBe(0);
-    expect(removals).toBe(0);
+    expectCleanup(bridge, 0);
     expect(window["__openclawTeamsAudioOutputs"]).toEqual([activeBridge]);
   });
 
@@ -404,14 +331,7 @@ describe("Microsoft Teams meeting audio routing", () => {
     const stream = liveMediaStream();
     const source: PageMedia = { muted: true, sinkId: "", srcObject: stream, async setSinkId() {} };
     const emptySource: PageMedia = { muted: true, sinkId: "", async setSinkId() {} };
-    let pauses = 0;
-    let removals = 0;
-    const bridge: PageMedia = {
-      sinkId: "",
-      pause: () => (pauses += 1),
-      remove: () => (removals += 1),
-      async setSinkId() {},
-    };
+    const bridge = trackedBridge({ sinkId: "" });
     const { window } = await runStatusScript({
       leave: control({ label: "Leave" }),
       priorAudioOutputs: [
@@ -441,16 +361,13 @@ describe("Microsoft Teams meeting audio routing", () => {
 
     expect(source.muted).toBe(true);
     expect(emptySource.muted).toBe(true);
-    expect(pauses).toBe(2);
-    expect(removals).toBe(2);
-    expect(window["__openclawTeamsAudioOutputs"]).toEqual([
-      expect.objectContaining({
-        sessionId: "session-1",
-        source,
-        sourceMuted: false,
-        suspended: true,
-      }),
-    ]);
+    expectCleanup(bridge, 2);
+    expectOutputs(window, {
+      sessionId: "session-1",
+      source,
+      sourceMuted: false,
+      suspended: true,
+    });
   });
 
   it("keeps a loaded non-MediaStream AbortError retryable", async () => {
