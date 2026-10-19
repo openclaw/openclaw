@@ -7,7 +7,10 @@ import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-co
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -18,12 +21,12 @@ import {
   clearMemoryPluginState,
   registerMemoryCapability,
 } from "../../plugins/memory-state.test-fixtures.js";
-import { releaseSessionControllerClaim } from "../../sessions/session-controller.mailbox.js";
-import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import {
   createReplyOperation as createSessionReplyOperation,
   type ReplyOperation,
 } from "../../sessions/session-controller.js";
+import { releaseSessionControllerClaim } from "../../sessions/session-controller.mailbox.js";
+import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
