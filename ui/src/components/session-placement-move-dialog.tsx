@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, For, onCleanup, onSettled, Show, untrack } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, onSettled, Show } from "solid-js";
 import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/index.js";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
@@ -104,7 +104,7 @@ export function showSessionPlacementTargetDialog(
           release = options.presentation!({
             title,
             cancel: () => finish(null),
-            render: () => <SessionPlacementPicker options={options} finish={finish} inline />,
+            render: () => renderSessionPlacementPicker(options, finish, true),
           });
           if (settled) {
             release();
@@ -120,7 +120,7 @@ export function showSessionPlacementTargetDialog(
             label={title}
             onModal-cancel={() => finish(null)}
           >
-            <SessionPlacementPicker options={options} finish={finish} />
+            {renderSessionPlacementPicker(options, finish)}
           </openclaw-modal-dialog>
         ));
       });
@@ -129,12 +129,11 @@ export function showSessionPlacementTargetDialog(
   });
 }
 
-function SessionPlacementPicker(props: {
-  options: SessionPlacementTargetOptions;
-  finish: (target: SessionMoveTarget | null) => void;
-  inline?: boolean;
-}) {
-  const options = untrack(() => props.options);
+function renderSessionPlacementPicker(
+  options: SessionPlacementTargetOptions,
+  finish: (target: SessionMoveTarget | null) => void,
+  inline = false,
+) {
   const [catalogRevision, reload] = createSignal(0);
   const loaded = createMemo<Catalog | string | null>(
     () => {
@@ -350,22 +349,22 @@ function SessionPlacementPicker(props: {
   );
   return (
     <form
-      class={["session-move", { "session-move--inline": props.inline }]}
+      class={["session-move", { "session-move--inline": inline }]}
       onSubmit={(event: Event) => {
         event.preventDefault();
         if (selectable()) {
-          props.finish(effectiveTarget());
+          finish(effectiveTarget());
         }
       }}
     >
-      <Show when={!props.inline}>
+      <Show when={!inline}>
         <header class="session-move__header">
           <h2>{t(`sessionsView.${options.mode}SessionTitle`)}</h2>
           <button
             type="button"
             class="session-move__close"
             aria-label={t("common.close")}
-            onClick={() => props.finish(null)}
+            onClick={() => finish(null)}
           >
             <Icon name="x" />
           </button>
@@ -450,7 +449,7 @@ function SessionPlacementPicker(props: {
         </div>
       </div>
       <openclaw-modal-actions class="session-move__actions">
-        <button type="button" class="btn" onClick={() => props.finish(null)}>
+        <button type="button" class="btn" onClick={() => finish(null)}>
           {t("common.cancel")}
         </button>
         <button type="submit" class="btn primary" disabled={!selectable()}>
