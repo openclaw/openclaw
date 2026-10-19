@@ -1,11 +1,27 @@
 import type { LookupAddress } from "node:dns";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import * as undici from "undici";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBraveWebSearchProvider } from "./brave-web-search-provider.js";
 
 type Result = Record<string, unknown>;
-const { loggerInfoMock } = vi.hoisted(() => ({ loggerInfoMock: vi.fn() }));
+const { loggerInfoMock, logger } = vi.hoisted(() => {
+  const info = vi.fn();
+  const subsystemLogger: ReturnType<typeof createSubsystemLogger> = {
+    subsystem: "brave",
+    info,
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    fatal: vi.fn(),
+    trace: vi.fn(),
+    raw: vi.fn(),
+    isEnabled: () => true,
+    child: () => subsystemLogger,
+  };
+  return { loggerInfoMock: info, logger: subsystemLogger };
+});
 const mockFetch = vi.fn<typeof fetch>();
 const lookup = vi.hoisted(() => vi.fn<() => Promise<LookupAddress[]>>());
 const publicAddress = [{ address: "93.184.216.34", family: 4 }];
@@ -46,14 +62,9 @@ vi.mock("node:dns/promises", async (importOriginal) => ({
   lookup,
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
-  const { createMockSubsystemLogger } =
-    await import("../../../test/helpers/mock-subsystem-logger.js");
-  return {
-    createSubsystemLogger: (name: string) =>
-      createMockSubsystemLogger(name, { info: loggerInfoMock, isEnabled: () => true }),
-  };
-});
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  createSubsystemLogger: () => logger,
+}));
 
 afterAll(() => {
   vi.doUnmock("node:dns/promises");

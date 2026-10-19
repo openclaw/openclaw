@@ -217,11 +217,12 @@ it.for(["before capture", "after capture"] as const)(
       });
       expect(read(sessionKey)?.status).toBe("killed");
       await mark({ activeAdmissions: captured });
-      expect(read(sessionKey)).toMatchObject({
+      const persisted = read(sessionKey);
+      expect(persisted).toMatchObject({
         status: "killed",
         abortedLastRun: true,
-        mainRestartRecovery: undefined,
       });
+      expect(persisted?.mainRestartRecovery).toBeUndefined();
     } finally {
       finish.resolve();
       await execution.catch(() => {});
@@ -510,8 +511,8 @@ it("marks only the closing Gateway's exact durable admissions and leaves host in
     expect(incognito?.entry).toMatchObject({
       sessionId: "volatile",
       incognito: true,
-      abortedLastRun: undefined,
     });
+    expect(incognito?.entry?.abortedLastRun).toBeUndefined();
     expect(getOpenClawAgentDatabaseIfOpen(memoryLocation)).toBeUndefined();
   } finally {
     admissions.forEach((admission) => admission.release());

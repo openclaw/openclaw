@@ -142,7 +142,7 @@ describe("ensureTool", () => {
     },
   );
 
-  it.each([
+  it.each<[string, string, string, string, string?]>([
     ["legacy only", "payload", "missing", "legacy"],
     ["migrated", "missing", "payload", "canonical"],
     ["both present", "payload", "payload", "legacy"],

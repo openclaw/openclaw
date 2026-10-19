@@ -123,9 +123,9 @@ it.each([
   expect(listing).toMatchObject({
     entries: [],
     truncated: true,
-    nextPageToken: undefined,
     text: expect.stringContaining(note),
   });
+  expect(listing.nextPageToken).toBeUndefined();
   expect(listing.text).not.toContain("later.txt");
 });
 
@@ -194,13 +194,14 @@ it("walks real pages using content for continuation and file reads", async () =>
     expect(seen.toSorted()).toEqual([...names, "nested"].toSorted());
     expect(sawTextLimitedLastPage).toBe(true);
     const empty = await tool.execute("empty", { node: "node-1", path: path.join(root, "nested") });
-    expect(readListing(empty.content)).toMatchObject({
+    const emptyListing = readListing(empty.content);
+    expect(emptyListing).toMatchObject({
       entries: [],
       returnedCount: 0,
       displayedCount: 0,
       truncated: false,
-      nextPageToken: undefined,
     });
+    expect(emptyListing.nextPageToken).toBeUndefined();
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

@@ -57,7 +57,11 @@ function makeModel(
     ...overrides,
   };
 }
-function localService(prefix = "") {
+function localService(prefix = ""): {
+  command: string;
+  args: [string, string];
+  healthUrl: string;
+} {
   return {
     command: path.join(tempRoot, `${prefix}llama-server`),
     args: ["--models-preset", path.join(tempRoot, `${prefix}models.ini`)],

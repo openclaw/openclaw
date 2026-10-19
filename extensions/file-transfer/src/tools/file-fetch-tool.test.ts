@@ -135,7 +135,7 @@ it.each([
   expect(payload.mimeType).toBe(mimeType);
   expect(text.includes("--- contents ---\n")).toBe(inline);
   if (inline) {
-    expect(text).toContain(contents.toString().split("\n")[0]);
+    expect(text).toContain(contents.split("\n")[0]);
   }
 });
 

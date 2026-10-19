@@ -168,25 +168,28 @@ async function startVaultFixture(jwt = false) {
     method?: string;
     body?: unknown;
   }> = [];
-  const vaultAddr = await startVaultServer(async (request, response) => {
-    try {
-      const body = jwt ? await readRequestBody(request) : "";
-      requests.push({
-        url: request.url,
-        token: request.headers["x-vault-token"]?.toString(),
-        namespace: request.headers["x-vault-namespace"]?.toString(),
-        ...(jwt ? { method: request.method, body: body ? JSON.parse(body) : undefined } : {}),
-      });
-      replyJson(
-        response,
-        jwt && ["/v1/auth/keycloak/login", "/v1/auth/kubernetes/login"].includes(request.url ?? "")
-          ? { auth: { client_token: "not-a-real-vault-client-token" } }
-          : vaultValue,
-      );
-    } catch (error) {
-      response.statusCode = 500;
-      response.end(error instanceof Error ? error.message : String(error));
-    }
+  const vaultAddr = await startVaultServer((request, response) => {
+    void (async () => {
+      try {
+        const body = jwt ? await readRequestBody(request) : "";
+        requests.push({
+          url: request.url,
+          token: request.headers["x-vault-token"]?.toString(),
+          namespace: request.headers["x-vault-namespace"]?.toString(),
+          ...(jwt ? { method: request.method, body: body ? JSON.parse(body) : undefined } : {}),
+        });
+        replyJson(
+          response,
+          jwt &&
+            ["/v1/auth/keycloak/login", "/v1/auth/kubernetes/login"].includes(request.url ?? "")
+            ? { auth: { client_token: "not-a-real-vault-client-token" } }
+            : vaultValue,
+        );
+      } catch (error) {
+        response.statusCode = 500;
+        response.end(error instanceof Error ? error.message : String(error));
+      }
+    })();
   });
   return { requests, vaultAddr };
 }

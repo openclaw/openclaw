@@ -61,7 +61,7 @@ function registerCrabboxGeneration() {
     api,
     inspect: (id: string) => providers[0]!.inspect({ leaseId: id, profile: PROFILE }),
     stopped: false,
-    async stop() {
+    async stop(this: void) {
       const scheduler = createTestPluginServiceScheduler();
       scheduler.beginClose();
       try {
@@ -152,6 +152,15 @@ it.each([
     await expect(provider.inspect({ leaseId: id, profile })).resolves.toEqual(active);
     await expect(provider.destroy({ leaseId: id, profile })).resolves.toBeUndefined();
     const calls = runCommand.mock.calls.map(([argv]) => argv);
+    expect(calls.filter((argv) => argv[1] !== "heartbeat").map((argv) => argv[1])).toEqual([
+      "providers",
+      ...(backend === "aws" ? ["config"] : []),
+      "warmup",
+      "inspect",
+      "run",
+      "inspect",
+      "stop",
+    ]);
     expect(calls.flat()).not.toContain("--class");
     expect(calls.at(-1)).toEqual([PROFILE.binary, "stop", "--provider", backend, "--id", id]);
     expect(runCommand.mock.lastCall?.[1]).toMatchObject({
