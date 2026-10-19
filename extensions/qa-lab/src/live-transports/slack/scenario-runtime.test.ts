@@ -79,10 +79,10 @@ function createMpimRuntime() {
 const requestStartedAt = "2026-09-03T12:00:00.000Z";
 function expectRttEvidence(
   result: unknown,
-  responseObservedAt: string,
   rttMs: number,
   source: "approval-request-to-resolution" | "request-to-observed-message",
 ) {
+  const responseObservedAt = new Date(Date.parse(requestStartedAt) + rttMs).toISOString();
   expect(result).toMatchObject({
     requestStartedAt,
     responseObservedAt,
@@ -114,22 +114,20 @@ it.each([
     const summaryText = builtRun.input.match(
       new RegExp(`SLACK_QA_${kind.toUpperCase()}_SUMMARY_[A-Z0-9]+`, "u"),
     )?.[0];
-    const finalMarker = builtRun.matchText;
     if (!summaryText) {
       throw new Error(`missing Slack native ${kind} summary marker`);
     }
+    const channelId = "C_NATIVE";
     const runtime = fixture(
       { ...builtRun, afterReply: undefined },
-      "C_NATIVE",
-      sutMessage(finalMarker, "3.000000"),
+      channelId,
+      sutMessage(builtRun.matchText, "3.000000"),
     );
-    runtime.writes.mockResolvedValue([
-      { channelId: "C_NATIVE", text: summaryText, ts: "2.000000" },
-    ]);
+    runtime.writes.mockResolvedValue([{ channelId, text: summaryText, ts: "2.000000" }]);
 
-    await expect(runSlackScenario(runtime.env, implementation)).resolves.toEqual(
-      expect.objectContaining({ details: expect.stringContaining("reply matched") }),
-    );
+    await expect(runSlackScenario(runtime.env, implementation)).resolves.toMatchObject({
+      details: expect.stringContaining("reply matched"),
+    });
     expect(runtime.writes.mock.invocationCallOrder[0]).toBeLessThan(
       runtime.history.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
@@ -138,7 +136,7 @@ it.each([
 
 it("returns structured RTT evidence for a matched reply", async () => {
   vi.useFakeTimers();
-  vi.setSystemTime("2026-09-03T12:00:00.000Z");
+  vi.setSystemTime(requestStartedAt);
   const runtime = createMpimRuntime();
   runtime.postMessage.mockImplementationOnce(async () => {
     vi.advanceTimersByTime(1_750);
@@ -147,18 +145,17 @@ it("returns structured RTT evidence for a matched reply", async () => {
 
   expectRttEvidence(
     await runSlackScenario(runtime.env, slackQaMpimAppMentionDedupeScenario),
-    "2026-09-03T12:00:01.750Z",
     1_750,
     "request-to-observed-message",
   );
 });
 
 it.each([
-  ["native", "exec", "approval", "SLACK_QA_APPROVAL", "approval-1", "01.250", 1_250],
-  ["Codex", "plugin", "codex-approval", "SLACK_QA_CODEX_APPROVAL", "approval-2", "02.500", 2_500],
+  ["native", "exec", "approval", "SLACK_QA_APPROVAL", "approval-1", 1_250],
+  ["Codex", "plugin", "codex-approval", "SLACK_QA_CODEX_APPROVAL", "approval-2", 2_500],
 ] as const)(
   "returns structured RTT evidence for a %s approval",
-  async (_label, approvalKind, kind, token, approvalId, time, rttMs) => {
+  async (_label, approvalKind, kind, token, approvalId, rttMs) => {
     const base = { approvalKind, decision: "allow-once" as const, token };
     const runtime = fixture(
       kind === "codex-approval"
@@ -170,17 +167,15 @@ it.each([
           }
         : { ...base, kind },
     );
-    const responseObservedAt = `2026-09-03T12:00:${time}Z`;
     const runner = kind === "approval" ? runSlackApprovalScenario : runSlackCodexApprovalScenario;
     runner.mockResolvedValueOnce({
       artifact: { approvalId },
       requestStartedAt: new Date(requestStartedAt),
-      responseObservedAt: new Date(responseObservedAt),
+      responseObservedAt: new Date(Date.parse(requestStartedAt) + rttMs),
       rttMs,
     });
     expectRttEvidence(
       await runSlackScenario(runtime.env, runtime.implementation),
-      responseObservedAt,
       rttMs,
       "approval-request-to-resolution",
     );
@@ -212,7 +207,7 @@ it.each([
     await expect(result).rejects.toThrow(`got 2 response(s) and ${expectedMarkerCount}`);
     return;
   }
-  await expect(result).resolves.toEqual(
-    expect.objectContaining({ details: expect.stringContaining("one MPIM reply observed") }),
-  );
+  await expect(result).resolves.toMatchObject({
+    details: expect.stringContaining("one MPIM reply observed"),
+  });
 });

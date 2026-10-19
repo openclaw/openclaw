@@ -136,12 +136,10 @@ describe("Slack agent E2E ownership", () => {
 
   it("cleans standalone scenario progress and final receipts after an assertion fails", async () => {
     const f = fixture();
-    const outputs = [
-      { ts: "2.000000", text: "COMMENTARY" },
-      { ts: "3.000000", text: "Ran Exec" },
-      { ts: "4.000000", text: "TOOL OUTPUT" },
-      { ts: "5.000000", text: "FINAL" },
-    ];
+    const outputs = ["COMMENTARY", "Ran Exec", "TOOL OUTPUT", "FINAL"].map((text, index) => ({
+      ts: `${index + 2}.000000`,
+      text,
+    }));
     const unrelated = [
       { ts: "6.000000", text: "Ran Exec", user: "U_OTHER" },
       { ts: "7.000000", text: "other channel", user: "U_SUT" },

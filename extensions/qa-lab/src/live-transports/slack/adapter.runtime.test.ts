@@ -72,6 +72,11 @@ const emptyCaptureReader = () => ({
   getSessionEvents: vi.fn(async () => []),
   readBlob: vi.fn(async () => null),
 });
+const messageRecorder = () => ({
+  addInboundMessage: vi.fn(),
+  addOutboundMessage: vi.fn(),
+  editMessage: vi.fn(),
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -81,15 +86,9 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  for (const key of [
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "ALL_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "all_proxy",
-  ]) {
+  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]) {
     vi.stubEnv(key, "");
+    vi.stubEnv(key.toLowerCase(), "");
   }
   vi.stubGlobal(
     "fetch",
@@ -207,11 +206,7 @@ async function nativeAdapterFixture(
       }),
     },
     adapterOptions: { agentE2e: true },
-    messages: {
-      addInboundMessage: vi.fn(),
-      addOutboundMessage: vi.fn(),
-      editMessage: vi.fn(),
-    },
+    messages: messageRecorder(),
   });
   const prepared = await adapter.prepareFlow?.({
     config: {},
@@ -274,11 +269,7 @@ function busObservationFixture() {
 describe("Slack live adapter reconciliation", () => {
   it("does not acquire a capture reader before a capture is requested", async () => {
     const adapter = await createSlackQaTransportAdapter({
-      messages: {
-        addInboundMessage: vi.fn(),
-        addOutboundMessage: vi.fn(),
-        editMessage: vi.fn(),
-      },
+      messages: messageRecorder(),
     } as never);
     const runtimeEnv = { OPENCLAW_STATE_DIR: "/candidate/state" };
     const input = {
