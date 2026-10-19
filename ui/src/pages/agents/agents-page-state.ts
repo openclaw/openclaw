@@ -45,7 +45,7 @@ import {
   subscribeModelCatalogCache,
   subscribeModelCatalogChanges,
 } from "../../lib/model-catalog-store.ts";
-import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner, projectMutableSource } from "../../lib/reactive/projection.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { createAgentConfigActions } from "./agent-config-actions.ts";
 import type { GeneratedAvatar } from "./avatar-picker.tsx";
@@ -1082,16 +1082,8 @@ export function createAgentsPageState(
       onSetDefault: (agentId) => void selectDefaultAgent(agentId),
     };
   }
-  const projection = projectSource(context, {
-    read: () => state,
-    subscribe: (_source, notify) => {
-      publish = notify;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const projection = projectMutableSource(context, () => state);
+  publish = projection.publish;
   const memoryTarget: AgentMemoryTarget = {
     read: () => state.agentsSelectedId,
     subscribe: projection.subscribe,

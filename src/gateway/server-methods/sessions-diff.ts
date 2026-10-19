@@ -1,5 +1,6 @@
 // Session checkout diff for operator clients, filtered against the exact
 // working-tree state captured when the logical session started.
+import { performance } from "node:perf_hooks";
 import {
   ErrorCodes,
   errorShape,
@@ -8,6 +9,7 @@ import {
   type SessionsDiffResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../config/io.js";
+import { startDiffReadTiming, type DiffReadTiming } from "../../infra/diff-read-timing.js";
 import { loadCheckoutDiff } from "../../sessions/session-diff.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
@@ -24,7 +26,9 @@ export async function loadSessionDiff(
   params: SessionsDiffParams,
   context?: GatewayRequestContext,
   assertAuthorized: () => void = () => {},
+  diffTiming?: DiffReadTiming,
 ): Promise<SessionsDiffResult> {
+  const resolveStarted = diffTiming ? performance.now() : 0;
   let worktreeCount = 0;
   let returnedFileCount = 0;
   using timing =
@@ -107,6 +111,9 @@ export async function loadSessionDiff(
       assertCurrent();
       worktreeCount = 1;
       timing?.mark("git");
+      if (diffTiming) {
+        diffTiming.durations["checkout-resolve"] = performance.now() - resolveStarted;
+      }
       const input = {
         cwd,
         sessionKey: params.sessionKey,
@@ -118,14 +125,20 @@ export async function loadSessionDiff(
         if (!params.commit) {
           throw new TypeError("commit scope requires a commit");
         }
-        result = await loadCheckoutDiff({ ...input, commit: params.commit, scope: "commit" });
+        result = await loadCheckoutDiff(
+          { ...input, commit: params.commit, scope: "commit" },
+          diffTiming,
+        );
       } else {
-        result = await loadCheckoutDiff({
-          ...input,
-          scope: params.scope ?? "all",
-          baseline: entry.sessionDiffBaseline,
-          sessionId: entry.sessionId,
-        });
+        result = await loadCheckoutDiff(
+          {
+            ...input,
+            scope: params.scope ?? "all",
+            baseline: entry.sessionDiffBaseline,
+            sessionId: entry.sessionId,
+          },
+          diffTiming,
+        );
       }
       assertCurrent();
       managedBase?.assertCurrent();
@@ -139,6 +152,9 @@ export async function loadSessionDiff(
 export const sessionsDiffHandlers: GatewayRequestHandlers = {
   "sessions.diff": async (options) => {
     const { params, respond, context } = options;
+    using ownDiffTiming = options.diffTiming ? undefined : startDiffReadTiming("sessions.diff");
+    const diffTiming = options.diffTiming ?? ownDiffTiming;
+    const admissionStarted = diffTiming ? performance.now() : 0;
     using timing = startSlowRequestDiagnostics<"scopedRead" | "load" | "send">(
       context.logGateway,
       "slow session diff request",
@@ -179,6 +195,10 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
       : undefined;
     try {
       timing?.mark("load");
+      if (diffTiming) {
+        diffTiming.durations.admission =
+          (diffTiming.durations.admission ?? 0) + performance.now() - admissionStarted;
+      }
       const result = await loadSessionDiff(
         {
           ...params,
@@ -186,10 +206,15 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
         },
         context,
         () => read?.assertCurrent(),
+        diffTiming,
       );
       read?.assertCurrent();
       timing?.mark("send");
+      const encodeStarted = diffTiming ? performance.now() : 0;
       respond(true, result);
+      if (diffTiming) {
+        diffTiming.durations.encode = performance.now() - encodeStarted;
+      }
     } finally {
       read?.release();
     }

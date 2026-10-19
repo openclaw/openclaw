@@ -84,12 +84,12 @@ function applyObservedChatSessionRow(
   state: ChatPageHost,
   row: GatewaySessionRow | null,
   observedSessionId: string | null = null,
-) {
+): void {
   const selectedAgentId = resolveChatAgentId(state);
   if (!row) {
     const result = state.sessionsResult;
     if (!result || state.sessionsResultAgentId !== selectedAgentId) {
-      return false;
+      return;
     }
     const sessions = result.sessions.filter(
       (candidate) =>
@@ -97,13 +97,13 @@ function applyObservedChatSessionRow(
         (observedSessionId !== null && candidate.sessionId !== observedSessionId),
     );
     if (sessions.length === result.sessions.length) {
-      return false;
+      return;
     }
     state.sessionsResult = { ...result, sessions, count: sessions.length };
-    return true;
+    return;
   }
   if (!visibleSessionMatches(state, row.key, row.agentId ?? selectedAgentId)) {
-    return false;
+    return;
   }
   const current = state.sessionsResultAgentId === selectedAgentId ? state.sessionsResult : null;
   const existing = row.sessionId
@@ -146,12 +146,8 @@ function applyObservedChatSessionRow(
       stopChatRealtimeTalk(state, { preserveConversation: true });
     }
   }
-  if (result === state.sessionsResult && state.sessionsResultAgentId === selectedAgentId) {
-    return false;
-  }
   state.sessionsResult = result;
   state.sessionsResultAgentId = selectedAgentId;
-  return true;
 }
 
 export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation {

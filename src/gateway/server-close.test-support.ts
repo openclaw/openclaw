@@ -93,7 +93,6 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       },
       stopMediaCleanup: vi.fn(async () => "drained" as const),
       agentUnsub: null,
-      heartbeatUnsub: null,
       transcriptUnsub: null,
       lifecycleUnsub: null,
       chatRunState: createTestChatRunState(),

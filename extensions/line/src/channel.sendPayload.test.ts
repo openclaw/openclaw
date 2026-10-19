@@ -31,7 +31,7 @@ function lineConfig(line: LineConfig): OpenClawConfig {
 }
 const cfg = lineConfig({});
 const to = "line:user:U123";
-const sendOptions = { verbose: false, accountId: "default", cfg };
+const sendOptions = { accountId: "default", cfg };
 const videoUrl = "https://example.com/video.mp4";
 const imageUrl = "https://example.com/photo.png";
 const previewImageUrl = "https://example.com/preview.jpg";
@@ -244,7 +244,6 @@ it("preserves batch receipts and bounds Flex alternative text", async () => {
     messageId: providerMessageIds[0],
     chatId: "C123",
     receipt: createLineSendReceipt({
-      messageId: providerMessageIds[0],
       messageIds: providerMessageIds,
       chatId: "C123",
       kind: "card",
@@ -417,7 +416,7 @@ it.each([false, true])("keeps nested partial evidence (accepted=%s)", async (acc
   const rejection = refusal(400);
   const partial = createChannelPartialDeliveryError(rejection, {
     messageIds: ["accepted-child"],
-    receipt: createLineSendReceipt({ messageId: "accepted-child", chatId: "c1", kind: "text" }),
+    receipt: createLineSendReceipt({ messageIds: ["accepted-child"], chatId: "c1", kind: "text" }),
     visibleReplySent: true,
   });
   if (accepted) {

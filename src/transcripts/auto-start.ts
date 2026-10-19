@@ -1,5 +1,6 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { throwCollectedErrors, throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
 import { normalizeCapabilityProviderId } from "../plugins/provider-registry-shared.js";
@@ -191,12 +192,7 @@ export function createTranscriptsAutoStartService(
         return;
       }
       // Only startup is deadline-bound; already acquired cleanup/finalization still joins fully.
-      const errors = (await stopping).flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (errors.length) {
-        throw new AggregateError(errors, "Transcript auto-start cleanup failed");
-      }
+      throwSettledAggregate(await stopping, "Transcript auto-start cleanup failed");
     },
   };
 }
@@ -717,12 +713,7 @@ function startTranscriptsAutoStartEntry(
         failures.push(error);
       }
     }
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length > 1) {
-      throw new AggregateError(failures, "Transcript entry cleanup failed");
-    }
+    throwCollectedErrors(failures, "Transcript entry cleanup failed");
     return startedSessions.size === 0;
   };
   return { stop, pendingStarts };

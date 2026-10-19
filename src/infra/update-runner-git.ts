@@ -629,6 +629,7 @@ export async function updateGitCheckout(params: {
         throw error;
       }
       steps.push(
+        ...doctorSteps.filter((result) => result !== doctorStep),
         doctorStep ??
           failureStep(
             "openclaw doctor",

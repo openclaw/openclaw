@@ -42,8 +42,8 @@ export function mountTooltipView(
   });
   overlay.bindSurface(surface);
   overlay.setParent(findOverlayParent(policy.trigger ?? host));
+  // Apply accepted-open policy synchronously; only completion events need forwarding.
   const unsubscribe = overlay.subscribe((open) => policy.acceptedOpen(open));
-  // Requests cross the shadow boundary; only completion events need forwarding.
   const listeners = ["overlay-after-show", "overlay-after-hide"].map((type) => {
     const listener = (event: Event) => {
       if (event.target !== surface) {
