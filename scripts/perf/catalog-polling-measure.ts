@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
-import { chromium, type WebSocket } from "playwright";
+import { chromium, type WebSocket as PlaywrightWebSocket } from "playwright";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { asOptionalRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import type { ControlUiReadiness } from "../../ui/src/app/control-ui-readiness.ts";
@@ -211,7 +211,7 @@ async function measureLoads(runs: number) {
             snapshot?.ready &&
             snapshot.gatewayPhase === "connected" &&
             (!sessionKey || snapshot.sessionKey === sessionKey) &&
-            snapshot.route?.resolvedLocation.pathname === pathname
+            snapshot.route?.resolvedLocation?.pathname === pathname
           );
         },
         { sessionKey: values["expect-session"], pathname: destination.pathname },
@@ -304,8 +304,8 @@ type Phase = {
 };
 const methods: Method[] = ["models.list", "cron.list"];
 const phases: Phase[] = [];
-const sockets = new Set<WebSocket>();
-const connected = new Set<WebSocket>();
+const sockets = new Set<PlaywrightWebSocket>();
+const connected = new Set<PlaywrightWebSocket>();
 const startedAt = performance.now();
 let accountedAt = startedAt;
 let measuring = true;
