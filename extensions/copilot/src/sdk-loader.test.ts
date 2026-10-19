@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import copilotPluginPackage from "../package.json" with { type: "json" };
 
 const FAKE_SDK = {
-  CopilotClient: class FakeCopilotClient {},
+  CopilotClient: vi.fn(),
 };
 
 function mockPrimaryImport(factory: () => Promise<unknown>) {
@@ -60,11 +60,13 @@ describe("sdk-loader", () => {
   });
 
   it("throws an actionable error with install and resolution details", async () => {
-    mockPrimaryImport(async () => {
-      throw new Error("primary boom");
-    });
     const { loadCopilotSdk } = await import("./sdk-loader.js");
-    const failed = loadCopilotSdk();
+    // Vitest wraps rejected mock factories, hiding the original import diagnostic.
+    const failed = loadCopilotSdk({
+      primaryImport: async () => {
+        throw new Error("primary boom");
+      },
+    });
 
     await expect(failed).rejects.toMatchObject({ code: "COPILOT_SDK_MISSING" });
     for (const detail of [

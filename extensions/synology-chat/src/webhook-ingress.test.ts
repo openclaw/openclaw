@@ -201,7 +201,7 @@ describe("Synology Chat durable ingress", () => {
   });
 
   it("allows concurrent stop calls", async () => {
-    await withQueue(async (queue, start) => {
+    await withQueue(async (_queue, start) => {
       const ingress = start(async (_event, lifecycle) => {
         await lifecycle.onAdopted();
       });

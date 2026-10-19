@@ -125,11 +125,11 @@ describe("createMantleAnthropicStreamFn", () => {
   });
 
   it("uses authToken bearer auth for Mantle Anthropic requests", async () => {
-    const stream = { kind: "anthropic-stream" };
+    const resultStream = { kind: "anthropic-stream" };
     const model = createTestModel();
     const context = { messages: [] };
     const deps = createTestDeps();
-    deps.stream.mockReturnValue(stream as never);
+    deps.stream.mockReturnValue(resultStream as never);
     const acceptanceObserver = vi.fn();
     const onResponse = vi.fn();
     const options = withProviderAcceptanceObserver(
@@ -145,7 +145,7 @@ describe("createMantleAnthropicStreamFn", () => {
 
     const result = createMantleAnthropicStreamFn()(model, context, options);
 
-    expect(result).toBe(stream);
+    expect(result).toBe(resultStream);
     const clientOptions = requireRecord(mockCallArg(deps.createClient), "client options");
     expect(clientOptions.apiKey).toBeNull();
     expect(clientOptions.authToken).toBe("bedrock-bearer-token");

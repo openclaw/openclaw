@@ -10,9 +10,11 @@ const COPILOT_SDK_SPEC = `@github/copilot-sdk@${copilotPluginPackage.dependencie
 
 let cached: Promise<typeof Sdk> | undefined;
 
-export async function loadCopilotSdk(): Promise<typeof Sdk> {
+export async function loadCopilotSdk(
+  options: { primaryImport?: () => Promise<typeof Sdk> } = {},
+): Promise<typeof Sdk> {
   if (!cached) {
-    cached = doLoad().catch((err: unknown) => {
+    cached = doLoad(options.primaryImport).catch((err: unknown) => {
       cached = undefined;
       throw err;
     });
@@ -20,10 +22,12 @@ export async function loadCopilotSdk(): Promise<typeof Sdk> {
   return cached;
 }
 
-async function doLoad(): Promise<typeof Sdk> {
+async function doLoad(
+  primaryImport: () => Promise<typeof Sdk> = () => import("@github/copilot-sdk"),
+): Promise<typeof Sdk> {
   let primaryErr: unknown;
   try {
-    return await import("@github/copilot-sdk");
+    return await primaryImport();
   } catch (err) {
     primaryErr = err;
   }
