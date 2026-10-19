@@ -70,6 +70,13 @@ suite.define(() => {
         const activityModule = controlUiE2eBuiltModuleRequest(
           "ui/src/pages/chat/components/chat-subagent-activity-live.tsx",
         );
+        const activityChunk = Promise.withResolvers<void>();
+        const activityRequested = Promise.withResolvers<void>();
+        await page.route(activityModule, async (route) => {
+          activityRequested.resolve();
+          await activityChunk.promise;
+          await route.continue();
+        });
         const activityRequests: string[] = [];
         page.on("request", (request) => {
           if (activityModule.test(request.url())) {
@@ -204,11 +211,19 @@ suite.define(() => {
           state: "final",
           yielded: true,
         });
+        await activityRequested.promise;
+        const pendingStatus = activePane.locator(".chat-working-indicator");
+        await pendingStatus.locator(".chat-reading-indicator").waitFor();
+        expect(await pendingStatus.isVisible()).toBe(true);
+        expect(await pendingStatus.textContent()).toContain("Working");
+        expect(await activePane.locator(".chat-subagent-activity").count()).toBe(0);
+        activityChunk.resolve();
         await activePane
           .locator(".chat-subagent-activity")
           .getByText("Backend review", { exact: true })
           .waitFor();
         expect(activityRequests).toHaveLength(1);
+        await pendingStatus.waitFor({ state: "hidden" });
         expect(await waitLine.count()).toBe(0);
         expect(await activePane.locator(".chat-working-indicator--subagents").count()).toBe(0);
         expect(await transcriptHeight()).toBe(beforeWaitHeight);
