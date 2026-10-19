@@ -137,6 +137,8 @@ it.runIf(process.platform !== "win32")("filters lsof listeners by PID and proces
 });
 
 it.runIf(process.platform !== "win32")("cleans stale processes on an explicit port", () => {
+  // Use the synthetic /proc fixture instead of querying macOS for an invented PID.
+  mockProcessPlatform("linux");
   const stalePid = process.pid + 1000;
   spawnSyncMock
     .mockReturnValueOnce(lsofResult([[stalePid, "openclaw", ["openclaw-gateway"]]]))

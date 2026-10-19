@@ -80,19 +80,10 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
   const run = () =>
     // Autonomous turns prepare their own workspace and cannot borrow a previous chat run's gate.
     runWithAgentWorkspaceReadiness(undefined, () => executeAgentRun(params, cleanup.resolve));
-  try {
-    await runWithSessionControllerCleanup(() =>
-      input ? withSessionControllerSource(input, run) : run(),
-    );
-    cleanup.resolve();
-  } catch (error) {
-    // A resource-owner receipt proves completed disposal despite callback errors.
-    // Other cleanup failures retain source custody until explicit recovery.
-    if (error instanceof PluginRuntimeCloseCompletedError) {
-      cleanup.resolve();
-    }
-    throw error;
-  }
+  await runWithSessionControllerCleanup(() =>
+    input ? withSessionControllerSource(input, run) : run(),
+  );
+  cleanup.resolve();
 }
 
 async function executeAgentRun(
@@ -132,8 +123,14 @@ async function executeAgentRun(
     await using runtimeResources = {
       stack: new AsyncDisposableStack(),
       async [Symbol.asyncDispose]() {
-        await this.stack.disposeAsync();
-        runtimeDisposed = true;
+        try {
+          await this.stack.disposeAsync();
+          runtimeDisposed = true;
+        } catch (error) {
+          // Capture the owner's receipt before await-using combines it with a publication error.
+          runtimeDisposed = error instanceof PluginRuntimeCloseCompletedError;
+          throw error;
+        }
       },
     };
     let preparedModelRuntimeLease = runtimeResources.stack.use(prepared.preparedModelRuntimeLease);

@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { pollPendingIMessageApprovalReactions as poll } from "./approval-reaction-poller.js";
 import {
   clearIMessageApprovalReactionTargetsForTest,
@@ -203,8 +204,9 @@ describe("iMessage approval reaction poller", () => {
     });
     await registerTarget();
     const request = createRpcRequest([buildGroupApprovalMessage()]);
-    const logVerboseMessage = vi.fn();
-    const pollParams = buildPollParams(request, { logVerboseMessage });
+    const logVerboseMessage = vi.spyOn(runtimeEnv, "logVerbose").mockImplementation(() => {});
+    onTestFinished(() => logVerboseMessage.mockRestore());
+    const pollParams = buildPollParams(request);
 
     await poll(pollParams);
     await poll(pollParams);

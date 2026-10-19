@@ -479,7 +479,17 @@ the hard upper bound. Clean database restart proof is published only after write
 leases, checkpointing, and native connection closure settle; one database's idle
 receipt alone does not authorize process exit.
 
-Worker-placement maintenance stops admitting new candidates when drain begins.
+Session-admission diagnostics distinguish source cleanup from effect admission.
+Pending source cleanup includes live counts of sources, operations, and retained
+source work. A failed final response does not retain a source after its runtime
+confirms completed disposal, even when disposal also reports a callback error.
+Unfinished disposal still retains its cleanup obligation.
+
+Worker-placement and environment reconciliation stop admitting new candidates
+when suspension or drain begins. Releasing a suspension allows the next scheduled
+sweep to resume. Drain signals cancellation to in-flight provider inspections.
+Device pairing and presence reads stop waiting; their late results cannot resume
+reconciliation afterward.
 Optional session-evidence reads and disk probes are canceled. Node retention stops
 new preparation and cancels supported requests; an in-progress shared bundle
 build remains joined. An accepted retirement, workspace recovery, reclaim, or
@@ -500,7 +510,7 @@ Pending diagnostics distinguish attachment reconciliation, environment reconcili
 retention writes, candidate reads, and session recovery. For an attached worker, shutdown stops the exact
 remote environment before draining its workspace queue: a foreground command
 can hold that queue until the stop cancels it. Remote stop, drain, and active-turn
-cancellation acknowledgments share at most five seconds after shutdown begins,
+cancellation acknowledgments and native computer close requests share at most five seconds after shutdown begins,
 capped by the remaining process cleanup budget, including cancellation already
 started before shutdown. Tunnel cleanup separately times initialization, active
 launches, workspace operations, and transfers, so a slow reconciliation join names

@@ -632,7 +632,6 @@
 ["extensions/imessage/src/install-imsg.test.ts","openclaw/plugin-sdk/run-command","2727ef6729675602332f03dcbfc7eb3e1727afafaf5b056390d550af7d5e14e4",1]
 ["extensions/imessage/src/monitor.approval-poll-ingress.test.ts","./approval-polls.js","98e3c3d9d95d1e45a7d55bf69e9cd3fcf91e6e22f29b26bb73e482781fc29804",1]
 ["extensions/imessage/src/monitor.approval-poll-ingress.test.ts","./approval-reaction-poller.js","deaf651386cd5cff2e7038aa504bb002807ac9b61f311b99d018913cfcb51773",1]
-["extensions/imessage/src/monitor.approval-poll-ingress.test.ts","./approval-reactions.js","a608078e7459aa978a01d6d862490f593a043cc2a7c472cc593e993508f80ca7",1]
 ["extensions/imessage/src/monitor.approval-poll-ingress.test.ts","./client.js","367c6905074fcf06067111ec69bf640686560fd883405fa0d9bf35a47487f27c",1]
 ["extensions/imessage/src/monitor.approval-poll-ingress.test.ts","./monitor/abort-handler.js","0d0aaa74af7f52bf03e67f91b44871d1d709f7c7cb222b134295692193a648ec",1]
 ["extensions/imessage/src/monitor.approval-poll-ingress.test.ts","./monitor/ingress.js","13e23d96ed00749b5e8102993d98c8738c999303732722bf3a2905e92795e7b2",1]
