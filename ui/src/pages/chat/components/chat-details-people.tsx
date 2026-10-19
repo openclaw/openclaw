@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For, onSettled, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type {
   SessionParticipant,
   SessionParticipantIdentity,
@@ -9,8 +9,8 @@ import {
 } from "../../../components/person-activity-link.ts";
 import { ParticipantAvatar } from "../../../components/solid/viewer-facepile.tsx";
 import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
-import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import "./chat-details-people.css";
 
 type ChatDetailsPeopleFacts = {
@@ -162,7 +162,6 @@ export function ChatDetailsPeople(props: ChatDetailsPeopleProps) {
 function PeopleName(props: { name: string }) {
   let viewport!: HTMLSpanElement;
   let text!: HTMLSpanElement;
-  const layoutOwner = {};
   const measure = () => {
     const overflowing = viewport.clientWidth > 0 && text.scrollWidth > viewport.clientWidth;
     return () => {
@@ -175,19 +174,7 @@ function PeopleName(props: { name: string }) {
       }
     };
   };
-  const schedule = () => scheduleLayout(layoutOwner, measure);
-  createEffect(() => props.name, schedule);
-  onSettled(() => {
-    // Observe both boxes: fonts/content can change intrinsic text width without resizing the row.
-    const observer = new ResizeObserver(schedule);
-    observer.observe(viewport);
-    observer.observe(text);
-    schedule();
-    return () => {
-      observer.disconnect();
-      cancelLayout(layoutOwner);
-    };
-  });
+  createLayoutMeasurement(() => props.name, measure, { targets: () => [viewport, text] });
   return (
     <span ref={(element) => (viewport = element)} class="chat-details-people__name">
       <span ref={(element) => (text = element)}>{props.name}</span>
