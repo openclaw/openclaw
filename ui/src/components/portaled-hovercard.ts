@@ -1,5 +1,5 @@
 import { onSettled } from "solid-js";
-import { composedParent } from "../lib/navigation-click.ts";
+import { composedAncestors, composedParent } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 import type { TooltipElement } from "./tooltip.ts";
@@ -54,26 +54,11 @@ export function createPortaledHovercardOwner(
     portal.scheduleClose();
   };
 
-  function presentationAncestors(): Node[] {
-    const ancestors: Node[] = [];
-    let node: Node | null = triggerElement;
-    while (node) {
-      ancestors.push(node);
-      node =
-        node instanceof Element && node.assignedSlot
-          ? node.assignedSlot
-          : node instanceof ShadowRoot
-            ? node.host
-            : node.parentNode;
-    }
-    return ancestors;
-  }
-
   function checkPresentation(): boolean {
     if (
       triggerElement &&
       (!triggerElement.isConnected ||
-        presentationAncestors().some(
+        composedAncestors(triggerElement).some(
           (node) =>
             node instanceof Element &&
             (node.hasAttribute("inert") ||
@@ -88,7 +73,7 @@ export function createPortaledHovercardOwner(
   }
 
   function observePresentation(): void {
-    const ancestors = presentationAncestors();
+    const ancestors = composedAncestors(triggerElement);
     if (
       ancestors.length === triggerAncestors.length &&
       ancestors.every((node, index) => node === triggerAncestors[index])
