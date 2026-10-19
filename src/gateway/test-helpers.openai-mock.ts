@@ -1,9 +1,3 @@
-// OpenAI mock helpers provide deterministic fake Responses API streams for
-// gateway OpenAI-compatible HTTP tests.
-type OpenAIResponsesParams = {
-  input?: unknown[];
-};
-
 function extractLastUserText(input: unknown[]): string {
   for (let i = input.length - 1; i >= 0; i -= 1) {
     const item = input[i] as Record<string, unknown> | undefined;
@@ -32,18 +26,13 @@ function extractLastUserText(input: unknown[]): string {
 }
 
 function extractToolOutput(input: unknown[]): string {
-  for (const itemRaw of input) {
-    const item = itemRaw as Record<string, unknown> | undefined;
-    if (!item || item.type !== "function_call_output") {
-      continue;
-    }
-    return typeof item.output === "string" ? item.output : "";
-  }
-  return "";
+  const item = input.find(
+    (entry) => (entry as Record<string, unknown> | undefined)?.type === "function_call_output",
+  ) as Record<string, unknown> | undefined;
+  return typeof item?.output === "string" ? item.output : "";
 }
 
-function buildOpenAIResponsesSse(params: OpenAIResponsesParams): Response {
-  const input = Array.isArray(params.input) ? params.input : [];
+function buildOpenAIResponsesSse(input: unknown[]): Response {
   const toolOutput = extractToolOutput(input);
   const completed = {
     type: "response.completed",
@@ -96,9 +85,6 @@ function buildOpenAIResponsesSse(params: OpenAIResponsesParams): Response {
 }
 
 function decodeBodyText(body: unknown): string {
-  if (!body) {
-    return "";
-  }
   if (typeof body === "string") {
     return body;
   }
@@ -133,15 +119,15 @@ export function installOpenAiResponsesMock(params?: { baseUrl?: string }) {
 
     if (isResponsesRequest(url)) {
       const bodyText =
-        (init as { body?: unknown } | undefined)?.body !== undefined
-          ? decodeBodyText((init as { body?: unknown }).body)
+        init?.body !== undefined
+          ? decodeBodyText(init.body)
           : input instanceof Request
             ? await input.clone().text()
             : "";
 
       const parsed = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {};
       const inputItems = Array.isArray(parsed.input) ? parsed.input : [];
-      return buildOpenAIResponsesSse({ input: inputItems });
+      return buildOpenAIResponsesSse(inputItems);
     }
     if (url.startsWith(baseUrl)) {
       throw new Error(`unexpected OpenAI request in mock test: ${url}`);

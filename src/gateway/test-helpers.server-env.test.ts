@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
@@ -37,19 +38,10 @@ const envBeforeSuite = startupEnv();
 installGatewayTestHooks();
 
 async function tryListen(server: Server, port: number): Promise<NodeJS.ErrnoException | undefined> {
-  return new Promise((resolve) => {
-    const onError = (error: NodeJS.ErrnoException) => {
-      server.off("listening", onListening);
-      resolve(error);
-    };
-    const onListening = () => {
-      server.off("error", onError);
-      resolve(undefined);
-    };
-    server.once("error", onError);
-    server.once("listening", onListening);
-    server.listen(port, "127.0.0.1");
-  });
+  return once(server.listen(port, "127.0.0.1"), "listening").then(
+    () => undefined,
+    (error: NodeJS.ErrnoException) => error,
+  );
 }
 
 async function closeListener(server: Server): Promise<void> {
@@ -248,10 +240,7 @@ describe("Gateway test environment lifecycle", () => {
                 failureMode === "connect error"
                   ? "wrong-gateway-token-1234567890"
                   : "test-gateway-token-1234567890",
-            }).then(
-              () => undefined,
-              (error: unknown) => error,
-            );
+            }).catch((error: unknown) => error);
             if (failureMode === "connect error") {
               expect(failure).toBeInstanceOf(GatewayClientRequestError);
               expect(failure).toMatchObject({

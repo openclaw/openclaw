@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -40,17 +41,18 @@ async function resolveTools(
     ...overrides,
   });
 }
+const toolNames = (result: { tools: { name: string }[] }) => result.tools.map(({ name }) => name);
 
 describe("resolveGatewayScopedTools", () => {
   beforeEach(() => setRuntimeConfigSnapshot({}));
 
   it.each([
-    { messageProvider: "webchat", deny: false, available: true },
-    { messageProvider: "whatsapp", deny: false, available: false },
-    { messageProvider: "webchat", deny: true, available: false },
-  ])(
-    "gates ask_user in the $messageProvider catalog (deny: $deny)",
-    async ({ messageProvider, deny, available }) => {
+    ["webchat", false, true],
+    ["whatsapp", false, false],
+    ["webchat", true, false],
+  ] as const)(
+    "gates ask_user in %s (deny: %s, available: %s)",
+    async (messageProvider, deny, available) => {
       const result = await resolveTools({
         cfg: {
           plugins: { enabled: false },
@@ -59,7 +61,7 @@ describe("resolveGatewayScopedTools", () => {
         messageProvider,
         senderIsOwner: true,
       });
-      expect(result.tools.some((tool) => tool.name === "ask_user")).toBe(available);
+      expect(toolNames(result).includes("ask_user")).toBe(available);
     },
   );
 
@@ -137,13 +139,12 @@ describe("resolveGatewayScopedTools", () => {
         } else if (method === "computer.status") {
           response = { configured: false, available: false };
         } else if (method === "node.invoke") {
-          if (!isRecord(request) || !isRecord(request.params)) {
-            throw new Error("Malformed fixture node invocation");
-          }
+          assert(
+            isRecord(request) && isRecord(request.params),
+            "Malformed fixture node invocation",
+          );
           const command = commands.get(String(request.command));
-          if (!command) {
-            throw new Error("Unexpected node command");
-          }
+          assert(command, "Unexpected node command");
           const params = request.params;
           if (params.action === "__close_execution") {
             expect(getGatewayToolCallerIdentity()).toBeUndefined();
@@ -184,9 +185,7 @@ describe("resolveGatewayScopedTools", () => {
         },
       });
       const computer = resolved.tools.find((tool) => tool.name === "computer");
-      if (!computer) {
-        throw new Error("MCP computer tool was not available");
-      }
+      assert(computer, "MCP computer tool was not available");
       return wrapToolWithGatewayCallerIdentity(computer, {
         agentId: "main",
         sessionKey: "agent:main:computer",
@@ -233,7 +232,7 @@ describe("resolveGatewayScopedTools", () => {
       messageProvider: "telegram",
       inboundEventKind: "room_event",
     });
-    expect(result.tools.some((tool) => tool.name === "message")).toBe(true);
+    expect(toolNames(result)).toContain("message");
   });
 
   it("rejects collector mode after gateway policy removes its reader", async () => {
@@ -246,7 +245,7 @@ describe("resolveGatewayScopedTools", () => {
     });
     const spawn = result.tools.find((tool) => tool.name === "sessions_spawn");
     expect(spawn).toBeDefined();
-    expect(result.tools.some((tool) => tool.name === "agents_wait")).toBe(false);
+    expect(toolNames(result)).not.toContain("agents_wait");
     expect(spawn?.parameters).not.toHaveProperty("properties.collect");
     await expect(
       spawn!.execute("uncollectable", { task: "inspect", collect: true }),
@@ -257,8 +256,8 @@ describe("resolveGatewayScopedTools", () => {
     const cfg = { agents: { defaults: { imageModel: { primary: "openai/gpt-5.4-mini" } } } };
     const unbound = await resolveTools({ cfg });
     const grantBound = await resolveTools({ cfg, agentDir: "/agents/cli" });
-    expect(unbound.tools.some((tool) => tool.name === "view_image")).toBe(false);
-    expect(grantBound.tools.some((tool) => tool.name === "view_image")).toBe(true);
+    expect(toolNames(unbound)).not.toContain("view_image");
+    expect(toolNames(grantBound)).toContain("view_image");
   });
 
   it("keeps unknown and disabled model vision distinct in cached tools", async () => {
@@ -273,85 +272,72 @@ describe("resolveGatewayScopedTools", () => {
           modelHasVision,
         },
       });
-      expect(result.tools.some((tool) => tool.name === "computer")).toBe(modelHasVision !== false);
+      expect(toolNames(result).includes("computer")).toBe(modelHasVision !== false);
     }
   });
 
-  it("limits gateway actions to the borrowed runtime policy without reassigning the session", async () => {
-    const result = await resolveTools({
-      cfg: {
-        plugins: { enabled: false },
-        agents: {
-          ownership: "explicit",
-          entries: {
-            main: { tools: { profile: "full" } },
-            worker: { tools: { profile: "coding" } },
+  it.each(["worker", "main"])(
+    "binds runtime policy to %s without reassigning the session",
+    async (agent) => {
+      const resolving = resolveTools({
+        cfg: {
+          plugins: { enabled: false },
+          agents: {
+            ownership: "explicit",
+            entries: {
+              main: { tools: { profile: "full" } },
+              worker: { tools: { profile: "coding" } },
+            },
           },
         },
-      },
-      agentId: "main",
-      runtimePolicySessionKey: "agent:worker:main",
-      runtimePolicyAgentId: "worker",
-      senderIsOwner: true,
-    });
-    expect(result.agentId).toBe("main");
-    expect(result.tools.find((tool) => tool.name === "gateway")?.parameters).toHaveProperty(
-      "properties.action.enum",
-      ["update.run"],
-    );
-  });
-
-  it("rejects a runtime policy agent that conflicts with its session key", async () => {
-    await expect(
-      resolveTools({
-        cfg: { agents: { ownership: "explicit", entries: { main: {}, worker: {} } } },
         agentId: "main",
         runtimePolicySessionKey: "agent:worker:main",
-        runtimePolicyAgentId: "main",
-      }),
-    ).rejects.toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
-  });
+        runtimePolicyAgentId: agent,
+        senderIsOwner: true,
+      });
+      if (agent === "main") {
+        await expect(resolving).rejects.toThrowError(
+          expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
+        );
+        return;
+      }
+      const result = await resolving;
+      expect(result.agentId).toBe("main");
+      expect(result.tools.find((tool) => tool.name === "gateway")?.parameters).toHaveProperty(
+        "properties.action.enum",
+        ["update.run"],
+      );
+    },
+  );
 
   it.each([
-    {
-      label: "policy group",
-      resolve: resolveMcpLoopbackPolicyTools,
-      toolsAllow: ["group:fs"],
-      expected: ["ls", "read"],
+    ["policy group", resolveMcpLoopbackPolicyTools, ["group:fs"], ["ls", "read"]],
+    ["exact ls", resolveMcpLoopbackScopedTools, ["ls"], ["ls"]],
+    ["exact group", resolveMcpLoopbackScopedTools, ["group:fs"], []],
+  ] as const)(
+    "materializes %s without widening its cap",
+    async (_label, resolve, toolsAllow, expected) => {
+      const scope = {
+        cfg: {
+          plugins: { enabled: false },
+          tools: { profile: "minimal" as const, alsoAllow: ["ls", "read"] },
+        },
+        context: {
+          sessionKey: "agent:main:cron:listing-surface",
+          workspaceDir: path.join(os.tmpdir(), "openclaw-listing-surface"),
+          senderIsOwner: true,
+          toolsAllow: [...toolsAllow],
+        },
+      };
+      const allowed = await resolve(scope);
+      expect(toolNames(allowed)).toEqual(expected);
+      const denied = await resolve({
+        ...scope,
+        cfg: { ...scope.cfg, tools: { ...scope.cfg.tools, deny: ["ls"] } },
+      });
+      expect(toolNames(denied)).toEqual(expected.filter((name) => name !== "ls"));
     },
-    {
-      label: "exact ls",
-      resolve: resolveMcpLoopbackScopedTools,
-      toolsAllow: ["ls"],
-      expected: ["ls"],
-    },
-    {
-      label: "exact group",
-      resolve: resolveMcpLoopbackScopedTools,
-      toolsAllow: ["group:fs"],
-      expected: [],
-    },
-  ])("materializes $label without widening its cap", async ({ resolve, toolsAllow, expected }) => {
-    const scope = {
-      cfg: {
-        plugins: { enabled: false },
-        tools: { profile: "minimal" as const, alsoAllow: ["ls", "read"] },
-      },
-      context: {
-        sessionKey: "agent:main:cron:listing-surface",
-        workspaceDir: path.join(os.tmpdir(), "openclaw-listing-surface"),
-        senderIsOwner: true,
-        toolsAllow,
-      },
-    };
-    const allowed = await resolve(scope);
-    expect(allowed.tools.map((tool) => tool.name)).toEqual(expected);
-    const denied = await resolve({
-      ...scope,
-      cfg: { ...scope.cfg, tools: { ...scope.cfg.tools, deny: ["ls"] } },
-    });
-    expect(denied.tools.map((tool) => tool.name)).toEqual(expected.filter((name) => name !== "ls"));
-  });
+  );
 
   it("keeps managed shell tools subject to explicit denies", async () => {
     const cfg = {
@@ -364,15 +350,15 @@ describe("resolveGatewayScopedTools", () => {
       context,
       defaultMediatedToolNames: ["exec", "process"],
     });
-    const toolsAllow = projected.tools.map((tool) => tool.name);
+    const toolsAllow = toolNames(projected);
     const granted = await resolveMcpLoopbackScopedTools({
       cfg,
       context: { ...context, toolsAllow },
     });
     for (const result of [projected, granted]) {
-      expect(result.tools.some((tool) => tool.name === "exec")).toBe(false);
-      expect(result.tools.some((tool) => tool.name === "process")).toBe(false);
-      expect(result.tools.some((tool) => tool.name === "read")).toBe(false);
+      expect(
+        toolNames(result).filter((name) => ["exec", "process", "read"].includes(name)),
+      ).toEqual([]);
     }
   });
 
@@ -383,7 +369,7 @@ describe("resolveGatewayScopedTools", () => {
         tools: { sandbox: { tools: { deny: ["sessions_list"] } } },
       },
     });
-    const names = result.tools.map((tool) => tool.name);
+    const names = toolNames(result);
     expect(names).not.toContain("sessions_list");
     expect(names).toContain("sessions_history");
   });

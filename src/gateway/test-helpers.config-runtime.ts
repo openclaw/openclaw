@@ -1,16 +1,10 @@
-// Gateway config runtime test mock.
-// Wraps config IO with mutable test runtime state for integration tests.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
-import type {
-  ConfigWriteOptions,
-  ReadConfigFileSnapshotForWriteResult,
-  ReadConfigFileSnapshotWithPluginMetadataResult,
-} from "../config/io.js";
+import type { ConfigWriteOptions } from "../config/io.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { finalizeRuntimeSnapshotWrite } from "../config/runtime-snapshot.js";
 import { getRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
@@ -22,13 +16,12 @@ import { writeConfigMachineState } from "../state/config-machine-state-write.js"
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 import { testConfigRoot, testIsNixMode, testState } from "./test-helpers.runtime-state.js";
 
-type GatewayConfigModule = typeof import("../config/config.js");
 type GatewayConfigRuntime = Pick<
   typeof import("../config/io.js"),
   "getRuntimeConfigSnapshot" | "setRuntimeConfigSnapshot"
 >;
 type GatewayConfigOverrides = Pick<
-  GatewayConfigModule,
+  typeof import("../config/config.js"),
   | "CONFIG_PATH"
   | "STATE_DIR"
   | "isNixMode"
@@ -52,9 +45,6 @@ const composeTestConfig = (baseConfig: Record<string, unknown>) => {
     ...asNonArrayRecord(fileAgents.defaults),
     ...testState.agentConfig,
   };
-  const testAgents = testState.agentsConfig;
-  const agents = { ...fileAgents, ...testAgents, defaults };
-
   const fileBindings = Array.isArray(baseConfig.bindings)
     ? (baseConfig.bindings as AgentBinding[])
     : undefined;
@@ -70,58 +60,46 @@ const composeTestConfig = (baseConfig: Record<string, unknown>) => {
       allowFrom: testState.allowFrom,
     };
   }
-  const channels = Object.keys(mergedChannels).length > 0 ? mergedChannels : undefined;
-
   const fileSession = asNonArrayRecord(baseConfig.session);
   const session: Record<string, unknown> = {
     ...fileSession,
     mainKey: fileSession.mainKey ?? "main",
+    ...(typeof testState.sessionStorePath === "string"
+      ? { store: testState.sessionStorePath }
+      : {}),
+    ...testState.sessionConfig,
   };
-  if (typeof testState.sessionStorePath === "string") {
-    session.store = testState.sessionStorePath;
-  }
-  if (testState.sessionConfig) {
-    Object.assign(session, testState.sessionConfig);
-  }
 
-  const fileGateway = { ...asNonArrayRecord(baseConfig.gateway) };
-  if (testState.gatewayBind) {
-    fileGateway.bind = testState.gatewayBind;
-  }
-  if (testState.gatewayAuth) {
-    fileGateway.auth = testState.gatewayAuth;
-  }
+  const fileGateway: Record<string, unknown> = {
+    ...asNonArrayRecord(baseConfig.gateway),
+    ...(testState.gatewayBind ? { bind: testState.gatewayBind } : {}),
+    ...(testState.gatewayAuth ? { auth: testState.gatewayAuth } : {}),
+  };
   if (testState.gatewayControlUi) {
     fileGateway.controlUi = {
       ...asNonArrayRecord(fileGateway.controlUi),
       ...testState.gatewayControlUi,
     };
   }
-  const gateway = Object.keys(fileGateway).length > 0 ? fileGateway : undefined;
-
-  const hooks = testState.hooksConfig ?? baseConfig.hooks;
-
-  const fileCron = { ...asNonArrayRecord(baseConfig.cron) };
-  if (typeof testState.cronEnabled === "boolean") {
-    fileCron.enabled = testState.cronEnabled;
-  }
-  if (typeof testState.cronTriggersEnabled === "boolean") {
-    fileCron.triggers = { enabled: testState.cronTriggersEnabled };
-  }
+  const fileCron = {
+    ...asNonArrayRecord(baseConfig.cron),
+    ...(typeof testState.cronEnabled === "boolean" ? { enabled: testState.cronEnabled } : {}),
+    ...(typeof testState.cronTriggersEnabled === "boolean"
+      ? { triggers: { enabled: testState.cronTriggersEnabled } }
+      : {}),
+  };
   if (typeof testState.cronStorePath === "string") {
     writeConfigMachineState("cron.store", testState.cronStorePath);
   }
-  const cron = Object.keys(fileCron).length > 0 ? fileCron : undefined;
-
   const composed = {
     ...baseConfig,
-    agents,
+    agents: { ...fileAgents, ...testState.agentsConfig, defaults },
     bindings: testState.bindingsConfig ?? fileBindings,
-    channels,
+    channels: Object.keys(mergedChannels).length > 0 ? mergedChannels : undefined,
     session,
-    gateway,
-    hooks,
-    cron,
+    gateway: Object.keys(fileGateway).length > 0 ? fileGateway : undefined,
+    hooks: testState.hooksConfig ?? baseConfig.hooks,
+    cron: Object.keys(fileCron).length > 0 ? fileCron : undefined,
   } as OpenClawConfig;
   return applyImplicitAgentRosterDefaults(composed) as OpenClawConfig;
 };
@@ -165,9 +143,9 @@ export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): Gate
         raw,
         parsed: testState.legacyParsed ?? {},
         valid: false,
-        issues: testState.legacyIssues.map((issue) => ({
-          path: issue.path,
-          message: issue.message,
+        issues: testState.legacyIssues.map(({ path: issuePath, message }) => ({
+          path: issuePath,
+          message,
         })),
         legacyIssues: testState.legacyIssues,
       });
@@ -180,11 +158,7 @@ export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): Gate
     try {
       const raw = await fs.readFile(configPath, "utf-8");
       const parsed = JSON.parse(raw) as Record<string, unknown>;
-      return snapshot({
-        raw,
-        parsed,
-        config: composeTestConfig(parsed),
-      });
+      return snapshot({ raw, parsed, config: composeTestConfig(parsed) });
     } catch (err) {
       return snapshot({
         valid: false,
@@ -217,30 +191,6 @@ export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): Gate
       };
     },
   );
-
-  const readConfigFileSnapshotForWrite =
-    async (): Promise<ReadConfigFileSnapshotForWriteResult> => ({
-      snapshot: await readConfigFileSnapshot(),
-      writeOptions: {
-        expectedConfigPath: resolveConfigPath(),
-      },
-    });
-  const readConfigFileSnapshotWithPluginMetadata =
-    async (): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> => {
-      const snapshot = await readConfigFileSnapshot();
-      const validation = validateConfigObjectWithPlugins(snapshot.config, {
-        env: process.env,
-        pluginValidation: "skip",
-      });
-      return {
-        snapshot: {
-          ...snapshot,
-          valid: validation.ok,
-          issues: validation.ok ? [] : validation.issues,
-          warnings: validation.warnings,
-        },
-      };
-    };
 
   const loadRuntimeAwareTestConfig = () => {
     const runtimeSnapshot = actual.getRuntimeConfigSnapshot();
@@ -278,8 +228,25 @@ export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): Gate
       issues: [],
     }),
     readConfigFileSnapshot,
-    readConfigFileSnapshotWithPluginMetadata,
-    readConfigFileSnapshotForWrite,
+    readConfigFileSnapshotWithPluginMetadata: async () => {
+      const snapshot = await readConfigFileSnapshot();
+      const validation = validateConfigObjectWithPlugins(snapshot.config, {
+        env: process.env,
+        pluginValidation: "skip",
+      });
+      return {
+        snapshot: {
+          ...snapshot,
+          valid: validation.ok,
+          issues: validation.ok ? [] : validation.issues,
+          warnings: validation.warnings,
+        },
+      };
+    },
+    readConfigFileSnapshotForWrite: async () => ({
+      snapshot: await readConfigFileSnapshot(),
+      writeOptions: { expectedConfigPath: resolveConfigPath() },
+    }),
     writeConfigFile,
   };
 }

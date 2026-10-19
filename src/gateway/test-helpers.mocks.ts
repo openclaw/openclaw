@@ -1,5 +1,3 @@
-// Gateway integration test module mocks.
-// Centralizes Vitest mock wiring for agent, channel, plugin, and runtime seams.
 import path from "node:path";
 import { vi } from "vitest";
 import { withReplyDispatcher } from "../auto-reply/dispatch-dispatcher.js";
@@ -76,6 +74,17 @@ async function importEmbeddedRunMockModule<TModule extends object>(
   return { ...actual, ...createEmbeddedRunMockExports() };
 }
 
+function embeddedAgentMock() {
+  return importEmbeddedRunMockModule<typeof import("../agents/embedded-agent.js")>(
+    "../agents/embedded-agent.js",
+  );
+}
+function embeddedRunsMock() {
+  return importEmbeddedRunMockModule<typeof import("../agents/embedded-agent-runner/runs.js")>(
+    "../agents/embedded-agent-runner/runs.js",
+  );
+}
+
 function createDispatchInboundMessageMockExports(
   actual: typeof import("../auto-reply/dispatch.js"),
 ): typeof import("../auto-reply/dispatch.js") {
@@ -112,6 +121,25 @@ function createDispatchInboundMessageMockExports(
   };
 }
 
+async function dispatchMock() {
+  return createDispatchInboundMessageMockExports(
+    await vi.importActual<typeof import("../auto-reply/dispatch.js")>("../auto-reply/dispatch.js"),
+  );
+}
+function btwMock() {
+  return {
+    runBtwSideQuestion: (...args: Parameters<RunBtwSideQuestionFn>) =>
+      gatewayTestHoisted.runBtwSideQuestion(...args),
+  };
+}
+function replyMock() {
+  return {
+    getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
+      gatewayTestHoisted.getReplyFromConfig(...args),
+    prewarmConfigDrivenReplyRuntime: vi.fn(async () => {}),
+  };
+}
+
 vi.mock("../agents/agent-model-discovery.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/agent-model-discovery.js")>(
     "../agents/agent-model-discovery.js",
@@ -120,47 +148,35 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
     "../agents/sessions/index.js",
   );
 
-  const createActualRegistry = (...args: Parameters<typeof actual.discoverModelsAsync>) => {
-    const modelsFile = path.join(args[1], "models.json");
-    type RegistryInstance = {
-      getAll: () => Array<{ provider?: string; id?: string }>;
-      getAvailable: () => Array<{ provider?: string; id?: string }>;
-      find: (provider: string, modelId: string) => unknown;
-    };
-    const Registry = modelSessions.ModelRegistry as unknown as {
-      create?: (authStorage: unknown, modelsFile: string) => RegistryInstance;
-      new (authStorage: unknown, modelsFile: string): RegistryInstance;
-    };
-    if (typeof Registry.create === "function") {
-      return Registry.create(args[0], modelsFile);
-    }
-    return new Registry(args[0], modelsFile);
-  };
+  const createActualRegistry = (
+    authStorage: Parameters<typeof actual.discoverModelsAsync>[0],
+    agentDir: string,
+  ) => modelSessions.ModelRegistry.create(authStorage, path.join(agentDir, "models.json"));
 
   class MockModelRegistry {
     private readonly actualRegistry?: ReturnType<typeof createActualRegistry>;
 
-    constructor(authStorage: unknown, modelsFile: string) {
+    constructor(authStorage: Parameters<typeof actual.discoverModelsAsync>[0], modelsFile: string) {
       if (!agentDiscoveryMock.enabled) {
-        this.actualRegistry = createActualRegistry(authStorage as never, path.dirname(modelsFile));
+        this.actualRegistry = createActualRegistry(authStorage, path.dirname(modelsFile));
       }
     }
 
+    private readModels(method: "getAll" | "getAvailable") {
+      if (!agentDiscoveryMock.enabled) {
+        return this.actualRegistry?.[method]() ?? [];
+      }
+      if (method === "getAll") {
+        agentDiscoveryMock.discoverCalls += 1;
+      }
+      return agentDiscoveryMock.models as Array<{ provider?: string; id?: string }>;
+    }
     getAll() {
-      if (!agentDiscoveryMock.enabled) {
-        return this.actualRegistry?.getAll() ?? [];
-      }
-      agentDiscoveryMock.discoverCalls += 1;
-      return agentDiscoveryMock.models as Array<{ provider?: string; id?: string }>;
+      return this.readModels("getAll");
     }
-
     getAvailable() {
-      if (!agentDiscoveryMock.enabled) {
-        return this.actualRegistry?.getAvailable() ?? [];
-      }
-      return agentDiscoveryMock.models as Array<{ provider?: string; id?: string }>;
+      return this.readModels("getAvailable");
     }
-
     find(provider: string, modelId: string) {
       if (!agentDiscoveryMock.enabled) {
         return this.actualRegistry?.find(provider, modelId);
@@ -235,29 +251,10 @@ vi.mock("../config/io.js", async () => {
   };
 });
 
-vi.mock("../agents/embedded-agent.js", async () => {
-  return await importEmbeddedRunMockModule<typeof import("../agents/embedded-agent.js")>(
-    "../agents/embedded-agent.js",
-  );
-});
-
-vi.mock("/src/agents/embedded-agent.js", async () => {
-  return await importEmbeddedRunMockModule<typeof import("../agents/embedded-agent.js")>(
-    "../agents/embedded-agent.js",
-  );
-});
-
-vi.mock("../agents/embedded-agent-runner/runs.js", async () => {
-  return await importEmbeddedRunMockModule<
-    typeof import("../agents/embedded-agent-runner/runs.js")
-  >("../agents/embedded-agent-runner/runs.js");
-});
-
-vi.mock("/src/agents/embedded-agent-runner/runs.js", async () => {
-  return await importEmbeddedRunMockModule<
-    typeof import("../agents/embedded-agent-runner/runs.js")
-  >("../agents/embedded-agent-runner/runs.js");
-});
+vi.mock("../agents/embedded-agent.js", embeddedAgentMock);
+vi.mock("/src/agents/embedded-agent.js", embeddedAgentMock);
+vi.mock("../agents/embedded-agent-runner/runs.js", embeddedRunsMock);
+vi.mock("/src/agents/embedded-agent-runner/runs.js", embeddedRunsMock);
 
 // mock-isolation: Gateway fixtures must not collect real channel or session state.
 vi.mock("./health/collector.js", () => ({
@@ -286,36 +283,12 @@ vi.mock("../commands/agent.js", () => ({
   agentCommandFromIngress: (...args: Parameters<typeof agentCommandMock>) =>
     agentCommandMock(...args),
 }));
-vi.mock("../agents/btw.js", () => ({
-  runBtwSideQuestion: (...args: Parameters<RunBtwSideQuestionFn>) =>
-    gatewayTestHoisted.runBtwSideQuestion(...args),
-}));
-vi.mock("/src/agents/btw.js", () => ({
-  runBtwSideQuestion: (...args: Parameters<RunBtwSideQuestionFn>) =>
-    gatewayTestHoisted.runBtwSideQuestion(...args),
-}));
-vi.mock("../auto-reply/dispatch.js", async () => {
-  const actual = await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
-    "../auto-reply/dispatch.js",
-  );
-  return createDispatchInboundMessageMockExports(actual);
-});
-vi.mock("/src/auto-reply/dispatch.js", async () => {
-  const actual = await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
-    "../auto-reply/dispatch.js",
-  );
-  return createDispatchInboundMessageMockExports(actual);
-});
-vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
-  getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
-    gatewayTestHoisted.getReplyFromConfig(...args),
-  prewarmConfigDrivenReplyRuntime: vi.fn(async () => {}),
-}));
-vi.mock("/src/auto-reply/reply/get-reply-from-config.runtime.js", () => ({
-  getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
-    gatewayTestHoisted.getReplyFromConfig(...args),
-  prewarmConfigDrivenReplyRuntime: vi.fn(async () => {}),
-}));
+vi.mock("../agents/btw.js", btwMock);
+vi.mock("/src/agents/btw.js", btwMock);
+vi.mock("../auto-reply/dispatch.js", dispatchMock);
+vi.mock("/src/auto-reply/dispatch.js", dispatchMock);
+vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", replyMock);
+vi.mock("/src/auto-reply/reply/get-reply-from-config.runtime.js", replyMock);
 vi.mock("../cli/deps.js", async () => {
   const actual = await vi.importActual<typeof import("../cli/deps.js")>("../cli/deps.js");
   const base = actual.createDefaultDeps();
