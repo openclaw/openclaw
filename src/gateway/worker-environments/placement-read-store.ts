@@ -36,7 +36,7 @@ export function createPlacementReadStore(params: {
       return new Map(decorate(records).map((record) => [record.sessionId, record]));
     }
     const records = ids.length ? await read(ids) : [];
-    return new Map(records.map((record) => [record.sessionId, record]));
+    return new Map(records.map((record) => [record.sessionId, structuredClone(record)]));
   };
   return {
     getManyAsync,
