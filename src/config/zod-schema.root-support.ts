@@ -1,3 +1,4 @@
+import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { ALL_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
@@ -199,7 +200,7 @@ function validateTalkProviderSelection(
 ): void {
   const provider = normalizeLowercaseStringOrEmpty(value.provider ?? "");
   const providers = value.providers ? Object.keys(value.providers) : [];
-  if (provider && providers.length > 0 && !Object.hasOwn(value.providers!, provider)) {
+  if (provider && providers.length > 0 && !findNormalizedProviderKey(value.providers, provider)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["provider"],

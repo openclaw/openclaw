@@ -462,7 +462,6 @@ export async function terminateScheduledTaskNodeHost(
   }
   if (beforeMutation) {
     await beforeMutation();
-    assertCurrent?.();
   }
   await terminateGatewayProcessTree(pid, assertCurrent);
   return [pid];

@@ -8,7 +8,7 @@ import {
   isAgentDatabaseInspectionPendingError,
   resolveGatewayReadRetryDelayMs,
 } from "../gateway-availability.ts";
-import { modelCatalogKey, modelCatalogParams } from "../model-catalog-cache.ts";
+import { modelCatalogParams } from "../model-catalog-cache.ts";
 import {
   loadModelCatalog,
   peekModelCatalog,
@@ -103,7 +103,6 @@ function metadataEntryFor(
   let entry = entries.get(key);
   if (!entry) {
     const catalogScope = modelCatalogParams(params);
-    const catalogKey = modelCatalogKey(catalogScope);
     const created: ChatMetadataEntry = {
       scope: params,
       catalogController: new AbortController(),
@@ -126,11 +125,15 @@ function metadataEntryFor(
         }
       },
     };
-    const stopCatalog = subscribeModelCatalogCache(client, (update) => {
-      if (update.type === "invalidated" && update.matches(catalogScope, catalogKey)) {
-        created.catalogRevision += 1;
-      }
-    });
+    const stopCatalog = subscribeModelCatalogCache(
+      client,
+      (update) => {
+        if (update.type === "invalidated") {
+          created.catalogRevision += 1;
+        }
+      },
+      () => catalogScope,
+    );
     entry = created;
     entries.set(key, entry);
     for (const candidate of entries.values()) {

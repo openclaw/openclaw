@@ -35,15 +35,14 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { formatMissingOperatorReadScopeMessage } from "../../lib/gateway-errors.ts";
-import { modelCatalogKey, modelCatalogParams } from "../../lib/model-catalog-cache.ts";
 import {
   loadModelCatalog,
   modelCatalogRefreshError,
   subscribeModelCatalogCache,
 } from "../../lib/model-catalog-store.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import {
   createDeliveryConversations,
   invalidateStaleDeliveryRoute,
@@ -117,7 +116,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     notify: publish,
   });
   let heartbeatScratchRequest = 0;
-  let pageHidden = document.visibilityState === "hidden";
+  const safetyRefresh = useVisiblePoll(600_000, () => ensureInitialData(true));
   const observeAgentScope = watchAgentScope((scopeId, intentChanged) => {
     if (!intentChanged) {
       // Hydration refines scope without replacing operator intent or drafts.
@@ -211,20 +210,11 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       }),
       currentContext.gateway.subscribeEvents((event) => {
         if (active && context() === currentContext && event.event === "cron") {
-          void refreshCron({ coalesce: true });
+          void refreshCron({ coalesce: true, event: event.payload });
         }
       }),
     );
   }
-
-  const onActivation = () => {
-    const hidden = document.visibilityState === "hidden";
-    const resumed = pageHidden && !hidden;
-    pageHidden = hidden;
-    if (resumed) {
-      ensureInitialData(true);
-    }
-  };
 
   onSettled(() => {
     active = true;
@@ -235,12 +225,10 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         ensureInitialData();
       }
     });
-    const stopVisibility = listen(document, "visibilitychange", onActivation);
-    const stopFocus = listen(globalThis, "focus", onActivation);
+    safetyRefresh.start();
     return () => {
       active = false;
-      stopVisibility();
-      stopFocus();
+      safetyRefresh.stop();
       cleanups.splice(0).forEach((stop) => stop());
       gateway.dispose();
       stopModelSuggestions?.();
@@ -285,7 +273,6 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     const routeData = resolveCronRouteData(routeSearch);
     cron.cronSessionFilter = routeData.session;
     routeSelection.requested = false;
-    pageHidden = document.visibilityState === "hidden";
     cron.cronAgentId = context().agentSelection.state.scopeId;
     setCronModelSuggestions([]);
     deliveryDirectory.retireEditor();
@@ -391,7 +378,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     }
   }
 
-  async function refreshCron(options: { coalesce?: boolean } = {}) {
+  async function refreshCron(options: { coalesce?: boolean; event?: unknown } = {}) {
     const cronState = cron;
     if (!canRefreshCron(cronState) || !cronState.connected || !cronState.client) {
       return;
@@ -400,7 +387,9 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     void context().channels.refresh(false);
     await Promise.all([
       runCronTask((current) => loadCronStatus(current, options)),
-      runCronTask((current) => loadCronJobsPage(current, { tableFilters: true })),
+      runCronTask((current) =>
+        loadCronJobsPage(current, { tableFilters: true, event: options.event }),
+      ),
     ]);
   }
 
@@ -428,17 +417,15 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     if (!connectionScope) {
       return;
     }
-    stopModelSuggestions ??= subscribeModelCatalogCache(client, (update) => {
-      if (!active || cron.client !== client || update.type !== "invalidated") {
-        return;
-      }
-      const scope = modelCatalogParams({
-        agentId: context().agentSelection.state.selectedId ?? undefined,
-      });
-      if (update.matches(scope, modelCatalogKey(scope))) {
-        void loadModelSuggestions(cron);
-      }
-    });
+    stopModelSuggestions ??= subscribeModelCatalogCache(
+      client,
+      (update) => {
+        if (active && cron.client === client && update.type === "invalidated") {
+          void loadModelSuggestions(cron);
+        }
+      },
+      () => ({ agentId: context().agentSelection.state.selectedId ?? undefined }),
+    );
     const request = { state: cronState, agentId };
     modelSuggestionsRequest = request;
     // Only the latest catalog request may publish rows or errors.

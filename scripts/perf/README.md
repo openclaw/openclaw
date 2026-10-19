@@ -160,6 +160,24 @@ JSON frame bytes and rates per authenticated socket-minute exclude payloads,
 URLs and authentication. Supply any synthetic token through the normal URL
 fragment. The probe builds nothing and neither starts nor stops the Gateway.
 
+Add a real cron workload with `--cron-runs 12 --cron-jobs 20 --interval-ms 2000`
+and optionally `--screenshot /path/to/runtime-complete.png`. Use a fresh isolated
+Gateway with cron enabled and `agents.defaults.heartbeat.every` set to `"0m"`.
+The probe creates disabled synthetic jobs, then forces runs through `cron.run`;
+system-event payloads and disabled heartbeats keep model providers out of the
+workload. Every forced run must finish and its event must reach the browser.
+A separate configuration-edit phase verifies that a changed job name becomes
+visible. Only browser list requests are counted; the controller socket is
+excluded, and the created jobs are removed on exit.
+
+For paired activity measurements, use `--start-at <epoch-ms>` with the same future
+time on both sides; it gates the runtime window after browser readiness and
+rejects a missed deadline. Hold the host's shared measurement lock, use separate
+Gateway states and ports on the two 16-core CPU halves, then swap the halves for
+the next pair. Compare per-pair request-count differences. This small catalog
+fixture covers the browser event trigger, not production database size, model
+inference, native clients, or a model-catalog mutation.
+
 Build runtime artifacts on the authorized benchmark host, generate an offline
 fixture, then let the measurement driver own its loopback Gateway:
 

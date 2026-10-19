@@ -11,6 +11,7 @@ export const cliProcessTestFiles = [
   "src/cli/update-cli/update-command-fresh-doctor-authority.test.ts",
   "src/cli/update-cli/update-command-fresh-inspection.test.ts",
   "src/cli/update-cli/update-command-fresh-preview.test.ts",
+  "src/cli/update-cli/update-command-fresh-terminal.test.ts",
   "src/cli/update-cli/update-command-runtime-preview.test.ts",
   "src/cli/update-cli/update-command-plugins.persistence.test.ts",
   "src/cli/plugins-cli.install.test.ts",

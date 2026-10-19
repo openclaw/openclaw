@@ -524,23 +524,41 @@ suite.define(() => {
                 },
                 { signal },
               )
-              .catch((error: unknown) => {
-                rejectedChecks = error;
-              });
+              .then(
+                () => {
+                  checksEntered.reject(
+                    new Error("CI details succeeded before the held provider was entered"),
+                  );
+                },
+                (error: unknown) => {
+                  rejectedChecks = error;
+                  checksEntered.reject(
+                    new Error("CI details rejected before the held provider was entered", {
+                      cause: error,
+                    }),
+                  );
+                },
+              );
             await waitFor(checksEntered);
             holdSnapshot = true;
             // Change a list-visible metadata field so the shared detail cache admits new facts.
             replacement.title = "Updated replacement workspace review";
             replacement.additions = 5;
             await subscribe([sessionKey], true);
-            await waitFor(snapshotEntered);
+            await waitFor(snapshotEntered).catch((cause: unknown) => {
+              throw new Error("The held PR snapshot provider was not entered", { cause });
+            });
             linkEmail(retiringEmail, viewer.id);
             identityReassigned = readResidentUserProfileId(retiring.id) === viewer.id;
             expect(identityReassigned).toBe(true);
 
             expect(await refreshFromBrowser(page)).toEqual(["operator.read"]);
             releaseIdentityReads.resolve();
-            const current = await waitFor(currentReaderDelivery);
+            const current = await waitFor(currentReaderDelivery).catch((cause: unknown) => {
+              throw new Error("The current reader did not receive PR #203 with additions=5", {
+                cause,
+              });
+            });
             await pendingChecks;
             await chip.locator(".chat-pr__checks-pill").click();
             await pane.getByText(replacement.checkName, { exact: true }).waitFor();
