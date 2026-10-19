@@ -21,6 +21,11 @@ load ARGV.fetch(0)
 
 # No pre-created devices, including a stale device with the preferred name.
 def available_simulator_devices; []; end
+def sh(*arguments)
+  raise "unexpected command" unless arguments == ["xcrun", "simctl", "runtime", "scan-and-mount"]
+  raise "runtime mount failed" if ARGV[1] == "mount-failed"
+  $mounted = true
+end
 module Open3
   def self.capture3(*arguments)
     raise "unexpected command" unless arguments == ["xcrun", "simctl", "list", "runtimes", "--json"]
@@ -33,7 +38,9 @@ module Open3
       { identifier: "com.apple.CoreSimulator.SimRuntime.watchOS-28-0", version: "28.0", isAvailable: false, supportedDeviceTypes: types },
       { identifier: "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", version: "27.0", isAvailable: true, supportedDeviceTypes: types }
     ]
-    runtimes.each { |runtime| runtime[:isAvailable] = false } if ARGV[1] == "unavailable"
+    if ARGV[1] == "unavailable" || (ARGV[1] == "unmounted" && !$mounted)
+      runtimes.each { |runtime| runtime[:isAvailable] = false }
+    end
     [JSON.generate({ runtimes: runtimes }), "", Struct.new(:success?).new(true)]
   end
 end
@@ -48,7 +55,13 @@ function resolve(scenario: string, name: string) {
   const result = spawnSync(
     "ruby",
     ["-e", fixture, path.join(process.cwd(), "apps/ios/fastlane/Fastfile"), scenario, name],
-    { encoding: "utf8" },
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CI: scenario === "unmounted" || scenario === "mount-failed" ? "true" : "false",
+      },
+    },
   );
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout);
@@ -78,7 +91,18 @@ it("reports missing runtime setup separately from a screenshot failure", () => {
   });
 });
 
-it.each(["installed", "missing", "download-failed"])(
+it("remounts the CI runtime immediately before Watch device selection", () => {
+  expect(resolve("unmounted", "Apple Watch Series 12 (46mm)").device).toEqual({
+    name: "Apple Watch Series 12 (46mm)",
+    deviceTypeIdentifier: "series-12",
+    runtime: "com.apple.CoreSimulator.SimRuntime.watchOS-27-0",
+  });
+  expect(resolve("mount-failed", "Apple Watch Series 12 (46mm)")).toEqual({
+    error: "runtime mount failed",
+  });
+});
+
+it.each(["installed", "missing", "download-failed", "watch-disabled"])(
   "prepares the CI runtime before capture: %s",
   (scenario) => {
     const root = tempDirs.make("watch-runtime-");
@@ -113,7 +137,12 @@ if (name === "xcrun") {
     }
     const result = spawnSync("/bin/bash", ["scripts/ios-screenshots.sh"], {
       encoding: "utf8",
-      env: { ...process.env, CI: "true", PATH: `${bin}${path.delimiter}${process.env.PATH}` },
+      env: {
+        ...process.env,
+        CI: "true",
+        OPENCLAW_SNAPSHOT_SKIP_WATCH: scenario === "watch-disabled" ? "1" : "0",
+        PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+      },
     });
     const commands: string[][] = readFileSync(calls, "utf8")
       .trim()
@@ -123,7 +152,7 @@ if (name === "xcrun") {
     const captures = commands.filter((command) => command.includes("fastlane"));
     expect(result.status, result.stderr).toBe(scenario === "download-failed" ? 42 : 0);
     expect(downloads).toEqual(
-      scenario === "installed"
+      scenario === "installed" || scenario === "watch-disabled"
         ? []
         : [["xcodebuild", "-downloadPlatform", "watchOS", "-buildVersion", "27.0"]],
     );
@@ -132,5 +161,8 @@ if (name === "xcrun") {
         ? []
         : [["bundle", "_4.0.22_", "exec", "fastlane", "ios", "screenshots"]],
     );
+    if (scenario === "watch-disabled") {
+      expect(commands.filter(([name]) => name === "xcodebuild" || name === "xcrun")).toEqual([]);
+    }
   },
 );

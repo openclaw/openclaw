@@ -4,9 +4,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT_DIR}/scripts/lib/ios-fastlane.sh"
 
-if [[ "${CI:-}" == "true" ]]; then
+if [[ "${CI:-}" == "true" && "${OPENCLAW_SNAPSHOT_SKIP_WATCH:-}" != "1" ]]; then
   echo "Runner image: ${ImageOS:-unknown} / ${ImageVersion:-unknown}"
   xcodebuild -version
+  xcrun simctl runtime scan-and-mount
   xcrun simctl list runtimes
   watch_version="$(xcrun --sdk watchsimulator --show-sdk-version)"
   # Xcode exits 70 when a requested runtime is already downloaded.

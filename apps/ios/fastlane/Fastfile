@@ -217,6 +217,8 @@ rescue JSON::ParserError => e
 end
 
 def resolve_simulator_device(name)
+  # Refresh hosted runtime registration after the iPhone/iPad captures.
+  sh("xcrun", "simctl", "runtime", "scan-and-mount") if ENV["CI"] == "true"
   # Hosted images need not contain pre-created Watch devices. The runtime owns
   # the supported device types; with_screenshot_simulator creates our device.
   stdout, stderr, status = Open3.capture3("xcrun", "simctl", "list", "runtimes", "--json")
@@ -526,10 +528,7 @@ def build_watch_screenshot_app
 end
 
 def capture_watch_screenshot(diagnostics: nil)
-  device = resolve_simulator_device(watch_snapshot_device)
-  device_name = device.fetch("name")
   output_dir = File.join(ios_root, "fastlane", "screenshots", "en-US")
-  output_path = File.join(output_dir, "#{device_name}-01-now-face.png")
 
   FileUtils.mkdir_p(output_dir)
   Dir[File.join(output_dir, "Apple Watch*-*.png")].each { |path| FileUtils.rm_f(path) }
@@ -539,6 +538,9 @@ def capture_watch_screenshot(diagnostics: nil)
   UI.user_error!("Watch screenshot build did not produce #{app_path}.") unless File.exist?(app_path)
   watch_app_identifier = bundle_identifier_for_product(app_path)
   screenshot_mode_bundle_identifiers = [watch_app_identifier]
+  device = resolve_simulator_device(watch_snapshot_device)
+  device_name = device.fetch("name")
+  output_path = File.join(output_dir, "#{device_name}-01-now-face.png")
 
   with_screenshot_simulator(device, diagnostics: diagnostics) do |udid|
     screenshot_phase(diagnostics, "watch-capture", device: device_name, udid: udid) do
