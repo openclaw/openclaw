@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { createIdentityFromStatus } from "@openclaw/acp-core/runtime/session-identity";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -6,29 +5,29 @@ import {
   createAdmittedRunOperatorAuthority,
   prepareSystemAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
-import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
-import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { readAcpSessionEntryAsync, upsertAcpSessionMeta } from "../runtime/session-meta.js";
+import { readAcpSessionEntryAsync } from "../runtime/session-meta.js";
 import {
   readDurableAcpSignals,
   withAcpCancellationFixture,
 } from "./manager.cancel-session.worker.test-support.js";
+import {
+  expectSuccessor,
+  locatorSessionKey,
+  expectNoRuntimeEffects,
+  memoryGuard,
+  replaceRuntime,
+  runtimeHandle,
+  startTurn,
+} from "./manager.cancellation-locator.test-support.js";
 import { stopAcpControllerTurns } from "./manager.controller-test-support.js";
 import { DEFAULT_DEPS } from "./manager.types.js";
 
 it("preserves replacement metadata when a cancelled late handle fails its applied-model policy", async () => {
   await withAcpCancellationFixture(async (f) => {
-    await upsertAcpSessionMeta({
-      ...f.target,
-      skipMaintenance: true,
-      mutate: (current) => {
-        if (!current) {
-          throw new Error("Policy fixture lost its global ACP metadata.");
-        }
-        return { ...current, runtimeOptions: { model: "fixture/allowed" } };
-      },
+    await replaceRuntime(f, {
+      runtimeSessionName: "retained-runtime",
+      runtimeOptions: { model: "fixture/allowed" },
     });
     const authority = createAdmittedRunOperatorAuthority({
       profileId: "fixture-operator",
@@ -91,13 +90,9 @@ it("preserves replacement metadata when a cancelled late handle fails its applie
     let cancelResult: Promise<PromiseSettledResult<void>[]> | undefined;
     try {
       const context = await admission.admit("acp");
-      const turn = f.manager.runTurn({
-        ...f.target,
+      const turn = startTurn(f, "policy-locator", {
         admittedRunContext: context,
-        provenance: "system",
-        mode: "prompt",
         text: "late policy locator",
-        requestId: "policy-locator",
       });
       turnResult = Promise.allSettled([turn]);
       await awaitGateBeforeSettlement(
@@ -130,35 +125,13 @@ it("preserves replacement metadata when a cancelled late handle fails its applie
         status: { agentSessionId: "successor-agent" },
         now: 200,
       });
-      await upsertAcpSessionMeta({
-        ...f.target,
-        skipMaintenance: true,
-        mutate: (current) => {
-          if (!current) {
-            throw new Error("Policy fixture lost its metadata before successor publication.");
-          }
-          return {
-            ...current,
-            runtimeSessionName: "successor-runtime",
-            identity: successorIdentity,
-            state: "running",
-          };
-        },
-      });
+      await replaceRuntime(f, { identity: successorIdentity });
       releasePublicationRead.resolve();
       await Promise.all([turnResult, cancelResult]);
       expect(await turnResult).toMatchObject([{ status: "rejected" }]);
-      expect((await readAcpSessionEntryAsync(f.target))?.acp).toMatchObject({
-        backend: "cancellation-proof",
-        runtimeSessionName: "successor-runtime",
-        state: "running",
-        identity: successorIdentity,
-      });
+      await expectSuccessor(f, { identity: successorIdentity });
       expect(readDurableAcpSignals(f, "policy-locator")).toEqual([]);
-      expect(f.ensureSession).toHaveBeenCalledOnce();
-      expect(f.runTurn).not.toHaveBeenCalled();
-      expect(f.cancel).not.toHaveBeenCalled();
-      expect(close).not.toHaveBeenCalled();
+      expectNoRuntimeEffects(f, close);
     } finally {
       releaseEnsure.resolve();
       releasePublicationRead.resolve();
@@ -178,11 +151,7 @@ it("preserves a durable replacement while cold cancellation ensure normalizes it
       f.ensureSession.mockImplementationOnce(async () => {
         entered.resolve();
         await release.promise;
-        return {
-          sessionKey: f.target.sessionKey,
-          backend: "cancellation-proof",
-          runtimeSessionName: "normalized-runtime",
-        };
+        return runtimeHandle(f, "normalized-runtime");
       });
       const close = vi.spyOn(f.runtime, "close");
       const cancellation = f.manager.cancelSession({
@@ -196,23 +165,10 @@ it("preserves a durable replacement while cold cancellation ensure normalizes it
           result,
           "Cold cancellation settled before runtime ensure.",
         );
-        await upsertAcpSessionMeta({
-          ...f.target,
-          skipMaintenance: true,
-          mutate: (current) => {
-            if (!current) {
-              throw new Error("Cold fixture lost its global ACP metadata.");
-            }
-            return { ...current, runtimeSessionName: "successor-runtime", state: "running" };
-          },
-        });
+        await replaceRuntime(f);
         release.resolve();
         const outcomes = await result;
-        expect((await readAcpSessionEntryAsync(f.target))?.acp).toMatchObject({
-          backend: "cancellation-proof",
-          runtimeSessionName: "successor-runtime",
-          state: "running",
-        });
+        await expectSuccessor(f);
         expect(outcomes).toMatchObject([{ status: "rejected" }]);
         expect(f.ensureSession).toHaveBeenCalledOnce();
         expect(f.cancel).not.toHaveBeenCalled();
@@ -238,12 +194,7 @@ it.each([
   async (sourceKind, boundary) => {
     await withAcpCancellationFixture(
       async (f) => {
-        const path = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: f.state.env });
-        const memory = memorySessionActorOwners.read({ agentId: "main", path });
-        if (sourceKind === "incognito") {
-          expect(memory).toBeDefined();
-          expect(fs.existsSync(path)).toBe(false);
-        }
+        const assertMemoryCurrent = memoryGuard(f, sourceKind);
         const reached = createDeferred();
         const release = createDeferred();
         const admitted = createDeferred();
@@ -252,11 +203,7 @@ it.each([
             reached.resolve();
             await release.promise;
           }
-          return {
-            sessionKey: f.target.sessionKey,
-            backend: "cancellation-proof",
-            runtimeSessionName: "normalized-runtime",
-          };
+          return runtimeHandle(f, "normalized-runtime");
         });
         const upsert = DEFAULT_DEPS.upsertSessionMeta;
         const writer =
@@ -277,16 +224,10 @@ it.each([
             return read;
           });
         const close = vi.spyOn(f.runtime, "close");
-        const context = createTestAdmittedRunContext("delayed-normalization");
         let turnSettled = false;
         let cancelSettled = false;
-        const turn = f.manager.runTurn({
-          ...f.target,
-          admittedRunContext: context,
-          provenance: "system",
-          mode: "prompt",
+        const turn = startTurn(f, "delayed-normalization", {
           text: "delayed normalization",
-          requestId: "delayed-normalization",
         });
         const turnResult = Promise.allSettled([turn]).then((result) => {
           turnSettled = true;
@@ -320,36 +261,15 @@ it.each([
             cancelResult,
             "Stop settled before delayed-write cancellation admission.",
           );
-          await upsertAcpSessionMeta({
-            ...f.target,
-            skipMaintenance: true,
-            mutate: (current) => {
-              if (!current) {
-                throw new Error("Delayed normalization lost its global ACP metadata.");
-              }
-              return { ...current, runtimeSessionName: "successor-runtime", state: "running" };
-            },
-          });
-          expect(turnSettled).toBe(false);
-          expect(cancelSettled).toBe(false);
+          await replaceRuntime(f);
+          expect([turnSettled, cancelSettled]).toEqual([false, false]);
           release.resolve();
           await Promise.all([turnResult, cancelResult]);
-          expect(turnSettled).toBe(true);
-          expect(cancelSettled).toBe(true);
-          expect((await readAcpSessionEntryAsync(f.target))?.acp).toMatchObject({
-            backend: "cancellation-proof",
-            runtimeSessionName: "successor-runtime",
-            state: "running",
-          });
+          expect([turnSettled, cancelSettled]).toEqual([true, true]);
+          await expectSuccessor(f);
           expect(readDurableAcpSignals(f, "delayed-normalization")).toEqual([]);
-          expect(f.ensureSession).toHaveBeenCalledOnce();
-          expect(f.runTurn).not.toHaveBeenCalled();
-          expect(f.cancel).not.toHaveBeenCalled();
-          expect(close).not.toHaveBeenCalled();
-          if (sourceKind === "incognito") {
-            expect(memorySessionActorOwners.read({ agentId: "main", path })).toBe(memory);
-            expect(fs.existsSync(path)).toBe(false);
-          }
+          expectNoRuntimeEffects(f, close);
+          assertMemoryCurrent();
         } finally {
           release.resolve();
           await Promise.allSettled([turnResult, cancelResult]);
@@ -359,10 +279,7 @@ it.each([
         }
       },
       {
-        sessionKey:
-          sourceKind === "incognito"
-            ? "agent:main:dashboard:incognito-delayed-normalization"
-            : "agent:main:acp:delayed-normalization",
+        sessionKey: locatorSessionKey(sourceKind, "delayed-normalization"),
       },
     );
   },

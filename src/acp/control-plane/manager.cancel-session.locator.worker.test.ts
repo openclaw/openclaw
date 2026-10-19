@@ -1,14 +1,18 @@
-import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
-import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { readAcpSessionEntryAsync, upsertAcpSessionMeta } from "../runtime/session-meta.js";
+import { readAcpSessionEntryAsync } from "../runtime/session-meta.js";
 import {
   readDurableAcpSignals,
   withAcpCancellationFixture,
 } from "./manager.cancel-session.worker.test-support.js";
+import {
+  expectSuccessor,
+  locatorSessionKey,
+  memoryGuard,
+  replaceRuntime,
+  runtimeHandle,
+  startTurn,
+} from "./manager.cancellation-locator.test-support.js";
 import { stopAcpControllerTurns } from "./manager.controller-test-support.js";
 import { DEFAULT_DEPS } from "./manager.types.js";
 
@@ -21,30 +25,10 @@ it.each([
   async (sourceKind, boundary) => {
     await withAcpCancellationFixture(
       async (f) => {
-        const path = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: f.state.env });
-        const memory = memorySessionActorOwners.read({ agentId: "main", path });
-        const assertMemoryCurrent = () => {
-          if (sourceKind === "incognito") {
-            expect(memory).toBeDefined();
-            expect(memorySessionActorOwners.read({ agentId: "main", path })).toBe(memory);
-            expect(fs.existsSync(path)).toBe(false);
-          }
-        };
-        assertMemoryCurrent();
+        const assertMemoryCurrent = memoryGuard(f, sourceKind);
         // Prime the real cache so ensure cannot publish a new handle over the replacement.
         await f.manager.getSessionStatus(f.target);
         expect(f.ensureSession).toHaveBeenCalledOnce();
-        const replaceRuntime = () =>
-          upsertAcpSessionMeta({
-            ...f.target,
-            skipMaintenance: true,
-            mutate: (current) => {
-              if (!current) {
-                throw new Error("Fixture lost its global ACP metadata before replacement.");
-              }
-              return { ...current, runtimeSessionName: "successor-runtime", state: "running" };
-            },
-          });
         const entered = createDeferred();
         const release = createDeferred();
         if (boundary === "cached-status") {
@@ -82,7 +66,7 @@ it.each([
             "Cancellation settled before the held runtime boundary.",
           );
           expect(f.cancel).toHaveBeenCalledTimes(initialCancelCalls);
-          await replaceRuntime();
+          await replaceRuntime(f);
           release.resolve();
           const outcomes = await result;
           const current = await readAcpSessionEntryAsync(f.target);
@@ -109,11 +93,7 @@ it.each([
           expect(close).not.toHaveBeenCalled();
           assertMemoryCurrent();
 
-          f.ensureSession.mockImplementationOnce(async () => ({
-            sessionKey: f.target.sessionKey,
-            backend: "cancellation-proof",
-            runtimeSessionName: "successor-runtime",
-          }));
+          f.ensureSession.mockImplementationOnce(async () => runtimeHandle(f, "successor-runtime"));
           await f.manager.cancelSession({
             ...f.target,
             reason: "successor-retry",
@@ -139,10 +119,7 @@ it.each([
         }
       },
       {
-        sessionKey:
-          sourceKind === "incognito"
-            ? "agent:main:dashboard:incognito-locator-retry"
-            : "agent:main:acp:locator-retry",
+        sessionKey: locatorSessionKey(sourceKind, "locator-retry"),
       },
     );
   },
@@ -156,12 +133,7 @@ it.each([
   async (sourceKind, returnedBackend) => {
     await withAcpCancellationFixture(
       async (f) => {
-        const path = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: f.state.env });
-        const memory = memorySessionActorOwners.read({ agentId: "main", path });
-        if (sourceKind === "incognito") {
-          expect(memory).toBeDefined();
-          expect(fs.existsSync(path)).toBe(false);
-        }
+        const assertMemoryCurrent = memoryGuard(f, sourceKind);
         f.ensureSession.mockImplementationOnce(async () => ({
           sessionKey: f.target.sessionKey,
           backend: returnedBackend === "empty-backend" ? "" : "cancellation-proof",
@@ -187,19 +159,13 @@ it.each([
             state: "idle",
           });
           expect(close).not.toHaveBeenCalled();
-          if (sourceKind === "incognito") {
-            expect(memorySessionActorOwners.read({ agentId: "main", path })).toBe(memory);
-            expect(fs.existsSync(path)).toBe(false);
-          }
+          assertMemoryCurrent();
         } finally {
           close.mockRestore();
         }
       },
       {
-        sessionKey:
-          sourceKind === "incognito"
-            ? "agent:main:dashboard:incognito-locator-normalization"
-            : "agent:main:acp:locator-normalization",
+        sessionKey: locatorSessionKey(sourceKind, "locator-normalization"),
       },
     );
   },
@@ -213,12 +179,7 @@ it.each([
   async (sourceKind, boundary, terminalStatus) => {
     await withAcpCancellationFixture(
       async (f) => {
-        const path = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: f.state.env });
-        const memory = memorySessionActorOwners.read({ agentId: "main", path });
-        if (sourceKind === "incognito") {
-          expect(memory).toBeDefined();
-          expect(fs.existsSync(path)).toBe(false);
-        }
+        const assertMemoryCurrent = memoryGuard(f, sourceKind);
         const turnEntered = createDeferred();
         const releaseTurn = createDeferred();
         const readEntered = createDeferred();
@@ -256,17 +217,11 @@ it.each([
             };
           });
         const close = vi.spyOn(f.runtime, "close");
-        const context = createTestAdmittedRunContext("active-locator");
         const events: unknown[] = [];
         let turnSettled = false;
         let cancelSettled = false;
-        const turn = f.manager.runTurn({
-          ...f.target,
-          admittedRunContext: context,
-          provenance: "system",
-          mode: "prompt",
+        const turn = startTurn(f, "active-locator", {
           text: "active locator",
-          requestId: "active-locator",
           onEvent: (event) => {
             events.push(event);
           },
@@ -297,36 +252,20 @@ it.each([
           );
           expect(signal?.aborted).toBe(true);
           expect(f.cancel).toHaveBeenCalledTimes(boundary === "post-abort-read" ? 0 : 1);
-          await upsertAcpSessionMeta({
-            ...f.target,
-            skipMaintenance: true,
-            mutate: (current) => {
-              if (!current) {
-                throw new Error("Active fixture lost its global ACP metadata.");
-              }
-              return { ...current, runtimeSessionName: "successor-runtime", state: "running" };
-            },
-          });
+          await replaceRuntime(f);
           releaseRead.resolve();
           releaseTurn.resolve();
           if (boundary === "cancel-rpc") {
             await new Promise<void>((resolve) => {
               setImmediate(resolve);
             });
-            expect(turnSettled).toBe(false);
-            expect(cancelSettled).toBe(false);
+            expect([turnSettled, cancelSettled]).toEqual([false, false]);
           }
           expect(close).not.toHaveBeenCalled();
           releaseCancel.resolve();
           await Promise.all([turnResult, cancelResult]);
-          expect(turnSettled).toBe(true);
-          expect(cancelSettled).toBe(true);
-          expect((await readAcpSessionEntryAsync(f.target))?.acp).toMatchObject({
-            backend: "cancellation-proof",
-            runtimeSessionName: "successor-runtime",
-            mode: "persistent",
-            state: "running",
-          });
+          expect([turnSettled, cancelSettled]).toEqual([true, true]);
+          await expectSuccessor(f, { mode: "persistent" });
           expect(readDurableAcpSignals(f, "active-locator")).toEqual([]);
           expect(events).toContainEqual({ type: "done", status: terminalStatus });
           if (boundary === "cancel-rpc") {
@@ -338,10 +277,7 @@ it.each([
             expect(f.cancel).not.toHaveBeenCalled();
           }
           expect(close).not.toHaveBeenCalled();
-          if (sourceKind === "incognito") {
-            expect(memorySessionActorOwners.read({ agentId: "main", path })).toBe(memory);
-            expect(fs.existsSync(path)).toBe(false);
-          }
+          assertMemoryCurrent();
         } finally {
           releaseRead.resolve();
           releaseTurn.resolve();
@@ -352,10 +288,7 @@ it.each([
         }
       },
       {
-        sessionKey:
-          sourceKind === "incognito"
-            ? "agent:main:dashboard:incognito-active-locator"
-            : "agent:main:acp:active-locator",
+        sessionKey: locatorSessionKey(sourceKind, "active-locator"),
       },
     );
   },

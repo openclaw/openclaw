@@ -34,37 +34,49 @@ async function withManagerTestDir(prefix: string, run: (dir: string) => Promise<
   });
 }
 
+function ownerFixture(
+  dir: string,
+  scope?: "global",
+  entries: Record<string, object> = { main: {}, work: {} },
+) {
+  const cfg = {
+    agents: { ownership: "explicit", entries },
+    session: { scope, store: path.join(dir, "{agentId}", "sessions.json") },
+  } satisfies OpenClawConfig;
+  const databasePath = path.join(dir, "state", "openclaw.sqlite");
+  const runtime = {
+    ownerAwareSessions: 1 as const,
+    ensureSession: vi.fn(async (input: { sessionKey: string; agentId?: string }) => ({
+      ...input,
+      backend: "synthetic",
+      runtimeSessionName: `${input.agentId}/${input.sessionKey}`,
+    })),
+    async *runTurn() {
+      yield { type: "done" as const };
+    },
+    prepareFreshSession: vi.fn(async () => {}),
+    async cancel() {},
+    close: vi.fn(async () => {}),
+  } satisfies AcpRuntime;
+  const deps = {
+    ...DEFAULT_DEPS,
+    loadSessionEntry: (input: Parameters<typeof readAcpSessionEntry>[0]) =>
+      readAcpSessionEntry({ ...input, databasePath }),
+    loadSessionEntryAsync: (input: Parameters<typeof readAcpSessionEntryAsync>[0]) =>
+      readAcpSessionEntryAsync({ ...input, databasePath }),
+    upsertSessionMeta: (input: Parameters<typeof upsertAcpSessionMeta>[0]) =>
+      upsertAcpSessionMeta({ ...input, databasePath }),
+    requireRuntimeBackend: () => ({ id: "synthetic", runtime }),
+  };
+  return { cfg, databasePath, runtime, deps };
+}
+
 describe("ACP manager with real owner-scoped metadata", () => {
   it("isolates two owners of global and retains the harness", async () => {
     const sessionKey = "global";
     await withManagerTestDir("acp-manager-owner-", async (dir) => {
-      const cfg = {
-        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
-        session: { scope: "global", store: path.join(dir, "{agentId}", "sessions.json") },
-      } satisfies OpenClawConfig;
-      const databasePath = path.join(dir, "state", "openclaw.sqlite");
-      const ensureSession = vi.fn(async (input: { sessionKey: string; agentId?: string }) => ({
-        ...input,
-        backend: "synthetic",
-        runtimeSessionName: `${input.agentId}/${input.sessionKey}`,
-      }));
-      const runtime = {
-        ownerAwareSessions: 1 as const,
-        ensureSession,
-        async *runTurn() {
-          yield { type: "done" as const };
-        },
-        async prepareFreshSession() {},
-        async cancel() {},
-        async close() {},
-      } satisfies AcpRuntime;
-      const manager = new AcpSessionManager({
-        ...DEFAULT_DEPS,
-        loadSessionEntry: (input) => readAcpSessionEntry({ ...input, databasePath }),
-        loadSessionEntryAsync: (input) => readAcpSessionEntryAsync({ ...input, databasePath }),
-        upsertSessionMeta: (input) => upsertAcpSessionMeta({ ...input, databasePath }),
-        requireRuntimeBackend: () => ({ id: "synthetic", runtime }),
-      });
+      const { cfg, databasePath, runtime, deps } = ownerFixture(dir, "global");
+      const manager = new AcpSessionManager(deps);
       try {
         for (const agentId of ["main", "work"]) {
           const input = {
@@ -127,18 +139,16 @@ describe("ACP manager with real owner-scoped metadata", () => {
             agentId,
           );
         }
-        if (sessionKey === "global") {
-          expect(manager.resolveSession({ cfg, sessionKey: "agent:work:main" })).toMatchObject({
-            kind: "ready",
-            agentId: "work",
-            sessionKey: "global",
-          });
-          const mismatch = { cfg, sessionKey: "agent:work:main", agentId: "main" };
-          expect(() => manager.resolveSession(mismatch)).toThrowError(
-            expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
-          );
-        }
-        expect(ensureSession).toHaveBeenCalledTimes(2);
+        expect(manager.resolveSession({ cfg, sessionKey: "agent:work:main" })).toMatchObject({
+          kind: "ready",
+          agentId: "work",
+          sessionKey: "global",
+        });
+        const mismatch = { cfg, sessionKey: "agent:work:main", agentId: "main" };
+        expect(() => manager.resolveSession(mismatch)).toThrowError(
+          expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
+        );
+        expect(runtime.ensureSession).toHaveBeenCalledTimes(2);
       } finally {
         await disposeAcpSessionManagerInstance(manager, "test-complete");
       }
@@ -148,10 +158,7 @@ describe("ACP manager with real owner-scoped metadata", () => {
 
 it("keeps legacy runtime implementations assignable and rejects unisolated bare targets before effects", async () => {
   await withManagerTestDir("acp-legacy-owner-", async (dir) => {
-    const cfg = {
-      agents: { ownership: "explicit" as const, entries: { main: {}, work: {} } },
-      session: { store: path.join(dir, "{agentId}", "sessions.json") },
-    };
+    const { cfg } = ownerFixture(dir);
     const ensureSession = vi.fn(
       async (input: { sessionKey: string; agent: string; mode: "persistent" | "oneshot" }) => ({
         sessionKey: input.sessionKey,
@@ -200,38 +207,15 @@ it("keeps legacy runtime implementations assignable and rejects unisolated bare 
 
 it("retains canonical metadata when an unmigrated backend locator blocks status or reset", async () => {
   await withManagerTestDir("acp-owner-repair-", async (dir) => {
-    const cfg = {
-      agents: { ownership: "explicit" as const, entries: { work: {} } },
-      session: { store: path.join(dir, "{agentId}", "sessions.json") },
-    };
-    const databasePath = path.join(dir, "state", "openclaw.sqlite");
+    const { cfg, databasePath, runtime, deps } = ownerFixture(dir, undefined, { work: {} });
     const target = { cfg, sessionKey: "global", agentId: "work" };
-    const runtime = {
-      ownerAwareSessions: 1 as const,
-      ensureSession: vi.fn(async () => ({
-        sessionKey: "global",
-        backend: "synthetic",
-        runtimeSessionName: "legacy-global",
-      })),
-      async *runTurn() {
-        yield { type: "done" as const };
-      },
-      prepareFreshSession: vi.fn(async () => {}),
-      async cancel() {},
-      close: vi.fn(async () => {}),
-    } satisfies AcpRuntime;
-    const deps = {
-      ...DEFAULT_DEPS,
-      loadSessionEntry: (input: Parameters<typeof readAcpSessionEntry>[0]) =>
-        readAcpSessionEntry({ ...input, databasePath }),
-      loadSessionEntryAsync: (input: Parameters<typeof readAcpSessionEntryAsync>[0]) =>
-        readAcpSessionEntryAsync({ ...input, databasePath }),
-      upsertSessionMeta: (input: Parameters<typeof upsertAcpSessionMeta>[0]) =>
-        upsertAcpSessionMeta({ ...input, databasePath }),
-      requireRuntimeBackend: () => ({ id: "synthetic", runtime }),
-      getRuntimeBackend: () => ({ id: "synthetic", runtime }),
-    };
-    const initial = new AcpSessionManager(deps);
+    runtime.ensureSession.mockResolvedValue({
+      sessionKey: "global",
+      backend: "synthetic",
+      runtimeSessionName: "legacy-global",
+    });
+    const repairDeps = { ...deps, getRuntimeBackend: deps.requireRuntimeBackend };
+    const initial = new AcpSessionManager(repairDeps);
     try {
       await initial.initializeSession({ ...target, agent: "fixture", mode: "persistent" });
     } finally {
@@ -246,7 +230,7 @@ it("retains canonical metadata when an unmigrated backend locator blocks status 
     runtime.ensureSession.mockRejectedValue(repairError);
     runtime.prepareFreshSession.mockRejectedValue(repairError);
     runtime.close.mockClear();
-    const manager = new AcpSessionManager(deps);
+    const manager = new AcpSessionManager(repairDeps);
     try {
       await expect(manager.getSessionStatus(target)).rejects.toBe(repairError);
       for (const discardPersistentState of [false, true]) {

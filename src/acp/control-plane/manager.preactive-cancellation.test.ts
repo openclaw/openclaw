@@ -1,7 +1,7 @@
 /** Cancellation must own accepted work before provider submission. */
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import { describe, expect, it } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { getActiveAcpTurnCount, listActiveAcpSessionsForOwner } from "./active-turns.js";
@@ -19,6 +19,8 @@ import {
   readySessionMeta,
 } from "./manager.test-helpers.js";
 
+const cancelledEvent = { type: "done", status: "cancelled", stopReason: "cancel" };
+
 describe("ACP accepted-turn cancellation", () => {
   installAcpSessionManagerTestLifecycle();
 
@@ -34,10 +36,13 @@ describe("ACP accepted-turn cancellation", () => {
       hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: state.runtime });
       mockMutableSession(sessionKey, { currentMeta: readySessionMeta() });
       const manager = new AcpSessionManager();
+      const pause = () => {
+        entered.resolve();
+        return release.promise;
+      };
       if (phase === "controls") {
         state.getCapabilities.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
+          await pause();
           return { controls: [] };
         });
       }
@@ -54,14 +59,7 @@ describe("ACP accepted-turn cancellation", () => {
         onLifecycle: (event) => {
           lifecycle.push(event);
         },
-        ...(phase === "submission"
-          ? {
-              onBeforePrompt: async () => {
-                entered.resolve();
-                await release.promise;
-              },
-            }
-          : {}),
+        ...(phase === "submission" ? { onBeforePrompt: pause } : {}),
       });
       // Observe rejection immediately so the baseline cannot leak an unhandled rejection.
       const settlement = Promise.allSettled([turn]);
@@ -74,11 +72,10 @@ describe("ACP accepted-turn cancellation", () => {
       const cancellation = Promise.allSettled([cancel]);
       release.resolve();
       const [turnResults, cancelResults] = await Promise.all([settlement, cancellation]);
-      expect(turnResults[0].status).toBe("fulfilled");
-      expect(cancelResults[0].status).toBe("fulfilled");
+      expect([turnResults[0].status, cancelResults[0].status]).toEqual(["fulfilled", "fulfilled"]);
       expect(state.runTurn).not.toHaveBeenCalled();
       expect(lifecycle).toEqual([]);
-      expect(events).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
+      expect(events).toEqual([cancelledEvent]);
       expect(manager.getObservabilitySnapshot().turns.active).toBe(0);
     },
   );
@@ -116,7 +113,7 @@ describe("ACP accepted-turn cancellation", () => {
     expect(state.runTurn).not.toHaveBeenCalled();
     expect(state.cancel).toHaveBeenCalledOnce();
     expect(state.close).toHaveBeenCalledOnce();
-    expect(events).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
+    expect(events).toEqual([cancelledEvent]);
     expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
   });
 });
@@ -168,12 +165,11 @@ describe("ACP reset successor liveness", () => {
       const oldSettled = old.catch(() => undefined);
       let fresh: Promise<void> | undefined;
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           oldEntered.promise,
-          old.then(() => {
-            throw new Error("Predecessor completed before entering the controlled runtime");
-          }),
-        ]);
+          old,
+          "Predecessor completed before entering the controlled runtime",
+        );
         await getAcpSessionResetControls(manager).forceDiscardSessionRuntime({
           cfg: baseCfg,
           sessionKey,
@@ -182,12 +178,11 @@ describe("ACP reset successor liveness", () => {
         fresh = manager.runTurn({ ...input, text: "fresh turn", requestId: "successor-turn" });
         releaseOld.resolve();
         await oldSettled;
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           freshEntered.promise,
-          fresh.then(() => {
-            throw new Error("Successor completed before entering the controlled runtime");
-          }),
-        ]);
+          fresh,
+          "Successor completed before entering the controlled runtime",
+        );
         expect(ensureCount).toBe(2);
         expect(listActiveAcpSessionsForOwner(ownerSessionKey)).toEqual([sessionKey]);
         expect(getActiveAcpTurnCount()).toBe(1);
@@ -232,7 +227,7 @@ describe("ACP session manager restart", () => {
         events.push(event);
       },
     });
-    expect(events).not.toContainEqual({ type: "done", status: "cancelled", stopReason: "cancel" });
+    expect(events).not.toContainEqual(cancelledEvent);
     expect(state.runTurn).toHaveBeenCalledOnce();
     expect(afterRestart).not.toBe(beforeRestart);
   });
