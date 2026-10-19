@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -90,6 +90,33 @@ async function startup(form: "cmd" | "9.2/9.3" | "9.4", taskName = "OpenClaw Gat
   return { startupPath, scriptPath, taskName };
 }
 
+const gatewayCommand =
+  '"C:/Node/node.exe" "C:/Applications/openclaw/dist/index.js" gateway --port 19789';
+const processSnapshot = (CommandLine = gatewayCommand, ProcessId = 4242) => ({
+  ProcessId,
+  CommandLine,
+});
+const nativeResult = (stdout: string, overrides: Partial<SpawnSyncReturns<string>> = {}) => ({
+  pid: 1234,
+  output: [null, "", ""],
+  stdout,
+  stderr: "",
+  status: 0,
+  signal: null,
+  ...overrides,
+});
+const readStartupWithinDeadline = (windowsStartupEntry: string, timeoutMs = 200) =>
+  readGatewayServiceState(resolveGatewayService(), {
+    env: environment(),
+    windowsStartupEntry,
+    timeoutMs,
+  });
+const scheduledTask = (taskPath: string, scriptPath: string) => ({
+  taskPath,
+  state: 3,
+  actions: [{ type: 0, path: scriptPath, arguments: "", workingDirectory: "" }],
+});
+
 describe("Windows Startup service inventory", () => {
   it.each([
     { form: "cmd", taskName: "OpenClaw Gateway", legacy: true, scheduler: "missing" },
@@ -163,13 +190,7 @@ describe("Windows Startup service inventory", () => {
       const foreignCommand =
         '"C:/Node/node.exe" "C:/Other/openclaw/dist/index.js" gateway --port 19789';
       vi.spyOn(taskProcesses, "readWindowsProcessSnapshot").mockReturnValue([
-        {
-          ProcessId: processKind === "matching" ? 4242 : 4343,
-          CommandLine:
-            processKind === "matching"
-              ? '"C:/Node/node.exe" "C:/Applications/openclaw/dist/index.js" gateway --port 19789'
-              : foreignCommand,
-        },
+        processKind === "matching" ? processSnapshot() : processSnapshot(foreignCommand, 4343),
       ]);
       if (processKind === "foreign") {
         vi.spyOn(probeHosts, "resolveGatewayServiceProbeHosts").mockResolvedValue(["127.0.0.1"]);
@@ -210,29 +231,16 @@ describe("Windows Startup service inventory", () => {
     vi.mocked(spawnSync).mockImplementation((_command, _args, options) => {
       const timeout = options?.timeout ?? Infinity;
       now += Math.min(timeout, 250);
-      return {
+      return nativeResult(JSON.stringify([processSnapshot()]), {
         pid: 0,
-        output: [null, "", ""],
-        stdout: JSON.stringify([
-          {
-            ProcessId: 4242,
-            CommandLine:
-              '"C:/Node/node.exe" "C:/Applications/openclaw/dist/index.js" gateway --port 19789',
-          },
-        ]),
-        stderr: "",
         status: timeout < 250 ? null : 0,
         signal: timeout < 250 ? "SIGTERM" : null,
         ...(timeout < 250
           ? { error: Object.assign(new Error("Native probe timed out"), { code: "ETIMEDOUT" }) }
           : {}),
-      };
+      });
     });
-    const state = await readGatewayServiceState(resolveGatewayService(), {
-      env: environment(),
-      windowsStartupEntry: startupPath,
-      timeoutMs,
-    });
+    const state = await readStartupWithinDeadline(startupPath, timeoutMs);
     expect(now).toBe(10_200);
     expect(spawnSync).toHaveBeenCalledTimes(1);
     expect(state.running).toBe(false);
@@ -255,22 +263,11 @@ describe("Windows Startup service inventory", () => {
         nativeBudgets.push(options?.timeout ?? Infinity);
         const portRead = args?.join(" ").includes("Get-NetTCPConnection");
         now += portRead ? (late ? 170 : 50) : 40;
-        return {
-          pid: 1234,
-          output: [null, "", ""],
-          stdout: portRead
-            ? "0\r\n"
-            : JSON.stringify([{ ProcessId: 9999, CommandLine: "unrelated.exe" }]),
-          stderr: "",
-          status: 0,
-          signal: null,
-        };
+        return nativeResult(
+          portRead ? "0\r\n" : JSON.stringify([processSnapshot("unrelated.exe", 9999)]),
+        );
       });
-      const state = await readGatewayServiceState(resolveGatewayService(), {
-        env: environment(),
-        windowsStartupEntry: startupPath,
-        timeoutMs: 200,
-      });
+      const state = await readStartupWithinDeadline(startupPath);
       expect(nativeBudgets).toEqual([200, 160]);
       expect(state.running).toBe(false);
       expect(state.runtime?.status).toBe(late ? "unknown" : "stopped");
@@ -291,20 +288,7 @@ describe("Windows Startup service inventory", () => {
     let signal: AbortSignal | undefined;
     vi.mocked(spawnSync).mockImplementation(() => {
       nativeRead = true;
-      return {
-        pid: 1234,
-        output: [null, "", ""],
-        stdout: JSON.stringify([
-          {
-            ProcessId: 4242,
-            CommandLine:
-              '"C:/Node/node.exe" "C:/Applications/openclaw/dist/index.js" gateway --port 19789',
-          },
-        ]),
-        stderr: "",
-        status: 0,
-        signal: null,
-      };
+      return nativeResult(JSON.stringify([processSnapshot()]));
     });
     const readFile = fs.readFile.bind(fs);
     vi.spyOn(fs, "readFile").mockImplementation((...args) => {
@@ -318,11 +302,7 @@ describe("Windows Startup service inventory", () => {
     });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     let result: Awaited<ReturnType<typeof readGatewayServiceState>> | undefined;
-    const inspection = readGatewayServiceState(resolveGatewayService(), {
-      env: environment(),
-      windowsStartupEntry: startupPath,
-      timeoutMs: 200,
-    }).then((state) => {
+    const inspection = readStartupWithinDeadline(startupPath).then((state) => {
       result = state;
     });
     try {
@@ -344,11 +324,7 @@ describe("Windows Startup service inventory", () => {
   it("reports Startup entries through Doctor when the selected Task exists", async () => {
     const selected = await startup("9.4", "OpenClaw Gateway");
     const sibling = await startup("9.4");
-    const task = {
-      taskPath: selected.taskName,
-      state: 3,
-      actions: [{ type: 0, path: selected.scriptPath, arguments: "", workingDirectory: "" }],
-    };
+    const task = scheduledTask(selected.taskName, selected.scriptPath);
     vi.mocked(taskProbe.listScheduledTasks).mockReturnValue([task]);
     vi.mocked(taskProbe.probeScheduledTaskState).mockReturnValue({ status: "found", ...task });
     for (const [key, value] of Object.entries(environment())) {
@@ -412,11 +388,7 @@ describe("Windows Startup service inventory", () => {
     const { startupPath, taskName } = await startup("9.4", "Recovery");
     let now = 10_000;
     vi.spyOn(performance, "now").mockImplementation(() => now);
-    const task = {
-      taskPath: taskName,
-      state: 3,
-      actions: [{ type: 0, path: startupPath, arguments: "", workingDirectory: "" }],
-    };
+    const task = scheduledTask(taskName, startupPath);
     vi.mocked(taskProbe.listScheduledTasks).mockImplementation(() => {
       now += 50_000;
       return [task];

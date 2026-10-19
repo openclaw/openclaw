@@ -44,6 +44,10 @@ const renderFields = (fields: Record<string, string>) =>
   Object.entries(fields)
     .map(([key, value]) => `${key}=${value}`)
     .join("\n");
+const identityResult = (fields: Record<string, string> = {}) =>
+  commandResult(renderFields({ ...systemdFields(), ...fields }));
+const prepare = (assertCaller = () => {}, signal = new AbortController().signal) =>
+  prepareHostedGatewayStop(processOwner, assertCaller, signal);
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -54,9 +58,7 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_LAUNCHD_LABEL", "ai.openclaw.test");
   Object.defineProperty(process, "platform", { ...platform, value: "linux" });
   vi.mocked(getFileLockProcessStartTime).mockReturnValue(10);
-  vi.mocked(execSystemctl).mockImplementation(async () =>
-    commandResult(renderFields(systemdFields())),
-  );
+  vi.mocked(execSystemctl).mockImplementation(async () => identityResult());
   vi.mocked(fs.readFile).mockImplementation(async () => `0::${cgroup}\n`);
   vi.mocked(prepareHostedStopExecutor).mockImplementation(async (params) => {
     const scope = params.scopeArgs?.find((arg) => arg.startsWith("--unit="))?.slice(7);
@@ -113,11 +115,7 @@ describe("hosted native stop", () => {
     "keeps a user service on its exact user manager",
     async () => {
       cgroup = `/user.slice/user-${process.getuid!()}.slice/user@${process.getuid!()}.service/app.slice/openclaw-test.service`;
-      const stop = await prepareHostedGatewayStop(
-        processOwner,
-        () => {},
-        new AbortController().signal,
-      );
+      const stop = await prepare();
       expect(prepareHostedStopExecutor).toHaveBeenCalledWith(
         expect.objectContaining({
           scopeArgs: expect.arrayContaining(["--user", "--scope"]),
@@ -137,43 +135,24 @@ describe("hosted native stop", () => {
     ["CanStop", "no"],
     ["RefuseManualStop", "yes"],
   ])("rejects %s=%s before acceptance and reports a late refusal", async (field, value) => {
-    vi.mocked(execSystemctl).mockResolvedValue(
-      commandResult(renderFields({ ...systemdFields(), [field]: value })),
-    );
-    await expect(
-      prepareHostedGatewayStop(processOwner, () => {}, new AbortController().signal),
-    ).rejects.toThrow("does not permit manual stop");
+    vi.mocked(execSystemctl).mockResolvedValue(identityResult({ [field]: value }));
+    await expect(prepare()).rejects.toThrow("does not permit manual stop");
     expect(prepareHostedStopExecutor).not.toHaveBeenCalled();
-    vi.mocked(execSystemctl).mockResolvedValue(commandResult(renderFields(systemdFields())));
-    const stop = await prepareHostedGatewayStop(
-      processOwner,
-      () => {},
-      new AbortController().signal,
-    );
-    vi.mocked(execSystemctl).mockResolvedValue(
-      commandResult(renderFields({ ...systemdFields(), [field]: value })),
-    );
+    vi.mocked(execSystemctl).mockResolvedValue(identityResult());
+    const stop = await prepare();
+    vi.mocked(execSystemctl).mockResolvedValue(identityResult({ [field]: value }));
     await expect(stop.execute(() => {})).resolves.toMatchObject({ outcome: "refused" });
     expect(execute).not.toHaveBeenCalled();
     await stop.dispose();
   });
   it("prepares an independent control scope and acknowledges native acceptance only at execution", async () => {
-    const stop = await prepareHostedGatewayStop(
-      processOwner,
-      () => {},
-      new AbortController().signal,
-    );
+    const stop = await prepare();
     expect(execute).not.toHaveBeenCalled();
     expect(prepareHostedStopExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
-        command: [
-          "systemctl",
-          "--system",
-          "--no-ask-password",
-          "--no-block",
-          "stop",
-          "openclaw-test.service",
-        ],
+        command: "systemctl --system --no-ask-password --no-block stop openclaw-test.service".split(
+          " ",
+        ),
         scopeArgs: expect.arrayContaining(["--system", "--scope"]),
       }),
     );
@@ -194,11 +173,9 @@ describe("hosted native stop", () => {
     ["ControlGroup", "/system.slice/other.service"],
   ])("rejects changed %s during preparation before accepting stop", async (field, value) => {
     vi.mocked(execSystemctl)
-      .mockResolvedValueOnce(commandResult(renderFields(systemdFields())))
-      .mockResolvedValue(commandResult(renderFields({ ...systemdFields(), [field]: value })));
-    await expect(
-      prepareHostedGatewayStop(processOwner, () => {}, new AbortController().signal),
-    ).rejects.toThrow(/systemd|instance/);
+      .mockResolvedValueOnce(identityResult())
+      .mockResolvedValue(identityResult({ [field]: value }));
+    await expect(prepare()).rejects.toThrow(/systemd|instance/);
     expect(execute).not.toHaveBeenCalled();
     expect(dispose).toHaveBeenCalledOnce();
   });
@@ -220,12 +197,10 @@ describe("hosted native stop", () => {
       } else {
         vi.mocked(execSystemctl).mockImplementationOnce(async () => {
           revoke();
-          return commandResult(renderFields(systemdFields()));
+          return identityResult();
         });
       }
-      await expect(
-        prepareHostedGatewayStop(processOwner, assertCaller, new AbortController().signal),
-      ).rejects.toThrow("closed caller");
+      await expect(prepare(assertCaller)).rejects.toThrow("closed caller");
       expect(prepareHostedStopExecutor).not.toHaveBeenCalled();
       expect(execute).not.toHaveBeenCalled();
     },
@@ -239,9 +214,7 @@ describe("hosted native stop", () => {
       });
       return { execute, dispose };
     });
-    await expect(
-      prepareHostedGatewayStop(processOwner, assertCaller, new AbortController().signal),
-    ).rejects.toThrow("closed caller");
+    await expect(prepare(assertCaller)).rejects.toThrow("closed caller");
     expect(execute).not.toHaveBeenCalled();
     expect(dispose).toHaveBeenCalledOnce();
   });
@@ -249,11 +222,7 @@ describe("hosted native stop", () => {
   it.each(["refused", "uncertain"] as const)(
     "classifies a %s result without manufacturing completion",
     async (disposition) => {
-      const stop = await prepareHostedGatewayStop(
-        processOwner,
-        () => {},
-        new AbortController().signal,
-      );
+      const stop = await prepare();
       execute.mockResolvedValueOnce({ disposition, detail: "native fault" });
       await expect(stop.execute(() => {})).resolves.toMatchObject({
         outcome: disposition,
@@ -269,31 +238,21 @@ describe("hosted native stop", () => {
     ["InvocationID", "b".repeat(32)],
     ["ExecMainStartTimestampMonotonic", "101"],
   ])("does not execute against a replaced %s at the terminal boundary", async (field, value) => {
-    const stop = await prepareHostedGatewayStop(
-      processOwner,
-      () => {},
-      new AbortController().signal,
-    );
-    vi.mocked(execSystemctl).mockResolvedValue(
-      commandResult(renderFields({ ...systemdFields(), [field]: value })),
-    );
+    const stop = await prepare();
+    vi.mocked(execSystemctl).mockResolvedValue(identityResult({ [field]: value }));
     await expect(stop.execute(() => {})).resolves.toMatchObject({ outcome: "uncertain" });
     expect(execute).not.toHaveBeenCalled();
     await stop.dispose();
   });
 
   it("does not execute when the terminal owner is revoked during the native identity query", async () => {
-    const stop = await prepareHostedGatewayStop(
-      processOwner,
-      () => {},
-      new AbortController().signal,
-    );
+    const stop = await prepare();
     const assertCurrent = vi.fn();
     vi.mocked(execSystemctl).mockImplementationOnce(async () => {
       assertCurrent.mockImplementation(() => {
         throw new Error("retired host");
       });
-      return commandResult(renderFields(systemdFields()));
+      return identityResult();
     });
     await expect(stop.execute(assertCurrent)).resolves.toEqual({
       outcome: "uncertain",
@@ -311,11 +270,7 @@ describe("hosted native stop", () => {
       // Native launchctl prints nested coalition state after the running job's state.
       runtime: { pid: process.pid, state: "active" },
     });
-    const stop = await prepareHostedGatewayStop(
-      processOwner,
-      () => {},
-      new AbortController().signal,
-    );
+    const stop = await prepare();
     expect(prepareHostedStopExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
         command: ["/bin/launchctl", "bootout", "gui/501/ai.openclaw.test"],
@@ -333,9 +288,7 @@ describe("hosted native stop", () => {
       state: "running",
       runtime: { pid: 999999, state: "running" },
     });
-    await expect(
-      prepareHostedGatewayStop(processOwner, () => {}, new AbortController().signal),
-    ).rejects.toThrow("exact Gateway");
+    await expect(prepare()).rejects.toThrow("exact Gateway");
     expect(prepareHostedStopExecutor).not.toHaveBeenCalled();
   });
 

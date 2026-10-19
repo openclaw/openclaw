@@ -27,11 +27,19 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 describe("findExtraGatewayServices (win32)", () => {
   const originalPlatform = process.platform;
   let nativeEnv: { APPDATA: string };
+  const action = (path: string, args: string) => ({
+    type: 0,
+    path,
+    arguments: args,
+    workingDirectory: "",
+  });
   const task = (taskPath: string, executable: string, args: string) => ({
     taskPath,
     state: null,
-    actions: [{ type: 0, path: executable, arguments: args, workingDirectory: "" }],
+    actions: [action(executable, args)],
   });
+  const expectedService = (label: string, legacy = false) =>
+    expect.objectContaining({ label, marker: legacy ? "clawdbot" : "openclaw", legacy });
 
   beforeEach(() => {
     nativeEnv = { APPDATA: tempDirs.make("openclaw-windows-inventory-") };
@@ -69,18 +77,8 @@ describe("findExtraGatewayServices (win32)", () => {
         taskPath: "\\OpenClaw CrossAction",
         state: null,
         actions: [
-          {
-            type: 0,
-            path: "C:\\OpenClaw\\openclaw.exe",
-            arguments: "node run",
-            workingDirectory: "",
-          },
-          {
-            type: 0,
-            path: "C:\\tools\\helper.exe",
-            arguments: "gateway run",
-            workingDirectory: "",
-          },
+          action("C:\\OpenClaw\\openclaw.exe", "node run"),
+          action("C:\\tools\\helper.exe", "gateway run"),
         ],
       },
     ]);
@@ -89,18 +87,10 @@ describe("findExtraGatewayServices (win32)", () => {
 
     expect(result.errors).toEqual([]);
     expect(result.services).toEqual([
-      expect.objectContaining({
-        label: "\\OpenClaw Gateway Backup",
-        marker: "openclaw",
-        legacy: false,
-      }),
-      expect.objectContaining({ label: "\\OpenClaw Node", marker: "openclaw", legacy: false }),
-      expect.objectContaining({ label: "\\Clawdbot Legacy", marker: "clawdbot", legacy: true }),
-      expect.objectContaining({
-        label: "\\OpenClaw CrossAction",
-        marker: "openclaw",
-        legacy: false,
-      }),
+      expectedService("\\OpenClaw Gateway Backup"),
+      expectedService("\\OpenClaw Node"),
+      expectedService("\\Clawdbot Legacy", true),
+      expectedService("\\OpenClaw CrossAction"),
     ]);
     expect(renderGatewayServiceCleanupHints(result.services).join("\n")).not.toContain("Monitor");
     const managed = await listManagedOpenClawGatewayServices(nativeEnv);
@@ -131,11 +121,8 @@ describe("findExtraGatewayServices (win32)", () => {
     const result = await findExtraGatewayServices(nativeEnv, { deep: true });
 
     expect(result.errors).toEqual([]);
-    expect(result.services).toEqual([
-      expect.objectContaining({ label: "\\Custom Service", marker: "openclaw", legacy: false }),
-    ]);
-    const managed = await listManagedOpenClawGatewayServices(nativeEnv);
-    expect(managed).toEqual({
+    expect(result.services).toEqual([expectedService("\\Custom Service")]);
+    expect(await listManagedOpenClawGatewayServices(nativeEnv)).toEqual({
       services: [],
       errors: [],
     });
@@ -153,7 +140,6 @@ describe("findExtraGatewayServices (win32)", () => {
   };
   const knownLabels = ["\\OpenClaw Gateway (dev)", "\\Clawdbot Gateway"];
   const missingLabels = [...knownLabels, "\\Custom Service"];
-  const custom = "\\Custom Assistant";
   it.each<IncompleteCase>([
     {
       name: "known selectors with missing actions",
@@ -179,8 +165,8 @@ describe("findExtraGatewayServices (win32)", () => {
         {
           ...task("\\Mixed Assistant", "C:\\clawdbot\\clawdbot.exe", "run"),
           actions: [
-            task(custom, "C:\\clawdbot\\clawdbot.exe", "run").actions[0]!,
-            task(custom, "C:\\OpenClaw\\openclaw.exe", "gateway run").actions[0]!,
+            action("C:\\clawdbot\\clawdbot.exe", "run"),
+            action("C:\\OpenClaw\\openclaw.exe", "gateway run"),
           ],
         },
       ],

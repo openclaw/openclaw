@@ -1,11 +1,9 @@
-// Daemon inspect tests cover service inspection and diagnostic output.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveLiveManagedGatewayDistFence } from "../../scripts/lib/live-gateway-dist-fence.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   findExtraGatewayServices,
   findSystemGatewayServices,
@@ -40,7 +38,6 @@ vi.mock("../process/exec.js", async (importOriginal) => {
   };
 });
 
-// File-scope cleanup cannot prevent the nested platform-restoration hooks from running.
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const CLAWDBOT_GATEWAY_CONTENTS = `\
@@ -60,8 +57,6 @@ ExecStart=/usr/bin/node /opt/openclaw/dist/entry.js gateway --port 18888
 `;
 
 describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem", () => {
-  // These tests write real .service files to a temp dir and call findExtraGatewayServices
-  // with that dir as HOME. No platform mocking or fs mocking needed.
   const isLinux = process.platform === "linux";
 
   it.skipIf(!isLinux)("reports an orphaned legacy systemd backup", async () => {
@@ -86,116 +81,88 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
   });
 });
 
+const originalPlatform = process.platform;
+
+beforeEach(() => {
+  loadedSystemdUnits.mockReset().mockResolvedValue([]);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+});
+
+function isolateNativeRoots(home: string) {
+  const roots = [
+    "/etc/systemd",
+    "/etc/xdg/systemd",
+    "/run/systemd",
+    "/run/user",
+    "/usr/local/lib/systemd",
+    "/usr/local/share/systemd",
+    "/usr/lib/systemd",
+    "/usr/share/systemd",
+    "/lib/systemd",
+    "/Library/LaunchAgents",
+    "/Library/LaunchDaemons",
+  ].map((root) => path.normalize(root));
+  const mapPath = (value: string) => {
+    const normalized = path.normalize(value);
+    return roots.some((root) => normalized === root || normalized.startsWith(`${root}${path.sep}`))
+      ? path.join(home, "native", normalized.slice(path.parse(normalized).root.length))
+      : value;
+  };
+  const readdir = fs.readdir;
+  const readFile = fs.readFile;
+  vi.spyOn(fs, "readdir").mockImplementation((...args: Parameters<typeof fs.readdir>) => {
+    if (typeof args[0] === "string") {
+      args[0] = mapPath(args[0]);
+    }
+    return readdir(...args);
+  });
+  vi.spyOn(fs, "readFile").mockImplementation((...args: Parameters<typeof fs.readFile>) => {
+    if (typeof args[0] === "string") {
+      args[0] = mapPath(args[0]);
+    }
+    return readFile(...args);
+  });
+  return async (file: string, contents: string) => {
+    const target = mapPath(file);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, contents);
+  };
+}
+
 describe("managed Gateway inventory projections", () => {
-  const originalPlatform = process.platform;
-
-  beforeEach(() => {
-    loadedSystemdUnits.mockReset().mockResolvedValue([]);
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
-  });
-
-  function isolateNativeRoots(home: string) {
-    const roots = [
-      "/etc/systemd",
-      "/etc/xdg/systemd",
-      "/run/systemd",
-      "/run/user",
-      "/usr/local/lib/systemd",
-      "/usr/local/share/systemd",
-      "/usr/lib/systemd",
-      "/usr/share/systemd",
-      "/lib/systemd",
-      "/Library/LaunchAgents",
-      "/Library/LaunchDaemons",
-    ].map((root) => path.normalize(root));
-    const mapPath = (value: string) => {
-      const normalized = path.normalize(value);
-      return roots.some(
-        (root) => normalized === root || normalized.startsWith(`${root}${path.sep}`),
-      )
-        ? path.join(home, "native", normalized.slice(path.parse(normalized).root.length))
-        : value;
-    };
-    const readdir = fs.readdir;
-    const readFile = fs.readFile;
-    vi.spyOn(fs, "readdir").mockImplementation((...args: Parameters<typeof fs.readdir>) => {
-      if (typeof args[0] === "string") {
-        args[0] = mapPath(args[0]);
-      }
-      return readdir(...args);
-    });
-    vi.spyOn(fs, "readFile").mockImplementation((...args: Parameters<typeof fs.readFile>) => {
-      if (typeof args[0] === "string") {
-        args[0] = mapPath(args[0]);
-      }
-      return readFile(...args);
-    });
-    return async (file: string, contents: string) => {
-      const target = mapPath(file);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, contents);
-    };
-  }
-
-  it.each([
-    [
-      "reset",
-      "Environment=OPENCLAW_SERVICE_MARKER=openclaw OPENCLAW_SERVICE_KIND=gateway\nEnvironment = ",
-      false,
-    ],
-  ] as const)(
-    "uses %s inline metadata for an unbranded systemd command",
-    async (_name, metadata, included) => {
-      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
-      const home = tempDirs.make("managed-systemd-metadata-", os.tmpdir());
-      const write = isolateNativeRoots(home);
-      for (const unitPath of [
-        path.join(home, ".config/systemd/user/custom.service"),
-        "/etc/systemd/system/custom.service",
-      ]) {
-        await write(
-          unitPath,
-          `[Service]\nExecStart = /usr/bin/node /srv/worker/dist/entry.js gateway run\n${metadata}\n`,
-        );
-      }
-
-      const managed = await listManagedOpenClawGatewayServices({ HOME: home });
-
-      expect(managed).toEqual({
-        services: included
-          ? ["user", "system"].map((scope) =>
-              expect.objectContaining({
-                label: "custom.service",
-                scope,
-                marker: "openclaw",
-                legacy: false,
-              }),
-            )
-          : [],
-        errors: [],
-      });
-      expect(await findSystemGatewayServices()).toEqual(
-        included
-          ? [
-              expect.objectContaining({
-                label: "custom.service",
-                scope: "system",
-                marker: "openclaw",
-                legacy: false,
-              }),
-            ]
-          : [],
+  it("resets inline metadata for an unbranded systemd command", async () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    const home = tempDirs.make("managed-systemd-metadata-", os.tmpdir());
+    const write = isolateNativeRoots(home);
+    for (const unitPath of [
+      path.join(home, ".config/systemd/user/custom.service"),
+      "/etc/systemd/system/custom.service",
+    ]) {
+      await write(
+        unitPath,
+        [
+          "[Service]",
+          "ExecStart = /usr/bin/node /srv/worker/dist/entry.js gateway run",
+          "Environment=OPENCLAW_SERVICE_MARKER=openclaw OPENCLAW_SERVICE_KIND=gateway",
+          "Environment = ",
+          "",
+        ].join("\n"),
       );
-      expect(await findExtraGatewayServices({ HOME: home }, { deep: true })).toEqual({
-        services: [],
-        errors: [],
-      });
-    },
-  );
+    }
+    expect(await listManagedOpenClawGatewayServices({ HOME: home })).toEqual({
+      services: [],
+      errors: [],
+    });
+    expect(await findSystemGatewayServices()).toEqual([]);
+    expect(await findExtraGatewayServices({ HOME: home }, { deep: true })).toEqual({
+      services: [],
+      errors: [],
+    });
+  });
 
   it("includes current, sibling, custom, and template systemd Gateways while preserving incomplete inspection", async () => {
     Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
@@ -387,31 +354,18 @@ describe("managed Gateway inventory projections", () => {
     const configHome = path.join(home, "xdg-config");
     const dataHome = path.join(home, "xdg-data");
     const runtimeDir = path.join(home, "xdg-runtime");
-    await write(
+    const unitPaths = [
       path.join(configHome, "systemd/user/config-gateway.service"),
-      CUSTOM_OPENCLAW_GATEWAY_CONTENTS,
-    );
-    await write(
       path.join(dataHome, "systemd/user/data-gateway.service"),
-      CUSTOM_OPENCLAW_GATEWAY_CONTENTS,
-    );
-    await write(
       "/etc/systemd/system.control/system-gateway.service",
-      CUSTOM_OPENCLAW_GATEWAY_CONTENTS,
-    );
-    await write(
       path.join(runtimeDir, "systemd/generator/generated-gateway.service"),
-      CUSTOM_OPENCLAW_GATEWAY_CONTENTS,
-    );
-    await write(
       path.join(runtimeDir, "systemd/transient/transient-gateway.service"),
-      CUSTOM_OPENCLAW_GATEWAY_CONTENTS,
-    );
-    await write("/run/systemd/user/run-gateway.service", CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
-    await write(
+      "/run/systemd/user/run-gateway.service",
       "/run/systemd/generator/system-generated-gateway.service",
-      CUSTOM_OPENCLAW_GATEWAY_CONTENTS,
-    );
+    ];
+    for (const unitPath of unitPaths) {
+      await write(unitPath, CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
+    }
 
     const result = await listManagedOpenClawGatewayServices(
       {
@@ -442,15 +396,7 @@ describe("managed Gateway inventory projections", () => {
     const bindings = await discoverManagedGatewayBindings({ HOME: home });
     expect(bindings).toHaveLength(7);
     expect(bindings.map((binding) => binding.systemdReadTarget?.unitPath)).toEqual(
-      expect.arrayContaining([
-        path.join(configHome, "systemd/user/config-gateway.service"),
-        path.join(dataHome, "systemd/user/data-gateway.service"),
-        "/etc/systemd/system.control/system-gateway.service",
-        path.join(runtimeDir, "systemd/generator/generated-gateway.service"),
-        path.join(runtimeDir, "systemd/transient/transient-gateway.service"),
-        "/run/systemd/user/run-gateway.service",
-        "/run/systemd/generator/system-generated-gateway.service",
-      ]),
+      expect.arrayContaining(unitPaths),
     );
   });
 
@@ -517,6 +463,8 @@ describe("managed Gateway inventory projections", () => {
     }
     await write("/Library/LaunchAgents/org.example.global.plist", plist("org.example.global"));
     await write("/Library/LaunchDaemons/ai.openclaw.gateway.plist", plist("ai.openclaw.gateway"));
+    const wrapper = ["/opt/service-env/rescue-env-wrapper.sh", "/opt/service-env/rescue.env"];
+    const node = ["/usr/bin/node", "/opt/openclaw/openclaw.mjs"];
     for (const [label, args] of [
       [
         "org.example.shell",
@@ -534,23 +482,12 @@ describe("managed Gateway inventory projections", () => {
         "org.example.shell-node",
         ["/bin/sh", "-c", 'exec /usr/bin/openclaw node run --display-name "Home Gateway"'],
       ],
-      [
-        "org.example.named-node",
-        [
-          "/usr/bin/node",
-          "/opt/openclaw/openclaw.mjs",
-          "node",
-          "run",
-          "--display-name",
-          "Home Gateway",
-        ],
-      ],
+      ["org.example.named-node", [...node, "node", "run", "--display-name", "Home Gateway"]],
       [
         "org.example.wrapped",
         [
           "/bin/sh",
-          "/opt/service-env/rescue-env-wrapper.sh",
-          "/opt/service-env/rescue.env",
+          ...wrapper,
           "/usr/bin/node",
           "--import",
           "/opt/bootstrap.mjs",
@@ -560,39 +497,14 @@ describe("managed Gateway inventory projections", () => {
           "gateway",
         ],
       ],
-      [
-        "org.example.direct-wrapper",
-        [
-          "/opt/service-env/rescue-env-wrapper.sh",
-          "/opt/service-env/rescue.env",
-          "/usr/bin/openclaw",
-          "gateway",
-        ],
-      ],
+      ["org.example.direct-wrapper", [...wrapper, "/usr/bin/openclaw", "gateway"]],
       [
         "org.example.wrapped-node",
-        [
-          "/bin/sh",
-          "/opt/service-env/rescue-env-wrapper.sh",
-          "/opt/service-env/rescue.env",
-          "/usr/bin/openclaw",
-          "node",
-          "run",
-          "--display-name",
-          "gateway",
-        ],
+        ["/bin/sh", ...wrapper, "/usr/bin/openclaw", "node", "run", "--display-name", "gateway"],
       ],
       [
         "org.example.direct-wrapped-node",
-        [
-          "/opt/service-env/rescue-env-wrapper.sh",
-          "/opt/service-env/rescue.env",
-          "/usr/bin/openclaw",
-          "--profile",
-          "gateway",
-          "node",
-          "run",
-        ],
+        [...wrapper, "/usr/bin/openclaw", "--profile", "gateway", "node", "run"],
       ],
     ] as const) {
       await write(
@@ -685,8 +597,17 @@ describe("managed Gateway inventory projections", () => {
   });
 });
 
+function isolateDirectoryReads(home: string) {
+  const readdir = fs.readdir;
+  vi.spyOn(fs, "readdir").mockImplementation((...args: Parameters<typeof fs.readdir>) => {
+    const dir = args[0];
+    return typeof dir === "string" && (dir === home || dir.startsWith(`${home}${path.sep}`))
+      ? readdir(...args)
+      : Promise.resolve([]);
+  });
+}
+
 describe("complete inventory admission", () => {
-  beforeEach(() => loadedSystemdUnits.mockReset().mockResolvedValue([]));
   it.each([
     ["linux", ".config/systemd/user/custom-worker.service", false],
     ["linux", ".config/systemd/user/openclaw-gateway.service", true],
@@ -694,125 +615,77 @@ describe("complete inventory admission", () => {
   ] as const)(
     "handles unreadable paths in complete %s inventories: %s",
     async (platform, relative, required) => {
-      const originalPlatform = process.platform;
       Object.defineProperty(process, "platform", { configurable: true, value: platform });
-      try {
-        await withTestDir({ prefix: "openclaw-incomplete-inventory-" }, async (home) => {
-          const readdir = fs.readdir;
-          const directories = vi
-            .spyOn(fs, "readdir")
-            .mockImplementation((...args: Parameters<typeof fs.readdir>) => {
-              const dir = args[0];
-              return typeof dir === "string" &&
-                (dir === home || dir.startsWith(`${home}${path.sep}`))
-                ? readdir(...args)
-                : Promise.resolve([]);
-            });
-          try {
-            const unreadable = path.join(home, relative);
-            // A directory in place of a service file fails reads even as root.
-            await fs.mkdir(unreadable, { recursive: true });
-            await expect(listManagedOpenClawGatewayServices({ HOME: home })).resolves.toEqual({
-              services: [],
-              errors: required
-                ? [{ source: unreadable, message: "Service path could not be inspected." }]
-                : [],
-            });
-            await expect(
-              listManagedOpenClawGatewayServices({ HOME: home }, { requireComplete: true }),
-            ).resolves.toEqual({
-              services: [],
-              errors: required
-                ? [{ source: unreadable, message: "Service path could not be inspected." }]
-                : [],
-            });
-          } finally {
-            directories.mockRestore();
-          }
-        });
-      } finally {
-        Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
-      }
+      const home = tempDirs.make("openclaw-incomplete-inventory-");
+      isolateDirectoryReads(home);
+      const unreadable = path.join(home, relative);
+      // A directory in place of a service file fails reads even as root.
+      await fs.mkdir(unreadable, { recursive: true });
+      const expected = {
+        services: [],
+        errors: required
+          ? [{ source: unreadable, message: "Service path could not be inspected." }]
+          : [],
+      };
+      await expect(listManagedOpenClawGatewayServices({ HOME: home })).resolves.toEqual(expected);
+      await expect(
+        listManagedOpenClawGatewayServices({ HOME: home }, { requireComplete: true }),
+      ).resolves.toEqual(expected);
     },
   );
 
   it("admits an unrelated unreadable launchd plist and still fences a live Gateway", async () => {
-    const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
-    try {
-      await withTestDir({ prefix: "openclaw-launchd-fence-" }, async (home) => {
-        const checkout = path.join(home, "openclaw");
-        await fs.mkdir(path.join(checkout, "dist"), { recursive: true });
-        await fs.writeFile(path.join(checkout, "package.json"), '{"name":"openclaw"}\n');
-        await fs.writeFile(path.join(checkout, "dist", "index.js"), "gateway\n");
-        const agents = path.join(home, "Library", "LaunchAgents");
-        await fs.mkdir(path.join(agents, "org.example.custom-worker.plist"), { recursive: true });
-        const readdir = fs.readdir;
-        const directories = vi
-          .spyOn(fs, "readdir")
-          .mockImplementation((...args: Parameters<typeof fs.readdir>) => {
-            const dir = args[0];
-            return typeof dir === "string" && (dir === home || dir.startsWith(`${home}${path.sep}`))
-              ? readdir(...args)
-              : Promise.resolve([]);
-          });
-        const label = "ai.openclaw.gateway.dev";
-        const target = `gui/501/${label}`;
-        const sourcePath = path.join(agents, `${label}.plist`);
-        const programArguments = [
-          process.execPath,
-          path.join(checkout, "dist", "index.js"),
-          "gateway",
-        ];
-        const readState = vi
-          .spyOn(launchdRuntime, "readLoadedLaunchAgentState")
-          .mockImplementation(async (env) => {
-            const live = env.OPENCLAW_LAUNCHD_LABEL === label;
-            return {
-              installed: live,
-              loadState: { status: live ? "loaded" : "not-loaded" },
-              running: live,
-              env,
-              command: live ? { programArguments, sourcePath } : null,
-              runtime: { status: live ? "running" : "stopped" },
-              ...(live
-                ? {
-                    launchAgent: {
-                      target,
-                      sourcePath,
-                      program: process.execPath,
-                      programArguments,
-                      environment: {},
-                    },
-                  }
-                : {}),
-            };
-          });
-        try {
-          const env = { HOME: home };
-          await expect(
-            resolveLiveManagedGatewayDistFence(checkout, { env, requireVerified: true }),
-          ).resolves.toEqual({ refuse: false });
+    const home = tempDirs.make("openclaw-launchd-fence-");
+    isolateDirectoryReads(home);
+    const checkout = path.join(home, "openclaw");
+    await fs.mkdir(path.join(checkout, "dist"), { recursive: true });
+    await fs.writeFile(path.join(checkout, "package.json"), '{"name":"openclaw"}\n');
+    await fs.writeFile(path.join(checkout, "dist", "index.js"), "gateway\n");
+    const agents = path.join(home, "Library", "LaunchAgents");
+    await fs.mkdir(path.join(agents, "org.example.custom-worker.plist"), { recursive: true });
+    const label = "ai.openclaw.gateway.dev";
+    const target = `gui/501/${label}`;
+    const sourcePath = path.join(agents, `${label}.plist`);
+    const programArguments = [process.execPath, path.join(checkout, "dist", "index.js"), "gateway"];
+    vi.spyOn(launchdRuntime, "readLoadedLaunchAgentState").mockImplementation(async (env) => {
+      const live = env.OPENCLAW_LAUNCHD_LABEL === label;
+      return {
+        installed: live,
+        loadState: { status: live ? "loaded" : "not-loaded" },
+        running: live,
+        env,
+        command: live ? { programArguments, sourcePath } : null,
+        runtime: { status: live ? "running" : "stopped" },
+        ...(live
+          ? {
+              launchAgent: {
+                target,
+                sourcePath,
+                program: process.execPath,
+                programArguments,
+                environment: {},
+              },
+            }
+          : {}),
+      };
+    });
+    const env = { HOME: home };
+    await expect(
+      resolveLiveManagedGatewayDistFence(checkout, { env, requireVerified: true }),
+    ).resolves.toEqual({ refuse: false });
 
-          await fs.writeFile(
-            sourcePath,
-            `<plist version="1.0"><dict><key>Label</key><string>${label}</string><key>ProgramArguments</key><array><string>${process.execPath}</string><string>${path.join(checkout, "dist", "index.js")}</string><string>gateway</string></array></dict></plist>`,
-          );
-          await expect(
-            resolveLiveManagedGatewayDistFence(checkout, { env, requireVerified: true }),
-          ).resolves.toMatchObject({
-            refuse: true,
-            message: expect.stringContaining(
-              `launchd job ${JSON.stringify(target)} loaded from ${JSON.stringify(sourcePath)}`,
-            ),
-          });
-        } finally {
-          readState.mockRestore();
-          directories.mockRestore();
-        }
-      });
-    } finally {
-      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
-    }
+    await fs.writeFile(
+      sourcePath,
+      `<plist version="1.0"><dict><key>Label</key><string>${label}</string><key>ProgramArguments</key><array><string>${process.execPath}</string><string>${path.join(checkout, "dist", "index.js")}</string><string>gateway</string></array></dict></plist>`,
+    );
+    await expect(
+      resolveLiveManagedGatewayDistFence(checkout, { env, requireVerified: true }),
+    ).resolves.toMatchObject({
+      refuse: true,
+      message: expect.stringContaining(
+        `launchd job ${JSON.stringify(target)} loaded from ${JSON.stringify(sourcePath)}`,
+      ),
+    });
   });
 });
