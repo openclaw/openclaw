@@ -5,6 +5,11 @@ import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-exe
 import { resolveAdmittedRunActiveAssertion as activeAssertion } from "../../agents/admitted-run-context.js";
 import { runWithAgentToolSourceExecutionScope as withSource } from "../../agents/agent-tool-source-execution-guard.js";
 import {
+  clearPromptCacheObservations,
+  completePromptCacheObservation,
+} from "../../agents/embedded-agent-runner/prompt-cache-observability.js";
+import { beginOpenAIObservation } from "../../agents/embedded-agent-runner/prompt-cache-observability.test-support.js";
+import {
   clearTestEmbeddedRun,
   createEmbeddedRunHandle,
   registerTestEmbeddedRun,
@@ -74,6 +79,7 @@ beforeEach(async () => {
   mocks.postWorkshopChangeNotice.mockClear();
 });
 afterEach(async () => {
+  clearPromptCacheObservations();
   mocks.runEmbeddedAgent.mockReset();
   resetGlobalHookRunner();
   vi.restoreAllMocks();
@@ -100,6 +106,40 @@ function withAdmission(run: (assertCurrent: ReturnType<typeof activeAssertion>) 
     }
   });
 }
+it.each(["success", "failure"])(
+  "releases a detached review's prompt diagnostics after %s while preserving its source session",
+  async (outcome) => {
+    await useRealReview();
+    const foreground = { sessionId: candidate.source.sessionId };
+    beginOpenAIObservation(foreground);
+    completePromptCacheObservation({ ...foreground, usage: { cacheRead: 8_000 } });
+    let reviewSessionId = "";
+    mocks.runEmbeddedAgent.mockImplementation(async (params: ReviewParams) => {
+      reviewSessionId = params.sessionId;
+      beginOpenAIObservation({ sessionId: reviewSessionId });
+      completePromptCacheObservation({
+        sessionId: reviewSessionId,
+        usage: { cacheRead: 8_000 },
+      });
+      if (outcome === "failure") {
+        throw new Error("review provider failed");
+      }
+      return { meta: { durationMs: 1 } };
+    });
+
+    const review = runSkillExperienceReview(candidate);
+    if (outcome === "failure") {
+      await expect(review).rejects.toThrow("review provider failed");
+    } else {
+      await review;
+    }
+
+    expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(beginOpenAIObservation({ sessionId: reviewSessionId }).previousCacheRead).toBeNull();
+    expect(beginOpenAIObservation(foreground).previousCacheRead).toBe(8_000);
+  },
+);
+
 it("yields an in-flight review when interactive work starts", async () => {
   await useRealReview();
   const ownHandle = createEmbeddedRunHandle();
