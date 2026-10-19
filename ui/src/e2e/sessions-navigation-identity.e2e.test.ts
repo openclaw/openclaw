@@ -23,6 +23,29 @@ async function capture(page: Page, name: string) {
     await page.screenshot({ path: path.join(suite.artifactDir, name), fullPage: true });
   }
 }
+async function receipt(name: string, data: () => Promise<object>) {
+  if (captureProof) {
+    await writeFile(path.join(suite.artifactDir, name), JSON.stringify(await data(), null, 2));
+  }
+}
+function session(key: string, sessionId: string, displayName: string) {
+  return { key, sessionId, displayName, kind: "direct", updatedAt: timestamp };
+}
+function transcript(text: string) {
+  return { messages: [{ role: "assistant", content: [{ type: "text", text }], timestamp }] };
+}
+function result(sessions: ReturnType<typeof session>[]) {
+  return {
+    sessions,
+    count: sessions.length,
+    totalCount: sessions.length,
+    hasMore: false,
+    offset: 0,
+    defaults: { contextTokens: null, model: null, modelProvider: null },
+    path: "",
+    ts: timestamp,
+  };
+}
 
 type Scenario = {
   name: string;
@@ -51,39 +74,17 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
       async ({ page }) => {
         const target = {
-          key: targetKey,
-          sessionId: "target-generation",
-          kind: "direct",
-          displayName: "Target launch review",
+          ...session(targetKey, "target-generation", "Target launch review"),
           label: "Target launch review",
           boardFace: scenario.face ?? "chat",
-          updatedAt: timestamp,
         };
         const otherAgent = scenario.otherAgent ?? "main";
-        const other = {
-          key: `agent:${otherAgent}:thread:${scenario.otherPrefix ?? "12345678"}-bbbb-4000-8000-000000000002`,
-          sessionId: "other-generation",
-          kind: "direct",
-          displayName: scenario.sameTitle ? target.displayName : "Other release review",
-          updatedAt: timestamp,
-        };
-        const main = {
-          key: "agent:main:main",
-          sessionId: "main-generation",
-          kind: "direct",
-          displayName: "Home",
-          updatedAt: timestamp,
-        };
-        const result = (sessions: (typeof main)[]) => ({
-          sessions,
-          count: sessions.length,
-          totalCount: sessions.length,
-          hasMore: false,
-          offset: 0,
-          defaults: { contextTokens: null, model: null, modelProvider: null },
-          path: "",
-          ts: timestamp,
-        });
+        const other = session(
+          `agent:${otherAgent}:thread:${scenario.otherPrefix ?? "12345678"}-bbbb-4000-8000-000000000002`,
+          "other-generation",
+          scenario.sameTitle ? target.displayName : "Other release review",
+        );
+        const main = session("agent:main:main", "main-generation", "Home");
         const primary = scenario.cached ? [main, target, other] : [main];
         const searched = otherAgent === "main" ? [main, target, other] : [main, target];
         const gateway = await installMockGateway(page, {
@@ -92,20 +93,8 @@ suite.define(() => {
           sessions: [main, target, other],
           sessionKey: main.key,
           sessionTranscripts: {
-            [target.key]: {
-              messages: [
-                { role: "assistant", content: [{ type: "text", text: targetText }], timestamp },
-              ],
-            },
-            [other.key]: {
-              messages: [
-                {
-                  role: "assistant",
-                  content: [{ type: "text", text: "Different synthetic transcript 982" }],
-                  timestamp,
-                },
-              ],
-            },
+            [target.key]: transcript(targetText),
+            [other.key]: transcript("Different synthetic transcript 982"),
           },
           methodResponses: {
             "sessions.list": {
@@ -193,23 +182,14 @@ suite.define(() => {
           .or(page.getByRole("heading", { name: "Choose a session", exact: true }));
         await visibleDestination.first().waitFor({ state: "visible" });
         await capture(page, "after-click.png");
-        if (captureProof) {
-          await writeFile(
-            path.join(suite.artifactDir, "receipt.json"),
-            JSON.stringify(
-              {
-                scenario,
-                primaryBeforeClick,
-                searchRequests,
-                url: page.url(),
-                resolveRequests: await gateway.getRequests("sessions.resolve"),
-                startupRequests: await gateway.getRequests("chat.startup"),
-              },
-              null,
-              2,
-            ),
-          );
-        }
+        await receipt("receipt.json", async () => ({
+          scenario,
+          primaryBeforeClick,
+          searchRequests,
+          url: page.url(),
+          resolveRequests: await gateway.getRequests("sessions.resolve"),
+          startupRequests: await gateway.getRequests("chat.startup"),
+        }));
         expect(
           await page.getByRole("heading", { name: "Choose a session", exact: true }).isVisible(),
         ).toBe(false);
@@ -251,22 +231,13 @@ suite.define(() => {
           ),
         ).toBe(true);
         await capture(page, "after-reload.png");
-        if (captureProof) {
-          await writeFile(
-            path.join(suite.artifactDir, "reload-receipt.json"),
-            JSON.stringify(
-              {
-                scenario,
-                url: page.url(),
-                beforeReloadRequests,
-                afterReloadRequests,
-                boardRequests: await gateway.getRequests("board.get"),
-              },
-              null,
-              2,
-            ),
-          );
-        }
+        await receipt("reload-receipt.json", async () => ({
+          scenario,
+          url: page.url(),
+          beforeReloadRequests,
+          afterReloadRequests,
+          boardRequests: await gateway.getRequests("board.get"),
+        }));
       },
     );
   });

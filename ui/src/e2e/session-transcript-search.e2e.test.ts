@@ -1,24 +1,25 @@
-// Control UI E2E tests transcript search through the scoped Gateway method.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { BrowserContext, Page } from "playwright";
+import { beforeEach, afterEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
-  canRunPlaywrightChromium,
   controlUiSessionPath,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
+  type MockGatewayWindow,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({ name: "Control UI session transcript search" });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const searchScope = {
+  agentId: "main",
+  excludeDock: true,
+  includeGlobal: true,
+  includeUnknown: false,
+  configuredAgentsOnly: true,
+};
 let artifactDir: string;
 beforeEach(() => {
   if (captureProof) {
@@ -26,11 +27,56 @@ beforeEach(() => {
   }
 });
 
-// Browser contexts preserve test isolation; keep one process warm for this file.
-let browser: Browser;
 let context: BrowserContext | undefined;
 let page: Page | undefined;
-let server: ControlUiE2eServer | undefined;
+
+async function newPage(height = 800, width = 1200, proof = false, light = false) {
+  context = await suite.newBrowserContext({
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport: { height, width },
+    ...(light ? { colorScheme: "light" as const } : {}),
+    ...(proof && captureProof
+      ? { recordVideo: { dir: artifactDir, size: { height, width } } }
+      : {}),
+  });
+  return (page = await context.newPage());
+}
+
+function listResponse(sessions: unknown[], timestamp: number, model: string | null = null) {
+  return {
+    count: sessions.length,
+    defaults: { contextTokens: null, model, modelProvider: model ? "openai" : null },
+    path: "",
+    sessions,
+    ts: timestamp,
+  };
+}
+
+function searchHit(
+  session: string,
+  snippet: string,
+  timestamp: number,
+  role = "assistant",
+  score = 1,
+) {
+  return {
+    messageId: `message-${session}`,
+    role,
+    score,
+    sessionId: `session-${session}`,
+    sessionKey: `agent:main:${session}`,
+    snippet,
+    timestamp,
+  };
+}
+
+async function openSearch(browserPage: Page) {
+  await browserPage.goto(`${suite.server.baseUrl}sessions`);
+  const search = browserPage.getByRole("search", { name: "Search transcripts" });
+  await search.getByRole("button", { name: "Search transcripts" }).click();
+  return { search, input: search.getByRole("searchbox", { name: "Search session transcripts" }) };
+}
 
 async function captureUiProof(fileName: string) {
   if (!captureProof || !page) {
@@ -55,13 +101,7 @@ async function resolveDeferredAndDrain(
 ): Promise<void> {
   await browserPage.evaluate(
     async ({ targetMethod, responsePayload }) => {
-      const gateway = (
-        window as Window & {
-          openclawControlUiE2eGateway?: {
-            resolveDeferred: (method: string, payload?: unknown) => void;
-          };
-        }
-      ).openclawControlUiE2eGateway;
+      const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
       if (!gateway) {
         throw new Error("Mock Gateway is not installed");
       }
@@ -74,40 +114,18 @@ async function resolveDeferredAndDrain(
   );
 }
 
-describeControlUiE2e("Control UI session transcript search", () => {
-  beforeAll(async () => {
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-    try {
-      server = await startControlUiE2eServer();
-    } catch (error) {
-      await browser.close();
-      throw error;
-    }
-  });
-
+suite.define(() => {
   afterEach(async () => {
-    await context?.close().catch(() => {});
+    if (context) {
+      await suite.closeBrowserContext(context);
+    }
     context = undefined;
     page = undefined;
   });
 
-  afterAll(async () => {
-    await browser?.close().catch(() => {});
-    await server?.close();
-  });
-
   it("searches once on submit, shows provenance, and opens the matching chat", async () => {
     const timestamp = Date.parse("2026-07-12T14:30:00.000Z");
-    context = await browser.newContext({
-      colorScheme: "light",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-      ...(captureProof
-        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1440 } } }
-        : {}),
-    });
-    page = await context.newPage();
+    page = await newPage(900, 1440, true, true);
     const gateway = await installMockGateway(page, {
       // Core search remains usable even when omitted from the feature catalog.
       featureMethods: ["chat.metadata", "chat.startup"],
@@ -119,11 +137,8 @@ describeControlUiE2e("Control UI session transcript search", () => {
         },
       ],
       methodResponses: {
-        "sessions.list": {
-          count: 1,
-          defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-          path: "",
-          sessions: [
+        "sessions.list": listResponse(
+          [
             {
               displayName: "Launch planning",
               key: "agent:main:launch",
@@ -134,29 +149,25 @@ describeControlUiE2e("Control UI session transcript search", () => {
               updatedAt: timestamp,
             },
           ],
-          ts: timestamp,
-        },
+          timestamp,
+          "gpt-5.5",
+        ),
         "sessions.search": {
           results: [
-            {
-              messageId: "message-launch",
-              role: "assistant",
-              score: 3.4,
-              sessionId: "session-launch",
-              sessionKey: "agent:main:launch",
-              snippet: "The nebula launch checklist is ready for final review.",
+            searchHit(
+              "launch",
+              "The nebula launch checklist is ready for final review.",
               timestamp,
-            },
+              "assistant",
+              3.4,
+            ),
           ],
         },
       },
       sessionKey: "agent:main:main",
     });
 
-    await page.goto(`${server?.baseUrl ?? ""}sessions`);
-    const search = page.getByRole("search", { name: "Search transcripts" });
-    await search.getByRole("button", { name: "Search transcripts" }).click();
-    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
+    const { search, input } = await openSearch(page);
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await captureUiProof("01-initial.png");
 
@@ -171,13 +182,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
     expect((await gateway.getRequests("sessions.search"))[0]?.params).toEqual({
       limit: 25,
       query: "nebula launch",
-      scope: {
-        agentId: "main",
-        excludeDock: true,
-        includeGlobal: true,
-        includeUnknown: false,
-        configuredAgentsOnly: true,
-      },
+      scope: searchScope,
     });
     await expect.poll(() => result.textContent()).toContain("Launch planning");
     await expect.poll(() => result.textContent()).toContain("Assistant");
@@ -205,24 +210,13 @@ describeControlUiE2e("Control UI session transcript search", () => {
 
   it("clears transcript matches when switching from active to archived sessions", async () => {
     const timestamp = Date.parse("2026-08-26T12:00:00.000Z");
-    context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1000, width: 1440 },
-      ...(captureProof
-        ? { recordVideo: { dir: artifactDir, size: { height: 1000, width: 1440 } } }
-        : {}),
-    });
-    page = await context.newPage();
+    page = await newPage(1000, 1440, true);
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.search"],
       sessionArchiveFiltering: true,
       methodResponses: {
-        "sessions.list": {
-          count: 2,
-          defaults: { contextTokens: null, model: null, modelProvider: null },
-          path: "",
-          sessions: [
+        "sessions.list": listResponse(
+          [
             {
               key: "agent:main:active",
               label: "Active task",
@@ -237,27 +231,14 @@ describeControlUiE2e("Control UI session transcript search", () => {
               updatedAt: timestamp,
             },
           ],
-          ts: timestamp,
-        },
+          timestamp,
+        ),
         "sessions.search": {
-          results: [
-            {
-              messageId: "message-active",
-              role: "assistant",
-              score: 1,
-              sessionId: "session-active",
-              sessionKey: "agent:main:active",
-              snippet: "Release notes from the active task.",
-              timestamp,
-            },
-          ],
+          results: [searchHit("active", "Release notes from the active task.", timestamp)],
         },
       },
     });
-    await page.goto(`${server?.baseUrl ?? ""}sessions`);
-    const search = page.getByRole("search", { name: "Search transcripts" });
-    await search.getByRole("button", { name: "Search transcripts" }).click();
-    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
+    const { input } = await openSearch(page);
     await input.fill("Release notes");
     await input.press("Enter");
     await page.getByText("Release notes from the active task.", { exact: true }).waitFor();
@@ -302,46 +283,27 @@ describeControlUiE2e("Control UI session transcript search", () => {
       kind: "direct",
       updatedAt: timestamp - 86_400_000,
     };
-    context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 800, width: 1200 },
-    });
-    page = await context.newPage();
+    page = await newPage();
     const gateway = await installMockGateway(page, {
       sessions: [first, missed],
       methodResponses: {
         "sessions.list": {
-          count: 1,
-          defaults: { contextTokens: null, model: null, modelProvider: null },
+          ...listResponse([first], timestamp),
           hasMore: true,
           nextOffset: 1,
           offset: 0,
-          path: "",
-          sessions: [first],
           totalCount: 2,
-          ts: timestamp,
         },
         "sessions.search": {
           sessions: [missed],
           results: [
-            {
-              messageId: "message-missed",
-              role: "assistant",
-              score: 1,
-              sessionId: "missed",
-              sessionKey: missed.key,
-              snippet: "the recovered launch code",
-              timestamp,
-            },
+            { ...searchHit("missed", "the recovered launch code", timestamp), sessionId: "missed" },
           ],
         },
       },
     });
 
-    await page.goto(`${server?.baseUrl ?? ""}sessions`);
-    await page.getByRole("button", { name: "Search transcripts" }).click();
-    const input = page.getByRole("searchbox", { name: "Search session transcripts" });
+    const { input } = await openSearch(page);
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await page
       .getByRole("checkbox", { name: `Select session: ${first.key}`, exact: true })
@@ -362,33 +324,19 @@ describeControlUiE2e("Control UI session transcript search", () => {
     expect((await gateway.getRequests("sessions.search"))[0]?.params).toEqual({
       limit: 25,
       query: "launch code",
-      scope: {
-        agentId: "main",
-        excludeDock: true,
-        includeGlobal: true,
-        includeUnknown: false,
-        configuredAgentsOnly: true,
-      },
+      scope: searchScope,
     });
     expect(await gateway.getRequests("sessions.list")).toEqual(listRequests);
   });
 
   it("ignores stale results and exposes indexing and request errors", async () => {
     const timestamp = Date.parse("2026-07-12T14:30:00.000Z");
-    context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 800, width: 1200 },
-    });
-    page = await context.newPage();
+    page = await newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.search"],
       methodResponses: {
-        "sessions.list": {
-          count: 1,
-          defaults: { contextTokens: null, model: null, modelProvider: null },
-          path: "",
-          sessions: [
+        "sessions.list": listResponse(
+          [
             {
               key: "agent:main:stale",
               kind: "direct",
@@ -398,17 +346,19 @@ describeControlUiE2e("Control UI session transcript search", () => {
               updatedAt: timestamp,
             },
           ],
-          ts: timestamp,
-        },
+          timestamp,
+        ),
         "sessions.search": { indexing: true, results: [] },
       },
     });
 
-    await page.goto(`${server?.baseUrl ?? ""}sessions`);
-    const search = page.getByRole("search", { name: "Search transcripts" });
-    await search.getByRole("button", { name: "Search transcripts" }).click();
-    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
+    const { search, input } = await openSearch(page);
     const submit = search.getByRole("button", { name: "Search transcripts" });
+    const empty = page.getByText("No transcript messages match that search.", { exact: true });
+    const indexing = page.getByText(
+      "The transcript index is still updating. Retry to include recent messages.",
+    );
+    const retry = page.getByRole("button", { name: "Retry" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await input.fill("   ");
     await expect.poll(() => submit.isEnabled()).toBe(true);
@@ -422,37 +372,19 @@ describeControlUiE2e("Control UI session transcript search", () => {
     await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(1);
     await input.fill("new phrase");
     await resolveDeferredAndDrain(page, "sessions.search", {
-      results: [
-        {
-          messageId: "message-stale",
-          role: "user",
-          score: 1,
-          sessionId: "session-stale",
-          sessionKey: "agent:main:stale",
-          snippet: "stale result must stay hidden",
-          timestamp,
-        },
-      ],
+      results: [searchHit("stale", "stale result must stay hidden", timestamp, "user")],
     });
     expect(await page.getByText("stale result must stay hidden", { exact: true }).count()).toBe(0);
     await input.press("Enter");
-    await page
-      .getByText("The transcript index is still updating. Retry to include recent messages.")
-      .waitFor({ state: "visible", timeout: 10_000 });
+    await indexing.waitFor({ state: "visible", timeout: 10_000 });
     await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(2);
     expect(await page.getByText("No transcript messages match that search.").count()).toBe(0);
 
     await gateway.setMethodResponse("sessions.search", { results: [] });
-    await page.getByRole("button", { name: "Retry" }).click();
+    await retry.click();
     await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(3);
-    await page
-      .getByText("No transcript messages match that search.", { exact: true })
-      .waitFor({ state: "visible", timeout: 10_000 });
-    expect(
-      await page
-        .getByText("The transcript index is still updating. Retry to include recent messages.")
-        .count(),
-    ).toBe(0);
+    await empty.waitFor({ state: "visible", timeout: 10_000 });
+    expect(await indexing.count()).toBe(0);
 
     await gateway.deferNext("sessions.search");
     await submit.click();
@@ -466,11 +398,9 @@ describeControlUiE2e("Control UI session transcript search", () => {
       .getByText(/Transcript search failed:.*Search service unavailable/)
       .waitFor({ state: "visible", timeout: 10_000 });
     await captureUiProof("05-search-request-error.png");
-    await page.getByRole("button", { name: "Retry" }).click();
+    await retry.click();
     await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(5);
-    await page
-      .getByText("No transcript messages match that search.", { exact: true })
-      .waitFor({ state: "visible" });
+    await empty.waitFor({ state: "visible" });
     expect(await page.getByText(/Transcript search failed:/).count()).toBe(0);
   });
 });

@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import {
   ensureSidebarConversation,
@@ -33,6 +34,31 @@ const englishDesktopPageOptions = {
   locale: "en-US",
   viewport: { height: 900, width: 1280 },
 };
+const widgetKinds = [{ pluginId: "session", kind: "session:progress", label: "Session progress" }];
+
+async function capture(page: Page, name: string) {
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(proofDir, `session-progress-widget-${name}.png`),
+  });
+}
+
+async function openDashboard(page: Page, dashboardKey: string) {
+  await page.addInitScript(
+    ({ key, storage }) => {
+      localStorage.setItem(
+        storage,
+        JSON.stringify({ boardSessionViews: { [key]: { activeTabId: "main" } } }),
+      );
+    },
+    { key: dashboardKey, storage: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
+  );
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, dashboardKey, "dashboard"));
+  const card = page.locator('[data-progress-card-placement="board"]');
+  await card.waitFor();
+  return card;
+}
 
 function boardResponse(key: string, widgetOverrides?: Record<string, unknown>) {
   return {
@@ -93,17 +119,8 @@ suite.define(() => {
       const now = Date.now();
       const gateway = await installMockGateway(page, {
         sessionKey,
-        controlUiWidgetKinds: [
-          { pluginId: "session", kind: "session:progress", label: "Session progress" },
-        ],
-        featureMethods: [
-          "board.get",
-          "chat.metadata",
-          "chat.startup",
-          "progressCard.get",
-          "sessions.list",
-          "sessions.patch",
-        ],
+        controlUiWidgetKinds: widgetKinds,
+        featureMethods: dashboardFeatureMethods,
         methodResponses: {
           "board.get": boardResponse(sessionKey),
           "progressCard.get": {
@@ -187,11 +204,7 @@ suite.define(() => {
           .toBe(viewport.routeKey);
         await gateway.waitForRequest("board.get", { match: { sessionKey: viewport.routeKey } });
         await surface.locator("openclaw-session-progress-widget").waitFor();
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(proofDir, "session-progress-widget-bare-route-admission.png"),
-        });
+        await capture(page, "bare-route-admission");
         await expect
           .poll(() =>
             surface
@@ -209,11 +222,7 @@ suite.define(() => {
         .toContain("1/3");
       await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
 
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(proofDir, `session-progress-widget-${viewport.name}.png`),
-      });
+      await capture(page, viewport.name);
       expect(await card.locator(".session-run-spinner").count()).toBe(0);
       const paused = card.locator(".session-progress-card__step--paused");
       expect(await paused.count()).toBe(1);
@@ -229,11 +238,7 @@ suite.define(() => {
       });
       const error = surface.locator('[data-test-id="session-progress-error"]');
       await error.waitFor();
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(proofDir, `session-progress-widget-${viewport.name}-refresh-failed.png`),
-      });
+      await capture(page, `${viewport.name}-refresh-failed`);
       await expect.poll(() => card.count()).toBe(1);
       expect(await card.textContent()).toContain("Earlier task");
       const visibility = await card
@@ -274,11 +279,7 @@ suite.define(() => {
         await mainChat.waitFor({ state: "visible" });
         await surface.locator('[data-panel-slot="dashboard"]').waitFor({ state: "visible" });
       }
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(proofDir, `session-progress-widget-${viewport.name}-refresh-recovered.png`),
-      });
+      await capture(page, `${viewport.name}-refresh-recovered`);
 
       const readsBeforeDenial = await gateway.getRequests("progressCard.get");
       await gateway.deferNext("progressCard.get");
@@ -294,11 +295,7 @@ suite.define(() => {
         .toContain("Select a session you can access or change sharing for this session.");
       await expect.poll(() => card.count()).toBe(0);
       expect(await error.getByRole("button").count()).toBe(0);
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(proofDir, `session-progress-widget-${viewport.name}-access-denied.png`),
-      });
+      await capture(page, `${viewport.name}-access-denied`);
     });
   });
 
@@ -315,9 +312,7 @@ suite.define(() => {
         heldMethods: ["sessions.describe"],
         // Describe and startup publish full snapshots of the same running session.
         sessions: mainSessions.sessions,
-        controlUiWidgetKinds: [
-          { pluginId: "session", kind: "session:progress", label: "Session progress" },
-        ],
+        controlUiWidgetKinds: widgetKinds,
         featureMethods: dashboardFeatureMethods,
         methodResponses: {
           "board.get": boardResponse(sessionKey),
@@ -351,20 +346,7 @@ suite.define(() => {
         },
       });
 
-      const storageKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
-      await page.addInitScript(
-        ({ key, storage }) => {
-          localStorage.setItem(
-            storage,
-            JSON.stringify({ boardSessionViews: { [key]: { activeTabId: "main" } } }),
-          );
-        },
-        { key: sessionKey, storage: storageKey },
-      );
-
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
-      const card = page.locator('[data-progress-card-placement="board"]');
-      await card.waitFor();
+      const card = await openDashboard(page, sessionKey);
       await expect.poll(() => card.locator(".session-run-spinner").count()).toBe(1);
       await expect.poll(() => card.locator(".session-progress-card__step--paused").count()).toBe(0);
 
@@ -374,47 +356,19 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.describe", { match: { key: sessionKey } });
       // Reconcile the descriptor after the running roster and scope transition.
       await gateway.resolveDeferred("sessions.describe");
-      await expect
-        .poll(async () =>
-          (await gateway.getRequests("sessions.list")).some((request) => {
-            const params = request.params as {
-              agentId?: string;
-              archived?: string;
-              hasBoard?: boolean;
-            };
-            // The widget's target roster follows the captured main-agent target,
-            // not the unrelated page filter, and remains archive-inclusive.
-            return (
-              params.agentId === "main" &&
-              params.archived === "all" &&
-              params.hasBoard === undefined
-            );
-          }),
-        )
-        .toBe(true);
-      await expect
-        .poll(async () =>
-          (await gateway.getRequests("sessions.list")).some((request) => {
-            const params = request.params as {
-              agentId?: string;
-              archived?: string;
-              hasBoard?: boolean;
-            };
-            return (
-              params.agentId === "writer" &&
-              params.archived === "all" &&
-              params.hasBoard === undefined
-            );
-          }),
-        )
-        .toBe(false);
+      // The target roster stays archive-inclusive and independent of the page filter.
+      const hasTargetRoster = async (agentId: string) =>
+        (await gateway.getRequests("sessions.list")).some(({ params }) => {
+          const query = params as { agentId?: string; archived?: string; hasBoard?: boolean };
+          return (
+            query.agentId === agentId && query.archived === "all" && query.hasBoard === undefined
+          );
+        });
+      await expect.poll(() => hasTargetRoster("main")).toBe(true);
+      await expect.poll(() => hasTargetRoster("writer")).toBe(false);
       await expect.poll(() => card.locator(".session-progress-card__step--paused").count()).toBe(0);
       await expect.poll(() => card.locator(".session-run-spinner").count()).toBe(1);
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(proofDir, "session-progress-widget-scope-transition.png"),
-      });
+      await capture(page, "scope-transition");
     });
   });
 
@@ -453,9 +407,7 @@ suite.define(() => {
       await installMockGateway(page, {
         sessionKey: boardOwnerKey,
         sessions: targetRoster.sessions,
-        controlUiWidgetKinds: [
-          { pluginId: "session", kind: "session:progress", label: "Session progress" },
-        ],
+        controlUiWidgetKinds: widgetKinds,
         featureMethods: dashboardFeatureMethods,
         methodResponses: {
           "board.get": boardResponse(boardOwnerKey, {
@@ -492,29 +444,12 @@ suite.define(() => {
         },
       });
 
-      const storageKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
-      await page.addInitScript(
-        ({ key, storage }) => {
-          localStorage.setItem(
-            storage,
-            JSON.stringify({ boardSessionViews: { [key]: { activeTabId: "main" } } }),
-          );
-        },
-        { key: boardOwnerKey, storage: storageKey },
-      );
-
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, boardOwnerKey, "dashboard"));
-      const card = page.locator('[data-progress-card-placement="board"]');
-      await card.waitFor();
+      const card = await openDashboard(page, boardOwnerKey);
       await expect.poll(() => card.textContent()).toContain("Board-less target tile");
       // A running target without its own dashboard must not render as paused.
       await expect.poll(() => card.locator(".session-run-spinner").count()).toBe(1);
       await expect.poll(() => card.locator(".session-progress-card__step--paused").count()).toBe(0);
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(proofDir, "session-progress-widget-boardless-target.png"),
-      });
+      await capture(page, "boardless-target");
     });
   });
 
@@ -523,9 +458,7 @@ suite.define(() => {
     await suite.withPage(englishDesktopPageOptions, async ({ page }) => {
       await installMockGateway(page, {
         sessionKey: queuedSessionKey,
-        controlUiWidgetKinds: [
-          { pluginId: "session", kind: "session:progress", label: "Session progress" },
-        ],
+        controlUiWidgetKinds: widgetKinds,
         featureMethods: dashboardFeatureMethods,
         methodResponses: {
           "board.get": boardResponse(queuedSessionKey),
@@ -546,26 +479,9 @@ suite.define(() => {
         },
       });
 
-      const storageKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
-      await page.addInitScript(
-        ({ key, storage }) => {
-          localStorage.setItem(
-            storage,
-            JSON.stringify({ boardSessionViews: { [key]: { activeTabId: "main" } } }),
-          );
-        },
-        { key: queuedSessionKey, storage: storageKey },
-      );
-
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, queuedSessionKey, "dashboard"));
-      const card = page.locator('[data-progress-card-placement="board"]');
-      await card.waitFor();
+      const card = await openDashboard(page, queuedSessionKey);
       await expect.poll(() => card.textContent()).toContain("Queued dashboard tile");
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(proofDir, "session-progress-widget-queued.png"),
-      });
+      await capture(page, "queued");
       await expect.poll(() => card.locator(".session-progress-card__step--paused").count()).toBe(1);
       await expect.poll(() => card.locator(".session-run-spinner").count()).toBe(0);
     });

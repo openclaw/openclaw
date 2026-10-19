@@ -12,36 +12,35 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+const pageOptions = {
+  locale: "en-US",
+  serviceWorkers: "block" as const,
+  viewport: { height: 900, width: 1280 },
+};
 
 suite.define(() => {
   it("keeps the global roster quiet for recaps and refreshes new session membership", async () => {
     const key = "agent:main:weekly-report";
     const row = sessionRow(key, "Weekly report", 1);
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse([row]),
-        "agents.list": {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [
-            { id: "main", name: "Main" },
-            { id: "research", name: "Research" },
-          ],
-        } satisfies AgentsListResult,
-      },
-      sessionKey: key,
-      historyMessages: [
-        { role: "assistant", content: [{ type: "text", text: "The weekly report is ready." }] },
-      ],
-    });
-    try {
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": sessionsListResponse([row]),
+          "agents.list": {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "research", name: "Research" },
+            ],
+          } satisfies AgentsListResult,
+        },
+        sessionKey: key,
+        historyMessages: [
+          { role: "assistant", content: [{ type: "text", text: "The weekly report is ready." }] },
+        ],
+      });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
       const sidebar = page.locator("openclaw-app-sidebar");
       const selectedRow = sidebar.locator(`[data-session-key="${key}"]`);
@@ -89,62 +88,53 @@ suite.define(() => {
           async () => (await gateway.getRequests("sessions.list", activityQuery)).length - before,
         )
         .toBe(1);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it("keeps the page Refresh control stable during background roster reads", async () => {
     const key = "agent:main:background-refresh";
     const row = sessionRow(key, "Background refresh", 1);
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: { "sessions.list": sessionsListResponse([row]) },
-      sessionKey: key,
-    });
-    let heldRequest = false;
-    try {
-      await page.goto(`${suite.server.baseUrl}sessions`);
-      const refresh = page.getByRole("button", { name: "Refresh", exact: true });
-      await refresh.waitFor();
-      await gateway.waitForRequest("sessions.subscribe");
-      await page.waitForTimeout(1_200);
-
-      const pageQuery = { includeUnknown: false };
-      await gateway.deferNext("sessions.list", pageQuery);
-      const before = (await gateway.getRequests("sessions.list", pageQuery)).length;
-      await gateway.emitGatewayEvent("sessions.changed", {
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: { "sessions.list": sessionsListResponse([row]) },
         sessionKey: key,
-        reason: "update",
-        updatedAt: 2,
       });
-      await gateway.waitForRequest("sessions.list", { after: before, match: pageQuery });
-      heldRequest = true;
-      await page.waitForTimeout(50);
-      await captureUiProof(suite, page, "sessions-background-refresh.png");
+      let heldRequest = false;
+      try {
+        await page.goto(`${suite.server.baseUrl}sessions`);
+        const refresh = page.getByRole("button", { name: "Refresh", exact: true });
+        await refresh.waitFor();
+        await gateway.waitForRequest("sessions.subscribe");
+        await page.waitForTimeout(1_200);
 
-      expect(await refresh.getAttribute("aria-label")).toBe("Refresh");
-      expect(await refresh.isEnabled()).toBe(true);
-    } finally {
-      if (heldRequest) {
-        await gateway.resolveDeferred("sessions.list");
+        const pageQuery = { includeUnknown: false };
+        await gateway.deferNext("sessions.list", pageQuery);
+        const before = (await gateway.getRequests("sessions.list", pageQuery)).length;
+        await gateway.emitGatewayEvent("sessions.changed", {
+          sessionKey: key,
+          reason: "update",
+          updatedAt: 2,
+        });
+        await gateway.waitForRequest("sessions.list", { after: before, match: pageQuery });
+        heldRequest = true;
+        await page.waitForTimeout(50);
+        await captureUiProof(suite, page, "sessions-background-refresh.png");
+
+        expect(await refresh.getAttribute("aria-label")).toBe("Refresh");
+        expect(await refresh.isEnabled()).toBe(true);
+      } finally {
+        if (heldRequest) {
+          await gateway.resolveDeferred("sessions.list");
+        }
       }
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it("keeps the selected roster quiet during other agents' activity and refreshes its own changes", async () => {
     const key = "agent:main:weekly-report";
     const row = sessionRow(key, "Weekly report", 1);
     const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
+      ...pageOptions,
       ...(captureUiProofEnabled
         ? { recordVideo: { dir: suite.artifactDir, size: { height: 900, width: 1280 } } }
         : {}),

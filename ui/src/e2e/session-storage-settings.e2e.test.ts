@@ -45,29 +45,18 @@ const storage: SessionsStorageStatusResult = {
     externalizedTranscripts: 0,
   },
 };
+const objectSchema = (properties: Record<string, unknown>) => ({ type: "object", properties });
 const schema = {
-  schema: {
-    type: "object",
-    properties: {
-      session: {
-        type: "object",
-        properties: {
-          maintenance: {
-            type: "object",
-            properties: {
-              coldStorage: {
-                type: "object",
-                properties: {
-                  enabled: { type: "boolean", default: false },
-                  afterDays: { type: "integer", minimum: 1, default: 30 },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-  },
+  schema: objectSchema({
+    session: objectSchema({
+      maintenance: objectSchema({
+        coldStorage: objectSchema({
+          enabled: { type: "boolean", default: false },
+          afterDays: { type: "integer", minimum: 1, default: 30 },
+        }),
+      }),
+    }),
+  }),
   uiHints: {},
 };
 function snapshot(enabled = false, afterDays = 30, hash = "storage-e2e") {
@@ -103,6 +92,19 @@ async function capture(page: Page, directory: string | null, filename: string) {
     await page.screenshot({ path: path.join(directory, filename), animations: "disabled" });
   }
 }
+async function openStorage(page: Page, options: Parameters<typeof installMockGateway>[1] = {}) {
+  const gateway = await installMockGateway(page, {
+    ...options,
+    methodResponses: {
+      "config.get": snapshot(),
+      "config.schema": schema,
+      "sessions.storage.status": storage,
+      ...options.methodResponses,
+    },
+  });
+  await page.goto(`${suite.server.baseUrl}${route}`);
+  return gateway;
+}
 
 suite.define(() => {
   it("shows inventory, saves whole-day policy without restart, and runs only applied settings", async () => {
@@ -110,14 +112,8 @@ suite.define(() => {
     await suite.withPage(
       { viewport: { width: 1440, height: 1100 }, colorScheme: "dark" },
       async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "config.get": snapshot(),
-            "config.schema": schema,
-            "sessions.storage.status": storage,
-          },
-        });
-        await page.goto(`${suite.server.baseUrl}${route}`);
+        const gateway = await openStorage(page);
+        const run = page.getByRole("button", { name: "Run now", exact: true });
         await expect.poll(() => row(page, "Transcripts").textContent()).toContain("1200");
         await expect
           .poll(() => row(page, "Transcripts").textContent())
@@ -125,9 +121,7 @@ suite.define(() => {
         await page.getByText("Details by agent", { exact: true }).click();
         await expect.poll(() => row(page, "research").textContent()).toContain("140 archived");
         await page.getByText("Details by agent", { exact: true }).click();
-        await expect
-          .poll(() => page.getByRole("button", { name: "Run now", exact: true }).isDisabled())
-          .toBe(true);
+        await expect.poll(() => run.isDisabled()).toBe(true);
         await expect
           .poll(() => row(page, "Compressed archives in database").textContent())
           .toContain("10.0 MiB");
@@ -161,18 +155,14 @@ suite.define(() => {
           afterDays: 14,
         });
         // A saved policy is not runnable until the Gateway confirms it was applied.
-        expect(await page.getByRole("button", { name: "Run now", exact: true }).isDisabled()).toBe(
-          true,
-        );
+        expect(await run.isDisabled()).toBe(true);
         await gateway.setMethodResponse("config.get", snapshot(true, 14, "storage-applied"));
-        await expect
-          .poll(() => page.getByRole("button", { name: "Run now", exact: true }).isEnabled())
-          .toBe(true);
+        await expect.poll(() => run.isEnabled()).toBe(true);
         expect(await gateway.getRequests("config.apply")).toHaveLength(0);
         expect(await gateway.getSocketCount()).toBe(1);
 
         await gateway.deferNext("sessions.storage.run");
-        await page.getByRole("button", { name: "Run now", exact: true }).click();
+        await run.click();
         await gateway.waitForRequest("sessions.storage.run");
         expect(await page.getByRole("button", { name: "Running", exact: true }).isDisabled()).toBe(
           true,
@@ -223,10 +213,9 @@ suite.define(() => {
 
   it("reports storage and worker failures without presenting a successful empty inventory", async () => {
     await suite.withPage({}, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
+      const gateway = await openStorage(page, {
         methodResponses: {
           "config.get": snapshot(true),
-          "config.schema": schema,
           "sessions.storage.status": {
             __mockError: {
               code: "UNAVAILABLE",
@@ -235,19 +224,17 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}${route}`);
+      const run = page.getByRole("button", { name: "Run now", exact: true });
       await page.getByRole("alert").filter({ hasText: "Archive missing" }).waitFor();
       expect(await row(page, "Transcripts").count()).toBe(0);
-      expect(await page.getByRole("button", { name: "Run now", exact: true }).isDisabled()).toBe(
-        true,
-      );
+      expect(await run.isDisabled()).toBe(true);
       await gateway.setMethodResponse("sessions.storage.status", storage);
       await page.getByRole("button", { name: "Refresh", exact: true }).click();
       await expect.poll(() => row(page, "Transcripts").textContent()).toContain("1200");
       await gateway.setMethodResponse("sessions.storage.run", {
         __mockError: { code: "UNAVAILABLE", message: "Not enough disk space to publish archive." },
       });
-      await page.getByRole("button", { name: "Run now", exact: true }).click();
+      await run.click();
       await page.getByRole("alert").filter({ hasText: "Not enough disk space" }).waitFor();
       expect(await page.getByText("Batch completed", { exact: false }).count()).toBe(0);
     });
@@ -255,15 +242,9 @@ suite.define(() => {
 
   it("keeps storage inspection and configuration disabled for a read-only operator", async () => {
     await suite.withPage({}, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
+      const gateway = await openStorage(page, {
         operatorScopes: ["operator.read"],
-        methodResponses: {
-          "config.get": snapshot(),
-          "config.schema": schema,
-          "sessions.storage.status": storage,
-        },
       });
-      await page.goto(`${suite.server.baseUrl}${route}`);
       await page
         .getByText("Administrator access is required to inspect session storage.")
         .waitFor();
