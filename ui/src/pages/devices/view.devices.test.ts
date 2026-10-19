@@ -18,6 +18,7 @@ import {
 } from "../../test-helpers/devices-view.tsx";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import type { DevicesProps } from "./view.types.ts";
 
 vi.mock("../../components/desktop/desktop-focus-window.ts", () => ({
   openDesktopFocus: vi.fn(),
@@ -92,29 +93,55 @@ function statusesByText(scope: Element, text: string): HTMLElement[] {
   );
 }
 
+type DeviceList = NonNullable<DevicesProps["devicesList"]>;
+function renderDevices({
+  paired = [],
+  pending = [],
+  ...props
+}: Partial<DevicesProps> & Partial<DeviceList>) {
+  return renderDevicesContainer({ ...props, devicesList: { paired, pending } });
+}
+
+function pairedDevice(
+  deviceId: string,
+  displayName: string,
+  extra: Partial<DeviceList["paired"][number]> = {},
+): DeviceList["paired"][number] {
+  return { deviceId, displayName, roles: ["operator"], ...extra };
+}
+
+function pendingDevice(
+  extra: Partial<DeviceList["pending"][number]> = {},
+): DeviceList["pending"][number] {
+  return {
+    requestId: "req-1",
+    deviceId: "device-1",
+    displayName: "Device One",
+    role: "operator",
+    scopes: ["operator.admin"],
+    ts: Date.now(),
+    ...extra,
+  };
+}
+
+function makeNode(
+  nodeId: string,
+  displayName: string,
+  extra: Partial<DevicesProps["nodes"][number]> = {},
+): DevicesProps["nodes"][number] {
+  return { nodeId, displayName, connected: true, paired: true, ...extra };
+}
+
+const description = (row: Element) => row.querySelector(".settings-row__desc")?.textContent;
+const imageLabel = (row: Element) => row.querySelector('[role="img"]')?.getAttribute("aria-label");
+
 describe("devices pending rendering", () => {
   it("normalizes pending device ids before matching paired access", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [
-          {
-            requestId: "req-1",
-            deviceId: " device-1 ",
-            displayName: "Device One",
-            role: "operator",
-            scopes: ["operator.admin", "operator.read"],
-            ts: Date.now(),
-          },
-        ],
-        paired: [
-          {
-            deviceId: "device-1",
-            displayName: "Device One",
-            roles: ["operator"],
-            scopes: ["operator.read"],
-          },
-        ],
-      },
+    const container = renderDevices({
+      pending: [
+        pendingDevice({ deviceId: " device-1 ", scopes: ["operator.admin", "operator.read"] }),
+      ],
+      paired: [pairedDevice("device-1", "Device One", { scopes: ["operator.read"] })],
     });
     const details = getPendingDeviceDetails(container);
 
@@ -126,29 +153,11 @@ describe("devices pending rendering", () => {
   });
 
   it("does not show upgrade context for key-mismatched pending requests", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [
-          {
-            requestId: "req-1",
-            deviceId: "device-1",
-            publicKey: "new-key",
-            displayName: "Device One",
-            role: "operator",
-            scopes: ["operator.admin"],
-            ts: Date.now(),
-          },
-        ],
-        paired: [
-          {
-            deviceId: "device-1",
-            publicKey: "old-key",
-            displayName: "Device One",
-            roles: ["operator"],
-            scopes: ["operator.read"],
-          },
-        ],
-      },
+    const container = renderDevices({
+      pending: [pendingDevice({ publicKey: "new-key" })],
+      paired: [
+        pairedDevice("device-1", "Device One", { publicKey: "old-key", scopes: ["operator.read"] }),
+      ],
     });
     const details = getPendingDeviceDetails(container);
 
@@ -160,19 +169,17 @@ describe("devices pending rendering", () => {
   });
 
   it("falls back to roles when role is absent", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [
-          {
-            requestId: "req-2",
-            deviceId: "device-2",
-            roles: ["node", "operator"],
-            scopes: ["operator.read"],
-            ts: Date.now(),
-          },
-        ],
-        paired: [],
-      },
+    const container = renderDevices({
+      pending: [
+        pendingDevice({
+          requestId: "req-2",
+          deviceId: "device-2",
+          displayName: undefined,
+          role: undefined,
+          roles: ["node", "operator"],
+          scopes: ["operator.read"],
+        }),
+      ],
     });
     const details = getPendingDeviceDetails(container);
 
@@ -187,11 +194,7 @@ describe("devices inventory rendering", () => {
   ])("renders node resource pressure as $tone", ({ load, free, diskFree, tone }) => {
     const container = renderDevicesContainer({
       nodes: [
-        {
-          nodeId: "studio",
-          displayName: "Studio",
-          connected: true,
-          paired: true,
+        makeNode("studio", "Studio", {
           platform: "macos 27.0",
           modelIdentifier: "Mac15,14",
           version: "2026.8.1",
@@ -204,8 +207,8 @@ describe("devices inventory rendering", () => {
             diskAvailableBytes: diskFree * 1024 ** 3,
             updatedAtMs: 1000,
           },
-        },
-        { nodeId: "without-stats", displayName: "Without stats", paired: true, connected: true },
+        }),
+        makeNode("without-stats", "Without stats"),
       ],
     });
     const row = getSettingsRow(container, "Studio");
@@ -215,9 +218,7 @@ describe("devices inventory rendering", () => {
     expect(row.querySelector(".device-resource")?.getAttribute("title")).toContain(
       `${load.toFixed(2)} / 2.80 / 2.40 on 24 cores`,
     );
-    expect(row.querySelector(".settings-row__desc")?.textContent).toContain(
-      "macOS 27.0 · Mac Studio · Mac15,14 · 2026.8.1",
-    );
+    expect(description(row)).toContain("macOS 27.0 · Mac Studio · Mac15,14 · 2026.8.1");
     expect(
       getSettingsRow(container, "Without stats").querySelector(".device-resources"),
     ).toBeNull();
@@ -252,7 +253,7 @@ describe("devices inventory rendering", () => {
       const container = renderDevicesContainer({
         basePath: "/ui",
         presence: [{ host: "Gateway", mode: "gateway", ts: 1000 }],
-        nodes: [{ nodeId: "studio", displayName: "Studio", paired: true, connected: true }],
+        nodes: [makeNode("studio", "Studio")],
         desktopEnvironments: [
           { id: environmentId, type: "host", status: "available", desktop: true },
         ],
@@ -308,24 +309,12 @@ describe("devices inventory rendering", () => {
     expect(row.querySelectorAll(".device-resource")).toHaveLength(3);
     expect(row.textContent).toContain("load 3.2");
     expect(row.textContent).toContain("1.2 TB free");
-    expect(row.querySelector(".settings-row__desc")?.textContent).toContain("up 11d 4h");
+    expect(description(row)).toContain("up 11d 4h");
   });
 
   it("keeps the paired-devices empty state when only other sections have rows", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [
-          {
-            requestId: "req-1",
-            deviceId: "device-1",
-            displayName: "Device One",
-            role: "operator",
-            scopes: [],
-            ts: Date.now(),
-          },
-        ],
-        paired: [],
-      },
+    const container = renderDevices({
+      pending: [pendingDevice({ scopes: [] })],
       presence: [{ instanceId: "probe-1", host: "laptop", mode: "probe", ts: 1_000 }],
     });
 
@@ -334,26 +323,16 @@ describe("devices inventory rendering", () => {
   });
 
   it("renders one row per machine with duplicates collapsed", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [],
-        paired: [
-          {
-            deviceId: "mac-new",
-            displayName: "MacBook",
-            roles: ["operator", "node"],
-            lastSeenAtMs: 3_000,
-          },
-          {
-            deviceId: "mac-old",
-            displayName: "MacBook",
-            roles: ["operator", "node"],
-            approvedVia: "silent",
-            lastSeenAtMs: 1_000,
-          },
-        ],
-      },
-      nodes: [{ nodeId: "mac-new", displayName: "MacBook", connected: true, paired: true }],
+    const container = renderDevices({
+      paired: [
+        pairedDevice("mac-new", "MacBook", { roles: ["operator", "node"], lastSeenAtMs: 3_000 }),
+        pairedDevice("mac-old", "MacBook", {
+          roles: ["operator", "node"],
+          approvedVia: "silent",
+          lastSeenAtMs: 1_000,
+        }),
+      ],
+      nodes: [makeNode("mac-new", "MacBook")],
     });
     const section = getInventorySection(container);
 
@@ -369,17 +348,8 @@ describe("devices inventory rendering", () => {
 
   it("routes the danger menu item through the existing inventory removal request", async () => {
     const removed: InventoryRemovalRequest[] = [];
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [],
-        paired: [
-          {
-            deviceId: "op-only",
-            displayName: "Browser",
-            roles: ["operator"],
-          },
-        ],
-      },
+    const container = renderDevices({
+      paired: [pairedDevice("op-only", "Browser")],
       onInventoryRemove: (entry) => removed.push(entry),
     });
 
@@ -394,23 +364,11 @@ describe("devices inventory rendering", () => {
 
   it("routes the Edit alias menu item to the device with its current alias", async () => {
     const renamed: Array<{ id: string; name: string; operatorLabel?: string }> = [];
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [],
-        paired: [
-          {
-            deviceId: "alias-device",
-            displayName: "LIN-5F196050F5D",
-            operatorLabel: "Office node",
-            roles: ["operator"],
-          },
-          {
-            deviceId: "unaliased-device",
-            displayName: "Fresh laptop",
-            roles: ["operator"],
-          },
-        ],
-      },
+    const container = renderDevices({
+      paired: [
+        pairedDevice("alias-device", "LIN-5F196050F5D", { operatorLabel: "Office node" }),
+        pairedDevice("unaliased-device", "Fresh laptop"),
+      ],
       onDeviceRename: (device) => renamed.push(device),
     });
 
@@ -465,12 +423,9 @@ describe("devices inventory rendering", () => {
         ? vi.fn().mockResolvedValue(undefined)
         : vi.fn().mockRejectedValue(new Error("Denied"));
       vi.stubGlobal("navigator", { clipboard: { writeText } });
-      const container = renderDevicesContainer({
+      const container = renderDevices({
         canManagePairing: false,
-        devicesList: {
-          pending: [],
-          paired: [{ deviceId: "copy-device-id", displayName: "Copy device", roles: ["operator"] }],
-        },
+        paired: [pairedDevice("copy-device-id", "Copy device")],
       });
       const row = getSettingsRow(container, "Copy device");
       expect((await selectMenuItem(row, "copy")).disabled).toBe(false);
@@ -488,14 +443,10 @@ describe("devices inventory rendering", () => {
     const rejections: string[] = [];
     const container = renderDevicesContainer({
       nodes: [
-        {
-          nodeId: "node-pending",
-          displayName: "clawmac",
-          paired: true,
-          connected: true,
+        makeNode("node-pending", "clawmac", {
           approvalState: "pending-reapproval",
           pendingRequestId: "node-req-1",
-        },
+        }),
       ],
       onNodeApprove: (requestId) => approvals.push(requestId),
       onNodeReject: (requestId) => rejections.push(requestId),
@@ -517,43 +468,26 @@ describe("devices inventory rendering", () => {
   it("keeps installed workers quiet and warns when the retained bundle is missing", () => {
     const container = renderDevicesContainer({
       nodes: [
-        {
-          nodeId: "node-installed",
-          displayName: "Installed Mac",
-          connected: true,
-          paired: true,
+        makeNode("node-installed", "Installed Mac", {
           workerSlots: { total: 2, available: 1 },
           workerBundle: { status: "installed", version: "2026.8.9" },
-        },
-        {
-          nodeId: "node-missing",
-          displayName: "Missing Mac",
-          connected: true,
-          paired: true,
-          workerBundle: { status: "missing" },
-        },
+        }),
+        makeNode("node-missing", "Missing Mac", { workerBundle: { status: "missing" } }),
       ],
     });
     const section = getInventorySection(container);
-    const rows = Array.from(section.querySelectorAll(".device-entry"));
-    const installed = rows.find((row) => row.textContent?.includes("Installed Mac"));
-    const missing = rows.find((row) => row.textContent?.includes("Missing Mac"));
+    const installed = getSettingsRow(section, "Installed Mac");
+    const missing = getSettingsRow(section, "Missing Mac");
 
-    expect(installed?.querySelector(".settings-row__desc")?.textContent).toContain(
-      "Worker 2026.8.9",
-    );
-    expect(installed?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
-      "1 of 2 slots busy",
-    );
-    expect(installed?.getAttribute("title")).toBe("1 of 2 slots busy");
-    expect(installed?.querySelector(".settings-row__desc")?.textContent).not.toContain(
-      "Worker slots",
-    );
-    expect(installed ? statusesByText(installed, "connected") : []).toHaveLength(1);
-    expect(installed ? statusesByText(installed, "worker missing") : []).toHaveLength(0);
-    expect(missing ? statusesByText(missing, "worker missing") : []).toHaveLength(1);
+    expect(description(installed)).toContain("Worker 2026.8.9");
+    expect(imageLabel(installed)).toBe("1 of 2 slots busy");
+    expect(installed.getAttribute("title")).toBe("1 of 2 slots busy");
+    expect(description(installed)).not.toContain("Worker slots");
+    expect(statusesByText(installed, "connected")).toHaveLength(1);
+    expect(statusesByText(installed, "worker missing")).toHaveLength(0);
+    expect(statusesByText(missing, "worker missing")).toHaveLength(1);
     expect(
-      Array.from(missing?.querySelectorAll<HTMLElement>("[title]") ?? [])
+      Array.from(missing.querySelectorAll<HTMLElement>("[title]"))
         .find((element) => element.textContent?.trim() === "worker missing")
         ?.getAttribute("title"),
     ).toBe(
@@ -566,41 +500,16 @@ describe("devices inventory rendering", () => {
       gatewayVersion: "2026.7.2",
       basePath: "",
       nodes: [
-        {
-          nodeId: "node-old",
-          displayName: "Older Mac",
-          version: "19.4",
-          coreVersion: "2026.6.11",
-          uiVersion: "19.4",
-          connected: true,
-          paired: true,
-        },
-        {
-          nodeId: "node-current",
-          displayName: "Current Mac",
-          version: "19.5",
-          coreVersion: "2026.7.2",
-          uiVersion: "19.5",
-          connected: true,
-          paired: true,
-        },
-        {
-          nodeId: "node-newer",
-          displayName: "Newer Mac",
-          version: "19.6",
-          coreVersion: "2026.8.1",
-          uiVersion: "19.6",
-          connected: true,
-          paired: true,
-        },
-        {
-          nodeId: "legacy-linux",
-          displayName: "Legacy Linux",
-          platform: "linux",
-          version: "2026.6.10",
-          connected: true,
-          paired: true,
-        },
+        ...(
+          [
+            ["old", "Older Mac", "19.4", "2026.6.11"],
+            ["current", "Current Mac", "19.5", "2026.7.2"],
+            ["newer", "Newer Mac", "19.6", "2026.8.1"],
+          ] satisfies Array<[string, string, string, string]>
+        ).map(([id, name, version, coreVersion]) =>
+          makeNode(`node-${id}`, name, { version, coreVersion, uiVersion: version }),
+        ),
+        makeNode("legacy-linux", "Legacy Linux", { platform: "linux", version: "2026.6.10" }),
       ],
     });
     const driftStatuses = Array.from(
@@ -620,29 +529,21 @@ describe("devices inventory rendering", () => {
   });
 
   it("shows node-only offline affordances while preserving mixed-role device liveness", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [],
-        paired: [
-          {
-            deviceId: "windows-mixed",
-            displayName: "Mixed-role Windows",
-            platform: "Windows 11",
-            roles: ["operator", "node"],
-            connected: true,
-          },
-        ],
-      },
+    const container = renderDevices({
+      paired: [
+        pairedDevice("windows-mixed", "Mixed-role Windows", {
+          platform: "Windows 11",
+          roles: ["operator", "node"],
+          connected: true,
+        }),
+      ],
       nodes: [
-        {
-          nodeId: "windows-mixed",
-          displayName: "Mixed-role Windows",
+        makeNode("windows-mixed", "Mixed-role Windows", {
           platform: "Windows 11",
           connected: false,
-          paired: true,
           workerSlots: { total: 8, available: 0 },
           hostStats: createOfflineDeviceNode().hostStats,
-        },
+        }),
       ],
     });
     const section = getInventorySection(container);
@@ -662,38 +563,23 @@ describe("devices inventory rendering", () => {
 
   it("preserves the slot-less exec affordance through node inventory", () => {
     const container = renderDevicesContainer({
-      nodes: [
-        {
-          nodeId: "exec",
-          displayName: "Exec host",
-          connected: true,
-          paired: true,
-          caps: ["codex.exec-server"],
-          commands: [],
-        },
-      ],
+      nodes: [makeNode("exec", "Exec host", { caps: ["codex.exec-server"], commands: [] })],
     });
     const row = getSettingsRow(getInventorySection(container), "Exec host");
-    expect(row.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Codex exec");
+    expect(imageLabel(row)).toBe("Codex exec");
     expect(row.querySelector(".capacity-meter-pips, .session-context-meter")).toBeNull();
   });
 
   it("shows token rows with rotate and revoke inside entry details", () => {
     const rotations: Array<{ deviceId: string; name: string; role: string }> = [];
     const revocations: Array<{ deviceId: string; role: string }> = [];
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [],
-        paired: [
-          {
-            deviceId: "device-1",
-            displayName: "Device One",
-            roles: ["operator"],
-            scopes: ["operator.read"],
-            tokens: [{ role: "operator", scopes: ["operator.read"], createdAtMs: Date.now() }],
-          },
-        ],
-      },
+    const container = renderDevices({
+      paired: [
+        pairedDevice("device-1", "Device One", {
+          scopes: ["operator.read"],
+          tokens: [{ role: "operator", scopes: ["operator.read"], createdAtMs: Date.now() }],
+        }),
+      ],
       onDeviceRotate: (device, role) =>
         rotations.push({ deviceId: device.id, name: device.name, role }),
       onDeviceRevoke: (deviceId, role) => revocations.push({ deviceId, role }),
@@ -717,34 +603,17 @@ describe("devices inventory rendering", () => {
   });
 
   it("brands platform names instead of naive capitalization", () => {
-    const container = renderDevicesContainer({
-      devicesList: {
-        pending: [],
-        paired: [
-          { deviceId: "ios-1", displayName: "iPhone", platform: "iOS 26.4", roles: ["operator"] },
-          { deviceId: "mac-1", displayName: "Mac", platform: "darwin", roles: ["operator"] },
-          {
-            deviceId: "mac-browser",
-            displayName: "Mac browser",
-            platform: "MacIntel",
-            deviceFamily: "Mac",
-            roles: ["operator"],
-          },
-          {
-            deviceId: "ipad-browser",
-            displayName: "iPad browser",
-            platform: "MacIntel",
-            deviceFamily: "iPad",
-            roles: ["operator"],
-          },
-          {
-            deviceId: "legacy-browser",
-            displayName: "Legacy browser",
-            platform: "MacIntel",
-            roles: ["operator"],
-          },
-        ],
-      },
+    const container = renderDevices({
+      paired: [
+        pairedDevice("ios-1", "iPhone", { platform: "iOS 26.4" }),
+        pairedDevice("mac-1", "Mac", { platform: "darwin" }),
+        pairedDevice("mac-browser", "Mac browser", { platform: "MacIntel", deviceFamily: "Mac" }),
+        pairedDevice("ipad-browser", "iPad browser", {
+          platform: "MacIntel",
+          deviceFamily: "iPad",
+        }),
+        pairedDevice("legacy-browser", "Legacy browser", { platform: "MacIntel" }),
+      ],
       presence: [
         {
           instanceId: "unpaired-ipad",
@@ -788,7 +657,7 @@ describe("devices access gating", () => {
     const onNodeApprove = vi.fn();
     const onNodeReject = vi.fn();
     const onDeviceRename = vi.fn();
-    const container = renderDevicesContainer({
+    const container = renderDevices({
       onInventoryRemove,
       onNodeApprove,
       onNodeReject,
@@ -805,25 +674,20 @@ describe("devices access gating", () => {
       canPairDevice: false,
       canManagePairing: false,
       canAdmin: false,
-      devicesList: {
-        pending: [
-          {
-            requestId: "request-1",
-            deviceId: "pending-device",
-            displayName: "Pending device",
-            roles: ["operator"],
-            scopes: ["operator.read"],
-          },
-        ],
-        paired: [
-          {
-            deviceId: "device-1",
-            displayName: "Device One",
-            roles: ["operator"],
-            tokens: [{ role: "operator", scopes: ["operator.read"], createdAtMs: Date.now() }],
-          },
-        ],
-      },
+      pending: [
+        {
+          requestId: "request-1",
+          deviceId: "pending-device",
+          displayName: "Pending device",
+          roles: ["operator"],
+          scopes: ["operator.read"],
+        },
+      ],
+      paired: [
+        pairedDevice("device-1", "Device One", {
+          tokens: [{ role: "operator", scopes: ["operator.read"], createdAtMs: Date.now() }],
+        }),
+      ],
       configForm: { agents: { entries: { main: {} } } },
       configDirty: true,
     });
@@ -833,21 +697,14 @@ describe("devices access gating", () => {
     for (const label of ["Approve", "Reject", "Rotate", "Revoke", "Save"]) {
       expect(findButton(container, label).disabled).toBe(true);
     }
-    const remove = getSettingsRow(container, "Device One").querySelector<HTMLButtonElement>(
-      '[role="menuitem"][data-value="remove"]',
-    );
-    expect(remove?.disabled).toBe(true);
-    expect(remove?.getAttribute("title")).toContain("operator.pairing");
-    const editAlias = getSettingsRow(container, "Device One").querySelector<HTMLButtonElement>(
-      '[role="menuitem"][data-value="editAlias"]',
-    );
-    expect(editAlias?.disabled).toBe(true);
-    expect(editAlias?.getAttribute("title")).toContain("operator.pairing");
-    remove?.click();
-    editAlias?.click();
-    for (const action of ["approve", "reject"]) {
+    for (const [name, action] of [
+      ["Device One", "remove"],
+      ["Device One", "editAlias"],
+      ["Pending node", "approve"],
+      ["Pending node", "reject"],
+    ] satisfies Array<[string, string]>) {
       const item = expectDefined(
-        getSettingsRow(container, "Pending node").querySelector<HTMLButtonElement>(
+        getSettingsRow(container, name).querySelector<HTMLButtonElement>(
           `[role="menuitem"][data-value="${action}"]`,
         ),
         `device action ${action}`,
