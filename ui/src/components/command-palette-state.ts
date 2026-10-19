@@ -33,7 +33,6 @@ import {
   buildCommandPaletteSessionItems,
   SESSION_SEARCH_LIMIT,
 } from "./command-palette-session-search.ts";
-import type { CommandPaletteProps, PaletteFilter } from "./command-palette-view.tsx";
 import type { OpenClawModalDialog } from "./modal-dialog.ts";
 
 const SEARCH_DEBOUNCE_MS = 200;
@@ -50,6 +49,8 @@ const SESSION_SEARCH_SCOPE = {
   excludeDock: true,
 } as const;
 const CATALOG_CACHE_TTL_MS = 30_000;
+
+export type PaletteFilter = "all" | "sessions" | "messages";
 
 export type CommandPaletteProperties = {
   onNavigate?: ApplicationContext["navigate"];
@@ -97,8 +98,7 @@ export class CommandPaletteState {
       this.changed();
     },
   });
-  private initialInput: CommandPaletteOpenInput | undefined;
-  private takeInitialInput: CommandPaletteInputHandoff | undefined;
+  private initialInput: CommandPaletteOpenInput | CommandPaletteInputHandoff | undefined;
   private inputElement: HTMLTextAreaElement | undefined;
   private stopInputFocus: (() => void) | undefined;
   private readonly mentionMenu = createHumanMentionMenu((nextOpen) =>
@@ -244,7 +244,6 @@ export class CommandPaletteState {
   disconnect() {
     this.connected = false;
     this.initialInput = undefined;
-    this.takeInitialInput = undefined;
     this.stopInputFocus?.();
     this.stopInputFocus = undefined;
     this.inputElement = undefined;
@@ -272,18 +271,14 @@ export class CommandPaletteState {
     this.onDraftInitialized();
     this.composing = false;
     this.mentionInput = undefined;
-    this.takeInitialInput = typeof input === "function" ? input : undefined;
-    this.initialInput =
-      typeof input === "function"
-        ? undefined
-        : (input ?? {
-            value: this.draft.message,
-            selectionStart: this.draft.message.length,
-            selectionEnd: this.draft.message.length,
-            selectionDirection: "none",
-            returnFocus,
-          });
-    if (this.initialInput) {
+    this.initialInput = input ?? {
+      value: this.draft.message,
+      selectionStart: this.draft.message.length,
+      selectionEnd: this.draft.message.length,
+      selectionDirection: "none",
+      returnFocus,
+    };
+    if (typeof this.initialInput !== "function") {
       this.draft.setMessage(this.initialInput.value);
     }
     this.activeId = null;
@@ -330,7 +325,6 @@ export class CommandPaletteState {
     this.composing = false;
     this.mentionInput = undefined;
     this.initialInput = undefined;
-    this.takeInitialInput = undefined;
     this.open = false;
     this.draft.close();
     this.clearSessionSearch();
@@ -358,9 +352,9 @@ export class CommandPaletteState {
     if (!this.open || !element?.isConnected || document.activeElement !== element) {
       return;
     }
-    if (this.takeInitialInput) {
-      const take = this.takeInitialInput;
-      this.takeInitialInput = undefined;
+    if (typeof this.initialInput === "function") {
+      const take = this.initialInput;
+      this.initialInput = undefined;
       const input = take();
       if (!input) {
         this.closePalette();
@@ -530,8 +524,6 @@ export class CommandPaletteState {
       void this.ensureCatalogItems();
       if (this.props.onSelectSession) {
         void this.searchSessions(search);
-      } else {
-        this.sessionSearchPending = false;
       }
     };
     if (immediate) {
@@ -650,7 +642,7 @@ export class CommandPaletteState {
     );
   }
 
-  readProps(): CommandPaletteProps {
+  readProps() {
     const models = this.settledModels;
     return {
       basePath: this.context?.basePath ?? "",
@@ -664,7 +656,7 @@ export class CommandPaletteState {
       mentionHost: this.mentionHost,
       onMentionChange: this.notifyMentionChange,
       composing: this.composing,
-      onBeforeInput: (event) => {
+      onBeforeInput: (event: InputEvent) => {
         const input = this.inputElement;
         this.mentionInput = input
           ? {
@@ -693,7 +685,7 @@ export class CommandPaletteState {
       },
       activeId: this.activeId,
       filter: this.filter,
-      onFilterChange: (filter) => {
+      onFilterChange: (filter: PaletteFilter) => {
         this.filter = filter;
         this.activeId = null;
         this.changed();
@@ -730,7 +722,7 @@ export class CommandPaletteState {
       desktopAvailable: this.props.desktopAvailable,
       custodianAvailable: this.props.custodianAvailable,
       onToggle: this.togglePalette,
-      onQueryChange: (query, event) => {
+      onQueryChange: (query: string, event: InputEvent) => {
         this.draft.setMessage(
           query,
           updateHumanMentions(this.draft.message, query, this.draft.mentions, this.mentionInput),
@@ -738,7 +730,7 @@ export class CommandPaletteState {
         this.mentionInput = undefined;
         this.updateMentionMenu(event);
       },
-      onActiveIdChange: (id) => {
+      onActiveIdChange: (id: string) => {
         this.activeId = id;
         this.changed();
       },
@@ -746,8 +738,8 @@ export class CommandPaletteState {
       onSelectSession: this.props.onSelectSession,
       onSlashCommand: this.props.onSlashCommand,
       pluginIconUrls: this.pluginIconUrls,
-      onPluginIconError: (pluginId) => this.pluginIcons.handleError(pluginId),
-      registerPluginIcon: (readId) => {
+      onPluginIconError: (pluginId: string) => this.pluginIcons.handleError(pluginId),
+      registerPluginIcon: (readId: () => string) => {
         this.pluginIconTiles.add(readId);
         const pluginId = readId();
         if (this.catalogItems.some((item) => item.pluginId === pluginId && item.hasPluginIcon)) {
