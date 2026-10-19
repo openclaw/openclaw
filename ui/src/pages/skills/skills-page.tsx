@@ -18,6 +18,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { observeState } from "../../lib/reactive/observe-state.ts";
 import { searchClawHub } from "../../lib/skills/clawhub-search.ts";
 import {
   closeClawHubDetail,
@@ -40,7 +41,6 @@ import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
 import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
 import { createSkillLibrary } from "./library-state.ts";
 import { SkillLibrary, SkillLibraryDialogs, SkillLibraryFeedback } from "./library-view.tsx";
-import { observeSkillState } from "./observe-state.ts";
 import type { SkillDetailTab, SkillsPresentation } from "./view-types.ts";
 import { Skills } from "./view.tsx";
 
@@ -106,7 +106,7 @@ export function SkillsPage(props: SkillsPageProps) {
   let routeDataInitialized = false;
   let routeDataEnabled = true;
   let accessSignature = "";
-  const skills = observeSkillState<SkillsState>({
+  const skills = observeState<SkillsState>({
     ...createSkillsData(),
     get client() {
       return context.gateway.snapshot.client;
