@@ -4,6 +4,10 @@ import type { IrcAccountConfigInput } from "./config-schema.js";
 
 export type IrcChannelConfig = NonNullable<NonNullable<IrcAccountConfigInput["groups"]>[string]>;
 export type IrcNickServConfig = NonNullable<IrcAccountConfigInput["nickserv"]>;
+/** NickServ settings after account resolution: the password leaf is already a literal string. */
+export type ResolvedIrcNickServConfig = Omit<IrcNickServConfig, "password"> & {
+  password?: string;
+};
 export type IrcAccountConfig = Omit<IrcAccountConfigInput, "groups"> & {
   defaultTo?: string;
   groups?: Record<string, IrcChannelConfig>;
@@ -14,9 +18,18 @@ type IrcConfig = IrcAccountConfig & {
   defaultAccount?: string;
 };
 
+// Core types the secret leaves as `SecretInput`, which is wider than the literal-ref union the
+// zod schema infers. Intersecting both would demand the wider core value satisfy the narrower
+// union, so the secret leaves come from the core contract and the plugin type owns the rest.
+type CoreIrcConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["irc"]>;
+type IrcSecretLeafKeys = "password" | "nickserv";
+
 export type CoreConfig = OpenClawConfig & {
   channels?: OpenClawConfig["channels"] & {
-    irc?: IrcConfig;
+    irc?: CoreIrcConfig &
+      Omit<IrcConfig, "accounts" | IrcSecretLeafKeys> & {
+        accounts?: Record<string, Omit<IrcAccountConfig, IrcSecretLeafKeys>>;
+      };
   };
 };
 

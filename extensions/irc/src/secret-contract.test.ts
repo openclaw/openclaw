@@ -136,4 +136,56 @@ describe("irc secret contract", () => {
     expect(resolved.config.channels?.irc?.nickserv?.password).toEqual(nickServRef);
     expect(resolved.assignments).toStrictEqual([]);
   });
+
+  it("keeps an account nickserv password ref inactive when the account inherits enabled: false", async () => {
+    const resolved = await resolveIrcSecretAssignments(
+      {
+        channels: {
+          irc: {
+            nickserv: { enabled: false },
+            accounts: {
+              work: {
+                host: "irc.example.com",
+                nick: "clawwork",
+                nickserv: { password: nickServRef },
+              },
+            },
+          },
+        },
+      } as CoreConfig,
+      { NS_PW: "hunter2" },
+    );
+
+    expect(resolved.config.channels?.irc?.accounts?.work?.nickserv?.password).toEqual(nickServRef);
+    expect(resolved.assignments).toStrictEqual([]);
+    expect(resolved.warnings).toEqual([
+      expect.objectContaining({
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "channels.irc.accounts.work.nickserv.password",
+      }),
+    ]);
+  });
+
+  it("resolves an account nickserv password ref when the account re-enables NickServ", async () => {
+    const resolved = await resolveIrcSecretAssignments(
+      {
+        channels: {
+          irc: {
+            nickserv: { enabled: false },
+            accounts: {
+              work: {
+                host: "irc.example.com",
+                nick: "clawwork",
+                nickserv: { enabled: true, password: nickServRef },
+              },
+            },
+          },
+        },
+      } as CoreConfig,
+      { NS_PW: "hunter2" },
+    );
+
+    expect(resolved.config.channels?.irc?.accounts?.work?.nickserv?.password).toBe("hunter2");
+    expect(resolved.warnings).toStrictEqual([]);
+  });
 });

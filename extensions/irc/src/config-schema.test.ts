@@ -104,7 +104,10 @@ describe("irc config schema", () => {
           work: {
             host: "irc.example.com",
             nick: "clawwork",
-            nickserv: { service: "NickServ", password: { source: "env", provider: "default", id: "NS_PW" } },
+            nickserv: {
+              service: "NickServ",
+              password: { source: "env", provider: "default", id: "NS_PW" },
+            },
           },
         },
       },

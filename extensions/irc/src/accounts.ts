@@ -7,7 +7,12 @@ import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
+import type {
+  CoreConfig,
+  IrcAccountConfig,
+  IrcNickServConfig,
+  ResolvedIrcNickServConfig,
+} from "./types.js";
 
 type CredentialUnavailableDiagnostic = Extract<
   ReturnType<typeof tryReadSecretFileSync>,
@@ -31,7 +36,7 @@ export type ResolvedIrcAccount = {
   credentialDiagnostics?: CredentialUnavailableDiagnostic[];
   // The NickServ password leaf is resolved by the time an account is returned.
   config: IrcAccountConfig & {
-    nickserv?: IrcNickServConfig & { password?: string };
+    nickserv?: ResolvedIrcNickServConfig;
   };
 };
 
@@ -123,7 +128,7 @@ function resolveNickServConfig(accountId: string, nickserv?: IrcNickServConfig) 
     }
   }
 
-  const merged: IrcNickServConfig & { password?: string } = {
+  const merged: ResolvedIrcNickServConfig = {
     ...base,
     service: normalizeOptionalString(base.service),
     passwordFile: passwordFile || undefined,

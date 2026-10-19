@@ -12,7 +12,7 @@ import {
   sanitizeIrcOutboundText,
   sanitizeIrcTarget,
 } from "./protocol.js";
-import type { IrcNickServConfig } from "./types.js";
+import type { ResolvedIrcNickServConfig } from "./types.js";
 
 const IRC_ERROR_CODES = new Set(["432", "464", "465"]);
 const IRC_NICK_COLLISION_CODES = new Set(["433", "436"]);
@@ -79,7 +79,8 @@ export type IrcClientOptions = {
   onLine?: (line: string) => void;
 };
 
-type IrcNickServOptions = Omit<IrcNickServConfig, "passwordFile">;
+// The transport only ever sees resolved credentials, so the password leaf stays a literal string.
+type IrcNickServOptions = Omit<ResolvedIrcNickServConfig, "passwordFile">;
 
 export type IrcClient = Awaited<ReturnType<typeof connectIrcClient>>;
 
