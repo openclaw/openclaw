@@ -7,6 +7,19 @@ import { readSlackQaNativeWrites, type SlackNativeWrite } from "./slack-live.cap
 import type { SlackMessage } from "./slack-live.contracts.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const nativeWrite = (
+  requestEventId: number,
+  messageId: string,
+  threadId: string,
+  channelId = "C_QA",
+): SlackNativeWrite => ({
+  evidence: "api-accepted",
+  requestEventId,
+  method: "chat.postMessage",
+  channelId,
+  messageId,
+  threadId,
+});
 
 function fixture(capturedEvents?: Array<Record<string, unknown>>) {
   const controller = new AbortController();
@@ -90,6 +103,7 @@ function fixture(capturedEvents?: Array<Record<string, unknown>>) {
     expire: () => {
       leaseAlive = false;
     },
+    artifact: () => fs.readFile(session.artifactPath, "utf8"),
   };
 }
 
@@ -108,30 +122,9 @@ describe("Slack agent E2E ownership", () => {
       f.session.driver.react({ messageId: root.id, emoji: "eyes", remove: true }),
     ).rejects.toThrow("add receipt");
     f.writes.push(
-      {
-        evidence: "api-accepted",
-        requestEventId: 1,
-        method: "chat.postMessage",
-        channelId: "C_QA",
-        messageId: "2.000000",
-        threadId: root.id,
-      },
-      {
-        evidence: "api-accepted",
-        requestEventId: 2,
-        method: "chat.postMessage",
-        channelId: "C_OTHER",
-        messageId: "3.000000",
-        threadId: root.id,
-      },
-      {
-        evidence: "api-accepted",
-        requestEventId: 3,
-        method: "chat.postMessage",
-        channelId: "C_QA",
-        messageId: "4.000000",
-        threadId: "0.000001",
-      },
+      nativeWrite(1, "2.000000", root.id),
+      nativeWrite(2, "3.000000", root.id, "C_OTHER"),
+      nativeWrite(3, "4.000000", "0.000001"),
     );
     await f.session.cleanup();
     expect(f.messages).toEqual([{ ts: "0.000001", user: "U_OTHER", text: "keep me" }]);
@@ -202,7 +195,7 @@ describe("Slack agent E2E ownership", () => {
       await f.session.cleanup();
     }
     expect(f.messages).toEqual(unrelated);
-    const artifact = JSON.parse(await fs.readFile(f.session.artifactPath, "utf8"));
+    const artifact = JSON.parse(await f.artifact());
     expect(artifact.ownedMessages).toHaveLength(5);
     expect(artifact.ownedMessages.every((receipt: { deleted: boolean }) => receipt.deleted)).toBe(
       true,
@@ -292,7 +285,7 @@ describe("Slack agent E2E ownership", () => {
         expect(f.sutClient.chat.delete).not.toHaveBeenCalled();
       }
       expect(f.sutClient.files.delete).not.toHaveBeenCalled();
-      const content = await fs.readFile(f.session.artifactPath, "utf8");
+      const content = await f.artifact();
       expect(content).not.toContain("private-");
       const artifact = JSON.parse(content);
       const gatewayEvidence = artifact.evidence.filter(
@@ -333,7 +326,7 @@ describe("Slack agent E2E ownership", () => {
       }),
     );
     await expect(f.session.cleanup()).rejects.toThrow("cleanup incomplete");
-    const content = await fs.readFile(f.session.artifactPath, "utf8");
+    const content = await f.artifact();
     expect(content).not.toContain("secret-fixture");
     const artifact = JSON.parse(content);
     expect(artifact.evidence).toContainEqual(

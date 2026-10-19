@@ -64,6 +64,14 @@ import { createSlackQaTransportAdapter, testing } from "./adapter.runtime.js";
 import type { SlackQaFetchFunction as FetchFunction } from "./slack-live.contracts.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+function expectLeaseReleased() {
+  expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
+  expect(mocks.credentialRelease).toHaveBeenCalledOnce();
+}
+const emptyCaptureReader = () => ({
+  getSessionEvents: vi.fn(async () => []),
+  readBlob: vi.fn(async () => null),
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -88,16 +96,10 @@ beforeEach(() => {
     vi.fn(() => Promise.reject(new Error("Unexpected Slack request"))),
   );
   mocks.acquireCaptureStore.mockResolvedValue({
-    store: {
-      getSessionEvents: vi.fn(async () => []),
-      readBlob: vi.fn(async () => null),
-    },
+    store: emptyCaptureReader(),
     release: mocks.captureRelease,
   });
-  mocks.createCaptureReader.mockReturnValue({
-    getSessionEvents: vi.fn(async () => []),
-    readBlob: vi.fn(async () => null),
-  });
+  mocks.createCaptureReader.mockReturnValue(emptyCaptureReader());
   mocks.acquireCredentialLease.mockResolvedValue({
     payload: {
       channelId: "C123",
@@ -307,8 +309,7 @@ describe("Slack live adapter reconciliation", () => {
     expect(mocks.createCaptureReader).not.toHaveBeenCalled();
     expect(mocks.acquireCaptureStore).not.toHaveBeenCalled();
     expect(mocks.captureRelease).not.toHaveBeenCalled();
-    expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
-    expect(mocks.credentialRelease).toHaveBeenCalledOnce();
+    expectLeaseReleased();
   });
 
   it("aborts an in-flight observer fetch when the adapter stops", async () => {
@@ -401,9 +402,7 @@ describe("Slack agent E2E request settlement", () => {
 
     await expect(f.adapter.captureBeforeGatewayCleanup?.()).resolves.toBeUndefined();
     await f.cleanup();
-    expect((await f.artifact()).ownedMessages).toEqual([
-      expect.objectContaining({ deleted: true }),
-    ]);
+    expect((await f.artifact()).ownedMessages).toMatchObject([{ deleted: true }]);
   });
 
   it("retains uncertain final Gateway writes while cleaning only known-owned receipts", async () => {
@@ -498,8 +497,7 @@ describe("Slack agent E2E request settlement", () => {
           }),
         );
       }
-      expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
-      expect(mocks.credentialRelease).toHaveBeenCalledOnce();
+      expectLeaseReleased();
     },
   );
 
@@ -533,8 +531,7 @@ describe("Slack agent E2E request settlement", () => {
         detail: expect.stringContaining("without a definitive Slack receipt"),
       }),
     );
-    expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
-    expect(mocks.credentialRelease).toHaveBeenCalledOnce();
+    expectLeaseReleased();
   });
 
   it("keeps a late acknowledged receipt after cancellation for exact cleanup", async () => {
@@ -553,11 +550,8 @@ describe("Slack agent E2E request settlement", () => {
 
     expect(f.requests.filter((request) => request.method === "chat.postMessage")).toHaveLength(1);
     expect(f.deletedMessageIds()).toEqual(["7.000000"]);
-    expect((await f.artifact()).ownedMessages).toEqual([
-      expect.objectContaining({
-        message: expect.objectContaining({ id: "7.000000" }),
-        deleted: true,
-      }),
+    expect((await f.artifact()).ownedMessages).toMatchObject([
+      { message: { id: "7.000000" }, deleted: true },
     ]);
     expect(mocks.credentialRelease).toHaveBeenCalledOnce();
   });
