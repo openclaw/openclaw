@@ -117,6 +117,29 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
+it.skipIf(process.platform === "win32")(
+  "repairs a shared package inode once without mistaking its own chmod for drift",
+  async () => {
+    const f = fixture();
+    const alias = path.join(f.directory, "shared.js");
+    fs.linkSync(f.payload, alias);
+    const previous = originalReceipt(f.root);
+    fs.chmodSync(f.payload, 0o644);
+    const chmod = vi.spyOn(fs, "fchmodSync");
+    const matcher = createPackagePublicationTreeMatcher(
+      { previous, candidate: { ...previous }, helperDigest: "0".repeat(64) },
+      f.warning,
+    );
+
+    await expect(matcher.matches(f.root, previous, f.root)).resolves.toBe(true);
+    expect(chmod).toHaveBeenCalledTimes(1);
+    expect([f.payload, alias].map((file) => fs.statSync(file).mode & 0o777)).toEqual([
+      0o600, 0o600,
+    ]);
+    expect(fs.readFileSync(alias, "utf8")).toBe("export {};\n");
+  },
+);
+
 it.skipIf(process.platform !== "linux")("repairs a recursive named-user POSIX ACL", async () => {
   const f = fixture();
   execFileSync("setfacl", ["-R", "-m", "u:65534:rX", f.root]);

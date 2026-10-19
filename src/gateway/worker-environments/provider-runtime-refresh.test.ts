@@ -5,7 +5,15 @@ import {
   type WorkerAdmissionHandshake,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
+import {
+  createManager as createNodeTunnelManager,
+  transport as createNodeTransport,
+  withWorkspaceDrain,
+  workspaceTransfer,
+} from "./node-worker-tunnel.test-support.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
@@ -130,6 +138,7 @@ describe("worker environment runtime upgrades", () => {
       start: unsupported("Node workspace transport was not configured"),
       stop: vi.fn(async () => {}),
       stopAll: vi.fn(async () => {}),
+      beginClose: vi.fn(),
     };
     const bindService = async (store: typeof placements, restarting = false) => {
       const gate = createWorkerSessionPlacementGate(store, {
@@ -247,6 +256,63 @@ describe("worker environment runtime upgrades", () => {
       lastError: null,
     });
     expect(h.placements.get(REQUEST.sessionId)?.workerBundleHash).toBe(currentReceipt.bundleHash);
+  });
+
+  it("bounds shutdown while guarded reconciliation is already waiting for a remote stop", async () => {
+    const h = await setupUpgrade("node");
+    const transport = createNodeTransport();
+    const nodes = await transport.listCurrentNodes();
+    transport.listCurrentNodes = async () => [
+      { ...nodes[0]!, nodeId: h.environment.nodeDeviceId! },
+    ];
+    const entered = createDeferred();
+    const release = createDeferred();
+    transport.invoke = withWorkspaceDrain(async ({ command }) => {
+      expect(command).toBe(NODE_WORKER_ENVIRONMENT_STOP_COMMAND);
+      entered.resolve();
+      await release.promise;
+      return { ok: true, payloadJSON: "null" };
+    });
+    const transfer = workspaceTransfer();
+    transfer.closeAll = vi.fn(async () => {});
+    Object.assign(
+      h.nodeTunnelManager,
+      createNodeTunnelManager(h.environment, {
+        getTransport: () => transport,
+        workspaceTransfer: transfer,
+      }),
+    );
+    installWorkerPlacementReconcileGuard({
+      placements: h.placements,
+      environments: h.service,
+      dispatch: {
+        resumeProvisioning: unsupported("Attached runtime refresh does not provision"),
+        hasPendingPlacementLifecycleOperation: () => false,
+      },
+      isStopping: h.service.isStopping,
+    });
+    const reconciling = h.service.reconcileOnce();
+    await entered.promise;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let stopped = false;
+    const stopping = h.service.stop().then(() => {
+      stopped = true;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(stopped).toBe(true);
+      h.expectRetained({
+        bootstrapReceipt: h.environment.bootstrapReceipt,
+        attachedSessionIds: h.environment.attachedSessionIds,
+        destroyRequestedAtMs: null,
+      });
+      expect(h.install).not.toHaveBeenCalled();
+      expect(h.destroy).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await Promise.all([reconciling, stopping]);
+      vi.useRealTimers();
+    }
   });
 
   it("keeps an idle SSH machine through startup recovery when its runtime upgrade must retry", async () => {

@@ -4,26 +4,21 @@ type McpAppUnmountTarget = Element & {
 };
 type McpAppUnmountKey = string | readonly string[];
 
-function isMcpAppUnmountTarget(value: Element): value is McpAppUnmountTarget {
-  return (
-    typeof Reflect.get(value, "restartAfterTeardown") === "function" &&
-    typeof Reflect.get(value, "teardown") === "function"
-  );
+const registeredTargets = new Set<McpAppUnmountTarget>();
+
+/** Each mounted App owns its registration until its rendering owner disposes. */
+export function registerMcpAppUnmountTarget(target: McpAppUnmountTarget): () => void {
+  registeredTargets.add(target);
+  return () => {
+    registeredTargets.delete(target);
+  };
 }
 
 function findMcpAppUnmountTargets(roots: Iterable<ParentNode>): McpAppUnmountTarget[] {
-  const targets = new Set<McpAppUnmountTarget>();
-  for (const root of roots) {
-    if (root instanceof Element && root.matches("mcp-app-view") && isMcpAppUnmountTarget(root)) {
-      targets.add(root);
-    }
-    for (const candidate of root.querySelectorAll("mcp-app-view")) {
-      if (isMcpAppUnmountTarget(candidate)) {
-        targets.add(candidate);
-      }
-    }
-  }
-  return [...targets];
+  const leavingRoots = [...roots];
+  return [...registeredTargets].filter((target) =>
+    leavingRoots.some((root) => root.contains(target)),
+  );
 }
 
 /** Keeps rendered DOM and owner state together until one coalesced MCP teardown completes. */

@@ -1,5 +1,4 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-/** Doctor repair for stale plugin-owned routing state persisted in session entries. */
 import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntriesLower } from "@openclaw/normalization-core/string-normalization";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";

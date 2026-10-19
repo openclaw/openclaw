@@ -530,11 +530,13 @@ export async function submitRealtimeTalkConsult(params: {
     aborted = true;
     // Relay lifetimes belong to the Gateway; aborting this browser wait must not cancel them.
     if (run && !params.relaySessionId) {
-      void ctx.client.request("chat.abort", {
-        sessionKey: run.agentSessionKey,
-        agentId: run.agentId,
-        runId: run.runId,
-      });
+      void ctx.client
+        .request("chat.abort", {
+          sessionKey: run.agentSessionKey,
+          agentId: run.agentId,
+          runId: run.runId,
+        })
+        .catch(() => undefined);
     }
   };
   if (params.signal?.aborted) {

@@ -4,13 +4,6 @@ export function cancelChatStreamRenderFrame(state: object): void {
   chatRunPresentation(state).cancelFrame();
 }
 
-export function requestChatPageUpdate(
-  state: { requestUpdate?: () => void },
-  mode: "immediate" | "animation-frame" = "immediate",
-): void {
-  chatRunPresentation(state).requestViewUpdate(() => state.requestUpdate?.(), mode);
-}
-
 export function publishChatRunState(state: object, mode: ChatRunPublication = "immediate"): void {
   chatRunPresentation(state).publish(mode);
 }

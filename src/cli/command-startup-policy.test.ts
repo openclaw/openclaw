@@ -16,6 +16,24 @@ function resolvePolicy(params: {
 }
 
 describe("command-startup-policy", () => {
+  it("leaves reset config and state preparation to onboarding", () => {
+    expect(resolvePolicy({ commandPath: ["onboard"] }).skipConfigGuard).toBe(false);
+    for (const command of ["onboard", "setup"]) {
+      for (const params of [
+        { argv: ["node", "openclaw", command, "--reset"] },
+        { options: { reset: true } },
+      ]) {
+        expect(
+          resolveCliStartupPolicy({ ...params, commandPath: [command], jsonOutputMode: false }),
+        ).toMatchObject({
+          skipConfigGuard: true,
+          validateConfigOnly: true,
+          loadPlugins: false,
+        });
+      }
+    }
+  });
+
   it.each(["gateway"])("defers only %s installs with a runtime expectation", (parent) => {
     const commandPath = [parent, "install"];
     expect(resolvePolicy({ commandPath }).skipConfigGuard).toBe(false);

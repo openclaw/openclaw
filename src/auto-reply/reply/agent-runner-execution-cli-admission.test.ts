@@ -1,12 +1,12 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
-import { withTestRunAdmission } from "../../agents/admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
 import { buildCliRunResult } from "../../agents/cli-runner/cli-run-settlement.js";
 import { executeDeps } from "../../agents/cli-runner/execute-deps.js";
 import { executePreparedCliRun } from "../../agents/cli-runner/execute.js";
 import { buildCliMcpGrantContext } from "../../agents/cli-runner/mcp-grant-context.js";
+import { admitCliRunParams } from "../../agents/cli-runner/run-admission.js";
 import { prepareCliRunTerminalReply } from "../../agents/cli-runner/terminal-reply.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
@@ -22,7 +22,6 @@ import {
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
   createFollowupRun,
-  requireMockCall,
   expectMockCallArgFields,
   initialFallbackAttemptOptions,
   fallbackAttemptOptions,
@@ -525,33 +524,6 @@ describe("executeAgentTurn: CLI admission", () => {
         throw new Error("Missing admitted CLI entry");
       }
       candidateEntry.activeWriterRunId = "cli-writer";
-      return { payloads: [{ text: "done" }], meta: {} };
-    });
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "claude-cli";
-    followupRun.run.model = "claude-sonnet-4-6";
-    const restoreAdmission = installSessionPlacementAdmissionProvider({
-      assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
-      executeLocalTurn: async (_claim, runLocal) => {
-        sessionEntry = admittedSessionEntry;
-        return await runLocal();
-      },
-      executeTurn: async (_claim, _params, runLocal) => await runLocal(),
-    });
-
-    try {
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn({
-        ...createMinimalRunAgentTurnParams({ followupRun }),
-        getActiveSessionEntry: () => sessionEntry,
-      });
-
-      expect(result.kind).toBe("success");
-      const run = requireMockCall(
-        state.runCliAgentMock,
-        0,
-        "CLI run params",
-      )[0] as RunCliAgentParams;
       expect(run.sessionEntry).toMatchObject({
         ...admittedSessionEntry,
         activeWriterRunId: "cli-writer",
@@ -611,22 +583,42 @@ describe("executeAgentTurn: CLI admission", () => {
         backend,
       });
       prepared.params = {
-        ...run,
-        admittedRunContext: prepared.params.admittedRunContext,
+        ...(await admitCliRunParams(run, "main")),
         skillsSnapshot: undefined,
       };
       prepared.cwd = run.cwd;
       prepared.reusableCliSession = { mode: "reuse", sessionId: observedCliSessionId };
       executeDeps.invokeNodeClaudeCliRun = nodeInvoke;
       try {
-        await withTestRunAdmission(prepared.params, async (admittedRunContext) => {
-          prepared.params.admittedRunContext = admittedRunContext;
-          await executePreparedCliRun(prepared, observedCliSessionId);
-        });
+        await executePreparedCliRun(prepared, observedCliSessionId);
       } finally {
         executeDeps.invokeNodeClaudeCliRun = restoreNodeInvoke;
       }
       expect(nodeInvoke).toHaveBeenCalledOnce();
+      return { payloads: [{ text: "done" }], meta: {} };
+    });
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-sonnet-4-6";
+    const restoreAdmission = installSessionPlacementAdmissionProvider({
+      assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
+      executeLocalTurn: async (_claim, runLocal) => {
+        sessionEntry = admittedSessionEntry;
+        return await runLocal();
+      },
+      executeTurn: async (_claim, _params, runLocal) => await runLocal(),
+    });
+
+    try {
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun }),
+        getActiveSessionEntry: () => sessionEntry,
+      });
+
+      expect(state.runCliAgentMock).toHaveBeenCalledOnce();
+      await state.runCliAgentMock.mock.results[0]?.value;
+      expect(result.kind).toBe("success");
     } finally {
       restoreAdmission();
     }

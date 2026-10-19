@@ -42,7 +42,7 @@ function encodeUsageCostPartition(
   rollup: SessionUsageRollupData,
 ): UsageCostPartition & { blob: Uint8Array<ArrayBuffer> } {
   const raw = Buffer.from(JSON.stringify(rollup));
-  const compressed = raw.byteLength >= 1024 ? codec?.compress(raw, 1) : undefined;
+  const compressed = raw.byteLength >= 1024 ? codec.compress(raw, 1) : undefined;
   const useCompressed = compressed !== undefined && compressed.byteLength < raw.byteLength;
   return {
     date,
@@ -95,9 +95,9 @@ export function decodeUsageCostPartition(
     }
     const raw =
       metadata.encoding === "zstd"
-        ? codec?.decompress(blob, metadata.bytes)
+        ? codec.decompress(blob, metadata.bytes)
         : Buffer.from(blob.buffer, blob.byteOffset, blob.byteLength);
-    if (!raw || raw.byteLength !== metadata.bytes || sha256Hex(raw) !== metadata.sha256) {
+    if (raw.byteLength !== metadata.bytes || sha256Hex(raw) !== metadata.sha256) {
       return undefined;
     }
     const value: unknown = JSON.parse(raw.toString("utf8"));

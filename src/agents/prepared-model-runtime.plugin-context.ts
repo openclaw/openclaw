@@ -7,9 +7,9 @@ import type {
 } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
-  createPluginRuntimeLoaderLogger,
   getPluginRuntimeLoadContext,
   getReusablePluginRuntimeActivation,
+  pluginRuntimeLoaderLogger,
   setPluginRuntimeLoadContext,
 } from "../plugins/runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
@@ -78,7 +78,7 @@ export function prepareOwnedPluginLoadContext(
       metadataSnapshot,
       manifestRegistry: metadataSnapshot.manifestRegistry,
       installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
-      logger: targetContext?.logger ?? createPluginRuntimeLoaderLogger(),
+      logger: targetContext?.logger ?? pluginRuntimeLoaderLogger,
       expectedSourceDigests: targetContext?.expectedSourceDigests,
       preferBuiltPluginArtifacts,
     });

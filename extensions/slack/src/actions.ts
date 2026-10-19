@@ -594,7 +594,6 @@ export async function downloadSlackFile(
   const isFileAllowed = (file: SlackFileInfoSummary) =>
     hasSlackScopeProof({ file, channelId: opts.channelId, threadId: opts.threadId });
 
-  // Fetch fresh file metadata (includes a current url_private_download).
   const info = await client.files.info({ file: fileId });
   const file = info.file as SlackFileInfoSummary | undefined;
 

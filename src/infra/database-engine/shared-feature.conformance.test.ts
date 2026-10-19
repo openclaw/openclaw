@@ -24,7 +24,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { PostgresSyncConnection } from "../postgres-sync/connection.js";
-import { rewritePostgresPlaceholders } from "../postgres-sync/protocol.js";
+import { preparePostgresQuery } from "../postgres-sync/protocol.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 
@@ -122,7 +122,7 @@ it.skipIf(!connection)(
             // PREPARE the actual owner statement, then execute it normally with its bound values.
             // This adds parser/type-inference proof without maintaining a second SQL implementation.
             if (/^(?:insert|select)\b/i.test(sql) && !prepared.has(sql)) {
-              query(`PREPARE feature_statement AS ${rewritePostgresPlaceholders(sql)}`);
+              query(`PREPARE feature_statement AS ${preparePostgresQuery(sql).sql}`);
               query("DEALLOCATE feature_statement");
               prepared.add(sql);
             }

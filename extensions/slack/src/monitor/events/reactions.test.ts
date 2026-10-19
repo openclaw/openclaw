@@ -1,6 +1,6 @@
 import type { AllMiddlewareArgs } from "@slack/bolt";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerSlackReactionEvents } from "./reactions.js";
+import { registerSlackCommonEvents } from "../events.js";
 import {
   createSlackSystemEventTestHarness,
   type SlackSystemEventHandler as ReactionHandler,
@@ -61,7 +61,11 @@ function createReactionHandlers(params: {
   if (params.shouldDropMismatchedSlackEvent) {
     harness.ctx.shouldDropMismatchedSlackEvent = params.shouldDropMismatchedSlackEvent;
   }
-  registerSlackReactionEvents({ ctx: harness.ctx, trackEvent: params.trackEvent });
+  registerSlackCommonEvents({
+    ctx: harness.ctx,
+    handleSlackMessage: vi.fn(),
+    trackEvent: params.trackEvent,
+  });
   return {
     added: harness.getHandler("reaction_added") as ReactionHandler | null,
     removed: harness.getHandler("reaction_removed") as ReactionHandler | null,
@@ -90,7 +94,7 @@ async function executeReactionCase(input: ReactionRunInput = {}) {
   });
 }
 
-describe("registerSlackReactionEvents", () => {
+describe("Slack reactions events", () => {
   beforeEach(() => {
     reactionQueueMock.mockClear();
   });
@@ -208,7 +212,7 @@ describe("registerSlackReactionEvents", () => {
     harness.ctx.resolveChannelName = resolveChannelName;
     harness.ctx.resolveUserName = resolveUserName;
     harness.ctx.resolveSlackSystemEventRoute = resolveSessionKey;
-    registerSlackReactionEvents({ ctx: harness.ctx, trackEvent });
+    registerSlackCommonEvents({ handleSlackMessage: vi.fn(), ctx: harness.ctx, trackEvent });
     const handler = requireReactionHandler(
       harness.getHandler("reaction_added") as ReactionHandler | null,
       "added",
@@ -252,7 +256,7 @@ describe("registerSlackReactionEvents", () => {
       apiAppId: "A_GRID",
       enterpriseId: "E_GRID",
     };
-    registerSlackReactionEvents({ ctx: harness.ctx });
+    registerSlackCommonEvents({ handleSlackMessage: vi.fn(), ctx: harness.ctx });
     const handler = requireReactionHandler(
       harness.getHandler("reaction_added") as ReactionHandler | null,
       "added",
@@ -276,7 +280,7 @@ describe("registerSlackReactionEvents", () => {
       apiAppId: "A_GRID",
       enterpriseId: "E_GRID",
     };
-    registerSlackReactionEvents({ ctx: harness.ctx, trackEvent });
+    registerSlackCommonEvents({ handleSlackMessage: vi.fn(), ctx: harness.ctx, trackEvent });
     const handler = requireReactionHandler(
       harness.getHandler("reaction_added") as ReactionHandler | null,
       "added",

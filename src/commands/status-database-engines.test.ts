@@ -1,15 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics.js";
 import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
-import { buildStatusJsonPayload } from "./status-json-payload.js";
+import { resolveStatusJsonOutput } from "./status-json-runtime.js";
 import { buildStatusCommandOverviewRows } from "./status-overview-rows.js";
-import { createStatusCommandOverviewRowsParams } from "./status.test-support.js";
+import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
+import {
+  createStatusCommandOverviewRowsParams,
+  createStatusScanResultFixture,
+} from "./status.test-support.js";
 
 const mocks = vi.hoisted(() => ({ describe: vi.fn() }));
 
 // mock-isolation: These tests own status projection/target routing, not physical store inspection.
 vi.mock("../infra/database-engine/admitted-diagnostics.js", () => ({
   describeAdmittedDatabaseStores: mocks.describe,
+}));
+
+// mock-isolation: Database projection does not need Gateway, service-manager, or usage probes.
+vi.mock("./status-runtime-shared.js", () => ({
+  resolveStatusRuntimeSnapshot: async () => ({}),
+  resolveStatusUsageSummary: vi.fn(),
+}));
+
+// mock-isolation: Backup-store I/O is unrelated to admitted database diagnostics.
+vi.mock("../state/backup-run-records.js", () => ({
+  readBackupRunFreshness: async () => ({}),
 }));
 
 const store: DatabaseStoreDiagnostic = {
@@ -45,20 +60,14 @@ describe("status database diagnostics", () => {
 
   it("projects the same physical store facts in text and JSON", async () => {
     const config = { database: { engine: "postgres" as const } };
-    const databaseEngines = await resolveStatusDatabaseEngines(config);
-    const params = createStatusCommandOverviewRowsParams();
-    const surface = { ...params.surface, cfg: {}, databaseEngines };
-    const rows = buildStatusCommandOverviewRows({ ...params, surface });
-    const payload = buildStatusJsonPayload({
-      summary: {},
-      surface,
-      osSummary: {},
-      memory: null,
-      memoryPlugin: {},
-      agents: [],
-      configDiagnostics: null,
-      secretDiagnostics: [],
+    const payload = await resolveStatusJsonOutput({
+      scan: createStatusScanResultFixture({ cfg: config }),
+      opts: createStatusGatewayProbeBudget(),
+      includeSecurityAudit: false,
     });
+    const params = createStatusCommandOverviewRowsParams();
+    const surface = { ...params.surface, cfg: {}, databaseEngines: payload.databaseEngines };
+    const rows = buildStatusCommandOverviewRows({ ...params, surface });
     expect(payload.databaseEngines.source).toBe("admitted");
     expect(payload.databaseEngines.families.find((family) => family.id === "state")).toMatchObject({
       default: "postgres",

@@ -304,10 +304,7 @@ function createSessionsResultFromRows(sessions: GatewaySessionRow[]): SessionsLi
   };
 }
 
-function createSettingsLaneHost(
-  patch: SessionPatchRoute,
-  refresh: () => Promise<void> = async () => {},
-) {
+function createSettingsLaneHost(patch: SessionPatchRoute) {
   const host = makeChatHost({
     requestHandlers: {},
     sessionKey: "main",
@@ -329,7 +326,6 @@ function createSettingsLaneHost(
     ]),
   });
   vi.spyOn(host.sessions, "patch").mockImplementation(patch);
-  vi.spyOn(host.sessions, "refresh").mockImplementation(refresh);
   onTestFinished(() => host.sessions.dispose());
   return host;
 }
@@ -2735,11 +2731,7 @@ describe("chat slash menu accessibility", () => {
         description: `Skill ${index + 1}.`,
       })),
     );
-    const animationFrames: FrameRequestCallback[] = [];
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-      animationFrames.push(callback);
-      return animationFrames.length;
-    });
+    const flushAnimationFrames = stubAnimationFrames();
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
       this: HTMLElement,
     ) {
@@ -2768,12 +2760,12 @@ describe("chat slash menu accessibility", () => {
     const { container } = createReactiveDraftHarness();
     document.body.append(container);
     inputDraftAtEnd(container, "Use $");
-    animationFrames.length = 0;
+    flushAnimationFrames();
 
     for (let index = 0; index < 4; index += 1) {
       keydownComposer(container, "ArrowDown");
     }
-    animationFrames.at(-1)?.(0);
+    flushAnimationFrames();
 
     const scrollRegion = container.querySelector<HTMLElement>(".skill-menu .slash-menu__scroll");
     const outerMenu = container.querySelector<HTMLElement>(".skill-menu");
@@ -3311,9 +3303,9 @@ describe("chat welcome", () => {
     expect(image?.getAttribute("src")).toBe("blob:identity-avatar");
     image?.dispatchEvent(new Event("load"));
     const identity = container.querySelector(".identity-avatar--agent");
-    expect(identity?.classList.contains("is-fallback")).toBe(false);
+    await waitForSolid(() => expect(identity?.classList.contains("is-fallback")).toBe(false));
     image?.dispatchEvent(new Event("error"));
-    expect(identity?.classList.contains("is-fallback")).toBe(true);
+    await waitForSolid(() => expect(identity?.classList.contains("is-fallback")).toBe(true));
     expect(identity?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
 
     container = renderWelcome({ assistantAvatar: null, assistantAvatarUrl: null });
@@ -3605,46 +3597,42 @@ describe("chat model controls", () => {
         label: "Workspace",
         authProfileId: profiles[0]!.profileId,
       };
-      const draw = () =>
-        renderModelControls(
-          state,
-          {
-            modelAuthStatusResult: status,
-            renderAccountSection: (model) =>
-              renderChatModelAccountControl({
-                owner: state,
-                client,
-                selection,
-                model,
-                modelAuthStatusResult: status,
-                disabled: false,
-                ownsSelection: () => true,
-                onSelect: vi.fn(),
-                onRequestUpdate: draw,
-              }),
-          },
-          container,
-        );
-      draw();
+      renderModelControls(
+        state,
+        {
+          modelAuthStatusResult: status,
+          renderAccountSection: (model) =>
+            renderChatModelAccountControl({
+              owner: state,
+              client,
+              selection,
+              model,
+              modelAuthStatusResult: status,
+              disabled: false,
+              ownsSelection: () => true,
+              onSelect: vi.fn(),
+            }),
+        },
+        container,
+      );
       expect(container.querySelector(".chat-controls__account-selection")?.textContent).toBe(
         "work@example.com · Sign in with ChatGPT",
       );
       container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
       await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-      await vi.waitFor(() =>
-        expect(container.querySelectorAll("[data-chat-account-option]")).toHaveLength(count),
-      );
-      for (const [index, row] of [
-        ...container.querySelectorAll("[data-chat-account-option]"),
-      ].entries()) {
-        expect(row.querySelector(".chat-controls__model-option-name")?.textContent?.trim()).toBe(
-          profiles[index]!.displayName,
-        );
-        expect(row.querySelector(".chat-controls__auth-meta")?.textContent?.trim() ?? "").toBe(
-          profiles[index]!.email,
-        );
-        expect(row.textContent).not.toContain(profiles[index]!.profileId);
-      }
+      await vi.waitFor(() => {
+        const rows = [...container.querySelectorAll("[data-chat-account-option]")];
+        expect(rows).toHaveLength(count);
+        for (const [index, row] of rows.entries()) {
+          expect(row.querySelector(".chat-controls__model-option-name")?.textContent?.trim()).toBe(
+            profiles[index]!.displayName,
+          );
+          expect(row.querySelector(".chat-controls__auth-meta")?.textContent?.trim() ?? "").toBe(
+            profiles[index]!.email,
+          );
+          expect(row.textContent).not.toContain(profiles[index]!.profileId);
+        }
+      });
     },
   );
 
@@ -4443,11 +4431,9 @@ describe("chat model controls", () => {
           await options.waitFor;
         }
         patches.push(patch);
-        return patchResult;
-      },
-      async () => {
         reconciliationStarted.resolve();
         await releaseReconciliation.promise;
+        return patchResult;
       },
     );
 

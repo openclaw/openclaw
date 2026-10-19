@@ -335,6 +335,7 @@ test.each([
     read: () => ({}),
     agent: {
       agentId: "main",
+      revision: "fixture-commands",
       owner,
       authStore: { version: 1, profiles: {} },
       authModes: {},

@@ -13,6 +13,26 @@ import {
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
 
+function updateText(
+  context: ReturnType<typeof createMessageUpdateContext>,
+  type: "text_delta" | "text_end",
+  text: string,
+  options: Omit<Parameters<typeof createTextUpdateEvent>[0], "type" | "text"> = {},
+) {
+  return updateMessage(context, createTextUpdateEvent({ type, text, ...options }));
+}
+const commentaryPartial = (text: string, id = "item-commentary") =>
+  createOpenAiResponsesPartial({
+    text,
+    id,
+    signaturePhase: "commentary",
+    partialPhase: "commentary",
+  });
+const preamble = (progressText: string, phase: string, itemId = "item-commentary") => ({
+  stream: "item",
+  data: { kind: "preamble", title: "Preamble", progressText, phase, itemId },
+});
+
 describe("handleMessageUpdate text signatures", () => {
   afterEach(() => vi.useRealTimers());
 
@@ -21,10 +41,7 @@ describe("handleMessageUpdate text signatures", () => {
     const context = createMessageUpdateContext({ emitReasoningStream });
 
     for (const chunk of ["<thi", "nk>reason", "ing</think>"]) {
-      await updateMessage(
-        context,
-        createTextUpdateEvent({ type: "text_delta", text: chunk, delta: chunk }),
-      );
+      await updateText(context, "text_delta", chunk, { delta: chunk });
     }
 
     expect(emitReasoningStream.mock.calls.map(([text]) => text)).toEqual([
@@ -34,45 +51,32 @@ describe("handleMessageUpdate text signatures", () => {
     ]);
   });
 
-  it.each([
-    {
-      name: "leading Unicode space and held paragraph breaks",
-      chunks: ["\u2003Hello ", "world", "\n\n", "Next"],
-      replies: [
-        ["Hello", "Hello"],
-        ["Hello world", " world"],
-        ["Hello world\n\nNext", "\n\nNext"],
-      ],
-    },
-  ])("uses incremental unphased Responses deltas with $name", async ({ chunks, replies }) => {
+  it("uses incremental unphased Responses deltas with Unicode space and held paragraph breaks", async () => {
+    const chunks = ["\u2003Hello ", "world", "\n\n", "Next"];
+    const replies = [
+      ["Hello", "Hello"],
+      ["Hello world", " world"],
+      ["Hello world\n\nNext", "\n\nNext"],
+    ];
     const onAgentEvent = vi.fn();
     const stripBlockTags = vi.fn((text: string) => text);
     const context = createMessageUpdateContext({ onAgentEvent, stripBlockTags });
 
-    const createNonPhaseEvent = (text: string, delta: string) =>
-      ({
+    let text = "";
+    for (const delta of chunks) {
+      text += delta;
+      await updateMessage(context, {
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
           contentIndex: 0,
           delta,
           partial: {
-            role: "assistant",
+            ...createOpenAiResponsesPartial({ text, id: "unused" }),
             content: [{ type: "text", text }],
-            stopReason: "stop",
-            api: "openai-responses",
-            provider: "openai",
-            model: "gpt-5.2",
-            usage: {},
-            timestamp: 0,
           },
         },
-      }) as never;
-
-    let text = "";
-    for (const delta of chunks) {
-      text += delta;
-      await updateMessage(context, createNonPhaseEvent(text, delta));
+      });
     }
 
     expect(stripBlockTags.mock.calls.map(([value]) => value)).toEqual(chunks);
@@ -85,13 +89,7 @@ describe("handleMessageUpdate text signatures", () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
 
-    await updateMessage(context, {
-      message: { role: "assistant", content: [] },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Here it is.\nMEDIA:/tmp/final.png\n",
-      },
-    });
+    await updateText(context, "text_delta", "Here it is.\nMEDIA:/tmp/final.png\n");
 
     expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
       stream: "assistant",
@@ -100,19 +98,13 @@ describe("handleMessageUpdate text signatures", () => {
   });
 
   it.each([
-    { chunks: ["NO_", "REPLY", "\nHello ", "world"], text: "Hello world" },
-    {
-      chunks: ["NO_", "REPLY", " is literal ", "text"],
-      text: "NO_REPLY is literal text",
-    },
-  ])("preserves visible text after a split protocol prefix: $text", async ({ chunks, text }) => {
+    [["NO_", "REPLY", "\nHello ", "world"], "Hello world"],
+    [["NO_", "REPLY", " is literal ", "text"], "NO_REPLY is literal text"],
+  ] as const)("preserves visible text after a split protocol prefix: %j", async (chunks, text) => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
     for (const delta of chunks) {
-      await updateMessage(context, {
-        message: { role: "assistant", content: [] },
-        assistantMessageEvent: { type: "text_delta", delta },
-      });
+      await updateText(context, "text_delta", delta);
     }
 
     const replies = onAgentEvent.mock.calls.map(([event]) => event.data);
@@ -125,47 +117,25 @@ describe("handleMessageUpdate text signatures", () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
 
-    await updateMessage(
-      context,
-      createTextUpdateEvent({
-        type: "text_delta",
-        text: "Hello",
-        delta: "Hello",
-        id: "item-commentary",
-        signaturePhase: "commentary",
-        partialPhase: "commentary",
-      }),
-    );
-    await updateMessage(
-      context,
-      createTextUpdateEvent({
-        type: "text_delta",
-        text: "Hello world",
-        delta: " world",
-        id: "item-final",
-        signaturePhase: "final_answer",
-        partialPhase: "final_answer",
-      }),
-    );
+    await updateText(context, "text_delta", "Hello", {
+      delta: "Hello",
+      id: "item-commentary",
+      signaturePhase: "commentary",
+      partialPhase: "commentary",
+    });
+    await updateText(context, "text_delta", "Hello world", {
+      delta: " world",
+      id: "item-final",
+      signaturePhase: "final_answer",
+      partialPhase: "final_answer",
+    });
 
-    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
-      // Emit-always: the commentary delta reaches the bus tagged with its
-      // phase; reply lanes still exclude it (covered below).
-      {
-        stream: "assistant",
-        data: {
-          text: "Hello",
-          delta: "",
-          replace: true,
-          phase: "commentary",
-          itemId: "item-commentary",
-        },
-      },
-      {
-        stream: "assistant",
-        data: { text: "Hello world", delta: "Hello world", phase: "final_answer" },
-      },
-    ]);
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject(
+      [
+        { text: "Hello", delta: "", replace: true, phase: "commentary", itemId: "item-commentary" },
+        { text: "Hello world", delta: "Hello world", phase: "final_answer" },
+      ].map((data) => ({ stream: "assistant", data })),
+    );
   });
 
   it.each([
@@ -178,18 +148,10 @@ describe("handleMessageUpdate text signatures", () => {
       vi.setSystemTime(1_000);
       const onAgentEvent = vi.fn();
       const context = createMessageUpdateContext({ onAgentEvent });
-      // Exercise the real projection/deduplication owner. A raw callback mock
-      // mistakes completion metadata for another assistant text message.
+      // Real projection distinguishes completion metadata from a second text message.
       context.emitAssistantStreamData = createReplyDelivery(context).emitAssistantStreamData;
-      const createPartial = (text: string) =>
-        createOpenAiResponsesPartial({
-          text,
-          id: "item-commentary",
-          signaturePhase: "commentary",
-          partialPhase: "commentary",
-        });
-      const startPartial = createPartial("Work");
-      const finalPartial = createPartial("Working...");
+      const startPartial = commentaryPartial("Work");
+      const finalPartial = commentaryPartial("Working...");
 
       for (const event of [
         { type: "text_start", partial: startPartial },
@@ -203,24 +165,12 @@ describe("handleMessageUpdate text signatures", () => {
         });
         vi.setSystemTime(Date.now() + delayMs);
       }
-      await endMessage(context, {
-        message: finalPartial,
-      });
+      await endMessage(context, { message: finalPartial });
 
-      expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual(
-        [...updates.map((text) => [text, "update"]), ["Working...", "end"]].map(
-          ([progressText, phase]) => ({
-            stream: "item",
-            data: {
-              kind: "preamble",
-              title: "Preamble",
-              progressText,
-              phase,
-              itemId: "item-commentary",
-            },
-          }),
-        ),
-      );
+      expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual([
+        ...updates.map((text) => preamble(text, "update")),
+        preamble("Working...", "end"),
+      ]);
 
       expect(context.state.deltaBuffer).toBe("Working...");
       expect(context.blockChunker.bufferedText).toBe("");
@@ -231,15 +181,8 @@ describe("handleMessageUpdate text signatures", () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
     context.emitAssistantStreamData = createReplyDelivery(context).emitAssistantStreamData;
-    const createPartial = (text: string, id: string) =>
-      createOpenAiResponsesPartial({
-        text,
-        id,
-        signaturePhase: "commentary",
-        partialPhase: "commentary",
-      });
-    const firstPartial = createPartial("Working", "item-1");
-    const extendedPartial = createPartial("Working now", "item-2");
+    const firstPartial = commentaryPartial("Working", "item-1");
+    const extendedPartial = commentaryPartial("Working now", "item-2");
 
     for (const event of [
       { type: "text_start", partial: firstPartial },
@@ -253,13 +196,8 @@ describe("handleMessageUpdate text signatures", () => {
     }
     await endMessage(context, { message: extendedPartial });
 
-    // Both snapshots finish the same logical item. The later message_end must
-    // not publish its already-observed completion again.
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual(
-      ["Working", "Working now"].map((progressText) => ({
-        stream: "item",
-        data: { kind: "preamble", title: "Preamble", progressText, phase: "end", itemId: "item-1" },
-      })),
+      ["Working", "Working now"].map((text) => preamble(text, "end", "item-1")),
     );
 
     expect(context.state.lastAssistantStreamItemId).toBe("item-1");
@@ -283,25 +221,10 @@ describe("commentary and flush isolation", () => {
       flushBlockReplyBuffer,
     });
 
-    await updateMessage(
-      ctx,
-      createTextUpdateEvent({
-        type: "text_delta",
-        text: "Need send.",
-        content: [commentaryBlock],
-      }),
-    );
-    await updateMessage(
-      ctx,
-      createTextUpdateEvent({
-        type: "text_end",
-        text: "Need send.",
-        content: [commentaryBlock],
-      }),
-    );
+    await updateText(ctx, "text_delta", "Need send.", { content: [commentaryBlock] });
+    await updateText(ctx, "text_end", "Need send.", { content: [commentaryBlock] });
 
-    // Archive-always: commentary (textSignature-only phase — the F3 shape) is
-    // emitted on the bus for archival + window, but kept out of the reply lanes.
+    // Signature-only commentary is archived but excluded from reply lanes.
     expect(onAgentEvent).toHaveBeenCalled();
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(flushBlockReplyBuffer).not.toHaveBeenCalled();
@@ -319,7 +242,7 @@ describe("commentary and flush isolation", () => {
       }),
     });
 
-    const pending = updateMessage(ctx, createTextUpdateEvent({ type: "text_end", text: "" }));
+    const pending = updateText(ctx, "text_end", "");
     expect(debug).toHaveBeenCalledWith("text_end block reply flush failed: Error: boom");
     await pending;
   });
@@ -332,27 +255,19 @@ describe("handleMessageUpdate current-source message-tool previews", () => {
       currentSourceMessagingToolSentTextsNormalized: ["qa-msteams-dm-ok"],
     };
 
-    expect(
+    const partial = (text: string) =>
       resolveCurrentSourceMessagingToolPartial(state, {
         evtType: "text_delta",
-        text: "QA-MSTEAMS",
-        visibleDelta: "QA-MSTEAMS",
-      }),
-    ).toEqual({ hold: true, text: "QA-MSTEAMS" });
-    expect(
-      resolveCurrentSourceMessagingToolPartial(state, {
-        evtType: "text_delta",
-        text: "-DM-OK",
-        visibleDelta: "-DM-OK",
-      }),
-    ).toEqual({ hold: true, text: "QA-MSTEAMS-DM-OK" });
-    expect(
-      resolveCurrentSourceMessagingToolPartial(state, {
-        evtType: "text_delta",
-        text: " with more detail",
-        visibleDelta: " with more detail",
-      }),
-    ).toEqual({ hold: false, text: "QA-MSTEAMS-DM-OK with more detail" });
+        text,
+        visibleDelta: text,
+      });
+    for (const [fragment, hold, text] of [
+      ["QA-MSTEAMS", true, "QA-MSTEAMS"],
+      ["-DM-OK", true, "QA-MSTEAMS-DM-OK"],
+      [" with more detail", false, "QA-MSTEAMS-DM-OK with more detail"],
+    ] as const) {
+      expect(partial(fragment)).toEqual({ hold, text });
+    }
     expect(state.currentSourceMessagingToolHeldPartial).toBeUndefined();
   });
 
@@ -369,22 +284,8 @@ describe("handleMessageUpdate current-source message-tool previews", () => {
       },
     });
 
-    await updateMessage(
-      context,
-      createTextUpdateEvent({
-        type: "text_delta",
-        text: "QA-MSTEAMS",
-        id: "msg_source_duplicate",
-      }),
-    );
-    await updateMessage(
-      context,
-      createTextUpdateEvent({
-        type: "text_end",
-        text: sentText,
-        id: "msg_source_duplicate",
-      }),
-    );
+    await updateText(context, "text_delta", "QA-MSTEAMS", { id: "msg_source_duplicate" });
+    await updateText(context, "text_end", sentText, { id: "msg_source_duplicate" });
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
     expect(onPartialReply).not.toHaveBeenCalled();

@@ -1,4 +1,3 @@
-// Shared camera, photo, and file entry points for chat and New Session.
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { appendChatAttachmentFiles } from "./chat-attachments.ts";
 

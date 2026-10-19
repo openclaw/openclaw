@@ -1,4 +1,5 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { prepareGoalContinuationContext } from "../../auto-reply/reply/goal-continuation-return.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import {
@@ -18,12 +19,14 @@ import { recordSessionHumanDirectMessage } from "../../sessions/session-state-ev
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
 import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
   prepareCommandHarnessCompletionRecovery,
 } from "../agent-command-restart-recovery.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { createRestartRecoveryOperatorSource } from "../operator-run-recovery-source.js";
+import { createRestartRecoveryRequesterSource } from "../requester-run-recovery-source.js";
 import { prepareCommandConversationContext } from "./conversation-context.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";
@@ -49,21 +52,36 @@ export function prepareCommandSessionRecoveryEntry(
       hasDeliveryContext: Boolean(params.deliveryContext),
     });
   const operatorSource =
-    entry.restartRecoveryDeliveryRunId !== runId &&
-    ((!sourceOptions.sourceRunId &&
-      (!opts.inputProvenance || opts.inputProvenance.kind === "external_user")) ||
-      (sourceOptions.sourceRunId === runId &&
-        opts.inputProvenance?.kind === "inter_session" &&
-        opts.inputProvenance.sourceTool === "subagent_settle"))
+    entry.restartRecoveryDeliveryRunId !== runId
       ? createRestartRecoveryOperatorSource({
           authority: opts.operatorAuthority,
           entry: { ...entry, sessionId },
           agentId: params.agentId,
           sessionKey: params.sessionKey,
-          sourceRunId: runId,
+          sourceRunId: sourceOptions.sourceRunId ?? runId,
           inputProvenance: opts.inputProvenance,
+          requesterOrigin: opts.requesterOrigin,
         })
       : undefined;
+  const requesterSource =
+    entry.restartRecoveryDeliveryRunId !== runId
+      ? createRestartRecoveryRequesterSource({
+          requesterOrigin: opts.requesterOrigin,
+          entry: { ...entry, sessionId },
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          sourceRunId: sourceOptions.sourceRunId ?? runId,
+        })
+      : undefined;
+  const sourceIngress =
+    sourceOptions.sourceIngress ??
+    (opts.inputProvenance && opts.inputProvenance.kind !== "external_user"
+      ? ("internal" as const)
+      : (operatorSource?.snapshot.sourceIngress ??
+        (requesterSource?.requesterOrigin.messageProvider &&
+        !isInternalMessageChannel(requesterSource.requesterOrigin.messageProvider)
+          ? ("channel" as const)
+          : ("internal" as const))));
   return {
     guardedHarnessCompletion,
     isCompletionCurrent,
@@ -91,11 +109,18 @@ export function prepareCommandSessionRecoveryEntry(
         runId,
         harnessCompletion,
         ...sourceOptions,
+        ...(requesterSource
+          ? {
+              requesterSource,
+              sourceRunId: requesterSource.sourceRunId,
+              sourceIngress,
+            }
+          : {}),
         ...(operatorSource
           ? {
               operatorSource,
-              sourceRunId: runId,
-              sourceIngress: sourceOptions.sourceIngress ?? operatorSource.snapshot.sourceIngress,
+              sourceRunId: operatorSource.sourceRunId,
+              sourceIngress,
             }
           : {}),
       }),
@@ -285,13 +310,15 @@ export async function prepareEmbeddedSessionState(params: {
   }
 
   const runContext = resolveAgentRunContext(params.opts);
+  const opts = await prepareCommandConversationContext({ ...params, sessionEntry, runContext });
+  prepareGoalContinuationContext({ runId: params.runId, sessionKey, sessionEntry });
   return {
     sessionEntry,
     requestedThinkLevel,
     resolvedVerboseLevel,
     skillsSnapshot,
     runContext,
-    opts: await prepareCommandConversationContext({ ...params, sessionEntry, runContext }),
+    opts,
   };
 }
 

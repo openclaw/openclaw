@@ -50,13 +50,15 @@ import graph.
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
-Storage-engine PRs, scheduled main runs, and manual CI validations include two hosted PostgreSQL 17
+Storage-engine PRs, scheduled main runs, and manual CI validations include three hosted PostgreSQL 17
 [conformance shards](/help/testing/suites#postgresql-conformance), required by the CI gate when selected.
-The infrastructure/state and integration groups run in parallel with separate
-databases and 30-minute budgets. Database-engine `*.integration.test.ts` suites
-run with integrations, balancing the real command/recovery work across the two jobs.
-Inspect either assignment with the conformance runner's `--list` option. Their combined inventory matches the local full
-suite; a failure in either shard leaves the other running and fails the aggregate gate.
+They run in parallel with separate databases and unchanged three-worker test limits,
+with a 30-minute job budget each. The conformance runner uses the shared weighted
+allocator and committed `config/postgres-conformance-timings.json` measurements;
+weights distribute work but never select the test inventory. Unknown targets receive
+a default weight. Inspect any assignment with `--shard 1/3 --list` (or `2/3`, `3/3`).
+The combined inventory matches the local full suite; a failure in one shard leaves
+the others running and fails the aggregate gate.
 
 Full hybrid extension lint packs the same standard chunks into three existing rows, sharing setup and SDK preparation within each row. Targeted plans and frozen routes retain their existing layout; see [runner profiles](/ci/runners#runner-backend-modes).
 
@@ -168,7 +170,7 @@ Full GitHub and hybrid type checks run the five core stripes independently, reta
 
 Additional checks and narrow-PR guards and dependency scans start directly after preflight. Ordinary PRs selecting Madge or Kysely divide guards into `check-guards` and `check-guards-architecture`, with the same runner routing and no compiler-plan wait. The manifest retains every check once, and both selected rows must pass. Other events retain their existing rows. Guards retain the exact comparison base and shared check commands; compiler and lint rows wait for their selected graphs. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
 
-Changed compiler planning reads complete programs from sequential native snapshots for core and additional graphs. It releases the core programs and closes their API before opening the additional graphs to bound each compiler heap. With `OPENCLAW_CI_TYPE_PLAN_SERIAL` unset, each snapshot shares parsing and resolution without changing graph membership or full fallback. Upstream first-attempt `check-plan` jobs use the 16-class when the backend is unset, `blacksmith`, or `hybrid`, including fork PRs. Fork type stripes also use the 16-class with an unset or `blacksmith` backend; their logical GitHub profile and restore-only cache policy stay intact. Existing hybrid health admission, the explicit GitHub override, retries, and frozen routing remain in effect. Set `OPENCLAW_CI_TYPE_PLAN_SERIAL` to `true` or `1` to restore serial queries.
+Changed compiler planning queries each config's complete file membership with `--listFilesOnly`, using tsrs by default and tsgo on unsupported hosts or when `OPENCLAW_TYPECHECKER=tsgo`. Type-only consumers and dependency declarations remain included; the selected compiler's bundled library directory is excluded because it describes compiler identity, not repository membership. Config expansion and shard/buildinfo validation still use tsgo's `--showConfig`. Queries run serially without opening native API snapshots. Upstream first-attempt `check-plan` jobs use the 16-class when the backend is unset, `blacksmith`, or `hybrid`, including fork PRs. Fork type stripes also use the 16-class with an unset or `blacksmith` backend; their logical GitHub profile and restore-only cache policy stay intact. Existing hybrid health admission, the explicit GitHub override, retries, and frozen routing remain in effect.
 
 The extension package boundary row has a 40-minute job budget for SDK preparation,
 all selected plugin compiles, input-receipt validation, the required negative

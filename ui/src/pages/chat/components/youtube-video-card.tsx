@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { YouTubeVideo } from "../../../lib/chat/youtube-video.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -12,12 +12,21 @@ function YouTubeVideoContent(
   props: YouTubeVideoProps,
   host: SolidBridgeElement<YouTubeVideoProps>,
 ) {
-  const [playing, setPlaying] = createSignal(false);
-  const [thumbnailFailed, setThumbnailFailed] = createSignal(false);
   const [wideEnough, setWideEnough] = createSignal(true);
-  const canPlay = () => props.enabled && wideEnough();
+  const canPlay = createMemo(() => props.enabled && wideEnough());
   const title = () => props.videoTitle.trim() || t("chat.youtube.video");
   const sourceUrl = createMemo(() => props.video?.watchUrl);
+  // Source and eligibility changes end playback; a restored policy never auto-plays.
+  const [playing, setPlaying] = createSignal(() => {
+    sourceUrl();
+    canPlay();
+    return false;
+  });
+  const [thumbnailFailed, setThumbnailFailed] = createSignal(() => {
+    sourceUrl();
+    return false;
+  });
+  let previewButton: HTMLButtonElement | undefined;
   const playerUrl = createMemo(() => {
     if (!props.video) {
       return undefined;
@@ -40,15 +49,6 @@ function YouTubeVideoContent(
     activePlayers.set(host.ownerDocument, stopPlayback);
     setPlaying(true);
   };
-  createEffect(sourceUrl, () => {
-    stopPlayback();
-    setThumbnailFailed(false);
-  });
-  createEffect(canPlay, (enabled) => {
-    if (!enabled) {
-      stopPlayback();
-    }
-  });
   onSettled(() => {
     const observer = new ResizeObserver(([entry]) => {
       if (entry) {
@@ -57,9 +57,11 @@ function YouTubeVideoContent(
       }
     });
     observer.observe(host);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      releasePlayback();
+    };
   });
-  onCleanup(releasePlayback);
   const PreviewContents = () => (
     <>
       <Show when={!thumbnailFailed()}>
@@ -98,6 +100,9 @@ function YouTubeVideoContent(
                 }
               >
                 <button
+                  ref={(element) => {
+                    previewButton = element;
+                  }}
                   class="preview"
                   type="button"
                   aria-label={t("chat.youtube.play", { title: title() })}
@@ -134,9 +139,7 @@ function YouTubeVideoContent(
               aria-label={t("chat.youtube.close")}
               onClick={() => {
                 stopPlayback();
-                queueMicrotask(() =>
-                  host.querySelector<HTMLButtonElement>("button.preview")?.focus(),
-                );
+                onSettled(() => previewButton?.focus());
               }}
             >
               <Icon name="x" />

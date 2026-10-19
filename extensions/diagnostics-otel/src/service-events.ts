@@ -46,6 +46,7 @@ export function createDiagnosticsEventHandler(params: {
     "sessions.list.baseline.retired": recorders.recordSessionsListBaselineRetired.bind(recorders),
     "sessions.list.retention": recorders.recordSessionsListRetention.bind(recorders),
     "sessions.event.retention": recorders.recordSessionEventRetention.bind(recorders),
+    "sessions.event.rows.reset": recorders.recordSessionEventRowsReset.bind(recorders),
     "gateway.ws.event": recorders.recordGatewayWsEvent.bind(recorders),
     "gateway.ws.connections": recorders.recordGatewayWsConnections.bind(recorders),
     "model.usage": (evt, metadata, privateData) =>

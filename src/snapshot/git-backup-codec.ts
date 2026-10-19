@@ -602,12 +602,13 @@ export async function restoreGitBackupDirectory(params: {
     targetDirectory,
     ".git-backup-restore-",
   );
-  applyPrivateModeSync(stagingDirectory, 0o700);
-  const stagedPath = path.join(stagingDirectory, SNAPSHOT_SQLITE_FILENAME);
-  const stagedHandle = await fs.open(stagedPath, "wx", 0o600);
-  await stagedHandle.close();
-  const database = openNodeSqliteDatabase(stagedPath);
+  let database: DatabaseSync | undefined;
   try {
+    applyPrivateModeSync(stagingDirectory, 0o700);
+    const stagedPath = path.join(stagingDirectory, SNAPSHOT_SQLITE_FILENAME);
+    const stagedHandle = await fs.open(stagedPath, "wx", 0o600);
+    await stagedHandle.close();
+    database = openNodeSqliteDatabase(stagedPath);
     database.exec("PRAGMA foreign_keys = OFF; PRAGMA journal_mode = DELETE;");
     for (const statement of [...plainTables, ...indexes]) {
       database.exec(statement);
@@ -719,7 +720,7 @@ export async function restoreGitBackupDirectory(params: {
       excludedConfigStateKeyPrefixes: manifest.excludedConfigStateKeyPrefixes,
     };
   } catch (error) {
-    if (database.isOpen) {
+    if (database?.isOpen) {
       database.close();
     }
     throw error;

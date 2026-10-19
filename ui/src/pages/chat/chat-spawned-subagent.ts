@@ -3,7 +3,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { normalizeOptionalString as text } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ToolCard } from "../../lib/chat/chat-types.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import {
   areUiSessionKeysEquivalent,
   isDashboardSessionKey,
@@ -92,7 +92,7 @@ export function isSubagentsPanelSession(row: GatewaySessionRow): boolean {
 
 /** A subagent that handed off to its own subagents is still at work. */
 export function isUnfinishedSubagent(row: GatewaySessionRow): boolean {
-  return isSessionRunActive(row) || row.hasActiveSubagentRun === true;
+  return isSessionRunStateActive(row) || row.hasActiveSubagentRun === true;
 }
 
 function finishedRuntimeMs(row: GatewaySessionRow): number | null {

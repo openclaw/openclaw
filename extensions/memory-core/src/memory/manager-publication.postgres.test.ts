@@ -215,7 +215,12 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
 
   it("publishes inline and streamed sources, then re-admits their projections after restart", () =>
     admitted(() => {
-      expect(publishInline(replacement("violet"))).toMatchObject({ ok: true, value: true });
+      const revision = readMemoryDatabaseFacts(database).revision;
+      expect(publishInline(replacement("violet"))).toMatchObject({
+        ok: true,
+        value: true,
+        facts: { revision: revision + 1 },
+      });
       const large = replacement("orchid", `orchid ${"x".repeat(280_000)}`);
       const batches = [...memoryPublicationBatches(large)];
       expect(batches.length).toBeGreaterThan(1);
@@ -226,6 +231,7 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       expect(backend.execute({ type: "source.replace", input: { state } })).toMatchObject({
         ok: true,
         value: true,
+        facts: { revision: revision + 2 },
       });
       expect(rows()).toEqual([
         { path: "memory/orchid.md", text: large.chunks[0]!.text, vector: "[1,0,0]" },
@@ -239,6 +245,65 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       admit();
       expect(rows()).toHaveLength(2);
       expect(keyword("orchid")).toEqual([{ path: "memory/orchid.md" }]);
+      expect(readMemoryDatabaseFacts(database).revision).toBe(revision + 2);
+    }));
+
+  it("advances once per grouped replacement, refresh, and deletion, including rollback", () =>
+    admitted(() => {
+      const revision = readMemoryDatabaseFacts(database).revision;
+      const sources = ["first", "second"].map((name) =>
+        memoryPublicationInline(replacement(name))!,
+      );
+      const group = { type: "source.replace.group", input: { sources, state } } as const;
+      expect(backend.execute(group)).toMatchObject({
+        ok: true,
+        facts: { revision: revision + 1 },
+      });
+      expect(rows()).toHaveLength(2);
+      denyCommit = true;
+      expect(backend.execute(group)).toMatchObject({ ok: false, committed: false });
+      expect(readMemoryDatabaseFacts(database).revision).toBe(revision + 1);
+      denyCommit = false;
+      expect(
+        backend.execute({
+          type: "source.delete",
+          input: { path: "memory/first.md", source: "memory", expectedHash: "first", state },
+        }),
+      ).toMatchObject({ ok: true, value: true, facts: { revision: revision + 2 } });
+      expect(keyword("first")).toEqual([]);
+      expect(keyword("second")).toEqual([{ path: "memory/second.md" }]);
+
+      const session: MemorySourceIndexReplacement = {
+        ...replacement("session"),
+        source: "sessions",
+        agentId: "main",
+        sessionId: "session",
+      };
+      expect(publishInline(session)).toMatchObject({ ok: true, facts: { revision: revision + 3 } });
+      expect(
+        backend.execute({
+          type: "source.refresh",
+          input: {
+            path: session.entry.path,
+            expectedHash: "session",
+            hash: "updated",
+            mtime: 2,
+            size: 2,
+          },
+        }),
+      ).toMatchObject({ ok: true, value: true, facts: { revision: revision + 4 } });
+      expect(
+        backend.execute({
+          type: "source.refresh",
+          input: {
+            path: session.entry.path,
+            expectedHash: "session",
+            hash: "stale",
+            mtime: 3,
+            size: 3,
+          },
+        }),
+      ).toMatchObject({ ok: true, value: false, facts: { revision: revision + 4 } });
     }));
 
   it("preserves fragment order across the PostgreSQL bind-parameter limit", () =>
@@ -364,7 +429,7 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       );
       expect(pg().prepare("SELECT chunk_id FROM memory_index_chunk_provenance").all()).toEqual([]);
       const after = readMemoryDatabaseFacts(database);
-      expect(after.revision).toBeGreaterThan(before.revision);
+      expect(after.revision).toBe(before.revision + 1);
       expect(backend.execute({ type: "database.reset", input: undefined })).toMatchObject({
         ok: true,
         value: false,
@@ -485,6 +550,7 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       });
       expect(rows()).toEqual(before);
       expect(keyword("old")).toEqual([{ path: "memory/old.md" }]);
+      expect(readMemoryDatabaseFacts(database).revision).toBe(revision);
       denyCommit = false;
       rebind();
       expect(
@@ -501,6 +567,7 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       expect(backend.execute({ type: "index.facts", input: undefined })).toMatchObject({
         meta: { chunkTokens: 200 },
         vectorState: { state: "complete" },
+        revision: revision + 1,
       });
       backend.execute({ type: "database.stage.discard", input: { stageId } });
       expect(() =>
@@ -518,7 +585,6 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       expect(backend.execute({ type: "index.writeMetadata", input: metadata })).toMatchObject({
         ok: true,
       });
-      const before = rows();
       const revision = Number(
         pg().prepare("SELECT revision FROM memory_index_state WHERE id = 1").get()!.revision,
       );
@@ -534,9 +600,10 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       });
       backend.close();
       backend = bind();
-      pg().runTransaction(() =>
-        pg().exec("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1"),
-      );
+      expect(publishInline(replacement("current", "newer canonical content"))).toMatchObject({
+        ok: true,
+      });
+      const before = rows();
       expect(
         backend.execute({
           type: "database.stage.publish",

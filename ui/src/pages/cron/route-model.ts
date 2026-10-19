@@ -67,5 +67,14 @@ export function createCronRouteSelection() {
     selection.target = { jobId, runId };
     selection.requested = true;
   }
-  return Object.assign(selection, { bind, resolve, select });
+  function resolveLoadedSession(state: CronState, apply: (job: CronJob) => void) {
+    if (selection.target?.session && state.cronJobsSnapshotRevision && !state.cronLoading) {
+      selection.target = null;
+      const [job] = state.cronJobs;
+      if (state.cronJobsTotal === 1 && job) {
+        apply(job);
+      }
+    }
+  }
+  return Object.assign(selection, { bind, resolve, resolveLoadedSession, select });
 }

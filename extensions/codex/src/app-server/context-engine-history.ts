@@ -86,26 +86,30 @@ export async function prepareCodexContextEngineHistory(params: {
   assertCurrent: () => void;
 }) {
   const { assembled, projectionParams, startupBinding, assertCurrent } = params;
+  const prepareSeed = params.runtimeParams.hostCapabilities.prepareBoundedSeed;
+  const includeMessage = (message: AgentMessage) =>
+    (message.role !== "custom" || isCodexDurableCustomMessage(message)) &&
+    !(
+      message.role === "user" &&
+      projectionParams.currentUserTurnIdempotencyKey &&
+      Reflect.get(message, "idempotencyKey") === projectionParams.currentUserTurnIdempotencyKey
+    );
   const messages = [...assembled.messages, ...(params.continuationMessages ?? [])].filter(
-    (message) =>
-      (message.role !== "custom" || isCodexDurableCustomMessage(message)) &&
-      !(
-        message.role === "user" &&
-        projectionParams.currentUserTurnIdempotencyKey &&
-        Reflect.get(message, "idempotencyKey") === projectionParams.currentUserTurnIdempotencyKey
-      ),
+    includeMessage,
   );
   const configured = params.historyTokenBudget !== undefined;
-  const selection = configured
-    ? selectHistoryPrefix(
-        messages,
-        assembled.contextProjection,
-        startupBinding?.contextEngine?.projection?.fingerprint,
-      )
-    : undefined;
-  const contextEngineProjection =
-    selection?.projection ??
-    readContextEngineThreadBootstrapProjection(assembled.contextProjection);
+  const selection =
+    configured && !prepareSeed
+      ? selectHistoryPrefix(
+          messages,
+          assembled.contextProjection,
+          startupBinding?.contextEngine?.projection?.fingerprint,
+        )
+      : undefined;
+  const contextEngineProjection = prepareSeed
+    ? undefined
+    : (selection?.projection ??
+      readContextEngineThreadBootstrapProjection(assembled.contextProjection));
   const projectionDecision =
     contextEngineProjection && !params.hasContinuation
       ? resolveContextEngineBootstrapProjectionDecision({
@@ -124,20 +128,31 @@ export async function prepareCodexContextEngineHistory(params: {
       prepareFileContext: includeAttachments ? projectionParams.prepareFileContext : undefined,
     });
   const projection = await renderProjection(projectionDecision.project);
-  const historyBootstrapItems = configured
-    ? await buildCodexSelectedHistoryItems({
-        messages,
-        tokenBudget: params.historyTokenBudget,
-        prepareFileContext: projectionParams.prepareFileContext,
-      })
-    : undefined;
+  const buildSeed = (seedMessages: AgentMessage[]) =>
+    buildCodexSelectedHistoryItems({
+      messages: seedMessages,
+      tokenBudget: params.historyTokenBudget,
+      prepareFileContext: projectionParams.prepareFileContext,
+    });
+  const historyBootstrapItems = !configured
+    ? undefined
+    : prepareSeed
+      ? async (assertSeedCurrent: () => void) => {
+          // Retain the host's message identities and their prepared media snapshots.
+          const seed = (
+            await prepareSeed({
+              assertCurrent: assertSeedCurrent,
+              signal: params.runtimeParams.abortSignal,
+              tokenBudget: params.historyTokenBudget,
+            })
+          ).filter(includeMessage);
+          assertSeedCurrent();
+          return buildSeed(seed);
+        }
+      : await buildSeed(messages);
   const historyDeltaItems =
     configured && selection?.prefixLength !== undefined && !projectionDecision.project
-      ? await buildCodexSelectedHistoryItems({
-          messages: messages.slice(selection.prefixLength),
-          tokenBudget: params.historyTokenBudget,
-          prepareFileContext: projectionParams.prepareFileContext,
-        })
+      ? await buildSeed(messages.slice(selection.prefixLength))
       : undefined;
   assertCurrent();
   return {
@@ -277,8 +292,7 @@ export async function seedCodexHistory(
     assertCurrent: () => void;
   },
 ): Promise<void> {
-  const items = params.historyBootstrapItems;
-  if (items === undefined) {
+  if (params.historyBootstrapItems === undefined) {
     return;
   }
   const { response, expectedModel, expectedProvider, lifecycleTiming, assertCurrent } = options;
@@ -292,6 +306,10 @@ export async function seedCodexHistory(
       "Codex selected a different model than the assembled context policy; retry with that model's configured budget.",
     );
   }
+  const items =
+    typeof params.historyBootstrapItems === "function"
+      ? await params.historyBootstrapItems(assertCurrent)
+      : params.historyBootstrapItems;
   if (items.length) {
     await lifecycleTiming.measure("thread-start-seed-history", () =>
       params.client.request(

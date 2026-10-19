@@ -1,6 +1,6 @@
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuEntry } from "../../../components/solid/menu.tsx";
-import { registerSkillLibraryEnglish } from "../../../i18n/locales/en-skill-library.ts";
+import { registerSessionSkillLibraryEnglish } from "../../../i18n/locales/en-session-skill-library.ts";
 import { registerSkillsBrowserEnglish } from "../../../i18n/locales/en-skills-browser.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ComposerLibraryProps } from "../composer-library-session.ts";
@@ -11,7 +11,7 @@ import {
 } from "./chat-composer-menu-rows.tsx";
 
 registerEnglishCatalog(registerSkillsBrowserEnglish);
-registerEnglishCatalog(registerSkillLibraryEnglish);
+registerEnglishCatalog(registerSessionSkillLibraryEnglish);
 
 function libraryStatus(library: ComposerLibraryProps): MenuEntry[] {
   const entries: MenuEntry[] = [];

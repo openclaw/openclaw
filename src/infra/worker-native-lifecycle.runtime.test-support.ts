@@ -16,7 +16,7 @@ export const nativeWorkerResourceEntrypoint = {
   distWorkerPath: "infra/worker-native-lifecycle.resource.test-support.js",
 } as const;
 
-export function assertNativeWorkerFields(actual: object, expected: object): void {
+function assertNativeWorkerFields(actual: object, expected: object): void {
   for (const [key, value] of Object.entries(expected)) {
     assert.deepEqual(Reflect.get(actual, key), value, key);
   }

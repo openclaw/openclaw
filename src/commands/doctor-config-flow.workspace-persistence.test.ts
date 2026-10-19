@@ -2,9 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import { setConfigValueAtPath } from "../config/config-paths.js";
 import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/config.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { saveCronJobsStore } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
@@ -22,7 +24,10 @@ import {
   prepareDoctorContext,
   withDoctorConfigMaintenance,
 } from "./doctor-config-flow.test-support.js";
-import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import {
+  useDoctorConfigPreflightHome,
+  withDoctorConfigPreflightHome,
+} from "./doctor-config-preflight.test-support.js";
 
 function writeConfig(home: string, config: Record<string, unknown>) {
   return writeOpenClawConfig(home, {
@@ -60,7 +65,89 @@ function withHome(
     );
 }
 
+const withQueueDefaultHome = useDoctorConfigPreflightHome();
+
 afterEach(closeOpenClawStateDatabaseForTest);
+
+it.each([
+  { included: true, otherRepair: false, value: undefined },
+  { included: false, otherRepair: true, value: undefined },
+  { included: true, otherRepair: false, value: false },
+  { included: true, otherRepair: false, value: true },
+])(
+  "persists collaborative steering without overriding authored config (included=$included, other repair=$otherRepair, value=$value)",
+  async ({ included, otherRepair, value }) => {
+    await withQueueDefaultHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        const messages = {
+          responsePrefix: "keep-prefix",
+          ...(value === undefined ? {} : { queue: { allowCollaborativeSteering: value } }),
+        };
+        const configPath = await writeOpenClawConfig(home, {
+          agents: {
+            entries: { main: otherRepair ? { $include: "./agent.json" } : {} },
+          },
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+          ...(included ? { messages: { $include: "./messages.json" } } : {}),
+        });
+        const includePath = path.join(path.dirname(configPath), "messages.json");
+        const includeRaw = JSON.stringify(messages);
+        if (included) {
+          await fs.writeFile(includePath, includeRaw);
+        }
+        const agentPath = path.join(path.dirname(configPath), "agent.json");
+        const agentRaw = '{"sandbox":{"browser":{"enableNoVnc":true}}}';
+        if (otherRepair) {
+          await fs.writeFile(agentPath, agentRaw);
+        }
+        const before = await fs.readFile(configPath, "utf8");
+        expect(
+          (await readConfigFileSnapshot()).sourceConfig.messages?.queue?.allowCollaborativeSteering,
+        ).toBe(value);
+        await using ctx = await prepareDoctorContext(configPath);
+        expect(await fs.readFile(configPath, "utf8")).toBe(before);
+        if (included) {
+          expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
+        }
+        // A later root-owned health repair must coexist with an included queue default.
+        if (!otherRepair) {
+          ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 18880 } };
+        }
+        expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(true);
+        expect(ctx.configWriteRefusal).toBeUndefined();
+        const saved = await readConfigFileSnapshot();
+        expect(saved.valid).toBe(true);
+        expect(saved.sourceConfig.messages?.queue?.allowCollaborativeSteering).toBe(value ?? false);
+        expect(saved.sourceConfig.gateway?.port).toBe(otherRepair ? undefined : 18880);
+        expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(before);
+        if (included) {
+          expect(saved.parsed).toHaveProperty("messages", { $include: "./messages.json" });
+          expect(saved.sourceConfig.messages?.responsePrefix).toBe("keep-prefix");
+          if (value === undefined) {
+            expect(await fs.readFile(`${includePath}.bak`, "utf8")).toBe(includeRaw);
+          } else {
+            expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
+          }
+        }
+        if (otherRepair) {
+          expect(saved.parsed).toHaveProperty("agents.entries.main", {
+            $include: "./agent.json",
+          });
+          expect(saved.sourceConfig.agents?.entries?.main?.sandbox?.browser?.noVncEnabled).toBe(
+            true,
+          );
+          expect(await fs.readFile(`${agentPath}.bak`, "utf8")).toBe(agentRaw);
+        }
+        const bytes = await fs.readFile(configPath, "utf8");
+        await using repeated = await prepareDoctorContext(configPath);
+        expect(repeated.configResult.shouldWriteConfig).toBe(false);
+        await runInitialConfigWriteHealth(repeated);
+        expect(await fs.readFile(configPath, "utf8")).toBe(bytes);
+      });
+    });
+  },
+);
 
 it(
   "refuses retired config until the bridge release migrates it",
@@ -187,6 +274,7 @@ it(
       expect(await readText(`${configPath}.bak`)).toBe(original);
 
       const saved = await readJson(configPath);
+      expect(saved.messages?.queue?.allowCollaborativeSteering).toBe(false);
       expect(saved.agents).toMatchObject({ ownership: "explicit", defaults });
       expect(saved.agents.entries.ops).toEqual({
         memory: { search: entries.ops.memorySearch },
@@ -299,6 +387,104 @@ it(
       config: { agents: { ownership: "explicit", entries: { main: { workspace } } } },
     });
   }),
+);
+
+const convergedRoster = (workspace: string) => ({
+  agents: {
+    ownership: "explicit",
+    defaults: { workspace, systemAgent: { agentId: "main" } },
+    entries: { main: {}, dev: {} },
+  },
+});
+const mainLaunchDir = (config: OpenClawConfig, workspace: string) =>
+  listConfiguredOwnerInputs(config, workspace).find((input) => input.agentId === "main")
+    ?.workspaceDir;
+
+it(
+  "copies shared-workspace files into a converged system agent's directory and pins it",
+  withHome(async (home) => {
+    const workspace = path.join(home, "shared-workspace");
+    await fs.mkdir(path.join(workspace, "memory"), { recursive: true });
+    await fs.writeFile(path.join(workspace, "SOUL.md"), "root persona");
+    const configPath = await writeConfig(home, convergedRoster(workspace));
+    const before = (await readConfigFileSnapshot()).config;
+    expect(resolveAgentWorkspaceDir(before, "main")).toBe(path.join(workspace, "main"));
+
+    await writeInitial(configPath);
+
+    const after = (await readConfigFileSnapshot()).config;
+    expect(after.agents?.entries?.main?.workspace).toBe(path.join(workspace, "main"));
+    expect(resolveAgentWorkspaceDir(after, "main")).toBe(path.join(workspace, "main"));
+    expect(mainLaunchDir(after, workspace)).toBe(path.join(workspace, "main"));
+    expect(await readText(path.join(workspace, "main", "SOUL.md"))).toBe("root persona");
+    expect(await readText(path.join(workspace, "SOUL.md"))).toBe("root persona");
+  }),
+);
+
+it(
+  "copies files only once an interactive preview is accepted",
+  withHome(async (home) => {
+    const workspace = path.join(home, "shared-workspace");
+    const agentDir = path.join(workspace, "main");
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(path.join(workspace, "SOUL.md"), "root persona");
+    const configPath = await writeConfig(home, convergedRoster(workspace));
+    const preview = { options: { nonInteractive: false, repair: false } };
+
+    await runInitialConfigWriteHealth(
+      await prepareDoctorContext(configPath, { ...preview, confirm: async () => false }),
+    );
+
+    expect((await readConfigFileSnapshot()).config.agents?.entries?.main?.workspace).toBe(
+      undefined,
+    );
+    await expect(fs.access(path.join(agentDir, "SOUL.md"))).rejects.toThrow();
+
+    await runInitialConfigWriteHealth(
+      await prepareDoctorContext(configPath, { ...preview, confirm: async () => true }),
+    );
+
+    expect((await readConfigFileSnapshot()).config.agents?.entries?.main?.workspace).toBe(agentDir);
+    expect(await readText(path.join(agentDir, "SOUL.md"))).toBe("root persona");
+  }),
+);
+it(
+  "keeps the authored env root when agents.defaults comes from an include",
+  withHome(
+    async (home) => {
+      const workspace = path.join(home, "shared-workspace");
+      const moved = path.join(home, "moved-workspace");
+      await fs.mkdir(path.join(workspace, "main", "memory"), { recursive: true });
+      await fs.writeFile(path.join(workspace, "main", "SOUL.md"), "agent persona");
+      await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
+      await fs.writeFile(
+        path.join(home, ".openclaw", "defaults.json5"),
+        '{ workspace: "${WORKSPACE_ROOT}", systemAgent: { agentId: "main" } }\n',
+      );
+      const configPath = await writeConfig(home, {
+        agents: {
+          ownership: "explicit",
+          defaults: { $include: "./defaults.json5" },
+          entries: { main: {}, dev: {} },
+        },
+      });
+
+      await writeInitial(configPath);
+
+      const written = await readJson(configPath);
+      expect(written.agents.defaults).toEqual({ $include: "./defaults.json5" });
+      expect(written.agents.entries.main.workspace).toBe("${WORKSPACE_ROOT}/main");
+      const after = (await readConfigFileSnapshot()).config;
+      expect(resolveAgentWorkspaceDir(after, "main")).toBe(path.join(workspace, "main"));
+      expect(resolveAgentWorkspaceDir(after, "dev")).toBe(path.join(workspace, "dev"));
+
+      process.env.WORKSPACE_ROOT = moved;
+      const reloaded = (await readConfigFileSnapshot()).config;
+      expect(resolveAgentWorkspaceDir(reloaded, "main")).toBe(path.join(moved, "main"));
+      expect(resolveAgentWorkspaceDir(reloaded, "dev")).toBe(path.join(moved, "dev"));
+    },
+    (home) => ({ WORKSPACE_ROOT: path.join(home, "shared-workspace") }),
+  ),
 );
 
 it(

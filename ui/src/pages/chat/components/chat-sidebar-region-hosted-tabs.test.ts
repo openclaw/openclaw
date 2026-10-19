@@ -65,6 +65,7 @@ async function mount(
   region.panelDefinitions = sidebarPanelDefinitions().map((definition) =>
     Object.assign(definition, {
       content: definition.slot === slot ? content : null,
+      panelHost: definition.slot === slot ? panel : undefined,
     }),
   );
   region.fetchFavicon = options.fetchFavicon;

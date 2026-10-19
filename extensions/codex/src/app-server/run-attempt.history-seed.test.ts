@@ -99,6 +99,37 @@ async function runTurn(
 }
 
 describe("Codex configured assembled-history delivery", () => {
+  it.each([false, true])("prepares only fresh native history (engine: %s)", async (engine) => {
+    const { params, assemble } = seedParams();
+    delete params.authoredContextTokenCap;
+    if (!engine) {
+      delete params.contextEngine;
+    }
+    const harness = selectedHarness();
+    const prepareBoundedSeed = vi.fn<
+      NonNullable<EmbeddedRunAttemptParams["hostCapabilities"]["prepareBoundedSeed"]>
+    >(async ({ assertCurrent, tokenBudget }) => {
+      assertCurrent();
+      expect(tokenBudget).toBeGreaterThan(0);
+      expect(tokenBudget).toBeLessThan(500_000);
+      expect(harness.requests.some(({ method }) => method === "thread/start")).toBe(true);
+      return [userMessage("BOUNDED_SELECTED_HISTORY", 1)];
+    });
+    params.hostCapabilities = { ...params.hostCapabilities, prepareBoundedSeed };
+    const first = await runTurn(params, harness, "lazy-seed");
+    expect(prepareBoundedSeed).toHaveBeenCalledOnce();
+    expect(JSON.stringify(selectedItems(first))).toContain("BOUNDED_SELECTED_HISTORY");
+    assemble.mockResolvedValue({
+      messages: [userMessage(original.repeat(1_000), 1)],
+      estimatedTokens: 20_000,
+    });
+    const next = await runTurn(params, harness, "lazy-seed-next");
+    expect(prepareBoundedSeed).toHaveBeenCalledOnce();
+    expect(selectedItems(next)).toEqual([]);
+    expect(next.some(({ method }) => method === "thread/start")).toBe(false);
+    expect(next.some(({ method }) => method === "thread/compact/start")).toBe(false);
+  });
+
   it("installs >1,048,576 characters in UTF-8-bounded quotes with ordered media before readiness", async () => {
     const { params, assemble } = seedParams();
     const history = `FULL_HISTORY_PREFIX $historical [@historical](plugin://history)\n${"h".repeat(1_060_000)}${"é漢😀".repeat(5_000)}\nFULL_HISTORY_TAIL`;

@@ -1,7 +1,6 @@
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
-import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
@@ -48,6 +47,7 @@ import {
   admitStateSchemaFacts,
   type StateSchemaContentVersionRowReader,
 } from "./openclaw-state-db-schema-version.js";
+import { postgresStateReadSnapshot } from "./openclaw-state-postgres-snapshot-context.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 
 export type OpenClawStateReadConnection = {
@@ -258,10 +258,7 @@ export function readOpenClawStateReadOnlyLocation<T>(
   let closeAdmission: (() => void) | undefined;
   let result!: OpenClawStateSettledRead<T>;
   try {
-    if (openStateSchemaReadAdmission) {
-      if (isPostgresSqlConnection(opened.database.db)) {
-        requireNativeDatabaseFile("postgres", "repair");
-      }
+    if (openStateSchemaReadAdmission && !isPostgresSqlConnection(opened.database.db)) {
       closeAdmission = openStateSchemaReadAdmission(opened.database.db);
     }
     // Scope and path policy are authority, not ordinary schema SQL failure.
@@ -282,7 +279,20 @@ export function readOpenClawStateReadOnlyLocation<T>(
       result = {
         status: "available",
         value: isPostgresSqlConnection(opened.database.db)
-          ? opened.database.db.runTransaction(read, undefined, true)
+          ? opened.database.db.runTransaction(
+              () => {
+                const snapshot = postgresStateReadSnapshot.getStore();
+                if (snapshot?.path === pathname) {
+                  // sqlite-allow-raw: PostgreSQL imports the retained worker's MVCC snapshot before any read.
+                  opened.database.db.exec(
+                    `SET TRANSACTION SNAPSHOT '${snapshot.snapshot.replaceAll("'", "''")}'`,
+                  );
+                }
+                return read();
+              },
+              undefined,
+              true,
+            )
           : read(),
       };
     } catch (error) {

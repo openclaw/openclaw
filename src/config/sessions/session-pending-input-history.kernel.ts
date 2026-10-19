@@ -6,7 +6,7 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   hasPendingInputConsumptionColumn,
@@ -35,7 +35,7 @@ export function readPendingInputHistoryInDatabase(
   if (query.includeTotal === false) {
     return readPendingInputPageInDatabase(database, query, hasConsumption);
   }
-  return runSqliteDeferredTransactionSync(database.db, () => {
+  return runSqliteReadSnapshotSync(database.db, () => {
     const db = getSessionKysely(database.db);
     let base = db
       .selectFrom("session_pending_inputs")

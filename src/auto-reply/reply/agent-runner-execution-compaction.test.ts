@@ -59,6 +59,20 @@ function expectNotices(reply: ReturnType<typeof vi.fn>, texts: string[], address
 }
 
 describe("executeAgentTurn: compaction events", () => {
+  it("warns about omitted seed history without claiming a compaction", async () => {
+    const onCompactionNoticePayload = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "context_bounded" } });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+    const result = await executeTestTurn(undefined, { onCompactionNoticePayload });
+    expect(result.kind).toBe("success");
+    expect(onCompactionNoticePayload).toHaveBeenCalledOnce();
+    expectBlockReplyCall(onCompactionNoticePayload, 0, {
+      text: expect.stringContaining("Full history remains saved"),
+      isCompactionNotice: true,
+    });
+  });
   it("warns about degraded compaction even when ordinary notices are disabled", async () => {
     const onCompactionNoticePayload = vi.fn();
     mockCompaction({}, { qualityDegraded: true });

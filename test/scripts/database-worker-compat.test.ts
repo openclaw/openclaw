@@ -5,6 +5,50 @@ const legacyFile = "src/plugin-sdk/sqlite-runtime-legacy.ts";
 const secondFile = "src/sessions/session-upstream-links.ts";
 const first = "sdkExecuteSqliteQueryTakeFirstSync";
 const second = "deleteSessionUpstreamLink";
+const barrelFile = "src/plugin-sdk/barrel.ts";
+const barrel = `export { ${first} as oldQuery } from './sqlite-runtime-legacy.js';`;
+const kernelFile = "src/session-kernel.ts";
+const kernel = `export function readKernel() { return 1; }`;
+type Inspection = ReturnType<typeof inspectDatabaseWorkerBoundaries>;
+type InspectOptions = Parameters<typeof inspectDatabaseWorkerBoundaries>;
+
+function inspectSources(
+  sources: Record<string, string>,
+  nonRuntime?: InspectOptions[2],
+  entry?: InspectOptions[3],
+) {
+  return inspectDatabaseWorkerBoundaries(
+    process.cwd(),
+    new Map(Object.entries(sources)),
+    nonRuntime,
+    entry,
+  );
+}
+
+function deprecated(body: string, imported = "readKernel", module = "../session-kernel.js") {
+  return `import { ${imported} } from '${module}';
+    /** @deprecated Use workers. */
+    export function ${second}() { ${body} }`;
+}
+
+function expectLive(result: Inspection, ...files: string[]) {
+  for (const file of files) {
+    expect(result.operations.has(file)).toBe(false);
+  }
+}
+
+function expectClosed(result: Inspection, file?: string, names: string[] = []) {
+  expect(result.violations).toEqual([]);
+  expect(result.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
+  if (file) {
+    expect(result.operations.get(file)).toEqual(new Set(names));
+  }
+}
+
+function expectConsumerRejected(result: Inspection, ...files: string[]) {
+  expectLive(result, ...files);
+  expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
+}
 const legacy = `
 /** @deprecated Use the worker API; removal follows a stable deprecation window. */
 export function ${first}() { return 1; }
@@ -16,15 +60,40 @@ export function ${second}() { return ${first}(); }
 `;
 
 function inspect(extra: Record<string, string>, source = legacy) {
-  return inspectDatabaseWorkerBoundaries(
-    process.cwd(),
-    new Map(Object.entries({ [legacyFile]: source, [secondFile]: owner, ...extra })),
-  );
+  return inspectSources({ [legacyFile]: source, [secondFile]: owner, ...extra });
+}
+
+function inspectKernel(extra: Record<string, string>) {
+  return inspect({ [kernelFile]: kernel, ...extra });
+}
+
+function inspectBarrel(consumer: string, source = barrel) {
+  return inspect({ [barrelFile]: source, "src/consumer.ts": consumer });
+}
+
+function fromBarrel(body: string, binding = "{ oldQuery }") {
+  return `import ${binding} from './plugin-sdk/barrel.js'; ${body}`;
+}
+
+function dynamicBarrel(binding: string, body: string) {
+  return `const ${binding} = await import('./plugin-sdk/barrel.js'); ${body}`;
+}
+
+function fromReceiver(
+  body: string,
+  binding = second,
+  module = "./sessions/session-upstream-links.js",
+) {
+  return `import { ${binding} } from '${module}'; ${body}`;
+}
+
+function kernelResult(source: string, consumer?: string, file = secondFile) {
+  return inspectKernel({ [file]: source, ...(consumer ? { "src/consumer.ts": consumer } : {}) });
 }
 
 it("retains deprecated-only operations through pure reexports and type-only references", () => {
   const result = inspect({
-    "src/plugin-sdk/barrel.ts": `export { ${first} as oldQuery } from './sqlite-runtime-legacy.js';`,
+    [barrelFile]: barrel,
     "src/types.ts": `
       import type { oldQuery } from './plugin-sdk/barrel.js';
       import { ${second} } from './sessions/session-upstream-links.js';
@@ -39,51 +108,27 @@ it("retains deprecated-only operations through pure reexports and type-only refe
 });
 
 it.each([
-  ["aliased barrel call", `import { oldQuery as read } from './plugin-sdk/barrel.js'; read();`],
-  ["namespace call", `import * as legacy from './plugin-sdk/barrel.js'; legacy.oldQuery();`],
-  [
-    "namespace element call",
-    `import * as legacy from './plugin-sdk/barrel.js'; legacy['oldQuery']();`,
-  ],
-  [
-    "dynamic namespace import",
-    `const legacy = await import('./plugin-sdk/barrel.js'); legacy.oldQuery();`,
-  ],
-  [
-    "dynamic namespace rest binding",
-    `const { ...legacy } = await import('./plugin-sdk/barrel.js'); legacy.oldQuery();`,
-  ],
-  [
-    "dynamic nested namespace binding",
-    `const { nested: { oldQuery } } = await import('./plugin-sdk/barrel.js'); oldQuery();`,
-  ],
+  ["aliased barrel call", fromBarrel("read();", "{ oldQuery as read }")],
+  ["namespace call", fromBarrel("legacy.oldQuery();", "* as legacy")],
+  ["namespace element call", fromBarrel("legacy['oldQuery']();", "* as legacy")],
+  ["dynamic namespace import", dynamicBarrel("legacy", "legacy.oldQuery();")],
+  ["dynamic namespace rest binding", dynamicBarrel("{ ...legacy }", "legacy.oldQuery();")],
+  ["dynamic nested namespace binding", dynamicBarrel("{ nested: { oldQuery } }", "oldQuery();")],
   [
     "dynamic computed namespace binding",
-    `const key = 'oldQuery'; const { [key]: read } = await import('./plugin-sdk/barrel.js'); read();`,
+    `const key = 'oldQuery'; ${dynamicBarrel("{ [key]: read }", "read();")}`,
   ],
-  [
-    "escaped callback",
-    `import { oldQuery } from './plugin-sdk/barrel.js'; export function callback() { return oldQuery; }`,
-  ],
-  [
-    "shorthand callback escape",
-    `import { oldQuery } from './plugin-sdk/barrel.js'; export const callbacks = { oldQuery };`,
-  ],
-  [
-    "escaped namespace",
-    `import * as legacy from './plugin-sdk/barrel.js'; export const api = legacy;`,
-  ],
+  ["escaped callback", fromBarrel("export function callback() { return oldQuery; }")],
+  ["shorthand callback escape", fromBarrel("export const callbacks = { oldQuery };")],
+  ["escaped namespace", fromBarrel("export const api = legacy;", "* as legacy")],
   [
     "unregistered deprecated wrapper",
-    `import { oldQuery } from './plugin-sdk/barrel.js';
+    fromBarrel(`
      /** @deprecated Use workers. */
-     export function wrapper() { return oldQuery(); }`,
+     export function wrapper() { return oldQuery(); }`),
   ],
 ])("rejects a bundled %s without allowing it to hide the live operation", (_name, consumer) => {
-  const result = inspect({
-    "src/plugin-sdk/barrel.ts": `export { ${first} as oldQuery } from './sqlite-runtime-legacy.js';`,
-    "src/consumer.ts": consumer,
-  });
+  const result = inspectBarrel(consumer);
   expect(result.violations).toEqual([
     expect.stringMatching(/src\/consumer.ts:\d+:\d+: bundled runtime reference/),
   ]);
@@ -114,9 +159,8 @@ it("permits a deprecated API only from an exact reviewed one-shot entry", () => 
   const doctor = `import { ${first} } from '../plugin-sdk/sqlite-runtime-legacy.js';
     export function collectAgentRuntimeToolSchemaFindings() { return ${first}(); }`;
   const inspectDoctor = (file: string, source: string) =>
-    inspectDatabaseWorkerBoundaries(
-      process.cwd(),
-      new Map(Object.entries({ [legacyFile]: legacy, [file]: source })),
+    inspectSources(
+      { [legacyFile]: legacy, [file]: source },
       (candidate) => candidate === doctorFile,
       (candidate, operation) =>
         candidate === doctorFile && operation === "collectAgentRuntimeToolSchemaFindings"
@@ -161,20 +205,16 @@ it.each([
   ["direct call", "service.listLinks();"],
   ["escaped member", "register(service.listLinks);"],
 ])("rejects a bundled %s to a reviewed deprecated member", (_label, use) => {
-  const result = inspect({
-    [kernelFile]: kernel,
+  const result = inspectKernel({
     [mixedReceiverFile]: mixedReceiver,
     "src/consumer.ts": `import { createModelAccountConnectService } from './gateway/model-account-connect.js';
       const service = createModelAccountConnectService(); ${use}`,
   });
-  expect(result.operations.has(kernelFile)).toBe(false);
-  expect(result.operations.has(mixedReceiverFile)).toBe(false);
-  expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
+  expectConsumerRejected(result, kernelFile, mixedReceiverFile);
 });
 
 it("requires the reviewed member itself to remain deprecated", () => {
-  const result = inspect({
-    [kernelFile]: kernel,
+  const result = inspectKernel({
     [mixedReceiverFile]: mixedReceiver.replace("@deprecated", "Legacy:"),
   });
   expect(result.operations.has(kernelFile)).toBe(false);
@@ -184,8 +224,7 @@ it("requires the reviewed member itself to remain deprecated", () => {
 });
 
 it("keeps a local legacy helper live when an async sibling calls it", () => {
-  const result = inspect({
-    [kernelFile]: kernel,
+  const result = inspectKernel({
     [mixedReceiverFile]: mixedReceiver.replace(
       "async listLinksAsync() { return executeSqliteQuerySync(query); }",
       "async listLinksAsync() { return readLegacy(); }",
@@ -198,8 +237,7 @@ it("keeps a local legacy helper live when an async sibling calls it", () => {
 });
 
 it("isolates reviewed members when a legacy wrapper and live factory share their receiver", () => {
-  const result = inspect({
-    [kernelFile]: kernel,
+  const result = inspectKernel({
     [mixedReceiverFile]: mixedReceiver,
     [secondFile]: `
       import { createModelAccountConnectService } from '../gateway/model-account-connect.js';
@@ -211,14 +249,10 @@ it("isolates reviewed members when a legacy wrapper and live factory share their
       createModelAccountConnectService().listLinksAsync();
     `,
   });
-  expect(result.violations).toEqual([]);
-  expect(result.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
-  expect(result.operations.get(mixedReceiverFile)).toEqual(
-    new Set([
-      "createModelAccountConnectService.listLinks",
-      "createModelAccountConnectService.readLegacy",
-    ]),
-  );
+  expectClosed(result, mixedReceiverFile, [
+    "createModelAccountConnectService.listLinks",
+    "createModelAccountConnectService.readLegacy",
+  ]);
 });
 
 const bindingServiceFile = "src/infra/outbound/session-binding-service.ts";
@@ -235,19 +269,14 @@ const bindingService = `
 `;
 
 it("isolates a typed singleton's deprecated member while its async API stays live", () => {
-  const result = inspect({
-    [kernelFile]: kernel,
+  const result = inspectKernel({
     [bindingServiceFile]: bindingService,
     "src/consumer.ts": `
       import { getService } from './infra/outbound/session-binding-service.js';
       getService().listBySessionAsync();
     `,
   });
-  expect(result.violations).toEqual([]);
-  expect(result.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
-  expect(result.operations.get(bindingServiceFile)).toEqual(
-    new Set(["DEFAULT_SESSION_BINDING_SERVICE.listBySession"]),
-  );
+  expectClosed(result, bindingServiceFile, ["DEFAULT_SESSION_BINDING_SERVICE.listBySession"]);
 });
 
 const pluginStateLegacyFile = "src/plugin-state/plugin-state-store.legacy.ts";
@@ -279,8 +308,7 @@ it.each([
   ["runtime contract", "runtime.openSyncKeyedStore<number>()"],
 ])("guards every legacy store member through the %s", (_label, factory) => {
   for (const escape of [false, true]) {
-    const result = inspect({
-      [kernelFile]: kernel,
+    const result = inspectKernel({
       [pluginStateLegacyFile]: legacyStore,
       "src/consumer.ts": `
         import { createSyncKeyedStore, runtime } from './plugin-state/plugin-state-store.legacy.js';
@@ -299,8 +327,7 @@ it.each([
 });
 
 it("rejects shorthand method escapes from typed receivers and parameters", () => {
-  const result = inspect({
-    [kernelFile]: kernel,
+  const result = inspectKernel({
     [pluginStateLegacyFile]: legacyStore,
     "src/consumer.ts": `
       import { createSyncKeyedStore, type Store } from './plugin-state/plugin-state-store.legacy.js';
@@ -317,8 +344,7 @@ it("rejects shorthand method escapes from typed receivers and parameters", () =>
 });
 
 it("keeps scalar authority and unguarded projection reads independent of guarded store members", () => {
-  const result = inspect({
-    [kernelFile]: kernel,
+  const result = inspectKernel({
     [pluginStateLegacyFile]: legacyStore,
     "src/consumer.ts": `
       import { createSyncKeyedStore } from './plugin-state/plugin-state-store.legacy.js';
@@ -328,16 +354,15 @@ it("keeps scalar authority and unguarded projection reads independent of guarded
       store.entries();
     `,
   });
-  expect(result.violations).toEqual([]);
-  expect(result.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
-  expect(result.operations.get(pluginStateLegacyFile)).toEqual(
-    new Set(legacyStoreMethods.map((name) => `createSyncKeyedStore.${name}`)),
+  expectClosed(
+    result,
+    pluginStateLegacyFile,
+    legacyStoreMethods.map((name) => `createSyncKeyedStore.${name}`),
   );
 });
 
 it("does not trust a same-named deprecated member on another factory", () => {
-  const result = inspect({
-    [kernelFile]: kernel,
+  const result = inspectKernel({
     [mixedReceiverFile]: `${mixedReceiver}
       export function createOtherService() {
         return {
@@ -358,35 +383,33 @@ it.each([
   ["inline property", `await (await import('./plugin-sdk/barrel.js')).queryAsync();`],
   ["inline element", `await (await import('./plugin-sdk/barrel.js'))['queryAsync']();`],
 ])("allows a statically selected async dynamic import via %s", (_label, consumer) => {
-  const result = inspect({
-    "src/plugin-sdk/barrel.ts": `export { ${first} as oldQuery } from './sqlite-runtime-legacy.js';
-      export async function queryAsync() { return 1; }`,
-    "src/consumer.ts": consumer,
-  });
+  const result = inspectBarrel(
+    consumer,
+    `${barrel}\nexport async function queryAsync() { return 1; }`,
+  );
   expect(result.violations).toEqual([]);
 });
 
 it.each([".oldQuery", "['oldQuery']", "[key]"])(
   "rejects a legacy or computed member from an inline dynamic import: %s",
   (selector) => {
-    const result = inspect({
-      "src/plugin-sdk/barrel.ts": `export { ${first} as oldQuery } from './sqlite-runtime-legacy.js';`,
-      "src/consumer.ts": `const key = 'oldQuery'; (await import('./plugin-sdk/barrel.js'))${selector}();`,
-    });
-    expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
+    const result = inspectBarrel(
+      `const key = 'oldQuery'; (await import('./plugin-sdk/barrel.js'))${selector}();`,
+    );
+    expectConsumerRejected(result);
   },
 );
 
 it("follows renamed namespace reexports and default exports", () => {
-  const result = inspect({
-    "src/plugin-sdk/barrel.ts": `export * as old from './sqlite-runtime-legacy.js';
-      export { ${second} as default } from '../sessions/session-upstream-links.js';`,
-    "src/consumer.ts": `
+  const result = inspectBarrel(
+    `
       import query, { old as api } from './plugin-sdk/barrel.js';
       api.${first}();
       query();
     `,
-  });
+    `export * as old from './sqlite-runtime-legacy.js';
+      export { ${second} as default } from '../sessions/session-upstream-links.js';`,
+  );
   expect(result.operations.size).toBe(0);
   expect(result.violations).toHaveLength(2);
 });
@@ -421,18 +444,10 @@ it("does not read missing compatibility files from the current checkout", () => 
   });
 });
 
-const kernelFile = "src/session-kernel.ts";
-const kernel = `export function readKernel() { return 1; }`;
-const sharedOwner = `
-  import { readKernel } from '../session-kernel.js';
-  /** @deprecated Use workers. */
-  export function ${second}() { return readKernel(); }
-`;
-const receiverOwner = `
-  import { readKernel } from '../session-kernel.js';
-  /** @deprecated Use workers. */
-  export function ${second}() { return { read() { return readKernel(); } }; }
-`;
+const sharedOwner = deprecated("return readKernel();");
+function receiverOwner(read = "read() { return readKernel(); }", extra = "") {
+  return deprecated(`return { ${read}, ${extra} };`);
+}
 
 it("proves a transitive mixed kernel with only worker and deprecated callers", () => {
   const result = inspect({
@@ -442,25 +457,26 @@ it("proves a transitive mixed kernel with only worker and deprecated callers", (
     "src/leaf.ts": `export function leaf() { return 1; }`,
     "src/reader.worker.ts": `import { readKernel as read } from './session-kernel.js'; read();`,
   });
-  expect(result.violations).toEqual([]);
-  expect(result.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
+  expectClosed(result);
   expect(result.operations.get("src/leaf.ts")).toEqual(new Set(["leaf"]));
 });
+
+function deprecatedClass(member: string, heritage = "") {
+  return `import { readKernel } from '../session-kernel.js';
+      class Base {}
+      /** @deprecated Use workers. */
+      export class ${second} ${heritage} { ${member} }`;
+}
 
 it.each([
   ["worker callback", "register(readKernel)", false],
   ["worker arrow", "register(() => readKernel())", false],
   ["deprecated callback", "register(() => readKernel())", true],
   ["returned registration", "return register(() => readKernel())", true],
-])("keeps an escaped %s live", (_label, registration, deprecated) => {
-  const result = inspect({
-    [secondFile]: deprecated
-      ? `import { readKernel } from '../session-kernel.js';
-      /** @deprecated Use workers. */
-      export function ${second}() { ${registration}; }`
-      : sharedOwner,
-    [kernelFile]: kernel,
-    ...(deprecated
+])("keeps an escaped %s live", (_label, registration, isDeprecated) => {
+  const result = inspectKernel({
+    [secondFile]: isDeprecated ? deprecated(`${registration};`) : sharedOwner,
+    ...(isDeprecated
       ? {}
       : {
           "src/reader.worker.ts": `import { readKernel } from './session-kernel.js';
@@ -471,101 +487,82 @@ it.each([
 });
 
 it.each([
-  ["object method", "{ read() { return readKernel(); } }"],
-  ["arrow property", "{ read: () => readKernel() }"],
-  ["function property", "{ read: function () { return readKernel(); } }"],
-  ["returned arrow", "() => readKernel()"],
-  ["returned function", "function () { return readKernel(); }"],
-])("proves kernels reached only through a deprecated factory's %s", (_label, value) => {
-  const result = inspect({
-    [secondFile]: `
-      import { readKernel } from '../session-kernel.js';
-      /** @deprecated Use workers. */
-      export function ${second}() { return ${value}; }`,
-    [kernelFile]: kernel,
-  });
-  expect(result.violations).toEqual([]);
-  expect(result.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
+  ["object method", deprecated("return { read() { return readKernel(); } };")],
+  ["arrow property", deprecated("return { read: () => readKernel() };")],
+  ["function property", deprecated("return { read: function () { return readKernel(); } };")],
+  ["returned arrow", deprecated("return () => readKernel();")],
+  ["returned function", deprecated("return function () { return readKernel(); };")],
+  [
+    "class receiver",
+    deprecatedClass(`constructor() { readKernel(); }
+        read() { return readKernel(); }`),
+  ],
+])("proves kernels reached only through a deprecated %s", (_label, source) => {
+  const result = kernelResult(source);
+  expectClosed(result);
   expect(result.operations.get(secondFile)?.has(second)).toBe(true);
 });
 
 it.each([
-  [
-    "direct factory call",
-    `import { ${second} } from './sessions/session-upstream-links.js'; ${second}().read();`,
-  ],
-  [
-    "aliased factory call",
-    `import { ${second} as create } from './sessions/session-upstream-links.js'; create().read();`,
-  ],
+  ["direct factory call", fromReceiver(`${second}().read();`)],
+  ["aliased factory call", fromReceiver("create().read();", `${second} as create`)],
   [
     "reexported factory call",
-    `import { create } from './plugin-sdk/receivers.js'; create().read();`,
+    fromReceiver("create().read();", "create", "./plugin-sdk/receivers.js"),
   ],
   [
     "SDK subpath factory call",
-    `import { create } from 'openclaw/plugin-sdk/receivers'; create().read();`,
+    fromReceiver("create().read();", "create", "openclaw/plugin-sdk/receivers"),
   ],
   [
     "scoped SDK subpath factory call",
-    `import { create } from '@openclaw/plugin-sdk/receivers'; create().read();`,
+    fromReceiver("create().read();", "create", "@openclaw/plugin-sdk/receivers"),
   ],
   [
     "dynamic factory call",
     `const { create } = await import('./plugin-sdk/receivers.js'); create().read();`,
   ],
-  [
-    "returned object escape",
-    `import { ${second} } from './sessions/session-upstream-links.js'; register(${second}());`,
-  ],
+  ["returned object escape", fromReceiver(`register(${second}());`)],
 ])("keeps a receiver family live after a bundled %s", (_label, consumer) => {
-  const result = inspect({
-    [secondFile]: receiverOwner,
-    [kernelFile]: kernel,
+  const result = inspectKernel({
+    [secondFile]: receiverOwner(),
     "src/plugin-sdk/receivers.ts": `export { ${second} as create } from '../sessions/session-upstream-links.js';`,
     "src/consumer.ts": consumer,
   });
-  expect(result.operations.has(kernelFile)).toBe(false);
-  expect(result.operations.has(secondFile)).toBe(false);
-  expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
+  expectConsumerRejected(result, kernelFile, secondFile);
 });
 
-it.each<{ name: string; file: string; sources: Record<string, string> }>([
-  {
-    name: "escaped arrow property",
-    file: secondFile,
-    sources: {
-      [secondFile]: `import { readKernel } from '../session-kernel.js';
-        /** @deprecated Use workers. */
-        export function ${second}() {
-          return { read: () => readKernel(), start() { register(this.read); } };
-        }`,
+it.each<[string, string, Record<string, string>]>([
+  [
+    "escaped arrow property",
+    secondFile,
+    {
+      [secondFile]: receiverOwner("read: () => readKernel()", "start() { register(this.read); }"),
     },
-  },
-  {
-    name: "escaped function property",
-    file: secondFile,
-    sources: {
-      [secondFile]: `import { readKernel } from '../session-kernel.js';
-        /** @deprecated Use workers. */
-        export function ${second}() {
-          return { read: function () { return readKernel(); }, start() { register(this.read); } };
-        }`,
+  ],
+  [
+    "escaped function property",
+    secondFile,
+    {
+      [secondFile]: receiverOwner(
+        "read: function () { return readKernel(); }",
+        "start() { register(this.read); }",
+      ),
     },
-  },
-  {
-    name: "unregistered nondeprecated factory",
-    file: "src/receiver.ts",
-    sources: {
+  ],
+  [
+    "unregistered nondeprecated factory",
+    "src/receiver.ts",
+    {
       "src/receiver.ts": `import { readKernel } from './session-kernel.js';
       export function createReceiver() { return { read() { return readKernel(); } }; }`,
     },
-  },
-  {
-    name: "receiver escaped by a deprecated wrapper",
-    file: secondFile,
-    sources: {
-      [secondFile]: receiverOwner,
+  ],
+  [
+    "receiver escaped by a deprecated wrapper",
+    secondFile,
+    {
+      [secondFile]: receiverOwner(),
       [legacyFile]: `import { ${second} } from '../sessions/session-upstream-links.js';
       /** @deprecated Use workers. */
       export function ${first}() {
@@ -573,26 +570,10 @@ it.each<{ name: string; file: string; sources: Record<string, string> }>([
         register(receiver.read);
       }`,
     },
-  },
-])("keeps the $name live without inventing a factory caller", ({ file, sources }) => {
-  const result = inspect({ ...sources, [kernelFile]: kernel });
-  expect(result.operations.has(kernelFile)).toBe(false);
-  expect(result.operations.has(file)).toBe(false);
-  expect(result.violations).toEqual([]);
-});
-
-it("proves kernels reached only through a deprecated class receiver", () => {
-  const result = inspect({
-    [secondFile]: `import { readKernel } from '../session-kernel.js';
-      /** @deprecated Use workers. */
-      export class ${second} {
-        constructor() { readKernel(); }
-        read() { return readKernel(); }
-      }`,
-    [kernelFile]: kernel,
-  });
-  expect(result.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
-  expect(result.operations.get(secondFile)?.has(second)).toBe(true);
+  ],
+])("keeps the %s live without inventing a factory caller", (_label, file, sources) => {
+  const result = inspectKernel(sources);
+  expectLive(result, kernelFile, file);
   expect(result.violations).toEqual([]);
 });
 
@@ -600,17 +581,11 @@ it.each([
   ["construction", "new Receiver().read();"],
   ["inheritance", "export class ActiveReceiver extends Receiver {}"],
 ])("rejects bundled %s of a deprecated class receiver", (_label, consumer) => {
-  const result = inspect({
-    [secondFile]: `import { readKernel } from '../session-kernel.js';
-      /** @deprecated Use workers. */
-      export class ${second} { read() { return readKernel(); } }`,
-    [kernelFile]: kernel,
-    "src/consumer.ts": `import { ${second} as Receiver } from './sessions/session-upstream-links.js';
-      ${consumer}`,
-  });
-  expect(result.operations.has(kernelFile)).toBe(false);
-  expect(result.operations.has(secondFile)).toBe(false);
-  expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
+  const result = kernelResult(
+    deprecatedClass("read() { return readKernel(); }"),
+    fromReceiver(consumer, `${second} as Receiver`),
+  );
+  expectConsumerRejected(result, kernelFile, secondFile);
 });
 
 it.each([
@@ -625,24 +600,14 @@ it.each([
     "constructor(@decorate value: unknown) {} read() { return readKernel(); }",
   ],
 ])("keeps deprecated classes with %s live", (_label, heritage, member) => {
-  const result = inspect({
-    [secondFile]: `import { readKernel } from '../session-kernel.js';
-      class Base {}
-      /** @deprecated Use workers. */
-      export class ${second} ${heritage} { ${member} }`,
-    [kernelFile]: kernel,
-  });
-  expect(result.operations.has(kernelFile)).toBe(false);
-  expect(result.operations.has(secondFile)).toBe(false);
+  const result = kernelResult(deprecatedClass(member, heritage));
+  expectLive(result, kernelFile, secondFile);
   expect(result.violations).toEqual([]);
 });
 
 it("rejects a deprecated factory reached through a live receiver method", () => {
-  const result = inspect({
-    [secondFile]: `import { createReceiver } from '../receiver.js';
-      /** @deprecated Use workers. */
-      export function ${second}() { return createReceiver(); }`,
-    [kernelFile]: kernel,
+  const result = inspectKernel({
+    [secondFile]: deprecated("return createReceiver();", "createReceiver", "../receiver.js"),
     "src/receiver.ts": `import { readKernel } from './session-kernel.js';
       import { ${first} } from './plugin-sdk/sqlite-runtime-legacy.js';
       export function createReceiver() {
@@ -650,10 +615,8 @@ it("rejects a deprecated factory reached through a live receiver method", () => 
       }
       export async function createReceiverAsync() { return createReceiver(); }`,
   });
-  expect(result.operations.has(kernelFile)).toBe(false);
-  expect(result.operations.has("src/receiver.ts")).toBe(false);
+  expectLive(result, kernelFile, "src/receiver.ts", legacyFile);
   expect(result.operations.get(secondFile)).toEqual(new Set([second]));
-  expect(result.operations.has(legacyFile)).toBe(false);
   expect(result.violations).toEqual([expect.stringContaining(`${legacyFile}:${first}:`)]);
 });
 
@@ -671,9 +634,7 @@ export function ${second}() {
 
 it("rejects a reviewed API escaped by a discovered helper", () => {
   const result = inspect({
-    [secondFile]: `import { helper } from '../helper.js';
-      /** @deprecated Use workers. */
-      export function ${second}() { helper(); }`,
+    [secondFile]: deprecated("helper();", "helper", "../helper.js"),
     "src/helper.ts": `import { ${first} } from './plugin-sdk/sqlite-runtime-legacy.js';
       export function helper() { register(${first}); }`,
   });
@@ -730,19 +691,39 @@ export function ${first}() { return accessPluginState(); }`,
       );
 
     const inline = inspectCallback("() => readKernel()");
-    expect(inline.violations).toEqual([]);
-    expect(inline.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
+    expectClosed(inline);
 
     const escaped = inspectCallback("() => () => readKernel()");
     expect(escaped.operations.has(kernelFile)).toBe(false);
   },
 );
 
+it.each(["runSqliteDeferredTransactionSync", "runSqliteReadSnapshotSync"])(
+  "follows inline callbacks through %s but keeps escaped callbacks live",
+  (scope) => {
+    const transactionFile = "src/infra/sqlite-transaction.ts";
+    const inspectCallback = (callback: string) =>
+      inspect(
+        {
+          [transactionFile]: `export function ${scope}(db, callback) { return callback(); }`,
+          [kernelFile]: kernel,
+          "src/transaction-reader.ts": `import { ${scope} } from './infra/sqlite-transaction.js';
+import { readKernel } from './session-kernel.js';
+export function read() { return ${scope}(db, ${callback}); }`,
+        },
+        `import { read } from '../transaction-reader.js';
+/** @deprecated Use workers. */
+export function ${first}() { return read(); }`,
+      );
+
+    expectClosed(inspectCallback("() => readKernel()"));
+    expect(inspectCallback("() => () => readKernel()").operations.has(kernelFile)).toBe(false);
+  },
+);
+
 it("does not confuse a nested function path with a live top-level namesake", () => {
   const result = inspect({
-    [secondFile]: `import { wrapper } from '../wrapper.js';
-      /** @deprecated Use workers. */
-      export function ${second}() { wrapper(); }`,
+    [secondFile]: deprecated("wrapper();", "wrapper", "../wrapper.js"),
     "src/wrapper.ts": `export function wrapper() {
       const local = () => { function same() { return 1; } return 1; };
       return local;
@@ -764,17 +745,17 @@ const doctorSource = `
     return runStateSchemaMigrationTransaction(db, path, () => writeCurrentStateSchemaMetadata());
   }
 `;
+const workerSchemaWrite = `import { writeCurrentStateSchemaMetadata } from './state/openclaw-state-db-maintenance.js';
+      writeCurrentStateSchemaMetadata();`;
+
+function schemaCaller(name: string, body = "write()") {
+  return `import { writeCurrentStateSchemaMetadata as write } from '../state/openclaw-state-db-maintenance.js';
+    export function ${name}() { return ${body}; }`;
+}
 
 function inspectMaintenance(extra: Record<string, string> = {}) {
-  return inspectDatabaseWorkerBoundaries(
-    process.cwd(),
-    new Map(
-      Object.entries({
-        [maintenanceFile]: maintenanceSource,
-        "src/commands/doctor.ts": doctorSource,
-        ...extra,
-      }),
-    ),
+  return inspectSources(
+    { [maintenanceFile]: maintenanceSource, "src/commands/doctor.ts": doctorSource, ...extra },
     (file) =>
       file.startsWith("src/commands/") || file.includes("migration") || file.endsWith(".worker.ts"),
     (file) =>
@@ -788,8 +769,7 @@ function inspectMaintenance(extra: Record<string, string> = {}) {
 
 it("proves maintenance-only kernels through the exact synchronous migration scope", () => {
   const result = inspectMaintenance({
-    "src/read.worker.ts": `import { writeCurrentStateSchemaMetadata } from './state/openclaw-state-db-maintenance.js';
-      writeCurrentStateSchemaMetadata();`,
+    "src/read.worker.ts": workerSchemaWrite,
   });
   expect(result.violations).toEqual([]);
   expect(result.operations.size).toBe(0);
@@ -803,24 +783,9 @@ it("proves maintenance-only kernels through the exact synchronous migration scop
 });
 
 it.each([
-  [
-    "Gateway caller",
-    "src/gateway/consumer.ts",
-    `import { writeCurrentStateSchemaMetadata as write } from '../state/openclaw-state-db-maintenance.js';
-    export function handle() { return write(); }`,
-  ],
-  [
-    "escaped Doctor callback",
-    "src/commands/doctor.ts",
-    `import { writeCurrentStateSchemaMetadata as write } from '../state/openclaw-state-db-maintenance.js';
-    export function doctor() { return () => write(); }`,
-  ],
-  [
-    "migration filename lead",
-    "src/infra/state-migrations.unreviewed.ts",
-    `import { writeCurrentStateSchemaMetadata as write } from '../state/openclaw-state-db-maintenance.js';
-    export function migrate() { return write(); }`,
-  ],
+  ["Gateway caller", "src/gateway/consumer.ts", schemaCaller("handle")],
+  ["escaped Doctor callback", "src/commands/doctor.ts", schemaCaller("doctor", "() => write()")],
+  ["migration filename lead", "src/infra/state-migrations.unreviewed.ts", schemaCaller("migrate")],
   [
     "SDK reexport",
     "src/plugin-sdk/schema.ts",
@@ -859,8 +824,7 @@ it.each([
 it("classifies a shared kernel with exclusively worker callers as worker-owned", () => {
   const result = inspectMaintenance({
     "src/commands/doctor.ts": "export {};",
-    "src/read.worker.ts": `import { writeCurrentStateSchemaMetadata } from './state/openclaw-state-db-maintenance.js';
-      writeCurrentStateSchemaMetadata();`,
+    "src/read.worker.ts": workerSchemaWrite,
   });
   expect(result.nonRuntimeOperations.get(maintenanceFile)).toEqual(
     new Map([
@@ -893,20 +857,16 @@ it.each([
     kernelSource: undefined,
   },
 ])("proves the profile worker chain through $entry", (fixture) => {
-  const sources = new Map([
-    [fixture.entryFile, fixture.source],
-    [
-      fixture.workerFile,
-      `import { ${fixture.entry} } from './${fixture.entryFile.split("/").at(-1)!.replace(".ts", ".js")}';
+  const sources = {
+    [fixture.entryFile]: fixture.source,
+    [fixture.workerFile]: `import { ${fixture.entry} } from './${fixture.entryFile.split("/").at(-1)!.replace(".ts", ".js")}';
         export const handlers = { run: () => ${fixture.entry}() };`,
-    ],
-  ]);
+  };
   if (fixture.kernelSource) {
-    sources.set(fixture.kernelFile, fixture.kernelSource);
+    sources[fixture.kernelFile] = fixture.kernelSource;
   }
   const inspectProfileChain = () =>
-    inspectDatabaseWorkerBoundaries(
-      process.cwd(),
+    inspectSources(
       sources,
       () => false,
       (file) => (file === fixture.workerFile ? "W" : undefined),
@@ -915,11 +875,9 @@ it.each([
     inspectProfileChain().nonRuntimeOperations.get(fixture.kernelFile)?.get(fixture.kernel),
   ).toBe("W");
 
-  sources.set(
-    "src/gateway/handler.ts",
+  sources["src/gateway/handler.ts"] =
     `import { ${fixture.entry} } from '../state/${fixture.entryFile.split("/").at(-1)!.replace(".ts", ".js")}';
-      export function handle() { return ${fixture.entry}(); }`,
-  );
+      export function handle() { return ${fixture.entry}(); }`;
   expect(
     inspectProfileChain().nonRuntimeOperations.get(fixture.kernelFile)?.has(fixture.kernel),
   ).not.toBe(true);
@@ -950,21 +908,27 @@ it("uses reviewed worker ownership for its complete handler table", () => {
 
 const channelAuthorityFile = "src/gateway/channel-operator-authority.ts";
 const profileEmailsFile = "src/state/user-profiles-internal.ts";
+const adminReceiver = "captureLinkedOperatorAdmin";
+const adminCaller = "resolveChannelOperatorAdminAuthority";
+
+function identityCaller(caller: string, call: string) {
+  return `export function ${caller}() {
+      const prepared = resolveChannelOperatorIdentityFacts();
+      return ${call};
+    }`;
+}
 
 function inspectChannelAuthority(source: string, extra: Record<string, string> = {}) {
-  return inspectDatabaseWorkerBoundaries(
-    process.cwd(),
-    new Map(
-      Object.entries({
-        [profileEmailsFile]: `export function selectUserProfileEmails() { return executeSqliteQuerySync(query); }`,
-        [channelAuthorityFile]: `import { selectUserProfileEmails } from '../state/user-profiles-internal.js';
+  return inspectSources(
+    {
+      [profileEmailsFile]: `export function selectUserProfileEmails() { return executeSqliteQuerySync(query); }`,
+      [channelAuthorityFile]: `import { selectUserProfileEmails } from '../state/user-profiles-internal.js';
           function resolveChannelOperatorIdentityFacts() {
             return { isCurrent: () => selectUserProfileEmails() };
           }
           ${source}`,
-        ...extra,
-      }),
-    ),
+      ...extra,
+    },
     () => false,
     (file, operation) =>
       file === channelAuthorityFile &&
@@ -978,15 +942,12 @@ function inspectChannelAuthority(source: string, extra: Record<string, string> =
 }
 
 it.each([
-  ["resolveChannelOperatorAdminAuthority", "captureLinkedOperatorAdmin"],
+  [adminCaller, adminReceiver],
   ["resolveUpdateChannelOperatorAdminIdentityAuthority", "captureLinkedOperatorAdminIdentity"],
 ])("proves the retained identity callback at %s", (caller, receiver) => {
   const source = `
     function ${receiver}(cfg, linked, isCurrent) { return { isCurrent }; }
-    export function ${caller}() {
-      const prepared = resolveChannelOperatorIdentityFacts();
-      return ${receiver}(null, null, prepared.isCurrent);
-    }
+    ${identityCaller(caller, `${receiver}(null, null, prepared.isCurrent)`)}
   `;
   const result = inspectChannelAuthority(source);
   expect(result.nonRuntimeOperations.get(profileEmailsFile)?.get("selectUserProfileEmails")).toBe(
@@ -999,32 +960,22 @@ it.each([
 });
 
 it.each([
-  ["runtime caller", "handle", "captureLinkedOperatorAdmin(null, null, prepared.isCurrent)"],
-  [
-    "wrong argument",
-    "resolveChannelOperatorAdminAuthority",
-    "captureLinkedOperatorAdmin(null, prepared.isCurrent, null)",
-  ],
-  ["unknown consumer", "resolveChannelOperatorAdminAuthority", "save(prepared.isCurrent)"],
+  ["runtime caller", "handle", `${adminReceiver}(null, null, prepared.isCurrent)`],
+  ["wrong argument", adminCaller, `${adminReceiver}(null, prepared.isCurrent, null)`],
+  ["unknown consumer", adminCaller, "save(prepared.isCurrent)"],
 ])("keeps an identity callback live after a %s", (_label, caller, call) => {
   const result = inspectChannelAuthority(`
-    function captureLinkedOperatorAdmin(cfg, linked, isCurrent) { return { isCurrent }; }
+    function ${adminReceiver}(cfg, linked, isCurrent) { return { isCurrent }; }
     function save(value) { return value; }
-    export function ${caller}() {
-      const prepared = resolveChannelOperatorIdentityFacts();
-      return ${call};
-    }
+    ${identityCaller(caller, call)}
   `);
   expect(result.nonRuntimeOperations.has(profileEmailsFile)).toBe(false);
 });
 
 it("rejects a same-named identity consumer from another module", () => {
   const result = inspectChannelAuthority(
-    `import { captureLinkedOperatorAdmin } from './unreviewed.js';
-    export function resolveChannelOperatorAdminAuthority() {
-      const prepared = resolveChannelOperatorIdentityFacts();
-      return captureLinkedOperatorAdmin(null, null, prepared.isCurrent);
-    }`,
+    `import { ${adminReceiver} } from './unreviewed.js';
+    ${identityCaller(adminCaller, `${adminReceiver}(null, null, prepared.isCurrent)`)}`,
     {
       "src/gateway/unreviewed.ts": `export function captureLinkedOperatorAdmin(cfg, linked, isCurrent) { return isCurrent; }`,
     },

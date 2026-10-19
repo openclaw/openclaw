@@ -128,12 +128,20 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       const executionProjectFiles =
         bootstrapWorkspaceDir === params.setup.resolvedWorkspace
           ? []
-          : (await resolveWorkspaceBootstrapFiles(params.setup.resolvedWorkspace)).filter(
-              (file) =>
-                file.name === DEFAULT_AGENTS_FILENAME &&
-                !file.missing &&
-                path.resolve(file.path) === executionAgentsPath,
-            );
+          : (await resolveWorkspaceBootstrapFiles(params.setup.resolvedWorkspace))
+              .filter(
+                (file) =>
+                  file.name === DEFAULT_AGENTS_FILENAME &&
+                  !file.missing &&
+                  path.resolve(file.path) === executionAgentsPath,
+              )
+              .map((file) => {
+                file.origin = {
+                  kind: "execution-project",
+                  rootPath: params.setup.resolvedWorkspace,
+                };
+                return file;
+              });
       const layeredBootstrapFiles = [...bootstrapFiles, ...executionProjectFiles];
       return {
         bootstrapFiles: layeredBootstrapFiles,

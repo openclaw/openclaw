@@ -419,13 +419,19 @@ through `sandbox_exec`. Denying `process` removes `sandbox_process` and backgrou
 continuation, while `sandbox_exec` runs to completion under the existing timeout,
 sandbox backend, and workspace-access policy.
 
-When deferred tools or native delegation are available, normal threads receive
-guidance to call listed tools directly and use `tool_search` for unlisted tools.
-They keep an `exec` / `ALL_TOOLS` fallback for the case where `tool_search` is
-not directly callable (for example a model whose metadata selects code-mode-only
-execution), but are told never to use `exec` to look up a listed tool or to
-repeat a completed call. Configured code-mode-only threads receive the original
-`exec` / `ALL_TOOLS` discovery guidance.
+When native Code Mode is available, normal threads call listed tools by their
+exact qualified names and use `tool_search` for deferred tools when supplied.
+The fallback is Codex's native JavaScript `exec`, where `ALL_TOOLS` and `tools`
+are JavaScript globals. Code-mode-only threads use that JavaScript discovery
+path. These globals are not shell environment variables, and OpenClaw shell
+command tools are separate from the native JavaScript runner.
+
+When the native surface is disabled, OpenClaw publishes its allowed dynamic
+tools directly instead of requiring deferred discovery. This includes managed
+GitHub identity and sandbox-backed execution paths. The current tool policy,
+argument validation, session authority, and effect owners still apply. Dashboard
+and widget actions use those session-bound tools; a shell CLI connection and
+its device pairing do not replace them.
 
 Sandbox turns also use these tools when Codex allows only managed hooks and cannot
 install the native process-admission hook. OpenClaw selects this existing execution
@@ -552,6 +558,11 @@ Proxy launch arguments are rejected to avoid changing a shared daemon's login.
 Native Codex subagents use Codex's execution and collaboration controls, not
 OpenClaw's retired Tasks view. Their current execution, assignment result, and
 result delivery remain separate facts.
+
+Once every native child has finished and its result has been captured, pending
+result delivery no longer prevents the parent from resuming. OpenClaw retains
+those results for delivery and retry. Running or interrupted children that can
+resume still protect the parent subscription.
 
 Retirement revokes captured requester authority immediately, then joins accepted
 native submission and assignment writes before releasing child subscriptions.

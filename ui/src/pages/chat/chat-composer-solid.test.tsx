@@ -16,12 +16,9 @@ import {
   renderComposerInto,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import { createInitializationContext } from "./chat-pane.test-support.ts";
+import { createTestChatPane, getPaneTestRuntime } from "./chat-pane.test-support.ts";
 import { keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { clearSubmittedComposerState, cancelChatDelivery } from "./chat-send-composer.ts";
-import { createChatState } from "./chat-state-controller.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
-import { createPageState } from "./chat-state-page.ts";
 import { ComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
@@ -33,73 +30,73 @@ import {
 
 afterEach(() => resetComposerFixture());
 
-function mountComposer(initial: ChatComposerProps) {
+function mountComposer(initial: Partial<ChatComposerProps>) {
   const container = document.body.appendChild(createComposerContainer());
-  let props = initial;
+  let props = createComposerProps(initial);
   const paint = () => renderComposerInto(container, props);
-  onTestFinished(() => {
-    disposeComposer(container);
-  });
   paint();
+  const query = container.querySelector.bind(container);
   return {
     container,
-    update: (next: (previous: typeof props) => typeof props) => {
-      props = next(props);
+    query,
+    textarea: () => query<HTMLTextAreaElement>("textarea")!,
+    goal: () => query(".agent-chat__goal-mode"),
+    update: (next: Partial<ChatComposerProps> = {}) => {
+      props = { ...props, ...next };
       paint();
     },
   };
 }
 
+function inputEvent(target: HTMLTextAreaElement, value: string, init: InputEventInit = {}) {
+  target.value = value;
+  target.dispatchEvent(new InputEvent("input", { bubbles: true, ...init }));
+}
+const composition = (target: HTMLTextAreaElement, type: "start" | "end") =>
+  target.dispatchEvent(new CompositionEvent(`composition${type}`, { bubbles: true }));
+function retireIme(target: HTMLTextAreaElement) {
+  composition(target, "end");
+  target.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+}
+
 function mountOwnedComposer(overrides: Partial<ChatComposerProps> = {}) {
-  const invalidate = vi.fn();
-  const owner = createChatState<ChatPageHost>({ invalidate, updateComplete: Promise.resolve() });
-  const state = createPageState(
-    createInitializationContext(),
-    owner.createRenderLifecycle(),
-    document.createElement("div"),
-  );
+  const { pane, state } = createTestChatPane({ client: createTestGatewayClient(async () => ({})) });
+  const owner = getPaneTestRuntime(pane).chatState;
   state.sessionKey = "agent:main:draft-source";
   state.chatMessage = overrides.draft ?? "";
   state.chatGoalDraftMode = overrides.goalDraftMode ?? null;
-  owner.attach(state);
-  onTestFinished(owner.dispose);
-  const view = mountComposer(
-    createComposerProps({
-      ...overrides,
-      sessionKey: state.sessionKey,
-      draftSource: owner.composerDraft,
-      getDraft: () => state.chatMessage,
-      getMentions: () => state.chatMentions ?? [],
-      onDraftChange: state.handleChatDraftChange,
-      onGoalDraftModeChange: (mode) => {
-        state.chatGoalDraftMode = mode;
-        state.handleChatDraftChange(state.chatMessage);
-        overrides.onGoalDraftModeChange?.(mode);
-      },
-    }),
-  );
+  state.handleChatDraftChange(state.chatMessage);
+  const view = mountComposer({
+    ...overrides,
+    sessionKey: state.sessionKey,
+    draftSource: owner.composerDraft,
+    getDraft: () => state.chatMessage,
+    getMentions: () => state.chatMentions ?? [],
+    onDraftChange: state.handleChatDraftChange,
+    onGoalDraftModeChange: (mode) => {
+      state.chatGoalDraftMode = mode;
+      state.handleChatDraftChange(state.chatMessage);
+      overrides.onGoalDraftModeChange?.(mode);
+    },
+  });
   const input = (value: string) => {
-    const textarea = view.container.querySelector<HTMLTextAreaElement>("textarea")!;
+    const textarea = view.textarea();
     textarea.focus();
-    textarea.value = value;
-    textarea.dispatchEvent(
-      new InputEvent("input", { bubbles: true, inputType: "insertText", data: value.at(-1) }),
-    );
+    inputEvent(textarea, value, { inputType: "insertText", data: value.at(-1) });
   };
   const enter = () =>
-    view.container
-      .querySelector("textarea")!
+    view
+      .textarea()
       .dispatchEvent(
         new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
       );
-  return { owner, state, view, invalidate, input, enter };
+  return { owner, state, view, input, enter };
 }
 
-it("updates edits and history from the draft owner without redrawing the pane", () => {
-  const { owner, state, view, invalidate } = mountOwnedComposer();
-  const textarea = view.container.querySelector("textarea")!;
-  textarea.value = "An ordinary edit";
-  textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+it("updates edits and history from the draft owner without remounting the input", () => {
+  const { owner, state, view } = mountOwnedComposer();
+  const textarea = view.textarea();
+  inputEvent(textarea, "An ordinary edit", { inputType: "insertText" });
   flush();
   expect(state.chatMessage).toBe("An ordinary edit");
 
@@ -120,22 +117,21 @@ it("updates edits and history from the draft owner without redrawing the pane", 
   });
   flush();
   expect(textarea.value).toBe("Earlier input");
-  expect(invalidate).not.toHaveBeenCalled();
+  expect(view.textarea()).toBe(textarea);
 
   const draftChanged = vi.fn();
   onTestFinished(owner.composerDraft.subscribe(draftChanged));
   state.chatStream = "An unrelated response";
-  state.requestUpdate?.();
   flush();
   expect(draftChanged).not.toHaveBeenCalled();
-  expect(view.container.querySelector("textarea")).toBe(textarea);
+  expect(view.textarea()).toBe(textarea);
 });
 
-it("publishes submitted and restored drafts without redrawing the pane", () => {
-  const { state, view, invalidate } = mountOwnedComposer({ draft: "A recoverable draft" });
+it("publishes submitted and restored drafts without remounting the input", () => {
+  const { state, view } = mountOwnedComposer({ draft: "A recoverable draft" });
   state.client = createTestGatewayClient(async () => ({}));
   state.connected = true;
-  const textarea = view.container.querySelector("textarea")!;
+  const textarea = view.textarea();
   const snapshot = clearSubmittedComposerState(state, state.chatMessage, [], [], null);
   expect(state.chatMessage).toBe("");
   flush();
@@ -152,12 +148,12 @@ it("publishes submitted and restored drafts without redrawing the pane", () => {
   expect(state.chatMessage).toBe("A recoverable draft");
   flush();
   expect(textarea.value).toBe("A recoverable draft");
-  expect(invalidate).not.toHaveBeenCalled();
+  expect(view.textarea()).toBe(textarea);
 });
 
 it("publishes a restored persisted draft and queue after adopting their revision", () => {
   vi.stubGlobal("sessionStorage", createStorageMock());
-  const { owner, state, view, invalidate } = mountOwnedComposer();
+  const { owner, state, view } = mountOwnedComposer();
   state.client = createTestGatewayClient(async () => ({}));
   state.connected = true;
   expect(persistChatComposerState(state, state.sessionKey, { draft: "Saved draft" })).toBe(true);
@@ -173,18 +169,18 @@ it("publishes a restored persisted draft and queue after adopting their revision
   const queue = mountSolid(() => (
     <output>{state.chatQueue.map((item) => item.text).join(";")}</output>
   ));
-  onTestFinished(queue.unmount);
   flush();
   expect(queue.container.textContent).toBe("");
-  expect(view.container.querySelector("textarea")!.value).toBe("");
+  expect(view.textarea().value).toBe("");
+  const textarea = view.textarea();
 
   expect(owner.composerPersistence.restore()).toBe(true);
   expect(state.chatMessage).toBe("Saved draft");
   expect(state.chatQueue[0]?.text).toBe("Saved queued input");
   flush();
   expect(queue.container.textContent).toBe("Saved queued input");
-  expect(view.container.querySelector("textarea")!.value).toBe("Saved draft");
-  expect(invalidate).not.toHaveBeenCalled();
+  expect(view.textarea().value).toBe("Saved draft");
+  expect(view.textarea()).toBe(textarea);
 });
 
 it("restores the conversation draft when a restored goal edit is cancelled", () => {
@@ -193,14 +189,14 @@ it("restores the conversation draft when a restored goal edit is cancelled", () 
     goalDraftMode: { action: "edit", goalId: "goal-one", previousDraft: "Conversation draft" },
     onGoalSubmit: vi.fn(async () => false),
   });
-  const cancel = view.container.querySelector<HTMLButtonElement>(".agent-chat__goal-mode button")!;
+  const cancel = view.goal()!.querySelector<HTMLButtonElement>("button")!;
   expect(cancel).not.toBeNull();
   cancel.click();
   flush();
   expect(state.chatGoalDraftMode).toBeNull();
   expect(state.chatMessage).toBe("Conversation draft");
-  expect(view.container.querySelector("textarea")!.value).toBe("Conversation draft");
-  expect(view.container.querySelector(".agent-chat__goal-mode")).toBeNull();
+  expect(view.textarea().value).toBe("Conversation draft");
+  expect(view.goal()).toBeNull();
 });
 
 it("starts a goal and admits only one same-turn submit", async () => {
@@ -210,94 +206,86 @@ it("starts a goal and admits only one same-turn submit", async () => {
   input("/goal start ");
   flush();
   expect(state.chatGoalDraftMode).toEqual({ action: "start" });
-  expect(view.container.querySelector(".agent-chat__goal-mode")).not.toBeNull();
-  expect(view.container.querySelector("textarea")!.value).toBe("");
+  expect(view.goal()).not.toBeNull();
+  expect(view.textarea().value).toBe("");
   input("Keep every literal space  ");
   flush();
   enter();
   enter();
-  view.container.querySelector<HTMLButtonElement>(".agent-chat__goal-mode button")!.click();
+  view.goal()!.querySelector<HTMLButtonElement>("button")!.click();
   expect(state.chatGoalDraftMode).toEqual({ action: "start" });
   expect(onGoalSubmit).toHaveBeenCalledExactlyOnceWith(
     { action: "start", objective: "Keep every literal space  " },
     expect.any(KeyboardEvent),
   );
   flush();
-  expect(view.container.querySelector("textarea")!.readOnly).toBe(true);
+  expect(view.textarea().readOnly).toBe(true);
   result.resolve(true);
   await waitForSolid(() => expect(state.chatGoalDraftMode).toBeNull());
-  expect(view.container.querySelector(".agent-chat__goal-mode")).toBeNull();
+  expect(view.goal()).toBeNull();
 });
 
-it("does not clear a replacement goal mode when an earlier submit completes", async () => {
-  const result = createDeferred<boolean>();
-  const { state, view, enter } = mountOwnedComposer({
-    draft: "First objective",
-    goalDraftMode: { action: "edit", goalId: "goal-one", previousDraft: "Old conversation" },
-    onGoalSubmit: () => result.promise,
-  });
-  enter();
-  state.chatGoalDraftMode = {
-    action: "edit",
-    goalId: "goal-two",
-    previousDraft: "New conversation",
-  };
-  state.handleChatDraftChange("Replacement objective");
-  result.resolve(true);
-  await result.promise;
-  flush();
-  expect(state.chatGoalDraftMode).toMatchObject({ action: "edit", goalId: "goal-two" });
-  expect(state.chatMessage).toBe("Replacement objective");
-  expect(view.container.querySelector("textarea")!.value).toBe("Replacement objective");
-});
-
-it.each([false, true])("settles an accepted goal after unmount (remount=%s)", async (remount) => {
-  const result = createDeferred<boolean>();
-  const onGoalSubmit = vi.fn(() => result.promise);
-  const { state, view, enter } = mountOwnedComposer({
-    draft: "Updated objective",
-    goalDraftMode: { action: "edit", goalId: "goal-one", previousDraft: "Conversation draft" },
-    onGoalSubmit,
-  });
-  enter();
-  disposeComposer(view.container);
-  if (remount) {
-    view.update((props) => props);
-    expect(view.container.querySelector("textarea")!.readOnly).toBe(true);
+it.each(["replacement", "unmount", "remount"])(
+  "settles a pending goal after %s",
+  async (change) => {
+    const result = createDeferred<boolean>();
+    const onGoalSubmit = vi.fn(() => result.promise);
+    const { state, view, enter } = mountOwnedComposer({
+      draft: "Updated objective",
+      goalDraftMode: { action: "edit", goalId: "goal-one", previousDraft: "Conversation draft" },
+      onGoalSubmit,
+    });
     enter();
-    expect(onGoalSubmit).toHaveBeenCalledOnce();
-  }
-  result.resolve(true);
-  await result.promise;
-  flush();
-  expect(state.chatGoalDraftMode).toBeNull();
-  expect(state.chatMessage).toBe("Conversation draft");
-});
+    if (change === "replacement") {
+      state.chatGoalDraftMode = {
+        action: "edit",
+        goalId: "goal-two",
+        previousDraft: "New conversation",
+      };
+      state.handleChatDraftChange("Replacement objective");
+    } else {
+      disposeComposer(view.container);
+      if (change === "remount") {
+        view.update();
+        expect(view.textarea().readOnly).toBe(true);
+        enter();
+        expect(onGoalSubmit).toHaveBeenCalledOnce();
+      }
+    }
+    result.resolve(true);
+    await result.promise;
+    flush();
+    if (change === "replacement") {
+      expect(state.chatGoalDraftMode).toMatchObject({ action: "edit", goalId: "goal-two" });
+      expect(state.chatMessage).toBe("Replacement objective");
+      expect(view.textarea().value).toBe("Replacement objective");
+    } else {
+      expect(state).toMatchObject({ chatGoalDraftMode: null, chatMessage: "Conversation draft" });
+    }
+  },
+);
 
 it("updates composer text on a live locale change without disturbing an IME draft", async () => {
   onTestFinished(captureI18nStateForTesting());
   await i18n.setLocale("en");
   const onDraftChange = vi.fn();
-  const props = createComposerProps({
+  const view = mountComposer({
     assistantName: "Locale fixture",
     draft: "Unfinished draft",
     permissionPicker: { canSelectFull: true, onSelect: vi.fn() },
     onDraftChange,
   });
-  const view = mountComposer(props);
-  view.container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!.click();
+  view.query<HTMLButtonElement>("[data-chat-permission-select]")!.click();
   await waitForSolid(() =>
-    expect(
-      view.container.querySelector(".chat-controls__permission-menu")?.matches(":popover-open"),
-    ).toBe(true),
+    expect(view.query(".chat-controls__permission-menu")?.matches(":popover-open")).toBe(true),
   );
-  const textarea = view.container.querySelector("textarea")!;
-  const heading = view.container.querySelector(".chat-controls__permission-heading")!;
+  const textarea = view.textarea();
+  const heading = view.query(".chat-controls__permission-heading")!;
   expect(heading.textContent).toBe("Execution permissions");
   expect(textarea.placeholder).toBe("Message Locale fixture");
 
   textarea.focus();
-  textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+  composition(textarea, "start");
   textarea.value = "Unfinished 日本語";
   textarea.setSelectionRange(11, 14);
   textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
@@ -308,8 +296,8 @@ it("updates composer text on a live locale change without disturbing an IME draf
 
   expect(heading.textContent).toBe("Ausführungsberechtigungen");
   expect(textarea.placeholder).toBe("Nachricht an Locale fixture");
-  expect(view.container.querySelector(".chat-controls__permission-heading")).toBe(heading);
-  expect(view.container.querySelector("textarea")).toBe(textarea);
+  expect(view.query(".chat-controls__permission-heading")).toBe(heading);
+  expect(view.textarea()).toBe(textarea);
   expect(document.activeElement).toBe(textarea);
   expect(textarea.value).toBe("Unfinished 日本語");
   expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([11, 14]);
@@ -361,14 +349,8 @@ it("retains the native input and IME draft across external composer updates", ()
   const onDraftChange = vi.fn((value: string) => {
     draft = value;
   });
-  const view = mountComposer(
-    createComposerProps({
-      draft,
-      getDraft: () => draft,
-      onDraftChange,
-    }),
-  );
-  const textarea = view.container.querySelector("textarea")!;
+  const view = mountComposer({ draft, getDraft: () => draft, onDraftChange });
+  const textarea = view.textarea();
   const nativeValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!;
   const setValue = vi.spyOn(HTMLTextAreaElement.prototype, "value", "set");
   const edit = (value: string, composing = false) => {
@@ -379,27 +361,23 @@ it("retains the native input and IME draft across external composer updates", ()
   };
 
   edit("hello there");
-  view.update((previous) => ({ ...previous, stream: "Streaming a response", runActive: true }));
+  view.update({ stream: "Streaming a response", runActive: true });
   flush();
-  expect(view.container.querySelector("textarea")).toBe(textarea);
+  expect(view.textarea()).toBe(textarea);
   expect(textarea.value).toBe("hello there");
   expect(setValue).not.toHaveBeenCalled();
 
-  textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+  composition(textarea, "start");
   edit("hello 日本語", true);
   onDraftChange.mockClear();
-  view.update((previous) => ({
-    ...previous,
-    draft: "stale host snapshot",
-    stream: "More response",
-  }));
+  view.update({ draft: "stale host snapshot", stream: "More response" });
   flush();
-  expect(view.container.querySelector("textarea")).toBe(textarea);
+  expect(view.textarea()).toBe(textarea);
   expect(textarea.value).toBe("hello 日本語");
   expect(setValue).not.toHaveBeenCalled();
   expect(onDraftChange).not.toHaveBeenCalled();
 
-  textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+  composition(textarea, "end");
   expect(onDraftChange).toHaveBeenCalledWith("hello 日本語", undefined);
   expect(setValue).not.toHaveBeenCalled();
 });
@@ -407,74 +385,58 @@ it("retains the native input and IME draft across external composer updates", ()
 it("ends the old IME scope without writing into a newly selected session", () => {
   const onOldDraftChange = vi.fn();
   const onNewDraftChange = vi.fn();
-  const view = mountComposer(
-    createComposerProps({
-      sessionKey: "first",
-      draft: "first draft",
-      onDraftChange: onOldDraftChange,
-    }),
-  );
-  const oldInput = view.container.querySelector("textarea")!;
-  oldInput.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-  oldInput.value = "unfinished composition";
-  oldInput.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+  const view = mountComposer({
+    sessionKey: "first",
+    draft: "first draft",
+    onDraftChange: onOldDraftChange,
+  });
+  const oldInput = view.textarea();
+  composition(oldInput, "start");
+  inputEvent(oldInput, "unfinished composition", { isComposing: true });
 
-  view.update((previous) => ({
-    ...previous,
-    sessionKey: "second",
-    draft: "second draft",
-    onDraftChange: onNewDraftChange,
-  }));
+  view.update({ sessionKey: "second", draft: "second draft", onDraftChange: onNewDraftChange });
   flush();
-  const newInput = view.container.querySelector("textarea")!;
+  const newInput = view.textarea();
   expect(newInput).not.toBe(oldInput);
   expect(newInput.value).toBe("second draft");
-  oldInput.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-  oldInput.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+  retireIme(oldInput);
   expect(onOldDraftChange).not.toHaveBeenCalled();
   expect(onNewDraftChange).not.toHaveBeenCalled();
   expect(newInput.value).toBe("second draft");
 
-  newInput.value = "second draft edited";
-  newInput.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+  inputEvent(newInput, "second draft edited", { inputType: "insertText" });
   expect(onNewDraftChange).toHaveBeenCalledWith("second draft edited", undefined);
 });
 
 it("retires an unfinished IME gesture when the same pane composer remounts", () => {
   const { state, view, input } = mountOwnedComposer({ draft: "Canonical draft" });
-  const oldInput = view.container.querySelector("textarea")!;
-  oldInput.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-  oldInput.value = "Unfinished composition";
-  oldInput.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+  const oldInput = view.textarea();
+  composition(oldInput, "start");
+  inputEvent(oldInput, "Unfinished composition", { isComposing: true });
   disposeComposer(view.container);
-  view.update((props) => props);
+  view.update();
 
-  const newInput = view.container.querySelector("textarea")!;
+  const newInput = view.textarea();
   expect(newInput).not.toBe(oldInput);
   expect(newInput.value).toBe("Canonical draft");
   input("Typing after remount");
   flush();
   expect(state.chatMessage).toBe("Typing after remount");
-  oldInput.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-  oldInput.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+  retireIme(oldInput);
   expect(state.chatMessage).toBe("Typing after remount");
 });
 
 it("keeps the open permission picker through parent updates", async () => {
   const permissionPicker = { canSelectFull: true, onSelect: vi.fn() };
-  const view = mountComposer(createComposerProps({ permissionPicker }));
-  const picker = view.container.querySelector(".chat-controls__permission-picker")!;
+  const view = mountComposer({ permissionPicker });
+  const picker = view.query(".chat-controls__permission-picker")!;
   const trigger = picker.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
   trigger.click();
   const surface = picker.querySelector<HTMLElement>('[role="menu"]')!;
   await waitForSolid(() => expect(surface.matches(":popover-open")).toBe(true));
-  view.update((previous) => ({
-    ...previous,
-    stream: "More response",
-    permissionPicker: { ...permissionPicker },
-  }));
+  view.update({ stream: "More response", permissionPicker: { ...permissionPicker } });
   flush();
-  expect(view.container.querySelector(".chat-controls__permission-picker")).toBe(picker);
+  expect(view.query(".chat-controls__permission-picker")).toBe(picker);
   expect(picker.querySelector('[role="menu"]')).toBe(surface);
   expect(surface.matches(":popover-open")).toBe(true);
   expect(trigger.getAttribute("aria-expanded")).toBe("true");
@@ -490,30 +452,19 @@ it("keeps a pending dictation send bound to the action that started it", async (
     onError: () => {},
   });
   vi.spyOn(controller, "active", "get").mockReturnValue(true);
-  let finish!: (value: boolean) => void;
-  vi.spyOn(controller, "finishActive").mockReturnValue(
-    new Promise<boolean>((resolve) => {
-      finish = resolve;
-    }),
-  );
+  const finish = createDeferred<boolean>();
+  vi.spyOn(controller, "finishActive").mockReturnValue(finish.promise);
   const firstSend = vi.fn();
   const laterSend = vi.fn();
-  const [props, setProps] = createSignal({
-    readDictation: () => controller,
-    onSend: firstSend,
-  });
+  const [props, setProps] = createSignal({ readDictation: () => controller, onSend: firstSend });
   const actionProps = merge(props);
   const view = mountSolid(() => <ComposerDictationSendAction {...actionProps} />);
-  try {
-    view.container.querySelector<HTMLButtonElement>("button")!.click();
-    setProps({ readDictation: () => controller, onSend: laterSend });
-    flush();
-    finish(true);
-    await Promise.resolve();
-    expect(firstSend).toHaveBeenCalledOnce();
-    expect(laterSend).not.toHaveBeenCalled();
-  } finally {
-    view.unmount();
-    controller.dispose();
-  }
+  onTestFinished(() => controller.dispose());
+  view.container.querySelector<HTMLButtonElement>("button")!.click();
+  setProps({ readDictation: () => controller, onSend: laterSend });
+  flush();
+  finish.resolve(true);
+  await Promise.resolve();
+  expect(firstSend).toHaveBeenCalledOnce();
+  expect(laterSend).not.toHaveBeenCalled();
 });

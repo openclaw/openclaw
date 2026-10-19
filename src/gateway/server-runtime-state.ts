@@ -1,4 +1,3 @@
-// Gateway HTTP/WebSocket runtime state factory.
 // Builds one server runtime with lazy plugin route handlers.
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node:http";
 import type { WebSocketServer } from "ws";

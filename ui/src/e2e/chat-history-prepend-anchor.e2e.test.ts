@@ -254,6 +254,21 @@ suite.define(() => {
           frames.every((top) => top !== null && Math.abs(top - before!.y) <= 2),
           "the message must stay anchored at every animation frame, not just after settling",
         ).toBe(true);
+        if (!more && !onlyGroup) {
+          await thread.hover();
+          await page.mouse.wheel(0, -1_000_000);
+          await waitForChatScrollIdle(page);
+          const first = thread.getByText(/^Transcript entry 1\./);
+          await first.waitFor();
+          const firstBox = await first.boundingBox();
+          const viewport = await thread.boundingBox();
+          expect(firstBox).not.toBeNull();
+          expect(viewport).not.toBeNull();
+          expect(firstBox!.y).toBeGreaterThanOrEqual(viewport!.y - 2);
+          expect(firstBox!.y).toBeLessThan(viewport!.y + viewport!.height);
+          await pane.locator(".chat-history-sentinel").waitFor({ state: "detached" });
+          expect((await gateway.getRequests("chat.history")).length).toBe(manual ? 2 : 1);
+        }
       } finally {
         await suite.closeBrowserContext(context);
       }

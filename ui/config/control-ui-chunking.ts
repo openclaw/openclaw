@@ -56,6 +56,15 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/lib/device-pair-setup.ts":
+      // Pairing loads on interaction; the earlier boot capture must not pull it into either route.
+      return "device-pair-setup-runtime";
+    case "ui/src/app/app-root-focus.ts":
+    case "ui/src/app/app-root-focus-view.tsx":
+      return "focus-dashboard-runtime";
+    case "ui/src/components/solid/gateway-url-confirmation.tsx":
+      // A pending target owns this dialog; ordinary boot never requests it.
+      return "gateway-confirmation-runtime";
     case "ui/src/pages/chat/route-entry.ts":
       // Pending New Session previews must render while the Chat route entry waits.
       return "chat-route-entry";

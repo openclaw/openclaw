@@ -1,9 +1,11 @@
 // The non-isolated runner resets modules between files but preserves customElements.
 // A dedicated jsdom context keeps the registered pane class on this file's module graph.
+import { createEffect, createRoot, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-lifecycle.test/"} */
 import type {
+  EnvironmentSummary,
   SessionSuggestion,
   SessionSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -13,6 +15,10 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import {
+  gatewayHelloForMethods,
+  SESSION_MUTATION_TEST_METHODS,
+} from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
@@ -124,6 +130,54 @@ function selectSuggestionRows(state: ChatPageHost, ...sessions: GatewaySessionRo
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
 const confirmationOwners = new Set<HTMLElement>();
 
+it("discovers an assigned desktop when only runner inventory becomes available", async () => {
+  vi.useFakeTimers();
+  const key = "agent:main:inventory-desktop";
+  let available = false;
+  const inventory = vi.fn(async (): Promise<EnvironmentSummary> => ({
+    id: "node:assigned-desktop",
+    type: "node",
+    status: available ? "available" : "unavailable",
+    desktop: true,
+  }));
+  const fixture = createMountedPanes(
+    [
+      {
+        key,
+        sessionId: "inventory-session",
+        kind: "direct",
+        updatedAt: 1,
+        execNode: "assigned-desktop",
+      },
+    ],
+    "main",
+    undefined,
+    { "environments.status": inventory },
+  );
+  fixture.context.gateway.snapshot.hello = gatewayHelloForMethods([
+    ...SESSION_MUTATION_TEST_METHODS,
+    "desktop.observe",
+  ]);
+  const pane = fixture.mount(key);
+  await vi.waitFor(() => expect(inventory).toHaveBeenCalledTimes(1));
+  await vi.waitFor(() => expect(pane.state.chatLoading).toBe(false));
+  await vi.dynamicImportSettled();
+  await pane.updateComplete;
+  // Isolate inventory publication from deferred startup frames.
+  for (let pass = 0; pass < 2; pass++) {
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(160);
+  }
+  expect(isSidebarSlotVisible(pane.state.sidebarLayout, "desktop")).toBe(false);
+
+  available = true;
+  fixture.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "assigned-desktop" });
+
+  await vi.waitFor(() =>
+    expect(isSidebarSlotVisible(pane.state.sidebarLayout, "desktop")).toBe(true),
+  );
+});
+
 it("publishes queued-edit retention changes while its pane is parked", async () => {
   vi.useFakeTimers();
   const key = "agent:main:parked-edit";
@@ -147,15 +201,49 @@ it("publishes queued-edit retention changes while its pane is parked", async () 
   const queued = enqueueChatMessage(state, "queued original");
   expect(queued).not.toBeNull();
   expect(beginQueuedMessageEdit(state, queued!.id)).toBe("started");
-  state.requestUpdate();
+  state.composerDraftChanged?.();
   expect(retained).toHaveBeenCalledTimes(1);
   expect(cancelQueuedMessageEdit(state)).toBe(true);
-  state.requestUpdate();
+  state.composerDraftChanged?.();
   expect(retained).toHaveBeenCalledTimes(2);
   await Promise.resolve();
   expect(updates).not.toHaveBeenCalled();
   pane.presented = true;
   await pane.updateComplete;
+});
+
+it("publishes a disconnected gateway snapshot through reactive page state", () => {
+  const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
+  state.client = pane.context.gateway.snapshot.client;
+  state.connected = true;
+  const changes: Array<{
+    connected: boolean;
+    canvas: ChatPageHost["canvasPluginSurfaceUrl"];
+  }> = [];
+  const dispose = createRoot((stop) => {
+    createEffect(
+      () => ({ connected: state.connected, canvas: state.canvasPluginSurfaceUrl }),
+      (snapshot) => {
+        changes.push(snapshot);
+      },
+    );
+    return stop;
+  });
+  try {
+    flush();
+    changes.length = 0;
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      phase: "reconnecting",
+      canvasPluginSurfaceUrl: "/canvas/reconnected",
+    });
+    // Transport consumers still observe connection retirement synchronously.
+    expect(state.connected).toBe(false);
+    flush();
+    expect(changes).toEqual([{ connected: false, canvas: "/canvas/reconnected" }]);
+  } finally {
+    dispose();
+  }
 });
 
 it("renews the attention cue for repeated draft prefill", () => {
@@ -259,9 +347,12 @@ it.each(["absent", "open"] as const)(
 
 function createSuggestionPane(request = vi.fn()) {
   const fixture = barePane(request);
-  fixture.pane.presencePayload = {
-    presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }],
-  };
+  fixture.pane.presence.update({
+    presence: [
+      { ts: 1, user: { id: "owner" } },
+      { ts: 1, user: { id: "alice" } },
+    ],
+  });
   return fixture;
 }
 
@@ -278,11 +369,13 @@ it("does not let a stale add completion clear a newer session operation", async 
 
   first.resolve({ suggestion: pendingSuggestion(state, "first") });
   await firstPending;
-  expect(pane.sessionSuggestionAddOperation).toBeDefined();
-  expect(pane.sessionSuggestions.some((suggestion) => suggestion.id === "first")).toBe(false);
+  expect(pane.collaboration.addOperation).toBeDefined();
+  expect(pane.collaboration.suggestions.some((suggestion) => suggestion.id === "first")).toBe(
+    false,
+  );
   second.resolve({ suggestion: pendingSuggestion(state, "second") });
   await secondPending;
-  expect(pane.sessionSuggestionAddOperation).toBeUndefined();
+  expect(pane.collaboration.addOperation).toBeUndefined();
 });
 
 it.each(["attachments", "mentions"] as const)(
@@ -331,9 +424,9 @@ it("coalesces overlapping refreshes and applies the event-invalidated follow-up"
   await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
   second.resolve({ suggestions: [existingSuggestion, eventSuggestion], role: "viewer" });
   await vi.waitFor(() =>
-    expect(pane.sessionSuggestions).toEqual([existingSuggestion, eventSuggestion]),
+    expect(pane.collaboration.suggestions).toEqual([existingSuggestion, eventSuggestion]),
   );
-  expect(pane.sessionSuggestionRole).toBe("viewer");
+  expect(pane.collaboration.role).toBe("viewer");
   await Promise.resolve();
   expect(request).toHaveBeenCalledTimes(2);
 });
@@ -348,16 +441,16 @@ it("clears cached suggestions until a rotated session instance list resolves", a
 
   pane.syncSessionSuggestionTarget("main", row("session-a"));
   await pane.refreshSessionSuggestions();
-  pane.sessionSuggestions = [stale];
+  pane.collaboration.suggestions = [stale];
   state.sessionsResultAgentId = "main";
   selectSuggestionRows(state, row("session-b"));
 
   pane.syncSessionSuggestionTarget("main", row("session-b"));
 
-  expect(pane.sessionSuggestions).toEqual([]);
+  expect(pane.collaboration.suggestions).toEqual([]);
   expect(request).toHaveBeenCalledTimes(1);
   listed.resolve({ suggestions: [fresh], role: "owner" });
-  await vi.waitFor(() => expect(pane.sessionSuggestions).toEqual([fresh]));
+  await vi.waitFor(() => expect(pane.collaboration.suggestions).toEqual([fresh]));
 });
 
 it("clears displayed typing actors when the session instance rotates", () => {
@@ -400,22 +493,22 @@ it("keeps an owner's self-authored resolved suggestion through the following lis
   selectSuggestionRows(state, suggestionRow(state));
   const pending = pendingSuggestion(state, "owner", "resolved suggestion", suggestionOwner);
   const resolved = { ...pending, state: "accepted" as const };
-  pane.sessionSuggestionRole = "owner";
-  pane.sessionSuggestions = [pending];
+  pane.collaboration.role = "owner";
+  pane.collaboration.suggestions = [pending];
 
   const resolving = pane.resolveCurrentSessionSuggestion(pending, "queue");
   expect(request).toHaveBeenCalledTimes(1);
   pane.handleSessionSuggestionEvent({ action: "resolved", suggestion: resolved });
-  expect(pane.sessionSuggestions).toEqual([resolved]);
+  expect(pane.collaboration.suggestions).toEqual([resolved]);
   expect(request).toHaveBeenCalledTimes(2);
 
   listed.resolve({ suggestions: [resolved], role: "owner" });
-  await vi.waitFor(() => expect(pane.sessionSuggestions).toEqual([resolved]));
+  await vi.waitFor(() => expect(pane.collaboration.suggestions).toEqual([resolved]));
   resolvedResponse.resolve({ suggestion: resolved });
   await resolving;
 
-  expect(pane.sessionSuggestions).toEqual([resolved]);
-  expect(pane.sessionSuggestionRole).toBe("owner");
+  expect(pane.collaboration.suggestions).toEqual([resolved]);
+  expect(pane.collaboration.role).toBe("owner");
 });
 
 it("drops a resolve completion after the same session key rotates instances", async () => {
@@ -425,14 +518,14 @@ it("drops a resolve completion after the same session key rotates instances", as
   const suggestion = pendingSuggestion(state, "old", "old suggestion", suggestionOwner);
   pane.context.gateway.snapshot.selfUser = { id: "owner" } as never;
   pane.syncSessionSuggestionTarget("main", session("session-a"));
-  pane.sessionSuggestions = [suggestion];
+  pane.collaboration.suggestions = [suggestion];
 
   const resolving = pane.resolveCurrentSessionSuggestion(suggestion, "queue");
   pane.syncSessionSuggestionTarget("main", session("session-b"));
   response.resolve({ suggestion: { ...suggestion, state: "accepted" } });
   await resolving;
 
-  expect(pane.sessionSuggestions).toEqual([]);
+  expect(pane.collaboration.suggestions).toEqual([]);
   expect(state.chatError).toBeNull();
 });
 

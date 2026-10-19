@@ -15,6 +15,11 @@ const compileCache = vi.hoisted(() => ({
   directory: vi.fn<() => string | undefined>(),
   respawn: vi.fn<typeof import("../node-runtime-recovery.mjs").runRespawnedChild>(async () => true),
 }));
+// mock-isolation: These cases simulate different processes; real immutable roles have subprocess coverage.
+vi.mock("./infra/database-engine/admission-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./infra/database-engine/admission-scope.js")>()),
+  installDatabaseProcessRole: vi.fn(),
+}));
 vi.mock("../node-runtime-recovery.mjs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../node-runtime-recovery.mjs")>()),
   runRespawnedChild: compileCache.respawn,
@@ -195,9 +200,7 @@ describe("legacy package executable entrypoint", () => {
       }
       handler(new Error("owned failure"), "uncaughtException");
       expect(owner).toHaveBeenCalledExactlyOnceWith(1, "uncaught exception");
-      expect(runtime.restoreRuntimeTerminalState).toHaveBeenCalledWith("uncaught exception", {
-        resumeStdinIfPaused: false,
-      });
+      expect(runtime.restoreRuntimeTerminalState).toHaveBeenCalledWith("uncaught exception");
     } finally {
       releaseOwner();
       for (const listener of process.listeners("uncaughtException")) {

@@ -30,7 +30,6 @@ import { prepareAndDispatchEmbeddedRunAttempt as dispatch } from "./run/run-atte
 const mocks = vi.hoisted(() => ({
   runAttempt: vi.fn(),
   settleRequesterAfterSessionSpawns: vi.fn(),
-  readGitHubPublicationFact: vi.fn(),
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const codex = await loadBundledPluginFacade<{
@@ -46,11 +45,6 @@ const codex = await loadBundledPluginFacade<{
     threadResumeParams: { config?: Record<string, unknown> };
   }>;
 }>({ pluginId: "codex", artifactBasename: "test-api.js" });
-
-// mock-isolation: Dispatch consumes publication facts without starting discovery or credential work.
-vi.mock("../../gateway/github-publication-discovery.js", () => ({
-  readGitHubPublicationFact: mocks.readGitHubPublicationFact,
-}));
 
 // mock-isolation: Dispatch fixtures provide an empty auth store and no credential database.
 vi.mock("../auth-profiles/source-check.js", () => ({
@@ -124,7 +118,6 @@ function makeDispatchInput(
     getLifecycleGeneration: () => lifecycleGeneration,
     getParams: () => params,
     globalLane: "retry-dispatch-global",
-    sessionLane: "retry-dispatch-session",
     initialQueuedLifecycleGeneration: lifecycleGeneration,
     setLifecycleGeneration: (value) => {
       lifecycleGeneration = value;
@@ -245,7 +238,6 @@ describe("embedded run retry dispatch", () => {
     setRuntimeConfigSnapshot({});
     mocks.runAttempt.mockReset().mockResolvedValue({ terminal: { kind: "ok" } });
     mocks.settleRequesterAfterSessionSpawns.mockReset();
-    mocks.readGitHubPublicationFact.mockReset().mockReturnValue({ available: true });
     admission = prepareSystemAgentRunAdmission({}, "run-1", "main", "dispatch-test");
     admittedRunContext = await admission.admit("plugin-harness", "dispatch-test");
   });
@@ -446,7 +438,7 @@ describe("embedded run retry dispatch", () => {
     },
   );
 
-  it("uses published GitHub availability for each admitted run and continuation", async () => {
+  it("offers brokered GitHub requests for each admitted run and continuation", async () => {
     const gateway = {} as GatewayRequestContext;
     for (const continuation of [false, true]) {
       if (continuation) {
@@ -463,33 +455,6 @@ describe("embedded run retry dispatch", () => {
       expect(names).toContain("github_identity_status");
       expect(names).toContain("github_publish");
     }
-    expect(mocks.readGitHubPublicationFact).toHaveBeenCalledTimes(2);
-  });
-
-  it("reads the adopted session fact and retains identity help when publication is unavailable", async () => {
-    const gateway = {} as GatewayRequestContext;
-    bindGatewayContextResolver(admittedRunContext, () => gateway);
-    const input = makeDispatchInput();
-    await dispatch(input);
-    input.sessionPromptState = {
-      ...input.sessionPromptState,
-      sessionId: "rotated-session",
-      sessionTarget: {
-        agentId: "main",
-        sessionId: "rotated-session",
-        sessionKey: "agent:main:session-1",
-        storePath: `${tempDirs.make("publication-adopted-")}/openclaw-agent.sqlite`,
-      },
-    };
-    mocks.readGitHubPublicationFact.mockReturnValue({ available: false });
-    const names = await publicationTools(input);
-    expect(names).toContain("github_identity_status");
-    expect(names).not.toContain("github_publish");
-    expect(mocks.readGitHubPublicationFact).toHaveBeenLastCalledWith({
-      agentId: "main",
-      sessionId: "rotated-session",
-      sessionKey: "agent:main:session-1",
-    });
   });
 
   it("retains accepted spawns for the logical owner after a late post-compaction abort", async () => {

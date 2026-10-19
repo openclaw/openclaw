@@ -79,12 +79,13 @@ afterEach(() => {
 });
 
 it.each([
-  { runtime: "node", pinned: false, changed: false },
-  { runtime: "bun", pinned: true, changed: false },
-  { runtime: "node", pinned: false, changed: true },
+  { runtime: "node", pinned: false, changed: false, launcher: "openclaw.mjs" },
+  { runtime: "bun", pinned: true, changed: false, launcher: "openclaw.mjs" },
+  { runtime: "node", pinned: false, changed: false, launcher: "dist/entry.js" },
+  { runtime: "node", pinned: false, changed: true, launcher: "openclaw.mjs" },
 ] as const)(
-  "restores a retained $runtime CLI with pin=$pinned and changed custody=$changed",
-  async ({ runtime, pinned, changed }) => {
+  "restores a retained $runtime CLI through $launcher with pin=$pinned and changed custody=$changed",
+  async ({ runtime, pinned, changed, launcher }) => {
     const root = tempDirs.make("openclaw-node-restore-");
     const cli = {
       executable: path.join(
@@ -94,8 +95,9 @@ it.each([
       entrypoint: path.join(root, "dist", "index.js"),
       sqliteLibrary: pinned ? path.join(root, "libsqlite3.dylib") : null,
     };
+    const launcherPath = path.join(root, launcher);
     fs.mkdirSync(path.dirname(cli.entrypoint));
-    for (const file of [cli.executable, cli.entrypoint, cli.sqliteLibrary]) {
+    for (const file of [cli.executable, cli.entrypoint, launcherPath, cli.sqliteLibrary]) {
       if (file) {
         fs.writeFileSync(file, "", { mode: 0o755 });
       }
@@ -143,7 +145,7 @@ it.each([
     expect(installed?.programArguments.slice(0, 4 + runtimeArgs.length)).toEqual([
       cli.executable,
       ...runtimeArgs,
-      cli.entrypoint,
+      launcherPath,
       "node",
       "run",
     ]);

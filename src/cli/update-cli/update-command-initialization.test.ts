@@ -237,7 +237,9 @@ describe("initialization schema coordination", () => {
         });
       });
       expect(mocks.doctor).toHaveBeenCalledOnce();
-      await expect(updateStateNeedsInitialization(env)).rejects.toThrow(/offline maintenance/);
+      await expect(updateStateNeedsInitialization(env)).rejects.toThrow(
+        "without an active schema lease or maintenance scope",
+      );
       const reader = new DatabaseSync(databasePath, { readOnly: true });
       try {
         expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });

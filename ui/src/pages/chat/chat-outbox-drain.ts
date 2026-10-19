@@ -9,7 +9,7 @@ import {
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -136,7 +136,7 @@ async function reconcileStoredChatOutboxHead(
             areUiSessionKeysEquivalent(session.key, outbox.sessionKey),
           )
         : undefined;
-    if (row && isSessionRunActive(row)) {
+    if (row && isSessionRunStateActive(row)) {
       return "blocked";
     }
   }

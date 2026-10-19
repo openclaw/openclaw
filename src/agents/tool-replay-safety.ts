@@ -1,31 +1,8 @@
 /**
  * Defines the narrow set of tool instances that blind attempt retries may repeat.
  */
+import { resolveCoreToolFacts } from "./tool-catalog.js";
 import { normalizeToolPolicyName } from "./tool-policy-shared.js";
-
-const UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES = new Set([
-  "read",
-  "search",
-  "find",
-  "grep",
-  "glob",
-  "ls",
-  "web_search",
-  "web_fetch",
-  "x_search",
-  "memory_get",
-  "sessions_list",
-  "sessions_history",
-  "sessions_search",
-  "agents_list",
-  "conversations_list",
-  "get_goal",
-  "tool_search",
-  "tool_describe",
-  "skills_search",
-  "skills_read",
-  "view_image",
-]);
 
 type NamedTool = { name?: string };
 
@@ -52,7 +29,8 @@ export function isAgentToolReplaySafe(
   if (options?.declaredReplaySafe?.(tool) === false) {
     return false;
   }
-  return UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES.has(normalizeToolPolicyName(tool.name ?? ""));
+  const safety = resolveCoreToolFacts(normalizeToolPolicyName(tool.name ?? ""))?.replay;
+  return safety === "both" || safety === "blind";
 }
 
 /**
@@ -68,7 +46,7 @@ export function isAgentToolRestartSafe(
   if (declaredReplaySafe !== undefined) {
     return declaredReplaySafe;
   }
-  return UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES.has(normalizeToolPolicyName(tool.name ?? ""));
+  return isAgentToolReplaySafe(tool);
 }
 
 /**

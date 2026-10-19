@@ -257,6 +257,10 @@ async function activateScheduledTask(
       throw new Error("Scheduled Task registration change did not confirm completion.");
     }
     updating = change.code === 0;
+    if (updating) {
+      // This changes the registration before XML publication can fail.
+      await params.registration?.recordRegistration();
+    }
   }
 
   // Re-apply the full XML so existing tasks inherit both false battery flags (#59299).

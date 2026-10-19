@@ -2,6 +2,7 @@ import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
+import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import type { ChatDetailsSession } from "./chat-details-session.tsx";
@@ -474,4 +475,46 @@ describe("chat Details presentation", () => {
     menu.querySelector<HTMLButtonElement>('[data-value="hide"]')!.click();
     expect(hide).toHaveBeenCalledTimes(1);
   });
+});
+
+it("keeps the change summary in the heading action when collapsed and omits empty Participants", async () => {
+  const request = vi.fn().mockResolvedValue({
+    files: Array.from({ length: 12 }, () => ({ path: "app.ts" })),
+    additions: 248,
+    deletions: 61,
+  });
+  // SAFETY: This fixture supplies the read-only connection surface used by Details.
+  const gateway = {
+    snapshot: { phase: "connected", client: { request }, hello: null },
+    connectionRevision: 1,
+    subscribe: () => () => {},
+    subscribeEvents: () => () => {},
+  } as unknown as ApplicationGateway;
+  const view = await fixture(
+    props({ onOpenSessionDiff: vi.fn(), pullRequestsGateway: gateway }),
+    360,
+  );
+  view.trigger.click();
+  const action = () => view.session.querySelector<HTMLButtonElement>(".chat-details__all-changes")!;
+  await vi.waitFor(() => expect(action().textContent).toContain("+248"));
+  const group = action().closest<HTMLElement>(".chat-details__group")!;
+  const disclosure = group.querySelector<HTMLDetailsElement>("details")!;
+  const heading = disclosure.querySelector<HTMLElement>(":scope > summary")!;
+  for (const width of [360, 300]) {
+    view.frame.style.width = width + "px";
+    const row = action().getBoundingClientRect();
+    const caption = heading.getBoundingClientRect();
+    expect(row.left).toBeGreaterThan(caption.left);
+    expect(row.right).toBeLessThanOrEqual(caption.right);
+    expect(row.bottom).toBeLessThanOrEqual(caption.bottom);
+    expect(action().scrollWidth).toBeLessThanOrEqual(action().clientWidth);
+  }
+  disclosure.open = false;
+  expect(action().getBoundingClientRect().height).toBeGreaterThan(0);
+  expect(action().textContent).toContain("+248");
+  expect(view.session.querySelector(".chat-details__participants")).toBeNull();
+  const additions = view.session.querySelector<HTMLElement>(".chat-details__change-lines--add")!;
+  const deletions = view.session.querySelector<HTMLElement>(".chat-details__change-lines--del")!;
+  expect(getComputedStyle(additions).fontVariantNumeric).toBe("tabular-nums");
+  expect(getComputedStyle(additions).color).not.toBe(getComputedStyle(deletions).color);
 });

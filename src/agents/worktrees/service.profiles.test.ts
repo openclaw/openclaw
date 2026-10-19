@@ -53,6 +53,12 @@ describe("repository source profile creation", () => {
     await git(repo, "commit", "-m", "profile inputs");
     return await git(repo, "rev-parse", "HEAD");
   }
+  const create = (name: string, profiles: string[], baseRef = "HEAD") =>
+    service.create({ repoRoot: repo, name, baseRef, profiles });
+  async function expectUnregistered(name: string) {
+    expect(await git(repo, "branch", "--list", `openclaw/${name}`)).toBe("");
+    expect(await service.listRegistryRecords()).toEqual([]);
+  }
   async function profileTarget(destination: string) {
     return {
       env,
@@ -92,16 +98,8 @@ describe("repository source profile creation", () => {
     async (definition) => {
       await write(".openclaw/worktree-profiles/bad", definition);
       await save();
-      await expect(
-        service.create({
-          repoRoot: repo,
-          name: "invalid",
-          baseRef: "HEAD",
-          profiles: ["bad"],
-        }),
-      ).rejects.toThrow(/directory/);
-      expect(await git(repo, "branch", "--list", "openclaw/invalid")).toBe("");
-      expect(await service.listRegistryRecords()).toEqual([]);
+      await expect(create("invalid", ["bad"])).rejects.toThrow(/directory/);
+      await expectUnregistered("invalid");
       expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("/invalid");
     },
   );
@@ -258,16 +256,8 @@ describe("repository source profile creation", () => {
   });
 
   it("rejects an escaping profile name before source registration", async () => {
-    await expect(
-      service.create({
-        repoRoot: repo,
-        name: "invalid-name",
-        baseRef: commit,
-        profiles: ["../alpha"],
-      }),
-    ).rejects.toThrow(/lowercase name/);
-    expect(await git(repo, "branch", "--list", "openclaw/invalid-name")).toBe("");
-    expect(await service.listRegistryRecords()).toEqual([]);
+    await expect(create("invalid-name", ["../alpha"], commit)).rejects.toThrow(/lowercase name/);
+    await expectUnregistered("invalid-name");
   });
 
   it("rejects invalid UTF-8 and oversized definitions instead of reading a valid prefix", async () => {
@@ -298,7 +288,6 @@ describe("repository source profile creation", () => {
       service.create({ repoRoot: repo, name: "retry", profiles: ["alpha"] }),
     ).rejects.toThrow("remote checkout failed");
     expect(attemptedBases).toEqual([commit]);
-    expect(await service.listRegistryRecords()).toEqual([]);
-    expect(await git(repo, "branch", "--list", "openclaw/retry")).toBe("");
+    await expectUnregistered("retry");
   });
 });

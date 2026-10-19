@@ -5,6 +5,7 @@ import {
   withDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
 import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
@@ -12,9 +13,11 @@ import { pluginMetadataReadOperations } from "../plugins/plugin-metadata-state.r
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   closeRetainedOpenClawStateReadConnections,
+  openOpenClawStateReadConnection,
   readOpenClawStateReadOnlyLocation,
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
+import { postgresStateReadSnapshot } from "./openclaw-state-postgres-snapshot-context.js";
 import { stateReadRegistry } from "./openclaw-state-read-operation-registry.js";
 import type {
   OpenClawStateReadReply,
@@ -60,6 +63,39 @@ serveOwnedWorkerTasks(
         }
         const { command } = input;
         if (command.type === "admit") {
+          if (input.exportPostgresSnapshot) {
+            if (!channel) {
+              throw new Error("PostgreSQL discovery snapshot requires its retained receiver");
+            }
+            const connection = openOpenClawStateReadConnection(
+              input.databasePath,
+              input.location,
+              input.expectedIdentity,
+            );
+            const db = connection.database.db;
+            try {
+              if (!isPostgresSqlConnection(db)) {
+                throw new Error("PostgreSQL discovery snapshot requires PostgreSQL state");
+              }
+              // sqlite-allow-raw: This PostgreSQL transaction must outlive the asynchronous snapshot consumer.
+              db.exec("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+              const snapshot =
+                /* sqlite-allow-raw: PostgreSQL exports the retained transaction's MVCC snapshot. */ db
+                  .prepare("SELECT pg_export_snapshot() AS snapshot")
+                  .get()?.snapshot;
+              const response = await channel.request(snapshot);
+              response.consumed();
+            } finally {
+              try {
+                if (db.isTransaction) {
+                  // sqlite-allow-raw: Release the exporting PostgreSQL transaction after its consumer settles.
+                  db.exec("ROLLBACK");
+                }
+              } finally {
+                connection.close();
+              }
+            }
+          }
           return { ok: true, type: "admit" };
         }
         const locationArgs = [
@@ -171,10 +207,17 @@ serveOwnedWorkerTasks(
         return { ok: true, sourceAdmitted: true, ...result };
       };
       const selection = input.context.databaseEngineSelection ?? getDatabaseEngineSelection();
-      const run = () =>
+      const execute = () =>
         withSqliteReaderOwner({ operation: input.command.type, ownerKind: "worker" }, () =>
           runWithSqliteWorkerStateContext(input.context, executeRead),
         );
+      const run = () =>
+        input.postgresSnapshot
+          ? postgresStateReadSnapshot.run(
+              { path: input.databasePath, snapshot: input.postgresSnapshot },
+              execute,
+            )
+          : execute();
       const reply = await (selection ? withDatabaseEngineSelection(selection, run) : run());
       if (
         !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources &&

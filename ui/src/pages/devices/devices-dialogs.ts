@@ -31,7 +31,6 @@ type InventoryRemovalPrompt =
 export type DevicesDialogHost = {
   canManagePairing: () => boolean;
   gatewayConnected: () => boolean;
-  requestGeneration: () => number;
   gatewayClient: () => GatewayBrowserClient | null;
   gatewayUrl: () => string;
   runPageTask: <T>(task: (pageState: DevicesPageDataState) => T | Promise<T>) => Promise<T>;
@@ -46,7 +45,7 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
     pending = null;
   }
 
-  // Alias edits and destructive confirmations share one slot, retired on reconnect.
+  // Alias edits and destructive confirmations share one identity-scoped slot.
   async function editAlias(device: DeviceAliasTarget): Promise<void> {
     if (!host.canManagePairing() || pending) {
       return;
@@ -62,6 +61,7 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
         defaultValue: device.operatorLabel ?? "",
         requireValue: true,
         requireChange: true,
+        canSubmit: host.canManagePairing,
         submit: (label) => {
           if (!host.canManagePairing()) {
             return Promise.resolve(t("devices.readOnly.pairingRequired"));
@@ -144,7 +144,7 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
   /**
    * Switching the exec approvals target throws away an unsaved policy draft, so
    * it confirms through the same single-dialog slot as the destructive actions:
-   * a reconnect aborts it and it cannot stack on another prompt. There is no
+   * an identity change aborts it and it cannot stack on another prompt. There is no
    * request to place, so the post-await revalidation is only that this dialog is
    * still the page's current one — a false result must leave every field alone.
    */
@@ -169,7 +169,7 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
 
   // Every destructive Devices action confirms here, never through window.confirm: the
   // awaited dialog lets the gateway reconnect or swap clients mid-prompt, so the captured
-  // scope and current authority are revalidated before the operation runs.
+  // identity and current authority are revalidated before the operation runs.
   async function confirmDestructiveAction(
     prompt: Omit<ConfirmDialogOptions, "danger" | "signal">,
     run: (pageState: DevicesPageDataState) => unknown,
@@ -179,12 +179,12 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
     }
     const controller = new AbortController();
     pending = controller;
-    const generation = host.requestGeneration();
     const client = host.gatewayClient();
     const confirmed = await showConfirmDialog({
       ...prompt,
       danger: true,
       signal: controller.signal,
+      canConfirm: host.canManagePairing,
     });
     if (pending === controller) {
       pending = null;
@@ -192,7 +192,6 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
     if (
       !confirmed ||
       controller.signal.aborted ||
-      generation !== host.requestGeneration() ||
       client !== host.gatewayClient() ||
       !host.gatewayConnected() ||
       !host.canManagePairing()

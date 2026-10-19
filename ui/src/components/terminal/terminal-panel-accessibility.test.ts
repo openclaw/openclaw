@@ -38,7 +38,7 @@ function createPickerClient() {
         ? terminalOpenResult("current-1")
         : method === "terminal.list"
           ? { sessions: [] }
-          : {}) as T,
+          : { ok: true }) as T,
     addEventListener: () => () => {},
   } satisfies TerminalGatewayClient;
 }
@@ -198,7 +198,7 @@ describe("OpenClawTerminalPanel accessibility", () => {
             seq: 0,
           } as T;
         }
-        return {} as T;
+        return { ok: true } as T;
       },
       addEventListener: () => () => {},
     };

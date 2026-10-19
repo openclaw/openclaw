@@ -68,7 +68,6 @@ const families = [
   "bootstrap",
   "capture",
   "channelIngress",
-  "clawProvenance",
   "claws",
   "config",
   "conversation",

@@ -67,7 +67,7 @@ async function withWorkerRuntime(run: () => Promise<void>) {
       getPluginRegistry: () => registry,
       getPortalRuntime: () => undefined,
       resolveGatewayContext: () => undefined,
-      desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
+      desktopSessionRegistry: createDesktopSessionRegistry(),
       startup,
       log: { child: () => ({ info: () => {}, warn: () => {} }) },
     });

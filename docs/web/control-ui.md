@@ -22,6 +22,24 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+## Temporary disconnections
+
+When the connection drops, the Control UI keeps loaded catalogs, automation
+editors, Memory Import selections, Activity history, Dreaming results, approval
+queues, and open board and portal documents in memory. A transport interruption
+does not reset those page-local drafts. The connection indicator at the bottom
+left shows the connection state; retained data may be out of date until reconnect.
+
+Gateway actions, including saving edits and approving requests, require a live
+connection. Reconnecting refreshes retained data without automatically replaying
+those actions. Memory Import keeps explicit deselections when refreshing its
+plan. Session rename and new-group dialogs keep typed text across a temporary
+disconnect; failed submissions stay open for review and retry.
+
+Switching Gateway or account, signing out, or losing access clears the affected
+data and drafts. This retention does not add offline persistence or guarantee
+that page-local drafts survive a reload or closing the tab.
+
 ## Browser requirements
 
 Use Safari 26.2 or later on macOS 26.2, iOS 26.2, or iPadOS 26.2 or later,
@@ -40,6 +58,8 @@ centered crop. The choice is saved with your tab-icon preference, and activity
 badges remain visible on every shape.
 
 After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
+
+If the New Session page fails during its initial render, the UI attempts one automatic page reload per browser tab. A repeated failure shows **Retry** instead of starting a reload loop. Automatic recovery is skipped if session storage is unavailable, the serving document cannot be reached, or unsaved work blocks reloading. Errors after the composer has rendered use in-page retry instead.
 
 Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
 
@@ -70,6 +90,8 @@ If the Gateway's request queue is full, automatic sidebar session discovery keep
 While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Drag the System busyness title bar to move the panel; its position is remembered in this browser. You can also focus the title bar and use the arrow keys (Shift moves farther). Compact/expanded transitions animate briefly, respect reduced motion, and keep the panel inside the window. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
 
 The selected chat loads before automatic sidebar session lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error. Accepted new sessions refresh the visible sidebar immediately, including **Involving me** and owner filters, without waiting for the chat to finish loading or the agent to finish working.
+
+If the selected session changes while its message subscription is being admitted, chat retries that read with fresh access checks for up to one minute. Saved replies load after the subscription succeeds, without resending your message. Switching chats or losing access stops recovery; a persistent failure leaves **Retry** available.
 
 Use **Snooze → Choose another time** in a session menu to pick a future date and time in your browser’s local time zone. After a successful snooze, **Custom** shows that exact date and time in other session menus for one hour. Choosing another custom time replaces it; presets and Undo leave the remembered choice unchanged. The browser stores this choice separately for each Gateway and signed-in account, and removes it when it expires or the wake time passes. If browser storage is unavailable, the choice remains reusable only in the current page.
 
@@ -112,6 +134,13 @@ Failed narration releases use the same backoff, including while the tab is hidde
 Closed Terminal, Browser, and Desktop panels initialize when you open them rather than during initial navigation. Home/Ask OpenClaw and System busyness keep lightweight frames ready and defer their conversation or diagnostic contents until opened. Home preserves its saved dock position and size throughout loading. Panels saved as open still restore after a reload. Settings does not automatically reopen Ask OpenClaw; its control and diagnostic actions can still open it explicitly.
 
 Minimizing and reopening the Dashboard side panel preserves loaded MCP Apps and their unsaved in-app input while the app lease remains valid.
+
+MCP Apps and Canvas previews also retain their loaded frames through a connection
+blip to the same Gateway. Gateway-backed actions pause until reconnection; they
+are not queued for replay. MCP discovery keeps its last results while offline.
+If an app times out during initialization, use **Retry** to load it again.
+Changing Gateway, losing access, or selecting different content retires the old
+frame and its local state.
 
 Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. Configuration and command changes refresh commands; catalog and session lifecycle changes refresh affected model choices. Agent-specific catalog changes retain other agents’ cached choices and pending catalog requests. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
 
@@ -170,7 +199,10 @@ messages. This changes only presentation, not stored messages or run ownership.
 
 When an incoming message causes an unstarted tool call to be skipped, its card
 and work summary show **Skipped**, including after reloading the conversation.
-Approval blocks and tool failures keep their separate outcomes.
+Approval blocks and tool failures keep their separate outcomes. A failed command
+with a reported zero exit code still shows **failed** in its summary and expanded
+result. Nonzero exit codes remain visible as diagnostics; captured output and
+reported exit facts are unchanged.
 
 Failed replies show **Try again** at the right of the heading. A compact
 **Copy error** icon beside the title appears on hover or keyboard focus, and
@@ -217,7 +249,10 @@ menu to inspect the conversation's background exec commands. It is separate from
 time. **Finished** starts collapsed; click its heading to expand or collapse the
 list. Selecting a process opens its recent output. **Stop** targets that exact
 process, not the parent conversation or another command with the same name.
-Hidden panels stop refreshing. Output follows the process owner's temporary
+Details and Processes panels viewing the same session share one observation and
+refresh when its background processes change. Changes are batched over five seconds;
+a safety refresh runs after a minute without an update. Hidden panels and browser
+tabs stop refreshing. Output follows the process owner's temporary
 retention limits; viewing it does not drain output waiting for the agent.
 
 Select a session's title in the chat header to rename it. Enter saves the name;

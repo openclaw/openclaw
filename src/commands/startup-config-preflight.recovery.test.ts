@@ -23,7 +23,46 @@ import {
   type StartupConfigPreflightOptions,
 } from "./startup-config-preflight.js";
 
-const withPreflightHome = useDoctorConfigPreflightHome();
+const inPreflightHome = useDoctorConfigPreflightHome();
+const backupConfig = {
+  gateway: { mode: "local" },
+  plugins: { enabled: false },
+  meta: { migrations: { webhookListeners: true } },
+};
+const incompleteConfig = '{"update":{"channel":"stable"}}\n';
+const runtime = {
+  log() {},
+  error() {},
+  exit(code: number): never {
+    throw new ExitError(code);
+  },
+};
+
+async function withPreflightHome(
+  run: (home: string, stateDir: string, configPath: string) => Promise<void>,
+) {
+  return inPreflightHome(async (home) => {
+    const stateDir = path.join(home, ".openclaw");
+    await fs.mkdir(stateDir, { recursive: true });
+    await run(home, stateDir, path.join(stateDir, "openclaw.json"));
+  });
+}
+
+function initializeDatabase(stateDir: string) {
+  openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
+  closeOpenClawStateDatabaseForTest();
+}
+
+async function expectLeaseReleased(
+  heartbeat: MockInstance<checkpoint.StartupMigrationLease["heartbeat"]> | undefined,
+) {
+  expect(vi.getTimerCount()).toBe(0);
+  expect(heartbeat).toBeDefined();
+  heartbeat?.mockClear();
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(heartbeat).not.toHaveBeenCalled();
+  expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
+}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -34,9 +73,7 @@ afterEach(() => {
 it.each(["current", "webhook-repair"] as const)(
   "preserves authored config during startup from %s",
   async (source) => {
-    await withPreflightHome(async (home) => {
-      const stateDir = path.join(home, ".openclaw");
-      const configPath = path.join(stateDir, "openclaw.json");
+    await withPreflightHome(async (home, stateDir, configPath) => {
       const original = JSON.stringify({
         gateway: { mode: "local" },
         ...(source === "webhook-repair"
@@ -51,20 +88,12 @@ it.each(["current", "webhook-repair"] as const)(
             }
           : { plugins: { enabled: false } }),
       });
-      await fs.mkdir(stateDir, { recursive: true });
-      openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
-      closeOpenClawStateDatabaseForTest();
+      initializeDatabase(stateDir);
       if (source === "webhook-repair") {
         await beginGatewayBootLifecycle(process.env, 1_800_000_000_000);
       }
       await fs.writeFile(configPath, original);
-      const runtime = {
-        log() {},
-        error() {},
-        exit(code: number): never {
-          throw new ExitError(code);
-        },
-      };
+
       expect(await prepareGatewayRunBootstrap({ opts: {}, runtime })).toBe(true);
       const replacement = JSON.stringify({
         gateway: { mode: "local", port: 19002 },
@@ -137,10 +166,7 @@ it.each([
 ] as const)(
   "leaves legacy bind %s untouched until Doctor repairs it",
   async (legacy, canonical) => {
-    await withPreflightHome(async (home) => {
-      const stateDir = path.join(home, ".openclaw");
-      const configPath = path.join(stateDir, "openclaw.json");
-      await fs.mkdir(stateDir, { recursive: true });
+    await withPreflightHome(async (home, stateDir, configPath) => {
       const original = JSON.stringify({
         gateway: { mode: "local", bind: legacy },
         plugins: { enabled: false },
@@ -175,19 +201,11 @@ it.each([
 );
 
 it("restores the admitted backup after database readiness exceeds the lease TTL", async () => {
-  await withPreflightHome(async (home) => {
-    const stateDir = path.join(home, ".openclaw");
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.mkdir(stateDir, { recursive: true });
-    const backup = {
-      gateway: { mode: "local" },
-      plugins: { enabled: false },
-      meta: { migrations: { webhookListeners: true } },
-    };
-    await fs.writeFile(configPath, '{"update":{"channel":"stable"}}\n');
+  await withPreflightHome(async (home, stateDir, configPath) => {
+    const backup = backupConfig;
+    await fs.writeFile(configPath, incompleteConfig);
     await fs.writeFile(`${configPath}.bak`, JSON.stringify(backup));
-    openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
-    closeOpenClawStateDatabaseForTest();
+    initializeDatabase(stateDir);
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     let acquired: checkpoint.StartupMigrationLease | undefined;
     let heartbeats = 0;
@@ -235,16 +253,9 @@ it("restores the admitted backup after database readiness exceeds the lease TTL"
 it.each(["backup", "active config"] as const)(
   "refuses changed %s under the lease before any repair",
   async (kind) => {
-    await withPreflightHome(async (home) => {
-      const stateDir = path.join(home, ".openclaw");
-      const configPath = path.join(stateDir, "openclaw.json");
-      await fs.mkdir(stateDir, { recursive: true });
-      const backup = {
-        gateway: { mode: "local" },
-        plugins: { enabled: false },
-        meta: { migrations: { webhookListeners: true } },
-      };
-      const original = '{"update":{"channel":"stable"}}\n';
+    await withPreflightHome(async (home, stateDir, configPath) => {
+      const backup = backupConfig;
+      const original = incompleteConfig;
       const replacement = JSON.stringify(
         kind === "backup"
           ? {
@@ -257,17 +268,10 @@ it.each(["backup", "active config"] as const)(
               agents: { defaults: { workspace: path.join(home, "changed-workspace") } },
             },
       );
-      openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
-      closeOpenClawStateDatabaseForTest();
+      initializeDatabase(stateDir);
       await fs.writeFile(configPath, original);
       await fs.writeFile(`${configPath}.bak`, JSON.stringify(backup));
-      const runtime = {
-        log() {},
-        error() {},
-        exit(code: number): never {
-          throw new ExitError(code);
-        },
-      };
+
       await withEnvAsync(
         { OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: undefined },
         async () => {
@@ -290,12 +294,7 @@ it.each(["backup", "active config"] as const)(
               recheckGatewayRunBootstrap({ opts: {}, runtime, snapshot }),
           }).catch((error: unknown) => error);
           expect(acquisition).toHaveBeenCalledTimes(1);
-          expect(vi.getTimerCount()).toBe(0);
-          expect(heartbeat).toBeDefined();
-          heartbeat?.mockClear();
-          await vi.advanceTimersByTimeAsync(60_000);
-          expect(heartbeat).not.toHaveBeenCalled();
-          expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
+          await expectLeaseReleased(heartbeat);
           expect(refusal).toMatchObject({ code: kind === "backup" ? 78 : 1 });
           expect(await fs.readFile(configPath, "utf8")).toBe(
             kind === "backup" ? original : replacement,
@@ -314,22 +313,11 @@ it.each([
   ["reacquires a reassigned migration lease during admission", "reassigned"],
   ["fails after three attempts when the lease is lost on every attempt", "always expired"],
 ] as const)("%s", async (_title, loss) => {
-  await withPreflightHome(async (home) => {
-    const stateDir = path.join(home, ".openclaw");
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.mkdir(stateDir, { recursive: true });
-    const original = '{"update":{"channel":"stable"}}\n';
+  await withPreflightHome(async (home, stateDir, configPath) => {
+    const original = incompleteConfig;
     await fs.writeFile(configPath, original);
-    await fs.writeFile(
-      `${configPath}.bak`,
-      JSON.stringify({
-        gateway: { mode: "local" },
-        plugins: { enabled: false },
-        meta: { migrations: { webhookListeners: true } },
-      }),
-    );
-    openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
-    closeOpenClawStateDatabaseForTest();
+    await fs.writeFile(`${configPath}.bak`, JSON.stringify(backupConfig));
+    initializeDatabase(stateDir);
     const acquire = checkpoint.acquireStartupMigrationLeaseWithWait;
     let attempts = 0;
     let heartbeat: MockInstance<checkpoint.StartupMigrationLease["heartbeat"]> | undefined;
@@ -367,12 +355,7 @@ it.each([
       expect((await fs.readdir(stateDir)).filter((name) => name.includes(".clobbered."))).toEqual(
         [],
       );
-      expect(vi.getTimerCount()).toBe(0);
-      expect(heartbeat).toBeDefined();
-      heartbeat?.mockClear();
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(heartbeat).not.toHaveBeenCalled();
-      expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
+      await expectLeaseReleased(heartbeat);
       return;
     }
     const result = await runStartupConfigPreflight({ gateway: true });
@@ -383,11 +366,6 @@ it.each([
     const clobbered = (await fs.readdir(stateDir)).filter((name) => name.includes(".clobbered."));
     expect(clobbered).toHaveLength(1);
     expect(await fs.readFile(path.join(stateDir, clobbered[0]!), "utf8")).toBe(original);
-    expect(vi.getTimerCount()).toBe(0);
-    expect(heartbeat).toBeDefined();
-    heartbeat?.mockClear();
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(heartbeat).not.toHaveBeenCalled();
-    expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
+    await expectLeaseReleased(heartbeat);
   });
 });

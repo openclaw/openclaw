@@ -4,9 +4,8 @@ import {
   logCodeModeDiagnostic,
 } from "../../../logging/code-mode-diagnostic.js";
 import {
-  copyAgentToolAvailability,
   finalizeAgentToolAvailability,
-  markAgentToolExecutionUnavailable,
+  gateAgentToolExecution,
 } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../../code-mode.js";
@@ -31,7 +30,6 @@ import {
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
-import { textResult } from "../../tools/tool-results.js";
 import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
@@ -254,18 +252,6 @@ function gateToolExecution(
   return tools.map((tool) =>
     executionAllowed(tool.name) || TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)
       ? tool
-      : markAgentToolExecutionUnavailable(
-          copyAgentToolAvailability(tool, {
-            ...tool,
-            // Preparation can perform work too; a denied call must not enter the source path.
-            prepareArguments: undefined,
-            prepareBeforeToolCallParams: undefined,
-            finalizeBeforeToolCallParams: undefined,
-            // A denial is guidance for the model, not a tool failure that fails the run;
-            // a failure-like `status` detail would reclassify it as an error.
-            execute: async () =>
-              textResult(formatToolExecutionGatedMessage(tool.name, allowNames), { gated: true }),
-          }),
-        ),
+      : gateAgentToolExecution(tool, formatToolExecutionGatedMessage(tool.name, allowNames)),
   );
 }

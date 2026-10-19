@@ -4,6 +4,7 @@ import { createMemo, For, Show } from "solid-js";
 import "../../components/resizable-divider.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
+import type { GatewayStatusProps } from "../../components/gateway-status.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
@@ -31,6 +32,7 @@ declare module "@solidjs/web" {
         "prop:narrow": boolean;
         "prop:mergedChrome": boolean;
         "prop:navDrawerOpen": boolean;
+        "prop:gatewayStatus"?: GatewayStatusProps | null;
       };
     }
   }
@@ -48,6 +50,7 @@ type ChatPagePaneRenderOptions = {
   mergedChrome: boolean;
   narrow: boolean;
   navDrawerOpen: boolean;
+  gatewayStatus?: GatewayStatusProps | null;
   onboarding: boolean;
   onClosePane?: (paneId: string) => void;
   onFaceChange: (paneId: string, sessionKey: string, face: BoardFace) => void;
@@ -183,6 +186,7 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
           prop:narrow={props.options.narrow}
           prop:mergedChrome={props.options.mergedChrome && active()}
           prop:navDrawerOpen={props.options.navDrawerOpen && active()}
+          prop:gatewayStatus={active() ? props.options.gatewayStatus : null}
         />
       }
     >
@@ -220,6 +224,7 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
         narrow={props.options.narrow}
         mergedChrome={props.options.mergedChrome && active()}
         navDrawerOpen={props.options.navDrawerOpen && active()}
+        gatewayStatus={active() ? (props.options.gatewayStatus ?? null) : null}
         onboarding={props.options.onboarding}
         onOpenSplitView={props.options.onOpenSplitView}
         onSplitDown={props.options.onSplitDown}

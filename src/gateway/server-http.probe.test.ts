@@ -17,7 +17,7 @@ import {
   createAgentDatabaseInspectionRefusal,
   type AgentDatabaseAdmissionRefusal,
 } from "../state/agent-database-admission.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
 import {
   AUTH_TOKEN,
   AUTH_NONE,
@@ -79,6 +79,7 @@ const startupDetails = (status: "starting" | "started" | "draining", pendingReas
   ok: status === "started",
   status,
   version: resolveRuntimeServiceVersion(process.env),
+  buildId: resolveRuntimeServiceBuildId(),
   uptimeMs: expect.any(Number),
   ...(pendingReason ? { pendingReason } : {}),
 });

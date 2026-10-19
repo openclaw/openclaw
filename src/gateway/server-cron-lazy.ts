@@ -1,4 +1,3 @@
-// Gateway cron lazy loader.
 // Defers scheduler startup until cron is touched by runtime or API handlers.
 import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";

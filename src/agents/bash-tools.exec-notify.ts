@@ -334,8 +334,8 @@ export function prepareExecExitNotification(
           sessionKey: targetKey,
           sessionId: target.sessionId,
         });
-        // Retain the originating runs, so a completion turn cannot extend its own lifetime.
-        target.assertCurrent = () => {
+        // The originating run must survive queue acceptance, not the queued follow-up.
+        session.assertExitNotificationAcceptanceCurrent = () => {
           if (!runs.some((run) => hasAgentRunContextExecutionOwner(run.runId))) {
             throw new Error("Originating cron run ended; inspect the result with process log");
           }
@@ -426,6 +426,7 @@ export async function maybeNotifyOnExit(
         processSessionInstanceId(session),
         {
           ...eventOptions,
+          assertAcceptanceCurrent: session.assertExitNotificationAcceptanceCurrent,
           onAdopted: session.clearExitNotification,
         },
       );

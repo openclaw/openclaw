@@ -14,15 +14,20 @@ import {
 function ConflictCopyAction(props: { text: string; label: string }) {
   return (
     <For each={[props.text]}>
-      {(text) => (
-        <button
-          class="btn btn--sm chat-copy-btn"
-          type="button"
-          onClick={(event) => void handleCopyButton(event, text, props.label)}
-        >
-          <span data-copy-label>{props.label}</span>
-        </button>
-      )}
+      {(text) => {
+        let label!: HTMLSpanElement;
+        return (
+          <button
+            class="btn btn--sm chat-copy-btn"
+            type="button"
+            onClick={(event) => void handleCopyButton(event, text, props.label, { label })}
+          >
+            <span ref={(element) => (label = element)} data-copy-label>
+              {props.label}
+            </span>
+          </button>
+        );
+      }}
     </For>
   );
 }

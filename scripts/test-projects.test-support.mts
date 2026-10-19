@@ -799,6 +799,10 @@ const SOURCE_TEST_TARGETS = new Map([
       "src/agents/model-compat.test.ts",
     ],
   ],
+  [
+    "src/plugin-sdk/lazy-value.ts",
+    ["src/plugin-sdk/core.test.ts", "src/plugin-sdk/channel-entry-contract.test.ts"],
+  ],
   ["src/plugin-sdk/memory-host-events.ts", ["src/plugin-sdk/memory-host-events.test.ts"]],
   ["src/plugin-sdk/persistent-dedupe.ts", ["src/plugin-sdk/memory-host-events.test.ts"]],
   [

@@ -136,7 +136,7 @@ it.each(["configured-owner", "profile"] as const)(
         try {
           if (source === "profile") {
             // The live owner grants storage access only inside its retained closure.
-            expect(assertCurrent).toThrow("undergoing offline maintenance");
+            expect(assertCurrent).toThrow("without an active schema lease or maintenance scope");
           }
           await maintenance!.run(async () => {
             expect(foreignRequester.isCurrent()).toBe(true);
@@ -189,7 +189,8 @@ it.each(["configured-owner", "profile"] as const)(
             repairGatewayMaintenanceStartupFailures(state.env);
           });
           expect(authorityWorkerLaunches.size).toBe(admissionWorkerLaunches);
-          expect(admissionWorkerLaunches).toBeLessThanOrEqual(8);
+          // Lease admission rechecks authority after acquisition inside the held scope.
+          expect(admissionWorkerLaunches).toBeLessThanOrEqual(9);
           // The Doctor flow leaves runChecks before its post-repair cleanup.
           // Draining those readers requires fresh admission before restoration.
           await maintenance!.cleanupRetainedRuntimes();

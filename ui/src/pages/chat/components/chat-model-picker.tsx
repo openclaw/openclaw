@@ -73,7 +73,6 @@ export type ChatModelPickerParams = {
   ) => Promise<unknown>;
   onTargetRetry?: (groupId: string) => unknown;
   onTargetSelect?: (groupId: string, value: string) => unknown;
-  onRequestUpdate?: () => void;
 };
 
 function prepareChatModelPicker(params: ChatModelPickerParams) {
@@ -209,7 +208,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
       searchInput.focus({ preventScroll: true });
     }
   };
-  // Retain choices after first use so provider expansion survives dismissal.
+  // Retain the panel after first use so search and provider expansion survive dismissal.
   const [choicesMounted, mountChoices] = createSignal(false);
   const pickerOverlay = createChatPickerOverlay((target) => {
     if (target.open) {
@@ -262,15 +261,12 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
       event.preventDefault();
       return;
     }
-    void params
-      .onModelSelect(
-        entry.commitValue,
-        params.sessionKey,
-        entry.runtimeOverride ??
-          (entry.isDefault || entry.agentRuntime !== undefined ? null : undefined),
-      )
-      .finally(() => params.onRequestUpdate?.());
-    params.onRequestUpdate?.();
+    void params.onModelSelect(
+      entry.commitValue,
+      params.sessionKey,
+      entry.runtimeOverride ??
+        (entry.isDefault || entry.agentRuntime !== undefined ? null : undefined),
+    );
     closeModelPickerAfterSelection(event);
   };
   const selectTarget = (groupId: string, value: string, event: MouseEvent) => {
@@ -422,15 +418,17 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
     <details
       ref={(element) => {
         details = element;
-        pickerOverlay(element);
+        pickerOverlay.details(element);
       }}
+      onClick={pickerOverlay.onClick}
+      onToggle={pickerOverlay.onToggle}
       class="chat-controls__inline-select chat-controls__model-picker"
       data-chat-autotype-shortcuts
       prop:open={params.open === true}
       onKeyDown={handleModelPickerKeydown}
     >
       <summary
-        ref={(element) => (summary = element)}
+        ref={[(element) => (summary = element), pickerOverlay.trigger]}
         class={[
           "chat-controls__inline-select-trigger chat-controls__model-trigger",
           {
@@ -484,6 +482,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
         </span>
       </summary>
       <div
+        ref={pickerOverlay.surface}
         class="oc-overlay chat-picker-overlay"
         data-anchored-overlay
         popover="manual"
@@ -493,70 +492,70 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
           }
         }}
       >
-        <div
-          class="chat-controls__inline-select-menu chat-controls__model-menu"
-          aria-label={t("chat.selectors.model")}
-        >
-          {params.modelSelectionLocked ? (
-            <div
-              class="chat-controls__locked-model"
-              aria-label={t("chat.selectors.modelLockedLabel")}
-            >
-              <span class="chat-controls__inline-select-section-label">
-                {t("chat.selectors.modelSection")}
-              </span>
-              <span class="chat-controls__locked-model-value">{params.triggerModelLabel}</span>
-              <span class="chat-controls__locked-model-badge">
-                {t("chat.selectors.modelLocked")}
-              </span>
-            </div>
-          ) : (
-            <>
-              {state().hasOptions || params.accountSection ? (
-                <div class="chat-controls__model-search-wrap">
-                  <Icon name="search" />
-                  <input
-                    ref={(element) => (searchInput = element)}
-                    class="chat-controls__model-search"
-                    data-chat-model-search="true"
-                    type="search"
-                    role="combobox"
-                    aria-autocomplete="list"
-                    autocomplete="off"
-                    spellcheck="false"
-                    placeholder={t("chat.modelControls.searchModels")}
-                    aria-label={t("chat.modelControls.searchModels")}
-                    disabled={params.disabled}
-                    onInput={(event: InputEvent) =>
-                      // SAFETY: This input handler belongs to the model search input.
-                      updateModelSearch(event.currentTarget as HTMLInputElement)
-                    }
-                    onKeyDown={handleModelSearchKeydown}
-                  />
-                  {params.modelOptions.length > 0 ? (
-                    <ChatModelCatalogRefresh state={params.modelCatalogState} />
-                  ) : undefined}
-                </div>
-              ) : undefined}
-              <ChatModelCatalogState
-                state={params.modelCatalogState}
-                hasOptions={params.modelOptions.length > 0}
-                hasSelectableOptions={state().hasSelectableModelOptions}
-                onModelSetup={params.onModelSetup}
-                emptyLabel={
-                  params.modelOptions.some(
-                    (option) =>
-                      option.unavailableReason === "missing-auth" &&
-                      resolveModelRuntimeRoute(option.provider, option.agentRuntimeId) ===
-                        "claudeCli",
-                  )
-                    ? t("chat.modelControls.claudeCliNotReady")
-                    : undefined
-                }
-              />
-              {state().hasOptions || params.accountSection ? (
-                <>
-                  <Show when={choicesMounted()}>
+        <Show when={choicesMounted()}>
+          <div
+            class="chat-controls__inline-select-menu chat-controls__model-menu"
+            aria-label={t("chat.selectors.model")}
+          >
+            {params.modelSelectionLocked ? (
+              <div
+                class="chat-controls__locked-model"
+                aria-label={t("chat.selectors.modelLockedLabel")}
+              >
+                <span class="chat-controls__inline-select-section-label">
+                  {t("chat.selectors.modelSection")}
+                </span>
+                <span class="chat-controls__locked-model-value">{params.triggerModelLabel}</span>
+                <span class="chat-controls__locked-model-badge">
+                  {t("chat.selectors.modelLocked")}
+                </span>
+              </div>
+            ) : (
+              <>
+                {state().hasOptions || params.accountSection ? (
+                  <div class="chat-controls__model-search-wrap">
+                    <Icon name="search" />
+                    <input
+                      ref={(element) => (searchInput = element)}
+                      class="chat-controls__model-search"
+                      data-chat-model-search="true"
+                      type="search"
+                      role="combobox"
+                      aria-autocomplete="list"
+                      autocomplete="off"
+                      spellcheck="false"
+                      placeholder={t("chat.modelControls.searchModels")}
+                      aria-label={t("chat.modelControls.searchModels")}
+                      disabled={params.disabled}
+                      onInput={(event: InputEvent) =>
+                        // SAFETY: This input handler belongs to the model search input.
+                        updateModelSearch(event.currentTarget as HTMLInputElement)
+                      }
+                      onKeyDown={handleModelSearchKeydown}
+                    />
+                    {params.modelOptions.length > 0 ? (
+                      <ChatModelCatalogRefresh state={params.modelCatalogState} />
+                    ) : undefined}
+                  </div>
+                ) : undefined}
+                <ChatModelCatalogState
+                  state={params.modelCatalogState}
+                  hasOptions={params.modelOptions.length > 0}
+                  hasSelectableOptions={state().hasSelectableModelOptions}
+                  onModelSetup={params.onModelSetup}
+                  emptyLabel={
+                    params.modelOptions.some(
+                      (option) =>
+                        option.unavailableReason === "missing-auth" &&
+                        resolveModelRuntimeRoute(option.provider, option.agentRuntimeId) ===
+                          "claudeCli",
+                    )
+                      ? t("chat.modelControls.claudeCliNotReady")
+                      : undefined
+                  }
+                />
+                {state().hasOptions || params.accountSection ? (
+                  <>
                     <div class="chat-controls__model-options">
                       <For each={state().orderedProviderGroups} keyed={(group) => group[0]}>
                         {(group) => (
@@ -625,35 +624,35 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
                         />
                       ) : undefined}
                     </div>
-                  </Show>
-                  <div
-                    class="chat-controls__model-search-empty"
-                    data-chat-model-search-empty
-                    hidden
-                  >
-                    {t("chat.modelControls.noMatchingModels")}
-                  </div>
-                  {params.contextWindow ? (
-                    <ChatContextWindowControl
-                      contextWindow={params.contextWindow}
-                      sessionKey={params.sessionKey}
-                    />
-                  ) : undefined}
-                </>
-              ) : undefined}
-            </>
-          )}
-          {params.modelSelectionLocked && params.accountSection ? (
-            <div class="chat-controls__model-options">
-              <ChatModelAccountSectionView {...params.accountSection.viewProps(0)} />
-            </div>
-          ) : undefined}
-          {params.modelCatalogState?.modelSelectionPolicy?.restricted ? (
-            <div class="chat-controls__model-catalog-state" data-chat-model-policy>
-              {t("chat.modelControls.restrictedModelsHelp")}
-            </div>
-          ) : undefined}
-        </div>
+                    <div
+                      class="chat-controls__model-search-empty"
+                      data-chat-model-search-empty
+                      hidden
+                    >
+                      {t("chat.modelControls.noMatchingModels")}
+                    </div>
+                    {params.contextWindow ? (
+                      <ChatContextWindowControl
+                        contextWindow={params.contextWindow}
+                        sessionKey={params.sessionKey}
+                      />
+                    ) : undefined}
+                  </>
+                ) : undefined}
+              </>
+            )}
+            {params.modelSelectionLocked && params.accountSection ? (
+              <div class="chat-controls__model-options">
+                <ChatModelAccountSectionView {...params.accountSection.viewProps(0)} />
+              </div>
+            ) : undefined}
+            {params.modelCatalogState?.modelSelectionPolicy?.restricted ? (
+              <div class="chat-controls__model-catalog-state" data-chat-model-policy>
+                {t("chat.modelControls.restrictedModelsHelp")}
+              </div>
+            ) : undefined}
+          </div>
+        </Show>
       </div>
     </details>
   );

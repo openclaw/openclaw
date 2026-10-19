@@ -31,10 +31,7 @@ function fullMessage(content: string): FullMessageResult {
 class RecoveryTranscriptElement extends TranscriptTestHost {
   props: ChatThreadProps = threadProps("recovery-pane");
   resetPresentationOnDisconnect = true;
-  override readonly transcript = createChatTranscript(
-    () => this.requestRender(),
-    () => this.props.paneId,
-  );
+  override readonly transcript = createChatTranscript(() => this.props.paneId);
 
   override renderTranscript = () => {
     return renderChatThread(this.props, this.transcript, {

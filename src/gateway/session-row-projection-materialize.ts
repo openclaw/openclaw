@@ -421,6 +421,26 @@ export function createSessionRowLookup(owner: {
 }) {
   return {
     readCapabilityEntry: createSessionRowCapabilityReader(owner),
+    findUrlCandidates(
+      selection: { shortId: string } | { key: string; slug?: string },
+      agentId?: string,
+    ) {
+      owner.assertCurrent();
+      const rows =
+        "shortId" in selection
+          ? owner.matching({ agentId, key: selection.shortId.toLowerCase().slice(0, 8) }, "url-id")
+          : [
+              ...owner.matching({ agentId, key: selection.key }),
+              ...(selection.slug
+                ? owner.matching({ agentId, key: selection.slug }, "url-slug")
+                : []),
+            ];
+      return rows.map((row) => ({
+        agentId: row.agentId,
+        key: row.key,
+        storePath: row.storeTarget.storePath,
+      }));
+    },
     readPreview(query: records.Lookup) {
       return owner.runInOwner(() => {
         const state = owner.state();

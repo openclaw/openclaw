@@ -92,19 +92,12 @@ export function createVoiceCallContinueOperationStore(params: {
     return { operationId, status: "pending", pollTimeoutMs };
   };
 
-  const read = (
-    operationId: string,
-  ):
-    | { ok: true; payload: VoiceCallContinueOperationResultPayload }
-    | { ok: false; error: string } => {
+  const read = (operationId: string): VoiceCallContinueOperationResultPayload | undefined => {
     const operation = operations.get(operationId);
-    if (!operation) {
-      return { ok: false, error: "operation not found" };
-    }
-    if (operation.status !== "pending") {
+    if (operation && operation.status !== "pending") {
       operations.delete(operationId);
     }
-    return { ok: true, payload: { ...operation } };
+    return operation;
   };
 
   return { start, read };

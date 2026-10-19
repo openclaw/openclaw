@@ -193,6 +193,12 @@ JavaScript `process.env` does not change native thread home lookup. Per-worker a
 per-test fixture homes remain separate. Installed Corepack and Playwright browser
 caches retain their caller-selected locations.
 
+Source subprocesses reuse the invocation's temporary TSX disk cache. Fixtures
+with descriptor-heavy source Worker imports opt out locally with
+`TSX_DISABLE_CACHE=1`: those threads share the parent's file descriptor table,
+and bursts of asynchronous cache writes can exhaust it. Tooling shims retain
+their separate cache policy.
+
 Gateway port claims remain in the common temporary directory outside all enclosing
 Vitest namespaces, found through their explicit resource owners. Parallel invocations
 therefore share port ownership while a fixture hands its reserved socket to a child;

@@ -1,6 +1,5 @@
-// Post-selection model/auth sanity checks shown during onboarding and agent setup.
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles.js";
 import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
@@ -42,15 +41,15 @@ type DefaultModelAuthStatus = {
  * indeterminate when provider facts cannot choose one route. Shared by the
  * onboarding model check and the finalize hatch gating.
  */
-export function resolveDefaultModelAuthStatus(
+export async function resolveDefaultModelAuthStatus(
   config: OpenClawConfig,
   options?: DefaultModelAuthOptions,
-): DefaultModelAuthStatus {
+): Promise<DefaultModelAuthStatus> {
   const ref = resolveDefaultModelForAgent({
     cfg: config,
     agentId: options?.agentId,
   });
-  const store = ensureAuthProfileStore(options?.agentDir, {
+  const store = await ensureAuthProfileStoreAsync(options?.agentDir, {
     allowKeychainPrompt: false,
     config,
     ...(ref.provider === "openai" ? { externalCliProviderIds: ["openai"] } : {}),
@@ -149,7 +148,7 @@ export async function warnIfModelConfigLooksOff(
   options?: DefaultModelAuthOptions,
 ) {
   let warning: string | undefined;
-  const authStatus = resolveDefaultModelAuthStatus(config, options);
+  const authStatus = await resolveDefaultModelAuthStatus(config, options);
   if (authStatus.status === "missing") {
     warning = `No auth configured for provider "${authStatus.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
       {

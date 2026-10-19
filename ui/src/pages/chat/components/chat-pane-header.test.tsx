@@ -73,7 +73,7 @@ function mountIntegratedPresenceHeader(params: {
     sessions: [session],
   };
   pane.context.gateway.snapshot.selfUser = { id: "profile-self" };
-  pane.presencePayload = { presence: params.presence };
+  pane.presence.update({ presence: params.presence });
   const container = document.createElement("div");
   document.body.append(container);
   containers.push(container);
@@ -113,6 +113,31 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__nav-toggle")).toBeNull();
     expect(container.querySelector(".chat-pane__palette-open")).toBeNull();
   });
+
+  it.each(["openclaw", null])(
+    "replaces the mobile workspace line with connection status for %s",
+    (workspaceLabel) => {
+      const retry = vi.fn();
+      const { container, update } = mountHeader({ mergedChrome: true, workspaceLabel });
+      const title = container.querySelector(".chat-pane__session-title");
+      const drawer = container.querySelector<HTMLButtonElement>(".chat-pane__nav-toggle")!;
+      update({ gatewayStatus: { kind: "offline", queuedCount: 2, onRetry: retry } });
+      const line = container.querySelector(".mobile-connection-status")!;
+      expect(line.textContent).toBe("Disconnected · 2 queued");
+      expect(line.querySelector('[role="status"]')).toBeNull();
+      expect(container.querySelector(".chat-pane__workspace-chip")).toBeNull();
+      expect(container.querySelector(".chat-pane__session-title")).toBe(title);
+      expect(drawer.dataset.connectionStatus).toBe("offline");
+      line.querySelector<HTMLButtonElement>("button")!.click();
+      expect(retry).toHaveBeenCalledOnce();
+      update({ gatewayStatus: { kind: "connected" } });
+      expect(container.querySelector(".mobile-connection-status")).toBeNull();
+      expect(container.querySelector(".chat-pane__workspace-chip") !== null).toBe(
+        Boolean(workspaceLabel),
+      );
+      expect(drawer.dataset.connectionStatus).toBe("connected");
+    },
+  );
 
   it("keeps only Share, Layout, and overflow at rest and moves layout actions into the menu", async () => {
     const onClosePane = vi.fn();
@@ -481,7 +506,7 @@ describe("chat pane header", () => {
     mounted.renderHeader();
     await facepile.updateComplete;
     expect(updates).toHaveLength(0);
-    mounted.pane.presencePayload = {
+    mounted.pane.presence.update({
       presence: [
         ...presence,
         {
@@ -491,7 +516,7 @@ describe("chat pane header", () => {
           watchedSessions: ["agent:main:current"],
         },
       ],
-    };
+    });
     mounted.renderHeader();
     await facepile.updateComplete;
     expect(updates.length).toBeGreaterThan(0);
@@ -524,7 +549,7 @@ describe("chat pane header", () => {
       "session-owner-chip--away",
     );
     for (const identity of [undefined, { type: "profile" as const, id: "profile-ada" }]) {
-      mounted.pane.presencePayload = {
+      mounted.pane.presence.update({
         presence: [
           {
             instanceId: "profile-ada-instance",
@@ -534,7 +559,7 @@ describe("chat pane header", () => {
           },
           guest,
         ],
-      };
+      });
       mounted.renderHeader();
       await ownerChip?.updateComplete;
       expect(

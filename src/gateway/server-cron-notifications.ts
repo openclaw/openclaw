@@ -1,4 +1,3 @@
-// Gateway cron notification delivery.
 // Sends announce and webhook notifications for cron completion/failure events.
 import {
   normalizeOptionalLowercaseString,

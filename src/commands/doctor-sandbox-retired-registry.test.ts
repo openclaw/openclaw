@@ -12,7 +12,6 @@ import {
 
 const fixture = vi.hoisted(() => ({ root: "" }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
-vi.mock("../agents/sandbox.js", () => ({}));
 vi.mock("../agents/sandbox/docker.js", () => ({}));
 vi.mock("../agents/sandbox/constants.js", () => ({
   get SANDBOX_REGISTRY_PATH() {

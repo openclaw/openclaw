@@ -808,20 +808,6 @@ ALTER TABLE "transcript_events" ADD FOREIGN KEY ("session_id") REFERENCES "sessi
 
 ALTER TABLE "transcript_rewrite_watermarks" ADD FOREIGN KEY ("session_id") REFERENCES "session_windows" ("session_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 
-CREATE FUNCTION "openclaw_memory_index_chunks_trigger"() RETURNS trigger LANGUAGE plpgsql SET search_path FROM CURRENT AS $trigger$
-BEGIN
-  UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-  RETURN NULL;
-END;
-$trigger$;
-
-CREATE FUNCTION "openclaw_memory_index_sources_trigger"() RETURNS trigger LANGUAGE plpgsql SET search_path FROM CURRENT AS $trigger$
-BEGIN
-  UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-  RETURN NULL;
-END;
-$trigger$;
-
 CREATE FUNCTION "openclaw_session_conversations_trigger"() RETURNS trigger LANGUAGE plpgsql SET search_path FROM CURRENT AS $trigger$
 BEGIN
   UPDATE session_conversations SET route_context_json = NULL WHERE session_id = NEW.session_id AND conversation_id = NEW.conversation_id AND role = NEW.role;
@@ -841,18 +827,6 @@ BEGIN
   RETURN NULL;
 END;
 $trigger$;
-
-CREATE TRIGGER "memory_index_chunks_revision_after_delete" AFTER DELETE ON "memory_index_chunks" FOR EACH ROW EXECUTE FUNCTION "openclaw_memory_index_chunks_trigger"();
-
-CREATE TRIGGER "memory_index_chunks_revision_after_insert" AFTER INSERT ON "memory_index_chunks" FOR EACH ROW EXECUTE FUNCTION "openclaw_memory_index_chunks_trigger"();
-
-CREATE TRIGGER "memory_index_chunks_revision_after_update" AFTER UPDATE ON "memory_index_chunks" FOR EACH ROW EXECUTE FUNCTION "openclaw_memory_index_chunks_trigger"();
-
-CREATE TRIGGER "memory_index_sources_revision_after_delete" AFTER DELETE ON "memory_index_sources" FOR EACH ROW EXECUTE FUNCTION "openclaw_memory_index_sources_trigger"();
-
-CREATE TRIGGER "memory_index_sources_revision_after_insert" AFTER INSERT ON "memory_index_sources" FOR EACH ROW EXECUTE FUNCTION "openclaw_memory_index_sources_trigger"();
-
-CREATE TRIGGER "memory_index_sources_revision_after_update" AFTER UPDATE ON "memory_index_sources" FOR EACH ROW EXECUTE FUNCTION "openclaw_memory_index_sources_trigger"();
 
 CREATE TRIGGER "session_conversations_route_context_invalidate_after_update" AFTER UPDATE OF "role", "last_seen_at" ON "session_conversations" FOR EACH ROW WHEN (NEW.route_context_json IS NOT DISTINCT FROM OLD.route_context_json) EXECUTE FUNCTION "openclaw_session_conversations_trigger"();
 

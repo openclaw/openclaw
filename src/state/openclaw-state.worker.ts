@@ -275,13 +275,17 @@ function createSharedStateWorkerBackend(
     [SQLITE_WORKER_OPERATION_CLEANUP]() {
       publicationSourceReader?.close();
     },
-    async prepare(command) {
+    prepare(command) {
       if (command.type === "pluginState.executeOperation") {
-        if (!pluginState) {
-          pluginState = await import("../plugin-state/plugin-state.worker.js");
+        if (pluginState) {
+          return pluginState.preparePluginStateOperation(command.input);
         }
-        await pluginState.preparePluginStateOperation(command.input);
+        return import("../plugin-state/plugin-state.worker.js").then((loaded) => {
+          pluginState = loaded;
+          return pluginState.preparePluginStateOperation(command.input);
+        });
       }
+      return undefined;
     },
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
       if (commandType.startsWith("cron.")) {
@@ -313,16 +317,19 @@ function createSharedStateWorkerBackend(
         commandType === "githubPublication.sourceFacts" ||
         commandType.startsWith("githubPublications.")
       ) {
-        return Promise.all([
-          publicationSource
-            ? undefined
-            : import("./github-publication-source.worker.js").then((loaded) => {
-                publicationSource = loaded;
-              }),
+        const sourcePreparation = publicationSource
+          ? undefined
+          : import("./github-publication-source.worker.js").then((loaded) => {
+              publicationSource = loaded;
+            });
+        const commandPreparation =
           commandType === "githubPublication.sourceFacts"
             ? undefined
-            : stateWorkerRegistry.prepare(commandType),
-        ]).then(() => undefined);
+            : stateWorkerRegistry.prepare(commandType);
+        // A Promise marks newly loaded modules for the transport's compile-cache flush.
+        return sourcePreparation || commandPreparation
+          ? Promise.all([sourcePreparation, commandPreparation]).then(() => undefined)
+          : undefined;
       }
       if (
         commandType.startsWith("deviceAuth.") ||

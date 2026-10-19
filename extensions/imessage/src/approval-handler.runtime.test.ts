@@ -109,8 +109,12 @@ vi.mock("./send.js", () => ({ sendMessageIMessage: send }));
 
 // mock-isolation: keep transport effects in test-owned doubles.
 vi.mock("./probe.js", () => ({
-  getCachedIMessagePrivateApiStatus: probeMock.cachedStatus,
   probeIMessagePrivateApi: probeMock.probeIMessagePrivateApi,
+}));
+
+// mock-isolation: Keep the shared bridge cache under test control.
+vi.mock("./private-api-status.js", () => ({
+  getCachedIMessagePrivateApiStatus: probeMock.cachedStatus,
 }));
 
 // mock-isolation: keep transport effects in test-owned doubles.

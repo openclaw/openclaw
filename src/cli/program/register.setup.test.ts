@@ -33,8 +33,9 @@ vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: mocks.readConfigFileSnapshotMock,
 }));
 
+// mock-isolation: Setup routing reads synthetic receipts without opening shared state.
 vi.mock("../../state/local-onboarding-state.js", () => ({
-  readLocalOnboardingStateForConfig: mocks.readLocalOnboardingStateMock,
+  readLocalOnboardingStateForConfigAsync: mocks.readLocalOnboardingStateMock,
 }));
 
 vi.mock("../../runtime.js", async (importOriginal) => ({
@@ -96,7 +97,7 @@ describe("registered setup routing", () => {
       path: "/tmp/openclaw.json",
       sourceConfig,
     });
-    readLocalOnboardingStateMock.mockReturnValue(pending ? { status: "pending" } : undefined);
+    readLocalOnboardingStateMock.mockResolvedValue(pending ? { status: "pending" } : undefined);
     const streams = [process.stdin, process.stdout];
     const descriptors = streams.map((stream) => Object.getOwnPropertyDescriptor(stream, "isTTY"));
     for (const stream of streams) {

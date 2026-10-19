@@ -16,6 +16,7 @@ import {
   runSqliteImmediateTransactionSync,
   tableExists as admittedTableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { markMemoryVectorIndexClean } from "./manager-vector-rebuild-state.js";
 
 const MEMORY_REINDEX_SCHEMA = "memory_reindex";
@@ -174,6 +175,7 @@ export function publishMemoryDatabaseTables(params: MemoryDatabasePublication): 
         if (params.vectorIndexComplete) {
           markMemoryVectorIndexClean(params.targetDb);
         }
+        advanceMemoryIndexRevision(params.targetDb);
       },
       { withCommit: params.withCommit },
     );

@@ -1,7 +1,6 @@
-// Check Deadcode Exports tests cover parsing and hard-zero enforcement.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import allExportsKnipConfig from "../../config/knip.all-exports.config.ts";
 import knipConfig from "../../config/knip.config.ts";
 import scriptExportsKnipConfig from "../../config/knip.scripts-exports.config.ts";
@@ -21,38 +20,35 @@ if (!fullRootWorkspace || !fullExtensionWorkspace || !fullUiWorkspace || !script
   throw new Error("deadcode Knip configs must define root, extension, and UI workspaces");
 }
 
+function expectEntries(entries: readonly string[], required: string[]) {
+  expect(entries).toEqual(expect.arrayContaining(required));
+}
+const isEntry = (entries: readonly string[], file: string) =>
+  entries.some((entry) => path.matchesGlob(file, entry.replace(/!$/u, "")));
+afterEach(() => vi.restoreAllMocks());
+
 describe("check-deadcode-exports", () => {
   it("makes tests in every workspace roots of the full-tree export audit", () => {
-    const isEntry = (entries: readonly string[], file: string) =>
-      entries.some((entry) => path.matchesGlob(file, entry.replace(/!$/u, "")));
-    expect(knipConfig.workspaces["."].entry).toEqual(
-      expect.arrayContaining([
-        "config/knip.config.ts!",
-        "config/knip.all-exports.config.ts!",
-        "config/knip.scripts-exports.config.ts!",
-      ]),
-    );
+    expectEntries(knipConfig.workspaces["."].entry, [
+      "config/knip.config.ts!",
+      "config/knip.all-exports.config.ts!",
+      "config/knip.scripts-exports.config.ts!",
+    ]);
     expect(knipConfig.workspaces["."].project).toContain("config/**/*.{ts,mts,cts}!");
-    expect(fullRootWorkspace.entry).toEqual(
-      expect.arrayContaining([
-        "test/vitest/vitest*.config.ts!",
-        "scripts/crabbox-wrapper.mjs!",
-        "scripts/crabbox-wrapper.mts!",
-        "scripts/check-openclaw-package-tarball.mjs!",
-        "scripts/check-openclaw-package-tarball.mts!",
-      ]),
-    );
+    expectEntries(fullRootWorkspace.entry, [
+      "test/vitest/vitest*.config.ts!",
+      "scripts/crabbox-wrapper.mjs!",
+      "scripts/crabbox-wrapper.mts!",
+      "scripts/check-openclaw-package-tarball.mjs!",
+      "scripts/check-openclaw-package-tarball.mts!",
+    ]);
     for (const extension of ["js", "mjs", "cjs", "ts", "tsx", "mts", "cts"]) {
       for (const directory of ["src", "scripts", "test"]) {
-        expect(isEntry(fullRootWorkspace.entry, `${directory}/example.test.${extension}`)).toBe(
-          true,
-        );
+        expect(isEntry(fullRootWorkspace.entry, `${directory}/x.test.${extension}`)).toBe(true);
       }
       expect(isEntry(fullExtensionWorkspace.entry, `src/example.spec.${extension}`)).toBe(true);
       expect(isEntry(fullUiWorkspace.entry, `src/example.test.${extension}`)).toBe(true);
-      expect(isEntry(knipConfig.workspaces["."].entry, `test/example.test.${extension}`)).toBe(
-        false,
-      );
+      expect(isEntry(knipConfig.workspaces["."].entry, `test/x.test.${extension}`)).toBe(false);
     }
     expect(isEntry(fullRootWorkspace.entry, ".agents/skills/example/scripts/probe.ts")).toBe(true);
   });
@@ -83,21 +79,14 @@ describe("check-deadcode-exports", () => {
   });
 
   it("keeps the script unused-export scan scoped to real executable roots", () => {
-    expect(scriptRootWorkspace.entry).toEqual(
-      expect.arrayContaining([
-        ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
-        ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
-        "apps/android/scripts/build-release-artifacts.ts!",
-        "security/opengrep/check-rule-metadata.mjs!",
-        "skills/meme-maker/scripts/meme.mjs!",
-        "scripts/check-openclaw-package-tarball.mts!",
-        "scripts/crabbox-wrapper.mjs!",
-        "scripts/crabbox-wrapper.mts!",
-        "scripts/lib/vitest-resource-reporter.mts!",
-        "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-        "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-        "src/plugin-sdk/api-baseline.ts!",
-      ]),
+    expectEntries(
+      scriptRootWorkspace.entry,
+      `.agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!
+.github/actions/setup-node-env/dependency-fingerprint.mjs! apps/android/scripts/build-release-artifacts.ts!
+security/opengrep/check-rule-metadata.mjs! skills/meme-maker/scripts/meme.mjs!
+scripts/check-openclaw-package-tarball.mts! scripts/crabbox-wrapper.mjs! scripts/crabbox-wrapper.mts!
+scripts/lib/vitest-resource-reporter.mts! scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!
+test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.split(/\s+/u),
     );
     expect(scriptRootWorkspace.entry).not.toContain("scripts/**/*.{js,mjs,cjs,ts,mts,cts}!");
     expect(
@@ -109,92 +98,59 @@ describe("check-deadcode-exports", () => {
     );
   });
 
-  it("models upgrade survivor inline imports from the shell source", () => {
-    const runner = "scripts/e2e/lib/upgrade-survivor/run.sh";
-    const source = fs.readFileSync(runner, "utf8");
-    const compile = knipConfig.compilers.sh;
+  it.each([
+    ["sh", "scripts/e2e/lib/upgrade-survivor/run.sh", "readPostCoreSnapshot", "./diagnostics.mjs"],
+    [
+      "yml",
+      ".github/workflows/openclaw-release-publish.yml",
+      "prefetchPreparedPlugins",
+      "../../scripts/openclaw-release-ready.mjs",
+    ],
+  ] as const)("models %s inline imports from %s", (kind, file, symbol, importedFrom) => {
+    const source = fs.readFileSync(file, "utf8");
+    const compile = knipConfig.compilers[kind];
     for (const workspace of [knipConfig.workspaces["."], fullRootWorkspace, scriptRootWorkspace]) {
-      expect(workspace.entry).toContain(`${runner}!`);
+      expect(workspace.entry).toContain(`${file}!`);
     }
-    expect(compile(source, runner)).toContain(
-      'import { readPostCoreSnapshot } from "./diagnostics.mjs";',
+    expect(compile(source, file)).toContain(`import { ${symbol} } from "${importedFrom}";`);
+    const remaining = compile(
+      source.replace(new RegExp(`^\\s*import \\{ ${symbol} \\}[^\\n]+\\n`, "mu"), ""),
+      file,
     );
-    const withoutSnapshot = source.replace(/^import \{ readPostCoreSnapshot \}[^\n]+\n/mu, "");
-    const remaining = compile(withoutSnapshot, runner);
-    expect(remaining).not.toContain("readPostCoreSnapshot");
-    expect(remaining).toContain('from "../../../lib/release-version.mjs";');
-    expect(compile(source, "scripts/e2e/lib/upgrade-survivor/other.sh")).toBe("");
-  });
-
-  it("models release publication imports from the workflow source", () => {
-    const workflow = ".github/workflows/openclaw-release-publish.yml";
-    const source = fs.readFileSync(workflow, "utf8");
-    const compile = knipConfig.compilers.yml;
-    for (const workspace of [knipConfig.workspaces["."], fullRootWorkspace, scriptRootWorkspace]) {
-      expect(workspace.entry).toContain(`${workflow}!`);
+    expect(remaining).not.toContain(symbol);
+    if (kind === "sh") {
+      expect(remaining).toContain('from "../../../lib/release-version.mjs";');
     }
-    expect(compile(source, workflow)).toContain(
-      'import { prefetchPreparedPlugins } from "../../scripts/openclaw-release-ready.mjs";',
-    );
-    const withoutPrefetch = source.replace(
-      /^\s*import \{ prefetchPreparedPlugins \}[^\n]+\n/mu,
-      "",
-    );
-    expect(compile(withoutPrefetch, workflow)).not.toContain("prefetchPreparedPlugins");
-    expect(compile(source, ".github/workflows/other.yml")).toBe("");
+    expect(compile(source, path.join(path.dirname(file), `other.${kind}`))).toBe("");
   });
 
   it("models only Vite runner members consumed by the build", () => {
-    const source = [
-      'const { module: routes } = await runnerImport<typeof import("./src/app-route-paths.ts")>(',
-      '  path.join(here, "src/app-route-paths.ts"), options);',
-      "const offlineShell = { routes: routes.APP_ROUTE_PATHS };",
-    ].join("\n");
+    const source = `const { module: routes } = await runnerImport<typeof import("./src/app-route-paths.ts")>(
+  path.join(here, "src/app-route-paths.ts"), options);
+const offlineShell = { routes: routes.APP_ROUTE_PATHS };`;
     const read = vi.spyOn(fs, "readFileSync").mockReturnValue(source);
-    try {
-      expect(knipConfig.workspaces["."].project).toContain("config/knip-vite-consumers.mjs!");
-      const compile = knipConfig.compilers.mjs;
-      const compiled = compile("// config", "config/knip-vite-consumers.mjs");
-      expect(read).toHaveBeenCalledWith(path.resolve("ui/vite.config.ts"), "utf8");
-      expect(compiled).toContain(
-        'import { APP_ROUTE_PATHS as __vite0_0 } from "../ui/src/app-route-paths.ts";',
-      );
-      expect(compiled).not.toContain("APP_ROUTE_OFFLINE_PREFIXES");
-      expect(compile(source, "config/unrelated.mjs")).toBe(source);
-    } finally {
-      read.mockRestore();
-    }
+    expect(knipConfig.workspaces["."].project).toContain("config/knip-vite-consumers.mjs!");
+    const compile = knipConfig.compilers.mjs;
+    const compiled = compile("// config", "config/knip-vite-consumers.mjs");
+    expect(read).toHaveBeenCalledWith(path.resolve("ui/vite.config.ts"), "utf8");
+    expect(compiled).toContain(
+      'import { APP_ROUTE_PATHS as __vite0_0 } from "../ui/src/app-route-paths.ts";',
+    );
+    expect(compiled).not.toContain("APP_ROUTE_OFFLINE_PREFIXES");
+    expect(compile(source, "config/unrelated.mjs")).toBe(source);
   });
 
   it("parses all compact export sections and expands symbol lists", () => {
-    expect(
-      parseKnipCompactUnusedExports(`
-Unused exports (2)
-src/b.ts: beta, alpha
-/tmp/outside.ts: noise
-C:\\tmp\\outside.ts: noise
-C:outside.ts: noise
-\\\\server\\share\\outside.ts: noise
-
-Unused exported types (1)
-extensions/example/src/types.ts: ExampleType
-
-Unused exported enum members (1)
-packages/example/src/state.ts: Ready
-
-Exports in used namespace (1)
-src/namespace.ts: runtimeHelper
-
-Exported types in used namespace (1)
-src/namespace.ts: RuntimeType
-
-Unused exported namespace members (1)
-src/protocol.ts: Result (v2)
-
-Unused files (1)
-src/noise.ts: src/noise.ts
-`),
-    ).toEqual([
+    const output = [
+      "Unused exports (2)\nsrc/b.ts: beta, alpha\n/tmp/outside.ts: noise\nC:\\tmp\\outside.ts: noise\nC:outside.ts: noise\n\\\\server\\share\\outside.ts: noise",
+      "Unused exported types (1)\nextensions/example/src/types.ts: ExampleType",
+      "Unused exported enum members (1)\npackages/example/src/state.ts: Ready",
+      "Exports in used namespace (1)\nsrc/namespace.ts: runtimeHelper",
+      "Exported types in used namespace (1)\nsrc/namespace.ts: RuntimeType",
+      "Unused exported namespace members (1)\nsrc/protocol.ts: Result (v2)",
+      "Unused files (1)\nsrc/noise.ts: src/noise.ts",
+    ].join("\n\n");
+    expect(parseKnipCompactUnusedExports(`\n${output}\n`)).toEqual([
       "extensions/example/src/types.ts: ExampleType",
       "packages/example/src/state.ts: Ready",
       "src/b.ts: alpha",
@@ -205,35 +161,33 @@ src/noise.ts: src/noise.ts
     ]);
   });
 
-  it("distinguishes a failed scan with no export sections from zero findings", () => {
-    expect(parseKnipCompactUnusedExportsResult("Configuration error: invalid project\n")).toEqual({
+  it.each([
+    ["Configuration error: invalid project\n", false],
+    ["Unused exports (0)\n", true],
+  ] as const)("distinguishes section presence in %s", (output, sawExportSection) => {
+    expect(parseKnipCompactUnusedExportsResult(output)).toEqual({
       entries: [],
-      sawExportSection: false,
-    });
-    expect(parseKnipCompactUnusedExportsResult("Unused exports (0)\n")).toEqual({
-      entries: [],
-      sawExportSection: true,
+      sawExportSection,
     });
   });
 
   it("discards export findings after workspace module resolution failures", () => {
-    const output = `ERROR: Error loading vitest.config.ts (Cannot find module 'vitest/config')
-ERROR: Error loading ui/vite.config.ts (Cannot find module 'vite')
-Unused exports (1)
-src/config/types.ts: TelegramConfig
-`;
-
-    const result = checkExportScan("production unused-export scan", output);
-    expect(result.ok).toBe(false);
-    expect(result.entries).toEqual([]);
-    expect(result.message).toContain(
-      "deadcode production unused-export scan could not resolve workspace modules; export findings would be unreliable and are discarded.",
-    );
-    expect(result.message).toContain("ERROR: Error loading vitest.config.ts");
-    expect(result.message).toContain("ERROR: Error loading ui/vite.config.ts");
-    expect(result.message).toContain("Install workspace dependencies in-tree (pnpm install)");
-    expect(result.message).not.toContain("Unused exports are not allowed");
-    expect(result.message).not.toContain("src/config/types.ts: TelegramConfig");
+    const errors = [
+      "ERROR: Error loading vitest.config.ts (Cannot find module 'vitest/config')",
+      "ERROR: Error loading ui/vite.config.ts (Cannot find module 'vite')",
+    ].join("\n");
+    expect(
+      checkExportScan(
+        "production unused-export scan",
+        `${errors}\nUnused exports (1)\nsrc/config/types.ts: TelegramConfig\n`,
+      ),
+    ).toEqual({
+      ok: false,
+      entries: [],
+      message: `deadcode production unused-export scan could not resolve workspace modules; export findings would be unreliable and are discarded.
+${errors}
+Install workspace dependencies in-tree (pnpm install) — on delegated boxes the crabbox wrapper links the hydrated modules dir into the workdir — and rerun.`,
+    });
   });
 
   it("accepts clean export scan output unchanged", () => {

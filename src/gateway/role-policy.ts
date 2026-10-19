@@ -1,4 +1,3 @@
-// Gateway connection role policy.
 // Separates node-role RPCs from operator RPCs before method scope checks.
 import { isCoreNodeGatewayMethod } from "./methods/core-method-policy.js";
 import type { GatewayRole } from "./role-policy.types.js";

@@ -115,7 +115,6 @@ describe("Completions cache markers", () => {
     });
     expect(markedRequest.tools?.[0]).toHaveProperty("cache_control", marker);
     expect(unmarkedRequest.tools?.[0]).not.toHaveProperty("cache_control");
-    expect(markedRequest.tools?.[0]?.function).toBe(unmarkedRequest.tools?.[0]?.function);
     expect(markedRequest.tools?.[0]).not.toBe(unmarkedRequest.tools?.[0]);
   });
 

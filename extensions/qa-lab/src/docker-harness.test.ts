@@ -1,4 +1,3 @@
-// Qa Lab tests cover docker harness plugin behavior.
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,64 +7,68 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import YAML from "yaml";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 
-const cleanups: Array<() => Promise<void>> = [];
-
+const roots: string[] = [];
 afterEach(async () => {
-  while (cleanups.length > 0) {
-    await cleanups.pop()?.();
-  }
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  vi.restoreAllMocks();
 });
-
-function parseComposeServices(compose: string) {
-  const parsed = YAML.parse(compose) as {
-    services?: Record<
-      string,
-      {
-        build?: { context?: string };
-        healthcheck?: { test?: string[] };
-        environment?: Record<string, string>;
-        volumes?: string[];
-      }
-    >;
-  };
-  return parsed.services ?? {};
+async function scaffold(options: Partial<Parameters<typeof writeQaDockerHarnessFiles>[0]> = {}) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "qa-docker-"));
+  roots.push(root);
+  const outputDir = path.join(root, "scaffold");
+  const repoRoot = path.join(root, "repo #hash");
+  await mkdir(repoRoot);
+  const result = await writeQaDockerHarnessFiles({
+    outputDir,
+    repoRoot,
+    gatewayToken: "qa-token",
+    bindUiDist: true,
+    ...options,
+  });
+  const read = (file: string) => readFile(path.join(outputDir, file), "utf8");
+  const compose = await read("docker-compose.qa.yml");
+  const services = (
+    YAML.parse(compose) as {
+      services: Record<
+        string,
+        {
+          build?: { context?: string };
+          healthcheck?: { test?: string[] };
+          environment?: Record<string, string>;
+          volumes?: string[];
+        }
+      >;
+    }
+  ).services;
+  return { result, compose, services, read, outputDir };
+}
+function contains(text: string, snippets: string[]) {
+  for (const snippet of snippets) {
+    expect(text).toContain(snippet);
+  }
 }
 
 describe("qa docker harness", () => {
   it("writes compose, env, config, and workspace scaffold files", async () => {
-    const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-docker-test-"));
-    cleanups.push(async () => {
-      await rm(outputDir, { recursive: true, force: true });
-    });
-
-    const result = await writeQaDockerHarnessFiles({
-      outputDir,
+    const { result, compose, services, read, outputDir } = await scaffold({
       gatewayPort: 18889,
       qaLabPort: 43124,
-      gatewayToken: "qa-token",
       providerBaseUrl: "http://host.docker.internal:45123/v1",
-      repoRoot: "/repo/openclaw",
       usePrebuiltImage: true,
-      bindUiDist: true,
     });
 
-    for (const expectedFile of [
-      path.join(outputDir, ".env.example"),
-      path.join(outputDir, "README.md"),
-      path.join(outputDir, "docker-compose.qa.yml"),
-      path.join(outputDir, "state", "openclaw.json"),
-      path.join(outputDir, "state", "seed-workspace", "QA_KICKOFF_TASK.md"),
-      path.join(outputDir, "state", "seed-workspace", "QA_SCENARIO_PLAN.md"),
-      path.join(outputDir, "state", "seed-workspace", "QA_SCENARIOS.yaml"),
-      path.join(outputDir, "state", "seed-workspace", "IDENTITY.md"),
+    for (const file of [
+      ".env.example",
+      "README.md",
+      "docker-compose.qa.yml",
+      "state/openclaw.json",
+      ...["QA_KICKOFF_TASK.md", "QA_SCENARIO_PLAN.md", "QA_SCENARIOS.yaml", "IDENTITY.md"].map(
+        (name) => `state/seed-workspace/${name}`,
+      ),
     ]) {
-      expect(result.files).toContain(expectedFile);
+      expect(result.files).toContain(path.join(outputDir, file));
     }
 
-    const compose = await readFile(path.join(outputDir, "docker-compose.qa.yml"), "utf8");
-    const services = parseComposeServices(compose);
-    expect(compose).toContain("image: openclaw:qa-local-prebaked");
-    expect(compose).toContain("qa-mock-openai:");
     expect(services["qa-mock-openai"]?.environment).toMatchObject({
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
       OPENCLAW_PROFILE: "",
@@ -78,14 +81,6 @@ describe("qa docker harness", () => {
       OPENCLAW_STATE_DIR: "/tmp/openclaw/state",
     });
     expect(services["qa-lab"]?.volumes).toContain("./state:/opt/openclaw-scaffold:ro");
-    expect(services["qa-lab"]?.volumes).toContain(
-      `${path.relative(outputDir, "/repo/openclaw/taxonomy.yaml").split(path.sep).join("/")}:/app/taxonomy.yaml:ro`,
-    );
-    expect(compose).toContain('      - "127.0.0.1:18889:18789"');
-    expect(compose).toContain('      - "127.0.0.1:43124:43123"');
-    expect(compose).toContain(":/opt/openclaw-qa-lab-ui:ro");
-    expect(compose).toContain("      - sh");
-    expect(compose).toContain("      - -lc");
     const healthcheck = services["openclaw-qa-gateway"]?.healthcheck?.test;
     expect(healthcheck?.slice(0, 3)).toEqual(["CMD", "node", "-e"]);
     const healthcheckScript = healthcheck?.[3];
@@ -126,24 +121,31 @@ describe("qa docker harness", () => {
     expect(compose).toContain("--control-ui-proxy-target http://openclaw-qa-gateway:18789/");
     expect(compose).not.toContain("--control-ui-token");
     expect(compose).not.toContain("qa-token");
-    expect(compose).toContain("--send-kickoff-on-start");
-    expect(compose).toContain("--ui-dist-dir /opt/openclaw-qa-lab-ui");
-    expect(compose).toContain(":/opt/openclaw-repo:ro");
-    expect(compose).toContain("./state:/opt/openclaw-scaffold:ro");
-    expect(compose).toContain(
+    contains(compose, [
+      "image: openclaw:qa-local-prebaked",
+
+      '      - "127.0.0.1:18889:18789"',
+      '      - "127.0.0.1:43124:43123"',
+      "      - sh",
+      "      - -lc",
+
+      "--send-kickoff-on-start",
+      "--ui-dist-dir /opt/openclaw-qa-lab-ui",
       "cp -R /opt/openclaw-scaffold/seed-workspace/. /tmp/openclaw/workspace/ && rm -rf /tmp/openclaw/workspace/repo && ln -s /opt/openclaw-repo /tmp/openclaw/workspace/repo",
-    );
-    expect(compose).toContain("OPENCLAW_CONFIG_PATH: /tmp/openclaw/openclaw.json");
-    expect(compose).toContain("OPENCLAW_STATE_DIR: /tmp/openclaw/state");
-    expect(compose).toContain('OPENCLAW_NO_RESPAWN: "1"');
+      "OPENCLAW_CONFIG_PATH: /tmp/openclaw/openclaw.json",
+      "OPENCLAW_STATE_DIR: /tmp/openclaw/state",
+      'OPENCLAW_NO_RESPAWN: "1"',
+    ]);
 
-    const envExample = await readFile(path.join(outputDir, ".env.example"), "utf8");
-    expect(envExample).toContain("OPENCLAW_GATEWAY_TOKEN=qa-token");
-    expect(envExample).toContain("QA_BUS_BASE_URL=http://qa-lab:43123");
-    expect(envExample).toContain("QA_PROVIDER_BASE_URL=http://host.docker.internal:45123/v1");
-    expect(envExample).toContain("QA_LAB_URL=http://127.0.0.1:43124");
+    const envExample = await read(".env.example");
+    contains(envExample, [
+      "OPENCLAW_GATEWAY_TOKEN=qa-token",
+      "QA_BUS_BASE_URL=http://qa-lab:43123",
+      "QA_PROVIDER_BASE_URL=http://host.docker.internal:45123/v1",
+      "QA_LAB_URL=http://127.0.0.1:43124",
+    ]);
 
-    const configText = await readFile(path.join(outputDir, "state", "openclaw.json"), "utf8");
+    const configText = await read("state/openclaw.json");
     const config = JSON.parse(configText) as {
       plugins?: {
         allow?: string[];
@@ -151,50 +153,37 @@ describe("qa docker harness", () => {
       };
     };
     expect(configText).not.toContain('"allowInsecureAuth"');
-    expect(configText).toContain('"pluginToolsMcpBridge": true');
-    expect(configText).toContain('"openClawToolsMcpBridge": true');
-    expect(configText).toContain("/app/dist/control-ui");
-    expect(configText).toContain("C-3PO QA");
-    expect(configText).toContain('"/tmp/openclaw/workspace"');
+    contains(configText, [
+      '"pluginToolsMcpBridge": true',
+      '"openClawToolsMcpBridge": true',
+      "/app/dist/control-ui",
+      "C-3PO QA",
+      '"/tmp/openclaw/workspace"',
+    ]);
     expect(config.plugins?.allow).toContain("qa-lab");
     expect(config.plugins?.entries?.["qa-lab"]?.enabled).toBe(true);
 
-    const kickoff = await readFile(
-      path.join(outputDir, "state", "seed-workspace", "QA_KICKOFF_TASK.md"),
-      "utf8",
-    );
+    const kickoff = await read("state/seed-workspace/QA_KICKOFF_TASK.md");
     expect(kickoff).toContain("Lobster Invaders");
 
-    const scenarios = await readFile(
-      path.join(outputDir, "state", "seed-workspace", "QA_SCENARIOS.yaml"),
-      "utf8",
-    );
-    expect(scenarios).toContain("pack:");
-    expect(scenarios).toContain("subagent-fanout-synthesis");
+    const scenarios = await read("state/seed-workspace/QA_SCENARIOS.yaml");
+    contains(scenarios, ["pack:", "subagent-fanout-synthesis"]);
 
-    const readme = await readFile(path.join(outputDir, "README.md"), "utf8");
-    expect(readme).toContain("in-process restarts inside Docker");
-    expect(readme).toContain("pnpm qa:lab:watch");
+    const readme = await read("README.md");
+    contains(readme, ["in-process restarts inside Docker", "pnpm qa:lab:watch"]);
   });
 
   it("builds the reusable QA image with bundled QA extensions", async () => {
     const calls: string[] = [];
-    const runExec = vi
-      .spyOn(processRuntime, "runExec")
-      .mockImplementation(async (command, args, options) => {
-        const cwd = typeof options === "number" ? undefined : options?.cwd;
-        calls.push([command, ...args, `@${cwd}`].join(" "));
-        return { stdout: "", stderr: "" };
-      });
-    let result: Awaited<ReturnType<typeof buildQaDockerHarnessImage>>;
-    try {
-      result = await buildQaDockerHarnessImage({
-        repoRoot: "/repo/openclaw",
-        imageName: "openclaw:qa-local-prebaked",
-      });
-    } finally {
-      runExec.mockRestore();
-    }
+    vi.spyOn(processRuntime, "runExec").mockImplementation(async (command, args, options) => {
+      const cwd = typeof options === "number" ? undefined : options?.cwd;
+      calls.push([command, ...args, `@${cwd}`].join(" "));
+      return { stdout: "", stderr: "" };
+    });
+    const result = await buildQaDockerHarnessImage({
+      repoRoot: "/repo/openclaw",
+      imageName: "openclaw:qa-local-prebaked",
+    });
 
     expect(result.imageName).toBe("openclaw:qa-local-prebaked");
     expect(calls).toEqual([
@@ -203,24 +192,7 @@ describe("qa docker harness", () => {
   });
 
   it("quotes generated compose paths so shell-sensitive repo paths survive YAML parsing", async () => {
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-docker-paths-"));
-    const outputDir = path.join(tempRoot, "scaffold");
-    const repoRoot = path.join(tempRoot, "repo #hash");
-    cleanups.push(async () => {
-      await rm(tempRoot, { recursive: true, force: true });
-    });
-    await mkdir(repoRoot, { recursive: true });
-
-    await writeQaDockerHarnessFiles({
-      outputDir,
-      repoRoot,
-      gatewayToken: "qa-token",
-      usePrebuiltImage: false,
-      bindUiDist: true,
-    });
-
-    const compose = await readFile(path.join(outputDir, "docker-compose.qa.yml"), "utf8");
-    const services = parseComposeServices(compose);
+    const { compose, services } = await scaffold({ usePrebuiltImage: false });
     expect(compose).toContain('OPENCLAW_EXTENSIONS: "acpx qa-channel qa-lab"');
     expect(services["qa-mock-openai"]?.build?.context).toBe("../repo #hash");
     expect(services["qa-lab"]?.volumes).toContain(

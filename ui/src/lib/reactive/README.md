@@ -73,14 +73,16 @@ Return immutable presentation values from `read`: parking does not clone or
 freeze mutable domain objects. Project their displayed fields rather than
 holding a mutable object and reading its fields directly from JSX.
 
-Chat's `createSolidRenderLifecycle` in `pages/chat/solid-render-lifecycle.ts`
-uses this projection for its `snapshot` accessor. Create it in the pane's Solid
-owner, pass the pane's `presented` accessor (including document visibility when
-the pane owns that policy), and render from `snapshot()`. `read` may consume
-existing owner projections; imperative owners call `invalidate()` after their
-synchronous mutations. The existing frame-coalescing owner still controls
-stream invalidation cadence.
+The chat pane reads domain projections and projected presentation fields through
+`createParkedProjection`. Synchronous owner mutations publish those values;
+the pane has no generic redraw callback. Its `updateComplete` getter observes
+pending DOM work, while `awaitDomCommit()` explicitly fences pane-level focus and
+layout tasks without rendering an unchanged pane. Parked tasks wait for reveal
+or disposal. The stream owner still controls publication cadence.
 
+Imperative transcript and detail-panel islands use `createSolidRenderLifecycle`
+in `pages/chat/solid-render-lifecycle.ts`. It wraps this projection in a `snapshot`
+accessor and exposes `invalidate()` for their synchronous mutations. Their
 `afterCommit` requests a new generation and runs in Solid's split-effect apply
 phase, after DOM bindings. Requests made from a callback wait for the following
 generation. ResizeObserver, child custom elements, images, and overlay animations

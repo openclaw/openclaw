@@ -148,15 +148,14 @@ jobs:
         run: rustup toolchain install 1.93.0 --profile minimal --component clippy,rustfmt
 
       - name: Cache Cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            crates/target
-          key: node-runtime-${{ runner.os }}-${{ hashFiles('crates/Cargo.lock') }}
-          restore-keys: |
-            node-runtime-${{ runner.os }}-
+          # Keep reusable dependencies, not stale workspace binaries or incremental state.
+          prefix-key: node-runtime
+          workspaces: crates -> target
+          cache-bin: "false"
+          cache-workspace-crates: "false"
+          cmd-format: rustup run 1.93.0 {0}
 
       - name: Check formatting
         run: cargo +1.93.0 fmt --manifest-path crates/Cargo.toml --all -- --check

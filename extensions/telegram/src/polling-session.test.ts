@@ -31,10 +31,7 @@ import {
 import { installPollingStallWatchdogHarness } from "./polling-session-watchdog.test-support.js";
 import { installTelegramIngressQueueRuntime } from "./runtime-state.test-support.js";
 import { getTelegramRuntime } from "./runtime.js";
-import {
-  clearTelegramRuntimeForTest as clearTelegramRuntime,
-  resetTelegramReplyFenceForTest as resetTelegramReplyFenceForTests,
-} from "./runtime.test-support.js";
+import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import {
   TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER,
   type TelegramIngressWorkerCommand,
@@ -427,7 +424,6 @@ describe("TelegramPollingSession", () => {
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
     drainPendingDeliveriesMock.mockReset().mockResolvedValue(undefined);
-    resetTelegramReplyFenceForTests();
     installTelegramIngressQueueRuntime(() =>
       path.join(os.tmpdir(), "openclaw-telegram-test-state"),
     );

@@ -10,7 +10,6 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { flushLogger, getChildLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { recordTalkLogEvent } from "./logging.js";
 import { recordTalkObservabilityEvent as observe } from "./observability.js";
 import { createTalkEventSequencer } from "./talk-events.js";
 
@@ -50,7 +49,7 @@ let unsubscribe: () => void;
 const logs = () => observed.flatMap(({ event }) => (event.type === "log.record" ? [event] : []));
 const next = (input: Parameters<ReturnType<typeof createTalkEventSequencer>["next"]>[0]) =>
   createTalkEventSequencer(TALK_CONTEXT).next(input);
-const record = (input: Parameters<typeof next>[0], hook = recordTalkLogEvent) => hook(next(input));
+const record = (input: Parameters<typeof next>[0], hook = observe) => hook(next(input));
 async function collect() {
   await setImmediate();
   unsubscribe();

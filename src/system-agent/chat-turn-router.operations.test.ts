@@ -1,5 +1,7 @@
 import "./chat-engine.mocks.test-support.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import * as authStore from "../agents/auth-profiles/store-runtime.js";
+import * as cliRunner from "../agents/cli-runner.js";
 import { extractToolResultText } from "../agents/embedded-agent-tool-results.js";
 import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
@@ -10,7 +12,7 @@ import {
   sharedVerifiedInference,
   sharedVerifiedInferenceConfig,
   classifySystemAgentApprovalText,
-  runSystemAgentTurnWithDeps,
+  runSystemAgentTurn,
   mocks,
   useTempStateDir,
   configSnapshot,
@@ -29,6 +31,11 @@ import type { SystemAgentOperation } from "./operation-types.js";
 import { SystemAgentOperationExitError } from "./operations-execution-helpers.js";
 import { describeSystemAgentPersistentOperation } from "./operations.js";
 import { installSystemAgentClaudeCliBackendTestFixture } from "./system-agent.test-helpers.js";
+
+vi.mock("../agents/cli-runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/cli-runner.js")>()),
+  runCliAgent: vi.fn(),
+}));
 
 function createRouterHarness(
   options: ConstructorParameters<typeof ChatTurnRouter>[0],
@@ -326,6 +333,14 @@ describe("SystemAgentChatEngine operations", () => {
     const verifiedInference = await createOAuthVerifiedBinding(config, credential);
     const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
     let authReads = 0;
+    vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(async () => {
+      authReads += 1;
+      // The fourth read is the persistent-apply guard, after the turn checks.
+      if (authReads === 4) {
+        credential = { ...credential, access: "access-b", refresh: "refresh-b" };
+      }
+      return { version: 1, profiles: { "anthropic:oauth": credential } };
+    });
     const engine = new SystemAgentChatEngine({
       verifiedInference,
       runAgentTurn: async () => ({
@@ -337,15 +352,6 @@ describe("SystemAgentChatEngine operations", () => {
       }),
       deps: {
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
-        loadAuthProfileStoreForRuntimeAsync: vi.fn(async () => {
-          authReads += 1;
-          // Turn start, dispatch, and post-agent checks see the verified grant.
-          // The fourth read is the last-moment guard inside applyPersistentOperation.
-          if (authReads === 4) {
-            credential = { ...credential, access: "access-b", refresh: "refresh-b" };
-          }
-          return { version: 1, profiles: { "anthropic:oauth": credential } };
-        }) as never,
         loadOverview: fakeOverviewLoader(),
       },
     });
@@ -372,6 +378,10 @@ describe("SystemAgentChatEngine operations", () => {
     };
     const verifiedInference = await createOAuthVerifiedBinding(config, credential);
     const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
+    vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(async () => ({
+      version: 1,
+      profiles: { "anthropic:oauth": credential },
+    }));
     const engine = new SystemAgentChatEngine({
       verifiedInference,
       runAgentTurn: async () => {
@@ -386,10 +396,6 @@ describe("SystemAgentChatEngine operations", () => {
       },
       deps: {
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
-        loadAuthProfileStoreForRuntimeAsync: vi.fn(async () => ({
-          version: 1,
-          profiles: { "anthropic:oauth": credential },
-        })) as never,
         loadOverview: fakeOverviewLoader(),
       },
     });
@@ -756,20 +762,25 @@ describe("SystemAgentChatEngine CLI loop backends", () => {
     const snapshot = configSnapshot(config);
     const inference = await createCliVerifiedBinding(config);
     const inferenceDeps = {
-      ...inference.deps,
       readConfigFileSnapshot: (async () => snapshot) as never,
     };
     const runCliAgent = vi.fn(async (_params: Record<string, unknown>) => ({
       payloads: [{ text: "*click* CLI loop checked your shell." }],
-      meta: { agentMeta: { cliSessionBinding: { sessionId: "native-1" } } },
+      meta: {
+        durationMs: 0,
+        agentMeta: {
+          sessionId: "native-1",
+          provider: "claude-cli",
+          model: "claude-opus-4-8",
+          cliSessionBinding: { sessionId: "native-1" },
+        },
+      },
     }));
+    vi.spyOn(cliRunner, "runCliAgent").mockImplementation(runCliAgent);
+    mocks.readConfigFileSnapshot.mockImplementation(inferenceDeps.readConfigFileSnapshot);
     const engine = new SystemAgentChatEngine({
       verifiedInference: inference.binding,
-      runAgentTurn: (params) =>
-        runSystemAgentTurnWithDeps(params, {
-          ...inferenceDeps,
-          runCliAgent: runCliAgent as never,
-        }),
+      runAgentTurn: runSystemAgentTurn,
       deps: {
         ...inferenceDeps,
         loadOverview: fakeOverviewLoader({ defaultModel: "claude-cli/claude-opus-4-8" }),

@@ -32,7 +32,10 @@ type CoreSessionEntry<Type extends SessionTreeEntry["type"]> = Extract<
   { type: Type }
 >;
 
-export interface SessionMessageEntry extends CoreSessionEntry<"message"> {}
+export interface SessionMessageEntry extends CoreSessionEntry<"message"> {
+  /** Entry id this copy replaced when a branch rewrite re-appended it. */
+  supersedesEntryId?: string;
+}
 
 export interface ThinkingLevelChangeEntry extends CoreSessionEntry<"thinking_level_change"> {}
 

@@ -69,10 +69,7 @@ let nextTestTranscriptId = 0;
 export function createTestTranscript(
   paneId = `test-transcript-${++nextTestTranscriptId}`,
 ): ChatTranscript {
-  return createChatTranscript(
-    () => undefined,
-    () => paneId,
-  );
+  return createChatTranscript(() => paneId);
 }
 
 export function createPasteEvent(

@@ -61,10 +61,16 @@ async function buildConfiguredMcpToolNamesAtRequestBoundary(params: {
   cfg: OpenClawConfig;
 }): Promise<string[]> {
   const runtimeModule = await import("./agent-bundle-mcp-runtime.js");
-  vi.spyOn(runtimeModule, "createSessionMcpRuntime").mockImplementationOnce(() =>
-    makeConfiguredRuntime(),
-  );
+  const createRuntime = vi
+    .spyOn(runtimeModule, "createSessionMcpRuntime")
+    .mockImplementationOnce(() => makeConfiguredRuntime());
   const runtime = await createBundleMcpToolRuntime({
+    workspaceDir: "/workspace",
+    cfg: params.cfg,
+  });
+  expect(createRuntime).toHaveBeenCalledOnce();
+  expect(createRuntime).toHaveBeenCalledWith({
+    sessionId: expect.stringMatching(/^bundle-mcp:/),
     workspaceDir: "/workspace",
     cfg: params.cfg,
   });
@@ -120,6 +126,9 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
   });
   it("exposes MCP resource and prompt utility tools when advertised", async () => {
     const base = makeConfiguredRuntime({ toolNames: [], serverName: "knowledge" });
+    const catalog = await base.getCatalog();
+    catalog.servers.knowledge!.resources = { listChanged: true };
+    catalog.servers.knowledge!.prompts = { listChanged: true };
     const publicResults = {
       prompts_get: {
         description: "Brief the user",
@@ -163,21 +172,7 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: {
         ...base,
-        getCatalog: async () => ({
-          version: 1,
-          generatedAt: 0,
-          servers: {
-            knowledge: {
-              serverName: "knowledge",
-              safeServerName: "knowledge",
-              launchSummary: "knowledge",
-              toolCount: 0,
-              resources: { listChanged: true },
-              prompts: { listChanged: true },
-            },
-          },
-          tools: [],
-        }),
+        getCatalog: async () => catalog,
         listResources: async () => privateResults.resources_list,
         readResource: async () => privateResults.resources_read,
         listPrompts: async () => privateResults.prompts_list,

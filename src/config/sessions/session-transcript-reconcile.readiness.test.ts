@@ -11,6 +11,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import * as transcriptMaintenance from "./session-transcript-index-maintenance.js";
 import { readSessionTranscriptIndexStatus } from "./session-transcript-projection-writer.js";
+import { readSessionTranscriptProjectionStatus } from "./session-transcript-reconcile-readiness.js";
 import {
   reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
@@ -187,6 +188,20 @@ it.each(["between-polls", "queued-status", "during-close"] as const)(
       if (boundary === "during-close") {
         observer.onTask = undefined;
         const closing = closeOpenClawAgentDatabasesAsync();
+        const readinessOptions = { ...options, path: database.path };
+        await expect(
+          readSessionTranscriptProjectionStatus(readinessOptions, scope.sessionId),
+        ).resolves.toBe(false);
+        const controller = new AbortController();
+        const reason = new Error("cancel projection status during close");
+        controller.abort(reason);
+        await expect(
+          readSessionTranscriptProjectionStatus(
+            readinessOptions,
+            scope.sessionId,
+            controller.signal,
+          ),
+        ).rejects.toMatchObject({ name: "AbortError", cause: reason });
         let scheduled: { ok: true } | { ok: false; error: unknown };
         try {
           startSessionTranscriptIndexReconcile(options);

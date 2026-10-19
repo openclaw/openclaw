@@ -792,7 +792,11 @@ export { preserveResolvedSecretBackedCredentials } from "./runtime-snapshot-owne
 export function createAuthProfileStoreRuntime(
   externalAuth: ReturnType<typeof createExternalAuthRuntime>,
 ) {
-  const { listRuntimeExternalAuthProfiles, overlayExternalAuthProfiles } = externalAuth;
+  const {
+    listRuntimeExternalAuthProfiles,
+    overlayExternalAuthProfiles,
+    withPreparedExternalAuthProfiles,
+  } = externalAuth;
 
   function maybeSyncPersistedExternalCliAuthProfiles(params: {
     store: AuthProfileStore;
@@ -1114,6 +1118,7 @@ export function createAuthProfileStoreRuntime(
     resolveRuntimeAuthProfileLoadOptions,
     loadAuthProfileStoreForAgent,
     loadRuntimeAuthProfileStore,
+    withPreparedExternalAuthProfiles,
     captureScope,
   });
 
@@ -1305,6 +1310,7 @@ export function createAuthProfileStoreRuntime(
     captureScope,
     withPreparedAuthProfileStoreReads,
     overlayExternalAuthProfiles,
+    withPreparedExternalAuthProfiles,
     setRuntimeAuthProfileStoreSnapshot,
     updateRuntimeAuthProfileStoreSnapshot,
   });

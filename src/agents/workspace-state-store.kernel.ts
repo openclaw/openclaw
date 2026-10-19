@@ -6,7 +6,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { formatDoctorStateRepairFailure } from "../infra/state-repair-message.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -325,7 +325,7 @@ export function readWorkspaceStateSnapshotForDirectoryInDatabase(params: {
   workspaceDir: string;
   database: WorkspaceStateDatabaseHandle;
 }): WorkspaceStateSnapshot {
-  return runSqliteDeferredTransactionSync(params.database.db, () => {
+  return runSqliteReadSnapshotSync(params.database.db, () => {
     const { identity } = resolveWorkspaceIdentityFromDatabase(params);
     return readWorkspaceStateSnapshotFromDatabase({ identity, database: params.database });
   });
@@ -357,7 +357,6 @@ export function replaceWorkspaceAttestationInDatabase(
   // Capture the comparison clock only after BEGIN IMMEDIATE acquires the
   // writer lock, so a newer committed row cannot look future-dated.
   const updatedAtMs = params.nowMs ?? Date.now();
-  assertCanonicalIntegerTimestamp(updatedAtMs, "attestation update");
   const resolution = resolveWorkspaceIdentityFromDatabase({
     workspaceDir: params.workspaceDir,
     database,

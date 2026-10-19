@@ -3,6 +3,7 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { describe, expect, it, vi } from "vitest";
 import { createSessionProjection } from "../../packages/gateway-client/src/session-projection.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { registerTuiCommandForwardingTests } from "./tui-command-forwarding.test-support.js";
 import type {
   LoadHistoryMock,
   SelectableOverlay,
@@ -337,29 +338,7 @@ describe("tui command handlers", () => {
     },
   );
 
-  it.each([
-    { command: "/side check this", local: true },
-    { command: "/not-a-real-command", local: true },
-    { command: "/goal status", local: false },
-    { command: "/model default", local: true },
-    { command: "/usage cost", local: false },
-    { command: "/queue:followup", local: false },
-  ])("forwards $command without applying a client-side setting", async ({ command, local }) => {
-    const h = createHarness({
-      opts: { local },
-      ...(command === "/model default"
-        ? { sendChat: vi.fn().mockResolvedValue({ status: "ok" }) }
-        : {}),
-      ...(command === "/queue:followup"
-        ? { activeChatRunId: "run-active", activityStatus: "streaming" }
-        : {}),
-    });
-    await h.handleCommand(command);
-    expectSendChatFields(h.sendChat, { sessionKey: "agent:main:main", message: command });
-    expect(h.sendChat).toHaveBeenCalledOnce();
-    expectUnused(h.patchSession, h.runGoalCommand, h.addSystem);
-    expect(h.runUsageCostCommand).not.toHaveBeenCalled();
-  });
+  registerTuiCommandForwardingTests();
 
   it.each(["/goal start ship", "/usage cost"])(
     "local global-agent command: %s",
@@ -560,9 +539,33 @@ describe("tui command handlers", () => {
     } else {
       expect(h.dropPendingUser).not.toHaveBeenCalled();
       expect(h.state.sessionProjection?.entries).toHaveLength(1);
-      expect(h.setActivityStatus).toHaveBeenLastCalledWith("idle");
+      expect(h.setActivityStatus).toHaveBeenLastCalledWith("idle", "completed");
     }
   });
+
+  it.each(["active", "pending"] as const)(
+    "keeps %s work visible after another send completes with a terminal ACK",
+    async (remaining) => {
+      const loadHistory = vi.fn<() => Promise<void>>(async () => {
+        h.state.activeChatRunId = remaining === "active" ? "other-run" : null;
+        h.state.pendingSubmit =
+          remaining === "pending"
+            ? { phase: "accepted", runId: "other-run", draftText: null }
+            : null;
+        h.state.activityStatus = remaining === "active" ? "streaming" : "waiting";
+        h.setActivityStatus.mockClear();
+      });
+      const h = createHarness({
+        activeChatRunId: "other-run",
+        sendChat: vi.fn(async ({ runId }: { runId: string }) => ({ runId, status: "ok" })),
+        loadHistory,
+      });
+      await h.handleCommand("hello");
+      expect(loadHistory).toHaveBeenCalledOnce();
+      expect(h.setActivityStatus).not.toHaveBeenCalled();
+      expect(h.state.activityStatus).toBe(remaining === "active" ? "streaming" : "waiting");
+    },
+  );
 
   it("ignores a terminal ACK after its history reload switches sessions", async () => {
     const history = createDeferred();

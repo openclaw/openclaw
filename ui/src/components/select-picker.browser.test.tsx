@@ -79,38 +79,73 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     }
   });
 
-  it("places submenus after batched writing-direction and placement changes", async () => {
-    const [direction, setDirection] = createSignal<"ltr" | "rtl">("ltr");
-    const [placement, setPlacement] = createSignal<"top" | "bottom">("bottom");
-    const host = mountHost();
-    mountSolid(
-      () => (
-        <div dir={direction()}>
-          <Picker
-            params={{
-              label: "Submenu",
-              value: "one",
-              options: [{ value: "one", label: "One" }],
-              variant: "submenu",
-              placement: placement(),
-              onChange() {},
-            }}
-          />
-        </div>
-      ),
-      { container: host },
-    );
-    const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
-    await picker.updateComplete;
-    const menu = picker.querySelector<HTMLElement>(".picker-select__menu")!;
-    expect(menu.dataset.placement).toBe("right-start");
+  it.each([undefined, "submenu"] as const)(
+    "resolves writing direction on opening without reading closed picker styles (%s)",
+    async (variant) => {
+      const { userEvent } = await import("vitest/browser");
+      const computedStyle = vi.spyOn(window, "getComputedStyle");
+      try {
+        const [direction, setDirection] = createSignal<"ltr" | "rtl">("ltr");
+        const [placement, setPlacement] = createSignal<"top" | "bottom">("bottom");
+        const host = mountHost();
+        mountSolid(
+          () => (
+            <div dir={direction()}>
+              <Picker
+                params={{
+                  label: "Submenu",
+                  value: "one",
+                  options: [{ value: "one", label: "One" }],
+                  variant,
+                  placement: placement(),
+                  onChange() {},
+                }}
+              />
+            </div>
+          ),
+          { container: host },
+        );
+        const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
+        await picker.updateComplete;
+        const menu = picker.querySelector<HTMLElement>(".picker-select__menu")!;
+        const hostStyleReads = () =>
+          computedStyle.mock.calls.filter(([element]) => element === picker);
+        expect(hostStyleReads()).toHaveLength(0);
 
-    setDirection("rtl");
-    setPlacement("top");
-    flush();
-    await picker.updateComplete;
-    expect(menu.dataset.placement).toBe("left-start");
-  });
+        setDirection("rtl");
+        setPlacement("top");
+        flush();
+        await picker.updateComplete;
+        expect(hostStyleReads()).toHaveLength(0);
+        const trigger = picker.querySelector<HTMLButtonElement>("button")!;
+        trigger.focus();
+        await userEvent.keyboard(variant === "submenu" ? "{ArrowLeft}" : "{ArrowDown}");
+        await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
+        expect(menu.dataset.placement).toBe(variant === "submenu" ? "left-start" : "top-start");
+        expect(getComputedStyle(menu).direction).toBe("rtl");
+
+        setDirection("ltr");
+        setPlacement("bottom");
+        flush();
+        await picker.updateComplete;
+        expect(menu.dataset.placement).toBe(variant === "submenu" ? "right-start" : "bottom-start");
+        await userEvent.keyboard("{Escape}");
+        computedStyle.mockClear();
+        setDirection("rtl");
+        setPlacement("top");
+        flush();
+        await picker.updateComplete;
+        expect(hostStyleReads()).toHaveLength(0);
+        await userEvent.keyboard(variant === "submenu" ? "{ArrowLeft}" : "{ArrowDown}");
+        await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
+        expect(menu.dataset.placement).toBe(variant === "submenu" ? "left-start" : "top-start");
+        await userEvent.keyboard(variant === "submenu" ? "{ArrowRight}" : "{Escape}");
+        await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
+      } finally {
+        computedStyle.mockRestore();
+      }
+    },
+  );
 
   it.each([
     { width: 1280, direction: "ltr" },

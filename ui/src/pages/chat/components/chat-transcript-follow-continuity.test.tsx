@@ -73,7 +73,7 @@ describe("transcript follow continuity", () => {
       const flushFrames = stubAnimationFrames();
       transcriptDomState.measuredRowHeight = 120;
       let followEnabled = true;
-      const transcript = createChatTranscript(vi.fn(), () => "smooth-no-op", {
+      const transcript = createChatTranscript(() => "smooth-no-op", {
         canFollowEnd: () => followEnabled,
         onReaderScroll: () => {
           followEnabled = false;
@@ -161,7 +161,7 @@ describe("transcript follow continuity", () => {
     async ({ source, settled }) => {
       stubAnimationFrames();
       const policy = makeChatHost({ chatHasAutoScrolled: true });
-      const transcript = createChatTranscript(vi.fn(), () => "follow-continuity", {
+      const transcript = createChatTranscript(() => "follow-continuity", {
         canFollowEnd: () => !policy.chatFollowLocked,
       });
       Object.assign(policy, {
@@ -221,11 +221,9 @@ describe("transcript follow continuity", () => {
       const { container, renderRows, transcript } = await mountTestTranscript(
         `typing-distance-${distance}`,
         rows,
-        createChatTranscript(
-          () => undefined,
-          () => `typing-distance-${distance}-${followEnabled}`,
-          { canFollowEnd: () => followEnabled },
-        ),
+        createChatTranscript(() => `typing-distance-${distance}-${followEnabled}`, {
+          canFollowEnd: () => followEnabled,
+        }),
       );
       try {
         const padding = nativePending ? 88 : 84;

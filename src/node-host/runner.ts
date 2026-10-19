@@ -17,6 +17,7 @@ import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
 } from "../infra/device-identity.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { logInfo } from "../logger.js";
@@ -171,6 +172,19 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   await initializeSqliteRuntimeCapabilities();
   ensureNodeHostStateReady();
   const cfg = await captureRuntimeConfigAsyncReader()();
+  if (
+    !isNodeHostLauncherChild() &&
+    !opts.ephemeral &&
+    /[/\\]dist[/\\]index\.(?:js|mjs)$/.test(process.argv[1] ?? "") &&
+    cfg.nodeHost?.autoUpdate?.enabled !== false &&
+    cfg.update?.checkOnStart !== false &&
+    !isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE) &&
+    !isTruthyEnvValue(process.env.OPENCLAW_NO_RESPAWN)
+  ) {
+    writeStderrLine(
+      "node auto-update unavailable: this process bypasses the node launcher. Run openclaw doctor --fix to repair the installed node service, or start openclaw node run through the package CLI.",
+    );
+  }
   const savedConfig = await loadNodeHostConfig();
   const plannedGateway: NodeHostGatewayConfig = {
     host: opts.gatewayHost,

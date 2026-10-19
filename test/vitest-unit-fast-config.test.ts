@@ -148,11 +148,11 @@ describe("unit-fast vitest lane", () => {
       console.log("UNIT_FAST_MEMBERSHIP_PROBE", JSON.stringify({ membership, unselectedFileReads, fullInventoryReads: gitLsFilesCalls }));
       const { resolveCiTestRuntimeSelections } = await import("./scripts/lib/ci-test-runtime.mts");
       const runtimeSelections = ["unit-fast", "unit-fast-isolated"].map((name, index) => ({
-        target: resolveCiTestRuntimeSelections({ targets: [selectedTests[index]] }, "bun-compatible"),
+        target: resolveCiTestRuntimeSelections({ targets: [selectedTests[index]] }, "bun-all"),
         group: resolveCiTestRuntimeSelections({
           configs: ["test/vitest/vitest." + name + ".config.ts"],
           includePatterns: selectedTests,
-        }, "bun-compatible"),
+        }, "bun-all"),
       }));
       console.log("UNIT_FAST_RUNTIME_PROBE", JSON.stringify({ runtimeSelections, unselectedFileReads }));
       hookFileReads = 0;
@@ -263,12 +263,7 @@ describe("unit-fast vitest lane", () => {
       runtimeSelections: [
         {
           target: [{ runtime: "bun" }],
-          group: [
-            {
-              runtime: "bun",
-              includePatterns: ["src/agents/agent-tools.deferred-followup-guidance.test.ts"],
-            },
-          ],
+          group: [{ runtime: "bun" }],
         },
         {
           target: [{ runtime: "bun" }],

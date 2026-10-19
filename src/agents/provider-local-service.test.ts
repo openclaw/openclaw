@@ -242,6 +242,7 @@ describe("provider local service", () => {
     expect(reconcile).toHaveBeenCalledTimes(5);
     expect((await fetch(healthUrl)).ok).toBe(true);
     firstLease.release();
+    firstLease.release();
     expect((await fetch(healthUrl)).ok).toBe(true);
     secondLease.release();
     await waitForProbeFailure(healthUrl);

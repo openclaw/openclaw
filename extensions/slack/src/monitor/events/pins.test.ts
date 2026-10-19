@@ -1,7 +1,7 @@
 // Slack tests cover pins plugin behavior.
 import type { AllMiddlewareArgs } from "@slack/bolt";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerSlackPinEvents } from "./pins.js";
+import { registerSlackCommonEvents } from "../events.js";
 import { createSlackSystemEventTestHarness as buildPinHarness } from "./system-event-test-harness.js";
 
 const pinEnqueueMock = vi.hoisted(() => vi.fn());
@@ -59,7 +59,11 @@ function installPinHandlers(args: {
   if (args.shouldDropMismatchedSlackEvent) {
     harness.ctx.shouldDropMismatchedSlackEvent = args.shouldDropMismatchedSlackEvent;
   }
-  registerSlackPinEvents({ ctx: harness.ctx, trackEvent: args.trackEvent });
+  registerSlackCommonEvents({
+    ctx: harness.ctx,
+    handleSlackMessage: vi.fn(),
+    trackEvent: args.trackEvent,
+  });
   return {
     added: harness.getHandler("pin_added") as PinHandler | null,
     removed: harness.getHandler("pin_removed") as PinHandler | null,
@@ -86,7 +90,7 @@ async function runPinCase(input: PinCase = {}): Promise<void> {
   });
 }
 
-describe("registerSlackPinEvents", () => {
+describe("Slack pins events", () => {
   beforeEach(() => {
     pinEnqueueMock.mockClear();
   });
@@ -141,7 +145,7 @@ describe("registerSlackPinEvents", () => {
     harness.ctx.resolveChannelName = resolveChannelName;
     harness.ctx.resolveUserName = resolveUserName;
     harness.ctx.resolveSlackSystemEventRoute = resolveSessionKey;
-    registerSlackPinEvents({ ctx: harness.ctx, trackEvent });
+    registerSlackCommonEvents({ handleSlackMessage: vi.fn(), ctx: harness.ctx, trackEvent });
     const handler = harness.getHandler("pin_added") as PinHandler | null;
     if (!handler) {
       throw new Error("expected Slack pin added handler");
@@ -179,7 +183,7 @@ describe("registerSlackPinEvents", () => {
       apiAppId: "A_GRID",
       enterpriseId: "E_GRID",
     };
-    registerSlackPinEvents({ ctx: harness.ctx, trackEvent });
+    registerSlackCommonEvents({ handleSlackMessage: vi.fn(), ctx: harness.ctx, trackEvent });
     const handler = harness.getHandler("pin_added") as PinHandler | null;
     if (!handler) {
       throw new Error("expected Slack pin added handler");

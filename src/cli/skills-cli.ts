@@ -385,11 +385,6 @@ export function registerSkillsCli(program: Command) {
               }),
               logger: skillInstallLogger,
             });
-            if (!result.ok) {
-              defaultRuntime.error(result.error);
-              defaultRuntime.exit(1);
-              return;
-            }
             await refreshLocalGatewaySkills(target);
             defaultRuntime.log(
               `Installed ${result.slug} from ${result.source} -> ${result.targetDir}`,
@@ -754,6 +749,9 @@ export function registerSkillsCli(program: Command) {
             command,
             (resolved) => {
               const value = archive ? opts.reason : opts.version;
+              if (!archive && value === "") {
+                throw new Error("--version must not be blank");
+              }
               return callSkillsWorkshop<SkillsWorkshopChangeResult>(
                 resolved,
                 method,

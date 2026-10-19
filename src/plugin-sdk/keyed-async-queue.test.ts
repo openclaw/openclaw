@@ -81,6 +81,51 @@ describe("enqueueKeyedTask", () => {
     }
   });
 
+  it("reserves overlapping object keys while their predecessors are still waiting", async () => {
+    const tails = new WeakMap<object, Promise<void>>();
+    const left = {};
+    const shared = {};
+    const right = {};
+    const gate = createDeferred();
+    const order: string[] = [];
+    const first = enqueueKeyedTask({
+      tails,
+      keys: [left, shared],
+      task: async () => {
+        order.push("first");
+        await gate.promise;
+      },
+    });
+    const second = enqueueKeyedTask({
+      tails,
+      keys: [shared, right],
+      task: async () => {
+        order.push("second");
+      },
+    });
+    const third = enqueueKeyedTask({
+      tails,
+      key: right,
+      task: async () => {
+        order.push("third");
+      },
+    });
+    try {
+      await enqueueKeyedTask({
+        tails,
+        key: {},
+        task: async () => {
+          order.push("independent");
+        },
+      });
+      expect(order).toEqual(["first", "independent"]);
+    } finally {
+      gate.resolve();
+      await Promise.all([first, second, third]);
+    }
+    expect(order).toEqual(["first", "independent", "second", "third"]);
+  });
+
   it("runs enqueue/settle hooks once per task", async () => {
     const tails = new Map<string, Promise<void>>();
     const onEnqueue = vi.fn();

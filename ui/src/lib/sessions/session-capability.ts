@@ -25,6 +25,7 @@ import type {
   SessionWorkspaceListResult,
   SessionWorkspaceSetResult,
 } from "../../api/types.ts";
+import type { BootRecord } from "../../app/boot-record.ts";
 import type { ApplicationGatewayPhase, ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import type { GatewayConnectionScope } from "../gateway-connection-lifecycle.ts";
@@ -57,6 +58,22 @@ export type SessionState = {
   /** Gateway-owned sidebar section order; pinned is intentionally absent. */
   sectionOrder: readonly string[];
 };
+
+export function createSessionState(
+  bootRecord?: Pick<BootRecord, "groups" | "sectionOrder"> | null,
+): SessionState {
+  return {
+    result: null,
+    agentId: null,
+    modelOverrides: {},
+    loading: false,
+    error: null,
+    deletedSessions: [],
+    groups: bootRecord?.groups.map((group) => group.name) ?? [],
+    groupSettings: bootRecord?.groups ?? [],
+    sectionOrder: bootRecord?.sectionOrder ?? [],
+  };
+}
 
 type SessionDeletionFact = {
   key: string;
@@ -219,7 +236,6 @@ export type SessionCapability = {
     // The lazy presentation supplies code; this session owner keeps operation custody.
     attach: (
       row: GatewaySessionRow,
-      changed: () => void,
       Owner: typeof GitHubPublicationOwner,
     ) => GitHubPublicationBinding | null;
   };

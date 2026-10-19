@@ -1,4 +1,3 @@
-// Restores one verified whole-archive backup into a fresh staging directory.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";

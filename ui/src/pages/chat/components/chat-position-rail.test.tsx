@@ -398,7 +398,7 @@ describe("conversation position rail", () => {
             root.scrollTop = 0;
             activeMessage.mockReturnValue("message-0");
           }
-          adjustTextareaHeight(textarea);
+          adjustTextareaHeight(textarea, { getTranscriptElement: () => root });
           expect(root.scrollTop).toBe(navigatesBeforeResize ? 0 : 8315);
           // The goal header regrows the composer before any observer or frame runs.
           height = 576;

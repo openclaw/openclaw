@@ -17,7 +17,7 @@ import { loadSessionEntryForAdmission } from "../../config/sessions/session-acce
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
-import { createDurableSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
+import { createSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import * as transcriptAnchors from "../../config/sessions/session-transcript-anchor-read.js";
 import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.types.js";
@@ -122,7 +122,7 @@ async function withSelectedTranscriptReader<T>(
     if (retainActor) {
       const identity = readDatabasePathIdentitySync(reader.database.path);
       assert(identity.key.startsWith("file:"), "Expected a physical actor database");
-      const acquired = await createDurableSessionActorFactory(reader.database).acquire(
+      const acquired = await createSessionActorFactory(reader.database).acquire(
         {
           sessionKey: target.sessionKey,
           database: {

@@ -9,6 +9,7 @@ import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.typ
 import { currentAttachments } from "./chat-attachment-draft.ts";
 import { stagedAttachmentBytes } from "./chat-attachments.ts";
 import { resolveChatCommentAnchor } from "./chat-comment-anchor.ts";
+import type { ChatCommentAction } from "./chat-selection-annotations.tsx";
 import { createChatSelectionAttachment } from "./chat-selection-attachment.ts";
 import { showChatAnnotationEditor } from "./chat-selection-popup.ts";
 
@@ -29,6 +30,8 @@ type ChatCommentControllerProps = {
   sessionKey: string;
   paneId: string;
   presented: boolean;
+  onFocusComposer?: () => void;
+  visiblePin?: (id: string) => HTMLElement | undefined;
 };
 
 /** Owns comment mutations even when plugins or history errors replace the transcript. */
@@ -78,63 +81,36 @@ export const ChatCommentController = defineSolidBridge<ChatCommentControllerProp
     }
 
     function visiblePin(id: string) {
-      return Array.from(root?.querySelectorAll<HTMLElement>(".chat-comment-pin") ?? []).find(
-        (pin) => {
-          if (pin.dataset.attachmentId !== id || pin.hidden) {
-            return false;
-          }
-          const bounds = pin.getBoundingClientRect();
-          const thread = pin.closest(".chat-thread")?.getBoundingClientRect();
-          return (
-            bounds.width > 0 &&
-            bounds.height > 0 &&
-            thread &&
-            bounds.top >= Math.max(thread.top, 0) &&
-            bounds.bottom <= Math.min(thread.bottom, window.innerHeight) &&
-            bounds.left >= Math.max(thread.left, 0) &&
-            bounds.right <= Math.min(thread.right, window.innerWidth)
-          );
-        },
-      );
+      return view.visiblePin?.(id);
     }
 
     const handleCommentAction = (event: Event) => {
       if (!(event instanceof CustomEvent) || !canChange(view.props.readSignal)) {
         return;
       }
-      if (event.detail?.action === "delete-all") {
+      const detail: ChatCommentAction | undefined = event.detail;
+      if (detail?.action === "delete-all") {
         event.stopPropagation();
         clearComments();
         return;
       }
       const attachment = currentChatComments(currentAttachments(view.props), view.sessionKey).find(
-        (item) => item.id === event.detail?.id,
+        (item) => item.id === detail?.id,
       );
       if (!attachment) {
         return;
       }
       event.stopPropagation();
-      if (event.detail.action === "delete") {
-        const preview =
-          event.target instanceof HTMLElement
-            ? event.target.closest<HTMLElement>(".chat-comment-preview--editable")
-            : null;
-        deleteComment(attachment.id, preview);
-      } else if (event.detail.action === "edit" && event.target instanceof HTMLElement) {
+      if (detail?.action === "delete") {
+        deleteComment(attachment.id, detail.focusDelete);
+      } else if (detail?.action === "edit" && event.target instanceof HTMLElement) {
         // Opening must not queue a transcript scroll that would dismiss the editor.
-        const trigger = event.target
-          .closest("openclaw-tooltip")
-          ?.querySelector<HTMLElement>(".chat-selection-annotations__trigger");
-        editComment(attachment, visiblePin(attachment.id) ?? trigger ?? event.target);
+        editComment(attachment, visiblePin(attachment.id) ?? detail.anchor ?? event.target);
       }
     };
 
     function focusComposer() {
-      root
-        ?.querySelector<HTMLElement>(
-          "openclaw-plugin-view[data-plugin-composer], .agent-chat__composer-combobox > textarea",
-        )
-        ?.focus({ preventScroll: true });
+      view.onFocusComposer?.();
     }
 
     function clearComments() {
@@ -152,7 +128,7 @@ export const ChatCommentController = defineSolidBridge<ChatCommentControllerProp
       focusComposer();
     }
 
-    function deleteComment(id: string, preview: HTMLElement | null = null) {
+    function deleteComment(id: string, focusDelete?: (id: string) => void) {
       retireEditor();
       const signal = view.props.readSignal;
       const sessionKey = view.sessionKey;
@@ -164,24 +140,17 @@ export const ChatCommentController = defineSolidBridge<ChatCommentControllerProp
         current,
         current.filter((item) => item.id !== id),
       );
-      if (!preview || !next) {
+      if (!focusDelete || !next) {
         focusComposer();
         return;
       }
       // Wait for the attachment owner to render the renumbered list before moving focus.
       focusFrame = requestAnimationFrame(() => {
         focusFrame = undefined;
-        if (
-          !canChange(signal) ||
-          view.sessionKey !== sessionKey ||
-          !preview.isConnected ||
-          !preview.hasAttribute("open")
-        ) {
+        if (!canChange(signal) || view.sessionKey !== sessionKey) {
           return;
         }
-        preview
-          .querySelector<HTMLElement>(`[data-comment-delete="${CSS.escape(next.id)}"]`)
-          ?.focus({ preventScroll: true });
+        focusDelete(next.id);
       });
     }
 
@@ -322,6 +291,8 @@ export const ChatCommentController = defineSolidBridge<ChatCommentControllerProp
       sessionKey: { default: "" },
       paneId: { default: "" },
       presented: { default: true, type: Boolean },
+      onFocusComposer: { default: undefined, attribute: false },
+      visiblePin: { default: undefined, attribute: false },
     },
   },
 );

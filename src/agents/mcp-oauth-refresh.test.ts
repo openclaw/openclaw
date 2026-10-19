@@ -17,7 +17,8 @@ const FRESH_ACCESS = "test-token-placeholder";
 const ROTATED_ACCESS = "gateway-token";
 const IDENTITY = operatorMcpOAuthIdentity("Remote Docs", "https://mcp.example.com/mcp");
 
-vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
+vi.mock("@modelcontextprotocol/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@modelcontextprotocol/client")>()),
   auth: authMock,
 }));
 

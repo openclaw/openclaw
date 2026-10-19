@@ -28,9 +28,7 @@ vi.mock("../state/openclaw-state-db-readonly.js", () => ({
 }));
 
 import {
-  cacheClawInstallSchemaVersion,
   captureClawInstallSchemaVersionFacts,
-  deleteCachedClawInstallSchemaVersion,
   prepareClawInstallSchemaVersions,
   readCachedClawInstallSchemaVersions,
   withClawInstallSchemaVersionFacts,
@@ -47,6 +45,12 @@ const row = {
 
 function schemaVersions(agentConfigDigest: string) {
   return new Map([["worker", { kind: "ok", schemaVersion: row.schemaVersion, agentConfigDigest }]]);
+}
+
+async function reloadSchemaVersions(rows: ClawInstallSchemaVersionRow[]) {
+  worker.lifecycle.mock.calls[0]?.[0]({ kind: "closed", path: options.path });
+  worker.read.mockResolvedValueOnce(rows);
+  (await prepareClawInstallSchemaVersions(options)).publish();
 }
 
 beforeEach(() => {
@@ -67,7 +71,7 @@ describe("asynchronous Claw consent preparation", () => {
   it("hands off one task's facts without replacing newer host facts or retaining the scope", async () => {
     (await prepareClawInstallSchemaVersions(options)).publish();
     const facts = structuredClone(captureClawInstallSchemaVersionFacts(options));
-    cacheClawInstallSchemaVersion("worker", row.schemaVersion, "newer", options);
+    await reloadSchemaVersions([{ ...row, agentConfigDigest: "newer" }]);
     const current = readCachedClawInstallSchemaVersions(options);
     worker.read.mockClear();
     let readAfterScope = () => readCachedClawInstallSchemaVersions(options);
@@ -144,15 +148,13 @@ describe("asynchronous Claw consent preparation", () => {
   });
 
   it.each(["update", "delete"] as const)(
-    "keeps a newer committed %s when an older read publishes",
+    "keeps a newer reloaded %s when an older read publishes",
     async (mutation) => {
       (await prepareClawInstallSchemaVersions(options)).publish();
       const stale = await prepareClawInstallSchemaVersions(options);
-      if (mutation === "update") {
-        cacheClawInstallSchemaVersion("worker", row.schemaVersion, "newer", options);
-      } else {
-        deleteCachedClawInstallSchemaVersion("worker", options);
-      }
+      await reloadSchemaVersions(
+        mutation === "update" ? [{ ...row, agentConfigDigest: "newer" }] : [],
+      );
       const current = readCachedClawInstallSchemaVersions(options);
 
       stale.publish();
@@ -165,26 +167,26 @@ describe("asynchronous Claw consent preparation", () => {
     },
   );
 
-  it("reuses committed changes until database closure requires a new read", async () => {
+  it("reuses reloaded legacy rows until database closure requires a new read", async () => {
     (await prepareClawInstallSchemaVersions(options)).publish();
-    cacheClawInstallSchemaVersion("worker", row.schemaVersion, "newer", options);
+    await reloadSchemaVersions([{ ...row, agentConfigDigest: "newer" }]);
     (await prepareClawInstallSchemaVersions(options)).publish();
     expect(readCachedClawInstallSchemaVersions(options)).toEqual({
       kind: "ready",
       schemaVersions: schemaVersions("newer"),
     });
 
-    deleteCachedClawInstallSchemaVersion("worker", options);
+    await reloadSchemaVersions([]);
     (await prepareClawInstallSchemaVersions(options)).publish();
     expect(readCachedClawInstallSchemaVersions(options)).toEqual({
       kind: "ready",
       schemaVersions: new Map(),
     });
-    expect(worker.read).toHaveBeenCalledTimes(1);
+    expect(worker.read).toHaveBeenCalledTimes(3);
 
     worker.lifecycle.mock.calls[0]?.[0]({ kind: "closed", path: options.path });
     (await prepareClawInstallSchemaVersions(options)).publish();
-    expect(worker.read).toHaveBeenCalledTimes(2);
+    expect(worker.read).toHaveBeenCalledTimes(4);
     expect(readCachedClawInstallSchemaVersions(options)).toEqual({
       kind: "ready",
       schemaVersions: schemaVersions("original"),

@@ -1071,6 +1071,8 @@ describe("createConfiguredOllamaStreamFn", () => {
     expect(request.url).toBe("https://remote-ollama.example.test/api/chat");
   });
 
+  // Hold async payload preparation open to prove acquisition order. Record
+  // readiness when acquisition starts; the mock must not enforce the order.
   it("acquires the exact provider service after final payload and headers, before fetch", async () => {
     const signal = new AbortController().signal;
     const leaseRelease = vi.fn();

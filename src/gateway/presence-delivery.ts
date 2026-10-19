@@ -28,13 +28,14 @@ export function preparePresenceDelivery(
   source: SystemPresence[],
   presence: SystemPresence[],
   version: number,
-): { fragment: string; snapshot: PresenceDeliverySnapshot } {
+): { fragment: string; snapshot: PresenceDeliverySnapshot; mode: "delta" | "reset" } {
   const full = createPresenceReset(source, presence, version);
   const rows = new Map(full.keys.map((key, index) => [key, presence[index]!]));
   const snapshot = { version, rows };
   const fullJSON = JSON.stringify(full);
   const previous = client.presenceSnapshot;
   let json = fullJSON;
+  let mode: "delta" | "reset" = "reset";
   if (previous) {
     const delta: PresenceDelta = {
       base: previous.version,
@@ -45,14 +46,37 @@ export function preparePresenceDelivery(
     };
     for (const [key, row] of rows) {
       const before = previous.rows.get(key);
-      if (before !== row && (!before || JSON.stringify(before) !== JSON.stringify(row))) {
+      if (!before) {
         delta.upsert.push({ key, presence: row });
+      } else if (before !== row) {
+        // Compare the projected wire fields; undefined is omitted by JSON.
+        const previousFields: Record<string, unknown> = before;
+        const currentFields: Record<string, unknown> = row;
+        const set: Partial<SystemPresence> = {};
+        const unset: string[] = [];
+        for (const [field, value] of Object.entries(currentFields)) {
+          if (
+            value !== undefined &&
+            JSON.stringify(value) !== JSON.stringify(previousFields[field])
+          ) {
+            Object.defineProperty(set, field, { value, enumerable: true });
+          }
+        }
+        for (const [field, value] of Object.entries(previousFields)) {
+          if (value !== undefined && currentFields[field] === undefined) {
+            unset.push(field);
+          }
+        }
+        if (Object.keys(set).length > 0 || unset.length > 0) {
+          delta.upsert.push({ key, set, unset });
+        }
       }
     }
     const deltaJSON = JSON.stringify(delta);
     if (Buffer.byteLength(deltaJSON) < Buffer.byteLength(fullJSON)) {
       json = deltaJSON;
+      mode = "delta";
     }
   }
-  return { fragment: `,"payload":${json}`, snapshot };
+  return { fragment: `,"payload":${json}`, snapshot, mode };
 }

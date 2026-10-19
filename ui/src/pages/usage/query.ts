@@ -91,13 +91,15 @@ type QuerySuggestion = {
 
 export type UsageFilterOptions = SessionsUsageOverview["filterOptions"];
 
-const buildQuerySuggestions = (query: string, options: UsageFilterOptions): QuerySuggestion[] => {
-  const trimmed = query.trim();
-  if (!trimmed) {
+const buildQuerySuggestions = (
+  query: string,
+  terms: ReturnType<typeof extractQueryTerms>,
+  options: UsageFilterOptions,
+): QuerySuggestion[] => {
+  if (!query.trim()) {
     return [];
   }
-  const tokens = extractQueryTerms(trimmed).map((term) => term.raw);
-  const lastQueryWord = tokens.at(-1) ?? "";
+  const lastQueryWord = terms.at(-1)?.raw ?? "";
   const [rawKey, rawValue] = lastQueryWord.includes(":")
     ? [
         lastQueryWord.slice(0, lastQueryWord.indexOf(":")),

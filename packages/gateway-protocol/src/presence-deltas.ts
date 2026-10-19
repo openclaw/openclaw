@@ -11,7 +11,10 @@ export type PresenceReset = {
 export type PresenceDelta = {
   base: number;
   version: number;
-  upsert: Array<{ key: string; presence: PresenceEntry }>;
+  upsert: Array<
+    | { key: string; presence: PresenceEntry }
+    | { key: string; set: Partial<PresenceEntry>; unset: string[] }
+  >;
   remove: string[];
   /** Complete resulting roster order, including unchanged rows. */
   order: string[];

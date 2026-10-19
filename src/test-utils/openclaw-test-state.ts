@@ -355,7 +355,10 @@ export async function createOpenClawTestState(
             import("../agents/auth-profiles/external-auth.js"),
           ]);
         const { saveAuthProfileStore } = createAuthProfileStoreRuntime(
-          createExternalAuthRuntime(() => []),
+          createExternalAuthRuntime(
+            () => [],
+            async (_params, run) => run(),
+          ),
         );
         withEnv(env, () => {
           const lease = acquireStateDatabaseSchemaLease(resolveOpenClawStateSqlitePath(env));

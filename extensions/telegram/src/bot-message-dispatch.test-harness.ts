@@ -11,10 +11,7 @@ import { withTelegramTestSettledReceipt } from "./bot-message-dispatch-receipt.t
 import type { TelegramBotFixtureMocks } from "./bot-module-mocks.test-support.js";
 import { createTestDraftStream } from "./draft-stream.test-helpers.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
-import {
-  clearTelegramRuntimeForTest as clearTelegramRuntime,
-  resetTelegramReplyFenceForTest as resetTelegramReplyFenceForTests,
-} from "./runtime.test-support.js";
+import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 
 export type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
   TelegramBotFixtureMocks["dispatchReplyWithBufferedBlockDispatcher"]
@@ -455,7 +452,6 @@ async function resetTelegramDispatchTestState() {
   testState = await createOpenClawTestState({ label: "telegram-dispatch", layout: "state-only" });
   resetPluginStateStoreForTests({ closeDatabase: false });
   setTelegramPluginStateRuntimeForTests();
-  resetTelegramReplyFenceForTests();
   createTelegramDraftStream.mockReset();
   dispatchReplyWithBufferedBlockDispatcher.mockReset();
   emitTelegramMessageSentHooks.mockReset();

@@ -69,7 +69,7 @@ export async function validateUpdateCandidateWithProgress(
   execution: {
     packageUpdateNodeRunner?: string;
     timeoutMs?: number;
-    opts: Pick<UpdateCommandOptions, "json">;
+    opts: Pick<UpdateCommandOptions, "json" | "fullIntegrityCheck">;
     progress: UpdateStepProgress;
   },
   run: UpdateCommandOptions["run"],
@@ -105,6 +105,7 @@ export async function validateUpdateCandidateWithProgress(
       stateDir: resolveStateDir(params.env),
       nodeRunner: execution.packageUpdateNodeRunner,
       timeoutMs: execution.timeoutMs,
+      fullIntegrityCheck: execution.opts.fullIntegrityCheck,
       onProgress: async (step) => {
         assertCurrent();
         if (run) {

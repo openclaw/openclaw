@@ -45,23 +45,3 @@ export function decodeClawAgentOwnership(
   }
   return { origin: "created", paths: parsed };
 }
-
-export function encodeClawAgentOwnership(
-  paths: string[],
-  origin: ClawAgentOrigin,
-): {
-  schemaVersion:
-    | "openclaw.clawInstallRecord.v2"
-    | typeof CLAW_INSTALL_RECORD_ADOPTED_SCHEMA_VERSION;
-  agentOwnedPathsJson: string;
-} {
-  return origin === "adopted"
-    ? {
-        schemaVersion: CLAW_INSTALL_RECORD_ADOPTED_SCHEMA_VERSION,
-        agentOwnedPathsJson: JSON.stringify({ origin, paths }),
-      }
-    : {
-        schemaVersion: "openclaw.clawInstallRecord.v2",
-        agentOwnedPathsJson: JSON.stringify(paths),
-      };
-}

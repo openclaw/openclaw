@@ -10,7 +10,10 @@ import {
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import {
   openOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
@@ -159,6 +162,7 @@ describe("plugin doctor session identity evidence", () => {
         });
         if (kind === "broken") {
           database.db.exec("PRAGMA user_version = 999");
+          await closeOpenClawAgentDatabaseByPathAsync(database.path);
         }
       }
       const context = doctorContext(env, { config });

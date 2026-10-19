@@ -9,7 +9,10 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { serializeSidebarEntry } from "../../app-navigation.ts";
 import { togglePinnedSession } from "../../app/bootstrap-navigation-preferences.ts";
 import { resolveSidebarSessionParentKey } from "../../components/app-sidebar-session-parent.ts";
-import type { SidebarSessionMutationScope } from "../../components/app-sidebar-session-types.ts";
+import type {
+  SidebarSessionMutationResult,
+  SidebarSessionMutationScope,
+} from "../../components/app-sidebar-session-types.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import type { SessionMenuData } from "../../components/session-menu-actions.ts";
 import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
@@ -180,14 +183,14 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       this.connectedClient === client &&
       this.connectionGeneration === generation
     ) {
-      if (this.headerPlatform !== platform) {
-        this.headerPlatform = platform;
-        this.invalidate();
-      }
+      this.headerPresentation.platform = platform;
     }
   }
 
-  protected async handleHeaderSessionAction(action: HeaderMenuAction, row: GatewaySessionRow) {
+  protected async handleHeaderSessionAction(
+    action: HeaderMenuAction,
+    row: GatewaySessionRow,
+  ): Promise<SidebarSessionMutationResult | void> {
     if (action.kind === "delete" && isNativeCatalogAdoptionSessionKey(row.key)) {
       return;
     }
@@ -240,6 +243,31 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         return;
       }
       togglePinnedSession(this.context.navigation, current.key);
+      return;
+    }
+    if (action.kind === "new-group") {
+      const signal = this.headerSessionDraftAbortController.signal;
+      const gateway = this.context.gateway;
+      const { showInputDialog } = await import("../../components/input-dialog.ts");
+      await showInputDialog({
+        signal,
+        gateway,
+        title: t("sessionsView.newGroupTitle"),
+        label: t("sessionsView.newGroupPrompt"),
+        submitLabel: t("sessionsView.newGroupCreate"),
+        requireValue: true,
+        submit: async (name) => {
+          const result = await this.handleHeaderSessionAction(
+            { kind: "move-to-group", category: name },
+            row,
+          );
+          return result === "completed"
+            ? null
+            : result === "stale"
+              ? t("sessionsView.newGroupStale")
+              : (this.state?.chatError ?? t("sessionsView.newGroupFailed"));
+        },
+      });
       return;
     }
     const scope = this.captureHeaderSessionActionScope();
@@ -375,21 +403,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           await operations.promoteSession(host, session, scope);
           break;
         case "move-to-group":
-          await assignCategory(action.category);
-          break;
-        case "new-group": {
-          const { showInputDialog } = await import("../../components/input-dialog.ts");
-          const name = await showInputDialog({
-            title: t("sessionsView.newGroupTitle"),
-            label: t("sessionsView.newGroupPrompt"),
-            submitLabel: t("sessionsView.newGroupCreate"),
-            requireValue: true,
-          });
-          if (name && this.isHeaderSessionActionCurrent(scope, owner)) {
-            await assignCategory(name);
-          }
-          break;
-        }
+          return await assignCategory(action.category);
         case "snooze":
           await operations.snoozeSessionWithUndo(host, session, action, scope);
           break;
@@ -455,25 +469,20 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (!result.ok) {
       return;
     }
-    this.continueInTerminalDialog = {
+    this.headerPresentation.continueInTerminalDialog = {
       qualifiedSessionKey: result.qualifiedSessionKey,
       selectedGatewayUrl: this.context.gateway.connection.gatewayUrl,
       clientGatewayUrl: scope.client.gatewayUrl,
       scope,
     };
-    this.invalidate();
   }
 
   protected closeContinueInTerminalDialog(): void {
-    if (!this.continueInTerminalDialog) {
-      return;
-    }
-    this.continueInTerminalDialog = null;
-    this.invalidate();
+    this.headerPresentation.continueInTerminalDialog = null;
   }
 
   protected currentContinueInTerminalCommand(row: GatewaySessionRow | undefined): string | null {
-    const dialog = this.continueInTerminalDialog;
+    const dialog = this.headerPresentation.continueInTerminalDialog;
     const gateway = this.context.gateway;
     const client = gateway.snapshot.client;
     if (!dialog) {
@@ -487,7 +496,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       gateway.connection.gatewayUrl !== dialog.selectedGatewayUrl ||
       client?.gatewayUrl !== dialog.clientGatewayUrl
     ) {
-      this.continueInTerminalDialog = null;
+      this.headerPresentation.continueInTerminalDialog = null;
       return null;
     }
     return result.command;
@@ -525,6 +534,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   }
 
   protected beginHeaderRename(row: GatewaySessionRow): void {
+    const header = this.headerPresentation;
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {
       method: "sessions.patch",
       params: { key: row.key, label: null },
@@ -536,11 +546,11 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       return;
     }
     // The edit belongs to this instance, even if a replacement reuses its key.
-    this.headerRenameSession = { key: row.key, sessionId: row.sessionId, label: row.label };
+    const { key, sessionId, label } = row;
+    header.renameSession = { key, sessionId, label };
     this.headerRenameInitialValue = resolveSessionRenameValue(row);
-    this.headerRenameValue = this.headerRenameInitialValue;
-    this.invalidate();
-    void this.updateComplete.then(() => {
+    header.renameValue = this.headerRenameInitialValue;
+    void this.awaitDomCommit().then(() => {
       // The native pane transfers focus into the independently rendered header.
       const input = this.element.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
       input?.focus();
@@ -549,25 +559,23 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   }
 
   protected cancelHeaderRename(): void {
-    if (!this.headerRenameSession) {
-      return;
-    }
-    this.headerRenameSession = null;
-    this.invalidate();
+    this.headerPresentation.renameSession = null;
   }
 
   protected commitHeaderRename(): void {
-    const session = this.headerRenameSession;
+    const session = this.headerPresentation.renameSession;
     if (!session) {
       return;
     }
+    if (this.context.gateway.snapshot.phase !== "connected") {
+      return;
+    }
     const patch = resolveSessionRenamePatch(
-      this.headerRenameValue,
+      this.headerPresentation.renameValue,
       this.headerRenameInitialValue,
       session.label,
     );
-    this.headerRenameSession = null;
-    this.invalidate();
+    this.headerPresentation.renameSession = null;
     const state = this.state;
     if (!state || !patch) {
       return;
@@ -599,6 +607,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     agentWorkspace: string | undefined,
     workspaceGit: boolean,
   ): Promise<void> {
+    const header = this.headerPresentation;
     const client = this.connectedClient;
     if (!client) {
       return;
@@ -613,8 +622,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       null;
     const worktreeId = row.worktree?.id;
     if (worktreeId && !immediateRoot) {
-      const entry = this.headerWorktreePaths.get(worktreeId) ?? {};
-      this.headerWorktreePaths.set(worktreeId, entry);
+      const entry = header.worktreePaths.get(worktreeId) ?? {};
+      header.worktreePaths.set(worktreeId, entry);
       if (entry.path === undefined && !entry.loading) {
         entry.loading = true;
         loads.push(
@@ -631,6 +640,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
             })
             .finally(() => {
               entry.loading = false;
+              if (header.worktreePaths.get(worktreeId) === entry) {
+                header.worktreePaths = new Map(header.worktreePaths);
+              }
             }),
         );
       }
@@ -638,7 +650,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     const agentRoot = !row.worktree ? agentWorkspace?.trim() : undefined;
     const knownRoot =
       immediateRoot ||
-      (worktreeId ? this.headerWorktreePaths.get(worktreeId)?.path : undefined) ||
+      (worktreeId ? header.worktreePaths.get(worktreeId)?.path : undefined) ||
       agentRoot;
     const remote = Boolean(row.execNode) || isCloudWorkerPlacementState(row.placement?.state);
     // workspaceGit describes the agent workspace only; a session-specific
@@ -647,8 +659,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     // HEAD can move mid-session, so refetch on every open while keeping the
     // last-known branch visible during the refresh to avoid menu flicker.
     if (!row.worktree && !remote && knownRoot && rootMayHaveBranch) {
-      const entry = this.headerBranches.get(knownRoot) ?? {};
-      this.headerBranches.set(knownRoot, entry);
+      const entry = header.branches.get(knownRoot) ?? {};
+      header.branches.set(knownRoot, entry);
       if (!entry.loading) {
         entry.loading = true;
         loads.push(
@@ -662,24 +674,24 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
             })
             .finally(() => {
               entry.loading = false;
+              if (header.branches.get(knownRoot) === entry) {
+                header.branches = new Map(header.branches);
+              }
             }),
         );
       }
     }
     await Promise.all(loads);
-    this.invalidate();
   }
 
   protected showHeaderCopied(action: ChatPaneHeaderAction): void {
-    this.headerCopiedAction = action;
-    this.invalidate();
+    this.headerPresentation.copiedAction = action;
     if (this.headerCopiedTimer !== null) {
       window.clearTimeout(this.headerCopiedTimer);
     }
     this.headerCopiedTimer = window.setTimeout(() => {
-      this.headerCopiedAction = null;
+      this.headerPresentation.copiedAction = null;
       this.headerCopiedTimer = null;
-      this.invalidate();
     }, 1_500);
   }
 
@@ -716,7 +728,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       return;
     }
     this.state.chatError = this.state.lastError = formatUiError(error);
-    this.state.requestUpdate?.();
   }
 
   protected async revealHeaderWorkspace(row: GatewaySessionRow): Promise<void> {

@@ -101,9 +101,8 @@ function fakeManagedDesktop(
 function hostService(
   getConfig: () => DesktopHostConfig,
   options: Omit<Parameters<typeof createHostDesktopService>[0], "getConfig" | "registry"> = {},
-  lingerMs?: number,
 ) {
-  const registry = createDesktopSessionRegistry({ lingerMs });
+  const registry = createDesktopSessionRegistry();
   cleanups.push(() => registry.stopAll());
   const service = createHostDesktopService({
     getConfig,
@@ -116,9 +115,8 @@ function hostService(
 function managedService(
   managedDesktop: ManagedLinuxDesktop,
   getConfig = (): DesktopHostConfig => ({ enabled: true, managed: true }),
-  lingerMs?: number,
 ) {
-  return hostService(getConfig, { platform: "linux", managedDesktop }, lingerMs);
+  return hostService(getConfig, { platform: "linux", managedDesktop });
 }
 
 describe("gateway host desktop source", () => {
@@ -332,7 +330,7 @@ describe("gateway host desktop source", () => {
     vi.useFakeTimers();
     unreachable();
     const managed = fakeManagedDesktop();
-    const { service, registry } = managedService(managed.managed, undefined, 10);
+    const { service, registry } = managedService(managed.managed);
     const computer = await service.acquireComputer({ onStop });
     await service.observe({ control: false });
     const observers = Array.from({ length: 8 }, () =>
@@ -346,11 +344,11 @@ describe("gateway host desktop source", () => {
     for (const observer of observers) {
       observer?.release();
     }
-    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(120_000);
     expect(managed.stop).not.toHaveBeenCalled();
     expect(computer.isCurrent()).toBe(true);
     computer.release();
-    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(120_000);
     expect(managed.stop).toHaveBeenCalled();
     expect(computer.isCurrent()).toBe(false);
   });

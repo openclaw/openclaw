@@ -236,6 +236,33 @@ describe("TerminalConnection", () => {
     expect(newData).toEqual(["!"]);
   });
 
+  it("retries an unapplied resume suffix after its replay fails", async () => {
+    const { client, conn } = makeHarness();
+    const output: string[] = [];
+    let replayFailed = false;
+    await openSession(conn, {
+      onData: (data) => output.push(data),
+      onReplay: ({ data, newlyObservedFrom }) => {
+        if (!replayFailed) {
+          replayFailed = true;
+          throw new Error("emulator unavailable");
+        }
+        output.push(data.slice(newlyObservedFrom));
+      },
+    });
+    emitData(client, 5, "hello");
+    conn.suspend();
+    client.nextResponse = sessionResult({ buffer: "helloagain", seq: 10 });
+    expect((await conn.resume()).has("s1")).toBe(true);
+    expect(output.join("")).toBe("hello");
+
+    conn.suspend();
+    expect((await conn.resume()).size).toBe(0);
+    emitData(client, 11, "!");
+    expect(output.join("")).toBe("helloagain!");
+    conn.dispose();
+  });
+
   it("discards a detached exit that predates a successful recovery rebind", async () => {
     const { client, conn } = makeHarness();
     const data: string[] = [];
@@ -362,6 +389,23 @@ describe("TerminalConnection", () => {
       ]);
       expect(conn.size).toBe(0);
       expect(client.listenerCount()).toBe(0);
+    },
+  );
+
+  it.each(["terminal.input", "terminal.resize"] as const)(
+    "reports rejected and unconfirmed %s delivery without retiring the session",
+    async (method) => {
+      const { client, conn } = makeHarness();
+      await openSession(conn);
+      const act = () =>
+        method === "terminal.input" ? conn.input("s1", "typed") : conn.resize("s1", 120, 40);
+      client.nextResponse = null;
+      await expect(act()).rejects.toThrow("delivery could not be confirmed");
+      const request = vi.spyOn(client, "request").mockRejectedValueOnce(new Error("offline"));
+      await expect(act()).rejects.toThrow("offline");
+      expect(conn.size).toBe(1);
+      request.mockRestore();
+      conn.dispose();
     },
   );
 

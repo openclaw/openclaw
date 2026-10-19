@@ -24,7 +24,6 @@ import {
 } from "../components/panel-toggle-contract.ts";
 import { focusWithoutTooltip } from "../components/tooltip.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
-import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -76,7 +75,7 @@ import {
   visibleNavDrawerToggle,
   type ShellNavigationElements,
 } from "./navigation-surface.ts";
-import { isHomePanelAvailable } from "./panel-availability.ts";
+import { isCustodianPanelAvailable, isHomePanelAvailable } from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
 
@@ -462,22 +461,6 @@ export class ShellChromeOwner {
       window.dispatchEvent(new CustomEvent(DEBUG_OVERLAY_REQUEST_EVENT));
       return;
     }
-    if (
-      matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event) &&
-      isSettingsTakeover(host.routeState.routeId)
-    ) {
-      if (host.navDrawerOpen && !this.shouldIgnoreSettingsEscape(event)) {
-        event.preventDefault();
-        host.closeNavDrawer({ restoreFocus: true });
-        return;
-      }
-      if (event.eventPhase === Event.CAPTURING_PHASE || this.shouldIgnoreSettingsEscape(event)) {
-        return;
-      }
-      event.preventDefault();
-      host.exitSettings();
-      return;
-    }
     if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings, event)) {
       event.preventDefault();
       host.navigate("appearance");
@@ -554,11 +537,7 @@ export class ShellChromeOwner {
       return;
     }
     const home = event.type === HOME_PANEL_TOGGLE_EVENT;
-    if (
-      home
-        ? !isHomePanelAvailable(host.context?.gateway)
-        : !canCallGatewayMethod(host.context?.gateway.snapshot, "openclaw.chat", "operator.admin")
-    ) {
+    if (!(home ? isHomePanelAvailable : isCustodianPanelAvailable)(host.context?.gateway)) {
       event.preventDefault();
       return;
     }

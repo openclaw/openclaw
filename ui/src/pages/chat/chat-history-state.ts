@@ -27,6 +27,7 @@ type ChatHistoryLoadState =
       connectionEpoch: number;
       key: string;
       sessions: ChatHistorySessions;
+      request: Promise<ObservedChatHistoryResult | undefined>;
       promise: Promise<ObservedChatHistoryResult | undefined>;
       refresh?: {
         promise: Promise<ObservedChatHistoryResult | undefined>;
@@ -78,7 +79,7 @@ export type InitialChatSnapshotHydration = {
 };
 
 const chatHistoryPaneRequests = new WeakMap<object, ChatHistoryPaneRequests>();
-// Start at history publication so slow network time never spends the cache grace period.
+// Bound the initial data read so an unavailable cache cannot stall history requests.
 const INITIAL_CHAT_SNAPSHOT_WAIT_MS = 2_000;
 
 export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {

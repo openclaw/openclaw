@@ -1,4 +1,3 @@
-// Gateway assistant identity resolver.
 // Combines agent config and workspace identity files for Control UI display.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";

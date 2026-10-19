@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { getQueriesForElement } from "@solidjs/testing-library";
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -14,16 +15,12 @@ import { ClawsCatalogDialog } from "./claws-catalog-dialog.tsx";
 beforeEach(setupAgentsHomePageTest);
 afterEach(cleanupAgentsHomePageTest);
 
-function createDetail(
-  options: Parameters<typeof createPage>[0],
-  initialEntry: typeof workflowOperator | null = workflowOperator,
-) {
+function createDetail(options: Parameters<typeof createPage>[0]) {
   const fixture = createPage(options);
   const [packageName, setPackageName] = createSignal<string>(workflowOperator.packageName);
   const view = mountSolid(
     () =>
       createComponent(ClawsCatalogDialog, {
-        initialEntry,
         get initialPackageName() {
           return packageName();
         },
@@ -36,6 +33,25 @@ function createDetail(
 }
 
 describe("Claws on Agents Home", () => {
+  it.each(["explore", "catalog"])("names the Add target in the %s view", async (surface) => {
+    const { page, navigate } = createPage({ clawsEnabled: true });
+    const queries = getQueriesForElement(page);
+    if (surface === "catalog") {
+      (await queries.findByRole<HTMLButtonElement>("button", { name: "Search Claws" })).click();
+    }
+    const container = surface === "catalog" ? ".claws-catalog" : "[data-claws-explore]";
+    await vi.waitFor(() => expect(page.querySelector(container)).not.toBeNull());
+    const view = getQueriesForElement(page.querySelector(container)!);
+    const add = await view.findByRole<HTMLButtonElement>("button", {
+      name: "Add Workflow Operator",
+    });
+    expect(add.textContent?.trim()).toBe("Add");
+    add.click();
+    expect(navigate).toHaveBeenCalledWith("claws", {
+      pathname: "/agents/claws/workflow-operator",
+    });
+  });
+
   it.each([
     {
       names: ["AGENTS.md", "SOUL.md", "USER.md", "notes/context.md"],
@@ -145,7 +161,7 @@ describe("Claws on Agents Home", () => {
   });
 
   it("clears a selected Claw when the detail route changes", async () => {
-    const { detail, request, setPackageName } = createDetail({ clawsEnabled: true }, null);
+    const { detail, request, setPackageName } = createDetail({ clawsEnabled: true });
 
     await vi.waitFor(() =>
       expect(detail.querySelector(".plugin-capabilities")?.textContent).toContain("AGENTS.md"),
@@ -167,10 +183,7 @@ describe("Claws on Agents Home", () => {
     const applyWait = new Promise<void>((resolve) => {
       finishApply = resolve;
     });
-    const { detail, request, setPackageName } = createDetail(
-      { clawsEnabled: true, applyWait },
-      null,
-    );
+    const { detail, request, setPackageName } = createDetail({ clawsEnabled: true, applyWait });
 
     await vi.waitFor(() =>
       expect(detail.querySelector<HTMLButtonElement>("[data-claws-confirm] button")?.disabled).toBe(

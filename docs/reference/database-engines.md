@@ -613,11 +613,39 @@ replacement facts after committed DDL. Optional SQLite WAL, checkpoint, and
 page-reclamation work does not apply to PostgreSQL. Explicit SQLite integrity,
 repair, and file-snapshot requests refuse with a PostgreSQL recovery instruction.
 
-Runtime PostgreSQL queries run in workers. Physical open and boot migration code
+Gateway runtime PostgreSQL queries run in workers. Physical open and boot migration code
 may use the synchronous `withEngineStoreAdmission` scope from
 `openclaw/plugin-sdk/database-engine-worker-runtime`; retaining a connection after
 that scope ends does not authorize main-thread queries. The callback must remain
-synchronous. Close remains available to settle resources. The store owner supplies
+synchronous. CLI processes classified as one-shots may use the synchronous bridge
+for offline commands and Doctor repairs; an unset process role still refuses
+main-thread access. One-shot CLI dispatch selects the engine after profile, dotenv,
+and config-directed path routing, before commands read shared state. Help, version,
+log retrieval, package authoring, and database-only connection repairs remain usable
+without database credentials. Gateway processes retain their final-target admission
+owner. Interactive onboarding selects storage before its state work and starts
+any temporary or foreground Gateway in a separate process; neither process
+changes roles during setup.
+Updater admission and recovery commands retain their context, receipt, or explicit
+path selection. QA fixtures, database tooling, and agent execution likewise keep
+their existing target owners.
+
+Gateway RPC commands defer local engine selection until paired-device authentication
+needs state. Loopback calls with shared credentials do not require database credentials.
+Runtime-intent service status and Gateway discovery also run without a database.
+Config validation reports source parse and include errors before selecting storage;
+valid config validation and config mutation previews still select the engine before
+reading installed-plugin metadata. A channel status config fallback follows the same
+metadata requirement.
+
+When Doctor cannot parse config, it attempts the requested file-only config repair
+before selecting an engine. If the target remains unresolved, Doctor completes a
+best-effort report with database checks marked **unknown**, a config repair next
+step, and no database access. It never creates fallback SQLite state. Recovery
+that requires database metadata, including verification of a last-known-good
+promotion, remains deferred until the target is resolved.
+
+Close remains available to settle resources. The store owner supplies
 `openEngineStore` with `inspectSqlite(): { hasExistingData, hasEngineAnchor }`,
 so partially initialized stores are also protected from an accidental engine
 switch. See the canonical
@@ -764,6 +792,13 @@ engine does not add PostgreSQL support to an unported store.
 | Update target lacks PostgreSQL support    | Stay on the current version or reverse-port with the current compatible binary before retrying.         |
 
 ## Observe database work
+
+PostgreSQL read snapshots use read-only repeatable-read transactions. Transactions
+that may write acquire the store's advisory lock before reading. Committed typed
+writes invalidate only their declared replica scopes; raw writes and schema
+changes invalidate the whole store. Empty commits leave replica revisions
+unchanged, so unrelated reads can reuse their cached snapshots.
+A PostgreSQL function that writes rows and is called through SELECT must be classified unscoped.
 
 The engine boundary publishes Node.js `diagnostics_channel` events on
 `openclaw.database.statement` and `openclaw.database.request`. Subscriptions are

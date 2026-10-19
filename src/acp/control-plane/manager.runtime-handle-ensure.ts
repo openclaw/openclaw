@@ -210,7 +210,6 @@ export async function ensureManagerRuntimeHandle(
   };
   let ensured: AcpRuntimeHandle;
   if (shouldPrepareFreshPersistentSession) {
-    assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
     if (expectedControlBinding || params.readAcpControl?.()) {
       await assertControlBindingCurrent();
     }

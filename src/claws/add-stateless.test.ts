@@ -3,6 +3,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
+import * as mcpMutation from "../agents/mcp-config-mutation.js";
+import * as mcpConfig from "../config/mcp-config.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
@@ -15,14 +17,18 @@ import {
   readAgentDeletionJournal,
 } from "../test-utils/agent-deletion-journal.js";
 import { applyClawAddPlanStateless } from "./add-stateless.js";
+import * as cronInstall from "./cron.js";
 import { buildGatewayClawAddPlan } from "./gateway-add-plan.js";
 import { CLAW_MCP_REF_SCHEMA_VERSION, type PersistedClawMcpServerRef } from "./mcp-records.js";
-import { digestClawMcpServer, rollbackStatelessClawMcpServers } from "./mcp.js";
+import * as mcpInstall from "./mcp.js";
+import * as packageInstall from "./packages.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
 import { readClawManifestFile } from "./reader.js";
+import * as workspaceFiles from "./workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
+afterEach(() => vi.restoreAllMocks());
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 describe("stateless Claw Add", () => {
@@ -167,13 +173,13 @@ describe("stateless Claw Add", () => {
     let config = { agents: { entries: {} } };
     const plan = await buildGatewayClawAddPlan(source, { config, sourceMcpServers: {} });
 
+    vi.spyOn(workspaceFiles, "createClawWorkspaceFiles").mockRejectedValueOnce(
+      new Error("test file failure"),
+    );
     const result = await applyClawAddPlanStateless(plan, {
       consentPlanIntegrity: plan.planIntegrity,
       commitConfig: async (transform) => {
         config = transform(config) as typeof config;
-      },
-      createWorkspaceFiles: async () => {
-        throw new Error("test file failure");
       },
     });
 
@@ -236,14 +242,14 @@ describe("stateless Claw Add", () => {
     }
     let config = { agents: { entries: {} } };
     const plan = await buildGatewayClawAddPlan(source, { config, sourceMcpServers: {} });
+    vi.spyOn(cronInstall, "installClawCronJobsStateless").mockImplementationOnce(async () => {
+      writeFileSync(path.join(plan.agent.workspace, "USER.md"), "new user content");
+      throw new Error("scheduler unavailable");
+    });
     const result = await applyClawAddPlanStateless(plan, {
       consentPlanIntegrity: plan.planIntegrity,
       commitConfig: async (transform) => {
         config = transform(config) as typeof config;
-      },
-      installCronJobs: async () => {
-        writeFileSync(path.join(plan.agent.workspace, "USER.md"), "new user content");
-        throw new Error("scheduler unavailable");
       },
     });
 
@@ -309,21 +315,29 @@ describe("stateless Claw Add", () => {
       origin: "pre-existing",
       status: "complete",
     } as PersistedClawMcpServerRef;
-    const rollbackPackages = vi.fn(async (refs: PersistedClawPackageRef[]) => {
-      refs[0]!.status = "rolled_back";
-      return [];
-    });
-    const rollbackMcpServers = vi.fn(async (refs: PersistedClawMcpServerRef[]) => {
-      refs.splice(refs.indexOf(introducedMcp), 1);
-      return [];
-    });
+    const rollbackPackages = vi
+      .spyOn(packageInstall, "rollbackStatelessClawPackages")
+      .mockImplementation(async (refs) => {
+        refs[0]!.status = "rolled_back";
+        return [];
+      });
+    const rollbackMcpServers = vi
+      .spyOn(mcpInstall, "rollbackStatelessClawMcpServers")
+      .mockImplementation(async (refs) => {
+        refs.splice(refs.indexOf(introducedMcp), 1);
+        return [];
+      });
+    vi.spyOn(packageInstall, "installClawPackages").mockResolvedValueOnce([
+      introducedPackage,
+      reusedPackage,
+    ]);
+    vi.spyOn(mcpInstall, "installClawMcpServersStateless").mockResolvedValueOnce([
+      introducedMcp,
+      reusedMcp,
+    ]);
 
     const result = await applyClawAddPlanStateless(plan, {
       consentPlanIntegrity: plan.planIntegrity,
-      installPackages: vi.fn(async () => [introducedPackage, reusedPackage]),
-      installMcpServers: vi.fn(async () => [introducedMcp, reusedMcp]),
-      rollbackPackages,
-      rollbackMcpServers,
       commitConfig: async () => {
         throw new Error("publish failed");
       },
@@ -344,6 +358,14 @@ describe("stateless Claw Add", () => {
 
 describe("stateless MCP cleanup", () => {
   const configured = { command: "npx", args: ["example-mcp"] };
+  const configSnapshot = {
+    path: "/fixture/openclaw.json",
+    config: {},
+    authoredConfig: {},
+    runtimeConfig: {},
+    sourceConfigBeforeMigrations: {},
+    mcpServers: {},
+  };
   const mcpRef = (
     name: string,
     origin: PersistedClawMcpServerRef["origin"],
@@ -351,7 +373,7 @@ describe("stateless MCP cleanup", () => {
     schemaVersion: CLAW_MCP_REF_SCHEMA_VERSION,
     agentId: "new-agent",
     name,
-    configDigest: digestClawMcpServer(configured),
+    configDigest: mcpInstall.digestClawMcpServer(configured),
     relationship: origin === "claw-introduced" ? "managed" : "referenced",
     origin,
     independentOwner: true,
@@ -365,17 +387,16 @@ describe("stateless MCP cleanup", () => {
     const introduced = mcpRef("new-server", "claw-introduced");
     const reused = mcpRef("existing-server", "pre-existing");
     const refs = [introduced, reused];
-    const unsetMcpServer = vi.fn().mockResolvedValue({ ok: true, removed: true });
+    const unsetMcpServer = vi
+      .spyOn(mcpMutation, "unsetConfiguredMcpServer")
+      .mockResolvedValue({ ...configSnapshot, ok: true, removed: true });
+    vi.spyOn(mcpConfig, "listConfiguredMcpServers").mockResolvedValue({
+      ...configSnapshot,
+      ok: true,
+      mcpServers: { "new-server": configured },
+    });
 
-    expect(
-      await rollbackStatelessClawMcpServers(refs, {
-        listMcpServers: vi.fn().mockResolvedValue({
-          ok: true,
-          mcpServers: { "new-server": configured },
-        }),
-        unsetMcpServer,
-      }),
-    ).toEqual([]);
+    expect(await mcpInstall.rollbackStatelessClawMcpServers(refs)).toEqual([]);
     expect(unsetMcpServer).toHaveBeenCalledWith(
       expect.objectContaining({ name: "new-server", expectedServer: configured }),
     );
@@ -386,17 +407,14 @@ describe("stateless MCP cleanup", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-claws-mcp-changed-"));
     const introduced = mcpRef("new-server", "claw-introduced");
     const refs = [introduced];
-    const unsetMcpServer = vi.fn();
+    const unsetMcpServer = vi.spyOn(mcpMutation, "unsetConfiguredMcpServer");
+    vi.spyOn(mcpConfig, "listConfiguredMcpServers").mockResolvedValue({
+      ...configSnapshot,
+      ok: true,
+      mcpServers: { "new-server": { command: "different-command" } },
+    });
 
-    expect(
-      await rollbackStatelessClawMcpServers(refs, {
-        listMcpServers: vi.fn().mockResolvedValue({
-          ok: true,
-          mcpServers: { "new-server": { command: "different-command" } },
-        }),
-        unsetMcpServer,
-      }),
-    ).toEqual([]);
+    expect(await mcpInstall.rollbackStatelessClawMcpServers(refs)).toEqual([]);
     expect(unsetMcpServer).not.toHaveBeenCalled();
     expect(refs).toEqual([introduced]);
   });

@@ -502,11 +502,11 @@ describe("dashboard shared default in the real header Layout menu", () => {
     const h = createDashboardHarness({
       row: session({ boardPresentation: "expanded" }),
     });
+    h.pane.narrow = true;
+    h.pane.paneWidth = 400;
     h.state.updateSidebarLayout(openDashboardPresentation(h.state.sidebarLayout, "split"), {
       persist: false,
     });
-    h.pane.narrow = true;
-    h.pane.paneWidth = 400;
     const menu = await h.header();
     expect(menu.querySelector(defaultAction)?.textContent).toContain(
       t("chat.sidePanel.useViewAsDefault"),

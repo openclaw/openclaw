@@ -6,6 +6,9 @@ import {
   readDeferredPluginMigrations,
   recordDeferredPluginMigrations,
 } from "../infra/deferred-plugin-migrations.js";
+import { defaultPayload } from "../infra/gateway-state-owner-record.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import { startSqliteCheckpointWriter } from "../infra/sqlite-checkpoint-writer.test-support.js";
 import * as sqliteReadOnlyWorker from "../infra/sqlite-readonly-worker.js";
 import {
   clearBundledDiscoveryModeMemo,
@@ -145,7 +148,7 @@ function observeWith(
 }
 
 it.each(["load", "snapshot", "metadata", "write-snapshot", "policy"] as const)(
-  "%s consumes canonical config without reading pending migrations or changing artifacts",
+  "offline %s consumes canonical config without reading pending migrations or changing artifacts",
   async (method) => {
     const raw = JSON.stringify({
       gateway: { mode: "local" },
@@ -216,6 +219,52 @@ it.each(["load", "snapshot", "metadata", "write-snapshot", "policy"] as const)(
     }
   },
 );
+
+it("validates config and update ownership snapshots while a verified live writer checkpoints", async () => {
+  const raw = JSON.stringify({
+    gateway: { mode: "local" },
+    session: { store: "/srv/synthetic-sessions.json" },
+  });
+  const options = fixture(raw);
+  await recordDeferredPluginMigrations({
+    env: options.env,
+    pending: [
+      {
+        pluginId: "fixture-plugin",
+        reason: "Synthetic pending migration",
+        command: "openclaw plugins install @example/fixture-plugin",
+        configPaths: [["session", "store"]],
+        validationExcludedPaths: [["session", "store"]],
+      },
+    ],
+  });
+  await closeOpenClawStateDatabaseAsync();
+  const databasePath = resolveOpenClawStateSqlitePath(options.env);
+  const writer = await startSqliteCheckpointWriter(databasePath);
+  const owner = acquireGatewayStateOwner({
+    databasePath,
+    payload: { ...defaultPayload(databasePath), role: "gateway" },
+  });
+  const mainSql = observeMainThreadSql();
+  try {
+    for (const method of ["metadata", "write-snapshot"] as const) {
+      await cached(async () => {
+        const io = createConfigIO({ ...options, observe: false });
+        const result =
+          method === "metadata"
+            ? await io.readConfigFileSnapshotWithPluginMetadata()
+            : await io.readConfigFileSnapshotForWrite();
+        expect(result.snapshot).toMatchObject({ valid: true, raw });
+      });
+    }
+    mainSql.expectIdle();
+    expect(fs.readFileSync(options.configPath, "utf8")).toBe(raw);
+  } finally {
+    mainSql.restore();
+    await writer.stop();
+    owner.release();
+  }
+});
 
 it("rejects an invalid async load and rolls back its injected config environment", async () => {
   const { io, env } = fixture(

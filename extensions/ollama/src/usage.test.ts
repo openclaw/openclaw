@@ -10,46 +10,52 @@ const baseParams = {
 };
 
 describe("Ollama balance usage", () => {
-  it("sends the configured public endpoint key instead of an ambient Cloud key", async () => {
-    const hooks = createOllamaUsageHooks();
-    const config = createModelProviderConfig({
-      ollama: {
-        baseUrl: "https://ollama.example/v1",
-        api: "ollama",
-        apiKey: "endpoint-key",
-        models: [],
-      },
-    });
-    const env = { OLLAMA_API_KEY: "ambient-cloud-key" };
-    const auth = await hooks.resolveUsageAuth?.({
-      config,
-      env,
-      provider: "ollama",
-      resolveApiKeyFromConfigAndStore: () => env.OLLAMA_API_KEY,
-      resolveOAuthToken: async () => null,
-    });
-    expect(auth).toEqual({ token: "endpoint-key" });
-    if (!auth || !("token" in auth)) {
-      throw new Error("Expected configured endpoint usage token");
-    }
-    const fetchFn = vi.fn(async () =>
-      Response.json({ included: { session: { remaining_percent: 80 } } }),
-    );
-    await hooks.fetchUsageSnapshot?.({
-      config,
-      env,
-      provider: "ollama",
-      token: auth.token,
-      timeoutMs: 5000,
-      fetchFn,
-    });
-    expect(fetchFn).toHaveBeenCalledWith(
-      "https://ollama.example/api/balance",
-      expect.objectContaining({
-        headers: { Accept: "application/json", Authorization: "Bearer endpoint-key" },
-      }),
-    );
-  });
+  it.each(["literal", "SecretRef"] as const)(
+    "sends the configured %s endpoint key instead of an ambient Cloud key",
+    async (credential) => {
+      const hooks = createOllamaUsageHooks();
+      const config = createModelProviderConfig({
+        ollama: {
+          baseUrl: "https://ollama.example/v1",
+          api: "ollama",
+          apiKey:
+            credential === "literal"
+              ? "endpoint-key"
+              : { source: "env", provider: "default", id: "OLLAMA_USAGE_TEST_KEY" },
+          models: [],
+        },
+      });
+      const env = { OLLAMA_API_KEY: "ambient-cloud-key", OLLAMA_USAGE_TEST_KEY: "endpoint-key" };
+      const auth = await hooks.resolveUsageAuth?.({
+        config,
+        env,
+        provider: "ollama",
+        resolveApiKeyFromConfigAndStore: () => env.OLLAMA_API_KEY,
+        resolveOAuthToken: async () => null,
+      });
+      expect(auth).toEqual({ token: "endpoint-key" });
+      if (!auth || !("token" in auth)) {
+        throw new Error("Expected configured endpoint usage token");
+      }
+      const fetchFn = vi.fn(async () =>
+        Response.json({ included: { session: { remaining_percent: 80 } } }),
+      );
+      await hooks.fetchUsageSnapshot?.({
+        config,
+        env,
+        provider: "ollama",
+        token: auth.token,
+        timeoutMs: 5000,
+        fetchFn,
+      });
+      expect(fetchFn).toHaveBeenCalledWith(
+        "https://ollama.example/api/balance",
+        expect.objectContaining({
+          headers: { Accept: "application/json", Authorization: "Bearer endpoint-key" },
+        }),
+      );
+    },
+  );
 
   it("maps legacy remaining quota and reset times to used windows", async () => {
     const fetchFn = vi.fn(async () =>

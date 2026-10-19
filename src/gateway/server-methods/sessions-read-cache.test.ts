@@ -4,7 +4,6 @@ import type { SessionsListParams } from "../../../packages/gateway-protocol/src/
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { notifyPreparedModelRuntimePublication } from "../../agents/prepared-model-runtime.publication-events.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
@@ -25,6 +24,7 @@ import { mergeSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -47,7 +47,12 @@ import {
 } from "../session-row-backfill.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
+import { createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { activePlacement } from "../worker-environments/placement-suite.test-support.js";
+import {
+  captureRpcTargetForTest,
+  createActiveRpcSourceForTest,
+} from "./rpc-source-fixtures.test-support.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
@@ -176,26 +181,26 @@ it("omits unchanged sidebar rows without reusing membership or revoked access", 
 
 it("refreshes reply activity including previously rejected candidates", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { context, list } = await listFixture({ agentId: "main", search: "live", limit: 50 });
+    const { list } = await listFixture({ agentId: "main", search: "live", limit: 50 });
     await patchEntry(mainScope, { status: "done" });
-    context.chatAbortControllers.set("retained-terminal", {
-      sessionId: "main-active",
-      sessionKey: mainKey,
-      agentId: "main",
-      projectSessionActive: false,
-    } as never);
+    const target = { ...mainScope, sessionId: "main-active" };
+    const storeScope = captureRpcTargetForTest(target).storeScope;
+    rpcSourceTesting.set(
+      "retained-terminal",
+      createRpcSourceForTest(
+        { projectSessionActive: false },
+        { ...target, storeScope, phase: "consumed" },
+      ),
+    );
     expect((await list()).sessions).toEqual([]);
-    const operation = createReplyOperation({
-      sessionId: "main-active",
-      sessionKey: mainKey,
-      resetTriggered: false,
-    });
+    const active = await createActiveRpcSourceForTest({}, { ...target, storeScope });
+    rpcSourceTesting.set("active-reply", active);
     try {
       expect(mainRow(await list())).toMatchObject({ hasActiveRun: true, status: "running" });
-      operation.complete();
+      active.release();
       expect((await list()).sessions).toEqual([]);
     } finally {
-      operation.complete();
+      active.release();
     }
   }));
 
@@ -684,7 +689,7 @@ it.each([{}, { search: "direct" }, { activeOnly: true }])(
       const context = requestContext(config);
       if (filter.activeOnly) {
         for (const name of ["first", "second", "third"]) {
-          activateReadSession(
+          await activateReadSession(
             context,
             `page-run-${name}`,
             "main",

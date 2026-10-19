@@ -1,9 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { inspect } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import * as currentService from "./launchd-current-service.js";
+import { restartLaunchAgent } from "./launchd-lifecycle.js";
 import {
   buildLaunchAgentPlist,
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
@@ -16,6 +20,7 @@ import {
   resolveLaunchAgentEnvWrapperPath,
   resolveLaunchAgentPlistPath,
 } from "./launchd-service-files.js";
+import * as ownership from "./launchd-system.js";
 import {
   buildTaskScript,
   readScheduledTaskCommand,
@@ -108,6 +113,40 @@ describe("native service command inspection", () => {
     await fs.mkdir(path.dirname(filename), { recursive: true });
     await fs.writeFile(filename, contents);
   }
+
+  it("preserves nested native cleanup while proving a missing plist is absent", async () => {
+    const failure = new AggregateError(
+      [new CommandProcessCleanupError()],
+      "native inspection failed",
+    );
+    native.launchctl.mockImplementation(async (_command: string, args: string[]) => {
+      if (args.some((arg) => arg.startsWith("gui/"))) {
+        throw failure;
+      }
+      return missingJob;
+    });
+
+    await expect(readLaunchAgentProgramArguments(env, { requireEffective: true })).rejects.toBe(
+      failure,
+    );
+  });
+
+  it("stops restart when the plist reader cannot confirm native cleanup", async () => {
+    const failure = new CommandProcessCleanupError();
+    await writeFile(resolveLaunchAgentPlistPath(env), renderPlist(programArguments));
+    native.plutil.mockRejectedValue(failure);
+    vi.spyOn(currentService, "isCurrentProcessInsideLaunchdService").mockResolvedValue(false);
+    vi.spyOn(ownership, "assertNoSystemLaunchDaemonOwnership").mockResolvedValue();
+    const stdout = new PassThrough();
+    const onMutation = vi.fn();
+
+    await expect(
+      restartLaunchAgent({ env, stdout, onMutation, preserveDefinition: true }),
+    ).rejects.toBe(failure);
+    expect(native.launchctl).not.toHaveBeenCalled();
+    expect(onMutation).not.toHaveBeenCalled();
+    expect(stdout.read()).toBeNull();
+  });
 
   const strictTask = (options: GatewayServiceReadOptions = {}) =>
     readScheduledTaskCommand(env, { requireEffective: true, ...options });

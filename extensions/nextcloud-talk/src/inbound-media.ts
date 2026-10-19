@@ -61,8 +61,6 @@ export type NextcloudTalkAuthenticatedMediaSourceResult =
       status?: number;
     };
 
-type NextcloudTalkGuardedFetch = typeof fetchWithSsrFGuard;
-
 function boundedLogField(value: string): string {
   return value.replace(/[^a-z0-9._:/-]/giu, "_").slice(0, 128) || "unknown";
 }
@@ -302,7 +300,6 @@ function parseWebDavFileId(xml: string): string | undefined {
 }
 
 async function fetchNextcloudTalkWebDavFileId(params: {
-  fetchGuarded: NextcloudTalkGuardedFetch;
   url: string;
   authorization: string;
   origin: string;
@@ -313,7 +310,7 @@ async function fetchNextcloudTalkWebDavFileId(params: {
   try {
     params.signal?.throwIfAborted();
     const privateNetworkPolicy = ssrfPolicyFromPrivateNetworkOptIn(params.accountConfig);
-    const { response, release } = await params.fetchGuarded({
+    const { response, release } = await fetchWithSsrFGuard({
       url: params.url,
       init: {
         method: "PROPFIND",
@@ -358,7 +355,6 @@ async function fetchNextcloudTalkWebDavFileId(params: {
 }
 
 async function fetchNextcloudTalkJson(params: {
-  fetchGuarded: NextcloudTalkGuardedFetch;
   url: string;
   authorization: string;
   origin: string;
@@ -370,7 +366,7 @@ async function fetchNextcloudTalkJson(params: {
   try {
     params.signal?.throwIfAborted();
     const privateNetworkPolicy = ssrfPolicyFromPrivateNetworkOptIn(params.accountConfig);
-    const { response, release } = await params.fetchGuarded({
+    const { response, release } = await fetchWithSsrFGuard({
       url: params.url,
       init: {
         method: "GET",
@@ -426,7 +422,6 @@ export async function resolveNextcloudTalkAuthenticatedMediaSource(params: {
   attachment: NextcloudTalkInboundAttachment;
   accountConfig: NextcloudTalkAccountConfig;
   reference: Extract<NextcloudTalkAttachmentReferenceResult, { ok: true }>;
-  fetchGuarded?: NextcloudTalkGuardedFetch;
   signal?: AbortSignal;
 }): Promise<NextcloudTalkAuthenticatedMediaSourceResult> {
   params.signal?.throwIfAborted();
@@ -445,11 +440,9 @@ export async function resolveNextcloudTalkAuthenticatedMediaSource(params: {
     return { ok: false, reason: "media_fetch_failed" };
   }
   const authorization = buildBasicAuthorization(credentials.apiUser, credentials.apiPassword);
-  const fetchGuarded = params.fetchGuarded ?? fetchWithSsrFGuard;
   const userUrl = buildSameOriginUrl(base, "/ocs/v1.php/cloud/user");
   userUrl.searchParams.set("format", "json");
   const user = await fetchNextcloudTalkJson({
-    fetchGuarded,
     url: userUrl.toString(),
     authorization,
     origin: params.reference.origin,
@@ -486,7 +479,6 @@ export async function resolveNextcloudTalkAuthenticatedMediaSource(params: {
   historyUrl.searchParams.set("noStatusUpdate", "1");
   historyUrl.searchParams.set("markNotificationsAsRead", "0");
   const history = await fetchNextcloudTalkJson({
-    fetchGuarded,
     url: historyUrl.toString(),
     authorization,
     origin: params.reference.origin,
@@ -522,7 +514,6 @@ export async function resolveNextcloudTalkAuthenticatedMediaSource(params: {
     `/remote.php/dav/files/${encodeURIComponent(canonicalUserId)}/${exactHistoryMedia.encodedFilePath}`,
   );
   const webDavFile = await fetchNextcloudTalkWebDavFileId({
-    fetchGuarded,
     url: webDavUrl.toString(),
     authorization,
     origin: params.reference.origin,

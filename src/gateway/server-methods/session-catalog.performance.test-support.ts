@@ -97,7 +97,13 @@ export async function createComposedCatalogFixture(
     );
   }
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  const requests = new Map<string, number>();
+  const staticResults: Record<string, unknown> = {
+    initialize: { userAgent: `codex-cli/${nativeVersion}`, codexHome },
+    "thread/turns/list": { data: [], nextCursor: null },
+    "model/list": { data: [], nextCursor: null },
+    "account/read": { account: { type: "apiKey" }, requiresOpenaiAuth: true },
+    "config/read": { config: {}, origins: {}, layers: [] },
+  };
   server.on("connection", (socket) =>
     socket.on("message", (encoded) => {
       const request = JSON.parse(rawDataToString(encoded)) as {
@@ -108,11 +114,12 @@ export async function createComposedCatalogFixture(
       if (request.id === undefined) {
         return;
       }
-      requests.set(request.method, (requests.get(request.method) ?? 0) + 1);
       counters.nativeRequest(request.method);
+      const send = (payload: { result: unknown } | { error: { code: number; message: string } }) =>
+        socket.send(JSON.stringify({ id: request.id, ...payload }));
       let result: unknown;
-      if (request.method === "initialize") {
-        result = { userAgent: `codex-cli/${nativeVersion}`, codexHome };
+      if (Object.hasOwn(staticResults, request.method)) {
+        result = staticResults[request.method];
       } else if (request.method === "thread/list") {
         const offset = Number(request.params?.cursor ?? 0);
         const data = rows.slice(offset, offset + (request.params?.limit ?? 64));
@@ -126,33 +133,21 @@ export async function createComposedCatalogFixture(
           throw new Error("Unknown synthetic native thread");
         }
         result = { thread };
-      } else if (request.method === "thread/turns/list" || request.method === "model/list") {
-        result = { data: [], nextCursor: null };
-      } else if (request.method === "account/read") {
-        result = { account: { type: "apiKey" }, requiresOpenaiAuth: true };
-      } else if (request.method === "config/read") {
-        result = { config: {}, origins: {}, layers: [] };
       } else {
-        socket.send(
-          JSON.stringify({
-            id: request.id,
-            error: { code: -32601, message: `Unexpected synthetic request ${request.method}` },
-          }),
-        );
+        send({
+          error: { code: -32601, message: `Unexpected synthetic request ${request.method}` },
+        });
         return;
       }
-      const respond = () => socket.send(JSON.stringify({ id: request.id, result }));
+      const respond = () => send({ result });
       if (request.method === "thread/list" && options.beforeNativeListResponse) {
         void options.beforeNativeListResponse().then(respond, (error: unknown) => {
-          socket.send(
-            JSON.stringify({
-              id: request.id,
-              error: {
-                code: -32603,
-                message: error instanceof Error ? error.message : "Synthetic native list failed",
-              },
-            }),
-          );
+          send({
+            error: {
+              code: -32603,
+              message: error instanceof Error ? error.message : "Synthetic native list failed",
+            },
+          });
         });
       } else {
         respond();
@@ -412,9 +407,6 @@ export async function createComposedCatalogFixture(
     return {
       api,
       projection,
-      rows,
-      requests,
-      requestList,
       list,
       setupList,
       setupMaintenance,

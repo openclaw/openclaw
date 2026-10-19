@@ -35,6 +35,20 @@ await loadBundledPluginFacade({
 
 afterEach(() => vi.restoreAllMocks());
 
+function onCommit(visit: (publication: Record<string, unknown>) => void) {
+  const create = admission.createSqliteWorkerOperationAdmission;
+  vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+    (callback, attachment) =>
+      create((request, grant) => {
+        const facts = request.facts;
+        if (request.stage === "commit" && isRecord(facts) && isRecord(facts.publication)) {
+          visit(facts.publication);
+        }
+        callback(request, grant);
+      }, attachment),
+  );
+}
+
 function fixture(storePath: string) {
   const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
   const cfg = {
@@ -83,20 +97,16 @@ function fixture(storePath: string) {
   };
 }
 
-it("purges only entry-referenced generations off the host and retains history and surviving references", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("purges only entry-referenced generations off the host and retains history and surviving references", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const f = fixture(state.statePath("shared.sqlite"));
     await state.writeConfig(f.cfg);
     const sql = observeHostDataSql();
+    const sessionData =
+      /\b(?:session_nodes|session_windows|session_events|session_transcript_archives)\b/i;
     try {
       await f.purge();
-      expect(
-        sql.queries.filter((query) =>
-          /\b(?:session_nodes|session_windows|session_events|session_transcript_archives)\b/i.test(
-            query,
-          ),
-        ),
-      ).toEqual([]);
+      expect(sql.queries.filter((query) => sessionData.test(query))).toEqual([]);
     } finally {
       sql.restore();
     }
@@ -105,13 +115,16 @@ it("purges only entry-referenced generations off the host and retains history an
     expect(f.transcript("current")).toEqual([]);
     expect(f.transcript("historical")).toEqual([{ type: "proof", data: "historical" }]);
     expect(f.transcript("shared")).toEqual([{ type: "proof", data: "shared" }]);
-  });
-});
+  }));
 
-it.each(["changed entry", "added owned key", "added survivor reference"] as const)(
+it.each([
+  ["changed entry", "ops", "agent:ops:chat", "concurrent"],
+  ["added owned key", "ops", "agent:ops:concurrent", "concurrent"],
+  ["added survivor reference", "main", "agent:main:concurrent", "current"],
+] as const)(
   "revalidates a foreign commit with %s after planning",
-  async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  (change, agentId, sessionKey, sessionId) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const f = fixture(state.statePath("shared.sqlite"));
       await state.writeConfig(f.cfg);
       const materialize = archives.materializeSessionStateDeletePlans;
@@ -121,13 +134,7 @@ it.each(["changed entry", "added owned key", "added survivor reference"] as cons
           const result = await materialize(...args);
           if (!changed) {
             changed = true;
-            if (change === "changed entry") {
-              f.write("ops", f.scope.sessionKey, "concurrent");
-            } else if (change === "added owned key") {
-              f.write("ops", "agent:ops:concurrent", "concurrent");
-            } else {
-              f.write("main", "agent:main:concurrent", "current");
-            }
+            f.write(agentId, sessionKey, sessionId);
           }
           return result;
         },
@@ -151,14 +158,13 @@ it.each(["changed entry", "added owned key", "added survivor reference"] as cons
             })
           : f.transcript("current");
       expect(transcript).toEqual([{ type: "proof", data: "current" }]);
-    });
-  },
+    }),
 );
 
 it.each([false, true])(
   "enforces maintenance during purge with new survivor protection: %s",
-  async (protectAtCommit) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  (protectAtCommit) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const f = fixture(state.statePath("shared.sqlite"));
       const oldKey = "agent:main:maintenance-old";
       replaceSessionEntrySync(
@@ -181,26 +187,14 @@ it.each([false, true])(
         capture: () => protectedKeys,
         dispose() {},
       }));
-      const create = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          create((request, grant) => {
-            const publication =
-              isRecord(request.facts) && isRecord(request.facts.publication)
-                ? request.facts.publication
-                : undefined;
-            if (
-              request.stage === "commit" &&
-              publication?.kind === "session-entry-patch-committed"
-            ) {
-              sawCommit = true;
-              if (protectAtCommit) {
-                protectedKeys = [oldKey];
-              }
-            }
-            callback(request, grant);
-          }, attachment),
-      );
+      onCommit((publication) => {
+        if (publication.kind === "session-entry-patch-committed") {
+          sawCommit = true;
+          if (protectAtCommit) {
+            protectedKeys = [oldKey];
+          }
+        }
+      });
       try {
         const purge = f.purge();
         if (protectAtCommit) {
@@ -217,37 +211,24 @@ it.each([false, true])(
       } finally {
         unregister();
       }
-    });
-  },
+    }),
 );
 
 it.each([false, true])(
   "settles the purge's typed native binding when the agent commit is refused: %s",
-  async (refuse) => {
-    await withNativeBindingFixture("codex", async (f) => {
+  (refuse) =>
+    withNativeBindingFixture("codex", async (f) => {
       const previous = f.readBinding();
       const error = new Error("purge commit refused");
-      let refused = false;
-      const create = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          create((request, grant) => {
-            const publication =
-              isRecord(request.facts) && isRecord(request.facts.publication)
-                ? request.facts.publication
-                : undefined;
-            if (
-              refuse &&
-              request.stage === "commit" &&
-              publication?.kind === "session-native-binding" &&
-              publication.agent === "committed"
-            ) {
-              refused = true;
-              throw error;
-            }
-            callback(request, grant);
-          }, attachment),
-      );
+      onCommit((publication) => {
+        if (
+          refuse &&
+          publication.kind === "session-native-binding" &&
+          publication.agent === "committed"
+        ) {
+          throw error;
+        }
+      });
       const purge = withPluginRuntimeRegistryScope(f.registry, () =>
         purgeDeletedAgentSessionEntries({
           cfg: { agents: { ownership: "explicit", entries: { main: {} } } },
@@ -259,7 +240,6 @@ it.each([false, true])(
       );
       if (refuse) {
         await expect(purge).rejects.toThrow("purge commit refused");
-        expect(refused).toBe(true);
         expect(f.readEntry()).toBeDefined();
         expect(f.readBinding()).toEqual(previous);
       } else {
@@ -267,6 +247,5 @@ it.each([false, true])(
         expect(f.readEntry()).toBeUndefined();
         expect(f.readBinding()).toBeUndefined();
       }
-    });
-  },
+    }),
 );

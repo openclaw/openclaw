@@ -464,13 +464,24 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/config/sessions/session-accessor.sqlite-closed-reset-interval.ts",
+    [
+      {
+        tier: "W",
+        operations: ["resolveClosedResetInterval"],
+        evidence:
+          "Closed intervals are called only by history-interval's worker-owned ID/anchor readers.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-reset-window.ts",
     [
       {
         tier: "W",
-        operations: ["resolveClosedResetInterval", "hasUnindexedVisibleMessages"],
+        operations: ["hasUnindexedVisibleMessages"],
         evidence:
-          "Closed intervals are called only by history-interval's worker-owned ID/anchor readers. Unindexed-message probing is called only by history-query's lookup reader, constructed by the readonly history reader inside session-transcript.worker.ts.",
+          "Unindexed-message probing is called only by history-query's lookup reader, constructed by the readonly history reader inside session-transcript.worker.ts.",
       },
       {
         tier: "W",
@@ -675,9 +686,12 @@ const reviewedOperations = new Map([
         operations: [
           "everySessionTranscriptUserInputFrom.read",
           "readSessionTranscriptVisibleMessageDeltaCore",
+          "resolveVisibleDeltaRange",
+          "readVisibleDeltaMetadata",
+          "readVisibleDeltaPayload",
         ],
         evidence:
-          "Harness completion reaches the predicate only through session-history-read-operation.worker.ts or openclaw-agent-execution.worker.ts -> session-actor.worker.ts -> session-actor-phase.worker.ts. Visible delta has only session-history-read-operation.worker.ts and the registered execution-worker visibleDelta operation as callers; the accessor reexport adds no native value caller.",
+          "Harness completion reaches the predicate only through session-history-read-operation.worker.ts or openclaw-agent-execution.worker.ts -> session-actor.worker.ts -> session-actor-phase.worker.ts. Visible delta has only session-history-read-operation.worker.ts and the registered execution-worker visibleDelta operation as callers; the accessor reexport adds no native value caller. Its private range, metadata, and payload helpers are called only by the visible delta core.",
       },
     ],
   ],
@@ -1485,24 +1499,6 @@ const reviewedOperations = new Map([
         operations: ["readClaimsFromStores", "readClaimsFromStores.readStore"],
         evidence:
           "legacy-main-session-migration.ts calls full native claims only after detect mode returns; detection uses prepareComparisonClaimsFromStores and session-retirement-read.worker.ts",
-      },
-    ],
-  ],
-  [
-    "src/claws/provenance.ts",
-    [
-      {
-        tier: "T3",
-        operations: [
-          "persistClawInstallRecord",
-          "updateClawInstallRecordStatus",
-          "deleteClawInstallRecord",
-          "updateClawInstallRecord",
-          "persistClawPackageRef",
-          "updateClawPackageRefStatus",
-        ],
-        evidence:
-          "CLI add/update/remove writers; Gateway claws-packages.ts:124 injects worker claimPackageRef; raw Gateway reads remain outside this primitive census",
       },
     ],
   ],
@@ -2358,10 +2354,11 @@ const reviewedOperations = new Map([
           "listRegistryWorktreesInDatabase",
           "readProvisionedData",
           "listLiveRegistryWorktreeIdsInDatabase",
+          "listExistingLiveWorktreePathsInDatabase",
           "getRegistryWorktreeProvisionedChunkInDatabase",
         ],
         evidence:
-          "Runtime reads and exact-row predicates use worktrees/dispatch.worker.ts and registry-run-end.worker.ts through the shared-state worker registry. Cleanup inventory uses openclaw-state-read-registry.ts in the read worker. Native fixture readers live only in registry.test-support.ts; Doctor migration lists keep their separate registry.ts queries.",
+          "Runtime reads and exact-row predicates use worktrees/dispatch.worker.ts and registry-run-end.worker.ts through the shared-state worker registry. Cleanup inventory uses openclaw-state-read-registry.ts in the read worker. Live-path discovery is private to worktreeReadOperations, loaded by openclaw-state-read-operation-registry.ts and executed by openclaw-state-read.worker.ts. Native fixture readers live only in registry.test-support.ts; Doctor migration lists keep their separate registry.ts queries.",
       },
     ],
   ],
@@ -2569,17 +2566,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/claws/package-status.kernel.ts",
-    [
-      {
-        tier: "T3",
-        operations: ["updateClawPackageRefStatusInDatabase"],
-        evidence:
-          "CLI add: src/claws/add.ts:264 → packages.ts:316,395,567,579,656 → provenance.ts:488; worker sibling provenance-write.worker.ts:81.",
-      },
-    ],
-  ],
-  [
     "src/claws/package-update-provenance.ts",
     [
       {
@@ -2597,7 +2583,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["readClawOrphanWorkspaceInDatabase"],
         evidence:
-          "Only src/state/openclaw-state-read.worker.ts:232 and src/claws/provenance-write.worker.ts:48 execute the reader.",
+          "Legacy read-only worker handler in src/state/openclaw-state-read.worker.ts; retained inventory inspection contract.",
       },
     ],
   ],
@@ -3394,6 +3380,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/state/openclaw-agent-execution-maintenance.ts", // Only openclaw-agent-execution.worker.ts constructs this owner; admission invokes its startup repair callback solely inside that worker.
   "src/config/sessions/session-accessor.sqlite-entry-identity.ts", // Only reaction (agent execution worker), suggestion (sharing/transcript workers), and sharing native (sharing worker; host imports are types) kernels call this reader.
   "extensions/memory-core/src/memory/manager-publication-postgres.ts", // Only manager-publication.worker.ts binds this adapter to the admitted agent execution worker connection.
   "src/infra/database-engine/postgres-vector.ts", // Accepts only an admitted PostgresSqlConnection; the shared executor dispatches through PostgresSyncConnection to postgres-sync/bridge.worker.ts, never native SQLite.

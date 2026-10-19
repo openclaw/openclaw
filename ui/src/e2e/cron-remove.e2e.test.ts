@@ -2,6 +2,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -94,7 +95,9 @@ suite.define(() => {
         await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
         await stale.getByRole("button", { name: "Remove" }).click();
         await expect.poll(async () => gateway.getRequests("cron.remove")).toHaveLength(0);
-        await row.waitFor({ state: "visible", timeout: 10_000 });
+        await waitForControlUiGatewayReady(page);
+        await detail.waitFor({ state: "visible", timeout: 10_000 });
+        expect(await detail.locator(".cron-detail-title").textContent()).toContain(job.name);
 
         await chooseRemove(page);
         const stable = await waitForConfirmModal(page);
@@ -105,6 +108,7 @@ suite.define(() => {
 
         await expect.poll(async () => gateway.getRequests("cron.remove")).toHaveLength(1);
         expect((await gateway.getRequests("cron.remove"))[0]?.params).toEqual({ id: job.id });
+        await detail.waitFor({ state: "detached" });
         await expect.poll(() => row.count()).toBe(0);
       },
     );

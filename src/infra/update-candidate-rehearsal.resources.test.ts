@@ -78,6 +78,77 @@ async function fixture(sizeMiB = 0) {
   return { root, stateDir, file };
 }
 
+it.each([undefined, true])(
+  "uses the requested integrity coverage for a disposable rehearsal (full=%s)",
+  async (fullIntegrityCheck) => {
+    const input = await fixture();
+    const db = openNodeSqliteDatabase(input.file);
+    try {
+      db.exec(`
+        CREATE TABLE retained(value TEXT, alternate TEXT);
+        CREATE INDEX retained_value ON retained(value);
+        INSERT INTO retained VALUES ('alpha', 'zeta'), ('beta', 'eta');
+      `);
+      db.enableDefensive?.(false);
+      db.exec(`
+        PRAGMA writable_schema = ON;
+        UPDATE sqlite_schema SET sql = 'CREATE INDEX retained_value ON retained(alternate)'
+        WHERE name = 'retained_value';
+        PRAGMA writable_schema = OFF;
+      `);
+    } finally {
+      db.close();
+    }
+    const before = await fs.readFile(input.file);
+    const pending = prepare(input, { fullIntegrityCheck });
+    if (fullIntegrityCheck) {
+      await expect(pending).rejects.toThrow(/integrity_check.*retained_value/su);
+    } else {
+      await withRehearsal(pending, async (rehearsal) => {
+        const copied = openNodeSqliteDatabase(
+          path.join(rehearsal.stateDir, path.relative(input.stateDir, input.file)),
+          { readOnly: true },
+        );
+        try {
+          expect(copied.prepare("SELECT * FROM retained NOT INDEXED").all()).toEqual([
+            { value: "alpha", alternate: "zeta" },
+            { value: "beta", alternate: "eta" },
+          ]);
+        } finally {
+          copied.close();
+        }
+      });
+    }
+    expect(await fs.readFile(input.file)).toEqual(before);
+  },
+);
+
+it("checks indexes on shared tables before rewriting the rehearsal", async () => {
+  const input = await fixture();
+  const shared = path.join(input.stateDir, "state", "openclaw.sqlite");
+  await fs.mkdir(path.dirname(shared), { recursive: true });
+  const db = openNodeSqliteDatabase(shared);
+  try {
+    db.exec(`
+      CREATE TABLE state_leases(value TEXT, alternate TEXT);
+      CREATE INDEX lease_value ON state_leases(value);
+      INSERT INTO state_leases VALUES ('alpha', 'zeta'), ('beta', 'eta');
+    `);
+    db.enableDefensive?.(false);
+    db.exec(`
+      PRAGMA writable_schema = ON;
+      UPDATE sqlite_schema SET sql = 'CREATE INDEX lease_value ON state_leases(alternate)'
+      WHERE name = 'lease_value';
+      PRAGMA writable_schema = OFF;
+    `);
+  } finally {
+    db.close();
+  }
+  const before = await fs.readFile(shared);
+  await expect(prepare(input)).rejects.toThrow(/integrity_check.*lease_value/su);
+  expect(await fs.readFile(shared)).toEqual(before);
+});
+
 async function syntheticSnapshotWorker(body: string) {
   const root = tempDirs.make("candidate-progress-");
   const stateDir = path.join(root, "source");

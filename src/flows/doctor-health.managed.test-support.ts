@@ -205,7 +205,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         if (initiallyStopped) {
           releaseOpenClawAgentDatabaseLease(leaseId, { env: state.env });
         }
-        const pid = outcome === "ancestor-blocked" ? process.pid : 4200;
+        const pid = outcome === "ancestor-blocked" ? process.pid : process.pid + 1;
         mocks.resident.mockImplementation(() => (running ? { pid } : undefined));
         const packageRoot = process.cwd();
         mocks.packageRoot.mockReturnValue(packageRoot);

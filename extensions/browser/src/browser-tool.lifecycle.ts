@@ -2,6 +2,7 @@ import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
+import type { BrowserLifecycleAction } from "./browser-tool-action-facts.js";
 import { resolveBrowserBaseUrl } from "./browser-tool.routing.js";
 import {
   browserDoctor,
@@ -75,7 +76,7 @@ export async function executeBrowserLifecycleAction({
   sandboxBridgeUrl,
   signal,
 }: {
-  action: "doctor" | "status" | "start" | "stop" | "profiles" | "importprofile";
+  action: BrowserLifecycleAction;
   input: Record<string, unknown>;
   baseUrl?: string;
   profile?: string;

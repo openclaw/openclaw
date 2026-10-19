@@ -8,8 +8,12 @@ import {
   sessionRowIdentity,
   type SessionRowWire,
 } from "../../packages/gateway-protocol/src/session-row-deltas.js";
+import type { SessionEventRowsResetCause } from "../infra/diagnostic-rpc-types.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
-import { updateSessionEventRowRetention } from "./session-event-row-retention.js";
+import {
+  recordSessionEventRowReset,
+  updateSessionEventRowRetention,
+} from "./session-event-row-retention.js";
 import {
   prepareSessionRowDeltaFields,
   type SessionRowDeltaFields,
@@ -73,15 +77,12 @@ export class ConnectionSessionRows {
   #wireBytes = 0;
   #version = 0;
 
-  clear(): void {
-    this.clearRows();
-    this.clearAncestors();
-  }
-
-  clearRows(): void {
+  clear(cause: SessionEventRowsResetCause = "close"): void {
+    recordSessionEventRowReset(cause, this.#wireRows.size);
     updateSessionEventRowRetention(-this.#wireRows.size, -this.#wireBytes);
     this.#wireRows.clear();
     this.#wireBytes = 0;
+    this.clearAncestors();
   }
 
   clearAncestors(): void {
@@ -110,6 +111,8 @@ export class ConnectionSessionRows {
     let count = this.#wireRows.size;
     let bytes = this.#wireBytes;
     let version = this.#version;
+    let generations = 0;
+    let evictions = 0;
     const bases: Array<SessionRowDeltaFields | undefined> = [];
     const update = (identity: string, next: DeliveredRow | undefined) => {
       const previous = updates.has(identity) ? updates.get(identity) : this.#wireRows.get(identity);
@@ -122,6 +125,10 @@ export class ConnectionSessionRows {
       const identity = sessionRowIdentity(row.key, row.agentId);
       const fields = prepareSessionRowDeltaFields(row);
       const previous = updates.has(identity) ? updates.get(identity) : this.#wireRows.get(identity);
+      const sameGeneration =
+        previous &&
+        previous.fields.hashes.get("sessionId") === fields.hashes.get("sessionId") &&
+        previous.fields.hashes.get("lifecycleRevision") === fields.hashes.get("lifecycleRevision");
       bases.push(previous?.fields);
       const charge = 64 + 16 * fields.fieldCount + 2 * identity.length;
       let eviction: string | undefined;
@@ -149,12 +156,7 @@ export class ConnectionSessionRows {
       const header = { key: row.key, agentId: row.agentId, version: next.version };
       const full = { ...header, full: row, ...(!retain ? { retain: false as const } : {}) };
       let result: SessionRowWire = full;
-      if (
-        retain &&
-        previous &&
-        previous.fields.hashes.get("sessionId") === fields.hashes.get("sessionId") &&
-        previous.fields.hashes.get("lifecycleRevision") === fields.hashes.get("lifecycleRevision")
-      ) {
+      if (retain && previous && sameGeneration) {
         const patch = { ...header, base: previous.version, ...diff(previous.fields, fields, row) };
         const fullBytes =
           Buffer.byteLength(JSON.stringify({ ...header, full: null })) - 4 + rowByteLength(row);
@@ -164,6 +166,12 @@ export class ConnectionSessionRows {
       }
       if (retain && eviction) {
         update(eviction, undefined);
+        evictions++;
+      }
+      if (previous && !sameGeneration) {
+        generations++;
+      } else if (previous && !retain) {
+        evictions++;
       }
       update(identity, retain ? next : undefined);
       return result;
@@ -190,6 +198,8 @@ export class ConnectionSessionRows {
         this.#wireBytes = bytes;
         this.#version = version;
         updateSessionEventRowRetention(count - previousCount, bytes - previousBytes);
+        recordSessionEventRowReset("generation", generations);
+        recordSessionEventRowReset("evicted", evictions);
       },
     };
   }

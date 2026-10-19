@@ -1,45 +1,9 @@
-.sidebar-community {
-  flex: none;
-  border-block-start: 1px solid var(--border);
-  padding: var(--space-1) var(--space-2);
-}
-
-.sidebar-community__entry {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  width: 100%;
-  min-height: 44px;
-  padding: var(--space-2);
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted);
-  cursor: var(--cursor-action, default);
-  font: inherit;
-  font-size: var(--control-ui-text-sm);
-  text-align: start;
-}
-
-.sidebar-community__entry:hover {
-  background: var(--bg-hover);
-  color: var(--text-strong);
-}
-
-.sidebar-community__entry svg,
 .sidebar-community__close svg {
   width: 18px;
   height: 18px;
   flex: none;
 }
 
-.sidebar-community__entry svg:last-child {
-  margin-inline-start: auto;
-  width: 14px;
-  height: 14px;
-}
-
-.sidebar-community__entry:focus-visible,
 .sidebar-community__close:focus-visible,
 .sidebar-community__link:focus-visible {
   outline: 2px solid var(--accent);

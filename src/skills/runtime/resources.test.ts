@@ -91,6 +91,32 @@ it("accepts 8 MiB of combined resources and identifies aggregate overflow", asyn
   await expect(prepare(snapshot)).rejects.toBeInstanceOf(SkillResourceDeliveryLimitError);
 });
 
+it("reserves delivery slots for prompted and explicit skills before additional discovery", async () => {
+  for (let index = 0; index < 257; index++) {
+    await writeSkill(`guide-${String(index).padStart(3, "0")}`);
+  }
+  const hidden = await writeSkill(
+    "zz-explicit",
+    "---\ndescription: Explicit procedure\ndisable-model-invocation: true\n---\n# Explicit\n",
+  );
+  const config = {
+    skills: { limits: { maxSkillsInPrompt: 1, maxSkillsLoadedPerSource: 300 } },
+  };
+  const snapshot = await buildSkillSnapshot(workspace, {
+    entries: loadWorkspaceSkills(workspace, { workspaceOnly: true, config }),
+    config,
+  });
+  const delivery = await prepare(snapshot, [selected("zz-explicit", hidden)]);
+  expect(delivery?.skills).toHaveLength(256);
+  expect(delivery?.skills.find((skill) => skill.name === "guide-000")).toMatchObject({
+    modelVisible: true,
+  });
+  expect(delivery?.skills.find((skill) => skill.name === "zz-explicit")).toMatchObject({
+    modelVisible: true,
+  });
+  expect(delivery?.skills.some((skill) => skill.name === "guide-256")).toBe(false);
+});
+
 it("recreates stable session paths and prompt bytes independent of delivery order", async () => {
   privateInputs("skill-stable-inputs-&-");
   const scope = { sessionId: "stable-session", workspaceDir: workspace };

@@ -17,6 +17,10 @@ const enSessionOrganization = {
     sessionSnoozed: "Snoozed until {time}",
     sessionsArchived: "Archived {count} sessions",
     renameSessionPrompt: "Rename session",
+    renameSessionFailed: "Could not rename the session. Try again.",
+    renameGroupFailed: "Could not rename the group. Try again.",
+    renameSessionStale:
+      "Connection changed before the rename was confirmed. Review the current name before trying again.",
     sessionNameInUse: "A session with this name already exists.",
     newGroupMoveSkipped:
       "Group created, but the move was skipped because the list changed. Move from the row menu.",

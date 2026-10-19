@@ -46,19 +46,16 @@ export function HubTabs<T extends string>(props: HubTabsProps<T>) {
       ),
     })),
   );
-  let tablist: HTMLDivElement | undefined;
+  let tabElement!: (value: string) => HTMLElement | undefined;
   onSettled(() => {
-    const selected = [...(tablist?.querySelectorAll<HTMLElement>("[role=tab]") ?? [])].find(
-      (tab) => tab.dataset.tabValue === props.active,
-    );
     if (props.active !== null) {
-      reclaimHubTabFocus(props.id, props.active, selected);
+      reclaimHubTabFocus(props.id, props.active, tabElement(props.active));
     }
   });
   return (
     <Tabs
-      ref={(node) => {
-        tablist = node;
+      ref={(_element, findTab) => {
+        tabElement = findTab;
       }}
       id={`${props.id}-tabs`}
       shadowStyles={[hubStyles]}

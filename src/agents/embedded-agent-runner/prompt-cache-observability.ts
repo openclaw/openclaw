@@ -94,7 +94,6 @@ const HISTORY_ENVELOPE_FIELDS = new Set([
   "role",
   "timestamp",
   "idempotencyKey",
-  "__openclaw",
   "usage",
   "api",
   "provider",

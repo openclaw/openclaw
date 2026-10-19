@@ -1,10 +1,10 @@
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
+import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-identity.js";
 import type {
   PendingInputSourceRead,
   PendingInputSourceSnapshot,
@@ -19,7 +19,7 @@ export function readPendingInputSourceInDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "path" | "db">,
   input: PendingInputSourceRead,
 ): PendingInputSourceSnapshot {
-  return runSqliteDeferredTransactionSync(database.db, () => {
+  return runSqliteReadSnapshotSync(database.db, () => {
     const db = getSessionKysely(database.db);
     const session = executeSqliteQueryTakeFirstSync(
       database.db,

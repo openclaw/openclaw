@@ -4,7 +4,7 @@ import {
   readSessionEntryResetRecallCutoff,
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import { LruCache } from "../../infra/lru-cache.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { prepareAssistantTranscriptText } from "../../shared/chat-message-content.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { readTranscriptExportSnapshotsFromDatabase } from "./session-accessor.sqlite-read.js";
@@ -56,7 +56,7 @@ export async function prepareSessionMemoryEntries(
   for (const group of groups.values()) {
     withOpenClawAgentDatabaseReadOnly(
       (database) =>
-        runSqliteDeferredTransactionSync(
+        runSqliteReadSnapshotSync(
           database.db,
           () => {
             const exported = readTranscriptExportSnapshotsFromDatabase(

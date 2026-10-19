@@ -19,7 +19,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type * as SkillRuntime from "openclaw/plugin-sdk/skill-commands-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi, type Mock } from "vitest";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
@@ -90,7 +90,15 @@ async function settleUpdates(): Promise<void> {
   }
 }
 
-export const harness = {
+// Keep declaration emit from inferring the private command-dispatch symbol into this export.
+export const harness: {
+  readonly state: OpenClawTestState;
+  replySpy: Mock<ReplyResolver>;
+  transcribeFirstAudio: typeof transcribeFirstAudio;
+  settleUpdates: typeof settleUpdates;
+  prepareSkillCommandsForAgents: typeof prepareSkillCommandsForAgents;
+  buildModelsProviderData: typeof buildModelsProviderData;
+} = {
   get state() {
     return state;
   },

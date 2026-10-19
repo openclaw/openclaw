@@ -13,6 +13,8 @@ import {
 } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import type { CommandLane } from "../../process/lanes.js";
+import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
 import {
   isSessionStoreTopologyChange,
   sessionChanges,
@@ -21,10 +23,6 @@ import {
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
-import {
-  runWithMainSessionRecoveryAdmission,
-  type MainSessionRecoveryAdmission,
-} from "./main-session-recovery-admission.js";
 import { getMainSessionRecoveryRetryCount } from "./main-session-recovery-state.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
 import {
@@ -103,8 +101,6 @@ export async function recoverRestartAbortedMainSessions(params: {
   onPreparationPending?: (target: ExhaustedRestartRecoveryTarget) => void;
   stateDir?: string;
   handledSessionKeys?: Set<string>;
-  activeSessionIds?: Iterable<string>;
-  activeSessionKeys?: Iterable<string>;
   excludedStoreTargets?: ReadonlySet<string>;
   lifecycleGeneration?: string;
   shouldContinue?: () => boolean;
@@ -136,7 +132,7 @@ export async function recoverRestartAbortedMainSessions(params: {
       const entries = await readSessionEntrySummariesInWorker({
         agentId: target.agentId,
         storePath: target.storePath,
-        mainSessionRecovery: true,
+        mainSessionRecovery: "claims",
       });
       for (const entry of entries) {
         candidates.push({ ...entry, storePath: target.storePath, storeAgentId: target.agentId });
@@ -196,10 +192,11 @@ export async function retryRestartAbortedMainSessionRecovery(
   params: MainSessionRecoveryStoreTarget & {
     canonicalSessionKey?: string;
     cfg?: OpenClawConfig;
+    controllerInput?: SessionControllerInput;
     expectedRecoveryRunId?: string;
     expectedRecoverySourceRunId?: string;
     expectedSessionId: string;
-    lane?: MainSessionRecoveryAdmission["lane"];
+    lane?: CommandLane.Main | CommandLane.RestartRecovery;
     stateDir?: string;
     gatewayRuntime: GatewayRecoveryRuntime;
   },
@@ -222,8 +219,9 @@ export async function retryRestartAbortedMainSessionRecovery(
 async function recoverExpectedRestartRecovery(
   params: MainSessionRecoveryStoreTarget & {
     cfg?: OpenClawConfig;
+    controllerInput?: SessionControllerInput;
     expectedTarget: ExpectedRestartRecoveryTarget;
-    lane?: MainSessionRecoveryAdmission["lane"];
+    lane?: CommandLane.Main | CommandLane.RestartRecovery;
     lifecycleGeneration?: string;
     observationOnly?: boolean;
     onPreparationPending?: (target: ExhaustedRestartRecoveryTarget) => void;
@@ -251,21 +249,15 @@ async function recoverExpectedRestartRecovery(
   if (!isCurrent()) {
     return { started: 0, settled: 0, failed: 0, skipped: 0 };
   }
-  return (
-    (await runWithMainSessionRecoveryAdmission({
-      ...params,
-      canonicalSessionKey: expected.canonicalSessionKey,
-      sessionId: expected.sessionId,
-      isCurrent,
-      run: (recoveryAdmission) =>
-        recoverStore({
-          ...params,
-          shouldContinue: recoveryAdmission.shouldContinue,
-          handledSessionKeys: new Set<string>(),
-          recoveryAdmission,
-        }),
-    })) ?? { started: 0, settled: 0, failed: 0, skipped: 1 }
-  );
+  const lifecycleGeneration = params.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
+  return await recoverStore({
+    ...params,
+    lifecycleGeneration,
+    shouldContinue: () =>
+      params.shouldContinue?.() !== false &&
+      isAgentEventLifecycleGenerationCurrent(lifecycleGeneration),
+    handledSessionKeys: new Set<string>(),
+  });
 }
 
 export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(

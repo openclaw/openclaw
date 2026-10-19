@@ -5,7 +5,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type { AgentCapability } from "../../lib/agents/index.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
@@ -323,7 +323,7 @@ class SessionPrefetcher {
     const row = snapshot.rows?.find((candidate) => candidate.key === snapshot.intentSessionKey);
     // The presented pane owns transient run adoption and replay. Prefetch only
     // warms durable history after navigation intent.
-    if (!row || isSessionRunActive(row)) {
+    if (!row || isSessionRunStateActive(row)) {
       return null;
     }
     const openKeys = new Set(

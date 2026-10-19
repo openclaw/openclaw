@@ -29,8 +29,9 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
 }));
 
+// mock-isolation: Listing formats synthetic profiles without reading host stores or external CLIs.
 vi.mock("../../agents/auth-profiles.js", () => ({
-  ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync: async (...args: unknown[]) => mocks.ensureAuthProfileStore(...args),
   externalCliDiscoveryForProviderAuth: mocks.externalCliDiscoveryForProviderAuth,
   resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
   resolveAuthStatePathForDisplay: mocks.resolveAuthStatePathForDisplay,

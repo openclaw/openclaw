@@ -1,8 +1,7 @@
 import { createServer, type Server } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createFirecrawlSearchTool } from "./firecrawl-search-tool.js";
+import { captureFirecrawlTools } from "./firecrawl-tools.test-support.js";
 
 describe("Firecrawl search cache", () => {
   let server: Server;
@@ -50,7 +49,7 @@ describe("Firecrawl search cache", () => {
         },
       },
     };
-    const tool = createFirecrawlSearchTool(createTestPluginApi({ config }));
+    const tool = captureFirecrawlTools(config)("firecrawl_search");
     return (await tool.execute("cache-test", { query })).details;
   }
 

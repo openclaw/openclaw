@@ -774,7 +774,7 @@ describe("openclaw state database", () => {
       } else {
         const error = new Error(reason);
         error.name = "SqliteIntegrityError";
-        expect(recordOpenClawStateDatabaseOpenFailure(databasePath, error, generation)).toBe(true);
+        recordOpenClawStateDatabaseOpenFailure(databasePath, error);
       }
 
       expect(() => repairOpenClawStateDatabaseReadabilityForDoctor(options)).toThrow(reason);
@@ -1625,6 +1625,7 @@ describe("openclaw state database", () => {
       { kind: "task-run-indexes-v24", path: fixture.databasePath },
       { kind: "subagent-operator-recovery-v25", path: fixture.databasePath },
       { kind: "state-write-indexes-v27", path: fixture.databasePath },
+      { kind: "github-publication-draft-v28", path: fixture.databasePath },
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -1848,6 +1849,7 @@ describe("openclaw state database", () => {
       { kind: "subagent-operator-recovery-v25", path: seeded.databasePath },
       { kind: "session-state-head-layout-v26", path: seeded.databasePath },
       { kind: "state-write-indexes-v27", path: seeded.databasePath },
+      { kind: "github-publication-draft-v28", path: seeded.databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
     ]);
     expectRepair(options, [
@@ -2074,6 +2076,7 @@ describe("openclaw state database", () => {
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "subagent-operator-recovery-v25", path: databasePath },
       { kind: "state-write-indexes-v27", path: databasePath },
+      { kind: "github-publication-draft-v28", path: databasePath },
     ]);
 
     openOpenClawStateDatabase(options);
@@ -2316,7 +2319,7 @@ describe("openclaw state database", () => {
   });
 
   it.each([false, true])(
-    "repairs current-schema index corruption (recorded failure: %s)",
+    "repairs current-schema index corruption with explicit FULL or recorded failure (%s)",
     (recordedFailure) => {
       const stateDir = createTempStateDir();
       const databasePath = materializeCurrentStateDatabase(stateDir);
@@ -2333,7 +2336,12 @@ describe("openclaw state database", () => {
         ).toThrow(/integrity_check failed.*missing from index unsafe_index_records_value/iu);
         expect(checkpointCallback).not.toHaveBeenCalled();
       }
-      expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      expect(
+        repairOpenClawStateDatabaseSchema({
+          ...options,
+          integrityCheck: recordedFailure ? undefined : "full",
+        }),
+      ).toEqual({
         changes: [
           expect.stringContaining("Saved pre-repair SQLite backup:"),
           expect.stringContaining(

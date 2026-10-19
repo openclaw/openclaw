@@ -1,3 +1,4 @@
+import "./attempt-selectors.test-support.js";
 import fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -6,9 +7,15 @@ import type {
   SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { expect, it, vi, type Mock } from "vitest";
-import { runCopilotAttempt } from "./attempt.js";
-import { makeFakePool, makeFakeSdk, type FakeSdk } from "./attempt.test-support.js";
+import {
+  makeFakePool,
+  makeFakeSdk,
+  runCopilotAttempt,
+  type FakeSdk,
+} from "./attempt.test-support.js";
 import type { createCopilotToolBridge } from "./tool-bridge.js";
+
+const { copilotAttemptOverrides } = await import("./attempt-selectors.test-support.js");
 
 type CopilotToolBridgeInput = Parameters<typeof createCopilotToolBridge>[0];
 
@@ -50,10 +57,10 @@ export function registerCopilotWorkspaceTests({
         createStubToolBridge(),
       );
       try {
+        copilotAttemptOverrides.createToolBridge = createToolBridge;
+        copilotAttemptOverrides.resolveSandboxContext = async () => sandbox;
         await runCopilotAttempt(params, {
-          createToolBridge,
           pool: makeFakePool(sdk),
-          resolveSandboxContextOverride: async () => sandbox,
         });
         const bridgeArgs = expectDefined(createToolBridge.mock.calls[0]?.[0], "bridge input");
         const effectiveWorkspaceDir = mode === "ro" ? sandboxDir : workspaceDir;

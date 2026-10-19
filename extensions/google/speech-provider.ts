@@ -57,7 +57,7 @@ function resolveGoogleTtsApiKey(params: {
 
 function normalizeGoogleTtsProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const raw = asOptionalRecord(providers?.google) ?? asOptionalRecord(rawConfig.google);
+  const raw = asOptionalRecord(providers?.google);
   return {
     ...readGoogleTtsProviderConfig(raw ?? {}),
     apiKey: normalizeResolvedSecretInputString({

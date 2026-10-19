@@ -286,6 +286,7 @@ describe("doctor config persistence", () => {
           const configPath = await writeOpenClawConfig(home, {
             agents: { entries: { main: {} } },
             browser: { $include: "./browser.json" },
+            messages: { queue: { allowCollaborativeSteering: true } },
             gateway: { mode: "local" },
             plugins: { enabled: false },
             meta: { migrations: { webhookListeners: true } },
@@ -373,6 +374,7 @@ describe("doctor config persistence", () => {
         await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
           const configPath = await writeOpenClawConfig(home, {
             agents: { $include: "./agents.json5" },
+            messages: { queue: { allowCollaborativeSteering: true } },
             gateway: { mode: "local" },
             plugins: { enabled: false },
             meta: { migrations: { webhookListeners: true } },
@@ -506,6 +508,7 @@ describe("doctor config persistence", () => {
         await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
           const configPath = await writeOpenClawConfig(home, {
             agents: { entries: { main: { $include: "./config/main-parent.json5" } } },
+            messages: { queue: { allowCollaborativeSteering: true } },
             gateway: { mode: "local" },
             plugins: { enabled: false },
             meta: { migrations: { webhookListeners: true } },

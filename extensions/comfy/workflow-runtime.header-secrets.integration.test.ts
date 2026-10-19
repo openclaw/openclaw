@@ -5,8 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspect } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildComfyImageGenerationProvider } from "./image-generation-provider.js";
-import { buildComfyConfig } from "./test-helpers.js";
+import { buildComfyConfig, registerComfyProviders } from "./test-helpers.js";
+
+const comfyProviders = registerComfyProviders();
 
 const TINY_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -118,7 +119,7 @@ describe("comfy headers: real sockets, real SecretRef resolution (no mocks)", ()
       inputImageNodeId: "6",
       headers: { Authorization: `Basic ${credential}`, "X-Proxy-Auth": customHeader },
     });
-    const result = await buildComfyImageGenerationProvider()
+    const result = await comfyProviders.image
       .generateImage({
         provider: "comfy",
         model: "workflow",
@@ -139,7 +140,7 @@ describe("comfy headers: real sockets, real SecretRef resolution (no mocks)", ()
   it("resolves an env-backed SecretRef Authorization header across all three real requests and completes generation", async () => {
     const expectedAuth = `Basic ${Buffer.from(`env:${Math.random().toString(36).slice(2)}`).toString("base64")}`;
     vi.stubEnv("COMFY_HEADER_PROOF_ENV", expectedAuth);
-    const provider = buildComfyImageGenerationProvider();
+    const provider = comfyProviders.image;
     const result = await provider.generateImage({
       provider: "comfy",
       model: "workflow",
@@ -166,7 +167,7 @@ describe("comfy headers: real sockets, real SecretRef resolution (no mocks)", ()
     await fs.writeFile(tmpFile, expectedAuth);
     await fs.chmod(tmpFile, 0o600);
     try {
-      const provider = buildComfyImageGenerationProvider();
+      const provider = comfyProviders.image;
       const result = await provider.generateImage({
         provider: "comfy",
         model: "workflow",
@@ -198,7 +199,7 @@ describe("comfy headers: real sockets, real SecretRef resolution (no mocks)", ()
 
   it("stops before any real request when the SecretRef is unresolvable (fail-closed)", async () => {
     vi.stubEnv("COMFY_HEADER_PROOF_MISSING", undefined);
-    const provider = buildComfyImageGenerationProvider();
+    const provider = comfyProviders.image;
 
     await expect(
       provider.generateImage({
