@@ -505,13 +505,21 @@ describe("loadWorkspaceSkills", () => {
     const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
     const completePassiveScan = async () => {
       tasks.mockClear();
+      let settledTasks = 0;
       for (let elapsed = 0; elapsed < 30 * 60_000 + 50; elapsed += 60_000) {
         await vi.advanceTimersByTimeAsync(Math.min(60_000, 30 * 60_000 + 50 - elapsed));
-        await withinTest(Promise.all(tasks.mock.results.map((result) => result.value)), signal);
+        while (settledTasks < tasks.mock.results.length) {
+          const pending = tasks.mock.results.slice(settledTasks);
+          settledTasks += pending.length;
+          await withinTest(Promise.all(pending.map((result) => result.value)), signal);
+        }
       }
     };
     try {
       const first = await prepareWorkspaceSkills(workspaceDir, options);
+      const initialTasks = tasks.mock.calls.length;
+      expect(await prepareWorkspaceSkills(workspaceDir, options)).toEqual(first);
+      expect(tasks).toHaveBeenCalledTimes(initialTasks);
       expect(
         (
           await prepareWorkspaceSkills(workspaceDir, { ...options, skillFilter: ["cached-skill"] })
@@ -540,7 +548,6 @@ describe("loadWorkspaceSkills", () => {
       await writeWorkspaceSkills(workspaceDir, [
         { name: "fresh-skill", description: "Fresh skill" },
       ]);
-      expect(await prepareWorkspaceSkills(workspaceDir, options)).toEqual(first);
       await completePassiveScan();
       for (const executionDir of executionDirs) {
         expect(
