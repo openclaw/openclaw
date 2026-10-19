@@ -116,25 +116,24 @@ export async function withPersistenceChild<T>(
   const moduleReady = createDeferred();
   try {
     const replyPromise = new Promise<PersistenceReply>((resolve, reject) => {
+      const send = (message: PersistenceCommand | { kind: "run" }) => {
+        child.send(message, (error) => {
+          if (error) {
+            reject(error);
+          }
+        });
+      };
       child.once("error", reject);
       child.on("message", (message: { kind?: string; error?: string; phase?: string }) => {
         if (message.kind === "phase") {
           recordPhase(message.phase ?? "unknown");
         } else if (message.kind === "booted") {
           recordPhase("booted");
-          child.send(command, (error) => {
-            if (error) {
-              reject(error);
-            }
-          });
+          send(command);
         } else if (message.kind === "ready") {
           recordPhase("module-ready");
           moduleReady.resolve();
-          child.send({ kind: "run" }, (error) => {
-            if (error) {
-              reject(error);
-            }
-          });
+          send({ kind: "run" });
         } else if (message.kind === "error") {
           reject(new Error(message.error));
         } else {
@@ -296,10 +295,7 @@ export function assertPersistenceSelection(
   reply: PersistenceReply,
   pins: SkillLibrarySelection[],
 ) {
-  assert.equal(reply.kind, "selected");
-  if (reply.kind !== "selected") {
-    throw new Error("Expected reopened selection");
-  }
+  assert.equal(reply.kind, "selected", "Expected reopened selection");
   assert.deepEqual(reply.pins, pins);
   assert.deepEqual(
     reply.catalog,

@@ -7,26 +7,50 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
-  closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync as closeDatabase,
+  openOpenClawStateDatabase as openDatabase,
 } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { materializeSkill } from "../loading/skill-materializer.js";
-import { prepareSkillResourceDelivery } from "../runtime/resources.js";
+import { prepareSkillResourceDelivery as deliver } from "../runtime/resources.js";
 import type { SkillSnapshot } from "../types.js";
 import * as bundles from "./bundle.js";
-import { decodeSkillLibraryFile } from "./bundle.js";
+import { decodeSkillLibraryFile as decodeFile } from "./bundle.js";
 import * as selectionReads from "./selection-read.js";
 import * as selection from "./selection.js";
-import { loadSkillLibrarySelection } from "./selection.js";
+import { loadSkillLibrarySelection as loadSelection } from "./selection.js";
 import { saveSkillLibrary } from "./service.js";
 
 const dirs = useStateDatabaseTempDirs();
 const content =
   "---\nname: guide\ndescription: Saved procedure\n---\n# Guide\nRead references/data.bin.\n";
+
+function snapshotFor(...pins: NonNullable<SkillSnapshot["librarySelections"]>): SkillSnapshot {
+  return { prompt: "", skills: pins.map(({ name }) => ({ name })), librarySelections: pins };
+}
+
+function pausedRead() {
+  const entered = createDeferredCore();
+  const gate = createDeferredCore();
+  return {
+    entered: entered.promise,
+    release: gate.resolve,
+    async hold<T>(value: T) {
+      entered.resolve();
+      await gate.promise;
+      return value;
+    },
+  };
+}
+
+const outcomeOf = <T>(pending: Promise<T>) =>
+  pending.then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
 
 async function fixture() {
   const root = dirs.make("skill-library-resource-read-");
@@ -54,13 +78,9 @@ async function fixture() {
     name: saved.entry.name,
     ownerProfileId: saved.entry.ownerProfileId,
   };
-  const snapshot: SkillSnapshot = {
-    prompt: "",
-    skills: [{ name: pin.name }],
-    librarySelections: [pin],
-  };
-  const databasePath = openOpenClawStateDatabase(options).path;
-  await closeOpenClawStateDatabaseAsync();
+  const snapshot = snapshotFor(pin);
+  const databasePath = openDatabase(options).path;
+  await closeDatabase();
   return { root, options, authority, pin, snapshot, databasePath };
 }
 
@@ -83,24 +103,17 @@ it.each(["ordinary", "artifact-preserving", "disposable"] as const)(
     const sql = observeMainThreadSql();
     const run = () =>
       withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-        const first = await prepareSkillResourceDelivery(snapshot, () => {});
+        const first = await deliver(snapshot, () => {});
         expect(first?.skills).toHaveLength(1);
         const skill = first!.skills[0]!;
+        const bytes = (name: string) => decodeFile(skill.files.find((file) => file.path === name)!);
         expect(skill.revision).toBe(pin.revision);
-        expect(
-          decodeSkillLibraryFile(skill.files.find((file) => file.path === "SKILL.md")!).toString(
-            "utf8",
-          ),
-        ).toBe(content);
-        expect(
-          decodeSkillLibraryFile(skill.files.find((file) => file.path === "references/data.bin")!),
-        ).toEqual(Buffer.from([0, 255, 128]));
+        expect(bytes("SKILL.md").toString("utf8")).toBe(content);
+        expect(bytes("references/data.bin")).toEqual(Buffer.from([0, 255, 128]));
         // The synchronous caller must reuse the same cache key as async preparation.
-        expect(loadSkillLibrarySelection([pin])[0]?.skill.name).toBe(pin.name);
-        expect(await prepareSkillResourceDelivery(structuredClone(snapshot), () => {})).toEqual(
-          first,
-        );
-        await closeOpenClawStateDatabaseAsync();
+        expect(loadSelection([pin])[0]?.skill.name).toBe(pin.name);
+        expect(await deliver(structuredClone(snapshot), () => {})).toEqual(first);
+        await closeDatabase();
       });
     try {
       if (mode === "artifact-preserving") {
@@ -144,17 +157,17 @@ it("reads both phases from the active snapshot without fetching hidden manifests
     name: hidden.entry.name,
     ownerProfileId: hidden.entry.ownerProfileId,
   });
-  await closeOpenClawStateDatabaseAsync();
+  await closeDatabase();
   const execute = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
   await withEnvAsync({ OPENCLAW_STATE_DIR: root }, () =>
     stateReads.withOpenClawStateDatabaseReadSnapshot(async () => {
-      const database = openOpenClawStateDatabase(options);
+      const database = openDatabase(options);
       database.db
         .prepare(
           "UPDATE skill_library_revisions SET description = ?, files_json = ? WHERE skill_id = ?",
         )
         .run("Later live description", "invalid live manifest", pin.skillId);
-      const delivery = await prepareSkillResourceDelivery(snapshot, () => {});
+      const delivery = await deliver(snapshot, () => {});
       expect(delivery?.skills).toHaveLength(1);
       expect(delivery?.skills[0]?.description).toBe("Saved procedure");
       expect(delivery?.skills[0]?.revision).toBe(pin.revision);
@@ -171,38 +184,29 @@ it.each(["root", "authority", "admission"] as const)(
   async (change) => {
     const { root, snapshot } = await fixture();
     const other = dirs.make("skill-library-other-root-");
-    const entered = createDeferredCore();
-    const gate = createDeferredCore();
+    const { entered, release, hold } = pausedRead();
     const original = selectionReads.readSkillLibrarySelectionDescriptions;
     vi.spyOn(selectionReads, "readSkillLibrarySelectionDescriptions").mockImplementation(
-      async (...args) => {
-        const descriptions = await original(...args);
-        entered.resolve();
-        await gate.promise;
-        return descriptions;
-      },
+      async (...args) => hold(await original(...args)),
     );
     const closed = new Error("Synthetic resource owner closed");
     let current = true;
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-      const pending = prepareSkillResourceDelivery(snapshot, () => {
+      const pending = deliver(snapshot, () => {
         if (!current) {
           throw closed;
         }
       });
-      const outcome = pending.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      await entered.promise;
+      const outcome = outcomeOf(pending);
+      await entered;
       if (change === "root") {
         process.env.OPENCLAW_STATE_DIR = other;
       } else if (change === "admission") {
-        await closeOpenClawStateDatabaseAsync();
+        await closeDatabase();
       } else {
         current = false;
       }
-      gate.resolve();
+      release();
       const result = await outcome;
       if (change === "authority") {
         expect(result).toEqual({ error: closed });
@@ -221,15 +225,9 @@ it.each(["selection", "descriptions", "manifests"] as const)(
   async (phase) => {
     const { root, pin, snapshot } = await fixture();
     const originalPin = { ...pin };
-    const entered = createDeferredCore();
-    const gate = createDeferredCore();
+    const { entered, release, hold } = pausedRead();
     const descriptions = selectionReads.readSkillLibrarySelectionDescriptions;
     const manifests = selectionReads.readSkillLibrarySelectionManifests;
-    async function hold<T>(value: T) {
-      entered.resolve();
-      await gate.promise;
-      return value;
-    }
     if (phase === "manifests") {
       vi.spyOn(selectionReads, "readSkillLibrarySelectionManifests").mockImplementation(
         async (...args) => hold(await manifests(...args)),
@@ -245,13 +243,10 @@ it.each(["selection", "descriptions", "manifests"] as const)(
           ? selection
               .prepareSkillLibrarySelection(snapshot.librarySelections!, {}, () => {})
               .then((entries) => entries.map((entry) => entry.skill))
-          : prepareSkillResourceDelivery(snapshot, () => {}).then((delivery) => delivery?.skills);
-      const outcome = pending.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+          : deliver(snapshot, () => {}).then((delivery) => delivery?.skills);
+      const outcome = outcomeOf(pending);
       try {
-        await entered.promise;
+        await entered;
         Object.assign(pin, {
           skillId: "changed",
           revision: "0".repeat(64),
@@ -260,13 +255,13 @@ it.each(["selection", "descriptions", "manifests"] as const)(
         });
         snapshot.librarySelections!.push({ ...pin });
         snapshot.skills[0]!.name = "changed";
-        gate.resolve();
+        release();
         expect(await outcome).toMatchObject({
           value: [{ name: originalPin.name, description: "Saved procedure" }],
         });
-        expect(loadSkillLibrarySelection([originalPin])[0]?.skill.name).toBe(originalPin.name);
+        expect(loadSelection([originalPin])[0]?.skill.name).toBe(originalPin.name);
       } finally {
-        gate.resolve();
+        release();
         await outcome;
       }
     });
@@ -279,27 +274,24 @@ it.each(["file", "table"] as const)(
     const root = dirs.make("skill-library-missing-read-");
     const options = { env: { OPENCLAW_STATE_DIR: root } };
     if (missing === "table") {
-      openOpenClawStateDatabase(options);
-      await closeOpenClawStateDatabaseAsync();
+      openDatabase(options);
+      await closeDatabase();
     }
-    const snapshot: SkillSnapshot = {
-      prompt: "",
-      skills: [{ name: "missing" }],
-      librarySelections: [
-        { skillId: "missing", revision: "0".repeat(64), name: "missing", ownerProfileId: null },
-      ],
-    };
+    const snapshot = snapshotFor({
+      skillId: "missing",
+      revision: "0".repeat(64),
+      name: "missing",
+      ownerProfileId: null,
+    });
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-      await expect(prepareSkillResourceDelivery(snapshot, () => {})).rejects.toMatchObject({
+      await expect(deliver(snapshot, () => {})).rejects.toMatchObject({
         code: "NOT_FOUND",
       });
     });
     if (missing === "file") {
       expect(fs.existsSync(path.join(root, "state", "openclaw.sqlite"))).toBe(false);
     } else {
-      expect(tableExists(openOpenClawStateDatabase(options).db, "skill_library_entries")).toBe(
-        false,
-      );
+      expect(tableExists(openDatabase(options).db, "skill_library_entries")).toBe(false);
     }
   },
 );
@@ -339,7 +331,7 @@ it.each(["workspace", "library"] as const)(
       .spyOn(selectionReads, "readSkillLibrarySelectionManifests")
       .mockRejectedValue(libraryError);
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-      await expect(prepareSkillResourceDelivery(snapshot, () => {})).rejects.toMatchObject({
+      await expect(deliver(snapshot, () => {})).rejects.toMatchObject({
         code: "INVALID_BUNDLE",
         message: expect.stringContaining(`skill="${first}"`),
         cause: first === "workspace" ? workspaceError : libraryError,
