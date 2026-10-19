@@ -1,4 +1,3 @@
-import path from "node:path";
 import { expect, it } from "vitest";
 import {
   installMockGateway,
@@ -9,14 +8,12 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { captureUiProof as captureScreenshot } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Session Observer model catalog recovery",
   startServerBeforeBrowser: true,
 });
 
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const model = (id: string, name: string, provider = "openai") => ({
   available: true,
   id,
@@ -35,9 +32,6 @@ suite.define(() => {
       {
         ...createControlUiE2eContextOptions(),
         colorScheme: "dark",
-        recordVideo: captureUiProof
-          ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
-          : undefined,
       },
       async ({ page }) => {
         await page.clock.install();
@@ -112,11 +106,6 @@ suite.define(() => {
           ...(initiallyUnavailable ? [] : ["Old model"]),
         ]);
         await page.keyboard.press("Escape");
-        if (captureUiProof) {
-          // The settings section exceeds the viewport; keep its current field scroll.
-          await picker.scrollIntoViewIfNeeded();
-          await captureScreenshot(suite, page, "01-before-refresh.png", section, [picker]);
-        }
 
         const recoveredModels = [
           model("gpt-recovered", "GPT Recovered"),
@@ -147,12 +136,6 @@ suite.define(() => {
           "Claude Recovered",
           "GPT Recovered",
         ]);
-        if (captureUiProof) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(suite.artifactDir, "02-after-recovery-poll.png"),
-          });
-        }
 
         await picker.locator('[role="option"][data-value="openai/gpt-recovered"]').click();
         const patchRequest = await gateway.waitForRequest("config.patch");

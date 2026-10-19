@@ -75,11 +75,7 @@ export function sessionsListResponse(
 ) {
   return {
     count: sessions.length,
-    defaults: {
-      contextTokens: null,
-      model: "gpt-5.5",
-      modelProvider: "openai",
-    },
+    defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
     hasMore: options.hasMore ?? false,
     limitApplied: 50,
     nextOffset: options.nextOffset ?? null,
@@ -113,36 +109,27 @@ export async function waitForPatch(
 }
 
 /** Playwright reacquires replaced controls before dispatching the single click. */
-export async function activateSelfRemovingControl(control: Locator): Promise<void> {
-  await control.click();
-}
+export const activateSelfRemovingControl = (control: Locator): Promise<void> => control.click();
 
-export function trimmedTextContents(locator: Locator): Promise<string[]> {
-  return locator.evaluateAll((elements) =>
-    elements.map((element) => element.textContent?.trim() ?? ""),
-  );
-}
+export const trimmedTextContents = (locator: Locator): Promise<string[]> =>
+  locator.evaluateAll((elements) => elements.map((element) => element.textContent?.trim() ?? ""));
 
-export function actionOpacity(button: Locator): Promise<string> {
-  return button.evaluate((element) => globalThis.getComputedStyle(element).opacity);
-}
+export const actionOpacity = (button: Locator): Promise<string> =>
+  button.evaluate((element) => globalThis.getComputedStyle(element).opacity);
 
-export function actionPointerEvents(button: Locator): Promise<string> {
-  return button.evaluate((element) => globalThis.getComputedStyle(element).pointerEvents);
-}
+export const actionPointerEvents = (button: Locator): Promise<string> =>
+  button.evaluate((element) => globalThis.getComputedStyle(element).pointerEvents);
 
 /** The owned native menu renders each submenu beside its trigger. */
-export function sessionMenuSubmenu(trigger: Locator): Locator {
-  return trigger.locator("..").locator(':scope > [role="menu"]');
-}
+export const sessionMenuSubmenu = (trigger: Locator): Locator =>
+  trigger.locator("..").locator(':scope > [role="menu"]');
 
-export function sessionMenuLabels(panel: Locator): Promise<string[]> {
-  return panel.evaluate((element) =>
+export const sessionMenuLabels = (panel: Locator): Promise<string[]> =>
+  panel.evaluate((element) =>
     [...element.querySelectorAll('[role^="menuitem"]')]
       .filter((item) => item.closest('[role="menu"]') === element)
       .map((item) => item.getAttribute("aria-label") ?? ""),
   );
-}
 
 /** Moves to an owned menu row through its roving-focus keyboard path. */
 export async function focusSessionMenuItem(page: Page, name: string): Promise<Locator> {
@@ -164,9 +151,9 @@ export async function focusSessionMenuItem(page: Page, name: string): Promise<Lo
     .poll(() =>
       parent.evaluate((element) => {
         const active = document.activeElement;
-        return Boolean(
+        return (
           active?.matches('[role^="menuitem"]') &&
-          active.closest('[role="menu"]') === element.closest('[role="menu"]'),
+          active.closest('[role="menu"]') === element.closest('[role="menu"]')
         );
       }),
     )
@@ -209,17 +196,9 @@ export async function captureUiProof(
   if (!captureUiProofEnabled) {
     return;
   }
-  if (page.video()) {
-    await writeFile(
-      path.join(owner.artifactDir, fileName),
-      await takeControlUiViewportScreenshot(page, surface, content),
-    );
-    return;
-  }
   // Nonrecording proof keeps its existing full-document framing.
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(owner.artifactDir, fileName),
-  });
+  const destination = path.join(owner.artifactDir, fileName);
+  await (page.video()
+    ? writeFile(destination, await takeControlUiViewportScreenshot(page, surface, content))
+    : page.screenshot({ animations: "disabled", fullPage: true, path: destination }));
 }

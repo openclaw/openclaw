@@ -1,5 +1,4 @@
-import path from "node:path";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   controlUiBundledSettingsStorageKey,
@@ -10,8 +9,6 @@ import { createControlUiSessionRow as sessionRow } from "../test-helpers/control
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   activateSelfRemovingControl,
-  captureUiProof,
-  captureUiProofEnabled,
   createSessionManagementE2eSuite,
   controlUiSessionUrl,
   installMockGateway,
@@ -49,16 +46,6 @@ async function installPinGateway(page: Page, sidebarEntries: string[] = []) {
   });
 }
 
-function personalPin(page: Page) {
-  return page.locator('.sidebar-rail [data-sidebar-entry="session:agent:main:candidate"]');
-}
-
-function candidateRow(page: Page) {
-  return page.locator(
-    '.sidebar-session-content .sidebar-recent-session[data-session-key="agent:main:candidate"]',
-  );
-}
-
 async function storedPins(page: Page) {
   return page.evaluate(
     ({ key, profile }) =>
@@ -88,37 +75,40 @@ async function confirmPinWrite(gateway: MockGatewayControls, sidebarEntries: str
   await gateway.resolveDeferred("users.prefs.set", { status: "ok" });
 }
 
-suite.define(() => {
-  it("pins from the row while its personal preference write is still in flight", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      recordVideo: captureUiProofEnabled
-        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
-        : undefined,
-    });
-    const page = await context.newPage();
-    const proofVideo = page.video();
-    const gateway = await installPinGateway(page);
-
-    try {
+type PinFixture = { page: Page; gateway: MockGatewayControls; pin: Locator; row: Locator };
+function withPins(run: (fixture: PinFixture) => Promise<void>, initial: string[] = []) {
+  return () =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installPinGateway(page, initial);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, candidateKey));
-      const pin = personalPin(page);
-      const row = candidateRow(page);
+      await run({
+        page,
+        gateway,
+        pin: page.locator(`.sidebar-rail [data-sidebar-entry="${pinRef}"]`),
+        row: page.locator(
+          `.sidebar-session-content .sidebar-recent-session[data-session-key="${candidateKey}"]`,
+        ),
+      });
+    });
+}
+const pinWrite = (entries: string[], expected: string[]) => ({
+  entries: { [pinsKey]: entries },
+  expectedEntries: { [pinsKey]: expected },
+});
+
+suite.define(() => {
+  it(
+    "pins from the row while its personal preference write is still in flight",
+    withPins(async ({ page, gateway, pin, row }) => {
       await row.waitFor();
       await expect.poll(() => storedPins(page)).toEqual([]);
       await expect.poll(() => pin.count()).toBe(0);
-      await captureUiProof(suite, page, "optimistic-pin-01-before-click.png");
 
       await gateway.deferNext("users.prefs.set");
       await row.hover();
       await row.getByRole("button", { name: "Pin session", exact: true }).click();
       const write = await gateway.waitForRequest("users.prefs.set");
-      expect(write.params).toEqual({
-        entries: { [pinsKey]: [pinRef] },
-        expectedEntries: { [pinsKey]: [] },
-      });
+      expect(write.params).toEqual(pinWrite([pinRef], []));
       // Personal refs appear immediately, without removing the session from Sessions.
       await expect.poll(() => pin.count()).toBe(1);
       expect(await row.count()).toBe(1);
@@ -128,7 +118,6 @@ suite.define(() => {
         expect.objectContaining({ railShortcuts: [pinRef], railShortcutsBase: [] }),
       ]);
       await expectNoSharedPinWrites(gateway);
-      await captureUiProof(suite, page, "optimistic-pin-02-pinned-while-in-flight.png");
 
       await confirmPinWrite(gateway, [pinRef]);
       await expect.poll(() => pendingPinWrites(page)).toEqual([]);
@@ -142,82 +131,63 @@ suite.define(() => {
       await pin.getByRole("link", { name: "Pin me", exact: true }).waitFor();
       expect(await row.count()).toBe(1);
       await expectNoSharedPinWrites(gateway);
-      await captureUiProof(suite, page, "optimistic-pin-03-confirmed-after-reconnect.png");
-    } finally {
-      await context.close();
-      if (proofVideo) {
-        await proofVideo.saveAs(path.join(suite.artifactDir, "optimistic-pin-button.webm"));
-      }
-    }
-  });
+    }),
+  );
 
-  it("retains a personal menu unpin for replay when profile storage is unavailable", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installPinGateway(page, [pinRef]);
+  it(
+    "retains a personal menu unpin for replay when profile storage is unavailable",
+    withPins(
+      async ({ page, gateway, pin, row }) => {
+        await expect.poll(() => pin.count()).toBe(1);
+        await expect.poll(() => storedPins(page)).toEqual([pinRef]);
+        await gateway.deferNext("users.prefs.set");
+        await row.click({ button: "right" });
+        await activateSelfRemovingControl(
+          page
+            .locator("openclaw-session-menu")
+            .getByRole("menuitem", { name: "Unpin session", exact: true }),
+        );
+        const write = await gateway.waitForRequest("users.prefs.set");
+        expect(write.params).toEqual(pinWrite([], [pinRef]));
+        await expect.poll(() => pin.count()).toBe(0);
+        expect(await row.count()).toBe(1);
 
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, candidateKey));
-      const pin = personalPin(page);
-      const row = candidateRow(page);
-      await expect.poll(() => pin.count()).toBe(1);
-      await expect.poll(() => storedPins(page)).toEqual([pinRef]);
-      await gateway.deferNext("users.prefs.set");
-      await row.click({ button: "right" });
-      await activateSelfRemovingControl(
-        page
-          .locator("openclaw-session-menu")
-          .getByRole("menuitem", { name: "Unpin session", exact: true }),
-      );
-      const write = await gateway.waitForRequest("users.prefs.set");
-      expect(write.params).toEqual({
-        entries: { [pinsKey]: [] },
-        expectedEntries: { [pinsKey]: [pinRef] },
-      });
-      await expect.poll(() => pin.count()).toBe(0);
-      expect(await row.count()).toBe(1);
-      await captureUiProof(suite, page, "optimistic-pin-04-unpinned-while-in-flight.png");
+        // Preferences retain unsynced intent; shared-session rollback/error UI is not this owner.
+        await gateway.rejectDeferred("users.prefs.set", {
+          code: "UNAVAILABLE",
+          message: "profile pin storage unavailable",
+          retryable: true,
+        });
+        await expect.poll(() => storedPins(page)).toEqual([]);
+        expect(await pendingPinWrites(page)).toEqual([
+          expect.objectContaining({ railShortcuts: [], railShortcutsBase: [pinRef] }),
+        ]);
+        await gateway.deferNext("users.prefs.set");
+        await gateway.closeLatest(1001, "retry personal unpin");
+        const replay = await gateway.waitForRequest("users.prefs.set", { after: 1 });
+        expect(replay.params).toEqual(write.params);
+        expect(await pin.count()).toBe(0);
+        await confirmPinWrite(gateway, []);
+        await expect.poll(() => pendingPinWrites(page)).toEqual([]);
+        expect(await pin.count()).toBe(0);
+        expect(await row.count()).toBe(1);
+        await expect.poll(() => storedPins(page)).toEqual([]);
+        await expectNoSharedPinWrites(gateway);
+      },
+      [pinRef],
+    ),
+  );
 
-      // Preferences retain unsynced intent; shared-session rollback/error UI is not this owner.
-      await gateway.rejectDeferred("users.prefs.set", {
-        code: "UNAVAILABLE",
-        message: "profile pin storage unavailable",
-        retryable: true,
-      });
-      await expect.poll(() => storedPins(page)).toEqual([]);
-      expect(await pendingPinWrites(page)).toEqual([
-        expect.objectContaining({ railShortcuts: [], railShortcutsBase: [pinRef] }),
-      ]);
-      await gateway.deferNext("users.prefs.set");
-      await gateway.closeLatest(1001, "retry personal unpin");
-      const replay = await gateway.waitForRequest("users.prefs.set", { after: 1 });
-      expect(replay.params).toEqual(write.params);
-      expect(await pin.count()).toBe(0);
-      await confirmPinWrite(gateway, []);
-      await expect.poll(() => pendingPinWrites(page)).toEqual([]);
-      expect(await pin.count()).toBe(0);
-      expect(await row.count()).toBe(1);
-      await expect.poll(() => storedPins(page)).toEqual([]);
-      await expectNoSharedPinWrites(gateway);
-      await captureUiProof(suite, page, "optimistic-pin-05-unpin-replayed.png");
-    });
-  });
-
-  it("keeps the newest personal pin intent while the older preference write completes", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installPinGateway(page);
-
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, candidateKey));
-      const pin = personalPin(page);
-      const row = candidateRow(page);
+  it(
+    "keeps the newest personal pin intent while the older preference write completes",
+    withPins(async ({ page, gateway, pin, row }) => {
       await row.waitFor();
       await expect.poll(() => storedPins(page)).toEqual([]);
       await gateway.deferNext("users.prefs.set");
       await row.hover();
       await row.getByRole("button", { name: "Pin session", exact: true }).click();
       const first = await gateway.waitForRequest("users.prefs.set");
-      expect(first.params).toEqual({
-        entries: { [pinsKey]: [pinRef] },
-        expectedEntries: { [pinsKey]: [] },
-      });
+      expect(first.params).toEqual(pinWrite([pinRef], []));
       await expect.poll(() => pin.count()).toBe(1);
 
       await gateway.deferNext("users.prefs.set");
@@ -228,10 +198,7 @@ suite.define(() => {
 
       await confirmPinWrite(gateway, [pinRef]);
       const second = await gateway.waitForRequest("users.prefs.set", { after: 1 });
-      expect(second.params).toEqual({
-        entries: { [pinsKey]: [] },
-        expectedEntries: { [pinsKey]: [pinRef] },
-      });
+      expect(second.params).toEqual(pinWrite([], [pinRef]));
       expect(await pin.count()).toBe(0);
       expect(await row.count()).toBe(1);
       expect(await storedPins(page)).toEqual([]);
@@ -241,7 +208,6 @@ suite.define(() => {
       expect(await pin.count()).toBe(0);
       expect(await storedPins(page)).toEqual([]);
       await expectNoSharedPinWrites(gateway);
-      await captureUiProof(suite, page, "optimistic-pin-06-newest-intent-wins.png");
-    });
-  });
+    }),
+  );
 });
