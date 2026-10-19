@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createUniqueId, Show } from "solid-js";
+import { createMemo, createUniqueId, Show } from "solid-js";
 import {
   ProgressDetailsContent,
   ProgressDetailsRefresh,
@@ -158,15 +158,6 @@ export function MobileTaskProgressContent(props: MobileTaskProgressProps) {
 /** The mobile Details host mounts this footer outside its scroll mask. */
 export function MobileTaskProgressControls(props: MobileTaskProgressProps) {
   const id = createUniqueId();
-  let menu: MenuHandle | undefined;
-  createEffect(
-    () => props.presented,
-    (presented) => {
-      if (!presented) {
-        menu?.close();
-      }
-    },
-  );
   const view = createMemo(() =>
     props.card
       ? progressCardPresentation(
@@ -251,9 +242,7 @@ export function MobileTaskProgressControls(props: MobileTaskProgressProps) {
           triggerClass="task-progress-details__mobile-options"
           panelClass="task-progress-details__mobile-menu"
           disabled={!props.presented}
-          ref={(value) => {
-            menu = value;
-          }}
+          open={props.presented ? undefined : false}
           items={items()}
           onSelect={(item) => {
             if (!props.presented) {

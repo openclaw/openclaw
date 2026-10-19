@@ -146,7 +146,7 @@ async function settleStartup(page: Page, gateway: Gateway) {
 async function expectProgress(page: Page, text: string) {
   const details = await openChatDetails(page.locator(".chat-pane-cache__pane--active"));
   await details
-    .getByRole("region", { name: "Progress note", exact: true })
+    .locator(".session-progress-card__markdown")
     .getByText(text, { exact: true })
     .waitFor();
 }
