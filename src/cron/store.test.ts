@@ -4,7 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -40,20 +40,17 @@ async function expectNoLegacyFiles(paths: string[]) {
   }
 }
 
-describe("resolveCronStorePath", () => {
+it("expands cron store paths using OPENCLAW_HOME", () => {
   const envSnapshot = captureEnv(["OPENCLAW_HOME", "HOME"]);
-
-  afterEach(() => {
-    envSnapshot.restore();
-  });
-
-  it("uses OPENCLAW_HOME for tilde expansion", () => {
+  try {
     setTestEnvValue("OPENCLAW_HOME", "/srv/openclaw-home");
     setTestEnvValue("HOME", "/home/other");
-
-    const result = resolveCronStorePath("~/cron/jobs.json");
-    expect(result).toBe(path.resolve("/srv/openclaw-home", "cron", "jobs.json"));
-  });
+    expect(resolveCronStorePath("~/cron/jobs.json")).toBe(
+      path.resolve("/srv/openclaw-home", "cron", "jobs.json"),
+    );
+  } finally {
+    envSnapshot.restore();
+  }
 });
 
 describe("cron store", () => {
@@ -232,17 +229,15 @@ describe("cron store", () => {
 
     const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
 
-    expect(loaded.store.jobs.map((job) => job.id)).toEqual([surviving.id]);
-    expect(loaded.configJobs.map((job) => job.id)).toEqual([surviving.id]);
-    expect(loaded.configJobIndexes).toEqual([1]);
+    expect(loaded).toMatchObject({
+      store: { jobs: [{ id: surviving.id }] },
+      configJobs: [{ id: surviving.id }],
+      configJobIndexes: [1],
+      invalidConfigRows: [
+        { sourceIndex: 0, reason: "invalid-schedule", job: { id: malformed.id } },
+      ],
+    });
     expect(loaded.configJobRuntimeEntries[0]?.state?.nextRunAtMs).toBe(987_654);
-    expect(loaded.invalidConfigRows).toEqual([
-      expect.objectContaining({
-        sourceIndex: 0,
-        reason: "invalid-schedule",
-        job: expect.objectContaining({ id: malformed.id }),
-      }),
-    ]);
   });
 
   it("rejects alias-only job identities without replacing existing rows", async () => {
@@ -401,13 +396,8 @@ describe("cron store", () => {
       .get(job.id) as { state_json: string };
     const queuedState = JSON.parse(queuedRow.state_json) as Record<string, unknown>;
     expect(queuedState.runningAtMs).toBeUndefined();
-    const queued = {
-      queuedAtMs: job.createdAtMs + 1,
-      startupCatchupAtMs: job.createdAtMs,
-      pacedNextRunAtMs: job.createdAtMs,
-    };
-    expect(queuedState).toMatchObject(queued);
-    expect((await loadCronStore(storePath)).jobs[0]?.state).toMatchObject(queued);
+    expect(queuedState).toMatchObject(job.state);
+    expect((await loadCronStore(storePath)).jobs[0]?.state).toMatchObject(job.state);
 
     job.state.queuedAtMs = undefined;
     job.state.runningAtMs = job.createdAtMs + 2;
@@ -455,10 +445,7 @@ describe("cron store", () => {
     await saveCronStore(storePath, { version: 1, jobs: [numberJob, stringJob] });
 
     const jobs = (await loadCronStore(storePath)).jobs;
-    expect(jobs[0]?.delivery?.threadId).toBe(42);
-    expect(typeof jobs[0]?.delivery?.threadId).toBe("number");
-    expect(jobs[1]?.delivery?.threadId).toBe("42");
-    expect(typeof jobs[1]?.delivery?.threadId).toBe("string");
+    expect(jobs.map((job) => job.delivery?.threadId)).toEqual([42, "42"]);
   });
 
   it("round-trips explicit failure destination field clears through canonical cron job JSON", async () => {

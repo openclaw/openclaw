@@ -36,6 +36,18 @@ import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./tri
 type HeadlessParams = Parameters<
   NonNullable<Parameters<typeof createCronScriptRuntime>[0]["runHeadless"]>
 >[0];
+type Runtime = ReturnType<typeof createCronScriptRuntime>;
+
+const invocation = (jobId: string, agentId = "main", toolsAllow = ["*"]) => ({
+  jobId,
+  agentId,
+  toolsAllow,
+  script: "return {}",
+  state: null,
+});
+const expectPayload = (result: ReturnType<Runtime["executePayload"]>, state: unknown) =>
+  expect(result).resolves.toMatchObject({ kind: "completed", state });
+const registration = (artifact: string, mode: string) => ({ artifact, mode });
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let config: OpenClawConfig;
@@ -124,7 +136,7 @@ function readRegistrations() {
     .map((line) => JSON.parse(line) as { artifact: string; mode: string });
 }
 
-async function executeProbe({ ctx }: HeadlessParams): Promise<CodeModeHeadlessResult> {
+async function executeProbe({ ctx }: HeadlessParams, condition = false) {
   const tool = ctx.catalogRef?.current?.entries.find(
     (entry) => entry.tool.name === "cold_probe",
   )?.tool;
@@ -135,10 +147,10 @@ async function executeProbe({ ctx }: HeadlessParams): Promise<CodeModeHeadlessRe
   const result = tool ? await runtime.callValue("cold_probe", {}) : null;
   return {
     status: "completed",
-    value: { state: result },
+    value: condition ? { fire: true, state: { state: result } } : { state: result },
     output: [],
     toolCallCount: tool ? 1 : 0,
-  };
+  } satisfies CodeModeHeadlessResult;
 }
 
 describe("cron preparation plugin ownership", () => {
@@ -166,33 +178,27 @@ describe("cron preparation plugin ownership", () => {
       createCronScriptRuntime({
         config: cfg,
         loadPluginRegistry: loadPreparedInboundPluginRegistry,
-        runHeadless: async (params) => {
-          const result = await executeProbe(params);
-          return result.status === "completed"
-            ? { ...result, value: { fire: true, state: result.value } }
-            : result;
-        },
+        runHeadless: (params) => executeProbe(params, true),
       });
-    const evaluate = (runtime: ReturnType<typeof createRuntime>) =>
-      runInDetachedAsyncContext(() =>
-        runScheduled(() =>
-          runtime.evaluateTrigger({
-            jobId: "detached-condition",
-            agentId: "main",
-            toolsAllow: ["cold_probe"],
-            script: "return { fire: true }",
-            state: null,
-          }),
+    const expectGeneration = (runtime: Runtime, generation: number) =>
+      expect(
+        runInDetachedAsyncContext(() =>
+          runScheduled(() =>
+            runtime.evaluateTrigger({
+              ...invocation("detached-condition", "main", ["cold_probe"]),
+              script: "return { fire: true }",
+            }),
+          ),
         ),
-      );
-    try {
-      const runtime = createRuntime(config);
-      await expect(evaluate(runtime)).resolves.toMatchObject({
+      ).resolves.toMatchObject({
         kind: "evaluated",
         fire: true,
-        state: { state: { artifact: "built", generation: 1, calls: 1 } },
+        state: { state: { artifact: "built", generation, calls: 1 } },
       });
-      expect(readRegistrations()).toEqual([{ artifact: "built", mode: "full" }]);
+    try {
+      const runtime = createRuntime(config);
+      await expectGeneration(runtime, 1);
+      expect(readRegistrations()).toEqual([registration("built", "full")]);
 
       const nextConfig: OpenClawConfig = {
         ...config,
@@ -205,16 +211,9 @@ describe("cron preparation plugin ownership", () => {
       setRuntimeConfigSnapshot(nextConfig, config);
       // Both an existing watcher and a rebuilt cron service must use the new generation.
       for (const nextRuntime of [runtime, createRuntime(nextConfig)]) {
-        await expect(evaluate(nextRuntime)).resolves.toMatchObject({
-          kind: "evaluated",
-          fire: true,
-          state: { state: { artifact: "built", generation: 2, calls: 1 } },
-        });
+        await expectGeneration(nextRuntime, 2);
       }
-      expect(readRegistrations()).toEqual([
-        { artifact: "built", mode: "full" },
-        { artifact: "built", mode: "full" },
-      ]);
+      expect(readRegistrations()).toEqual(Array(2).fill(registration("built", "full")));
     } finally {
       await owner.close();
     }
@@ -231,7 +230,7 @@ describe("cron preparation plugin ownership", () => {
       });
       setCurrentPluginMetadataSnapshot(metadataSnapshot, { config });
       const contexts: Array<ReturnType<typeof getPluginRuntimeLoadContext>> = [];
-      const deps = {
+      const runtime = createCronScriptRuntime({
         config,
         ...(owner === "gateway" ? { loadPluginRegistry: loadPreparedInboundPluginRegistry } : {}),
         runHeadless: async (params: HeadlessParams) => {
@@ -240,33 +239,30 @@ describe("cron preparation plugin ownership", () => {
           );
           return executeProbe(params);
         },
-      };
-      const runtime = createCronScriptRuntime(deps);
+      });
       const artifact = owner === "gateway" ? "built" : "source";
       const run = (jobId: string, agentId = "main", toolsAllow = ["*"]) =>
         runtime.executePayload({
-          jobId,
-          agentId,
-          toolsAllow,
-          script: "return {}",
-          state: null,
+          ...invocation(jobId, agentId, toolsAllow),
           timeoutSeconds: 5,
         });
-      for (const [jobId, agentId, calls] of [
-        ["first", "main", 1],
-        ["first", "main", 1],
-        ["second", "main", 1],
-        ["first", "other", 1],
+      for (const [jobId, agentId] of [
+        ["first", "main"],
+        ["first", "main"],
+        ["second", "main"],
+        ["first", "other"],
       ] as const) {
-        await expect(run(jobId, agentId)).resolves.toMatchObject({
-          kind: "completed",
-          state: { artifact, calls, agentId, sessionKey: `agent:${agentId}:cron:${jobId}:trigger` },
+        await expectPayload(run(jobId, agentId), {
+          artifact,
+          calls: 1,
+          agentId,
+          sessionKey: `agent:${agentId}:cron:${jobId}:trigger`,
         });
       }
       expect(readRegistrations()).toEqual(
         expect.arrayContaining([
-          { artifact, mode: "discovery" },
-          { artifact, mode: "tool-discovery" },
+          registration(artifact, "discovery"),
+          registration(artifact, "tool-discovery"),
         ]),
       );
       expect(readRegistrations().every((entry) => entry.artifact === artifact)).toBe(true);
@@ -274,21 +270,12 @@ describe("cron preparation plugin ownership", () => {
         expect(contexts[0]?.metadataSnapshot).toBe(metadataSnapshot);
         expect(contexts[1]).toBe(contexts[0]);
       }
-      await expect(run("first", "other", [])).resolves.toMatchObject({
-        kind: "completed",
-        state: null,
-      });
-      await expect(run("first", "other", ["cold_probe"])).resolves.toMatchObject({
-        kind: "completed",
-        state: { calls: 1 },
-      });
+      await expectPayload(run("first", "other", []), null);
+      await expectPayload(run("first", "other", ["cold_probe"]), { calls: 1 });
       const nextConfig = structuredClone(config);
       nextConfig.tools = { deny: ["cold_probe"] };
       setRuntimeConfigSnapshot(nextConfig, config);
-      await expect(run("first", "other", ["cold_probe"])).resolves.toMatchObject({
-        kind: "completed",
-        state: null,
-      });
+      await expectPayload(run("first", "other", ["cold_probe"]), null);
     },
   );
 
@@ -322,8 +309,8 @@ describe("cron preparation plugin ownership", () => {
         },
       });
       expect(readRegistrations()).toEqual([
-        { artifact: "built", mode: "discovery" },
-        { artifact: owner === "scoped" ? "built" : "source", mode: "tool-discovery" },
+        registration("built", "discovery"),
+        registration(owner === "scoped" ? "built" : "source", "tool-discovery"),
       ]);
     },
   );

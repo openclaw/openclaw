@@ -23,6 +23,26 @@ import { cronStoreKey } from "./store/key.js";
 import { loadCronStoreFromDatabase } from "./store/load.kernel.js";
 
 const makeStorePath = createStorePathFixture();
+type Job = Parameters<typeof saveCronStore>[1]["jobs"][number];
+const EXEC_TARGET = { version: 1, host: "gateway", ask: "always" } as const;
+
+function turn(toolsAllow: string[], toolsAllowIsDefault?: true): Job["payload"] {
+  return {
+    kind: "agentTurn",
+    message: "scheduled continuation",
+    toolsAllow,
+    ...(toolsAllowIsDefault ? { toolsAllowIsDefault } : {}),
+  };
+}
+
+function authority(app: string): NonNullable<Job["runtimeAuthority"]> {
+  return {
+    version: 1,
+    runtimeId: "codex",
+    namespace: "codex.apps",
+    payload: { apps: [{ id: app }] },
+  };
+}
 
 function readDefinition(jobId: string): Record<string, unknown> {
   const row = openOpenClawStateDatabase()
@@ -37,9 +57,10 @@ function writeDefinition(jobId: string, value: Record<string, unknown>) {
     .run(JSON.stringify(value), jobId);
 }
 
-async function savedAuthority(jobId: string) {
+async function savedAuthority(jobId: string, overrides: Partial<Job> = {}) {
   const { storePath } = await makeStorePath();
   const store = makeAuthorityStore(jobId);
+  Object.assign(store.jobs[0], overrides);
   await saveCronStore(storePath, store);
   return { storePath, store, job: store.jobs[0], database: openOpenClawStateDatabase().db };
 }
@@ -74,12 +95,7 @@ function makeAuthorityStore(jobId: string) {
     accountId: "work",
   };
   job.sessionTarget = "isolated";
-  job.payload = {
-    kind: "agentTurn",
-    message: "scheduled continuation",
-    toolsAllow: ["read", "cron"],
-    toolsAllowIsDefault: true,
-  };
+  job.payload = turn(["read", "cron"], true);
   job.scheduledToolPolicy = {
     version: 1,
     mode: "account",
@@ -87,12 +103,7 @@ function makeAuthorityStore(jobId: string) {
     ownerAccountId: "work",
   };
   job.toolsAllowProvenance = { version: 1, source: "final-executable-surface" };
-  job.runtimeAuthority = {
-    version: 1,
-    runtimeId: "codex",
-    namespace: "codex.apps",
-    payload: { apps: [{ id: "calendar" }] },
-  };
+  job.runtimeAuthority = authority("calendar");
   return store;
 }
 
@@ -102,12 +113,7 @@ describe("cron store", () => {
     const store = makeStore("tools-allow-job", true);
     store.jobs[0].sessionTarget = "isolated";
     const toolsAllow = isDefault ? ["read", "cron"] : ["read"];
-    store.jobs[0].payload = {
-      kind: "agentTurn",
-      message: "scheduled continuation",
-      toolsAllow,
-      ...(isDefault ? { toolsAllowIsDefault: true } : {}),
-    };
+    store.jobs[0].payload = turn(toolsAllow, isDefault ? true : undefined);
     await saveCronStore(storePath, store);
     const payload = (await loadCronStore(storePath)).jobs[0]?.payload;
     expect(payload).toMatchObject({ kind: "agentTurn", toolsAllow });
@@ -156,71 +162,46 @@ describe("cron store", () => {
   });
 
   it("round-trips the restrict-only exec target and drops foreign shapes", async () => {
-    const { storePath } = await makeStorePath();
-    const authorityStore = makeAuthorityStore("exec-target-round-trip");
-    const job = authorityStore.jobs[0];
-    job.payload = {
-      kind: "agentTurn",
-      message: "scheduled continuation",
-      toolsAllow: ["exec", "read"],
-    };
-    const target = { version: 1, host: "gateway", ask: "always" } as const;
+    const target = EXEC_TARGET;
     const required = { version: 1, target, grantIndex: 0 } as const;
-    job.toolsAllowExecTarget = target;
-    job.toolsAllowExecTargetRequirement = required;
-
-    await saveCronStore(storePath, authorityStore);
+    const { storePath, job } = await savedAuthority("exec-target-round-trip", {
+      payload: turn(["exec", "read"]),
+      toolsAllowExecTarget: target,
+      toolsAllowExecTargetRequirement: required,
+    });
     const reloaded = (await loadCronStore(storePath)).jobs[0];
     expect(reloaded?.payload.toolsAllow).toEqual(["exec", "read"]);
     expect(reloaded?.toolsAllowExecTarget).toEqual(target);
     expect(reloaded?.toolsAllowExecTargetRequirement).toEqual(required);
 
-    // A damaged target cannot rehydrate the private exec grant.
     const edited = readDefinition(job.id);
     expect((edited.payload as { toolsAllow?: string[] }).toolsAllow).toEqual(["read"]);
-    edited.toolsAllowExecTarget = { version: 1, host: "node" };
-    writeDefinition(job.id, edited);
-    const rejected = (await loadCronStore(storePath)).jobs[0];
-    expect(rejected?.toolsAllowExecTarget).toBeUndefined();
-    expect(rejected?.payload.toolsAllow).toEqual(["read"]);
-
-    // Older writers may drop both private fields, but cannot restore broad exec.
-    const requirement = edited.toolsAllowExecTargetRequirement;
-    delete edited.toolsAllowExecTarget;
-    delete edited.toolsAllowExecTargetRequirement;
-    writeDefinition(job.id, edited);
-    const downgraded = (await loadCronStore(storePath)).jobs[0];
-    expect(downgraded?.payload.toolsAllow).toEqual(["read"]);
-
-    // Extra keys from a newer writer are tolerated: known fields rebuild cleanly.
-    edited.toolsAllowExecTargetRequirement = requirement;
-    edited.toolsAllowExecTarget = { ...target, note: "future-field" };
-    writeDefinition(job.id, edited);
-    const tolerated = (await loadCronStore(storePath)).jobs[0];
-    expect(tolerated?.toolsAllowExecTarget).toEqual(target);
-    expect(tolerated?.payload.toolsAllow).toEqual(["exec", "read"]);
-
-    edited.toolsAllowExecTarget = { version: 1, host: "gateway", ask: "off" };
-    writeDefinition(job.id, edited);
-    const nonRestrictiveAsk = (await loadCronStore(storePath)).jobs[0];
-    expect(nonRestrictiveAsk?.toolsAllowExecTarget).toEqual({ version: 1, host: "gateway" });
-    expect(nonRestrictiveAsk?.payload.toolsAllow).toEqual(["read"]);
+    // Damaged or downgraded writers cannot restore broad exec; future keys are tolerated.
+    for (const [storedTarget, requirement, expectedTarget, toolsAllow] of [
+      [{ version: 1, host: "node" }, required, undefined, ["read"]],
+      [undefined, undefined, undefined, ["read"]],
+      [{ ...target, note: "future-field" }, required, target, ["exec", "read"]],
+      [{ ...target, ask: "off" }, required, { version: 1, host: "gateway" }, ["read"]],
+    ] as const) {
+      Object.assign(edited, {
+        toolsAllowExecTarget: storedTarget,
+        toolsAllowExecTargetRequirement: requirement,
+      });
+      writeDefinition(job.id, edited);
+      const restored = (await loadCronStore(storePath)).jobs[0];
+      expect({
+        target: restored?.toolsAllowExecTarget,
+        tools: restored?.payload.toolsAllow,
+      }).toEqual({ target: expectedTarget, tools: toolsAllow });
+    }
   });
 
   it("never stores broad exec when a required target is already damaged", async () => {
-    const { storePath } = await makeStorePath();
-    const authorityStore = makeAuthorityStore("damaged-exec-target-save");
-    const job = authorityStore.jobs[0];
-    job.payload = {
-      kind: "agentTurn",
-      message: "scheduled continuation",
-      toolsAllow: ["read", "exec"],
-    };
-    job.toolsAllowExecTarget = { version: 1, host: "gateway", ask: "always" };
-    job.toolsAllowExecTargetRequirement = { version: 1, recoveryRequired: true };
-
-    await saveCronStore(storePath, authorityStore);
-
+    const { storePath, job } = await savedAuthority("damaged-exec-target-save", {
+      payload: turn(["read", "exec"]),
+      toolsAllowExecTarget: EXEC_TARGET,
+      toolsAllowExecTargetRequirement: { version: 1, recoveryRequired: true },
+    });
     expect(readDefinition(job.id)).toMatchObject({ payload: { toolsAllow: ["read"] } });
     const reloaded = (await loadCronStore(storePath)).jobs[0];
     expect(reloaded?.payload.toolsAllow).toEqual(["read"]);
@@ -300,10 +281,7 @@ describe("cron store", () => {
 
     const recapturedStore = structuredClone(store);
     const recapturedJob = recapturedStore.jobs[0];
-    recapturedJob.runtimeAuthority = {
-      ...expectDefined(job.runtimeAuthority, "original runtime authority test invariant"),
-      payload: { apps: [{ id: "mail" }] },
-    };
+    recapturedJob.runtimeAuthority = authority("mail");
     delete recapturedJob.runtimeAuthorityRecoveryRequired;
     await saveCronStore(storePath, recapturedStore);
     expect((await loadCronStore(storePath)).jobs[0]?.runtimeAuthority).toEqual(
@@ -425,10 +403,7 @@ describe("cron jobs fingerprint guard", () => {
         lastRunStatus: "ok",
         consecutiveErrors: 0,
       };
-      seeded.runtimeAuthority = {
-        ...expectDefined(seeded.runtimeAuthority, "authority fixture"),
-        payload: { apps: [{ id: "mail" }] },
-      };
+      seeded.runtimeAuthority = authority("mail");
       if (mode === "clear") {
         delete seeded.runtimeAuthority;
         delete seeded.runtimeAuthorityRecoveryRequired;
@@ -438,11 +413,7 @@ describe("cron jobs fingerprint guard", () => {
       const repair = structuredClone(store);
       repair.jobs[0].enabled = false;
       if (mode === "reauthorize") {
-        repair.jobs[0].payload = {
-          kind: "agentTurn",
-          message: "scheduled continuation",
-          toolsAllow: ["read"],
-        };
+        repair.jobs[0].payload = turn(["read"]);
       }
       await saveGuarded(storePath, repair, expectedFingerprint, {
         preserveRuntimeState: mode !== "replace",
