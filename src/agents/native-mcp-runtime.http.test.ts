@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import http from "node:http";
 import { SdkError, SdkErrorCode } from "@modelcontextprotocol/client";
 import { toNodeHandler } from "@modelcontextprotocol/node";
@@ -114,9 +115,7 @@ afterEach(async () => {
   } finally {
     if (runtime) {
       await runtime.dispose();
-      if (!runtime.joinCleanup) {
-        throw new Error("MCP runtime does not expose cleanup ownership");
-      }
+      assert(runtime.joinCleanup, "MCP runtime must expose cleanup ownership");
       await runtime.joinCleanup();
     }
     runtime = undefined;
