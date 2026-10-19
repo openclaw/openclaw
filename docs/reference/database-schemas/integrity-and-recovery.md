@@ -75,15 +75,18 @@ close and seal reuse do not advance that timestamp. On Linux, where Node can
 substitute change time for unavailable birthtime, the existing physical-file
 identity policy uses a stable unknown birthtime value.
 
-Schema identity covers the application version, the database family's canonical
-SQL definitions, and the admission policy revision. Admitted facts identify agent
+Schema identity covers the loaded SQLite version, source ID and compile options,
+the Node/Bun runtime versions, the database family's schema version and canonical
+SQL definitions, and the admission policy revision. Unknown SQLite identity disables
+seal reuse. Admitted facts identify agent
 and shared-state databases, including databases at custom paths. A shared-state
 schema change does not invalidate an unchanged agent database's seal, or vice versa.
 Unclassified or mixed admission facts conservatively depend on both schemas.
-Commit and build
-IDs do not invalidate seals for otherwise compatible builds. Maintainers must advance
-the policy revision for migrations or schema-version changes not reflected in canonical
-SQL, and for changes to validation rules or serialized admission facts.
+Application versions, commit IDs, and build IDs do not invalidate seals for otherwise
+compatible storage stacks. Maintainers must advance the policy revision for code-only
+migrations, validation rules, or serialized admission fact changes. SQLite identity
+comes from the existing native library probe, including shared or custom libraries;
+it is not inferred from the application's version or Node's advertised SQLite version.
 Same-version session columns are admission prerequisites, not optional reader
 projections. Declare them in `STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS`: the
 same declarations drive installation, pending-repair detection, and saved-catalog
@@ -103,7 +106,7 @@ same-version installer is represented in admission facts. A complete prior-build
 catalog retains seal reuse without validation SQL; adding requirements alone does
 not invalidate seals whose catalogs already satisfy them.
 
-Updating from an older seal-identity format requires one full validation;
+Updating from an older application-version-bound seal requires one full validation;
 subsequent compatible builds reuse the new seal. Managed drain followed by an
 interrupt uses ordinary close and can publish a seal once its writers settle.
 Forced termination before successful close cannot certify the database.

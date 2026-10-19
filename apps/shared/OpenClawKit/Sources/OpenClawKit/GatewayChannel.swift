@@ -1161,7 +1161,7 @@ extension GatewayChannelActor {
                     guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else { continue }
                     if case let .event(evt) = frame, evt.event == "connect.challenge" {
                         guard let payload = evt.payload?.value as? [String: ProtoAnyCodable],
-                              let challenge = GatewayConnectChallengeSupport.challenge(from: payload)
+                              let challenge = GatewayConnectChallenge(payload: payload)
                         else {
                             throw ConnectChallengeError.invalid
                         }

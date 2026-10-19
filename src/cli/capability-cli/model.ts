@@ -160,6 +160,13 @@ async function runModelRun(params: {
                 'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with provider/model agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
               );
             }
+            // Provider transcript transforms replace images with a placeholder for text-only
+            // models, so a raw local run would answer without ever seeing the --file input.
+            if (imageFiles.length > 0 && !prepared.model.input.includes("image")) {
+              throw new Error(
+                `Model "${prepared.selection.provider}/${prepared.selection.modelId}" does not accept image input, so --file cannot be sent to it. Use an image-capable model, run openclaw infer image describe, or add --gateway to describe images for text-only models.`,
+              );
+            }
             const localModelRunSystemPrompt =
               prepared.model.api === "openai-chatgpt-responses"
                 ? LOCAL_MODEL_RUN_SYSTEM_PROMPT

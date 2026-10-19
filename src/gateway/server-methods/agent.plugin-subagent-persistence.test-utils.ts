@@ -96,10 +96,12 @@ export function registerPluginSubagentPersistenceFailureTest() {
         expectRespondError(respond, {
           code: ErrorCodes.UNAVAILABLE,
           message:
-            "plugin subagent registry persistence failed; run was not started | Queued subagent registry persistence failed: disk full | SQLITE_FULL",
+            "OpenClaw couldn't save your conversation because the disk is full. Free up space on the computer running OpenClaw before continuing.",
+          retryable: true,
+          details: { code: "SQLITE_FULL" },
         });
         expect(context.logGateway.warn).toHaveBeenCalledWith(
-          expect.stringContaining("rejecting untracked dispatch"),
+          expect.stringMatching(/rejecting untracked dispatch: .*disk full.*SQLITE_FULL/u),
         );
 
         await resetSubagentRegistryForTests({ persist: false });

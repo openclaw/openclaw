@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, onSettled, Show, untrack } from "solid-js";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import {
   lobsterPetSeed,
@@ -418,6 +419,7 @@ function createComposerPlaceholder(options: () => NewSessionComposerOptions) {
 }
 
 export function NewSessionComposer(props: { options: NewSessionComposerOptions }) {
+  const footerControl = createFooterControlRef();
   const draft = createMemo(() => {
     const source = props.options.draftSource;
     return source ? projectOwner(source, (owner) => owner.read()) : undefined;
@@ -460,6 +462,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
   });
   return (
     <div
+      ref={footerControl}
       class="agent-chat__composer-shell new-session-page__composer"
       onDrop={(event) => {
         if (options().nativeTerminal && event.dataTransfer?.files.length) {

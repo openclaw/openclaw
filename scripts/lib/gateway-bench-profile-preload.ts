@@ -69,6 +69,7 @@ if (isMainThread) {
     GatewayProfileCommand["kind"],
     ReturnType<typeof getWorkerMessageMetrics>
   >();
+  let stopDiagnostics: ReturnType<typeof startGatewayBenchDiagnostics> | undefined;
   let busy = false;
   process.on("message", (message: GatewayBenchCommand) => {
     if (message?.channel !== GATEWAY_PROFILE_CHANNEL) {
@@ -123,6 +124,30 @@ if (isMainThread) {
         error,
       });
     };
+    if (message.kind === "diagnostics") {
+      if (message.action === "start") {
+        if (stopDiagnostics) {
+          reply("Gateway diagnostics already started");
+          return;
+        }
+        stopDiagnostics = startGatewayBenchDiagnostics();
+        reply();
+      } else {
+        if (!stopDiagnostics) {
+          reply("Gateway diagnostics have not started");
+          return;
+        }
+        const diagnostics = stopDiagnostics();
+        stopDiagnostics = undefined;
+        process.send?.({
+          channel: GATEWAY_PROFILE_CHANNEL,
+          kind: message.kind,
+          action: message.action,
+          diagnostics,
+        });
+      }
+      return;
+    }
     if (busy) {
       reply("Gateway profile command already in progress");
       return;
@@ -219,6 +244,7 @@ if (isMainThread) {
     );
   });
   process.once("disconnect", () => {
+    stopDiagnostics?.();
     for (const finish of diagnosticCaptures.values()) {
       finish();
     }

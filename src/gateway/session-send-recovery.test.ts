@@ -486,6 +486,50 @@ it("retries transient admission with the saved input and delivery identity, in o
   expect(io.report).not.toHaveBeenCalled();
 });
 
+it.each(["interrupted", "cancelled"] as const)(
+  "preserves returned-result semantics while respecting %s custody",
+  async (state) => {
+    const returnedDelivery: SessionSendDelivery = {
+      ...delivery,
+      returnedResult: { extraSystemPrompt: "Consume this result once; do not send it back." },
+    };
+    const returnedInput = {
+      ...input,
+      message: {
+        ...input.message,
+        __openclaw: { sessionSendDelivery: { ...returnedDelivery, operatorSource: null } },
+      },
+    };
+    io.pending.mockResolvedValue({ items: [returnedInput], total: 1 });
+    sourceEntry.communication = { send: "never" };
+    io.source.mockResolvedValue(sourceSnapshot(returnedInput, state));
+    dispatch.mockImplementation(async (_request, _timeout, options) => {
+      options.assertAdmissionCurrent();
+      expect(
+        readSessionSendDeliveryAdmission({
+          runId: delivery.runId,
+          agentId: "main",
+          sessionKey: delivery.target.sessionKey,
+          sessionId: "target-id",
+        })?.acceptedMessage,
+      ).toEqual(returnedInput.message);
+    });
+    await recover();
+    expect(dispatch).toHaveBeenCalledTimes(state === "interrupted" ? 1 : 0);
+    if (state === "interrupted") {
+      expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
+        idempotencyKey: delivery.runId,
+        message: delivery.message,
+        extraSystemPrompt: "Consume this result once; do not send it back.",
+        expectedExistingSessionId: "target-id",
+        inputProvenance: input.message.provenance,
+      });
+      expect(dispatch.mock.calls[0]?.[2].replyExpectation).toBe("optional");
+    }
+    expectNoCalls(io.report, io.withdraw, warn);
+  },
+);
+
 it.each(["reset", "replaced", "archive", "permission", "consumed", "abort"] as const)(
   "rechecks %s before a delayed attempt",
   async (change) => {

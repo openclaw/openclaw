@@ -405,14 +405,12 @@ export type ReplyOperationAdmission = {
   afterTransition?: (transition: SessionAdmissionTransition) => Promise<void>;
 };
 
-/** Each attach call owns a fresh identity, even when it reuses a backend handle. */
-export type ReplyBackendAttachment = { readonly handle: ReplyBackendHandle };
-
 /** The exact run facts owned by one reply operation. Embedded attempts extend
  * this object in place and the runner's run-id index points back to that record. */
 type SessionControllerRunAttachment = {
   readonly operation: ReplyOperation;
-  backend?: ReplyBackendAttachment;
+  /** Each attach call owns a fresh identity, even when it reuses a backend handle. */
+  backend?: { readonly handle: ReplyBackendHandle };
   projectSessionActive?: boolean;
 };
 
@@ -491,7 +489,6 @@ export type Mutation = {
   operations: Set<ReplyOperation>;
   ready: Deferred;
 };
-type Closure = { reason: Error };
 export type OwnerContext = {
   /** Exact raw producer context, including cleanup before a turn has been claimed. */
   sourceInput?: SessionControllerInput;
@@ -505,7 +502,7 @@ export type SessionControllerLifecycle = {
   operations: Set<ReplyOperation>;
   effects: Set<Effect>;
   mutations: Mutation[];
-  closures: Set<Closure>;
+  closures: Set<{ reason: Error }>;
   changed: Deferred;
   readonly blocksTurnAdmission: boolean;
 };

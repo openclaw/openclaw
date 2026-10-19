@@ -145,6 +145,17 @@ export async function recoverEmbeddedRunOverflow(
   const preflightRecovery = input.attempt.preflightRecovery;
   const requiresTranscriptContinuation =
     preflightRecovery?.source === "mid-turn" || !isCurrentAttemptReplaySafe(input.attempt);
+  if ((input.state.compactionRequestBudget?.fixedTokens ?? 0) >= contextTokenBudget) {
+    return {
+      action: "surface",
+      kind: "context_overflow",
+      errorText,
+      userText:
+        "Context overflow: the system prompt, injected context, or tool definitions exceed the model's context window before chat history. " +
+        "Reduce plugin-provided system context or other fixed instructions (inspect /context detail), or use a larger-context model. Resetting the session will not shrink this context." +
+        renderRecoverySideEffectCaution(input.attempt),
+    };
+  }
   // Compaction cannot shrink pending input; rewriting history cannot make this retry fit.
   if (
     !requiresTranscriptContinuation &&

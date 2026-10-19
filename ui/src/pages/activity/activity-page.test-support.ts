@@ -47,10 +47,6 @@ export function expandFirst(page: TestActivityPage) {
   return row;
 }
 
-export function mountActivityPage(page: TestActivityPage) {
-  return page.container;
-}
-
 export function toolEvent(id: string, sessionKey = "main", name = "read", runId = `run-${id}`) {
   return createGatewayEvent("session.tool", {
     stream: "tool",

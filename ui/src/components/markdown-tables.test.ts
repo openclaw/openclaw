@@ -2,7 +2,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startNativeLinkRouting } from "../app/native-link-routing.ts";
-import { resetTranscriptSession } from "../pages/chat/components/chat-thread-interactions.ts";
+import {
+  registerTranscriptElement,
+  resetThreadPresentation,
+  resetTranscriptSession,
+} from "../pages/chat/components/chat-thread-interactions.ts";
 import { installDialogPolyfill, waitForRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import {
   enhanceMarkdownTables,
@@ -106,6 +110,7 @@ describe("Markdown table interactions", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    resetThreadPresentation();
     document.body.replaceChildren();
     restoreProperties
       .splice(0)
@@ -281,6 +286,7 @@ describe("Markdown table interactions", () => {
     const { owner, expand } = interactiveOwner();
     pane.append(owner);
     document.body.append(pane);
+    registerTranscriptElement("retired-pane", owner);
     expand.click();
 
     resetTranscriptSession("retired-pane", pane);

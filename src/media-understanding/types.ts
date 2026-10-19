@@ -76,7 +76,7 @@ export type MediaUnderstandingProviderRequestAuth =
 
 export type AudioTranscriptionRequest = MediaUnderstandingProviderRequest & {
   language?: string;
-  query?: Record<string, string | number | boolean>;
+  query?: Record<string, string | number | boolean | string[]>;
 };
 
 type MediaUnderstandingProviderRequest = ImagesDescriptionInput & {

@@ -214,6 +214,10 @@ describe("operation-owned watchdog through controller admission", () => {
     operation.attachBackend({ kind: "embedded", cancel, recoverStalledModelCall });
     vi.setSystemTime(abortMs);
     await operation.watchdog.tick();
+    expect(operation.abortSignal.reason).toMatchObject({
+      name: "AbortError",
+      code: "OPENCLAW_SESSION_WATCHDOG",
+    });
     expect(recoverStalledModelCall).toHaveBeenCalledOnce();
     expect(cancel).toHaveBeenCalledOnce();
     expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });

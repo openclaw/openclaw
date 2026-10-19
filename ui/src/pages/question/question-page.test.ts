@@ -82,6 +82,33 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
+it.each(["question", "outside"] as const)(
+  "restores focus after removing a question only when it held focus (%s)",
+  async (focusAt) => {
+    const request = vi.fn().mockResolvedValue({ question: question() });
+    const { page } = mount(request);
+    await settle(page);
+    await questionPanelIn(page);
+    const input = page.querySelector("textarea")!;
+    const outside = document.body.appendChild(document.createElement("button"));
+    const target = focusAt === "question" ? input : outside;
+    target.focus();
+    expect(document.activeElement).toBe(target);
+
+    page.questionId = "";
+    await settle(page);
+
+    await waitForSolid(() => {
+      expect(input.isConnected).toBe(false);
+      expect(document.activeElement).toBe(
+        focusAt === "question" ? page.querySelector("#question-page-title") : outside,
+      );
+    });
+    expect(page.textContent).toContain("Unavailable");
+    expect(request).toHaveBeenCalledTimes(1);
+  },
+);
+
 it("recovers a failed reconnect lookup without losing the typed answer", async () => {
   const request = vi
     .fn()

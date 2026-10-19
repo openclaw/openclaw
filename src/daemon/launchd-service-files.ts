@@ -25,6 +25,7 @@ import { preserveServicePolicyXml } from "./service-policy-xml.js";
 import {
   publishServiceFile,
   matchesServiceFilePublication,
+  matchesServiceFileState,
   readServiceFileState,
   type GatewayServiceDefinitionTransactionHooks,
 } from "./service-stage.js";
@@ -234,7 +235,7 @@ export async function captureLaunchAgentInstallFiles(env: GatewayServiceEnv) {
     const expected = published.get(file);
     if (
       expected
-        ? !matchesServiceFilePublication(current, expected)
+        ? !matchesServiceFileState(current, expected)
         : !isDeepStrictEqual(current, originals.get(file)?.state)
     ) {
       throw new Error(`LaunchAgent artifact changed after capture or publication: ${file}`);

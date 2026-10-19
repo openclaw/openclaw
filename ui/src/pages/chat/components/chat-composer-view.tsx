@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { dynamic } from "@solidjs/web";
 import { createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createFooterControlRef } from "../../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../styles/chat/composer-surface.css";
 import "../../../components/mcp-app-catalog.tsx";
@@ -53,6 +54,7 @@ export function renderChatComposerView(
   props: ChatComposerProps,
   state: ChatComposerState,
 ) {
+  const footerControl = createFooterControlRef();
   const ComposerTextarea = (view: ComposerTextareaProps) =>
     renderComposerTextarea(context, props, state, view);
   const [capabilityOpen, setCapabilityOpen] = createSignal(false);
@@ -233,7 +235,7 @@ export function renderChatComposerView(
   });
   const fallbackStatus = createMemo(() => renderFallbackIndicatorSolid(props.fallbackStatus));
   return (
-    <div class="agent-chat__composer-shell">
+    <div ref={footerControl} class="agent-chat__composer-shell">
       <div class="chat-footer__context">
         {props.footerContent}
         <div class="agent-chat__composer-notices">

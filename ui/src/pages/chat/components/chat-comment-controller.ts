@@ -11,7 +11,7 @@ import { stagedAttachmentBytes } from "./chat-attachments.ts";
 import { resolveChatCommentAnchor } from "./chat-comment-anchor.ts";
 import type { ChatCommentAction } from "./chat-selection-annotations.tsx";
 import { createChatSelectionAttachment } from "./chat-selection-attachment.ts";
-import { showChatAnnotationEditor } from "./chat-selection-popup.ts";
+import { showChatAnnotationEditor } from "./chat-selection-popup.tsx";
 
 type CommentAttachment = ChatAttachment & { selectionAnnotation: ChatSelectionAnnotation };
 
