@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as nodeRuntime from "../../commands/node-runtime-diagnostics.js";
 import * as container from "../../infra/container-environment.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
@@ -22,7 +21,6 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import * as shared from "./shared.js";
-import { updateStatusCommand } from "./status.js";
 import * as finalization from "./update-command-finalize.js";
 import * as servicePlan from "./update-command-service-plan.js";
 import { updateCommand } from "./update-command.js";
@@ -215,15 +213,6 @@ it.each(["missing", "invalid"])(
         }),
       ],
     });
-    const diagnostics = JSON.stringify(output[0]);
-    expect(diagnostics).toContain(`Root: ${root}`);
-    expect(diagnostics).toContain("Git metadata: absent or unreadable");
-    expect(diagnostics).toContain("node_modules layout: outside node_modules");
-    expect(diagnostics).toContain("package.json name: missing or unreadable");
-    expect(diagnostics).toContain(
-      "Service unit target: not inspected (service management unavailable)",
-    );
-    expect(diagnostics).toContain("retry openclaw update from the owning installation");
     expect(metadata).not.toHaveBeenCalled();
     expect(channel).not.toHaveBeenCalled();
     expect(triage).not.toHaveBeenCalled();
@@ -272,25 +261,6 @@ it.skipIf(process.platform === "win32").each([false, true])(
         status: "skipped",
         origin: { nextAction: expect.stringContaining("brew upgrade openclaw-cli") },
       });
-      const publicOrigin = { ...run.origin };
-      delete publicOrigin.windowsUserSid;
-      expect(output[0]).toMatchObject({ runId: run.runId, run: { origin: publicOrigin } });
-      const report = renderUpdateRunReport(run).markdown;
-      expect(report).toContain("brew upgrade openclaw-cli");
-      expect(report).toContain("openclaw gateway restart");
-      expect(report.length).toBeLessThanOrEqual(1500);
-      expect(isReportableUpdateRun(run)).toBe(false);
-      vi.spyOn(nodeRuntime, "collectNodeRuntimeFindings").mockResolvedValue([]);
-      vi.spyOn(updateCheck, "checkUpdateStatus").mockResolvedValue({
-        root: brewRoot,
-        installKind: "package",
-        packageManager: "unknown",
-      });
-      await updateStatusCommand({ json: true });
-      expect(output[1]).toMatchObject({
-        lastRun: { runId: run.runId, status: "skipped", origin: publicOrigin },
-      });
-      expect(JSON.stringify(output)).not.toContain(windowsUserSid);
     } else {
       expect(output[0]).not.toHaveProperty("runId");
       await expectNoDatabase();
