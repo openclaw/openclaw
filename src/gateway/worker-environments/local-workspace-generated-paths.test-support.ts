@@ -21,10 +21,12 @@ import {
 import { writeWorkspaceFiles } from "./workspace-sync-scripts.test-support.js";
 
 const workerPackage = ".artifacts/vitest-workers/run-cache-0/package.json";
+const retainedWorker = ".artifacts/vitest-worker-cache/run-cache-0/outputs/dist/worker.js";
 const packageCaches = [
   ".local/share/pnpm/store/v11/files/10/package-content",
   ".cache/openclaw/bun/pinned/linux-x64/bin/bun",
   ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome",
+  ".cache/bun-transpiler/compiled.pile",
 ];
 
 function legacyManifest(manifest: WorkerWorkspaceManifest) {
@@ -92,17 +94,25 @@ export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner
     await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
   }
   const row = (await readLocalWorkspaceProjection(owner.worktree.id))!;
+  // Keep the shared artifacts parent; only its disposable cache subtree disappeared.
+  await fs.mkdir(path.join(owner.worktree.path, ".artifacts"), { recursive: true });
+  // Old captures can retain a cache ancestor that has since disappeared on the host.
+  await writeWorkspaceFiles(projection, { [retainedWorker]: "previous compiler output\n" });
   const base = { ...(await manifestFor(projection)), baseCommit: row.base_commit };
+  const before = legacyManifest(base);
+  await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
+    await store.update(store.get()!, { baseline_json: before.raw, baseline_ref: before.ref });
+  });
   const files = {
     ...projectFiles,
     [cache]: "captured cache\n",
     ...Object.fromEntries(packageCaches.map((name) => [name, "captured cache\n"])),
     [lock]: "departed owner\n",
     [workerPackage]: '{"type":"module"}\n',
+    [retainedWorker]: "next compiler output\n",
   };
   await writeWorkspaceFiles(projection, files);
   const current = { ...(await manifestFor(projection)), baseCommit: row.base_commit };
-  const before = { raw: row.baseline_json!, ref: row.baseline_ref! };
   const after = legacyManifest(current);
   const ref = workerWorkspaceResultRef("legacy-generated-files");
   const message = Buffer.from(
@@ -145,6 +155,9 @@ export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner
   );
   await closeOpenClawStateDatabaseAsync();
 
+  await expect(
+    fs.stat(path.join(owner.worktree.path, ".artifacts/vitest-worker-cache")),
+  ).rejects.toMatchObject({ code: "ENOENT" });
   await withLocalWorkspaceProjection(owner, (state) => state.settle());
   const accepted = (await readLocalWorkspaceProjection(owner.worktree.id))!;
   expect(accepted.pending_ref).toBeNull();
@@ -166,6 +179,12 @@ export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner
     );
     expect(await fs.readFile(path.join(projection, name), "utf8")).toBe("guest cache churn\n");
   }
+  await expect(fs.stat(path.join(owner.worktree.path, retainedWorker))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  expect(await fs.readFile(path.join(projection, retainedWorker), "utf8")).toBe(
+    "next compiler output\n",
+  );
   expect(await fs.readFile(path.join(owner.worktree.path, ".env.local"), "utf8")).toBe(
     "host-only-secret",
   );

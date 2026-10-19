@@ -21,6 +21,9 @@ const packageCaches = [
   ".local/share/pnpm/store/v11/files/10/package-content",
   ".cache/openclaw/bun/pinned/linux-x64/bin/bun",
   ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome",
+  ".cache/bun-transpiler/compiled.pile",
+  ".artifacts/vitest-worker-cache/run-cache-0/outputs/dist/worker.js",
+  ".artifacts/vitest-shard-timings.json",
 ];
 const workerPackage = ".artifacts/vitest-workers/run-cache-0/package.json";
 const lock = ".artifacts/dist-artifacts.lock/owner.json";
@@ -33,6 +36,14 @@ const userFiles = {
   [`${stagedRoot}/.gitignore`]: STAGED_INPUT_GITIGNORE,
   [`${stagedRoot}/.local/share/pnpm/store/input.txt`]: "staged input\n",
   ".artifacts/report.md": "user report\n",
+  ".artifacts/vitest-worker-cache-notes.md": "user notes\n",
+  ".artifacts/vitest-shard-timings.json-notes": "user notes\n",
+  "fixtures/.artifacts/vitest-worker-cache/input.js": "nested user fixture\n",
+  ".cache/bun-transpiler-notes.md": "user notes\n",
+  "fixtures/.cache/bun-transpiler/input.pile": "nested user fixture\n",
+  [`${stagedRoot}/.cache/bun-transpiler/input.pile`]: "staged input\n",
+  [`${stagedRoot}/.artifacts/vitest-worker-cache/input.js`]: "staged input\n",
+  ".openclaw/tmp/unit.log": "guest log\n",
   ".artifacts/vitest-workers-notes.md": "user notes\n",
   "fixtures/.artifacts/vitest-workers/input.json": "nested user fixture\n",
   ".cache/openclaw/notes.md": "user notes\n",

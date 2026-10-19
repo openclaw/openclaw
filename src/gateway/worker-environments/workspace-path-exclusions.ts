@@ -16,10 +16,13 @@ const DERIVED_WORKSPACE_DIRECTORY_NAMES = [
 // These producers own exact checkout-relative roots, not every .cache or .artifacts path.
 const DERIVED_WORKSPACE_ROOT_PATHS = [
   ".cache/vitest",
+  ".cache/bun-transpiler",
   ".cache/openclaw/bun",
   ".cache/ms-playwright",
   ".local/share/pnpm/store",
   ".artifacts/vitest-workers",
+  ".artifacts/vitest-worker-cache",
+  ".artifacts/vitest-shard-timings.json",
 ] as const;
 const RUNTIME_WORKSPACE_ROOT_PATHS = [".artifacts/dist-artifacts.lock"] as const;
 
