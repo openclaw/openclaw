@@ -186,7 +186,11 @@ export async function createGatewayChatMetadataLifecycle(params: {
       sessionCostUsageNotifications.onUpdated = (publication) => {
         if (publication.usageRefreshFailed) {
           // Clients retain the last successful commit separately from the latest failure.
-          flushUsage();
+          const pending = pendingUsage.get(publication.agentId);
+          if (pending) {
+            pendingUsage.delete(publication.agentId);
+            broadcastUsage(pending);
+          }
           broadcastUsage(publication);
           return;
         }

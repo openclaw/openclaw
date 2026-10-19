@@ -170,8 +170,10 @@ it("coalesces usage batches by agent without delaying failures or extending the 
   const firstCommit = broadcast.mock.calls[0]![1].usageUpdatedAt;
   broadcast.mockClear();
 
+  publishSessionCostUsageUpdated("other");
   publishSessionCostUsageUpdated("main");
   publishSessionCostUsageUpdated("main", true);
+  expect(broadcast.mock.calls.map(([, payload]) => payload.agentId)).toEqual(["main", "main"]);
   expect(broadcast.mock.calls.map(([, payload]) => payload.usageRefreshFailed ?? false)).toEqual([
     false,
     true,
@@ -180,10 +182,14 @@ it("coalesces usage batches by agent without delaying failures or extending the 
   expect(broadcast.mock.calls[1]![1].usageUpdatedAt).toBeGreaterThan(
     broadcast.mock.calls[0]![1].usageUpdatedAt,
   );
+  await vi.advanceTimersByTimeAsync(499);
+  expect(broadcast).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(broadcast.mock.calls[2]![1].agentId).toBe("other");
   publishSessionCostUsageUpdated("main");
   await sidecarOwner.stop();
   await vi.advanceTimersByTimeAsync(500);
-  expect(broadcast).toHaveBeenCalledTimes(2);
+  expect(broadcast).toHaveBeenCalledTimes(3);
 });
 
 it("retires model choices at its config commit before pending metadata settles", async () => {
