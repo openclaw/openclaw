@@ -1057,7 +1057,7 @@ export function areDiagnosticsEnabledForProcess(): boolean {
  */
 function dropInactiveTracingSkillFingerprint(event: DiagnosticEventPayload): void {
   if (event.type === "skill.used" && !hasActiveDiagnosticTracePropagation()) {
-    delete (event as { skillFingerprint?: string }).skillFingerprint;
+    delete event.skillFingerprint;
   }
 }
 
@@ -1632,7 +1632,7 @@ export function hasPendingInternalDiagnosticEvent(
       // in-process inspector — including the Plugin SDK surface — never
       // observes a retained stamp the dispatch gate would strip. Skill
       // accounting stays intact: the event and its skill identity remain.
-      const cloned = structuredClone(entry.event) as DiagnosticEventPayload;
+      const cloned = structuredClone(entry.event);
       dropInactiveTracingSkillFingerprint(cloned);
       event = deepFreezeDiagnosticValue(cloned);
     } catch {
