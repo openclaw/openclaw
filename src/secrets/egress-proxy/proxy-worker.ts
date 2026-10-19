@@ -3,7 +3,6 @@ import { resolveRuntimeWorkerThreadExecArgv } from "../../infra/runtime-worker-u
 import { createCpuTrackedWorker } from "../../infra/worker-cpu.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { copySecretSentinelDecryptionKey } from "../sentinel.js";
-import type { SecretEgressCertificateStatus } from "./certificates.js";
 import type {
   SecretEgressProcessGrant,
   SecretEgressProxyAuditEvent,
@@ -17,15 +16,9 @@ import type {
   SecretEgressWorkerReply,
 } from "./proxy-worker.types.js";
 
-export type SecretEgressProxyWorkerHandle = {
-  caCertPath: string;
-  proxyOrigin: string;
-  registerProcess: (
-    bindings?: readonly SecretEgressSentinelBinding[],
-  ) => Promise<SecretEgressProcessGrant>;
-  getCertificateStatus: () => Promise<SecretEgressCertificateStatus>;
-  stop: () => Promise<void>;
-};
+export type SecretEgressProxyWorkerHandle = Awaited<
+  ReturnType<typeof startSecretEgressProxyWorker>
+>;
 
 /** The Gateway exchanges grants and health only; all network bytes stay in this Worker. */
 export async function startSecretEgressProxyWorker(params: {
@@ -34,7 +27,7 @@ export async function startSecretEgressProxyWorker(params: {
   bypassHosts?: readonly string[];
   onAudit: (event: SecretEgressProxyAuditEvent) => void;
   onFailure?: () => void;
-}): Promise<SecretEgressProxyWorkerHandle> {
+}) {
   const authority = new Int32Array(new SharedArrayBuffer(4));
   const decryptionKey = copySecretSentinelDecryptionKey();
   const workerUrl = resolveRuntimeProcessEntrypointUrl("secretEgressProxy");
@@ -122,7 +115,9 @@ export async function startSecretEgressProxyWorker(params: {
   return {
     caCertPath: address.caCertPath,
     proxyOrigin: address.proxyOrigin,
-    registerProcess: async (bindings = []) => {
+    registerProcess: async (
+      bindings: readonly SecretEgressSentinelBinding[] = [],
+    ): Promise<SecretEgressProcessGrant> => {
       if (Atomics.load(authority, 0) !== 0) {
         throw failure ?? new Error("Secret egress proxy has stopped");
       }

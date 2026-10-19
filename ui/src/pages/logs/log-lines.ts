@@ -1,8 +1,8 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import { parseLogLine as parseCoreLogLine } from "../../../../src/logging/parse-log-line.js";
 
-export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
+export const LOG_LEVELS = ["trace", "debug", "info", "warn", "error", "fatal"] as const;
+export type LogLevel = (typeof LOG_LEVELS)[number];
 
 export type LogEntry = {
   raw: string;
@@ -21,16 +21,6 @@ export const DEFAULT_LOG_LEVEL_FILTERS: Record<LogLevel, boolean> = {
   fatal: true,
 };
 
-const LEVELS = new Set<LogLevel>(["trace", "debug", "info", "warn", "error", "fatal"]);
-
-function normalizeLevel(value: unknown): LogLevel | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const lowered = normalizeLowercaseStringOrEmpty(value) as LogLevel;
-  return LEVELS.has(lowered) ? lowered : null;
-}
-
 export function parseLogLine(line: string): LogEntry {
   const parsed = parseCoreLogLine(line);
   if (!parsed) {
@@ -40,7 +30,7 @@ export function parseLogLine(line: string): LogEntry {
   return {
     raw: parsed.raw,
     time: parsed.time ?? null,
-    level: normalizeLevel(parsed.level),
+    level: LOG_LEVELS.find((level) => level === parsed.level) ?? null,
     subsystem: subsystem ? stripAnsi(subsystem) : null,
     message: stripAnsi(parsed.message),
   };

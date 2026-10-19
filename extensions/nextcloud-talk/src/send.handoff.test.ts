@@ -1,8 +1,10 @@
 import type { ServerResponse } from "node:http";
+import { text } from "node:stream/consumers";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { ChannelMessageSendMediaContext } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { nextcloudTalkPlugin } from "../channel-plugin-api.js";
 
 const transport = vi.hoisted(() => ({
@@ -36,23 +38,10 @@ type SendContext = Pick<
   | "assertDirectAdapterHandoff"
 >;
 
-const sendText = (ctx: SendContext) => nextcloudTalkPlugin.message?.send?.text?.(ctx);
-const sendMedia = (ctx: SendContext) => nextcloudTalkPlugin.outbound?.sendMedia?.(ctx);
-const registrations = [
-  { name: "message text", media: false, send: sendText },
-  {
-    name: "message media",
-    media: true,
-    send: (ctx: SendContext) => nextcloudTalkPlugin.message?.send?.media?.(ctx),
-  },
-  {
-    name: "outbound text",
-    media: false,
-    send: (ctx: SendContext) => nextcloudTalkPlugin.outbound?.sendText?.(ctx),
-  },
-  { name: "outbound media", media: true, send: sendMedia },
-];
+const sendText = expectDefined(nextcloudTalkPlugin.message?.send?.text, "text sender");
+const sendMedia = expectDefined(nextcloudTalkPlugin.outbound?.sendMedia, "media sender");
 const MESSAGE_PATH = "/ocs/v2.php/apps/spreed/api/v1/bot/allowed/message";
+const MEDIA_MESSAGE = "hello\n\nAttachment: https://example.com/image.png";
 
 type RecordedRequest = { method?: string; url?: string; body: string };
 async function withTalkServer(
@@ -65,31 +54,23 @@ async function withTalkServer(
     (request, response) => {
       const recorded = { method: request.method, url: request.url, body: "" };
       requests.push(recorded);
-      request.setEncoding("utf8");
-      request.on("data", (chunk: string) => {
-        recorded.body += chunk;
-      });
-      request.once("end", () => {
-        respond(response, requests);
-      });
-      request.once("error", () => response.destroy());
+      void text(request).then(
+        (body) => {
+          recorded.body = body;
+          respond(response, requests);
+        },
+        () => response.destroy(),
+      );
     },
-    async (baseUrl) =>
-      run(
+    async (baseUrl) => {
+      const work = {
+        baseUrl,
+        botSecret: "synthetic-bot-secret",
+        network: { dangerouslyAllowPrivateNetwork: true },
+      };
+      await run(
         {
-          cfg: {
-            channels: {
-              "nextcloud-talk": {
-                accounts: {
-                  work: {
-                    baseUrl,
-                    botSecret: "synthetic-bot-secret",
-                    network: { dangerouslyAllowPrivateNetwork: true },
-                  },
-                },
-              },
-            },
-          },
+          cfg: { channels: { "nextcloud-talk": { accounts: { work } } } },
           accountId: "work",
           to: "room:allowed",
           text: "hello",
@@ -97,26 +78,45 @@ async function withTalkServer(
           replyToId: "parent-1",
         },
         requests,
-      ),
+      );
+    },
   );
   return requests;
 }
 
+function createGate() {
+  const started = createDeferred<void>();
+  const resume = createDeferred<void>();
+  return {
+    async block() {
+      started.resolve();
+      await resume.promise;
+    },
+    async during(pending: Promise<unknown>, check: () => void | Promise<void>) {
+      const result = pending.catch((error: unknown) => error);
+      try {
+        expect(
+          await Promise.race([started.promise.then(() => true), result.then(() => false)]),
+        ).toBe(true);
+        await check();
+      } finally {
+        resume.resolve();
+        await result;
+      }
+      return result;
+    },
+  };
+}
+
 function createHandoff() {
-  let current = true;
+  const controller = new AbortController();
   const error = new Error("Nextcloud delivery cancelled");
   return {
     error,
-    cancel: () => {
-      current = false;
-    },
+    cancel: () => controller.abort(error),
     callbacks: {
       onPlatformSendDispatch: vi.fn(async () => {}),
-      assertDirectAdapterHandoff: () => {
-        if (!current) {
-          throw error;
-        }
-      },
+      assertDirectAdapterHandoff: () => controller.signal.throwIfAborted(),
     },
   };
 }
@@ -128,78 +128,47 @@ afterEach(() => {
   transport.beforeLookup = undefined;
 });
 
-describe.each(registrations)("Nextcloud Talk $name handoff", ({ send, media }) => {
-  it("preserves message content, the dispatch hook, and the accepted receipt", async () => {
-    const handoff = createHandoff();
-    const requests = await withTalkServer(async (ctx) => {
-      await expect(send({ ...ctx, ...handoff.callbacks })).resolves.toMatchObject({
-        messageId: "42",
-        receipt: { platformMessageIds: ["42"], replyToId: "parent-1" },
-      });
-    });
-    expect(requests).toEqual([
-      {
-        method: "POST",
-        url: MESSAGE_PATH,
-        body: JSON.stringify({
-          message: media ? "hello\n\nAttachment: https://example.com/image.png" : "hello",
-          replyTo: "parent-1",
-        }),
-      },
-    ]);
-    expect(handoff.callbacks.onPlatformSendDispatch).toHaveBeenCalledOnce();
-  });
-
-  it("blocks a send cancelled during DNS without cancelling a concurrent delivery", async () => {
+it.each([
+  { name: "message text", media: false, send: sendText },
+  { name: "outbound media", media: true, send: sendMedia },
+])(
+  "blocks $name cancelled during DNS without cancelling a concurrent delivery",
+  async ({ send, media }) => {
     const cancelled = createHandoff();
     const current = createHandoff();
-    const started = createDeferred<void>();
-    const resume = createDeferred<void>();
+    const gate = createGate();
     transport.beforeLookup = async (url) => {
       if (url.includes("/held/")) {
-        started.resolve();
-        await resume.promise;
+        await gate.block();
       }
     };
     const requests = await withTalkServer(async (ctx) => {
-      const result = Promise.resolve(
+      const result = await gate.during(
         send({ ...ctx, ...cancelled.callbacks, to: "room:held" }),
-      ).catch((error: unknown) => error);
-      try {
-        expect(
-          await Promise.race([started.promise.then(() => true), result.then(() => false)]),
-        ).toBe(true);
-        cancelled.cancel();
-        await expect(sendMedia({ ...ctx, ...current.callbacks })).resolves.toMatchObject({
-          messageId: "42",
-        });
-      } finally {
-        resume.resolve();
-        await result;
-      }
-      expect(await result).toBe(cancelled.error);
+        async () => {
+          cancelled.cancel();
+          await expect(send({ ...ctx, ...current.callbacks })).resolves.toMatchObject({
+            messageId: "42",
+            receipt: { platformMessageIds: ["42"], replyToId: "parent-1" },
+          });
+        },
+      );
+      expect(result).toBe(cancelled.error);
     });
-    expect(requests.map((request) => request.url)).toEqual([MESSAGE_PATH]);
-  });
-});
+    const message = media ? MEDIA_MESSAGE : "hello";
+    const body = JSON.stringify({ message, replyTo: "parent-1" });
+    expect(requests).toEqual([{ method: "POST", url: MESSAGE_PATH, body }]);
+    expect(current.callbacks.onPlatformSendDispatch).toHaveBeenCalledOnce();
+  },
+);
 
-// All registrations above reach the same guarded sender; exercise its deeper lifecycle once.
-it.each([false, true])("rechecks redirects with delivery cancelled=%s", async (cancelled) => {
+it("rejects a redirect after delivery cancellation", async () => {
   const handoff = createHandoff();
   const requests = await withTalkServer(
-    async (ctx) => {
-      const pending = Promise.resolve(sendMedia({ ...ctx, ...handoff.callbacks }));
-      if (cancelled) {
-        await expect(pending).rejects.toBe(handoff.error);
-      } else {
-        await expect(pending).resolves.toMatchObject({ messageId: "42" });
-      }
-    },
+    (ctx) => expect(sendMedia({ ...ctx, ...handoff.callbacks })).rejects.toBe(handoff.error),
     (response, received) => {
       if (received.length === 1) {
-        if (cancelled) {
-          handoff.cancel();
-        }
+        handoff.cancel();
         response.writeHead(307, { location: "/redirected-message" });
         response.end();
       } else {
@@ -209,7 +178,6 @@ it.each([false, true])("rechecks redirects with delivery cancelled=%s", async (c
   );
   expect(requests.map((request) => `${request.method} ${request.url}`)).toEqual([
     `POST ${MESSAGE_PATH}`,
-    ...(!cancelled ? ["POST /redirected-message"] : []),
   ]);
 });
 
@@ -218,12 +186,11 @@ it.each([false, true])(
   async (validBody) => {
     const handoff = createHandoff();
     await withTalkServer(
-      async (ctx) => {
-        await expect(sendMedia({ ...ctx, ...handoff.callbacks })).resolves.toMatchObject({
+      (ctx) =>
+        expect(sendMedia({ ...ctx, ...handoff.callbacks })).resolves.toMatchObject({
           messageId: validBody ? "42" : "unknown",
           receipt: { platformMessageIds: validBody ? ["42"] : [] },
-        });
-      },
+        }),
       (response) => {
         handoff.cancel();
         acceptMessage(response, validBody);
@@ -236,29 +203,22 @@ it.each(["reject", "cancel"])(
   "settles an asynchronous dispatch hook before HTTP (%s)",
   async (mode) => {
     const handoff = createHandoff();
-    const started = createDeferred<void>();
-    const resume = createDeferred<void>();
+    const gate = createGate();
     handoff.callbacks.onPlatformSendDispatch.mockImplementation(async () => {
-      started.resolve();
-      await resume.promise;
+      await gate.block();
       if (mode === "reject") {
         throw handoff.error;
       }
     });
     const requests = await withTalkServer(async (ctx, received) => {
-      const result = Promise.resolve(sendText({ ...ctx, ...handoff.callbacks })).catch(
-        (error: unknown) => error,
-      );
-      try {
-        await Promise.race([started.promise, result]);
+      const result = await gate.during(sendText({ ...ctx, ...handoff.callbacks }), () => {
         expect(handoff.callbacks.onPlatformSendDispatch).toHaveBeenCalledOnce();
         expect(received).toEqual([]);
-        handoff.cancel();
-      } finally {
-        resume.resolve();
-        await result;
-      }
-      expect(await result).toBe(handoff.error);
+        if (mode === "cancel") {
+          handoff.cancel();
+        }
+      });
+      expect(result).toBe(handoff.error);
     });
     expect(requests).toEqual([]);
   },

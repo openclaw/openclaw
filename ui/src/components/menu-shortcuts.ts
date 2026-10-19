@@ -1,55 +1,40 @@
-import { html } from "lit";
-import {
-  formatKeyboardShortcutCombo,
-  type KeyboardShortcutCombo,
-} from "../lib/keyboard-shortcut-contract.ts";
-import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
-import { handlePeopleMenuKeydown } from "./searchable-people-menu.ts";
+const shortcutItems = new WeakMap<
+  HTMLElement,
+  () => Iterable<{ element: HTMLElement; key: string | undefined }>
+>();
 
-// Single-letter context-menu shortcuts. Items opt in via data-shortcut plus a
-// rendered hint; menu hosts route non-Escape keydowns here so a bare letter
-// clicks the matching enabled item and disabled items swallow nothing.
-export function menuShortcutHint(key: string, alias?: KeyboardShortcutCombo) {
-  const label = key.length === 1 ? key.toUpperCase() : key;
-  return html`<span slot="details" class="session-menu__shortcut" aria-hidden="true"
-    >${alias ? `${label} / ${formatKeyboardShortcutCombo(alias)}` : label}</span
-  >`;
+/** Renderers publish the same enabled shortcut elements that receive activation. */
+export function registerMenuShortcuts(
+  surface: HTMLElement,
+  read: () => Iterable<{ element: HTMLElement; key: string | undefined }>,
+): () => void {
+  shortcutItems.set(surface, read);
+  return () => shortcutItems.delete(surface);
 }
 
-export function activateMenuShortcut(root: ParentNode, event: KeyboardEvent): boolean {
-  if (handlePeopleMenuKeydown(event)) {
-    return true;
-  }
+export function findMenuShortcut(
+  surface: HTMLElement | undefined,
+  key: string,
+): HTMLElement | undefined {
   if (
-    event.metaKey ||
-    event.ctrlKey ||
-    event.altKey ||
-    event
-      .composedPath()
-      .some(
-        (target) =>
-          target instanceof Element &&
-          target.matches("input, textarea, select, [contenteditable=true]"),
-      )
+    !surface ||
+    !(surface instanceof HTMLDetailsElement ? surface.open : surface.matches(":popover-open")) ||
+    surface.closest("[inert]")
   ) {
-    return false;
+    return undefined;
   }
-  const key = resolveAsciiShortcutKey(event);
-  if (!key) {
-    return false;
+  for (const { element, key: advertisedKey } of shortcutItems.get(surface)?.() ?? []) {
+    if (
+      advertisedKey === key &&
+      !element.matches(":disabled") &&
+      element.getAttribute("aria-disabled") !== "true"
+    ) {
+      return element;
+    }
   }
-  const item = root.querySelector<HTMLElement & { disabled?: boolean }>(`[data-shortcut="${key}"]`);
-  if (!item || item.disabled || item.getAttribute("aria-disabled") === "true") {
-    return false;
-  }
-  const parentItem = item.closest<HTMLElement & { submenuOpen?: boolean }>(
-    'wa-dropdown-item:not([slot="submenu"])',
-  );
-  if (item.getAttribute("slot") === "submenu" && parentItem?.submenuOpen !== true) {
-    return false;
-  }
-  event.preventDefault();
-  event.stopPropagation();
-  item.click();
-  return true;
+  return undefined;
+}
+
+export function menuOwnsShortcut(surface: HTMLElement, key: string): boolean {
+  return /^[a-z0-9]$/iu.test(key) && Boolean(findMenuShortcut(surface, key.toLowerCase()));
 }

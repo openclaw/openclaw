@@ -3,11 +3,9 @@ import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
 
 const ALLOWED_PLUGIN_ICON_MIME_TYPES = new Set(["image/png", "image/svg+xml", "image/x-icon"]);
+export const SVG_ARTWORK_MIME_TYPES = new Set(["image/svg+xml"]);
+export const THEME_BACKGROUND_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 type PluginIconAuthSource = Parameters<typeof resolveControlUiAuthCandidates>[0];
-
-function normalizeMimeType(contentType: string | null): string {
-  return contentType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-}
 
 type FetchProxiedIconParams = {
   auth: PluginIconAuthSource;
@@ -30,7 +28,7 @@ function cancelUnreadResponseBody(response: Response): void {
 export async function fetchProxiedIconBlobUrl(
   params: FetchProxiedIconParams,
   routeUrl: string,
-  svgOnly = false,
+  allowedTypes: ReadonlySet<string> = ALLOWED_PLUGIN_ICON_MIME_TYPES,
 ): Promise<string | null> {
   if (!hasSameOriginGatewayTransport(params.gatewayUrl)) {
     return null;
@@ -59,11 +57,9 @@ export async function fetchProxiedIconBlobUrl(
       }
       return null;
     }
-    const contentType = normalizeMimeType(response.headers.get("content-type"));
-    if (
-      !ALLOWED_PLUGIN_ICON_MIME_TYPES.has(contentType) ||
-      (svgOnly && contentType !== "image/svg+xml")
-    ) {
+    const contentType =
+      response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+    if (!allowedTypes.has(contentType)) {
       cancelUnreadResponseBody(response);
       return null;
     }
@@ -80,12 +76,10 @@ export async function fetchProxiedIconBlobUrl(
 export function fetchPluginIconBlobUrl(
   params: FetchProxiedIconParams & { pluginId: string },
 ): Promise<string | null> {
-  const routeUrl = buildControlUiResourcePath(
-    "pluginIcon",
-    params.resourceBasePath,
-    params.pluginId,
+  return fetchProxiedIconBlobUrl(
+    params,
+    buildControlUiResourcePath("pluginIcon", params.resourceBasePath, params.pluginId),
   );
-  return fetchProxiedIconBlobUrl(params, routeUrl);
 }
 
 export function fetchPluginActivityIconBlobUrl(
@@ -97,32 +91,32 @@ export function fetchPluginActivityIconBlobUrl(
     params.pluginId,
   );
   const routeUrl = params.tool ? `${path}?tool=${encodeURIComponent(params.tool)}` : path;
-  return fetchProxiedIconBlobUrl(params, routeUrl, true);
+  return fetchProxiedIconBlobUrl(params, routeUrl, SVG_ARTWORK_MIME_TYPES);
 }
 
 export function fetchCatalogIconBlobUrl(
   params: FetchProxiedIconParams & { iconUrl: string },
 ): Promise<string | null> {
-  const routeUrl = buildControlUiResourcePath(
-    "catalogIcon",
-    params.resourceBasePath,
-    params.iconUrl,
+  return fetchProxiedIconBlobUrl(
+    params,
+    buildControlUiResourcePath("catalogIcon", params.resourceBasePath, params.iconUrl),
   );
-  return fetchProxiedIconBlobUrl(params, routeUrl);
 }
 
 export function fetchLinkFaviconBlobUrl(
   params: FetchProxiedIconParams & { hostname: string },
 ): Promise<string | null> {
-  const routeUrl = buildControlUiResourcePath(
-    "linkFavicon",
-    params.resourceBasePath,
-    params.hostname,
+  return fetchProxiedIconBlobUrl(
+    params,
+    buildControlUiResourcePath("linkFavicon", params.resourceBasePath, params.hostname),
   );
-  return fetchProxiedIconBlobUrl(params, routeUrl);
 }
 
-export type PluginThemeArtworkFetchParams = { url: string } & Partial<FetchProxiedIconParams>;
+export type PluginThemeArtworkFetchParams = {
+  url: string;
+  /** Canvas backgrounds are raster images; every other theme artwork kind is SVG. */
+  background?: boolean;
+} & Partial<FetchProxiedIconParams>;
 
 export function fetchPluginThemeArtworkBlobUrl(
   params: PluginThemeArtworkFetchParams,

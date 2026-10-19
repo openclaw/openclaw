@@ -61,19 +61,6 @@ export function isSlackStreamingEnabled(params: {
   return false;
 }
 
-export function resolveSlackDisableBlockStreaming(params: {
-  useStreaming: boolean;
-  shouldUseDraftStream: boolean;
-  blockStreamingEnabled: boolean | undefined;
-}): boolean | undefined {
-  if (params.useStreaming || params.shouldUseDraftStream) {
-    return true;
-  }
-  return typeof params.blockStreamingEnabled === "boolean"
-    ? !params.blockStreamingEnabled
-    : undefined;
-}
-
 export function resolveExplicitSlackProgressTitle(
   entry: Parameters<typeof resolveChannelProgressDraftConfig>[0],
 ): string | undefined {
@@ -85,18 +72,33 @@ export function resolveExplicitSlackProgressTitle(
   return trimmed && trimmed.toLowerCase() !== "auto" ? trimmed : undefined;
 }
 
-export function resolveSlackProgressStyle(entry: SlackProgressConfigEntry): "card" | "compact" {
-  // DO NOT REMOVE OR CHANGE THE COMPACT STYLE WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
+export function resolveSlackProgressStyle(
+  entry: SlackProgressConfigEntry,
+  hasReplyThread: boolean,
+): "card" | "compact" | "none" {
   const progress = entry?.streaming?.progress;
+  // Native task cards only affect threads; every other own setting opts into a preview.
+  if (
+    !hasReplyThread &&
+    !Object.entries(progress ?? {}).some(
+      ([key, value]) => key !== "nativeTaskCards" || value !== true,
+    )
+  ) {
+    return "none";
+  }
+  // DO NOT REMOVE OR CHANGE THE COMPACT STYLE WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
   return progress?.style ?? (progress?.toolProgress === false ? "compact" : "card");
 }
 
 // Slack's native agent card is the default progress surface; operators opt out
 // with an explicit `false`, which falls back to the Block Kit progress card.
-export function resolveSlackNativeProgressTaskCards(entry: SlackProgressConfigEntry): boolean {
+export function resolveSlackNativeProgressTaskCards(
+  entry: SlackProgressConfigEntry,
+  style: ReturnType<typeof resolveSlackProgressStyle>,
+): boolean {
   // THIS BEHAVIOR IS INTENTIONAL AND MUST NOT BE CASUALLY ADJUSTED.
   // DO NOT CHANGE THIS WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
-  if (resolveSlackProgressStyle(entry) === "compact") {
+  if (style !== "card") {
     return false;
   }
   return entry?.streaming?.progress?.nativeTaskCards !== false;
@@ -145,34 +147,6 @@ export function buildSlackEventDeliveryKey(
     mediaUrls: reply.mediaUrls,
     blocks: slackBlocks ?? null,
   });
-}
-
-export function createSlackEventDeliveryTracker() {
-  const deliveredKeys = new Set<string>();
-  return {
-    hasDelivered(key: string | null) {
-      return key ? deliveredKeys.has(key) : false;
-    },
-    markDelivered(key: string | null) {
-      if (key) {
-        deliveredKeys.add(key);
-      }
-    },
-  };
-}
-
-export function shouldUseStreaming(params: {
-  streamingEnabled: boolean;
-  threadTs: string | undefined;
-}): boolean {
-  if (!params.streamingEnabled) {
-    return false;
-  }
-  if (!params.threadTs) {
-    logVerbose("slack-stream: streaming disabled — no reply thread target available");
-    return false;
-  }
-  return true;
 }
 
 export async function resolveSlackStreamRecipientTeamId(params: {

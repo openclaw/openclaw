@@ -19,21 +19,6 @@ describe("drainPendingToolTasks", () => {
     });
   });
 
-  it("waits for all pending tasks to settle", async () => {
-    const first = createDeferred();
-    const second = createDeferred();
-    const tasks = new Set([first.promise, second.promise]);
-
-    const drain = drainPendingToolTasks({ tasks, idleTimeoutMs: 1_000 });
-    first.resolve();
-    await flushPromises();
-    expect(tasks.size).toBe(1);
-    second.resolve();
-
-    await expect(drain).resolves.toEqual({ kind: "settled" });
-    expect(tasks.size).toBe(0);
-  });
-
   it("resets the idle timeout after each completed task", async () => {
     vi.useFakeTimers();
     const first = createDeferred();

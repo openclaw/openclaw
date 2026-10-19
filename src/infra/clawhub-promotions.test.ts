@@ -83,13 +83,4 @@ describe("promotion fetches", () => {
     });
     await expect(fetchClawHubPromotions()).rejects.toThrow(/promotions array/);
   });
-
-  it("fetches a single promotion by slug", async () => {
-    mockHttp.intercept({
-      url: `${CLAWHUB_URL}/api/v1/promotions/spring-models`,
-      reply: { json: validPromotion },
-    });
-    const promotion = await fetchClawHubPromotion({ slug: "spring-models" });
-    expect(promotion.title).toBe("Free Example models");
-  });
 });

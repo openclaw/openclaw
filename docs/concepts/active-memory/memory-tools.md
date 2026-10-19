@@ -9,12 +9,20 @@ title: "Memory tools"
 ## Memory tools
 
 `config.toolsAllow` sets the concrete tool names the blocking sub-agent may
-call for advanced Active Memory. Defaults depend on the current memory provider:
+call for advanced Active Memory. Active Memory chooses tools in this order:
+
+1. A valid, non-empty explicit `config.toolsAllow` list.
+2. The selected memory provider's `recallToolNames` capability.
+3. The built-in fallback shown below.
 
 | Memory provider | Default `toolsAllow`              |
 | --------------- | --------------------------------- |
 | Built-in memory | `["memory_search", "memory_get"]` |
 | LanceDB         | `["memory_recall"]`               |
+
+Memory Core declares `["memory_search", "memory_get"]`. Custom memory
+providers can register their own concrete deep-recall tools and declare the
+same names through `recallToolNames`.
 
 `toolsAllow` is a limit, not a permission grant. Before starting recall, Active
 Memory filters these names through the parent agent's finalized tool policy.

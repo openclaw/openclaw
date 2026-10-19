@@ -1,3 +1,4 @@
+import type { SessionControllerInput } from "../../sessions/session-controller.contracts.js";
 import type { RealtimeVoiceAgentConsultRunner } from "../../talk/provider-types.js";
 
 export type TalkRequesterFinalBinding = {
@@ -9,11 +10,6 @@ export type TalkAgentConsultRequest = Parameters<RealtimeVoiceAgentConsultRunner
 };
 
 export type TalkAgentConsultSource = "tool-call" | "native-delegation";
-
-export type TalkRequesterFinalRegistration = {
-  releaseProvisional: () => void;
-  revoke: () => void;
-};
 
 export type TalkAgentConsultLifecycleMethods = {
   adoptCompletionClaims?: () => void;
@@ -38,4 +34,6 @@ export type ReusableTalkAgentConsult = (
   signal: AbortSignal,
   assertCurrent?: () => void,
   source?: TalkAgentConsultSource,
+  /** Mailbox input reserved when the tool call arrived; the run adopts it. */
+  sourceInput?: SessionControllerInput,
 ) => Promise<{ text: string }>;

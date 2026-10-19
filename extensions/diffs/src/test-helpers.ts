@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type {
   OpenBlobStoreOptions,
-  PluginBlobStore,
+  PluginBlobStoreWithReceipts,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginBlobStoreForTests,
@@ -19,7 +19,7 @@ import {
   type OpenClawStateKyselyDatabaseForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { resolvePreferredOpenClawTmpDir } from "../api.js";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { DiffArtifactStore } from "./store.js";
 import type { DiffArtifactBlobMetadata } from "./types.js";
 
@@ -107,10 +107,10 @@ export async function createDiffStoreHarness(
 ): Promise<{
   rootDir: string;
   store: DiffArtifactStore;
-  blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
+  blobStore: PluginBlobStoreWithReceipts<DiffArtifactBlobMetadata>;
   reopen: () => Promise<{
     store: DiffArtifactStore;
-    blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
+    blobStore: PluginBlobStoreWithReceipts<DiffArtifactBlobMetadata>;
   }>;
   cleanup: () => Promise<void>;
 }> {

@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deliverAgentCommandResult } from "../../agents/command/delivery.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { defaultRuntime } from "../../runtime.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import { createTrackedDispatch } from "./agent-run-dispatch.test-support.js";
+import { setTestRpcSourceIdentity, testRpcSourceController } from "./rpc-source.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   command: vi.fn<typeof import("../../commands/agent.js").agentCommandFromGatewayIngress>(),
@@ -15,9 +17,24 @@ vi.mock("../../commands/agent.js", () => ({ agentCommandFromGatewayIngress: mock
 const privateReply = "synthetic-private-agent-reply";
 const privateDeliveryTarget = "synthetic-private-delivery-target";
 const sessionCases = [
-  { name: "ordinary", key: "agent:main:dashboard:ordinary", isIncognito: false },
-  { name: "Incognito key", key: "agent:main:dashboard:incognito-private", isIncognito: false },
-  { name: "Incognito entry", key: "agent:main:dashboard:private-entry", isIncognito: true },
+  {
+    name: "ordinary",
+    key: "agent:main:dashboard:ordinary",
+    isIncognito: false,
+    modes: ["text", "delivery error"],
+  },
+  {
+    name: "Incognito key",
+    key: "agent:main:dashboard:incognito-private",
+    isIncognito: false,
+    modes: ["text", "nested"],
+  },
+  {
+    name: "Incognito entry",
+    key: "agent:main:dashboard:private-entry",
+    isIncognito: true,
+    modes: ["json", "delivery error"],
+  },
 ] as const;
 
 beforeEach(() => {
@@ -36,7 +53,7 @@ afterEach(() => {
 
 function createDispatch(session: (typeof sessionCases)[number]) {
   const { context, entry, runId } = createTrackedDispatch();
-  entry.sessionKey = session.key;
+  setTestRpcSourceIdentity(entry, { sessionKey: session.key });
   const emitFinal = vi.fn();
   return {
     admittedRunEntry: entry,
@@ -48,18 +65,17 @@ function createDispatch(session: (typeof sessionCases)[number]) {
     isIncognito: session.isIncognito,
     runId,
     dedupeKeys: [],
-    abortController: entry.controller,
+    abortController: testRpcSourceController(entry),
     cleanupAbortController: vi.fn(),
     io: { emitAcceptance: vi.fn(), emitFinal },
     context,
-    taskTrackingMode: "none" as const,
   };
 }
 
 describe.each(sessionCases)("Gateway agent diagnostic output: $name", (session) => {
   const isPrivate = session.name !== "ordinary";
 
-  it.each(["text", "nested", "json", "delivery error"] as const)(
+  it.each(session.modes)(
     "preserves the live result without persisting private %s output",
     async (mode) => {
       const params = createDispatch(session);
@@ -137,7 +153,7 @@ describe.each(sessionCases)("Gateway agent diagnostic output: $name", (session) 
       expect(diagnostics).toMatchObject({ error: privateReply });
     }
 
-    params.context.chatAbortControllers.clear();
+    rpcSourceTesting.clear();
     const emitAcceptance = vi.fn();
     expect(
       replayAgentTurnIfCached({

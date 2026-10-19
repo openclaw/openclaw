@@ -1,0 +1,299 @@
+import { createSignal, For } from "solid-js";
+import { afterEach, describe, expect, it } from "vitest";
+import { page } from "vitest/browser";
+import type { MessageGroup as MessageGroupData } from "../../lib/chat/chat-types.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
+import { MessageGroup } from "./components/chat-message-group-view.tsx";
+import { StreamGroup, WorkGroupSummary } from "./components/chat-message-stream-view.tsx";
+import "../../styles/base.css";
+import "../../styles/components.css";
+import "../../styles/chat.ts";
+import "../../styles/chat/composer-surface.css";
+
+const paragraph =
+  "The conversation keeps every participant's content inside the shared column. ".repeat(20);
+const code = `\`\`\`text\n${"long-unbroken-output-".repeat(80)}\n\`\`\``;
+// Exercise the scroll fallback with values that cannot wrap at spaces or hyphens.
+const table = `| ${Array.from({ length: 12 }, (_, i) => `Column ${i}`).join(" | ")} |\n| ${"--- | ".repeat(12)}\n| ${"unbrokentablevalueunbrokentablevalue | ".repeat(12)}`;
+const image = {
+  type: "image",
+  data: "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAHElEQVR4nGP4z8DwnxLMMGrAsDCAQv2jBgwPAwAxtf4Q24P5oAAAAABJRU5ErkJggg==",
+  mimeType: "image/png",
+};
+const options = {
+  userId: "alice",
+  userName: "Alice Chen",
+  assistantName: "Assistant",
+  showReasoning: false,
+};
+
+function group(key: string, role: string, content: unknown, extra: Partial<MessageGroupData> = {}) {
+  const [prepared] = groupMessages([
+    { kind: "message", key, message: { role, content, timestamp: 1_000 } },
+  ]);
+  if (prepared?.kind !== "group") {
+    throw new Error(`Expected rendered group for ${key}`);
+  }
+  return { ...prepared, key, ...extra };
+}
+
+const fixtures = [
+  group("paragraph", "assistant", paragraph),
+  group("code", "assistant", code),
+  group("table", "assistant", table),
+  group("image", "assistant", [image]),
+  group("gallery", "assistant", [image, { ...image, alt: "Second image" }]),
+  group("file", "assistant", [
+    {
+      type: "attachment",
+      attachment: {
+        url: "https://example.invalid/report.txt",
+        kind: "document",
+        label: "report.txt",
+        mimeType: "text/plain",
+      },
+    },
+  ]),
+  group("peer", "user", paragraph, { sender: { id: "peer", name: "Other Sender" } }),
+  group("forwarded", "assistant", paragraph, {
+    senderSession: { sessionKey: "agent:research:main", agentId: "research", label: "Research" },
+  }),
+  group("cron", "assistant", paragraph, {
+    senderSession: { sessionKey: "agent:main:cron:daily:run:fixture", agentId: "main" },
+  }),
+  group("report", "assistant", `# Report\n\n${paragraph}\n\n${code}`),
+  group("tool", "assistant", [
+    {
+      type: "toolcall",
+      id: "read-fixture",
+      name: "read",
+      arguments: { path: "/workspace/report.txt" },
+    },
+  ]),
+];
+
+describe("shared chat content column", () => {
+  let container: HTMLDivElement | undefined;
+  let previousTheme: string | undefined;
+  let view: ReturnType<typeof mountSolid> | undefined;
+
+  afterEach(() => {
+    if (container) {
+      view?.unmount();
+      view = undefined;
+      container.remove();
+      container = undefined;
+    }
+    if (previousTheme === undefined) {
+      delete document.documentElement.dataset.themeMode;
+    } else {
+      document.documentElement.dataset.themeMode = previousTheme;
+    }
+  });
+
+  for (const width of [1440, 1024, 390]) {
+    for (const theme of ["light", "dark"]) {
+      it(`bounds every left-side block at ${width}px in ${theme}`, async () => {
+        await page.viewport(width, 900);
+        container = document.createElement("div");
+        container.className = "chat";
+        container.style.height = "850px";
+        previousTheme = document.documentElement.dataset.themeMode;
+        document.documentElement.dataset.themeMode = theme;
+        document.body.append(container);
+        const [directLayout, setDirectLayout] = createSignal(false);
+        view = mountSolid(
+          () => (
+            <div
+              class={["chat-thread", { "chat-thread--direct": directLayout() }]}
+              style={{ height: "850px" }}
+            >
+              <div class="chat-thread-inner">
+                <MessageGroup
+                  group={group("own", "user", paragraph, {
+                    sender: {
+                      id: "alice",
+                      name: "Alice Chen",
+                      identity: { type: "profile", id: "alice" },
+                    },
+                  })}
+                  options={options}
+                />
+                <For each={fixtures}>
+                  {(fixture) => (
+                    <MessageGroup
+                      group={fixture}
+                      options={{ ...options, isToolExpanded: () => true }}
+                    />
+                  )}
+                </For>
+                <WorkGroupSummary
+                  item={{ key: "summary", durationMs: 2_000, groups: [] }}
+                  options={{ expanded: false, onToggle: () => {} }}
+                />
+                <StreamGroup
+                  options={{}}
+                  parts={[
+                    {
+                      kind: "stream",
+                      key: "stream",
+                      text: code,
+                      startedAt: 1_000,
+                      isStreaming: true,
+                    },
+                  ]}
+                />
+                <StreamGroup
+                  options={{}}
+                  parts={[{ kind: "reading-indicator", key: "working", startedAt: 1_000 }]}
+                />
+              </div>
+            </div>
+          ),
+          { container },
+        );
+
+        for (const direct of [false, true]) {
+          for (const direction of ["ltr", "rtl"]) {
+            // A narrow desktop pane retains its avatar gutter; mobile uses the
+            // viewport breakpoint that hides avatars in production.
+            for (const mode of ["saved", "narrow", "default"]) {
+              const narrow = mode === "narrow";
+              const fullWidth = mode !== "default";
+              if (fullWidth) {
+                container.style.setProperty("--chat-message-max-width", "100%");
+              } else {
+                container.style.removeProperty("--chat-message-max-width");
+              }
+              if (mode === "saved") {
+                container.style.setProperty("--chat-thread-max-width", "100%");
+              } else {
+                container.style.removeProperty("--chat-thread-max-width");
+              }
+              container.dir = direction;
+              container.style.width = narrow ? "min(100%, 480px)" : "100%";
+              setDirectLayout(direct);
+              flush();
+              await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+              });
+
+              const own = container.querySelector('[data-chat-row-key="own"] .chat-bubble');
+              expect(own).not.toBeNull();
+              const edge = (element: Element) => {
+                const rect = element.getBoundingClientRect();
+                return direction === "rtl" ? -rect.left : rect.right;
+              };
+              const boundary = edge(own!);
+              const ownName = container.querySelector(
+                '[data-chat-row-key="own"] .chat-sender-name',
+              );
+              expect(ownName).not.toBeNull();
+              // Mobile actions share the identity line after the name; the footer,
+              // not the name alone, owns the bubble edge.
+              const ownFooter = container.querySelector(
+                '[data-chat-row-key="own"] > .chat-group-footer',
+              )!;
+              expect(
+                Math.abs(edge(width <= 768 ? ownFooter : ownName!) - boundary),
+              ).toBeLessThanOrEqual(1);
+              const context = `${width}/${theme}/${direct ? "direct" : "shared"}/${direction}/${mode}`;
+              const leftGroups = container.querySelectorAll(
+                '.chat-group:not([data-chat-row-key="own"])',
+              );
+              expect(leftGroups.length).toBe(fixtures.length + 3);
+              for (const left of leftGroups) {
+                const column = left.querySelector(".chat-group-messages")!;
+                expect(
+                  fullWidth && !left.classList.contains("chat-group--peer")
+                    ? Math.abs(edge(column) - boundary)
+                    : edge(column) - boundary,
+                  `${context}: ${left.getAttribute("data-chat-row-key")} column`,
+                ).toBeLessThanOrEqual(1);
+                for (const block of left.querySelectorAll(
+                  ".chat-bubble, .code-block-viewport, .markdown-table__viewport, .chat-message-images, .chat-assistant-attachment-card, .chat-activity-group, .chat-tool-msg-summary, .chat-tool-msg-body, .chat-reply-attribution",
+                )) {
+                  expect(
+                    edge(block) - boundary,
+                    `${context}: ${block.className}`,
+                  ).toBeLessThanOrEqual(1);
+                }
+              }
+              for (const [key, selector] of [
+                ["paragraph", ".chat-text p"],
+                ["code", ".code-block-wrapper"],
+                ["table", ".markdown-table"],
+                ["image", ".chat-message-images--single"],
+                ["gallery", ".chat-message-images--gallery.chat-message-images--two-column"],
+                ["file", ".chat-assistant-attachment-card"],
+                ["peer", ".chat-text p"],
+                ["forwarded", ".chat-reply-attribution--forwarded"],
+                ["cron", ".markdown-session-link--automation"],
+                ["report", ".chat-text h1"],
+                [
+                  "tool",
+                  '.chat-tool-msg-summary [aria-expanded="true"], .chat-tool-msg-summary[aria-expanded="true"]',
+                ],
+                ["tool", ".chat-tool-msg-body"],
+                [
+                  "summary",
+                  '.chat-work-group > .chat-activity-group__summary[aria-expanded="false"]',
+                ],
+                ["stream", ".code-block-wrapper"],
+                ["working", ".chat-reading-indicator"],
+              ] as const) {
+                const fixture = container.querySelector(`[data-chat-row-key="${key}"]`)!;
+                const block = fixture.querySelector(selector);
+                expect(block, `${context}: ${key} ${selector}`).not.toBeNull();
+                expect(
+                  block!.getBoundingClientRect().width,
+                  `${context}: ${key} visible block`,
+                ).toBeGreaterThan(0);
+              }
+              for (const [key, count] of [
+                ["image", 1],
+                ["gallery", 2],
+              ] as const) {
+                const images = [
+                  ...container.querySelectorAll<HTMLImageElement>(
+                    `[data-chat-row-key="${key}"] img.chat-message-image`,
+                  ),
+                ];
+                expect(images.length, `${context}: ${key} image count`).toBe(count);
+                // Production defers offscreen images; exercise their viewport admission
+                // before checking decoded geometry rather than requiring eager downloads.
+                for (const element of images) {
+                  element.scrollIntoView({
+                    block: "center",
+                    inline: "nearest",
+                    behavior: "instant",
+                  });
+                  await element.decode();
+                  expect(element.naturalWidth).toBeGreaterThan(0);
+                }
+              }
+              for (const selector of [".code-block-wrapper", ".markdown-table"]) {
+                const block = container.querySelector(selector)!;
+                const viewport = [...block.querySelectorAll<HTMLElement>("*")].find(
+                  (element) =>
+                    element.scrollWidth > element.clientWidth &&
+                    ["auto", "scroll"].includes(getComputedStyle(element).overflowX),
+                );
+                expect(viewport, `${context}: ${selector} internal scroll`).toBeDefined();
+                viewport!.scrollLeft = getComputedStyle(viewport!).direction === "rtl" ? -64 : 64;
+                expect(Math.abs(viewport!.scrollLeft)).toBeGreaterThan(0);
+              }
+              const thread = container.querySelector<HTMLElement>(".chat-thread")!;
+              expect(
+                thread.scrollWidth - thread.clientWidth,
+                `${context}: thread overflow`,
+              ).toBeLessThanOrEqual(1);
+            }
+          }
+        }
+      });
+    }
+  }
+});

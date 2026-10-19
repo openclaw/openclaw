@@ -5,9 +5,9 @@ import {
   sameQueuedDeliveryVersion,
   type StoredComposerSession,
 } from "../../lib/chat/outbox-store-codec.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import {
   applyStoredChatOutboxScope,
-  type StoredChatOutboxScope,
   type StoredComposerState,
 } from "../../lib/chat/outbox-store.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
@@ -40,7 +40,10 @@ export function writeStoredComposerSession(
   };
 }
 
-function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
+export function serializeQueueItemForScope(
+  item: ChatQueueItem,
+  scope: StoredChatOutboxScope,
+): ChatQueueItem | null {
   if (
     !item.id?.trim() ||
     (!item.text?.trim() &&
@@ -68,22 +71,12 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
   if (item.attachments?.length && attachments.some((attachment) => attachment === null)) {
     return null;
   }
-  return normalizeStoredQueueItem({
+  const serialized = normalizeStoredQueueItem({
     ...item,
     attachments: attachments.length ? attachments : undefined,
     ...(item.sendState === "waiting-model" ? { sendError: INTERRUPTED_SETTINGS_WAIT_ERROR } : {}),
   });
-}
-
-export function serializeQueueItemForScope(
-  item: ChatQueueItem,
-  scope: StoredChatOutboxScope,
-): ChatQueueItem | null {
-  const serialized = serializeQueueItem(item);
-  if (!serialized) {
-    return null;
-  }
-  return applyStoredChatOutboxScope(serialized, scope);
+  return serialized ? applyStoredChatOutboxScope(serialized, scope) : null;
 }
 
 export function queueItemVersionMatches(

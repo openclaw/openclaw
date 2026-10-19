@@ -37,6 +37,13 @@ if (compilerOptions) {
   }
 }
 const inputReceipt = boundary.assert(request.inputReceipt);
+let roots: string[] | undefined;
+if ("roots" in request) {
+  if (!Array.isArray(request.roots) || !request.roots.every((root) => typeof root === "string")) {
+    throw new Error("Invalid extension boundary compiler roots");
+  }
+  roots = request.roots.map((root: string) => boundary.assert(root));
+}
 const outDir =
   compilerOptions && "outDir" in compilerOptions && typeof compilerOptions.outDir === "string"
     ? boundary.assert(compilerOptions.outDir)
@@ -50,6 +57,7 @@ const result = await compileNativeProject({
   compilerRoot: boundary.root,
   configFile: boundary.assert(request.configFile),
   compilerOptions,
+  roots,
   diagnostics: "all",
   assertInput: (file) => boundary.assert(file),
   emit: request.emit,
@@ -77,7 +85,7 @@ for (const { target, text } of outputs) {
   fs.writeFileSync(target, text);
 }
 fs.mkdirSync(path.dirname(inputReceipt), { recursive: true });
-fs.writeFileSync(inputReceipt, `${JSON.stringify({ inputs })}\n`);
+fs.writeFileSync(inputReceipt, `${JSON.stringify({ inputs, lookups: result.lookups })}\n`);
 for (const file of [...outputs.map(({ target }) => target), inputReceipt]) {
   process.stdout.write(`TSFILE: ${file}\n`);
 }

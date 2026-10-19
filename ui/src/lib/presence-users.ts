@@ -1,14 +1,15 @@
-import { normalizeOptionalString as normalized } from "@openclaw/normalization-core/string-coerce";
 import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
-import { presenceUserKey } from "../../../src/shared/presence-user.ts";
+import type { UserProfile } from "../../../packages/gateway-protocol/src/schema/users.js";
+import { groupPresenceUsers, presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { PresenceEntry } from "../api/types.ts";
 import {
   readPresenceEntries,
-  resolveSelfPresenceUser,
+  resolveCurrentSelfUser,
   type AuthenticatedUser,
 } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
+import { profileAvatarUrl } from "./profile-directory.ts";
 
 export type PresenceViewer = NonNullable<PresenceEntry["user"]> & {
   watchedSessions: readonly string[];
@@ -16,62 +17,21 @@ export type PresenceViewer = NonNullable<PresenceEntry["user"]> & {
 };
 
 export const PRESENCE_ACTIVE_WINDOW_MS = 120_000;
+export function profilePresenceViewer(profile: UserProfile): PresenceViewer {
+  return {
+    id: profile.id,
+    identity: { type: "profile", id: profile.id },
+    name: profile.displayName ?? undefined,
+    avatarUrl: profileAvatarUrl(profile),
+    watchedSessions: [],
+    entries: [],
+  };
+}
+
 export type PresenceActivity = "active" | "idle" | "unknown";
-
-function firstSorted(values: Iterable<string | null | undefined>): string | undefined {
-  return [...values]
-    .map(normalized)
-    .filter((value): value is string => value !== undefined)
-    .toSorted()[0];
-}
-
-function presenceEntrySortKey(entry: PresenceEntry): string {
-  return [
-    normalized(entry.host) ?? "",
-    normalized(entry.platform) ?? "",
-    normalized(entry.deviceFamily) ?? "",
-    normalized(entry.instanceId) ?? "",
-    String(entry.ts ?? 0).padStart(16, "0"),
-  ].join("\u0000");
-}
 
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
-}
-
-function groupPresenceUsers(entries: readonly PresenceEntry[]): {
-  users: readonly PresenceViewer[];
-} {
-  const grouped = new Map<string, PresenceEntry[]>();
-  for (const entry of entries) {
-    if (entry.reason === "disconnect" || !entry.user?.id) {
-      continue;
-    }
-    const key = presenceUserKey(entry.user);
-    const existing = grouped.get(key);
-    if (existing) {
-      existing.push(entry);
-    } else {
-      grouped.set(key, [entry]);
-    }
-  }
-  return {
-    users: [...grouped.entries()]
-      .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([, userEntries]) => ({
-        id: userEntries[0]!.user!.id,
-        identity: userEntries[0]!.user!.identity,
-        name: firstSorted(userEntries.map((entry) => entry.user?.name)),
-        email: firstSorted(userEntries.map((entry) => entry.user?.email)),
-        avatarUrl: firstSorted(userEntries.map((entry) => entry.user?.avatarUrl)),
-        watchedSessions: [
-          ...new Set(userEntries.flatMap((entry) => entry.watchedSessions ?? [])),
-        ].toSorted(),
-        entries: userEntries.toSorted((a, b) =>
-          compareText(presenceEntrySortKey(a), presenceEntrySortKey(b)),
-        ),
-      })),
-  };
 }
 
 let cachedPresencePayload: unknown;
@@ -159,8 +119,11 @@ export function projectPresenceViewers(
   sessionKey?: string,
   excludeIdentities: readonly SessionParticipantIdentity[] = [],
 ): readonly PresenceViewer[] {
-  const self =
-    selfUser ?? resolveSelfPresenceUser(readPresenceEntries(value) ?? [], selfInstanceId);
+  const self = resolveCurrentSelfUser({
+    snapshotUser: selfUser,
+    presenceEntries: readPresenceEntries(value),
+    presenceInstanceId: selfInstanceId,
+  });
   const selfKey = self ? presenceUserKey(self) : undefined;
   return projectPresencePayload(value).users.filter(
     (user) =>
@@ -170,15 +133,9 @@ export function projectPresenceViewers(
   );
 }
 
-export function projectOnlinePresenceViewers(
-  value: unknown,
-  authenticatedSelfUser?: AuthenticatedUser | null,
-  selfInstanceId?: string,
-): readonly PresenceViewer[] {
+export function projectOnlinePresenceViewers(value: unknown): readonly PresenceViewer[] {
   const now = Date.now();
-  return projectPresenceViewers(value, authenticatedSelfUser, selfInstanceId).toSorted((a, b) =>
-    comparePresenceViewers(a, b, now),
-  );
+  return projectPresencePayload(value).users.toSorted((a, b) => comparePresenceViewers(a, b, now));
 }
 
 export function hasSessionPresenceViewers(

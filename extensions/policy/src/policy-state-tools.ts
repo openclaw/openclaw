@@ -1,12 +1,7 @@
-import { COLLAPSE_HYPHENS, NON_SLUG_CHARS, TRIM_HYPHENS } from "./policy-state-types.js";
 import type { PolicyToolEvidence } from "./policy-state-types.js";
 
-export function scanPolicyTools(raw: string): Promise<readonly PolicyToolEvidence[]> {
-  return Promise.resolve(scanPolicyToolHeaders(raw));
-}
-
-function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
-  const section = markdownSectionLines(raw, "tools");
+export function scanPolicyTools(raw: string): readonly PolicyToolEvidence[] {
+  const section = markdownSectionLines(raw);
   if (section.length === 0) {
     return [];
   }
@@ -94,10 +89,7 @@ function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
   return tools;
 }
 
-function markdownSectionLines(
-  raw: string,
-  sectionSlug: string,
-): readonly {
+function markdownSectionLines(raw: string): readonly {
   readonly line: number;
   readonly text: string;
   readonly sectionDepth: number;
@@ -139,7 +131,7 @@ function markdownSectionLines(
         section.push({ line: index + 1, text: line, sectionDepth });
         continue;
       }
-      if (depth <= 2 && slug === sectionSlug) {
+      if (depth <= 2 && slug === "tools") {
         if (foundSection) {
           section.push({ line: index + 1, text: line, sectionDepth: depth });
         }
@@ -159,9 +151,9 @@ function slugify(text: string): string {
   return text
     .toLowerCase()
     .replace(/_/g, "-")
-    .replace(NON_SLUG_CHARS, "-")
-    .replace(COLLAPSE_HYPHENS, "-")
-    .replace(TRIM_HYPHENS, "");
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 function riskFromMeta(meta: string): string | undefined {
@@ -170,20 +162,9 @@ function riskFromMeta(meta: string): string | undefined {
     return namedRisk.toLowerCase();
   }
   const alias = /\bR([0-5])\b/.exec(meta)?.[1];
-  switch (alias) {
-    case "0":
-    case "1":
-      return "low";
-    case "2":
-    case "3":
-      return "medium";
-    case "4":
-      return "high";
-    case "5":
-      return "critical";
-    default:
-      return undefined;
-  }
+  return alias === undefined
+    ? undefined
+    : ["low", "low", "medium", "medium", "high", "critical"][Number(alias)];
 }
 
 function capabilityTokensFromMetaLines(lines: readonly string[]): readonly string[] {

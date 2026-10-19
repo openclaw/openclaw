@@ -1,6 +1,6 @@
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
-import { runInSqliteMaintenanceContext } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type { StateDatabaseLifecycle } from "./openclaw-state-db-cache.types.js";
 import type {
   OpenClawStateDatabase,
@@ -36,21 +36,19 @@ export function createStateDatabaseIdleRetirement(
       previous.refresh();
       return;
     }
-    const timer = runInSqliteMaintenanceContext(() =>
+    const timer = runInDetachedAsyncContext(() =>
       setTimeout(() => {
         idleTimers.delete(database.db);
         try {
-          if (
-            database.db.isOpen &&
-            (database.db.isTransaction ||
-              borrowers.get(database.db)?.references.size ||
-              idleReferences.get(database.db)?.size)
-          ) {
+          if (database.db.isOpen && database.db.isTransaction) {
             touch(database);
-            return;
+          } else if (
+            !borrowers.get(database.db)?.references.size &&
+            !idleReferences.get(database.db)?.size
+          ) {
+            // Pins restart idleness on release; expiry preserves independent worker admission.
+            retire(database, false, { busyTimeoutMs: 0, checkpointMode: "PASSIVE" });
           }
-          // Native expiry does not revoke independently active worker admission.
-          retire(database, false, { busyTimeoutMs: 0, checkpointMode: "PASSIVE" });
         } catch (error) {
           log.warn("Idle shared-state database cleanup failed", { path: database.path, error });
           touch(database);

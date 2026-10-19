@@ -8,9 +8,14 @@ const catalog = {
       copyPath: "Copy path",
       discard: "Discard",
       editFile: "Edit file",
+      downloadFile: "Download file",
+      downloading: "Downloading…",
+      downloadFailed: "Could not download this file: {error}. Try again.",
       searchInFile: "Search in file",
       showInFiles: "Show in Files",
       unavailable: "Unable to open",
+      outsideSessionBoundary: "This file is outside {session}'s workspace, and you can't open it.",
+      assetsUnavailable: "Some assets couldn't be loaded ({count})",
       previousMatch: "Previous match",
       nextMatch: "Next match",
       overwrite: "Overwrite",
@@ -50,6 +55,15 @@ const catalog = {
     },
   },
   filePreview: {
+    skill: {
+      title: "Skill file preview",
+      source: "Skill source",
+      open: "Open full file",
+      loading: "Loading skill file…",
+      unavailable: "Skill file unavailable",
+      unavailableHint: "The skill may have moved or is not installed for this agent.",
+      lines: "L1–{count} / {total}",
+    },
     bundle: {
       binary: "This binary file is included in the bundle but cannot be displayed as text.",
       "too-large":

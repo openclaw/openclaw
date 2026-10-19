@@ -1,4 +1,3 @@
-// Hook status helpers summarize configured, installed, and plugin-provided hooks.
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
@@ -86,7 +85,7 @@ function buildHookStatus(
   const hookKey = resolveHookKey(entry.hook.name, entry);
   const hookConfig = resolveHookConfig(config, hookKey);
   const managedByPlugin = entry.hook.source === "openclaw-plugin";
-  const enableState = resolveHookEnableState({ entry, config, hookConfig });
+  const enableState = resolveHookEnableState({ entry, hookConfig });
   const always = entry.metadata?.always === true;
   const events = entry.metadata?.events ?? [];
   const unknownEvents = events.filter((event) => !isKnownInternalHookEventKey(event));

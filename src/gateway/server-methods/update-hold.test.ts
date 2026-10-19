@@ -1,6 +1,7 @@
 // Update hold tests cover campaign deferral and its validated schedule response.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { updateHandlers } from "./update.js";
 
 type UpdateScheduleState =
   import("../../../packages/gateway-protocol/src/index.js").UpdateScheduleState;
@@ -30,7 +31,8 @@ vi.mock("../../infra/update-status-state.js", () => ({
   getUpdateSchedule: getUpdateScheduleMock,
 }));
 
-vi.mock("./validation.js", () => ({
+vi.mock("./validation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./validation.js")>()),
   assertValidParams: () => true,
 }));
 
@@ -48,7 +50,6 @@ async function invokeUpdateHold(
   respond: ReturnType<typeof vi.fn>,
   logInfo = vi.fn(),
 ): Promise<void> {
-  const { updateHandlers } = await import("./update.js");
   await expectDefined(
     updateHandlers["update.hold"],
     'updateHandlers["update.hold"] test invariant',

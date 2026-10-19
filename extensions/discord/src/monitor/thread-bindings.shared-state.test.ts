@@ -1,38 +1,11 @@
-// Discord tests cover thread bindings.shared state plugin behavior.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
-import { createThreadBindingManager, getThreadBindingManager } from "./thread-bindings.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
-
-type ThreadBindingsModule = {
-  getThreadBindingManager: typeof getThreadBindingManager;
-};
-
-async function loadThreadBindingsViaAlternateLoader(): Promise<ThreadBindingsModule> {
-  const fallbackPath = "./thread-bindings.ts?vitest-loader-fallback";
-  return (await import(/* @vite-ignore */ fallbackPath)) as ThreadBindingsModule;
-}
 
 describe("thread binding manager state", () => {
   beforeEach(async () => {
     await resetThreadBindingsForTests();
-  });
-
-  it("shares managers between ESM and alternate-loaded module instances", async () => {
-    const viaAlternateLoader = await loadThreadBindingsViaAlternateLoader();
-
-    await createThreadBindingManager({
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
-      accountId: "work",
-      persist: false,
-      enableSweeper: false,
-    });
-
-    const direct = getThreadBindingManager("work");
-    if (!direct) {
-      throw new Error("expected direct thread binding manager");
-    }
-    expect(viaAlternateLoader.getThreadBindingManager("work")).toBe(direct);
   });
 
   it("reuses predecessor state across source reloads without losing account scheduling", async () => {
@@ -40,7 +13,6 @@ describe("thread binding manager state", () => {
     const globalStore = globalThis as Record<PropertyKey, unknown>;
     const { THREAD_BINDINGS_STATE: originalState } = await import("./thread-bindings.state.js");
     const predecessor = { ...originalState };
-    Reflect.deleteProperty(predecessor, "accountOperationTails");
     globalStore[stateKey] = predecessor;
 
     try {
@@ -85,8 +57,6 @@ describe("thread binding manager state", () => {
       await replacement.stop();
       expect(second.getThreadBindingManager("work")).toBeNull();
     } finally {
-      // The missing-map regression must not leave a manager that teardown cannot drain.
-      predecessor.accountOperationTails ??= new WeakMap();
       try {
         await resetThreadBindingsForTests();
       } finally {

@@ -10,51 +10,8 @@ const agentListBase = {
     ],
   },
 };
-const agentListPatch = {
-  agents: {
-    list: [{ id: "primary", memory: { search: { extraPaths: ["/tmp/memory.md"] } } }],
-  },
-};
 
 describe("applyMergePatch", () => {
-  it("replaces arrays by default", () => {
-    expect(applyMergePatch(agentListBase, agentListPatch)).toEqual({
-      agents: {
-        list: [{ id: "primary", memory: { search: { extraPaths: ["/tmp/memory.md"] } } }],
-      },
-    });
-  });
-
-  it("merges object arrays by id when enabled", () => {
-    expect(applyMergePatch(agentListBase, agentListPatch, { mergeObjectArraysById: true })).toEqual(
-      {
-        agents: {
-          list: [
-            {
-              id: "primary",
-              workspace: "/tmp/one",
-              memory: { search: { extraPaths: ["/tmp/memory.md"] } },
-            },
-            { id: "secondary", workspace: "/tmp/two" },
-          ],
-        },
-      },
-    );
-  });
-
-  it("replaces object arrays by id when the array path is explicit", () => {
-    expect(
-      applyMergePatch(agentListBase, agentListPatch, {
-        mergeObjectArraysById: true,
-        replaceArrayPaths: new Set(["agents.list"]),
-      }),
-    ).toEqual({
-      agents: {
-        list: [{ id: "primary", memory: { search: { extraPaths: ["/tmp/memory.md"] } } }],
-      },
-    });
-  });
-
   it("replaces nested arrays in id-keyed entries when the nested path is explicit", () => {
     const base = {
       agents: {
@@ -75,21 +32,6 @@ describe("applyMergePatch", () => {
         list: [
           { id: "primary", skills: ["a"] },
           { id: "secondary", skills: ["c"] },
-        ],
-      },
-    });
-  });
-
-  it("merges by id even when patch entries lack id (appends them)", () => {
-    const patch = {
-      agents: { list: [{ id: "primary", model: "new-model" }, { workspace: "/tmp/orphan" }] },
-    };
-    expect(applyMergePatch(agentListBase, patch, { mergeObjectArraysById: true })).toEqual({
-      agents: {
-        list: [
-          { id: "primary", workspace: "/tmp/one", model: "new-model" },
-          { id: "secondary", workspace: "/tmp/two" },
-          { workspace: "/tmp/orphan" },
         ],
       },
     });

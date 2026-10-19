@@ -172,10 +172,9 @@ defineDiscordVoiceTests((harness) => {
       const reply = vi.fn();
       const command = createDiscordVoiceCommand({
         cfg: {},
-        discordConfig: {},
+        discordConfig: { allowFrom: [OWNER] },
         accountId: "default",
         groupPolicy: "open",
-        useAccessGroups: false,
         getManager: () => f.manager,
         ephemeralDefault: true,
       });

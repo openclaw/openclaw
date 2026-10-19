@@ -1,4 +1,3 @@
-// Doctor legacy config issue finder that combines core, channel, and plugin rules.
 import { collectChannelLegacyConfigRules } from "../../../channels/plugins/legacy-config.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { LegacyConfigRule } from "../../../config/legacy.shared.js";
@@ -16,15 +15,11 @@ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sn
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { findLegacySystemAgentOwnerIssue } from "./legacy-config-migrations.runtime.system-agent.js";
 
-function collectConfiguredChannelIds(raw: unknown): ReadonlySet<string> {
-  return new Set(listDoctorConfiguredChannelIds(raw, { configEntryPolicy: "raw" }));
-}
-
 function collectPluginLegacyConfigRules(
   raw: unknown,
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
 ): LegacyConfigRule[] {
-  const channelIds = collectConfiguredChannelIds(raw);
+  const channelIds = new Set(listDoctorConfiguredChannelIds(raw, { configEntryPolicy: "raw" }));
   const pluginIds = collectDoctorConfigRepairPluginIds(raw, touchedPaths).filter(
     (pluginId) => !channelIds.has(pluginId),
   );
@@ -40,15 +35,10 @@ export function findDoctorLegacyConfigIssues(
   sourceRaw?: unknown,
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
 ): LegacyConfigIssue[] {
-  return findLegacyConfigIssues(
-    raw,
-    sourceRaw,
-    [
-      ...collectChannelLegacyConfigRules(raw, touchedPaths),
-      ...collectPluginLegacyConfigRules(raw, touchedPaths),
-    ],
-    touchedPaths,
-  );
+  return findLegacyConfigIssues(raw, sourceRaw, [
+    ...collectChannelLegacyConfigRules(raw, touchedPaths),
+    ...collectPluginLegacyConfigRules(raw, touchedPaths),
+  ]);
 }
 
 export function addDoctorLegacyIssues(

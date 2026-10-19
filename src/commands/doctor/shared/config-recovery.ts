@@ -3,6 +3,7 @@ import {
   createConfigIoContext,
   type ConfigRecoveryCandidateTransform,
 } from "../../../config/io.context.js";
+import { createInvalidConfigError } from "../../../config/io.invalid-config.js";
 import { recoverConfigFromLastKnownGoodCore } from "../../../config/io.observe-recovery.js";
 import { prepareConfigRecoveryFromContext } from "../../../config/io.snapshot.js";
 import type { ConfigIoFactoryOptions } from "../../../config/io.types.js";
@@ -17,7 +18,8 @@ const transformDoctorRecoveryCandidate: ConfigRecoveryCandidateTransform = (para
     resolvedConfig: params.resolvedConfig,
   });
   if (ownership && ownership.kind !== "direct") {
-    throw new Error(
+    throw createInvalidConfigError(
+      params.configPath,
       ownership.kind === "resolved-only"
         ? "candidate migration cannot persist an env-resolved diagnostics.otel.protocol repair"
         : "candidate migration requires an include-owned diagnostics.otel.protocol repair",

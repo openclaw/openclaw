@@ -1,6 +1,6 @@
 // Root help tests cover top-level help rendering and command visibility.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderRootHelpText } from "./root-help.js";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { outputRootHelp } from "./root-help.js";
 
 const getPluginCliCommandDescriptorsMock = vi.fn(
   async (_configForTest?: unknown, _env?: unknown, _loaderOptions?: unknown) => [
@@ -30,23 +30,19 @@ vi.mock("./core-command-descriptors.js", () => ({
   getCoreCliCommandsWithSubcommands: () => [],
 }));
 
-vi.mock("./subcli-descriptors.js", () => ({
-  SUB_CLI_DESCRIPTORS: [
-    {
-      name: "config",
-      description: "Manage config",
-      hasSubcommands: true,
-    },
-  ],
-  getSubCliEntriesCore: () => [
-    {
-      name: "config",
-      description: "Manage config",
-      hasSubcommands: true,
-    },
-  ],
-  getSubCliCommandsWithSubcommands: () => ["config"],
-}));
+vi.mock("./subcli-descriptors.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./subcli-descriptors.js")>();
+  return {
+    ...actual,
+    getSubCliEntriesCore: () => [
+      {
+        name: "config",
+        description: "Manage config",
+        hasSubcommands: true,
+      },
+    ],
+  };
+});
 
 vi.mock("../../plugins/cli-root-descriptors.js", () => ({
   getPluginCliCommandDescriptors: (...args: [unknown?, unknown?, unknown?]) =>
@@ -54,7 +50,14 @@ vi.mock("../../plugins/cli-root-descriptors.js", () => ({
 }));
 
 describe("root help", () => {
+  let text = "";
   beforeEach(() => {
+    text = "";
+    const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      text += String(chunk);
+      return true;
+    });
+    onTestFinished(() => write.mockRestore());
     getPluginCliCommandDescriptorsMock.mockClear();
   });
 
@@ -68,7 +71,7 @@ describe("root help", () => {
     };
     const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-root-help-state" } as NodeJS.ProcessEnv;
 
-    await renderRootHelpText({ config, env, pluginSdkResolution: "src" });
+    await outputRootHelp({ config, env, pluginSdkResolution: "src" });
 
     expect(getPluginCliCommandDescriptorsMock).toHaveBeenCalledWith(config, env, {
       pluginSdkResolution: "src",
@@ -76,7 +79,7 @@ describe("root help", () => {
   });
 
   it("includes plugin CLI descriptors alongside core and sub-CLI commands", async () => {
-    const text = await renderRootHelpText({ includePluginDescriptors: true });
+    await outputRootHelp({ config: {} });
 
     expect(text).toContain("status");
     expect(text).toContain("config");
@@ -86,7 +89,7 @@ describe("root help", () => {
   });
 
   it("does not load plugin CLI descriptors by default", async () => {
-    await renderRootHelpText();
+    await outputRootHelp();
 
     expect(getPluginCliCommandDescriptorsMock).not.toHaveBeenCalled();
   });

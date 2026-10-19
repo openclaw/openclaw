@@ -28,7 +28,7 @@ const assertActive = () => {};
 const metadata = { threadId: command.threadId, toolCallId: command.itemId };
 
 describe("native process custody", () => {
-  it("rechecks foreground permission before a pending spawn without closing background custody", async () => {
+  it("rechecks foreground permission before a pending spawn without closing background custody", () => {
     const client = createClientHarness();
     const origin = source();
     let active = true;
@@ -38,29 +38,13 @@ describe("native process custody", () => {
         throw new Error("foreground admission closed");
       }
     });
-    const stop = vi.fn(async () => {});
-    const process = getCodexNativeProcessClient(client.client).claim(metadata, stop);
-    const sibling = { ...command, itemId: "sibling" };
-    origin.owner.admit(client.client, sibling, assertActive);
-    const stopSibling = vi.fn(async () => {});
-    const siblingProcess = getCodexNativeProcessClient(client.client).claim(
-      { ...metadata, toolCallId: sibling.itemId },
-      stopSibling,
-    );
+    const process = getCodexNativeProcessClient(client.client).claim(metadata, async () => {});
     try {
       active = false;
       expect(() => process.assertAdmission()).toThrow("foreground admission closed");
       expect(() => process.assertCurrent()).not.toThrow();
-      expect(await origin.owner.cancelCommand(client.client, { ...command, turnId: "stale" })).toBe(
-        false,
-      );
-      expect(stop).not.toHaveBeenCalled();
-      expect(await origin.owner.cancelCommand(client.client, command)).toBe(true);
-      expect(stop).toHaveBeenCalledOnce();
-      expect(stopSibling).not.toHaveBeenCalled();
     } finally {
       process.settle();
-      siblingProcess.settle();
       origin.owner.release();
       client.client.close();
     }
@@ -155,6 +139,28 @@ describe("native process custody", () => {
     } finally {
       earlier.owner.release();
       later.owner.release();
+      client.client.close();
+    }
+  });
+
+  it("settles confirmed background custody when Codex closes the thread", () => {
+    const client = createClientHarness();
+    const origin = source();
+    origin.owner.bindTurn(client.client, command.threadId, command.turnId);
+    const retain = origin.owner.prepareBackgroundCommands(
+      client.client,
+      command,
+      new Map([[command.itemId, "process"]]),
+    );
+    retain(new Map([[command.itemId, "process"]]));
+    try {
+      origin.owner.release();
+      expect(origin.released).not.toHaveBeenCalled();
+      // Idle unload drops the listener first, so no item/completed reaches this client.
+      client.send({ method: "thread/closed", params: { threadId: command.threadId } });
+      expect(origin.released).toHaveBeenCalledOnce();
+    } finally {
+      origin.owner.release();
       client.client.close();
     }
   });

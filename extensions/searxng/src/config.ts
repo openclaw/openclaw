@@ -9,23 +9,12 @@ import {
 const SEARXNG_BASE_URL_ENV_VAR = "SEARXNG_BASE_URL";
 const SEARXNG_BASE_URL_PATH = "plugins.entries.searxng.config.webSearch.baseUrl";
 
-type SearxngPluginConfig = {
-  webSearch?: {
-    baseUrl?: unknown;
-    categories?: string;
-    language?: string;
-  };
-};
-
 function normalizeBaseUrl(value: unknown): string | undefined {
   return normalizeSecretInput(value)?.replace(/\/+$/u, "") || undefined;
 }
 
-function resolveSearxngWebSearchConfig(
-  config?: OpenClawConfig,
-): SearxngPluginConfig["webSearch"] | undefined {
-  const pluginConfig = config?.plugins?.entries?.searxng?.config as SearxngPluginConfig | undefined;
-  return asOptionalRecord(pluginConfig?.webSearch);
+function resolveSearxngWebSearchConfig(config?: OpenClawConfig) {
+  return asOptionalRecord(config?.plugins?.entries?.searxng?.config?.webSearch);
 }
 
 export function resolveSearxngBaseUrl(config?: OpenClawConfig): string | undefined {

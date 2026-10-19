@@ -37,6 +37,7 @@ export type SlackChannelE2eSession = {
   driver: QaChannelE2eDriver;
   cleanup: () => Promise<void>;
   artifactPath: string;
+  recordScenarioMessages: (afterMessageId: string, messageIds: readonly string[]) => Promise<void>;
 };
 
 export function createSlackChannelE2e(params: {
@@ -414,6 +415,41 @@ export function createSlackChannelE2e(params: {
     },
   };
 
+  const recordScenarioMessages = async (afterMessageId: string, messageIds: readonly string[]) => {
+    params.assertLease();
+    const ingress = own(afterMessageId);
+    const root = ingress.message.threadId ?? ingress.message.id;
+    const candidates = new Set(messageIds);
+    const writes = await params.readNativeWrites();
+    params.assertLease();
+    // The module scenario supplies its capture window; native acceptance, channel,
+    // ingress ordering and thread ownership still belong to the receipt owner.
+    for (const write of writes) {
+      if (
+        write.evidence !== "api-accepted" ||
+        write.method !== "chat.postMessage" ||
+        write.channelId !== params.channelId ||
+        !write.messageId ||
+        !candidates.has(write.messageId) ||
+        Number(write.messageId) <= Number(afterMessageId) ||
+        (write.threadId && write.threadId !== root) ||
+        receipts.has(write.messageId)
+      ) {
+        continue;
+      }
+      receipts.set(write.messageId, {
+        message: {
+          id: write.messageId,
+          channelId: params.channelId,
+          threadId: write.threadId,
+          text: "",
+          actor: "sut",
+        },
+      });
+    }
+    await persist();
+  };
+
   const cleanup = async () => {
     closing = true;
     await Promise.allSettled(pending);
@@ -555,5 +591,5 @@ export function createSlackChannelE2e(params: {
       );
     }
   };
-  return { driver, cleanup, artifactPath };
+  return { driver, cleanup, artifactPath, recordScenarioMessages };
 }

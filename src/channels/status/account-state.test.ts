@@ -94,8 +94,7 @@ describe("resolveChannelAccountState", () => {
       linked: undefined,
       runtime: { running },
     });
-    expect(state.kind).toBe(running ? "running" : "stopped");
-    expect(projectChannelAccountState(state)).toMatchObject({ configured: true });
+    expect(projectChannelAccountState(state)).toMatchObject({ configured: true, running });
     expect(projectChannelAccountState(state)).not.toHaveProperty("linked");
   });
 

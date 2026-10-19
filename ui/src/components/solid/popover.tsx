@@ -1,0 +1,114 @@
+import type { JSX } from "@solidjs/web";
+import { Show, onSettled, untrack } from "solid-js";
+import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
+import { createAnchoredOverlay } from "../../lib/reactive/overlay-anchor.ts";
+import type { OverlayPlacement } from "../overlay-anchor.ts";
+import { createOverlay, type Overlay } from "../overlay-lifecycle.ts";
+import { useOverlayControl } from "./overlay-control.ts";
+import { retainShadowStyles } from "./shadow-styles.ts";
+import overlayStyles from "./overlay.css?inline";
+import "./overlay.css";
+
+export interface PopoverHandle {
+  readonly overlay: Overlay;
+  show(): boolean;
+  hide(): boolean;
+}
+
+export interface PopoverProps {
+  /** Preserve drafts by default; transient bodies are released after the exit. */
+  lazy?: boolean | "while-open";
+  /** The caller keeps anchor and surface in one DOM root for this mount. */
+  sameRoot?: boolean;
+  id: string;
+  label: string;
+  anchor?: HTMLElement;
+  trigger?: JSX.Element;
+  children?: JSX.Element;
+  class?: JSX.HTMLAttributes<HTMLDivElement>["class"];
+  open?: boolean;
+  disabled?: boolean;
+  placement?: OverlayPlacement;
+  dismissOutsidePointer?: boolean;
+  dismissOutsideFocus?: boolean;
+  onBeforeShow?(event: Event): void;
+  onBeforeHide?(event: Event): void;
+  onOpenChange?(open: boolean): void;
+  ref?(handle: PopoverHandle): void;
+}
+
+export function Popover(props: PopoverProps): JSX.Element {
+  let trigger!: HTMLButtonElement;
+  let surface!: HTMLDivElement;
+  // Identity, lazy mounting, and root placement are fixed for this native overlay lifetime.
+  const initialIdentity = untrack(() => ({
+    id: props.id,
+    lazy: props.lazy,
+    sameRoot: props.sameRoot ?? false,
+  }));
+  const overlay = createOverlay(initialIdentity.id, undefined, {
+    get dismissOutsidePointer() {
+      return props.dismissOutsidePointer;
+    },
+    get dismissOutsideFocus() {
+      return props.dismissOutsideFocus;
+    },
+    acquireOcclusion: acquireNativeOverlaySurface,
+    onRootChange: (root) =>
+      root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles]) : undefined,
+  });
+  const control = useOverlayControl(overlay, initialIdentity.lazy, props, () => props.children);
+  const anchor = createAnchoredOverlay(
+    overlay,
+    () => trigger,
+    () => ({ anchor: props.anchor, placement: props.placement }),
+    { sameRoot: initialIdentity.sameRoot },
+  );
+  onSettled(() => {
+    overlay.bindSurface(surface);
+    const disconnectAnchor = anchor.connect();
+    const disconnectControl = control.connect(() =>
+      props.ref?.({
+        overlay,
+        show: () => overlay.request(true),
+        hide: () => overlay.request(false),
+      }),
+    );
+    return () => {
+      disconnectAnchor();
+      disconnectControl();
+    };
+  });
+  return (
+    <>
+      <Show when={!props.anchor}>
+        <button
+          ref={(node) => {
+            trigger = node;
+          }}
+          type="button"
+          disabled={props.disabled}
+          aria-label={props.label}
+          aria-haspopup="dialog"
+          aria-controls={initialIdentity.id}
+          onClick={() => overlay.request(!overlay.open)}
+        >
+          {props.trigger ?? props.label}
+        </button>
+      </Show>
+      <div
+        ref={(node) => {
+          surface = node;
+        }}
+        class={["oc-overlay oc-popover", props.class]}
+        id={initialIdentity.id}
+        popover="manual"
+        role="dialog"
+        aria-label={props.label}
+        tabindex={-1}
+      >
+        {initialIdentity.lazy ? undefined : props.children}
+      </div>
+    </>
+  );
+}

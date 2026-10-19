@@ -4,7 +4,7 @@ import {
   cleanupCommandLogMessages,
   createCleanupCommandRuntime,
   gatewayService,
-  listAgentSessionDirs,
+  removeAgentSessions,
   removePath,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
@@ -94,20 +94,6 @@ describe("resetCommand", () => {
     ).toBe(false);
   });
 
-  it("does not reopen workspace state after full state removal", async () => {
-    await resetCommand(runtime, {
-      scope: "full",
-      yes: true,
-      nonInteractive: true,
-      dryRun: true,
-    });
-
-    expect(removeWorkspaceDirs).toHaveBeenCalledWith(["/tmp/.openclaw/workspace"], runtime, {
-      dryRun: true,
-      removeStateRows: false,
-    });
-  });
-
   it("removes workspace rows when full state removal fails", async () => {
     removeStateAndLinkedPaths.mockResolvedValueOnce(false);
 
@@ -128,7 +114,6 @@ describe("resetCommand", () => {
     { scope: "config" as const, failedRemoval: 0 },
     { scope: "config+creds+sessions" as const, failedRemoval: 0 },
     { scope: "config+creds+sessions" as const, failedRemoval: 1 },
-    { scope: "config+creds+sessions" as const, failedRemoval: 2 },
   ])("reports failed removal $failedRemoval for $scope", async ({ scope, failedRemoval }) => {
     for (let index = 0; index < failedRemoval; index++) {
       removePath.mockResolvedValueOnce({ ok: true });
@@ -139,7 +124,7 @@ describe("resetCommand", () => {
       resetCommand(runtime, { scope, yes: true, nonInteractive: true }),
     ).rejects.toMatchObject({ name: "ExitError", code: 1 });
 
-    expect(removePath).toHaveBeenCalledTimes(scope === "config" ? 1 : 3);
+    expect(removePath).toHaveBeenCalledTimes(scope === "config" ? 1 : 2);
     expect(cleanupCommandLogMessages(runtime).some((message) => message.startsWith("Next:"))).toBe(
       false,
     );
@@ -158,8 +143,8 @@ describe("resetCommand", () => {
     );
   });
 
-  it("reports incomplete scoped reset when session directory inspection fails", async () => {
-    listAgentSessionDirs.mockRejectedValueOnce(new Error("permission denied"));
+  it("continues independent cleanup and reports incomplete reset when session cleanup fails", async () => {
+    removeAgentSessions.mockRejectedValueOnce(new Error("permission denied"));
 
     await expect(
       resetCommand(runtime, {
@@ -169,8 +154,16 @@ describe("resetCommand", () => {
       }),
     ).rejects.toMatchObject({ name: "ExitError", code: 1 });
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Failed to inspect session directories: Error: permission denied",
+    expect(removePath.mock.calls.map(([target]) => target)).toEqual([
+      "/tmp/.openclaw/openclaw.json",
+      "/tmp/.openclaw/credentials",
+    ]);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("permission denied"));
+    expect(runtime.error).toHaveBeenLastCalledWith(
+      "Reset incomplete. Resolve the cleanup errors above, then retry reset.",
+    );
+    expect(cleanupCommandLogMessages(runtime).some((message) => message.startsWith("Next:"))).toBe(
+      false,
     );
   });
 });

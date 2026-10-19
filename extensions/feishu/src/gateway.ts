@@ -16,10 +16,7 @@ export const feishuGatewayAdapter: NonNullable<ChannelPlugin<ResolvedFeishuAccou
     ctx.log?.info(
       `starting feishu[${ctx.accountId}] (mode: ${account.config?.connectionMode ?? "websocket"})`,
     );
-    const statusSink = createAccountStatusSink({
-      accountId: ctx.accountId,
-      setStatus: ctx.setStatus,
-    });
+    const statusSink = createAccountStatusSink(ctx);
     return monitorFeishuProvider({
       config: ctx.cfg,
       runtime: ctx.runtime,

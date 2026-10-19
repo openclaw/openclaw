@@ -1,37 +1,13 @@
-import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/account-core";
+import {
+  DEFAULT_ACCOUNT_ID,
+  resolveAccountKey,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/account-resolution";
+import type { WhatsAppAccountConfig } from "./account-types.js";
 
 const WHATSAPP_GROUP_SCOPE_FIELDS = ["groupPolicy", "groupAllowFrom", "groups"] as const;
 
 type WhatsAppGroupScopeField = (typeof WHATSAPP_GROUP_SCOPE_FIELDS)[number];
-
-function resolveWhatsAppAccountKey(
-  accounts: Record<string, unknown> | undefined,
-  accountId: string,
-): string | undefined {
-  if (!accounts) {
-    return undefined;
-  }
-  if (Object.hasOwn(accounts, accountId)) {
-    return accountId;
-  }
-  const normalizedAccountId = accountId.trim().toLowerCase();
-  return Object.keys(accounts).find((key) => key.trim().toLowerCase() === normalizedAccountId);
-}
-
-function normalizePathAccountId(accountId?: string | null): string {
-  return typeof accountId === "string"
-    ? accountId.trim() || DEFAULT_ACCOUNT_ID
-    : DEFAULT_ACCOUNT_ID;
-}
-
-function hasConfiguredField(config: unknown, field: WhatsAppGroupScopeField): boolean {
-  return Boolean(
-    config &&
-    typeof config === "object" &&
-    Object.hasOwn(config as Record<string, unknown>, field) &&
-    (config as Record<string, unknown>)[field] !== undefined,
-  );
-}
 
 function resolveWhatsAppGroupScopeBasePath(
   params: {
@@ -40,14 +16,15 @@ function resolveWhatsAppGroupScopeBasePath(
   },
   fields: readonly WhatsAppGroupScopeField[] = WHATSAPP_GROUP_SCOPE_FIELDS,
 ): string | undefined {
-  const accountId = normalizePathAccountId(params.accountId);
+  const accountId = params.accountId?.trim() || DEFAULT_ACCOUNT_ID;
   const whatsapp = params.cfg.channels?.whatsapp;
-  const accounts = whatsapp?.accounts as Record<string, unknown> | undefined;
-  const accountKey = resolveWhatsAppAccountKey(accounts, accountId);
-  const defaultAccountKey = resolveWhatsAppAccountKey(accounts, DEFAULT_ACCOUNT_ID);
+  const accounts = whatsapp?.accounts;
+  const accountKey = resolveAccountKey(accounts, accountId);
+  const defaultAccountKey = resolveAccountKey(accounts, DEFAULT_ACCOUNT_ID);
   const accountConfig = accountKey ? accounts?.[accountKey] : undefined;
   const defaultAccountConfig = defaultAccountKey ? accounts?.[defaultAccountKey] : undefined;
-  const hasField = (config: unknown) => fields.some((field) => hasConfiguredField(config, field));
+  const hasField = (config: WhatsAppAccountConfig | undefined) =>
+    fields.some((field) => config?.[field] !== undefined);
   if (hasField(accountConfig)) {
     return `channels.whatsapp.accounts.${accountKey}`;
   }

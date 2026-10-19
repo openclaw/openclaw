@@ -1,4 +1,3 @@
-// Gateway mutable runtime handles.
 // Provides stop-safe defaults for timers, sidecars, subscriptions, and services.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -45,9 +44,7 @@ export type GatewayServerMutableState = {
   tailscaleCleanup: (() => Promise<void>) | null;
   readonly postReadySidecars: GatewaySidecarStopOwner;
   readonly gatewayLifetimeSidecars: GatewaySidecarStopOwner;
-  skillsRefreshTimer: ReturnType<typeof setTimeout> | null;
-  skillsRefreshDelayMs: number;
-  skillsChangeUnsub: () => Promise<void>;
+  skillsChangeUnsub: (options?: { exitAfterClose?: boolean }) => Promise<void>;
   channelHealthMonitor: ChannelHealthMonitor | null;
   configReloader: GatewayConfigReloaderHandle;
   reconcileAuditPolicy: ((config: OpenClawConfig) => void) | null;
@@ -55,7 +52,6 @@ export type GatewayServerMutableState = {
   heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
-  taskUnsub: (() => void) | null;
 };
 
 /** Creates gateway mutable state with inert handles that are safe to stop before startup finishes. */
@@ -70,8 +66,6 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     tailscaleCleanup: null,
     postReadySidecars: createGatewaySidecarStopOwner(),
     gatewayLifetimeSidecars: createGatewaySidecarStopOwner(),
-    skillsRefreshTimer: null,
-    skillsRefreshDelayMs: 30_000,
     skillsChangeUnsub: async () => {},
     channelHealthMonitor: null,
     configReloader: {
@@ -86,6 +80,5 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     heartbeatUnsub: null,
     transcriptUnsub: null,
     lifecycleUnsub: null,
-    taskUnsub: null,
   };
 }

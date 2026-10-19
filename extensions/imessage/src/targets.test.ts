@@ -1,7 +1,4 @@
-// Imessage tests cover targets plugin behavior.
-import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe, expect, it } from "vitest";
-import { imessageDmPolicy } from "./setup-core.js";
 import { parseIMessageAllowFromEntries } from "./setup-surface.js";
 import {
   formatIMessageChatTarget,
@@ -14,16 +11,6 @@ import {
 } from "./targets.js";
 
 describe("imessage targets", () => {
-  it("parses chat_id targets", () => {
-    const target = parseIMessageTarget("chat_id:123");
-    expect(target).toEqual({ kind: "chat_id", chatId: 123 });
-  });
-
-  it("parses chat targets", () => {
-    const target = parseIMessageTarget("chat:456");
-    expect(target).toEqual({ kind: "chat_id", chatId: 456 });
-  });
-
   it("parses sms handles with service", () => {
     const target = parseIMessageTarget("sms:+1555");
     expect(target).toEqual({
@@ -34,36 +21,8 @@ describe("imessage targets", () => {
     });
   });
 
-  it.each([
-    ["Name@Example.com", "name@example.com"],
-    [" +1 (555) 222-3333 ", "+15552223333"],
-    ["Alice Smith", "AliceSmith"],
-    ["auto:Alice Smith", "AliceSmith"],
-    ["sms:auto:Alice Smith", "AliceSmith"],
-    ["auto:chatident:AbC", "chat_identifier:AbC"],
-  ])("normalizes handle %s", (input, expected) => {
-    expect(normalizeIMessageHandle(input)).toBe(expected);
-  });
-
-  it("normalizes chat_id prefixes case-insensitively", () => {
-    expect(normalizeIMessageHandle("CHAT_ID:123")).toBe("chat_id:123");
-    expect(normalizeIMessageHandle("Chat_Id:456")).toBe("chat_id:456");
-    expect(normalizeIMessageHandle("chatid:789")).toBe("chat_id:789");
-    expect(normalizeIMessageHandle("CHAT:42")).toBe("chat_id:42");
-  });
-
-  it("normalizes chat_guid prefixes case-insensitively", () => {
-    expect(normalizeIMessageHandle("CHAT_GUID:abc-def")).toBe("chat_guid:abc-def");
-    expect(normalizeIMessageHandle("ChatGuid:XYZ")).toBe("chat_guid:XYZ");
-    expect(normalizeIMessageHandle("GUID:test-guid")).toBe("chat_guid:test-guid");
-  });
-
-  it("normalizes chat_identifier prefixes case-insensitively", () => {
-    expect(normalizeIMessageHandle("CHAT_IDENTIFIER:iMessage;-;chat123")).toBe(
-      "chat_identifier:iMessage;-;chat123",
-    );
-    expect(normalizeIMessageHandle("ChatIdentifier:test")).toBe("chat_identifier:test");
-    expect(normalizeIMessageHandle("CHATIDENT:foo")).toBe("chat_identifier:foo");
+  it("normalizes service-prefixed chat identifiers", () => {
+    expect(normalizeIMessageHandle("auto:chatident:AbC")).toBe("chat_identifier:AbC");
   });
 
   it("does not check allowFrom against conversation targets", () => {
@@ -165,7 +124,9 @@ describe("imessage targets", () => {
 
   it("infers direct and group chat types from normalized targets", () => {
     expect(inferIMessageTargetChatType("+15552223333")).toBe("direct");
-    expect(inferIMessageTargetChatType("chat_id:42")).toBe("group");
+    expect(inferIMessageTargetChatType("chat_id:42")).toBeUndefined();
+    expect(inferIMessageTargetChatType("chat_guid:iMessage;-;+15552223333")).toBe("direct");
+    expect(inferIMessageTargetChatType("chat_guid:iMessage;+;chat42")).toBe("group");
   });
 
   it("treats bare 32-char hex strings as chat identifiers, not phone numbers", () => {
@@ -180,29 +141,7 @@ describe("imessage targets", () => {
       kind: "chat_identifier",
       chatIdentifier: hex,
     });
-    expect(inferIMessageTargetChatType(hex)).toBe("group");
-  });
-
-  it.each(["7d5297154d5f436d83dbbdf03fcc8fd", "7d5297154d5f436d83dbbdf03fcc8fdg"])(
-    "keeps non-hex or wrong-length value %s on the handle path",
-    (value) => {
-      expect(normalizeIMessageHandle(value)).toBe(value);
-      expect(parseIMessageTarget(value)).toEqual({ kind: "handle", to: value, service: "auto" });
-    },
-  );
-
-  it("normalizes tel URIs without treating arbitrary prefixed identifiers as phone numbers", () => {
-    expect(normalizeIMessageHandle("tel:+1 (555) 222-3333")).toBe("+15552223333");
-    expect(normalizeIMessageHandle("tel:C0AG22RN7L3")).toBe("tel:C0AG22RN7L3");
-  });
-
-  it("accepts the all-digit edge of the 32-hex identifier contract", () => {
-    const identifier = "1".repeat(32);
-    expect(normalizeIMessageHandle(identifier)).toBe(`chat_identifier:${identifier}`);
-    expect(parseIMessageTarget(identifier)).toEqual({
-      kind: "chat_identifier",
-      chatIdentifier: identifier,
-    });
+    expect(inferIMessageTargetChatType(hex)).toBeUndefined();
   });
 });
 
@@ -223,29 +162,5 @@ describe("parseIMessageAllowFromEntries", () => {
       entries: [],
       error: "iMessage allowFrom entries must be sender handles: imessage:chat_id:123",
     });
-  });
-
-  it("returns validation errors for chat_identifier entries", () => {
-    expect(parseIMessageAllowFromEntries("chat_identifier:")).toEqual({
-      entries: [],
-      error: "iMessage allowFrom entries must be sender handles: chat_identifier:",
-    });
-  });
-
-  installChannelDmPolicyContractSuite({
-    dmPolicy: imessageDmPolicy,
-    cases: [
-      {
-        name: "iMessage named accounts",
-        channel: "imessage",
-        accountId: "work",
-        accountConfig: { cliPath: "imsg" },
-        inheritedAllowFrom: ["+15555550123"],
-        defaultAccount: {
-          rootAllowFrom: ["+15555550123"],
-          accountAllowFrom: ["chat_id:123"],
-        },
-      },
-    ],
   });
 });

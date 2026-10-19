@@ -43,8 +43,7 @@ function decimalRationalsEqual(left: DecimalRational, right: DecimalRational): b
 }
 
 export function isConfigFormDecimalNumberString(value: string): boolean {
-  const trimmed = value.trim();
-  return trimmed !== "" && CONFIG_FORM_DECIMAL_NUMBER_RE.test(trimmed);
+  return CONFIG_FORM_DECIMAL_NUMBER_RE.test(value.trim());
 }
 
 export function isConfigFormUnsafeIntegerString(value: string): boolean {
@@ -60,15 +59,9 @@ export function coerceConfigFormNumberString(
   if (trimmed === "") {
     return undefined;
   }
-  if (!isConfigFormDecimalNumberString(trimmed)) {
-    return value;
-  }
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed) || (integer && !Number.isInteger(parsed))) {
-    return value;
-  }
   const authored = decimalStringRational(trimmed);
-  if (!authored) {
+  const parsed = Number(trimmed);
+  if (!authored || !Number.isFinite(parsed) || (integer && !Number.isInteger(parsed))) {
     return value;
   }
   const decimalSpelling = Number.isInteger(parsed) ? undefined : decimalRational(parsed);

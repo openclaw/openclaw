@@ -1,4 +1,3 @@
-// Parses host tool parameters supplied by plugin tool contracts.
 import {
   extractResolvedApplyPatchTargetPaths,
   type ApplyPatchPathExtractionOptions,
@@ -33,5 +32,5 @@ export async function deriveToolParams(
     return {};
   }
   const paths = await extractResolvedApplyPatchTargetPaths(params, options);
-  return paths.length > 0 ? { derivedPaths: Object.freeze([...paths]) } : {};
+  return paths.length > 0 ? { derivedPaths: Object.freeze(paths) } : {};
 }

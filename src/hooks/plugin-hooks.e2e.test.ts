@@ -20,19 +20,21 @@ import {
 
 const pluginId = "qa-plugin-hook-contracts";
 const recordedEventsKey = Symbol.for("openclaw.qa.plugin-hook-contracts.events");
-const registeredHookNames = [
-  "before_tool_call",
-  "message_received",
-  "message_sending",
-  "session_start",
-  "session_end",
-  "cron_changed",
-] as const;
-
+const sessionContext = {
+  agentId: "main",
+  sessionId: "session-1",
+  sessionKey: "agent:main:session-1",
+};
 type RecordedHookEvent = {
   context: Record<string, unknown>;
   event: Record<string, unknown>;
-  hookName: (typeof registeredHookNames)[number];
+  hookName:
+    | "before_tool_call"
+    | "message_received"
+    | "message_sending"
+    | "session_start"
+    | "session_end"
+    | "cron_changed";
 };
 
 function recordedEvents(): RecordedHookEvent[] {
@@ -77,22 +79,14 @@ module.exports = {
         },
       };
     });
-    api.on("message_received", (event, context) => {
-      record("message_received", event, context);
-    });
+    api.on("message_received", (event, context) => record("message_received", event, context));
     api.on("message_sending", (event, context) => {
       record("message_sending", event, context);
       return { content: event.content + " [plugin checked]" };
     });
-    api.on("session_start", (event, context) => {
-      record("session_start", event, context);
-    });
-    api.on("session_end", (event, context) => {
-      record("session_end", event, context);
-    });
-    api.on("cron_changed", (event, context) => {
-      record("cron_changed", event, context);
-    });
+    for (const name of ["session_start", "session_end", "cron_changed"]) {
+      api.on(name, (event, context) => record(name, event, context));
+    }
   },
 };
 `,
@@ -103,18 +97,14 @@ module.exports = {
       plugins: {
         allow: [plugin.id],
         load: { paths: [plugin.file] },
-        entries: {
-          [plugin.id]: {
-            enabled: true,
-            hooks: { allowConversationAccess: true },
-          },
-        },
+        entries: { [plugin.id]: { enabled: true, hooks: { allowConversationAccess: true } } },
       },
     },
     workspaceDir: plugin.dir,
   });
+  expect(registry.plugins).toEqual([expect.objectContaining({ id: pluginId, status: "loaded" })]);
   initializeGlobalHookRunner(registry);
-  return registry;
+  return requireGlobalHookRunner();
 }
 
 afterEach(() => {
@@ -125,25 +115,11 @@ afterEach(() => {
   delete (globalThis as Record<PropertyKey, unknown>)[recordedEventsKey];
 });
 
-afterAll(() => {
-  cleanupPluginLoaderFixturesForTest();
-});
+afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("plugin hook lifecycle contracts", () => {
-  it("registers the six typed hook boundaries through the production plugin loader", () => {
-    const registry = loadFixturePlugin();
-
-    expect(registry.plugins).toEqual([expect.objectContaining({ id: pluginId, status: "loaded" })]);
-    expect(
-      registry.typedHooks
-        .filter((registration) => registration.pluginId === pluginId)
-        .map((registration) => registration.hookName),
-    ).toEqual(registeredHookNames);
-  });
-
   it("executes message, session, and cron lifecycle hooks from the loaded plugin", async () => {
-    loadFixturePlugin();
-    const runner = requireGlobalHookRunner();
+    const runner = loadFixturePlugin();
     const messageContext = { channelId: "qa-channel" };
 
     await runner.runMessageReceived({ from: "operator", content: "incoming" }, messageContext);
@@ -151,26 +127,9 @@ describe("plugin hook lifecycle contracts", () => {
       runner.runMessageSending({ to: "operator", content: "outgoing" }, messageContext),
     ).resolves.toEqual({ content: "outgoing [plugin checked]" });
 
-    const sessionContext = {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-    };
-    await runner.runSessionStart(
-      {
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        resumedFrom: "session-0",
-      },
-      sessionContext,
-    );
+    await runner.runSessionStart({ ...sessionContext, resumedFrom: "session-0" }, sessionContext);
     await runner.runSessionEnd(
-      {
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        messageCount: 3,
-        reason: "reset",
-      },
+      { ...sessionContext, messageCount: 3, reason: "reset" },
       sessionContext,
     );
 
@@ -178,15 +137,7 @@ describe("plugin hook lifecycle contracts", () => {
       {
         action: "updated",
         jobId: "job-1",
-        agentId: "main",
-        sessionTarget: "main",
         nextRunAtMs: 123,
-        job: {
-          id: "job-1",
-          agentId: "main",
-          sessionTarget: "main",
-          state: { nextRunAtMs: 123 },
-        },
       },
       {
         port: 18789,
@@ -203,10 +154,7 @@ describe("plugin hook lifecycle contracts", () => {
       "session_end",
       "cron_changed",
     ]);
-    expect(recordedEvents()[1]?.event).toMatchObject({
-      content: "outgoing",
-      to: "operator",
-    });
+    expect(recordedEvents()[1]?.event).toMatchObject({ content: "outgoing", to: "operator" });
     expect(recordedEvents()[4]?.event).toMatchObject({
       action: "updated",
       jobId: "job-1",
@@ -224,11 +172,7 @@ describe("plugin hook lifecycle contracts", () => {
       toolName: "exec",
       params: { command: "pwd" },
       toolCallId: "call-1",
-      ctx: {
-        agentId: "main",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-      },
+      ctx: sessionContext,
     });
 
     await vi.waitFor(() => {
@@ -259,11 +203,7 @@ describe("plugin hook lifecycle contracts", () => {
           toolCallId: "call-1",
           toolName: "exec",
         }),
-        context: expect.objectContaining({
-          agentId: "main",
-          sessionId: "session-1",
-          sessionKey: "agent:main:session-1",
-        }),
+        context: expect.objectContaining(sessionContext),
       }),
     ]);
   });

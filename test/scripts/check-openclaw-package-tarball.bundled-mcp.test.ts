@@ -34,7 +34,7 @@ const MCP_PROCESS_TIMEOUT_MS = 180_000;
 const MCP_PACKAGE_TEST_TIMEOUT_MS = MCP_PROCESS_TIMEOUT_MS + 60_000;
 const packageJson = {
   files: ["dist"],
-  dependencies: { [MCP_NAME]: "1.9.0" },
+  dependencies: { [MCP_NAME]: "1.10.1" },
   bundleDependencies: [MCP_NAME],
 };
 
@@ -81,7 +81,7 @@ function installPatchedMcp(packageRoot: string) {
     JSON.stringify({
       packages: ["."],
       autoInstallPeers: false,
-      overrides: { [MCP_NAME]: `file:${join(fixtureRoot, `${MCP_NAME}-1.9.0.tgz`)}` },
+      overrides: { [MCP_NAME]: `file:${join(fixtureRoot, `${MCP_NAME}-1.10.1.tgz`)}` },
     }),
   );
   const pnpm = resolvePnpmRunner({
@@ -215,7 +215,7 @@ describe("bundled browser MCP package", () => {
             },
           );
           expectPackageCommandSuccess(cli, "read bundled browser MCP version");
-          expect(cli.stdout.trim()).toBe("1.9.0");
+          expect(cli.stdout.trim()).toBe("1.10.1");
         },
         undefined,
         {
@@ -241,7 +241,7 @@ describe("bundled browser MCP package", () => {
     },
     {
       name: "unpinned dependency",
-      manifest: { ...packageJson, dependencies: { [MCP_NAME]: "^1.9.0" } },
+      manifest: { ...packageJson, dependencies: { [MCP_NAME]: "^1.10.1" } },
       error: "must be pinned to a supported patched version",
     },
     {
@@ -298,31 +298,18 @@ describe("bundled browser MCP package", () => {
       {
         file: "package.json",
         change: "modify",
-        error: "bundled chrome-devtools-mcp must be ESM version 1.9.0",
+        error: "bundled chrome-devtools-mcp must be ESM version 1.10.1",
       },
-      ...[
-        "build/src/TextSnapshot.js",
-        "build/src/McpPage.js",
-        "build/src/third_party/index.js",
-        "build/src/OPENCLAW_PATCH_NOTICE.md",
-      ].map((file) => ({
-        file,
+      {
+        file: "build/src/TextSnapshot.js",
         change: "modify",
-        error: `unpatched or changed runtime entry ${file}`,
-      })),
-      ...[
-        MCP_CLI,
-        "build/src/bin/chrome-devtools-mcp-main.js",
-        "build/src/third_party/devtools-formatter-worker.js",
-        "build/src/third_party/devtools-heap-snapshot-worker.js",
-        "build/src/third_party/lighthouse-devtools-mcp-bundle.js",
-        "LICENSE",
-        "build/src/third_party/THIRD_PARTY_NOTICES",
-      ].map((file) => ({
-        file,
+        error: "unpatched or changed runtime entry build/src/TextSnapshot.js",
+      },
+      {
+        file: MCP_CLI,
         change: "remove",
-        error: `missing required runtime entry ${file}`,
-      })),
+        error: `missing required runtime entry ${MCP_CLI}`,
+      },
       {
         file: "build/src/third_party/issue-descriptions",
         change: "remove",

@@ -271,10 +271,8 @@ class ChatScreenTest {
         hosts =
           listOf(
             SessionCatalogHost(
-              catalogId = "codex",
               hostId = "local",
               label = "Local",
-              kind = "local",
               connected = true,
               sessions = listOf(matching),
             ),

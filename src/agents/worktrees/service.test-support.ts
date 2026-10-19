@@ -1,12 +1,19 @@
 import { execFile } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
+import { hostname } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, beforeAll } from "vitest";
+import { afterAll, assert, beforeAll } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { withWorktreeMutationLease } from "./allocation.js";
 import { insertRegistryWorktree } from "./registry.js";
+import {
+  listTemplatesAsync,
+  markTemplateReadyAsync,
+  releaseTemplateReaderAsync,
+  retainTemplateReaderAsync,
+} from "./template-registry-async.js";
 import type { ManagedWorktreeOwnerKind, ManagedWorktreeRecord } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -27,7 +34,7 @@ async function initializeRepository(repo: string): Promise<void> {
 
 async function addRemote(root: string, repo: string): Promise<string> {
   const remote = path.join(root, "remote.git");
-  await git(root, "init", "--bare", remote);
+  await git(root, "init", "--bare", "-b", "main", remote);
   await git(repo, "remote", "add", "origin", remote);
   await git(repo, "push", "-u", "origin", "main");
   return await fs.realpath(repo);
@@ -39,12 +46,15 @@ export async function initializeManagedWorktreeTestRepository(root: string): Pro
   return await addRemote(root, repo);
 }
 
-export function useManagedWorktreeTestRepository(): (root: string) => Promise<string> {
+export function useManagedWorktreeTestRepository(
+  prepare?: (repo: string) => Promise<void>,
+): (root: string) => Promise<string> {
   const templateDirs = useAutoCleanupTempDirTracker(afterAll);
   let templateRoot: string;
   beforeAll(async () => {
     templateRoot = templateDirs.make("openclaw-worktree-template-");
-    await initializeManagedWorktreeTestRepository(templateRoot);
+    const repo = await initializeManagedWorktreeTestRepository(templateRoot);
+    await prepare?.(repo);
   });
 
   // Copy the initial push too. Each case owns independent Git metadata and a
@@ -81,6 +91,7 @@ type ManagedWorktreeFixtureParams = {
   ownerKind?: ManagedWorktreeOwnerKind;
   ownerId?: string;
   provisionedPaths?: readonly string[];
+  repoFingerprint?: string;
   repoRoot: string;
   stateDir: string;
 };
@@ -88,12 +99,13 @@ type ManagedWorktreeFixtureParams = {
 export async function materializeManagedWorktreeFixtures(
   params: Omit<ManagedWorktreeFixtureParams, "name"> & { names: string[] },
 ): Promise<ManagedWorktreeRecord[]> {
+  const repoFingerprint = params.repoFingerprint ?? "downstream-fixture";
   const records = params.names.map((name): ManagedWorktreeRecord => ({
     id: `fixture-${name}`,
     name,
-    repoFingerprint: "downstream-fixture",
+    repoFingerprint,
     repoRoot: params.repoRoot,
-    path: path.join(params.stateDir, "worktrees", "downstream-fixture", name),
+    path: path.join(params.stateDir, "worktrees", repoFingerprint, name),
     branch: `openclaw/${name}`,
     baseRef: "HEAD",
     ownerKind: params.ownerKind ?? "manual",
@@ -141,18 +153,38 @@ export async function materializeManagedWorktreeFixtures(
       provisionedPaths,
     });
   }
-  const register = () => {
-    for (const record of records) {
-      insertRegistryWorktree(params.env, record, { provisionedPaths });
-    }
-  };
-  if (records.length > 1) {
-    // All asynchronous setup is complete before committing the fixture rows together.
-    runOpenClawStateWriteTransaction(register, { env: params.env });
-  } else {
-    register();
+  for (const record of records) {
+    await insertRegistryWorktree(params.env, record, { provisionedPaths });
   }
   return records;
+}
+
+export async function ageManagedWorktreeTemplates(
+  env: NodeJS.ProcessEnv,
+  lastUsedAt: number,
+): Promise<void> {
+  for (const template of await listTemplatesAsync(env)) {
+    await withWorktreeMutationLease({ env, id: `template:${template.cacheKey}` }, async (guard) => {
+      const key = `age-template:${template.id}`;
+      assert(
+        await retainTemplateReaderAsync(
+          env,
+          {
+            id: template.id,
+            key,
+            owner: { pid: process.pid, host: hostname(), startedAt: null },
+            unpublish: true,
+          },
+          guard.commitGuard,
+        ),
+      );
+      try {
+        assert(await markTemplateReadyAsync(env, template.id, lastUsedAt, guard.commitGuard));
+      } finally {
+        await releaseTemplateReaderAsync(env, key, guard.commitGuard);
+      }
+    });
+  }
 }
 
 export async function materializeManagedWorktreeFixture(

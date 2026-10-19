@@ -1,7 +1,10 @@
 import { expect, test } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { agentDiscoveryMock, rpcReq, writeSessionStore } from "./test-helpers.js";
-import { setupGatewaySessionsTestHarness } from "./test/server-sessions.test-helpers.js";
+import { rpcReq, writeSessionStore } from "./test-helpers.js";
+import {
+  getGatewayConfigModule,
+  setupGatewaySessionsTestHarness,
+} from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 type SessionPatchResponse = { ok: true; key: string; entry: Record<string, unknown> };
@@ -11,10 +14,31 @@ test("write-scoped operators change and reset effort in an existing session", as
   await writeSessionStore({
     entries: { "topic-a": { sessionId: "sess-topic-a", updatedAt: Date.now() } },
   });
-  agentDiscoveryMock.enabled = true;
-  agentDiscoveryMock.models = [
-    { id: "gpt-test-a", name: "A", provider: "openai", reasoning: true },
-  ];
+  const { getRuntimeConfig, writeConfigFile } = await getGatewayConfigModule();
+  // Configured models remain available when discovery runs in the catalog worker.
+  await writeConfigFile({
+    ...getRuntimeConfig(),
+    models: {
+      providers: {
+        openai: {
+          api: "openai-responses",
+          baseUrl: "https://openai.invalid/v1",
+          agentRuntime: { id: "openclaw" },
+          models: [
+            {
+              id: "gpt-test-a",
+              name: "A",
+              reasoning: true,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 32768,
+              maxTokens: 2048,
+            },
+          ],
+        },
+      },
+    },
+  });
   const { ws } = await openClient({ scopes: ["operator.write"] });
   try {
     const model = await rpcReq<SessionPatchResponse>(ws, "sessions.patch", {

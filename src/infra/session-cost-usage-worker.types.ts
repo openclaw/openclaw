@@ -1,12 +1,7 @@
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
-import type { MemoryTranscriptProjectionFrame } from "../config/sessions/session-transcript-reconcile-memory.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
-import type {
-  SessionCostUsageRollupByteRow,
-  SessionCostUsageRollupRow,
-} from "./session-cost-usage-cache.kernel.js";
+import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
 import type {
   CostUsageSummary,
   SessionCostSummary,
@@ -14,6 +9,22 @@ import type {
   UsageCostTranscriptFile,
   UsageDailyBucket,
 } from "./session-cost-usage.types.js";
+import type { WorkerTaskOptions } from "./worker-task-pool.types.js";
+
+export type SessionCostUsageWorkerOptions = Pick<
+  WorkerTaskOptions<UsageCostWorkerInput>,
+  "signal" | "onRequest" | "inputBytes" | "timeoutMs" | "transferList" | "onInputConsumed"
+> & { beforeDispatch?: () => void };
+
+export type SessionCostUsageWorkerScope = {
+  assertCurrent: () => void;
+  run: (
+    input: UsageCostWorkerInput,
+    options: SessionCostUsageWorkerOptions,
+  ) => Promise<UsageCostWorkerResult>;
+  /** Register before acquisition can wait; a failed cleanup stays owned for close retry. */
+  retainCleanup: (close: () => Promise<void>) => () => void;
+};
 
 export type UsageCostWorkerDatabase = { agentId: string; path: string };
 
@@ -36,10 +47,16 @@ export type UsageCostWorkerOperation =
   | {
       kind: "sessions";
       pricingFingerprint: string;
-      sessions: Array<{ sessionId?: string; sessionFile: string }>;
+      sessions: Array<{
+        sessionId?: string;
+        sessionFile: string;
+        transcriptFile?: UsageCostTranscriptFile;
+      }>;
       startMs?: number;
       endMs?: number;
       includeUntimestamped?: boolean;
+      reportBudgetBytes?: number;
+      committedOnly?: boolean;
       dayBucket: UsageDailyBucket;
     }
   | {
@@ -56,13 +73,23 @@ export type UsageCostWorkerInput = {
   kind: "usage-cost";
   location: UsageCostWorkerLocation;
   databases: UsageCostWorkerDatabase[];
+  /** Logical selectors and their physical owners captured before acquiring custody. */
+  stores: Array<{ agentId: string; storePath: string; database: UsageCostWorkerDatabase }>;
+  /** Archive metadata discovery shares the roster captured before database custody. */
+  archiveStorePaths: string[];
   operation: UsageCostWorkerOperation;
 };
+
+export type UsageCostPendingFile = { sessionFile: string; rollupId: string };
 
 export type UsageCostWorkerResult =
   | {
       kind: "inventory";
-      files: Array<Pick<UsageCostTranscriptFile, "kind" | "sourcePath" | "sessionId" | "mtimeMs">>;
+      files: Array<
+        Pick<UsageCostTranscriptFile, "kind" | "sourcePath" | "sessionId" | "mtimeMs"> & {
+          transcriptFile?: UsageCostTranscriptFile;
+        }
+      >;
     }
   | { kind: "summary"; summary: CostUsageSummary; invalidRows: SessionCostUsageRollupRow[] }
   | {
@@ -71,14 +98,13 @@ export type UsageCostWorkerResult =
       cacheStatus: UsageCacheStatus;
       staleSessionFiles: string[];
       invalidRows: SessionCostUsageRollupRow[];
+      remainingReportBytes?: number;
     }
-  | { kind: "refresh"; changed: boolean };
+  | { kind: "refresh"; changed: boolean; remainingFiles?: UsageCostPendingFile[] };
 
 export type UsageCostWorkerFailure = {
   message: string;
   error?: OpenClawStateWorkerErrorPayload;
-  hostOrigin?: number;
-  hostFailureOnly?: boolean;
 };
 
 /** Retain the domain failure while the pool proves native retirement. */
@@ -95,15 +121,17 @@ export type UsageCostWorkerReply =
 
 type UsageCostPreparedRollup = {
   key: string;
-  previousValue: Uint8Array | null;
   value: Uint8Array;
   blob: Uint8Array;
   updatedAt: number;
+  partitions?: import("./session-cost-usage-partitions.js").UsageCostPartition[];
+  removedDates?: string[];
+  replacePartitions?: boolean;
 };
 
 type UsageCostPruneRow = {
   key: string;
-  value: Uint8Array;
+  value: Uint8Array<ArrayBuffer>;
   updatedAt: number;
 };
 
@@ -114,34 +142,9 @@ export type UsageCostWorkerHostEffects = {
     output: Array<ModelCostConfig | undefined>;
   };
   restore: { input: SqliteSessionFileMarker; output: void };
-  "memory-stats": {
-    input: SqliteSessionFileMarker[];
-    output: Array<SessionTranscriptStats | undefined>;
-  };
-  "memory-instances": {
-    input: { agentId: string; storePath: string };
-    output: Array<{ agentId: string; sessionId: string; updatedAtMs: number }>;
-  };
-  "memory-cache": {
-    input: { filePaths?: readonly string[] };
-    output: SessionCostUsageRollupByteRow[];
-  };
-  "memory-cache-body": {
-    input: SessionCostUsageRollupRow;
-    output: { blob: Uint8Array | null } | undefined;
-  };
-  "memory-transcript": {
-    input: {
-      marker: SqliteSessionFileMarker;
-      afterSeq: number;
-      throughSeq: number;
-      readId: number;
-    };
-    output: MemoryTranscriptProjectionFrame;
-  };
-  "prune-row": { input: UsageCostPruneRow; output: void };
+  "prune-rows": { input: UsageCostPruneRow[]; output: void };
   prune: { input: Record<string, never>; output: void };
-  write: { input: UsageCostPreparedRollup; output: boolean };
+  write: { input: UsageCostPreparedRollup[]; output: boolean };
 };
 
 export type UsageCostWorkerHostRequest = {
@@ -150,7 +153,3 @@ export type UsageCostWorkerHostRequest = {
     input: UsageCostWorkerHostEffects[Kind]["input"];
   };
 }[keyof UsageCostWorkerHostEffects];
-
-export type UsageCostWorkerHostReply =
-  | { ok: true; value: UsageCostWorkerHostEffects[keyof UsageCostWorkerHostEffects]["output"] }
-  | { ok: false; origin: number; message: string };

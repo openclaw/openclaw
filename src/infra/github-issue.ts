@@ -3,12 +3,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
-export type PreparedGithubIssue = {
-  body: string;
-  browserFallback: GithubIssueBrowserFallback;
-  marker: string;
-  title: string;
-};
+export type PreparedGithubIssue = ReturnType<typeof prepareGithubIssue>;
 
 type GithubIssueBrowserFallback =
   | { status: "available"; url: string }
@@ -73,12 +68,12 @@ const GITHUB_MARKER_RE = /^openclaw-report:[a-f0-9]{64}$/u;
 const GITHUB_AUTH_ARGS = ["auth", "status", "--active", "--hostname", "github.com"] as const;
 const inflightSubmissions = new Map<string, Promise<GithubIssueSubmitResult>>();
 
-function boundUtf8(value: string, maxBytes: number, suffix: string): string {
+function boundUtf8(value: string, maxBytes: number): string {
   if (Buffer.byteLength(value, "utf8") <= maxBytes) {
     return value;
   }
-  const suffixBytes = Buffer.byteLength(suffix, "utf8");
-  return `${truncateUtf8Prefix(value, Math.max(0, maxBytes - suffixBytes))}${suffix}`;
+  const suffixBytes = Buffer.byteLength(GITHUB_BODY_TRUNCATED_SUFFIX, "utf8");
+  return `${truncateUtf8Prefix(value, Math.max(0, maxBytes - suffixBytes))}${GITHUB_BODY_TRUNCATED_SUFFIX}`;
 }
 
 /** Builds an exact browser fallback when its encoded request stays within a safe bound. */
@@ -95,13 +90,9 @@ function prepareGithubIssueBrowserFallback(
 }
 
 /** Bounds sanitized content and adds the stable marker used for reconciliation. */
-export function prepareGithubIssue(input: { body: string; title: string }): PreparedGithubIssue {
-  const title = boundUtf8(input.title, GITHUB_ISSUE_TITLE_MAX_BYTES, GITHUB_BODY_TRUNCATED_SUFFIX);
-  const boundedBody = boundUtf8(
-    input.body,
-    GITHUB_ISSUE_BODY_MAX_BYTES,
-    GITHUB_BODY_TRUNCATED_SUFFIX,
-  );
+export function prepareGithubIssue(input: { body: string; title: string }) {
+  const title = boundUtf8(input.title, GITHUB_ISSUE_TITLE_MAX_BYTES);
+  const boundedBody = boundUtf8(input.body, GITHUB_ISSUE_BODY_MAX_BYTES);
   const marker = `openclaw-report:${createHash("sha256")
     .update(title)
     .update("\0")
@@ -111,7 +102,6 @@ export function prepareGithubIssue(input: { body: string; title: string }): Prep
   const body = `${boundUtf8(
     boundedBody.trimEnd(),
     GITHUB_ISSUE_BODY_MAX_BYTES - Buffer.byteLength(markerComment, "utf8"),
-    GITHUB_BODY_TRUNCATED_SUFFIX,
   )}${markerComment}`;
   return {
     body,

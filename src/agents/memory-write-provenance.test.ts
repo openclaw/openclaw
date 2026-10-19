@@ -101,4 +101,66 @@ describe("memory write provenance", () => {
       expect(commit).toHaveBeenCalledOnce();
     });
   });
+
+  it("treats a wrapped missing-path read as empty prior content", async () => {
+    const missingPath = Object.assign(new Error("file not found"), { code: "not-found" });
+    const writeFile = vi.fn(async (_absolutePath: string, _content: string) => {});
+    let observedContentBefore: string | undefined;
+    const operations = withMemoryWriteProvenance(
+      {
+        readFile: async () => {
+          throw new Error("sandbox bridge read failed", { cause: missingPath });
+        },
+        writeFile,
+      },
+      {
+        classifies: async () => true,
+        write: async ({ contentBefore, commit }) => {
+          observedContentBefore = contentBefore;
+          await commit();
+        },
+        clearAfterDelete: async () => {},
+      },
+    );
+
+    await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:memory-missing-path-cause" },
+      () => operations.writeFile("/workspace/memory/new.md", "new memory file"),
+    );
+
+    expect(observedContentBefore).toBe("");
+    expect(writeFile).toHaveBeenCalledOnce();
+  });
+
+  it("does not treat a wrapped boundary read error as a missing path", async () => {
+    const boundaryError = Object.assign(new Error("outside workspace"), { code: "EACCES" });
+    const writeFile = vi.fn(async (_absolutePath: string, _content: string) => {});
+    let observerWriteCount = 0;
+    const operations = withMemoryWriteProvenance(
+      {
+        readFile: async () => {
+          throw new Error("sandbox boundary checks failed", { cause: boundaryError });
+        },
+        writeFile,
+      },
+      {
+        classifies: async () => true,
+        write: async ({ commit }) => {
+          observerWriteCount += 1;
+          await commit();
+        },
+        clearAfterDelete: async () => {},
+      },
+    );
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        { agentId: "main", sessionKey: "agent:main:memory-boundary-cause" },
+        () => operations.writeFile("/outside/new.md", "must not write"),
+      ),
+    ).rejects.toThrow("sandbox boundary checks failed");
+
+    expect(observerWriteCount).toBe(0);
+    expect(writeFile).not.toHaveBeenCalled();
+  });
 });

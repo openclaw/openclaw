@@ -84,7 +84,7 @@ async function screenshot(page: Page, name: string) {
   await writeFile(
     path.join(proofDir, name),
     await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-      page.locator(".sidebar-agent-card__name"),
+      page.locator(".sidebar-agent-card__main"),
     ]),
   );
 }
@@ -159,8 +159,8 @@ suite.define(() => {
 
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       await sidebar
-        .locator("wa-dropdown.sidebar-agent-menu")
-        .getByRole("menuitemradio", { name: "OpenClaw" })
+        .locator(".sidebar-agent-menu")
+        .getByRole("menuitem", { name: "OpenClaw" })
         .click();
       await waitForControlUiRoute(firstPage, { pathname: "/chat/openclaw", routeId: "chat" });
       await expect.poll(() => selectedAgentName(firstPage)).toBe("OpenClaw");
@@ -188,6 +188,13 @@ suite.define(() => {
         .poll(() => reopenedPage.getByRole("heading", { name: "OpenClaw" }).isVisible())
         .toBe(true);
       await screenshot(reopenedPage, "04-verified-reopened-agent.png");
+      await reopenedPage.getByRole("link", { name: "New conversation", exact: true }).click();
+      await waitForControlUiRoute(reopenedPage, {
+        routeId: "new-session",
+        search: "?agent=openclaw",
+      });
+      await reopenedPage.locator(".new-session-page__message").waitFor();
+      expect(await reopened.gateway.getRequests("sessions.create")).toHaveLength(0);
     } finally {
       await suite.closeBrowserContext(context);
     }

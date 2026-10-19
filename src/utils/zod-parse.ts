@@ -1,4 +1,3 @@
-// Zod parse helpers wrap schema parsing with consistent error handling.
 import type { ZodType } from "zod";
 
 /**

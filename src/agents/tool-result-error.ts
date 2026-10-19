@@ -1,15 +1,17 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { formatErrorMessage } from "../infra/errors.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import {
   truncateSanitizedExternalContent,
   wrapExternalContent,
 } from "../security/external-content.js";
-import {
-  consumeToolExecutionNotStarted,
-  markToolExecutionNotStarted,
-} from "./tool-effect-receipt.js";
+import { attachInternalToolResultContentSource } from "./runtime/internal-hooks.js";
 import { isTrustedToolInputError } from "./tool-input-error.js";
+
+export {
+  consumeToolExecutionNotStarted as consumeTrustedToolNoStartError,
+  markToolExecutionNotStarted as registerTrustedToolNoStartError,
+} from "./tool-effect-receipt.js";
 
 const TOOL_TIMEOUT_ERROR_CODES = new Set([
   "ERR_TIMEOUT",
@@ -22,6 +24,24 @@ const TOOL_TIMEOUT_ERROR_CODES = new Set([
 const NETWORK_TOOL_ERROR_MAX_CHARS = 4_000;
 const protectedNetworkToolErrors = new WeakSet<object>();
 const protectedNetworkToolTimeoutErrors = new WeakSet<object>();
+const TOOL_RESULT_FAILURE_STATUSES = new Map<string, ToolResultFailureKind>([
+  ["error", "failed"],
+  ["failed", "failed"],
+  ["failure", "failed"],
+  ["timeout", "timed_out"],
+  ["timed_out", "timed_out"],
+  ["blocked", "blocked"],
+  ["denied", "blocked"],
+  ["forbidden", "blocked"],
+  ["unavailable", "failed"],
+  ["approval-unavailable", "blocked"],
+  ["disabled", "blocked"],
+  ["aborted", "cancelled"],
+  ["cancelled", "cancelled"],
+  ["canceled", "cancelled"],
+  ["killed", "cancelled"],
+  ["invalid", "failed"],
+]);
 
 function readToolErrorField(error: object, key: string): unknown {
   try {
@@ -88,44 +108,7 @@ export function readToolResultStatus(result: unknown): string | undefined {
 }
 
 export function isToolResultError(result: unknown): boolean {
-  const details = readToolResultDetails(result);
-  const normalized = readToolResultStatus(result);
-  const ok = details ? readToolErrorField(details, "ok") : undefined;
-  const success = details ? readToolErrorField(details, "success") : undefined;
-  const explicitlySuccessful = ok === true || success === true;
-  if (ok === false || success === false) {
-    return true;
-  }
-  const hasFailureStatus =
-    normalized === "error" ||
-    normalized === "failed" ||
-    normalized === "failure" ||
-    normalized === "timeout" ||
-    normalized === "timed_out" ||
-    normalized === "blocked" ||
-    normalized === "denied" ||
-    normalized === "forbidden" ||
-    normalized === "unavailable" ||
-    normalized === "approval-unavailable" ||
-    normalized === "disabled" ||
-    normalized === "aborted" ||
-    normalized === "cancelled" ||
-    normalized === "canceled" ||
-    normalized === "killed" ||
-    normalized === "invalid";
-  if (hasFailureStatus && !explicitlySuccessful) {
-    return true;
-  }
-  const timedOut = details ? readToolErrorField(details, "timedOut") : undefined;
-  const error = details ? readToolErrorField(details, "error") : undefined;
-  if (timedOut === true || Boolean(error)) {
-    return true;
-  }
-  if (normalized === "completed") {
-    return false;
-  }
-  const exitCode = details ? readToolErrorField(details, "exitCode") : undefined;
-  return typeof exitCode === "number" && Number.isFinite(exitCode) && exitCode !== 0;
+  return resolveToolResultFailureKind(result) !== undefined;
 }
 
 export type ToolResultFailureKind = "blocked" | "cancelled" | "failed" | "timed_out";
@@ -149,17 +132,7 @@ export function isTrustedToolExecutionPreflightError(error: unknown): boolean {
   return isTrustedSecretSurfaceUnavailableError(error) || isTrustedToolInputError(error);
 }
 
-/** Record host-owned proof that the protected operation never started, even if hooks ran. */
-export function registerTrustedToolNoStartError<T>(error: T): T {
-  return markToolExecutionNotStarted(error);
-}
-
-/** Consume one private no-start fact at the next authoritative lifecycle boundary. */
-export function consumeTrustedToolNoStartError(error: unknown): boolean {
-  return consumeToolExecutionNotStarted(error);
-}
-
-/** Format a redacted tool error without allowing hostile getters to escape observability. */
+/** Format a tool error without allowing hostile getters to escape observability. */
 export function formatToolExecutionErrorMessage(error: unknown, fallback: string): string {
   try {
     return formatErrorMessage(error) || fallback;
@@ -213,6 +186,8 @@ export function protectNetworkToolExecutionError(
     // Hostile reflection must never replace the already-protected network error.
   }
   protectedNetworkToolErrors.add(protectedError);
+  // Dispatchers rethrow this error under their own tool; keep its network origin for turn taint.
+  attachInternalToolResultContentSource(protectedError, "network");
   if (timedOut) {
     protectedNetworkToolTimeoutErrors.add(protectedError);
   }
@@ -221,31 +196,31 @@ export function protectNetworkToolExecutionError(
 
 /** Classify a resolved structured tool result through the shared terminal contract. */
 export function resolveToolResultFailureKind(result: unknown): ToolResultFailureKind | undefined {
-  if (!isToolResultError(result)) {
+  const details = readToolResultDetails(result);
+  if (!details) {
     return undefined;
   }
-  const status = readToolResultStatus(result);
+  const status = normalizeOptionalLowercaseString(readToolErrorField(details, "status"));
+  const statusKind = TOOL_RESULT_FAILURE_STATUSES.get(status ?? "");
+  const ok = readToolErrorField(details, "ok");
+  const success = readToolErrorField(details, "success");
+  const timedOut = readToolErrorField(details, "timedOut") === true;
+  const exitCode = readToolErrorField(details, "exitCode");
   if (
-    status === "blocked" ||
-    status === "denied" ||
-    status === "forbidden" ||
-    status === "disabled" ||
-    status === "approval-unavailable"
+    ok !== false &&
+    success !== false &&
+    (!statusKind || ok === true || success === true) &&
+    !timedOut &&
+    !readToolErrorField(details, "error") &&
+    (status === "completed" ||
+      typeof exitCode !== "number" ||
+      !Number.isFinite(exitCode) ||
+      exitCode === 0)
   ) {
+    return undefined;
+  }
+  if (statusKind === "blocked") {
     return "blocked";
   }
-  const details = readToolResultDetails(result);
-  const timedOut = details ? readToolErrorField(details, "timedOut") : undefined;
-  if (timedOut === true || status === "timeout" || status === "timed_out") {
-    return "timed_out";
-  }
-  if (
-    status === "aborted" ||
-    status === "cancelled" ||
-    status === "canceled" ||
-    status === "killed"
-  ) {
-    return "cancelled";
-  }
-  return "failed";
+  return timedOut ? "timed_out" : (statusKind ?? "failed");
 }

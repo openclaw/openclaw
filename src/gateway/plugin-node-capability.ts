@@ -286,10 +286,8 @@ export function hasAuthorizedClientPluginNodeCapabilityUrl(params: {
 export function normalizePluginNodeCapabilityScopedUrl(
   rawUrl: string,
 ): NormalizedPluginNodeCapabilityUrl {
-  let url: URL;
-  try {
-    url = new URL(rawUrl, "http://localhost");
-  } catch {
+  const url = URL.parse(rawUrl, "http://localhost");
+  if (!url) {
     return {
       pathname: "/",
       scopedPath: false,

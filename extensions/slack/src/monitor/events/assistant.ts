@@ -1,7 +1,8 @@
 import type { AssistantThreadStartedEvent } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { buildSlackAssistantThreadMetadata, DEFAULT_SLACK_SUGGESTED_PROMPTS } from "../context.js";
+import { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "../../channel-meta.js";
+import { buildSlackAssistantThreadMetadata } from "../context.js";
 import type { SlackMonitorContext, SlackAssistantThreadContext } from "../context.js";
 
 type SlackAssistantThreadPayload = {
@@ -41,26 +42,18 @@ function normalizeAssistantThread(
     key: keyof Pick<SlackAssistantThreadContextPayload, "channel_id" | "team_id">,
     previousValue: string | undefined,
   ) => threadContext?.[key]?.trim() || eventContext?.[key]?.trim() || previousValue;
-  const enterpriseId = (() => {
-    if (threadContext && "enterprise_id" in threadContext) {
-      return threadContext.enterprise_id === null
-        ? null
-        : threadContext.enterprise_id?.trim() || previous?.enterpriseId;
-    }
-    if (eventContext && "enterprise_id" in eventContext) {
-      return eventContext.enterprise_id === null
-        ? null
-        : eventContext.enterprise_id?.trim() || previous?.enterpriseId;
-    }
-    return previous?.enterpriseId;
-  })();
+  const enterpriseContext =
+    threadContext && "enterprise_id" in threadContext ? threadContext : eventContext;
   return {
     assistantChannelId: channelId,
     threadTs,
     userId: thread.user_id?.trim() || previous?.userId,
     channelId: resolveContextString("channel_id", previous?.channelId),
     teamId: resolveContextString("team_id", previous?.teamId),
-    enterpriseId,
+    enterpriseId:
+      enterpriseContext?.enterprise_id === null
+        ? null
+        : enterpriseContext?.enterprise_id?.trim() || previous?.enterpriseId,
   };
 }
 

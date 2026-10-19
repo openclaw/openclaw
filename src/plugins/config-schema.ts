@@ -1,4 +1,3 @@
-// Builds plugin config schemas from manifest metadata.
 import { z, type ZodTypeAny } from "zod";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
@@ -17,11 +16,8 @@ type BuildPluginConfigSchemaOptions = {
   safeParse?: OpenClawPluginConfigSchema["safeParse"];
 };
 
-type BuildJsonPluginConfigSchemaOptions = {
+type BuildJsonPluginConfigSchemaOptions = BuildPluginConfigSchemaOptions & {
   cacheKey?: string;
-  /** @deprecated Declare top-level `uiHints` in `openclaw.plugin.json`. */
-  uiHints?: Record<string, PluginConfigUiHint>;
-  safeParse?: OpenClawPluginConfigSchema["safeParse"];
 };
 
 function error(message: string): SafeParseResult {
@@ -48,7 +44,7 @@ function safeParseRuntimeSchema(schema: ZodTypeAny, value: unknown): SafeParseRe
   }
   return {
     success: false,
-    error: { issues: result.error.issues.map((issue) => cloneIssue(issue)) },
+    error: { issues: result.error.issues.map(cloneIssue) },
   };
 }
 

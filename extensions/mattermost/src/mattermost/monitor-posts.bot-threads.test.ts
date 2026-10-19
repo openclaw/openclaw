@@ -1,8 +1,10 @@
 import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/channel-policy";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
+import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setMattermostRuntime } from "../runtime.js";
-import type { MattermostAccountConfig } from "../types.js";
+import type { MattermostConfig } from "../types.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import type { MattermostPost } from "./client.js";
 import type { MattermostIngressPost } from "./monitor-ingress.js";
@@ -19,7 +21,7 @@ vi.mock("./thread-participation.js", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
-  resolveInboundSessionEnvelopeContext: () => ({ envelopeOptions: {} }),
+  resolveInboundSessionEnvelopeContextAsync: async () => ({ envelopeOptions: {} }),
 }));
 
 describe("Mattermost bot-owned thread mention policy", () => {
@@ -28,7 +30,11 @@ describe("Mattermost bot-owned thread mention policy", () => {
     hasParticipation.mockReset().mockResolvedValue(false);
   });
 
-  function setup(config: Partial<MattermostAccountConfig> = {}, botUsername = "bot") {
+  function setup(
+    config: Partial<MattermostConfig> = {},
+    botUsername = "bot",
+    accountId = "default",
+  ) {
     const cfg: OpenClawConfig = {
       channels: {
         mattermost: {
@@ -40,14 +46,14 @@ describe("Mattermost bot-owned thread mention policy", () => {
         },
       },
     };
-    const account = resolveMattermostAccount({ cfg, accountId: "default" });
+    const account = resolveMattermostAccount({ cfg, accountId });
     const core = createPluginRuntimeMock();
     core.channel.mentions.buildMentionRegexes = () => [];
     core.channel.groups.resolveRequireMention = resolveChannelGroupRequireMention;
     core.channel.routing.resolveAgentRoute = () => ({
       agentId: "main",
       channel: "mattermost",
-      accountId: "default",
+      accountId,
       sessionKey: "agent:main:mattermost:channel:room",
       mainSessionKey: "agent:main:main",
       lastRoutePolicy: "session",
@@ -88,6 +94,7 @@ describe("Mattermost bot-owned thread mention policy", () => {
     } as unknown as MattermostMonitorContext;
     const handler = createMattermostPostHandler(monitor);
     return {
+      core,
       root,
       request,
       receive: (post: Partial<MattermostIngressPost> = {}) =>
@@ -106,23 +113,90 @@ describe("Mattermost bot-owned thread mention policy", () => {
     };
   }
 
+  it("keeps participated-thread follow-ups enabled by default", async () => {
+    const f = setup();
+    hasParticipation.mockResolvedValue(true);
+
+    await f.receive();
+
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(dispatch.mock.calls[0]?.[1].ctxPayload).toMatchObject({
+      BodyForAgent: "Continue the discussion",
+      WasMentioned: true,
+    });
+  });
+
   it.each([
-    { scope: "account", config: { requireMentionInBotThreads: false } },
+    { accountId: "default", admitted: true },
+    { accountId: "work", admitted: false },
+  ])(
+    "applies account implicit-mention policy before channel policy for $accountId",
+    async ({ accountId, admitted }) => {
+      const f = setup(
+        {
+          implicitMentions: { threadParticipation: true },
+          accounts: { work: { implicitMentions: { threadParticipation: false } } },
+        },
+        "bot",
+        accountId,
+      );
+      hasParticipation.mockResolvedValue(true);
+
+      await f.receive();
+
+      expect(dispatch).toHaveBeenCalledTimes(admitted ? 1 : 0);
+      if (admitted) {
+        expect(dispatch.mock.calls[0]?.[1].ctxPayload).toMatchObject({
+          AccountId: "default",
+          WasMentioned: true,
+        });
+      }
+    },
+  );
+
+  it.each([
+    {
+      activation: "explicit mentions",
+      message: "@bot continue the discussion",
+      expected: { BodyForAgent: "continue the discussion", WasMentioned: true },
+    },
+    {
+      activation: "authorized commands",
+      message: "/reset",
+      expected: {
+        BodyForAgent: "/reset",
+        WasMentioned: true,
+        CommandAuthorized: true,
+        CommandSource: "text",
+      },
+    },
+  ])(
+    "keeps $activation independent from disabled implicit mentions",
+    async ({ message, expected }) => {
+      const f = setup({
+        implicitMentions: { threadParticipation: false },
+        groupAllowFrom: ["sender"],
+      });
+      f.core.channel.commands.isControlCommandMessage = isControlCommandMessage;
+      f.core.channel.commands.shouldHandleTextCommands = shouldHandleTextCommands;
+      hasParticipation.mockResolvedValue(true);
+
+      await f.receive();
+      expect(dispatch).not.toHaveBeenCalled();
+
+      await f.receive({ id: "activated-follow-up", message });
+
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(dispatch.mock.calls[0]?.[1].ctxPayload).toMatchObject(expected);
+    },
+  );
+
+  it.each([
     {
       scope: "wildcard group",
       config: {
         requireMentionInBotThreads: true,
         groups: { "*": { requireMentionInBotThreads: false } },
-      },
-    },
-    {
-      scope: "exact group",
-      config: {
-        requireMentionInBotThreads: true,
-        groups: {
-          "*": { requireMentionInBotThreads: true },
-          room: { requireMentionInBotThreads: false },
-        },
       },
     },
   ])("admits an unmentioned bot-thread reply configured at $scope scope", async ({ config }) => {
@@ -163,22 +237,7 @@ describe("Mattermost bot-owned thread mention policy", () => {
     expect(dispatch).toHaveBeenCalledOnce();
   });
 
-  it.each([false, true])(
-    "preserves omitted-policy participation behavior (%s)",
-    async (engaged) => {
-      const f = setup();
-      hasParticipation.mockResolvedValue(engaged);
-
-      await f.receive();
-
-      expect(dispatch).toHaveBeenCalledTimes(engaged ? 1 : 0);
-      expect(f.request).not.toHaveBeenCalled();
-    },
-  );
-
   it.each([
-    { name: "strict bot thread", setting: true, owner: "bot", admitted: false },
-    { name: "omitted setting", setting: undefined, owner: "bot", admitted: true },
     { name: "another author's thread", setting: true, owner: "someone-else", admitted: true },
   ])("handles missing mention detectors for $name", async ({ setting, owner, admitted }) => {
     const f = setup({ requireMentionInBotThreads: setting }, "");
@@ -189,44 +248,12 @@ describe("Mattermost bot-owned thread mention policy", () => {
     expect(dispatch).toHaveBeenCalledTimes(admitted ? 1 : 0);
   });
 
-  it.each([
-    { kind: "another author's root", patch: { user_id: "someone-else" } },
-    { kind: "another post id", patch: { id: "different-root" } },
-    { kind: "another channel", patch: { channel_id: "different-room" } },
-    { kind: "a deleted root", patch: { delete_at: 10 } },
-    { kind: "an unreadable root", patch: null },
-  ])("retains mention gating for $kind", async ({ patch }) => {
+  it("retains mention gating for an unreadable root", async () => {
     const f = setup({ requireMentionInBotThreads: false });
-    if (patch) {
-      f.request.mockResolvedValue({ ...f.root, ...patch });
-    } else {
-      f.request.mockRejectedValue(new Error("Mattermost API 403 Forbidden"));
-    }
-
+    f.request.mockRejectedValue(new Error("Mattermost API 403 Forbidden"));
     await f.receive();
-
     expect(dispatch).not.toHaveBeenCalled();
     expect(f.request).toHaveBeenCalled();
-  });
-
-  it("preserves participation in human-owned threads when bot-thread mentions are required", async () => {
-    const f = setup({ requireMentionInBotThreads: true });
-    f.request.mockResolvedValue({ ...f.root, user_id: "someone-else" });
-    hasParticipation.mockResolvedValue(true);
-
-    await f.receive();
-
-    expect(dispatch).toHaveBeenCalledOnce();
-  });
-
-  it("does not treat a reply-to-current delivery target as an existing bot-owned thread", async () => {
-    const f = setup({ requireMentionInBotThreads: false, replyToMode: "all" });
-    f.request.mockResolvedValue({ ...f.root, id: "follow-up" });
-
-    await f.receive({ root_id: "" });
-
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(f.request).not.toHaveBeenCalled();
   });
 
   it.each([

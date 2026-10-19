@@ -41,7 +41,6 @@ function stripConversationPrefix(
 function resolveAgentHookChannel(params: {
   messageChannel?: string | null;
   messageProvider?: string | null;
-  agentAccountId?: string | null;
 }): string | undefined {
   const messageChannel = normalizeOptionalString(params.messageChannel);
   const provider = normalizeOptionalString(params.messageProvider);
@@ -58,10 +57,8 @@ function resolveAgentHookChannel(params: {
   if (!prefix) {
     return provider;
   }
-  if (
-    TARGET_PREFIXES.has(normalizeKey(prefix)) ||
-    normalizeKey(prefix) === normalizeKey(provider)
-  ) {
+  const prefixKey = normalizeKey(prefix);
+  if (TARGET_PREFIXES.has(prefixKey) || prefixKey === normalizeKey(provider)) {
     return provider;
   }
   return prefix;

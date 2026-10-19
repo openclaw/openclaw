@@ -16,6 +16,7 @@ const registration = {
 function consume(handoffId: string | undefined, overrides: Record<string, unknown> = {}) {
   return consumeSubagentCompletionToolHandoff({
     handoffId,
+    sourceTool: "subagent_announce",
     ...registration,
     provider: "openai",
     model: "glm-4.5",
@@ -44,6 +45,7 @@ describe("subagent completion tool handoff", () => {
     ["target session", { targetSessionKey: "agent:main:other" }],
     ["target run", { targetSessionId: "replaced-requester-session" }],
     ["idempotency key", { idempotencyKey: "announce-forged" }],
+    ["source tool", { sourceTool: "subagent_settle" }],
   ])("rejects a mismatched %s without burning the valid capability", (_name, overrides) => {
     const handoffId = registerSubagentCompletionToolHandoff(registration);
     expect(consume(handoffId, overrides)).toBeUndefined();
@@ -53,6 +55,42 @@ describe("subagent completion tool handoff", () => {
   it("rejects missing and forged capability ids", () => {
     expect(consume(undefined)).toBeUndefined();
     expect(consume("forged")).toBeUndefined();
+  });
+
+  it("revalidates the settle owner's authority before consuming a capability", () => {
+    let current = true;
+    const handoffId = registerSubagentCompletionToolHandoff({
+      ...registration,
+      settleBatch: {
+        sourceSessionKeys: [registration.sourceSessionKey],
+        isCurrent: () => current,
+      },
+    });
+    expect(handoffId).toBeDefined();
+    expect(consume(handoffId)).toBeUndefined();
+    current = false;
+    expect(consume(handoffId, { sourceTool: "subagent_settle" })).toBeUndefined();
+    expect(cancelSubagentCompletionToolHandoff(handoffId)).toBe(true);
+  });
+
+  it("binds an accepted replay source only within the registered settle cohort", () => {
+    const acceptedSource = "agent:main:subagent:sibling";
+    const handoffId = registerSubagentCompletionToolHandoff({
+      ...registration,
+      settleBatch: {
+        sourceSessionKeys: [registration.sourceSessionKey, acceptedSource],
+        isCurrent: () => true,
+      },
+    });
+    expect(
+      consume(handoffId, {
+        sourceTool: "subagent_settle",
+        sourceSessionKey: "agent:main:subagent:outside-batch",
+      }),
+    ).toBeUndefined();
+    const accepted = { sourceTool: "subagent_settle", sourceSessionKey: acceptedSource };
+    expect(consume(handoffId, accepted)?.sourceSessionKey).toBe(acceptedSource);
+    expect(consume(handoffId, accepted)).toBeUndefined();
   });
 
   it("expires capabilities and removes cancelled capabilities", () => {

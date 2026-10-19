@@ -16,51 +16,19 @@ installCronTestHooks({ logger: noopLogger });
 
 const base = Date.parse("2025-12-13T00:00:00.000Z");
 
-function dueEveryJob(): CronJob {
+function createJob(id: string, schedule: CronJob["schedule"], nextRunAtMs?: number): CronJob {
   return {
-    id: "due-every",
-    name: "due every 10s",
+    id,
+    name: id,
     enabled: true,
     createdAtMs: base - 3_600_000,
     updatedAtMs: base - 10_000,
-    schedule: { kind: "every", everyMs: 10_000 },
+    schedule,
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "tick" },
     delivery: { mode: "none" },
-    state: { nextRunAtMs: base - 5_000 },
-  };
-}
-
-function missingNextRunJob(): CronJob {
-  return {
-    id: "missing-next",
-    name: "enabled daily without next run",
-    enabled: true,
-    createdAtMs: base - 3_600_000,
-    updatedAtMs: base - 10_000,
-    schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "daily" },
-    delivery: { mode: "none" },
-    state: {},
-  };
-}
-
-function jobToRemove(): CronJob {
-  return {
-    id: "to-remove",
-    name: "obsolete job",
-    enabled: true,
-    createdAtMs: base - 3_600_000,
-    updatedAtMs: base - 10_000,
-    schedule: { kind: "cron", expr: "0 12 * * *", tz: "UTC" },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "noop" },
-    delivery: { mode: "none" },
-    state: { nextRunAtMs: base + 3_600_000 },
+    state: nextRunAtMs === undefined ? {} : { nextRunAtMs },
   };
 }
 
@@ -69,7 +37,11 @@ describe("remove() must not drop a due every-job's pending run", () => {
     const store = await makeStorePath();
     await writeCronStoreSnapshot({
       storePath: store.storePath,
-      jobs: [dueEveryJob(), missingNextRunJob(), jobToRemove()],
+      jobs: [
+        createJob("due-every", { kind: "every", everyMs: 10_000 }, base - 5_000),
+        createJob("missing-next", { kind: "cron", expr: "0 9 * * *", tz: "UTC" }),
+        createJob("to-remove", { kind: "cron", expr: "0 12 * * *", tz: "UTC" }, base + 3_600_000),
+      ],
     });
 
     const cron = new CronService({

@@ -1,7 +1,12 @@
-import type { DatabaseSync } from "node:sqlite";
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveGatewayLockDir } from "../config/paths.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
@@ -27,7 +32,7 @@ const migrationPaths = ["runtime open", "doctor repair"] as const;
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
-function readSnapshot(db: DatabaseSync) {
+function readSnapshot(db: EngineConnection) {
   return {
     version: db.prepare("PRAGMA user_version").get(),
     metadata: db.prepare("SELECT * FROM schema_meta").all(),
@@ -127,6 +132,44 @@ function createV17PublicationState(options: { populated?: boolean; deferred?: bo
 }
 
 describe("GitHub publication requester authority schema migration", () => {
+  it("keeps schema 17 unchanged when cold identity loading meets a published Gateway owner", () => {
+    const { options, databasePath, before } = createV17PublicationState();
+    const projectionPath = path.join(
+      resolveGatewayLockDir(options.env.OPENCLAW_STATE_DIR),
+      "gateway.state.lock",
+    );
+    const previousOwner = JSON.stringify({
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      configPath: path.join(options.env.OPENCLAW_STATE_DIR, "openclaw.json"),
+      role: "gateway",
+    });
+    // v2026.9.4 holds this file alongside its retired SQLite coordinator; it
+    // does not know the replacement external sidecar.
+    fs.mkdirSync(path.dirname(projectionPath), { recursive: true });
+    fs.writeFileSync(projectionPath, previousOwner, { flag: "wx" });
+    try {
+      expect(() => loadOrCreateDeviceIdentity(options)).toThrow(
+        expect.objectContaining({ name: "StateSchemaMutationConflictError" }),
+      );
+      const unchanged = openNodeSqliteDatabase(databasePath, { readOnly: true });
+      try {
+        expect(readSnapshot(unchanged)).toEqual(before);
+      } finally {
+        unchanged.close();
+      }
+      expect(fs.readFileSync(projectionPath, "utf8")).toBe(previousOwner);
+      expect(fs.existsSync(resolveGatewayStateOwnerPath(databasePath))).toBe(false);
+    } finally {
+      fs.rmSync(projectionPath);
+    }
+    expect(loadOrCreateDeviceIdentity(options).deviceId).toMatch(/^[a-f0-9]{64}$/u);
+    expect(openOpenClawStateDatabase(options).db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
+    expect(fs.existsSync(projectionPath)).toBe(false);
+  });
+
   it.each([
     { via: "runtime open", deferred: false },
     { via: "doctor repair", deferred: false },
@@ -137,10 +180,22 @@ describe("GitHub publication requester authority schema migration", () => {
       const { options, databasePath, before } = createV17PublicationState({ deferred });
       expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
         { kind: "github-publication-requester-authority-v18", path: databasePath },
+        { kind: "predicate-columns-v21", path: databasePath },
+        { kind: "portable-identity-columns-v22", path: databasePath },
+        { kind: "meeting-transcript-start-time", path: databasePath },
+        { kind: "task-run-indexes-v24", path: databasePath },
+        { kind: "subagent-operator-recovery-v25", path: databasePath },
+        { kind: "session-state-head-layout-v26", path: databasePath },
+        { kind: "state-write-indexes-v27", path: databasePath },
+        { kind: "github-publication-draft-v28", path: databasePath },
       ]);
       if (via === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-          changes: ["Added original requester authority to GitHub publication receipts (v18)"],
+          changes: [
+            "Added original requester authority to GitHub publication receipts (v18)",
+            "Replaced retained task indexes with ordered cron history indexes (v24)",
+            "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
+          ],
           warnings: [],
         });
       }

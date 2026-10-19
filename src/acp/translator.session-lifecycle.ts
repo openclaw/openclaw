@@ -1,4 +1,3 @@
-/** ACP session creation, loading, listing, resuming, closing, and configuration. */
 import { randomUUID } from "node:crypto";
 import type {
   AuthenticateRequest,
@@ -26,7 +25,8 @@ import type { GatewayClient } from "../gateway/client.js";
 import type { SessionsListResult } from "../gateway/session-utils.js";
 import type { FixedWindowRateLimiter } from "../infra/fixed-window-rate-limit.js";
 import type { AcpEventLedgerReplay } from "./event-ledger.js";
-import { parseSessionMeta, resetSessionIfNeeded, resolveAcpSessionKey } from "./session-mapper.js";
+import { parseSessionMeta, resolveAcpSessionKey } from "./session-mapper.js";
+import type { SessionSnapshot } from "./translator.presentation.js";
 import { extractReplayChunks, type GatewayTranscriptMessage } from "./translator.replay.js";
 import {
   ACP_LIST_SESSIONS_MAX_FETCH_LIMIT,
@@ -39,15 +39,6 @@ import type { AcpTranslatorSessionState } from "./translator.session-state.js";
 import type { AcpTranslatorSessionUpdates } from "./translator.session-updates.js";
 
 const ACP_LOAD_SESSION_REPLAY_LIMIT = 1_000_000;
-
-function hasExplicitSessionRouting(
-  meta: ReturnType<typeof parseSessionMeta>,
-  opts: AcpServerOptions,
-): boolean {
-  return Boolean(
-    meta.sessionKey || meta.sessionLabel || opts.defaultSessionKey || opts.defaultSessionLabel,
-  );
-}
 
 export class AcpTranslatorSessionLifecycle {
   constructor(
@@ -84,17 +75,8 @@ export class AcpTranslatorSessionLifecycle {
     await this.sessionUpdates.startLedgerSession(session, { complete: true, reset: true });
     this.log(`newSession: ${session.sessionId} -> ${session.sessionKey}`);
     const sessionSnapshot = await this.sessionState.getSnapshot(session.sessionKey);
-    await this.sessionState.sendSnapshotUpdate(session, sessionSnapshot, {
-      includeControls: false,
-      record: true,
-    });
-    await this.sessionUpdates.sendAvailableCommands(session, { record: true });
-    const { configOptions, modes } = sessionSnapshot;
-    return {
-      sessionId: session.sessionId,
-      configOptions,
-      modes,
-    };
+    const presentation = await this.publishSessionSnapshot(session, sessionSnapshot, true);
+    return { sessionId: session.sessionId, ...presentation };
   }
 
   async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
@@ -104,7 +86,12 @@ export class AcpTranslatorSessionLifecycle {
     }
 
     const meta = parseSessionMeta(params["_meta"]);
-    const hasExplicitRouting = hasExplicitSessionRouting(meta, this.opts);
+    const hasExplicitRouting = Boolean(
+      meta.sessionKey ||
+      meta.sessionLabel ||
+      this.opts.defaultSessionKey ||
+      this.opts.defaultSessionLabel,
+    );
     const exactLedgerReplay: AcpEventLedgerReplay = hasExplicitRouting
       ? { complete: false, events: [] }
       : await this.sessionUpdates.readLedgerReplayBySessionId(params.sessionId);
@@ -144,18 +131,29 @@ export class AcpTranslatorSessionLifecycle {
             return [];
           }),
     ]);
+    const replaySessionId = session.sessionId;
     if (ledgerReplay.complete) {
-      await this.replayLedgerSession(session.sessionId, ledgerReplay);
+      for (const event of ledgerReplay.events) {
+        await this.sessionUpdates.emit({
+          sessionId: replaySessionId,
+          update: event.update,
+          record: false,
+        });
+      }
     } else {
-      await this.replaySessionTranscript(session.sessionId, transcript);
+      for (const message of transcript) {
+        for (const chunk of extractReplayChunks(message)) {
+          await this.sessionUpdates.emit({
+            sessionId: replaySessionId,
+            update: {
+              sessionUpdate: chunk.sessionUpdate,
+              content: { type: "text", text: chunk.text },
+            },
+          });
+        }
+      }
     }
-    await this.sessionState.sendSnapshotUpdate(session, sessionSnapshot, {
-      includeControls: false,
-      record: false,
-    });
-    await this.sessionUpdates.sendAvailableCommands(session, { record: false });
-    const { configOptions, modes } = sessionSnapshot;
-    return { configOptions, modes };
+    return await this.publishSessionSnapshot(session, sessionSnapshot, false);
   }
 
   async listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
@@ -244,13 +242,7 @@ export class AcpTranslatorSessionLifecycle {
     });
     await this.sessionUpdates.startLedgerSession(session, { complete: false });
     this.log(`resumeSession: ${session.sessionId} -> ${session.sessionKey}`);
-    await this.sessionState.sendSnapshotUpdate(session, sessionSnapshot, {
-      includeControls: false,
-      record: false,
-    });
-    await this.sessionUpdates.sendAvailableCommands(session, { record: false });
-    const { configOptions, modes } = sessionSnapshot;
-    return { configOptions, modes };
+    return await this.publishSessionSnapshot(session, sessionSnapshot, false);
   }
 
   async closeSession(params: CloseSessionRequest): Promise<CloseSessionResponse> {
@@ -323,6 +315,20 @@ export class AcpTranslatorSessionLifecycle {
     }
   }
 
+  private async publishSessionSnapshot(
+    session: Parameters<AcpTranslatorSessionState["sendSnapshotUpdate"]>[0],
+    snapshot: SessionSnapshot,
+    record: boolean,
+  ): Promise<LoadSessionResponse> {
+    await this.sessionState.sendSnapshotUpdate(session, snapshot, {
+      includeControls: false,
+      record,
+    });
+    await this.sessionUpdates.sendAvailableCommands(session, { record });
+    const { configOptions, modes } = snapshot;
+    return { configOptions, modes };
+  }
+
   private requireSession(sessionId: string) {
     const session = this.sessionStore.getSession(sessionId);
     if (!session) {
@@ -341,12 +347,9 @@ export class AcpTranslatorSessionLifecycle {
       gateway: this.gateway,
       opts: this.opts,
     });
-    await resetSessionIfNeeded({
-      meta: params.meta,
-      sessionKey,
-      gateway: this.gateway,
-      opts: this.opts,
-    });
+    if (params.meta.resetSession ?? this.opts.resetSession ?? false) {
+      await this.gateway.request("sessions.reset", { key: sessionKey });
+    }
     return sessionKey;
   }
 
@@ -359,37 +362,6 @@ export class AcpTranslatorSessionLifecycle {
       return [];
     }
     return result.messages as GatewayTranscriptMessage[];
-  }
-
-  private async replaySessionTranscript(
-    sessionId: string,
-    transcript: ReadonlyArray<GatewayTranscriptMessage>,
-  ): Promise<void> {
-    for (const message of transcript) {
-      const replayChunks = extractReplayChunks(message);
-      for (const chunk of replayChunks) {
-        await this.sessionUpdates.emit({
-          sessionId,
-          update: {
-            sessionUpdate: chunk.sessionUpdate,
-            content: { type: "text", text: chunk.text },
-          },
-        });
-      }
-    }
-  }
-
-  private async replayLedgerSession(
-    sessionId: string,
-    ledgerReplay: AcpEventLedgerReplay,
-  ): Promise<void> {
-    for (const event of ledgerReplay.events) {
-      await this.sessionUpdates.emit({
-        sessionId,
-        update: event.update,
-        record: false,
-      });
-    }
   }
 
   private assertSupportedSessionSetup(mcpServers: ReadonlyArray<unknown>): void {

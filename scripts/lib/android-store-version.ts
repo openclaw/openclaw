@@ -301,10 +301,8 @@ export function resolveAndroidStorePlan(input: {
   const releaseNotesBaselines = publicBaselines(snapshot, history.records);
   const records = [...new Set(history.records.values())];
   for (const version of [input.pinnedVersion, ...records.map((record) => record.gatewayVersion)]) {
-    if (
-      compareReleaseVersions(gatewayVersion, version) === null ||
-      compareReleaseVersions(gatewayVersion, version)! < 0
-    ) {
+    const comparison = compareReleaseVersions(gatewayVersion, version);
+    if (comparison === null || comparison < 0) {
       throw new Error(
         `Gateway version ${gatewayVersion} precedes or cannot compare with Android release ${version}.`,
       );

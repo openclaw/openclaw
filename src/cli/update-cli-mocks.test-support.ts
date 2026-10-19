@@ -1,6 +1,5 @@
 import { isCancel } from "@clack/core";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -16,41 +15,70 @@ import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const commandTransport = vi.hoisted(() => ({
   run: vi.fn<typeof import("../process/exec.js").runCommandWithTimeout>(),
+  exec: vi.fn<typeof import("../process/exec.js").runExec>(async () => ({
+    stdout: "",
+    stderr: "",
+  })),
+  hostPlatform: process.platform,
   hostEnv: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" },
   hostCwd: process.cwd(),
   npmPrefix: "",
 }));
+export const sqliteHostPlatform = commandTransport.hostPlatform;
 
-const sqliteHostPlatform = process.platform;
-const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
-const immutableHostUri = nodeSqlite.resolveImmutableSqliteFileUri;
+const isMacosAclInspection = vi.hoisted(
+  () => (command: string, args: readonly string[]) =>
+    args.length === 3 &&
+    ((command === "/bin/ls" && args[0] === "-lden" && args[1] === "--") ||
+      (command === "/usr/bin/dsmemberutil" && args[0] === "getuuid" && args[1] === "-U")),
+);
 
-const confirm = vi.fn();
-const select = vi.fn();
+const isPlistStdinConversion = vi.hoisted(
+  () => (command: string, args: readonly string[]) =>
+    command === "/usr/bin/plutil" &&
+    args.length === 6 &&
+    args[0] === "-convert" &&
+    (args[1] === "xml1" || args[1] === "json") &&
+    args[2] === "-o" &&
+    args[3] === "-" &&
+    args[4] === "--" &&
+    args[5] === "-",
+);
+
+function parseVersion(value: string | null): [number, number, number] | null {
+  const match = value?.match(/(\d+)\.(\d+)\.(\d+)/);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+}
+
+export const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
+export const immutableHostUri = nodeSqlite.resolveImmutableSqliteFileUri;
+
+export const confirm = vi.fn();
+export const select = vi.fn();
 const text = vi.fn();
 const spinner = vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), clear: vi.fn() }));
-const triageCommand = vi.fn<typeof import("../commands/triage.js").triageCommand>();
-const triageAfterFailure =
+export const triageCommand = vi.fn<typeof import("../commands/triage.js").triageCommand>();
+export const triageAfterFailure =
   vi.fn<typeof import("../commands/triage-failure.js").triageAfterFailure>();
 const updateFailureActionMocks = vi.hoisted(() => ({
   runInteractiveUpdateFailureAction: vi.fn(),
 }));
 
-const readPackageName = vi.fn();
-const readPackageVersion = vi.fn();
-const resolveGlobalManager = vi.fn();
-const serviceLoaded = vi.fn();
-const serviceEnabled = vi.fn();
-const serviceDefinitionMutationCapability = vi.fn();
-const serviceStart = vi.fn();
-const serviceStop = vi.fn();
-const serviceRestart = vi.fn();
+export const readPackageName = vi.fn();
+export const readPackageVersion = vi.fn();
+export const resolveGlobalManager = vi.fn();
+export const serviceLoaded = vi.fn();
+export const serviceEnabled = vi.fn();
+export const serviceDefinitionMutationCapability = vi.fn();
+export const serviceStart = vi.fn();
+export const serviceStop = vi.fn();
+export const serviceRestart = vi.fn();
 // A fixed Gateway PID can collide with the updater and trigger its self-stop safeguard.
-const gatewayFixturePid = process.pid + 1;
-const unrelatedGatewayFixturePid = process.pid + 2;
+export const gatewayFixturePid = process.pid + 1;
+export const unrelatedGatewayFixturePid = process.pid + 2;
 
-const suspendScheduledTaskAutoStartForUpdate = vi.fn();
-const resumeScheduledTaskAutoStartAfterUpdate = vi.fn();
+export const suspendScheduledTaskAutoStartForUpdate = vi.fn();
+export const resumeScheduledTaskAutoStartAfterUpdate = vi.fn();
 const managedUpdateHandoff = vi.hoisted(() => ({
   start: vi.fn(),
   transfer: vi.fn(),
@@ -65,7 +93,8 @@ const sourceRuntimeCompletion = vi.hoisted(() =>
   vi.fn<typeof import("./update-cli/update-command-runtime.js").completeSourceUpdateRuntime>(),
 );
 const pluginAvailabilityPreflight = vi.hoisted(() => vi.fn());
-vi.mock("../daemon/service-process-membership.js", () => ({
+vi.mock("../daemon/service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service-process-membership.js")>()),
   inspectServiceProcessMembershipSync: vi.fn(() => "outside"),
 }));
 
@@ -78,35 +107,35 @@ const inferenceRepair = vi.hoisted(() =>
 const httpReadiness = vi.hoisted(() => vi.fn());
 const stateSchemaVersions = vi.hoisted(() => vi.fn());
 const mockedRunDaemonInstall = vi.fn();
-const serviceReadCommand = vi.fn();
-const serviceReadRuntime = vi.fn();
-const serviceFixtureState = { absentServicePort: 0 };
-const mockGetSelfAndAncestorPidsSync = vi.fn(() => new Set<number>([process.pid, 1]));
-const terminateStaleGatewayPids = vi.fn();
-const inspectPortUsage = vi.fn();
-const probePortUsage = vi.fn();
-const classifyPortListener = vi.fn();
-const formatPortDiagnostics = vi.fn();
-const callGateway = vi.fn<(opts: CallGatewayOptions) => Promise<unknown>>();
-const pathExists = vi.fn();
-const syncPluginsForUpdateChannel = vi.fn();
-const updateNpmInstalledPlugins = vi.fn();
-const loadInstalledPluginIndexInstallRecords = vi.fn(
+export const serviceReadCommand = vi.fn();
+export const serviceReadRuntime = vi.fn();
+export const serviceFixtureState = { absentServicePort: 0 };
+export const mockGetSelfAndAncestorPidsSync = vi.fn(() => new Set<number>([process.pid, 1]));
+export const terminateStaleGatewayPids = vi.fn();
+export const inspectPortUsage = vi.fn();
+export const probePortUsage = vi.fn();
+export const classifyPortListener = vi.fn();
+export const formatPortDiagnostics = vi.fn();
+export const callGateway = vi.fn<(opts: CallGatewayOptions) => Promise<unknown>>();
+export const pathExists = vi.fn();
+export const syncPluginsForUpdateChannel = vi.fn();
+export const updateNpmInstalledPlugins = vi.fn();
+export const loadInstalledPluginIndexInstallRecords = vi.fn(
   async (params: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv } = {}) =>
     params.config?.plugins?.installs ?? {},
 );
-const readPersistedInstalledPluginIndex = vi.fn(async () => null);
-const restorePersistedInstalledPluginIndexIfCurrent = vi.fn<
+export const readPersistedInstalledPluginIndex = vi.fn(async () => null);
+export const restorePersistedInstalledPluginIndexIfCurrent = vi.fn<
   typeof import("../plugins/installed-plugin-index-store-write.js").restorePersistedInstalledPluginIndexIfCurrent
 >(async () => true);
-const writePersistedInstalledPluginIndexInstallRecordsWithLease = vi.fn(async () => ({
+export const writePersistedInstalledPluginIndexInstallRecordsWithLease = vi.fn(async () => ({
   previous: null,
   revision: 1,
 }));
-const checkShellCompletionStatus = vi.fn();
-const ensureCompletionCacheExists = vi.fn();
-const installCompletion = vi.fn();
-const createPreUpdateConfigSnapshotMock = vi.fn();
+export const checkShellCompletionStatus = vi.fn();
+export const ensureCompletionCacheExists = vi.fn();
+export const installCompletion = vi.fn();
+export const createPreUpdateConfigSnapshotMock = vi.fn();
 const legacyConfigRepairMocks = vi.hoisted(() => ({
   repairLegacyConfigForUpdateChannel:
     vi.fn<
@@ -128,9 +157,11 @@ const { nodeVersionSatisfiesEngine, resolveNodeRuntimeInfo, execFile, spawn } = 
     (await import("./update-cli/update-cli-process-mocks.test-support.js")).updateCliProcessMocks,
 );
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
-const fixtureEnvSnapshot = captureEnv([
+export const fixtureEnvSnapshot = captureEnv([
   ...SUPERVISOR_HINT_ENV_VARS,
   "OPENCLAW_COMPATIBILITY_HOST_VERSION",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
   "OPENCLAW_UPDATE_RUN_HANDOFF",
   "OPENCLAW_SERVICE_MARKER",
   "OPENCLAW_SERVICE_KIND",
@@ -154,6 +185,9 @@ vi.mock("../infra/update-managed-service-handoff.js", async (importOriginal) => 
   startManagedServiceUpdateHandoff: managedUpdateHandoff.start,
   transferManagedServiceUpdateHandoff: managedUpdateHandoff.transfer,
   cancelManagedServiceUpdateHandoff: managedUpdateHandoff.cancel,
+}));
+vi.mock("../infra/update-managed-service-handoff-current.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-managed-service-handoff-current.js")>()),
   isCurrentManagedServiceUpdateHandoffProcess: async () => false,
 }));
 vi.mock("../infra/update-repair-agent.js", () => ({
@@ -216,8 +250,8 @@ vi.mock("../state/openclaw-database-preflight.js", () => ({
   preflightOpenClawDatabaseSchemas: databasePreflightMocks.preflightOpenClawDatabaseSchemas,
 }));
 
-vi.mock("../state/openclaw-state-ownership.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../state/openclaw-state-ownership.js")>()),
+vi.mock("../state/openclaw-state-ownership-preflight.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-ownership-preflight.js")>()),
   assertOpenClawStateWriteAllowedAtPath: vi.fn(async () => undefined),
 }));
 
@@ -239,57 +273,20 @@ vi.mock("../daemon/gateway-entrypoint.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../config/config.js", () => {
-  const readConfigFileSnapshot = vi.fn();
+vi.mock("../config/config.js", async () => {
+  const { createUpdateConfigMock } = await import("./update-cli-shared-fixture.test-support.js");
+  return createUpdateConfigMock();
+});
+
+vi.mock("../config/io.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/io.js")>();
+  const mocked = await import("../config/config.js");
   return {
-    createConfigIO: (
-      options: {
-        pluginValidation?: string;
-        observe?: boolean;
-        suppressFutureVersionWarning?: boolean;
-      } = {},
-    ) => ({
-      readConfigFileSnapshotForWrite: async () => ({
-        snapshot: await readConfigFileSnapshot({
-          ...(options.pluginValidation === "skip" ? { skipPluginValidation: true } : {}),
-          ...(options.observe !== undefined ? { observe: options.observe } : {}),
-          ...(options.suppressFutureVersionWarning !== undefined
-            ? { suppressFutureVersionWarning: options.suppressFutureVersionWarning }
-            : {}),
-        }),
-        writeOptions: {},
-      }),
+    ...actual,
+    createConfigIO: (options: Parameters<typeof actual.createConfigIO>[0] = {}) => ({
+      ...actual.createConfigIO(options),
+      readConfigFileSnapshotForWrite: mocked.createConfigIO(options).readConfigFileSnapshotForWrite,
     }),
-    assertConfigWriteAllowedInCurrentMode: () => {
-      if (process.env.OPENCLAW_NIX_MODE === "1") {
-        throw new Error(
-          [
-            "Config is managed by Nix (`OPENCLAW_NIX_MODE=1`), so OpenClaw treats openclaw.json as immutable.",
-            "Do not run setup, onboarding, openclaw update, plugin install/update/uninstall/enable, doctor repair/token-generation, or config set against this file.",
-            "Agent-first Nix setup: https://github.com/openclaw/nix-openclaw#quick-start",
-            "OpenClaw Nix overview: https://docs.openclaw.ai/install/nix",
-          ].join("\n"),
-        );
-      }
-    },
-    ConfigMutationConflictError: class ConfigMutationConflictError extends Error {
-      constructor(message: string) {
-        super(message);
-        this.name = "ConfigMutationConflictError";
-      }
-    },
-    parseConfigJson5: (raw: string) => {
-      try {
-        return { ok: true, parsed: JSON.parse(raw) };
-      } catch (err) {
-        return { ok: false, error: String(err) };
-      }
-    },
-    readConfigFileSnapshot,
-    readSourceConfigBestEffort: vi.fn(),
-    mutateConfigFileWithRetry: vi.fn(),
-    replaceConfigFile: vi.fn(),
-    resolveGatewayPort: vi.fn(() => 18789),
   };
 });
 
@@ -347,18 +344,8 @@ vi.mock("../infra/runtime-guard.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/runtime-guard.js")>()),
   nodeVersionSatisfiesEngine,
   parseSemver: (version: string | null) => {
-    if (!version) {
-      return null;
-    }
-    const match = version.match(/(\d+)\.(\d+)\.(\d+)/);
-    if (!match) {
-      return null;
-    }
-    return {
-      major: Number.parseInt(match[1] ?? "0", 10),
-      minor: Number.parseInt(match[2] ?? "0", 10),
-      patch: Number.parseInt(match[3] ?? "0", 10),
-    };
+    const parts = parseVersion(version);
+    return parts && { major: parts[0], minor: parts[1], patch: parts[2] };
   },
 }));
 
@@ -378,42 +365,81 @@ vi.mock("../infra/update-managed-service-handoff-cleanup.js", async (importOrigi
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const { SQLITE_READONLY_CHILD_ARG } = await import("../infra/runtime-process-entrypoints.js");
+  const { resolveRuntimeProcessEntrypointUrl } = await import("../infra/runtime-process-url.js");
+  const { resolveRuntimeWorkerArgv } = await import("../infra/runtime-worker-url.js");
+  const hostExecPath = process.execPath;
+  const brokerUrl = resolveRuntimeProcessEntrypointUrl("spawnBroker");
+  const hostBrokerArgv = resolveRuntimeWorkerArgv(brokerUrl);
+  const hostSourcePrefix = resolveRuntimeWorkerArgv(new URL("./worker.ts", import.meta.url)).slice(
+    0,
+    -1,
+  );
+  const hostCompiledPrefix = resolveRuntimeWorkerArgv(
+    new URL("./worker.js", import.meta.url),
+  ).slice(0, -1);
+  const sqliteHostArgv = (argv: readonly string[]) => {
+    const entryIndex = argv.indexOf(SQLITE_READONLY_CHILD_ARG) - 1;
+    const entry = expectDefined(argv[entryIndex], "SQLite worker entrypoint");
+    // Simulated Bun metadata must not select flags for real host SQLite children.
+    const prefix = /\.[cm]?ts$/u.test(entry) ? hostSourcePrefix : hostCompiledPrefix;
+    return [...prefix, ...argv.slice(entryIndex)];
+  };
+  const remapSqliteChild = (args: { 0: string; 1?: unknown }) => {
+    if (
+      args[0] !== process.execPath ||
+      !Array.isArray(args[1]) ||
+      !args[1].includes(SQLITE_READONLY_CHILD_ARG)
+    ) {
+      return false;
+    }
+    args[0] = hostExecPath;
+    args[1] = sqliteHostArgv(args[1]);
+    return true;
+  };
   return {
     ...actual,
-    execFile,
-    spawn,
+    // SQLite snapshots and their native broker need real IPC; updater/service children stay simulated.
+    spawnSync: (...args: Parameters<typeof actual.spawnSync>) => {
+      remapSqliteChild(args);
+      return actual.spawnSync(...args);
+    },
+    execFile: (...args: Parameters<typeof actual.execFile>) => {
+      if (remapSqliteChild(args)) {
+        return actual.execFile(...args);
+      }
+      return execFile(...args);
+    },
+    spawn: (...args: Parameters<typeof actual.spawn>) => {
+      const brokerArgv = resolveRuntimeWorkerArgv(brokerUrl);
+      const childArgs = args[1];
+      if (
+        args[0] === process.execPath &&
+        Array.isArray(childArgs) &&
+        childArgs.length === brokerArgv.length &&
+        childArgs.every((arg, index) => arg === brokerArgv[index])
+      ) {
+        // Simulated Node selection must not mix runtimes on the real broker's advanced IPC.
+        return actual.spawn(hostExecPath, hostBrokerArgv, args[2]);
+      }
+      if (remapSqliteChild(args)) {
+        return actual.spawn(...args);
+      }
+      return Array.isArray(childArgs) &&
+        (isMacosAclInspection(args[0], childArgs) || isPlistStdinConversion(args[0], childArgs))
+        ? actual.spawn(...args)
+        : spawn(...args);
+    },
   };
 });
 
 vi.mock("../process/exec.js", async (importOriginal) => {
-  const { createUpdateCommandTransportFixture, createUpdateUtf8CommandTransportFixture } =
-    await import("./update-cli/update-command-transport.test-support.js");
+  const transport = await import("./update-cli/update-command-transport.test-support.js");
   const actual = await importOriginal<typeof import("../process/exec.js")>();
   return {
-    isPlainCommandExitFailure: actual.isPlainCommandExitFailure,
-    // The real snapshot worker has separate WAL/source-inode boundary coverage.
-    // Retain real rehearsal config projection and drift checks in this CLI fixture.
-    runCommandBuffered: async (
-      ...[, options]: [string[], { input: string; timeoutMs?: number }]
-    ) => {
-      const input: unknown = JSON.parse(options.input);
-      const mode = isRecord(input) ? input.mode : undefined;
-      if (mode !== "inventory" && mode !== "snapshot") {
-        throw new Error("Unexpected update state worker mode");
-      }
-      return {
-        code: 0,
-        stdout: Buffer.from(
-          JSON.stringify(
-            mode === "inventory"
-              ? { databases: [], pluginBytes: 0, pluginPlan: "plugin-copy-plan.json" }
-              : { versions: [], pluginPaths: {} },
-          ),
-        ),
-        stderr: Buffer.alloc(0),
-      };
-    },
-    runCommandWithTimeout: await createUpdateCommandTransportFixture({
+    ...actual,
+    runCommandBuffered: transport.runUpdateBufferedCommandFixture,
+    runCommandWithTimeout: await transport.createUpdateCommandTransportFixture({
       ...commandTransport,
       get npmPrefix() {
         return commandTransport.npmPrefix;
@@ -421,12 +447,18 @@ vi.mock("../process/exec.js", async (importOriginal) => {
       readServiceCommand: (env) => serviceReadCommand(env),
     }),
     runUtf8CommandWithTimeout: vi.fn(
-      await createUpdateUtf8CommandTransportFixture(
+      await transport.createUpdateUtf8CommandTransportFixture(
         commandTransport,
         actual.runUtf8CommandWithTimeout,
       ),
     ),
-    runExec: vi.fn(async () => ({ stdout: "", stderr: "" })),
+    runExec: transport.createUpdateExecTransportFixture({
+      run: commandTransport.exec,
+      nativeRun: actual.runExec,
+      hostPlatform: commandTransport.hostPlatform,
+      isMacosAclInspection,
+      isPlistStdinConversion,
+    }),
   };
 });
 
@@ -459,46 +491,31 @@ vi.mock("../utils.js", async (importOriginal) => {
 
 vi.mock("../plugins/official-external-install-records.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/official-external-install-records.js")>()),
-  resolveTrustedSourceLinkedOfficialClawHubSpec: vi.fn(() => undefined),
-  resolveTrustedSourceLinkedOfficialNpmSpec: vi.fn(() => undefined),
+  resolveTrustedSourceLinkedOfficialClawHubInstall: vi.fn(() => undefined),
+  resolveTrustedSourceLinkedOfficialNpmInstall: vi.fn(() => undefined),
 }));
 
-vi.mock("../plugins/update.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/update.js")>();
-  return {
-    ...actual,
-    syncPluginsForUpdateChannel: (...args: unknown[]) => syncPluginsForUpdateChannel(...args),
-    updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPlugins(...args),
-  };
-});
+vi.mock("../plugins/update.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/update.js")>()),
+  syncPluginsForUpdateChannel: (...args: unknown[]) => syncPluginsForUpdateChannel(...args),
+  updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPlugins(...args),
+}));
 
-vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../plugins/installed-plugin-index-records.js")>();
-  return {
-    ...actual,
-    loadInstalledPluginIndexInstallRecords,
-    writePersistedInstalledPluginIndexInstallRecordsWithLease,
-  };
-});
+vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/installed-plugin-index-records.js")>()),
+  loadInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsWithLease,
+}));
 
-vi.mock("../plugins/installed-plugin-index-store.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../plugins/installed-plugin-index-store.js")>();
-  return {
-    ...actual,
-    readPersistedInstalledPluginIndex,
-  };
-});
+vi.mock("../plugins/installed-plugin-index-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/installed-plugin-index-store.js")>()),
+  readPersistedInstalledPluginIndex,
+}));
 
-vi.mock("../plugins/installed-plugin-index-store-write.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../plugins/installed-plugin-index-store-write.js")>();
-  return {
-    ...actual,
-    restorePersistedInstalledPluginIndexIfCurrent,
-  };
-});
+vi.mock("../plugins/installed-plugin-index-store-write.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/installed-plugin-index-store-write.js")>()),
+  restorePersistedInstalledPluginIndexIfCurrent,
+}));
 
 vi.mock("../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
   runPostCorePluginConvergence: vi.fn(
@@ -518,6 +535,12 @@ vi.mock("../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
 vi.mock("../config/backup-rotation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/backup-rotation.js")>()),
   createPreUpdateConfigSnapshot: (...args: unknown[]) => createPreUpdateConfigSnapshotMock(...args),
+}));
+
+vi.mock("../daemon/inspect.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/inspect.js")>()),
+  // Service state is fixture-owned; never pair it with the host's installed services.
+  listManagedOpenClawGatewayServices: vi.fn(async () => ({ services: [], errors: [] })),
 }));
 
 vi.mock("../daemon/service.js", async () => {
@@ -588,6 +611,12 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
   callGateway: (opts: CallGatewayOptions) => callGateway(opts),
 }));
 
+// These cases simulate a ready Gateway; no listener is started for HTTP startup probes.
+vi.mock("./daemon-cli/restart-health-probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./daemon-cli/restart-health-probe.js")>()),
+  readGatewayStartupPhase: vi.fn(async () => undefined),
+}));
+
 vi.mock("./daemon-cli/restart-health.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./daemon-cli/restart-health.js")>();
   return {
@@ -618,13 +647,10 @@ vi.mock("../commands/doctor/legacy-config-repair.js", async (importOriginal) => 
   ...(await importOriginal<typeof import("../commands/doctor/legacy-config-repair.js")>()),
   repairLegacyConfigForUpdateChannel: legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel,
 }));
-vi.mock("./completion-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./completion-runtime.js")>();
-  return {
-    ...actual,
-    installCompletion: (...args: unknown[]) => installCompletion(...args),
-  };
-});
+vi.mock("./completion-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./completion-runtime.js")>()),
+  installCompletion: (...args: unknown[]) => installCompletion(...args),
+}));
 // Mock the daemon-cli module
 vi.mock("./daemon-cli.js", () => ({
   runDaemonInstall: mockedRunDaemonInstall,
@@ -645,67 +671,25 @@ vi.mock("../commands/triage-failure.js", () => ({ triageAfterFailure }));
 vi.mock("./update-cli/update-command-report.js", () => updateFailureActionMocks);
 
 export {
-  callGateway,
-  candidateValidation,
-  checkShellCompletionStatus,
-  classifyPortListener,
   commandTransport,
-  confirm,
-  createPreUpdateConfigSnapshotMock,
-  databasePreflightMocks,
-  ensureCompletionCacheExists,
-  existingHostUri,
-  fixtureEnvSnapshot,
-  formatPortDiagnostics,
-  gatewayFixturePid,
-  httpReadiness,
-  immutableHostUri,
-  inferenceRepair,
-  inspectPortUsage,
-  installCompletion,
-  launchdUpdateCleanupMocks,
-  legacyConfigRepairMocks,
-  loadInstalledPluginIndexInstallRecords,
-  managedUpdateHandoff,
-  mockGetSelfAndAncestorPidsSync,
-  nodeVersionSatisfiesEngine,
-  pathExists,
-  pluginAvailabilityPreflight,
-  probePortUsage,
-  readPackageName,
-  readPackageVersion,
-  readPersistedInstalledPluginIndex,
-  resetRuntimeCapture,
-  resolveGlobalManager,
-  resolveNodeRuntimeInfo,
-  restartHealthTestControl,
-  restorePersistedInstalledPluginIndexIfCurrent,
-  resumeScheduledTaskAutoStartAfterUpdate,
-  retainUpdateRuntime,
-  runtimeCapture,
-  select,
-  serviceDefinitionMutationCapability,
-  serviceEnabled,
-  serviceFixtureState,
-  serviceLoaded,
-  serviceReadCommand,
-  serviceReadRuntime,
-  serviceRestart,
-  serviceStart,
-  serviceStop,
-  sourceRuntimeCompletion,
-  spawn,
-  sqliteHostPlatform,
-  stateSchemaVersions,
-  suspendScheduledTaskAutoStartForUpdate,
-  syncPluginsForUpdateChannel,
-  systemdPolicy,
-  terminateStaleGatewayPids,
-  triageAfterFailure,
-  triageCommand,
-  unrelatedGatewayFixturePid,
   updateFailureActionMocks,
-  updateNpmInstalledPlugins,
+  managedUpdateHandoff,
+  candidateValidation,
+  retainUpdateRuntime,
+  systemdPolicy,
+  sourceRuntimeCompletion,
+  pluginAvailabilityPreflight,
+  inferenceRepair,
+  httpReadiness,
+  stateSchemaVersions,
+  legacyConfigRepairMocks,
+  launchdUpdateCleanupMocks,
   windowsOfflineProbe,
-  writePersistedInstalledPluginIndexInstallRecordsWithLease,
+  databasePreflightMocks,
+  restartHealthTestControl,
+  nodeVersionSatisfiesEngine,
+  resetRuntimeCapture,
+  resolveNodeRuntimeInfo,
+  runtimeCapture,
+  spawn,
 };

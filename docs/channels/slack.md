@@ -33,6 +33,13 @@ Slack support covers DMs and channels via Slack app integrations. Default transp
 - [Slack events and operations](/channels/slack/events) — system events, interactions, and presence polling.
 - [Slack troubleshooting](/channels/slack/troubleshooting) — silent channels, ignored DMs, and dead transports.
 
+## Huddles
+
+Use the separate [Slack huddles plugin](/plugins/slack-huddles) to call an agent
+into an active huddle. It drives Slack in the OpenClaw Chrome profile, signed in
+as a dedicated Slack user account. Slack app and bot tokens cannot join huddles
+or read their audio.
+
 ## Where each section moved
 
 Every section heading from the previous single-page version keeps its anchor here, so an existing link such as `/channels/slack#text-streaming` still resolves. Each entry points at the page that now holds the content.

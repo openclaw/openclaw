@@ -4,13 +4,7 @@ import {
   type ParsedIpAddress,
 } from "@openclaw/net-policy/ip";
 
-export function normalizeGatewayErrorText(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
-function isSensitiveUrlQueryParamName(key: string): boolean {
-  return /(?:token|password|secret|key|auth|credential)/iu.test(key);
-}
+export { normalizeLowercaseStringOrEmpty as normalizeGatewayErrorText } from "@openclaw/normalization-core/string-coerce";
 
 export function isGatewayClientStoppedError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
@@ -18,13 +12,12 @@ export function isGatewayClientStoppedError(err: unknown): boolean {
 }
 
 export function formatGatewayClientErrorForLog(err: unknown): string {
-  const redactedUrlLikeString = String(err)
+  return String(err)
     .replace(/\/\/([^@/?#\s]+)@/g, "//***:***@")
     .replace(/(Authorization:\s*Bearer\s+)[^\s]+/giu, "$1***")
     .replace(/([?&])([^=&\s]+)=([^&#\s"'<>)]*)/g, (match, prefix: string, key: string) =>
-      isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=***` : match,
+      /(?:token|password|secret|key|auth|credential)/iu.test(key) ? `${prefix}${key}=***` : match,
     );
-  return redactedUrlLikeString;
 }
 
 const SHA256_HEX_FINGERPRINT = /^[a-fA-F0-9]{64}$/u;

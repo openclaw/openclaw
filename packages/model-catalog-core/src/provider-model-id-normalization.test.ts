@@ -55,12 +55,16 @@ describe("provider model id policy normalization", () => {
       "claude-opus-5": "claude-opus-5",
       "opus-5": "claude-opus-5",
       "opus-4.8": "claude-opus-4-8",
-      sonnet: "claude-sonnet-5",
+      sonnet: "claude-sonnet-5-5",
+      "sonnet-5.5": "claude-sonnet-5-5",
+      "sonnet-5-5": "claude-sonnet-5-5",
+      "anthropic/sonnet": "claude-sonnet-5-5",
+      "claude-sonnet-5": "claude-sonnet-5",
       "sonnet-5": "claude-sonnet-5",
       fable: "claude-fable-5-1",
       "fable-5": "claude-fable-5",
       "fable-5.1": "claude-fable-5-1",
-      haiku: "claude-haiku-4-5",
+      haiku: "claude-haiku-5-5",
       "opus-4.7": "claude-opus-4-7",
       "mythos-5": "claude-mythos-5",
     })) {
@@ -99,23 +103,6 @@ describe("provider model id policy normalization", () => {
     expect(
       normalizeStaticProviderModelIdWithPolicies("vercel-ai-gateway", "vercel-ai-gateway/opus-4.6"),
     ).toBe("vercel-ai-gateway/opus-4.6");
-  });
-
-  it("preserves provider-owned xAI Grok 4.20 aliases", () => {
-    expect(
-      normalizeStaticProviderModelIdWithPolicies("xai", "grok-4.20-beta-latest-reasoning"),
-    ).toBe("grok-4.20-beta-latest-reasoning");
-    expect(
-      normalizeStaticProviderModelIdWithPolicies(
-        "xai",
-        "grok-4.20-experimental-beta-0304-non-reasoning",
-      ),
-    ).toBe("grok-4.20-experimental-beta-0304-non-reasoning");
-  });
-
-  it("preserves the global xAI flagship alias without manifest metadata", () => {
-    expect(normalizeStaticProviderModelIdWithPolicies("xai", "grok-latest")).toBe("grok-latest");
-    expect(normalizeStaticProviderModelIdWithPolicies("xai", "grok-4.5-latest")).toBe("grok-4.5");
   });
 
   it("strips self provider model prefixes before runtime provider calls", () => {

@@ -47,21 +47,22 @@ export async function fetchGatewayContextResource(
     await response.body?.cancel();
     throw new Error("Gateway credentials rejected");
   }
+  if (!response.ok) {
+    // Optional resource callers ignore error bodies. Release the stream without
+    // letting stalled cleanup delay their fallback or retryable result.
+    void response.body?.cancel().catch(() => undefined);
+  }
   return response;
 }
 
 function toHttpOrigin(url: string | null | undefined): string | null {
-  if (!url) {
+  const parsed = url ? URL.parse(url) : null;
+  if (!parsed) {
     return null;
   }
-  try {
-    const parsed = new URL(url);
-    const scheme =
-      parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
-    return `${scheme}//${parsed.host}`;
-  } catch {
-    return null;
-  }
+  const scheme =
+    parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
+  return `${scheme}//${parsed.host}`;
 }
 
 /** Keeps avatar routes, credentials, and cached images scoped to the current gateway. */

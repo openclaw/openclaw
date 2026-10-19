@@ -33,7 +33,6 @@ it("settles an aborted acquisition without waiting for an unrelated queued comma
   });
   const context: OpenClawStateWorkerContext = {
     environment: { OPENCLAW_STATE_DIR: "/synthetic-lease" },
-    coordinatorRuntime: { directory: "/synthetic-coordinator", keepAlive: false },
     admission: {
       coordinationKey: "file:synthetic-lease",
       databasePath: "/synthetic-lease/state.sqlite",

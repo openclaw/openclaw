@@ -3,47 +3,36 @@ import { describe, expect, it } from "vitest";
 import {
   buildGatewayStatusJsonPayload,
   buildStatusOverviewSurfaceRows,
+  buildStatusUpdateSurface,
 } from "./status-all/format.js";
-import {
-  buildStatusOverviewSurfaceFromOverview,
-  buildStatusOverviewSurfaceFromScan,
-} from "./status-overview-surface.ts";
 import {
   baseStatusCfg,
   baseStatusExpectedUpdateChannelLabel,
-  baseStatusGatewaySnapshot,
-  baseStatusOverviewScanFields,
   baseStatusOverviewSurface,
-  baseStatusServices,
-  baseStatusUpdate,
 } from "./status.test-support.ts";
 
 describe("status-overview-surface", () => {
-  it("builds the shared overview surface from a status scan result", () => {
-    expect(
-      buildStatusOverviewSurfaceFromScan({
-        scan: baseStatusOverviewScanFields,
-        ...baseStatusServices,
-      }),
-    ).toEqual(baseStatusOverviewSurface);
-  });
+  it("shows the app owner and its update hint without offering a package update", () => {
+    const update = buildStatusUpdateSurface({
+      update: {
+        root: "/Applications/OpenClaw.app/Contents/Resources/openclaw",
+        installKind: "host",
+        packageManager: "unknown",
+        installOwner: {
+          schemaVersion: 1,
+          owner: "macos-app",
+          displayName: "OpenClaw.app",
+          updateHint: "Update OpenClaw.app to update this Gateway.",
+        },
+      },
+    });
 
-  it("builds the shared overview surface from scan overview data", () => {
-    expect(
-      buildStatusOverviewSurfaceFromOverview({
-        overview: {
-          cfg: baseStatusCfg,
-          update: baseStatusUpdate,
-          tailscaleMode: "serve",
-          tailscaleDns: "box.tail.ts.net",
-          tailscaleHttpsUrl: "https://box.tail.ts.net",
-          gatewaySnapshot: baseStatusGatewaySnapshot,
-        } as never,
-        ...baseStatusServices,
-      }),
-    ).toEqual(baseStatusOverviewSurface);
+    expect(update.updateLine).toBe(
+      "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
+    );
+    expect(update.updateAvailable).toBe(false);
+    expect(update.gitLabel).toBeNull();
   });
-
   it("builds overview rows from the shared surface bundle", () => {
     expect(
       buildStatusOverviewSurfaceRows({

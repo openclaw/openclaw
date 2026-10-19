@@ -1,8 +1,7 @@
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
-// Session-placement recovery copy is registered with the lazy chat placement
-// surfaces so device recovery does not tax every Control UI startup.
+// Shared session menus and lazy placement surfaces register their placement copy.
 const enSessionPlacement = {
   sessionsView: {
     placementFactService: "Service",
@@ -10,6 +9,8 @@ const enSessionPlacement = {
     placementFactMachine: "Machine",
     placementFactState: "State",
     placementFactDisk: "Disk",
+    placementFactInference: "Inference",
+    inferenceWorker: "Direct from worker",
     placementDiskFree: "{free} free",
     runsOnDevice: "Runs on device",
     runsOnWorker: "Runs on worker",
@@ -48,6 +49,15 @@ const enSessionPlacement = {
     repositoryWorkerRequiredTitle: "Repository worker required",
     repositoryWorkerRequiredPrompt:
       "Choose a device or cloud worker before sending another message in this repository session.",
+    moveSessionRequiredProfile:
+      "This Gateway requires its configured worker profile and machine defaults.",
+    moveToCloud: "Move to cloud…",
+    retrySessionMove: "Retry move",
+    moveLocalSessionBusy: "Wait for the active turn to finish before moving this session.",
+    moveSessionWorkspaceRequired:
+      "Moving requires a session-owned worktree or repository workspace.",
+    dispatchLocalSessionNotice:
+      "Continue the same session on a configured cloud worker or device. The active turn must finish before moving.",
     dispatchSessionTitle: "Choose a worker",
     dispatchSessionDescription: 'Choose where "{session}" should continue.',
     dispatchSessionNotice:
@@ -55,9 +65,9 @@ const enSessionPlacement = {
     dispatchSessionAction: "Continue on worker",
     stoppingSession: "Stopping session…",
     finishingSessionMove: "Finishing session move…",
-    syncingCloudFiles: "Cloud · syncing files",
+    syncingCloudFiles: "Worker · syncing files",
     syncingCloudFilesComposer: "Send now; your message starts automatically after workspace sync.",
-    syncingCloudFilesDetail: "Safely applying cloud edits",
+    syncingCloudFilesDetail: "Finalizing worker workspace",
     failedSessionTitle: "Runner failed",
     failedSessionRestartPrompt: "Restart this session to continue.",
     failedSessionStopPrompt: "Stop the failed worker before restarting this session.",
@@ -67,8 +77,7 @@ const enSessionPlacement = {
 
 export const registerSessionPlacementEnglish = Object.assign(
   () => {
-    // SAFETY: The canonical English catalog defines sessionsView as an object; this only extends it.
-    Object.assign(en.sessionsView as TranslationMap, enSessionPlacement.sessionsView);
+    Object.assign(en.sessionsView, enSessionPlacement.sessionsView);
   },
   { catalog: enSessionPlacement },
 );

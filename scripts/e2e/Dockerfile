@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.27.0
+# syntax=docker/dockerfile:1.28.0@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
 #
 # Shared Docker E2E image.
 # `bare` is a clean Node/Git runner for install/update lanes. `functional`
@@ -6,7 +6,7 @@
 
 ARG OPENCLAW_NODE_ALPINE_IMAGE="docker.io/library/node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1"
 
-FROM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS e2e-runner
+FROM node:24-trixie-slim@sha256:7f486cabe892bff8fef04c0f7da8dba84a560be3e4e2740b7a86afc57ebec315 AS e2e-runner
 
 # openssl provisions short-lived fixture certificates for HTTPS-only provider
 # routes. python3 covers package/plugin install paths that execute helper scripts.
@@ -17,7 +17,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable
-RUN npm install -g tsx@4.23.13 --no-fund --no-audit
+RUN npm install -g tsx@4.23.15 --no-fund --no-audit
 
 # Mounted survivor helpers resolve compiler tooling independently of installed packages.
 COPY package.json /tmp/openclaw-e2e-package.json

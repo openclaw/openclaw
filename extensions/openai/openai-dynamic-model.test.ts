@@ -47,6 +47,22 @@ describe("OpenAI dynamic model capabilities", () => {
       cacheWrite: 0.0125,
     },
     {
+      id: "gpt-6.1-sol",
+      promptTokens: 272_000,
+      inputRate: 2,
+      output: 0.01,
+      cacheRead: 0.00005,
+      cacheWrite: 0.00125,
+    },
+    {
+      id: "gpt-6.1-sol",
+      promptTokens: 272_001,
+      inputRate: 4,
+      output: 0.015,
+      cacheRead: 0.0001,
+      cacheWrite: 0.0025,
+    },
+    {
       id: "gpt-6-sol",
       promptTokens: 272_000,
       inputRate: 2,
@@ -114,6 +130,13 @@ describe("OpenAI dynamic model capabilities", () => {
       },
       {
         api,
+        id: "gpt-6.1-sol",
+        off: null,
+        efforts: ["low", "medium", "high", "xhigh", "max"],
+        cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+      },
+      {
+        api,
         id: "gpt-6-sol",
         off: "none",
         efforts: ["none", "low", "medium", "high", "xhigh", "max"],
@@ -149,7 +172,7 @@ describe("OpenAI dynamic model capabilities", () => {
       reasoning: true,
       input: ["text", "image"],
       contextWindow: 1_050_000,
-      contextTokens: 272_000,
+      contextTokens: api === "openai-chatgpt-responses" && id === "gpt-6.1-sol" ? 500_000 : 272_000,
       maxTokens: 128_000,
       cost,
       thinkingLevelMap: { off, minimal: "low", xhigh: "xhigh", max: "max" },
@@ -161,6 +184,36 @@ describe("OpenAI dynamic model capabilities", () => {
       },
     });
   });
+
+  it.each([128_000, 272_000, 700_000])(
+    "preserves GPT-6.1 Sol subscription context override %s",
+    (contextTokens) => {
+      const exact: ProviderRuntimeModel = {
+        id: "gpt-6.1-sol",
+        name: "GPT-6.1 Sol",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+        contextWindow: 1_050_000,
+        contextTokens,
+        maxTokens: 128_000,
+      };
+      const model = buildOpenAIProvider().resolveDynamicModel?.({
+        provider: "openai",
+        modelId: exact.id,
+        providerConfig: {
+          api: "openai-chatgpt-responses",
+          baseUrl: exact.baseUrl,
+          models: [],
+        },
+        modelRegistry: modelRegistry([exact]),
+      });
+      expect(model?.contextTokens).toBe(contextTokens);
+    },
+  );
 
   it.each(preferredModels)(
     "retains preferred capabilities for $id without discovery",
@@ -355,5 +408,30 @@ describe("OpenAI dynamic model capabilities", () => {
       modelRegistry: modelRegistry([exact]),
     });
     expect(model?.compat).toEqual(exact.compat);
+  });
+
+  // The API-key listing hides these families; config defaults and session overrides still name them.
+  it.each([
+    ["gpt-4o", false],
+    ["o3", true],
+    ["ft:gpt-4.1-mini:acme::abc123", false],
+  ] as const)("resolves the selected pre-GPT-5 ref %s with listing metadata", (id, reasoning) => {
+    const model = buildOpenAIProvider().resolveDynamicModel?.({
+      provider: "openai",
+      modelId: id,
+      modelRegistry: modelRegistry(),
+    });
+    expect(model).toEqual({
+      id,
+      name: id,
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+    });
   });
 });

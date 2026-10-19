@@ -1,10 +1,9 @@
-/** Resolves channel and account context for command handlers. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { getLoadedChannelPluginById } from "../../channels/plugins/registry-loaded.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
 
 type CommandSurfaceParams = {
   ctx: {
@@ -39,9 +38,7 @@ export function resolveChannelAccountId(params: ChannelAccountParams): string {
     return accountId;
   }
   const channel = resolveCommandSurfaceChannel(params);
-  const plugin = getActivePluginChannelRegistry()?.channels.find(
-    (entry) => entry.plugin.id === channel,
-  )?.plugin;
+  const plugin = getLoadedChannelPluginById(channel);
   const configuredDefault = normalizeOptionalString(plugin?.config.defaultAccountId?.(params.cfg));
   return configuredDefault || "default";
 }

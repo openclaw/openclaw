@@ -1,4 +1,3 @@
-// Xai setup module handles plugin onboarding behavior.
 import {
   applyAgentDefaultModelPrimary,
   applyOnboardAuthAgentModelsAndProviders,
@@ -30,7 +29,7 @@ const xaiPresetAppliers = createModelCatalogPresetAppliers({
 
 function pruneRetiredXaiBuiltinModels(cfg: OpenClawConfig): OpenClawConfig {
   const provider = cfg.models?.providers?.xai;
-  if (!provider || !Array.isArray(provider.models)) {
+  if (!provider?.models) {
     return cfg;
   }
   const models = provider.models.filter((model) => !isLegacyXaiBuiltinModel(model));
@@ -71,6 +70,12 @@ export function applyXaiOAuthConfig(
     providers: {
       xai: {
         ...provider,
+        // ID-keyed auth patches preserve omitted fields. Explicit undefined removes old facts.
+        models: provider.models.map((model) => ({
+          ...model,
+          thinkingLevelMap: undefined,
+          compat: { ...model.compat, supportedReasoningEfforts: undefined },
+        })),
         apiKey: undefined,
         authHeader: undefined,
         headers: undefined,

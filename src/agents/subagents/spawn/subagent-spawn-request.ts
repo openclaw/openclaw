@@ -1,21 +1,26 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId } from "../../../routing/session-key.js";
+import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
 import { listAgentIds } from "../../agent-scope-config.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "../../spawn-plan.js";
+import { prepareSubagentSessionListReadCache } from "../registry/subagent-registry-state.js";
 import { listSwarmRunsForGroup } from "../registry/subagent-registry.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../swarm/swarm-output-schema.js";
 import { holdQueuedSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
+import { getSubagentDepthFromSessionStoreInWorker } from "./subagent-depth.js";
+import { createSubagentSessionStore } from "./subagent-session-store.js";
 import { resolveSubagentContextMode } from "./subagent-spawn-context.js";
-import type {
-  SpawnSubagentContext,
-  SpawnSubagentParams,
-  SpawnSubagentResult,
+import {
+  rejectSubagentSpawnRequest,
+  type SpawnSubagentContext,
+  type SpawnSubagentParams,
 } from "./subagent-spawn-contract.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
@@ -25,10 +30,6 @@ import {
   resolveGatewaySessionStoreTargetInWorker,
 } from "./subagent-spawn.runtime.js";
 import { normalizeSubagentTaskName } from "./subagent-task-name.js";
-
-function rejectSubagentSpawnRequest(status: "error" | "forbidden", error: string) {
-  return { ok: false as const, result: { status, error } satisfies SpawnSubagentResult };
-}
 
 export async function resolveSubagentSpawnRequest(
   params: SpawnSubagentParams,
@@ -82,20 +83,11 @@ export async function resolveSubagentSpawnRequest(
     );
   }
   const cleanup: "delete" | "keep" =
-    spawnMode === "session"
-      ? "keep"
-      : params.cleanup === "keep" || params.cleanup === "delete"
-        ? params.cleanup
-        : "keep";
-  const expectsCompletionMessage = params.collect
-    ? false
-    : params.expectsCompletionMessage !== false;
+    spawnMode !== "session" && params.cleanup === "delete" ? "delete" : "keep";
+  const expectsCompletionMessage = !params.collect && params.expectsCompletionMessage !== false;
   const hookRunner: SubagentLifecycleHookRunner | null = getGlobalHookRunner();
   const cfg = getRuntimeConfig();
 
-  // When agent omits runTimeoutSeconds, use the config default.
-  // Falls back to 0 (no timeout) if config key is also unset,
-  // preserving current behavior for existing deployments.
   const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
@@ -118,36 +110,62 @@ export async function resolveSubagentSpawnRequest(
 
   // Capture the requester window before launch; a reset must not move child
   // progress receipts or private results to a replacement session at the same key.
-  let completionRequesterSessionId: string | undefined;
   const captureRequester = async () => {
     try {
+      const requesterAgentId = resolveSessionAgentId({
+        config: cfg,
+        sessionKey: requesterInternalKey,
+        agentId: ctx.requesterAgentIdOverride,
+      });
+      await waitForSessionParticipantRecording({
+        agentId: requesterAgentId,
+        sessionKey: requesterInternalKey,
+        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: requesterAgentId }),
+      });
       const target = await resolveGatewaySessionStoreTargetInWorker({
         cfg,
         key: ownership.completionRequesterSessionKey,
         agentId: ctx.requesterAgentIdOverride,
         assertActive: ctx.assertActive,
+        projection:
+          requesterInternalKey === ownership.completionRequesterSessionKey ? "full" : "list",
       });
+      const completionEntry = target.store[target.canonicalKey];
+      // Proxied completion never supplies the controller's isolation or preferences.
+      const requesterTarget =
+        requesterInternalKey === ownership.completionRequesterSessionKey
+          ? target
+          : await resolveGatewaySessionStoreTargetInWorker({
+              cfg,
+              key: requesterInternalKey,
+              agentId: ctx.requesterAgentIdOverride,
+              assertActive: ctx.assertActive,
+              projection: "full",
+            });
       ctx.assertActive?.();
-      completionRequesterSessionId = target.store[target.canonicalKey]?.sessionId;
+      if (params.completionTarget === "parent" && !completionEntry?.sessionId) {
+        return rejectSubagentSpawnRequest(
+          "error",
+          "Private completion requires an existing requester session. Retry from an active session.",
+        );
+      }
+      return {
+        ok: true as const,
+        requesterTarget,
+        requesterEntry: requesterTarget.store[requesterTarget.canonicalKey],
+        completionRequesterSessionId: completionEntry?.sessionId,
+        completionRequesterLifecycleRevision: completionEntry?.lifecycleRevision,
+      };
     } catch (error) {
       return rejectSubagentSpawnRequest(
         "error",
         `sessions_spawn could not read the requester session: ${summarizeSpawnError(error)}`,
       );
     }
-    if (params.completionTarget === "parent" && !completionRequesterSessionId) {
-      return rejectSubagentSpawnRequest(
-        "error",
-        "Private completion requires an existing requester session. Retry from an active session.",
-      );
-    }
-    return undefined;
   };
-  if (!params.collect) {
-    const rejection = await captureRequester();
-    if (rejection) {
-      return rejection;
-    }
+  const earlyRequester = !params.collect ? await captureRequester() : undefined;
+  if (earlyRequester && !earlyRequester.ok) {
+    return earlyRequester;
   }
 
   const requesterAgentId = resolveSessionAgentId({
@@ -188,13 +206,11 @@ export async function resolveSubagentSpawnRequest(
   const effectiveRequestedAgentId = usingDefaultAgentId
     ? swarmConfig.defaultAgentId
     : requestedAgentId;
-  if (usingDefaultAgentId) {
-    if (!isValidAgentId(effectiveRequestedAgentId)) {
-      return rejectSubagentSpawnRequest(
-        "error",
-        `tools.swarm.defaultAgentId contains invalid agentId "${effectiveRequestedAgentId}".`,
-      );
-    }
+  if (usingDefaultAgentId && !isValidAgentId(effectiveRequestedAgentId)) {
+    return rejectSubagentSpawnRequest(
+      "error",
+      `tools.swarm.defaultAgentId contains invalid agentId "${effectiveRequestedAgentId}".`,
+    );
   }
   const targetAgentId = effectiveRequestedAgentId
     ? normalizeAgentId(effectiveRequestedAgentId)
@@ -209,6 +225,18 @@ export async function resolveSubagentSpawnRequest(
   const swarmSchedulerGroupKey = swarmGroupId
     ? JSON.stringify([requesterAgentId, requesterInternalKey, swarmGroupId])
     : undefined;
+  const callerDepth = await getSubagentDepthFromSessionStoreInWorker(requesterInternalKey, {
+    cfg,
+    agentId: requesterAgentId,
+    store: earlyRequester?.requesterEntry
+      ? createSubagentSessionStore(
+          earlyRequester.requesterTarget.readSource?.path ??
+            earlyRequester.requesterTarget.storePath,
+          requesterAgentId,
+          { sessionKey: requesterInternalKey, entry: earlyRequester.requesterEntry },
+        )
+      : undefined,
+  });
   const resolveAdmission = (pendingChildren = 0) => {
     const collectorRuns = params.collect
       ? swarmGroupId
@@ -217,6 +245,8 @@ export async function resolveSubagentSpawnRequest(
       : undefined;
     return resolveSpawnAdmission({
       cfg,
+      callerDepth,
+      inheritedToolPolicySource: ctx.inheritedToolPolicySource,
       collector: collectorRuns
         ? {
             liveChildren: collectorRuns.filter((entry) => !entry.collectorCompletion).length,
@@ -234,6 +264,8 @@ export async function resolveSubagentSpawnRequest(
     });
   };
   try {
+    ctx.assertActive?.();
+    await prepareSubagentSessionListReadCache();
     ctx.assertActive?.();
   } catch (error) {
     return rejectSubagentSpawnRequest(
@@ -311,59 +343,62 @@ export async function resolveSubagentSpawnRequest(
   // Keep submission order while requester reads finish on independent workers.
   // Hand this exact hold to the spawn owner; failed reads must unblock the lane.
   const reservation = reservationPending ? holdQueuedSwarmRun(childIdem) : undefined;
-  if (params.collect) {
-    let captured = false;
-    try {
-      // Notify after capturing the requester, but include failed reservation work
-      // in the tool's effect receipt before the attempt settles.
-      const rejection = await captureRequester().finally(() => ctx.onSpawnEffectsStart?.());
-      if (rejection) {
-        return rejection;
+  const requester =
+    earlyRequester ??
+    (await (async () => {
+      let captured = false;
+      try {
+        // Notify after capturing the requester, but include failed reservation work
+        // in the tool's effect receipt before the attempt settles.
+        const capturedRequester = await captureRequester().finally(() =>
+          ctx.onSpawnEffectsStart?.(),
+        );
+        if (!capturedRequester.ok) {
+          return capturedRequester;
+        }
+        captured = true;
+        return capturedRequester;
+      } finally {
+        if (!captured) {
+          reservation?.withdraw();
+          await reservation?.release();
+        }
       }
-      captured = true;
-    } finally {
-      if (!captured) {
-        reservation?.withdraw();
-        await reservation?.release();
-      }
-    }
+    })());
+  if (!requester.ok) {
+    return requester;
   }
   return {
     ok: true as const,
     resolved: {
-      request: {
-        taskName,
-        spawnMode,
-        cleanup,
-        expectsCompletionMessage,
-        completionRequesterSessionId,
-      },
-      runtime: {
-        hookRunner,
-        cfg,
-        runTimeoutSeconds,
-        contextMode,
-        requesterInternalKey,
-        ownership,
-        requesterAgentId,
-        targetAgentId,
-      },
-      swarm: {
-        config: swarmConfig,
-        groupId: swarmGroupId,
-        schedulerGroupKey: swarmSchedulerGroupKey,
-        launchReplayKey: swarmLaunchReplayKey,
-        soleImplicitMember,
-        reservationPending,
-        reservation,
-      },
-      admission: {
-        resolve: resolveAdmission,
-        initial: admission,
-        reservation: admissionReservation?.ok ? admissionReservation : undefined,
-        childDepth,
-        maxSpawnDepth,
-      },
+      taskName,
+      spawnMode,
+      cleanup,
+      expectsCompletionMessage,
+      completionRequesterSessionId: requester.completionRequesterSessionId,
+      completionRequesterLifecycleRevision: requester.completionRequesterLifecycleRevision,
+      hookRunner,
+      cfg,
+      runTimeoutSeconds,
+      contextMode,
+      requesterInternalKey,
+      ownership,
+      requesterEntry: requester.requesterEntry,
+      requesterTarget: requester.requesterTarget,
+      requesterAgentId,
+      targetAgentId,
+      swarmConfig,
+      swarmGroupId,
+      swarmSchedulerGroupKey,
+      swarmLaunchReplayKey,
+      soleImplicitMember,
+      reservationPending,
+      swarmReservation: reservation,
+      resolveAdmission,
+      admission,
+      admissionReservation: admissionReservation?.ok ? admissionReservation : undefined,
+      childDepth,
+      maxSpawnDepth,
       childIdem,
     },
   };

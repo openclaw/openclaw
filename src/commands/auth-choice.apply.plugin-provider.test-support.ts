@@ -3,7 +3,7 @@ import type { ProviderPlugin } from "../plugins/types.js";
 
 export const LOCAL_PROVIDER_ID = "local-provider";
 export const LOCAL_PROVIDER_LABEL = "Local Provider";
-export const LOCAL_AUTH_METHOD_ID = "local";
+const LOCAL_AUTH_METHOD_ID = "local";
 export const LOCAL_PROFILE_ID = `${LOCAL_PROVIDER_ID}:default`;
 export const LOCAL_API_KEY = "local-provider-key";
 export const LOCAL_DEFAULT_MODEL = `${LOCAL_PROVIDER_ID}/demo-model`;

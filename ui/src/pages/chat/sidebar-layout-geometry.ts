@@ -5,10 +5,6 @@ import type {
   SidebarSlotId,
 } from "./sidebar-layout-types.ts";
 
-export function cloneLayout(layout: SidebarLayout): SidebarLayout {
-  return structuredClone(layout);
-}
-
 export const SIDEBAR_MIN_WIDTH_PX = 260;
 export const SIDEBAR_MIN_HEIGHT_PX = 220;
 const SIDEBAR_MAX_WIDTH_PX = 1_200;
@@ -55,7 +51,7 @@ export function fitSidebarLayout(
   layout: SidebarLayout,
   availableWidth: number,
 ): SidebarLayout | null {
-  const next = cloneLayout(layout);
+  const next = structuredClone(layout);
   if (!Number.isFinite(availableWidth) || availableWidth <= 0) {
     return next;
   }
@@ -100,7 +96,7 @@ export function initializeBrowserSidebarWidth(
   ) {
     return layout;
   }
-  const next = cloneLayout(layout);
+  const next = structuredClone(layout);
   const nextColumn = next.columns[0]!;
   // Reclaim the centered chat's spare margins; share tighter panes evenly.
   nextColumn.width = Math.max(

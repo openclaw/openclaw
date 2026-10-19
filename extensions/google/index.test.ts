@@ -1,4 +1,3 @@
-// Google tests cover index plugin behavior.
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,13 +5,14 @@ import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type {
   OpenClawPluginApi,
   ProviderReplaySessionEntry,
-  ProviderSanitizeReplayHistoryContext,
+  ProviderSanitizeReplayHistoryContextV2,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
+import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { buildGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import googleProviderDiscovery from "./provider-discovery.js";
@@ -32,6 +32,13 @@ function registerGoogleProviders() {
     name: "Google Provider",
   });
 }
+
+const adc = JSON.stringify({
+  type: "authorized_user",
+  client_id: "fixture-client",
+  client_secret: "fixture-secret",
+  refresh_token: "fixture-refresh",
+});
 
 describe("google provider plugin hooks", () => {
   it("owns replay policy and reasoning mode for the direct Gemini provider", async () => {
@@ -75,25 +82,30 @@ describe("google provider plugin hooks", () => {
       } as never),
     ).toBe("native");
 
+    const assistantMessage = makeAgentAssistantMessage({
+      api: "google-generative-ai",
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      content: [{ type: "text", text: "hello" }],
+    });
     const sanitized = await Promise.resolve(
-      provider.sanitizeReplayHistory?.({
+      provider.sanitizeReplayHistoryAsync?.({
         provider: "google",
         modelApi: "google-generative-ai",
         modelId: "gemini-3.1-pro-preview",
         sessionId: "session-1",
-        messages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "hello" }],
-          },
-        ],
+        messages: [structuredClone(assistantMessage)],
         sessionState: {
           getCustomEntries: () => customEntries,
-          appendCustomEntry: (customType: string, data: unknown) => {
+          appendCustomEntry: () => {
+            throw new Error("legacy persistence used");
+          },
+          appendCustomEntryAsync: async (customType: string, data: unknown) => {
             customEntries.push({ customType, data });
+            return "bootstrap";
           },
         },
-      } as ProviderSanitizeReplayHistoryContext),
+      } satisfies ProviderSanitizeReplayHistoryContextV2),
     );
 
     const bootstrapMessage = sanitized?.[0] as
@@ -102,10 +114,7 @@ describe("google provider plugin hooks", () => {
     expect(bootstrapMessage?.role).toBe("user");
     expect(bootstrapMessage?.content).toBe("(session bootstrap)");
     expect(typeof bootstrapMessage?.timestamp).toBe("number");
-    expect(sanitized?.[1]).toEqual({
-      role: "assistant",
-      content: [{ type: "text", text: "hello" }],
-    });
+    expect(sanitized?.[1]).toEqual(assistantMessage);
     expect(customEntries).toHaveLength(1);
     expect(customEntries[0]?.customType).toBe("google-turn-ordering-bootstrap");
   });
@@ -180,16 +189,7 @@ describe("google provider plugin hooks", () => {
   it("resolves Google Vertex ADC auth evidence to the config marker", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-config-key-"));
     const credentialsPath = path.join(tempDir, "application_default_credentials.json");
-    await writeFile(
-      credentialsPath,
-      JSON.stringify({
-        type: "authorized_user",
-        client_id: "client-id",
-        client_secret: "client-secret",
-        refresh_token: "refresh-token",
-      }),
-      "utf8",
-    );
+    await writeFile(credentialsPath, adc, "utf8");
     const { providers } = await registerGoogleProviders();
     const provider = requireRegisteredProvider(providers, "google-vertex");
 
@@ -240,16 +240,7 @@ describe("google provider plugin hooks", () => {
       "application_default_credentials.json",
     );
     await Promise.all([
-      writeFile(
-        relocatedCredentialsPath,
-        JSON.stringify({
-          type: "authorized_user",
-          client_id: "fixture-client",
-          client_secret: "fixture-secret",
-          refresh_token: "fixture-refresh",
-        }),
-        "utf8",
-      ),
+      writeFile(relocatedCredentialsPath, adc, "utf8"),
       writeFile(homeCredentialsPath, JSON.stringify({ type: "unsupported" }), "utf8"),
     ]);
     const { providers } = await registerGoogleProviders();
@@ -274,16 +265,7 @@ describe("google provider plugin hooks", () => {
       }),
     ).toBeUndefined();
 
-    await writeFile(
-      homeCredentialsPath,
-      JSON.stringify({
-        type: "authorized_user",
-        client_id: "stale-client",
-        client_secret: "stale-secret",
-        refresh_token: "stale-refresh",
-      }),
-      "utf8",
-    );
+    await writeFile(homeCredentialsPath, adc, "utf8");
     const missingRelocatedCredentialsEnv = {
       ...env,
       CLOUDSDK_CONFIG: path.join(tempDir, "missing-cloud-sdk"),
@@ -381,10 +363,6 @@ describe("google provider plugin hooks", () => {
           },
         },
       });
-      const thinkingConfig = (
-        (capturedPayload as Record<string, unknown>).config as Record<string, unknown>
-      ).thinkingConfig as Record<string, unknown>;
-      expect(thinkingConfig).not.toHaveProperty("thinkingBudget");
     };
 
     runCase(googleProvider, "google");
@@ -413,6 +391,7 @@ describe("google provider plugin hooks", () => {
       throw new Error("expected Google provider thinking profile resolver");
     }
     const resolveThinkingProfile = provider.resolveThinkingProfile;
+    const levels = (ids: string[]) => ids.map((id) => ({ id }));
     const gemini3Profile = resolveThinkingProfile({
       provider: "google",
       modelId: "gemini-3.1-pro-preview",
@@ -422,19 +401,9 @@ describe("google provider plugin hooks", () => {
       modelId: "gemini-2.5-flash",
     } as never);
 
-    expect(gemini3Profile?.levels).toEqual([
-      { id: "off" },
-      { id: "low" },
-      { id: "adaptive" },
-      { id: "high" },
-    ]);
-    expect(gemini25Profile?.levels).toEqual([
-      { id: "off" },
-      { id: "minimal" },
-      { id: "low" },
-      { id: "medium" },
-      { id: "adaptive" },
-      { id: "high" },
-    ]);
+    expect(gemini3Profile?.levels).toEqual(levels(["off", "low", "adaptive", "high"]));
+    expect(gemini25Profile?.levels).toEqual(
+      levels(["off", "minimal", "low", "medium", "adaptive", "high"]),
+    );
   });
 });

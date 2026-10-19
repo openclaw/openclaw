@@ -83,10 +83,17 @@ suite.define(() => {
             },
           },
         });
+        // Keep this regression keyboard-only: a pointer click would light-dismiss
+        // the previous pane's CI disclosure before Escape is exercised.
+        const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+        await pane.getByRole("button", { name: "Details", exact: true }).press("Enter");
+        await expect
+          .poll(() => pane.locator('[data-details-group="pull-requests"]').getAttribute("open"))
+          .not.toBeNull();
         const visibleChecks = page.locator(
           'openclaw-chat-pane[aria-hidden="false"] .chat-pr__checks',
         );
-        const summary = visibleChecks.locator("summary");
+        const summary = visibleChecks.locator(":scope > summary");
         await summary.focus();
         await summary.press("Enter");
         await expect.poll(() => visibleChecks.getAttribute("open")).toBe("");

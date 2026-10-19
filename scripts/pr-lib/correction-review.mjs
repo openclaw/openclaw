@@ -4,6 +4,8 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, lstatSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
+import { baselineRefreshCandidate } from "./baseline-refresh.mjs";
+import { incomingReview } from "./incoming-review.mjs";
 import {
   createReviewArtifactTemplate,
   renderReviewMarkdown,
@@ -20,35 +22,12 @@ function readRegular(path) {
   return readFileSync(path, "utf8");
 }
 
-function incomingReview(pr, incoming, jsonOid) {
-  const reviewPath = ".local/review.json";
-  const review = JSON.parse(readRegular(reviewPath));
-  const prMeta = JSON.parse(readRegular(".local/pr-meta.json"));
-  const violations = validateReviewArtifacts({ review, prMeta });
-  if (violations.length) {
-    throw new Error(violations.join("\n"));
-  }
-  if (prMeta.number !== pr || prMeta.headRefOid !== incoming) {
-    throw new Error("Correction preparation does not match the incoming PR review.");
-  }
-  if (git("hash-object", "--no-filters", reviewPath) !== jsonOid) {
+function candidateMetadata(prMeta, incoming, head, jsonOid, anchor, bindingOid) {
+  if (lstatSync(".local/review-transition.json", { throwIfNoEntry: false })) {
     throw new Error(
-      "Incoming review changed after correction admission. Retain evidence and re-review.",
+      "Complete the retained native transition before correction review or publication.",
     );
   }
-  const findings = review.findings.filter((item) =>
-    ["BLOCKER", "IMPORTANT"].includes(item.severity),
-  );
-  if (review.recommendation !== "NEEDS WORK" || findings.length === 0) {
-    throw new Error("Correction admission requires NEEDS WORK with actionable findings.");
-  }
-  if (new Set(findings.map((item) => item.id)).size !== findings.length) {
-    throw new Error("Correction admission requires distinct finding IDs.");
-  }
-  return { prMeta, findings };
-}
-
-function candidateMetadata(prMeta, incoming, head) {
   if (!/^[0-9a-f]{40}$/u.test(head) || head === incoming || git("rev-parse", "HEAD") !== head) {
     throw new Error("Review a committed correction, not the unchanged incoming head.");
   }
@@ -59,20 +38,24 @@ function candidateMetadata(prMeta, incoming, head) {
   }
   // Include both the incoming scope and every fixup path. Candidate metadata is
   // derived in memory; the live incoming-head metadata is never rewritten.
-  const changed = execFileSync(gitExecutable, ["diff", "--name-only", "-z", incoming, head], {
-    encoding: "utf8",
-    // The complete path set is required; a fixed capture cap rejects large corrections.
-    maxBuffer: Infinity,
-  })
-    .split("\0")
-    .filter(Boolean);
-  const paths = new Set([...prMeta.files.map((file) => file.path), ...changed]);
-  return { ...prMeta, headRefOid: head, files: [...paths].map((path) => ({ path })) };
+  const baseline = baselineRefreshCandidate({
+    pr: prMeta.number,
+    incoming,
+    incomingReviewOid: jsonOid,
+    head,
+    anchor,
+    bindingOid,
+  });
+  const paths = new Set([...prMeta.files.map((file) => file.path), ...baseline.paths]);
+  return {
+    metadata: { ...prMeta, headRefOid: head, files: [...paths].map((path) => ({ path })) },
+    baselineHead: baseline.baselineHead,
+  };
 }
 
-function runCorrectionReview(command, pr, incoming, head, jsonOid) {
+function runCorrectionReview(command, pr, incoming, head, jsonOid, anchor, bindingOid) {
   if (
-    !["init", "validate"].includes(command) ||
+    !["init", "validate", "publication-baseline"].includes(command) ||
     !Number.isSafeInteger(pr) ||
     pr < 1 ||
     !/^[0-9a-f]{40}$/u.test(incoming)
@@ -80,7 +63,7 @@ function runCorrectionReview(command, pr, incoming, head, jsonOid) {
     throw new Error("Invalid correction-review command or PR number.");
   }
   const { prMeta, findings } = incomingReview(pr, incoming, jsonOid);
-  const candidate = candidateMetadata(prMeta, incoming, head);
+  const candidate = candidateMetadata(prMeta, incoming, head, jsonOid, anchor, bindingOid);
   const jsonPath = ".local/correction-review.json";
   const incomingJsonPath = ".local/correction-incoming-review.json";
   if (command === "init") {
@@ -109,7 +92,7 @@ function runCorrectionReview(command, pr, incoming, head, jsonOid) {
   const review = JSON.parse(readRegular(jsonPath));
   const violations = validateReviewArtifacts({
     review,
-    prMeta: candidate,
+    prMeta: candidate.metadata,
   });
   if (violations.length) {
     throw new Error(violations.join("\n"));
@@ -143,18 +126,23 @@ function runCorrectionReview(command, pr, incoming, head, jsonOid) {
   ) {
     throw new Error("The correction review must resolve every incoming BLOCKER/IMPORTANT finding.");
   }
-  process.stdout.write(renderReviewMarkdown(review));
+  process.stdout.write(
+    command === "publication-baseline"
+      ? (candidate.baselineHead ?? "")
+      : renderReviewMarkdown(review),
+  );
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
-    const [command, pr, incoming, head, jsonOid, ...extra] = process.argv.slice(2);
+    const [command, pr, incoming, head, jsonOid, anchor, bindingOid, ...extra] =
+      process.argv.slice(2);
     if (extra.length || !jsonOid) {
       throw new Error(
         "Expected command, PR, incoming/candidate heads and incoming review JSON object ID.",
       );
     }
-    runCorrectionReview(command, Number(pr), incoming, head, jsonOid);
+    runCorrectionReview(command, Number(pr), incoming, head, jsonOid, anchor, bindingOid);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

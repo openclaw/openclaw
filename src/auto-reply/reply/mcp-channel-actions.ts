@@ -1,7 +1,7 @@
 import type { McpConnectAction } from "../../agents/mcp-connect-action.js";
 import type { McpAppChannelView } from "../../agents/mcp-ui-resource.js";
 import { materializeMcpAppChannelPresentation } from "../../gateway/mcp-app-channel-action.js";
-import { isReplyPayloadTerminalContent } from "../reply-payload.js";
+import { copyReplyPayloadMetadata, isReplyPayloadTerminalContent } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
 function attachChannelPresentation(
@@ -24,7 +24,7 @@ function attachChannelPresentation(
   }
   const result = payloads.slice();
   const payload = payloads[index]!;
-  result[index] = {
+  result[index] = copyReplyPayloadMetadata(payload, {
     ...payload,
     presentation: payload.presentation
       ? {
@@ -32,7 +32,7 @@ function attachChannelPresentation(
           blocks: [...payload.presentation.blocks, ...presentation.blocks],
         }
       : presentation,
-  };
+  });
   return result;
 }
 

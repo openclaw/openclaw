@@ -117,8 +117,6 @@ private actor ChatSendHydrationGateway {
             payload = ["models": []]
         case "question.list":
             payload = ["questions": []]
-        case "tasks.list":
-            payload = ["tasks": []]
         default:
             payload = [:]
         }

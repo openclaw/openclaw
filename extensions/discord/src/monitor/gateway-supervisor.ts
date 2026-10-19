@@ -2,6 +2,7 @@ import type { EventEmitter } from "node:events";
 import { createSubsystemLogger, danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { GatewayPluginContract } from "../internal/plugin-contract.js";
 
 type DiscordGatewayEventType = "disallowed-intents" | "fatal" | "other" | "reconnect-exhausted";
 
@@ -24,12 +25,8 @@ export class DiscordGatewayLifecycleError extends Error {
   }
 }
 
-export function getDiscordGatewayEmitter(gateway?: unknown): EventEmitter | undefined {
-  return (gateway as { emitter?: EventEmitter } | undefined)?.emitter;
-}
-
 export type DiscordGatewaySupervisor = {
-  emitter?: EventEmitter;
+  emitter: EventEmitter;
   attachLifecycle: (handler: (event: DiscordGatewayEvent) => void) => void;
   detachLifecycle: () => void;
   drainPending: (
@@ -56,16 +53,17 @@ function ensureDiscordGatewayLateErrorGuard(emitter: EventEmitter): void {
   if (emitter.listenerCount("error") > 0) {
     return;
   }
-  const seenMessages = new Set<string>();
+  let logged = false;
   // Keep the emitter safe after its supervisor is gone without retaining the disposed runtime.
-  // A module-owned logger preserves one diagnostic per distinct late error until the next start.
+  // One diagnostic is enough for a retired socket; later errors must not grow retained state.
   const guard = (err: unknown) => {
-    const message = formatDiscordGatewayErrorMessage(err);
-    if (seenMessages.has(message)) {
+    if (logged) {
       return;
     }
-    seenMessages.add(message);
-    discordGatewayLog.error(`suppressed late gateway error after dispose: ${message}`);
+    logged = true;
+    discordGatewayLog.error(
+      `suppressed late gateway error after dispose: ${formatDiscordGatewayErrorMessage(err)}`,
+    );
   };
   discordGatewayLateErrorGuards.set(emitter, guard);
   emitter.on("error", guard);
@@ -85,14 +83,13 @@ function readFirstStackFrame(err: Error): string | undefined {
 }
 
 function formatDiscordGatewayErrorMessage(err: unknown): string {
+  const detail = formatErrorMessage(err);
   if (!(err instanceof Error)) {
-    return formatErrorMessage(err);
+    return detail;
   }
   if (err.message) {
-    const detail = formatErrorMessage(err);
     return err.name ? `${err.name}: ${detail}` : detail;
   }
-  const detail = formatErrorMessage(err);
   const firstFrame = readFirstStackFrame(err);
   if (firstFrame && detail === (err.name || "Error")) {
     return `${detail} @ ${firstFrame}`;
@@ -131,42 +128,16 @@ function classifyDiscordGatewayEvent(params: {
 }
 
 export function createDiscordGatewaySupervisor(params: {
-  gateway?: unknown;
+  gateway: Pick<GatewayPluginContract, "emitter">;
   isDisallowedIntentsError: (err: unknown) => boolean;
   runtime: RuntimeEnv;
 }): DiscordGatewaySupervisor {
-  const emitter = getDiscordGatewayEmitter(params.gateway);
+  const { emitter } = params.gateway;
   const pending: DiscordGatewayEvent[] = [];
-  if (!emitter) {
-    return {
-      attachLifecycle: () => {},
-      detachLifecycle: () => {},
-      drainPending: () => "continue",
-      dispose: () => {},
-      emitter,
-    };
-  }
 
   let lifecycleHandler: ((event: DiscordGatewayEvent) => void) | undefined;
   let phase: GatewaySupervisorPhase = "buffering";
-  const seenLateEventKeys = new Set<string>();
-  const logLateEvent = (
-    state: Extract<GatewaySupervisorPhase, "disposed" | "teardown">,
-    event: DiscordGatewayEvent,
-  ) => {
-    const key = `${state}:${event.type}:${event.message}`;
-    if (seenLateEventKeys.has(key)) {
-      return;
-    }
-    seenLateEventKeys.add(key);
-    params.runtime.error?.(
-      danger(
-        `discord: suppressed late gateway ${event.type} error ${
-          state === "disposed" ? "after dispose" : "during teardown"
-        }: ${event.message}`,
-      ),
-    );
-  };
+  let loggedLateError = false;
   const onGatewayError = (err: unknown) => {
     const event = classifyDiscordGatewayEvent({
       err,
@@ -174,13 +145,19 @@ export function createDiscordGatewaySupervisor(params: {
     });
     switch (phase) {
       case "disposed":
-        logLateEvent("disposed", event);
+        return;
+      case "teardown":
+        if (!loggedLateError) {
+          loggedLateError = true;
+          params.runtime.error?.(
+            danger(
+              `discord: suppressed late gateway ${event.type} error during teardown: ${event.message}`,
+            ),
+          );
+        }
         return;
       case "active":
         lifecycleHandler?.(event);
-        return;
-      case "teardown":
-        logLateEvent("teardown", event);
         return;
       case "buffering":
         pending.push(event);
@@ -200,11 +177,7 @@ export function createDiscordGatewaySupervisor(params: {
       phase = "teardown";
     },
     drainPending: (handler) => {
-      if (pending.length === 0) {
-        return "continue";
-      }
-      const queued = [...pending];
-      pending.length = 0;
+      const queued = pending.splice(0);
       for (const event of queued) {
         if (handler(event) === "stop") {
           return "stop";

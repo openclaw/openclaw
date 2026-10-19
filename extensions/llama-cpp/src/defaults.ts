@@ -33,6 +33,7 @@ export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL =
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_REVISION =
   "66f974f8cd48cc3b9c41c516b95508e75b4bee64";
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID = "embeddinggemma-300m-qat-q8_0";
+export const DEFAULT_LLAMA_CPP_EMBEDDING_CONTEXT_SIZE = 2048;
 export const DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE =
   "hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf";
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SIZE_BYTES = 328_577_056;
@@ -168,20 +169,29 @@ export function buildLlamaCppProviderConfig(
     ...existing,
     baseUrl:
       managed?.baseUrl ?? existing?.baseUrl ?? `http://127.0.0.1:${LLAMA_CPP_DEFAULT_PORT}/v1`,
-    apiKey: existing?.apiKey ?? LLAMA_CPP_LOCAL_AUTH_MARKER,
     api: "openai-completions",
     timeoutSeconds: existing?.timeoutSeconds ?? 600,
     ...(managed
       ? {
           localService: {
+            ...existing?.localService,
             command: managed.command,
             args: managed.args,
             healthUrl: managed.healthUrl,
-            readyTimeoutMs: LLAMA_CPP_READY_TIMEOUT_MS,
-            idleStopMs: LLAMA_CPP_IDLE_STOP_MS,
+            readyTimeoutMs: existing?.localService?.readyTimeoutMs ?? LLAMA_CPP_READY_TIMEOUT_MS,
+            idleStopMs: existing?.localService?.idleStopMs ?? LLAMA_CPP_IDLE_STOP_MS,
           },
         }
       : {}),
-    models,
+    // Every setup mode can move the managed router. Retain independent endpoints,
+    // but move model rows that explicitly used the previous provider endpoint.
+    models:
+      managed && existing?.localService
+        ? models.map((model) =>
+            model.baseUrl === existing.baseUrl
+              ? Object.assign({}, model, { baseUrl: managed.baseUrl })
+              : model,
+          )
+        : models,
   };
 }

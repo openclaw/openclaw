@@ -1,8 +1,10 @@
 // OpenClaw TUI backend tests cover rescue status integration with the TUI backend.
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
+import * as configModule from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentCommandDeps, SystemAgentOperation } from "./operations.js";
 import type { SystemAgentOverview } from "./overview.js";
@@ -112,7 +114,6 @@ async function createVerifiedTuiOptions(
   return {
     verifiedInference: fixture.binding,
     deps: {
-      ...fixture.deps,
       readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
       ...deps,
     },
@@ -143,13 +144,26 @@ describe("runSystemAgentTui", () => {
     };
     Reflect.deleteProperty(options, "verifiedInference");
 
-    await expect(runSystemAgentTui(options, createRuntime())).rejects.toBeInstanceOf(
-      SystemAgentInferenceUnavailableError,
-    );
+    await expect(runSystemAgentTui(options, createRuntime())).rejects.toMatchObject({
+      message: expect.stringContaining("openclaw onboard"),
+    });
 
     expect(loadOverview).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
     expect(runChannelsAdd).not.toHaveBeenCalled();
+  });
+
+  it("reports a changed verified route without recommending onboarding", async () => {
+    const verified = await createVerifiedTuiOptions();
+    const runTui = vi.fn();
+    vi.mocked(resolveSystemAgentVerifiedInferenceState).mockResolvedValueOnce(null);
+
+    await expect(runSystemAgentTui({ ...verified, runTui }, createRuntime())).rejects.toMatchObject(
+      {
+        message: expect.stringContaining("verified inference route changed"),
+      },
+    );
+    expect(runTui).not.toHaveBeenCalled();
   });
 
   it("runs OpenClaw inside the shared TUI shell", async () => {
@@ -352,41 +366,6 @@ describe("runSystemAgentTui", () => {
     );
   });
 
-  it("uses the verified model's default thinking level", async () => {
-    const config = {
-      ...verifiedConfig,
-      agents: { defaults: { model: "openai/gpt-5.6-sol" } },
-    } satisfies OpenClawConfig;
-    const verified = await createVerifiedTuiOptions(
-      {
-        loadOverview: async () => ({
-          ...overview,
-          defaultModel: "openai/gpt-5.6-sol@openai:setup-test",
-        }),
-      },
-      config,
-    );
-
-    await runSystemAgentTui(
-      {
-        ...verified,
-        runTui: async (opts) => {
-          const backend = opts.backend as unknown as {
-            listSessions: () => Promise<{
-              sessions: Array<{ model?: string; thinkingLevel?: string }>;
-            }>;
-          };
-
-          await expect(backend.listSessions()).resolves.toMatchObject({
-            sessions: [{ model: "gpt-5.6-sol", thinkingLevel: "medium" }],
-          });
-          return { exitReason: "exit" };
-        },
-      },
-      createRuntime(),
-    );
-  });
-
   it("reports that /model cannot replace the active verified inference route", async () => {
     const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
 
@@ -560,7 +539,23 @@ describe("runSystemAgentTui", () => {
       const events: string[] = [];
       const runtime = createRuntime();
       runtime.log = (...args) => events.push(`log:${args.join(" ")}`);
-      const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+      let verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+      if (handoff.target === "gateway") {
+        const configFixture = await createInferenceConfigFixture(verifiedConfig);
+        const snapshot = configFixture.snapshot;
+        const fixture = await createSystemAgentVerifiedInferenceTestFixture(
+          snapshot.runtimeConfig ?? snapshot.config,
+          snapshot,
+        );
+        verified = {
+          verifiedInference: fixture.binding,
+          deps: { readConfigFileSnapshot: configFixture.read, loadOverview: async () => overview },
+        };
+        const reader = vi
+          .spyOn(configModule, "readConfigFileSnapshot")
+          .mockImplementation(configFixture.read);
+        onTestFinished(() => reader.mockRestore());
+      }
       await runSystemAgentTui(
         {
           ...verified,

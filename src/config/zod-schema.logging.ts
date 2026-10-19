@@ -32,7 +32,6 @@ export const DiagnosticsConfigSchema = z
         logsExporter: z
           .union([z.literal("otlp"), z.literal("stdout"), z.literal("both")])
           .optional(),
-        /** Trace sample rate (0.0 - 1.0). */
         sampleRate: z.number().min(0).max(1).optional(),
         /** Metric export interval (ms). */
         flushIntervalMs: z.number().int().nonnegative().optional(),
@@ -57,7 +56,7 @@ export const LoggingConfigSchema = z
     maxFileBytes: z.number().int().positive().optional(),
     consoleLevel: LoggingLevelSchema.optional(),
     consoleStyle: z.union([z.literal("pretty"), z.literal("json")]).optional(),
-    /** Regex patterns used to redact sensitive tokens from logs and transcripts. */
+    /** Regex patterns used to redact sensitive tokens from logs and diagnostics. */
     redactPatterns: z.array(z.string()).optional(),
     /** Metadata-only agent activity audit ledger settings. */
     audit: z

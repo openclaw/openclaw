@@ -92,9 +92,9 @@ Namespace: openclaw (configurable via OPENCLAW_NAMESPACE)
 └── Secret/openclaw-secrets    # Gateway token + API keys
 ```
 
-The Deployment probes `/readyz` for startup and traffic readiness with a five-minute startup budget, and `/healthz` for liveness. Every probe asserts the JSON probe contract rather than the status code alone, because the Control UI answers unknown paths with a catch-all `200`; a status-only check would pass forever against an image whose probe route does not exist yet.
+The Deployment checks `/readyz` for startup and traffic readiness with a five-minute startup budget, and `/healthz` for liveness. Every check asserts the JSON check contract rather than the status code alone, because the Control UI answers unknown paths with a catch-all `200`; a status-only check would pass forever against an image whose check route does not exist yet.
 
-`/startupz` is the better traffic-admission probe because it ignores channel health, so one failing channel account cannot evict an otherwise healthy Gateway from Service endpoints. It requires an image built from `2026.8.1` or newer, the release that introduced it, which is newer than the tag pinned above. After pinning such an image, switch the startup and readiness probes to `/startupz` and keep `/readyz` for monitoring that should include channel-account health.
+`/startupz` is the better traffic-admission check because it ignores channel health, so one failing channel account cannot evict an otherwise healthy Gateway from Service endpoints. It requires an image built from `2026.8.1` or newer, the release that introduced it, which is newer than the tag pinned above. After pinning such an image, switch the startup and readiness checks to `/startupz` and keep `/readyz` for monitoring that should include channel-account health.
 
 ## Customization
 
@@ -155,6 +155,8 @@ Edit the `image` field in `scripts/k8s/manifests/deployment.yaml`:
 image: ghcr.io/openclaw/openclaw:2026.7.1-2-slim
 ```
 
+Images from `2026.8.1` onward need a [writable cache location](/install/kubernetes#architecture-notes); the shipped manifest provides it through `XDG_CACHE_HOME`. When upgrading an older deployment, apply that environment entry along with the image change.
+
 ### Expose beyond port-forward
 
 The default manifests bind the gateway to loopback inside the pod. That works with `kubectl port-forward`, but not with a Kubernetes `Service` or Ingress path that needs to reach the pod IP directly.
@@ -202,6 +204,7 @@ This also deletes unrelated workloads and the PVC.
 - The gateway binds to loopback inside the pod by default, so the included setup is for `kubectl port-forward`.
 - No cluster-scoped resources; everything lives in a single namespace.
 - Security hardening: `readOnlyRootFilesystem`, `drop: ALL` capabilities, non-root user (UID 1000).
+- Writable cache: the Gateway stages private SQLite snapshots under `XDG_CACHE_HOME` (default `~/.cache`). The manifest points it at `/home/node/.openclaw/.cache` on the PVC because the root filesystem is read-only. Keep an equivalent writable cache location if you customize the mounts.
 - The default config keeps the Control UI on the safer local-access path: loopback bind plus `kubectl port-forward` to `http://127.0.0.1:18789`.
 - If you move beyond localhost access, use the supported remote model: HTTPS/Tailscale plus the appropriate gateway bind and Control UI origin settings.
 - Secrets are generated in a temp directory and applied directly to the cluster; no secret material is written to the repo checkout.

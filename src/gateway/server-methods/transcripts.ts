@@ -26,7 +26,7 @@ import { isGatewayAdmin } from "../session-sharing.js";
 import { formatForLog } from "../ws-log.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams, type Validator } from "./validation.js";
+import { defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
 function transcriptMethod<T>(
   method: string,
@@ -38,11 +38,8 @@ function transcriptMethod<T>(
     assertCurrent: () => void,
   ) => Promise<unknown>,
 ): GatewayRequestHandler {
-  return async (options) => {
+  return defineValidatedGatewayHandler(method, validate, async (options) => {
     const { params, context, client, respond } = options;
-    if (!assertValidParams(params, validate, method, respond)) {
-      return;
-    }
     const cfg = context.getRuntimeConfig();
     // Meeting rows have agent attribution but no person owner. Mirror global
     // aggregate visibility; an agent filter cannot make hidden archive data readable.
@@ -73,7 +70,9 @@ function transcriptMethod<T>(
           throw new Error("Transcript archive access changed");
         }
       };
-      respond(true, await read(store, params, cfg, assertCurrent));
+      const result = await read(store, params, cfg, assertCurrent);
+      assertCurrent();
+      respond(true, result);
     } catch (error) {
       if (!(error instanceof TranscriptLibraryError)) {
         context.logGateway.warn(`${method} failed: ${formatForLog(error)}`);
@@ -94,7 +93,7 @@ function transcriptMethod<T>(
             ),
       );
     }
-  };
+  });
 }
 
 export const transcriptsHandlers: GatewayRequestHandlers = {
@@ -116,6 +115,7 @@ export const transcriptsHandlers: GatewayRequestHandlers = {
       assertCurrent();
       if (!entry.hasSummary && entry.utteranceCount > 0) {
         await ensureTranscriptSummary({
+          stateDir: resolveStateDir(),
           store,
           session: entry.session,
           config: resolveTranscriptsConfig(cfg.transcripts),

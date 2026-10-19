@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { loadSettings, saveSettings } from "../../app/settings.ts";
 import { createChatPageStateContext } from "./chat-page.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
@@ -11,11 +11,10 @@ it.each(["minimize", "close-resource", "explicit-desktop"])(
     saveSettings({ ...savedSettings, sidebarSessionLayouts: {} });
     try {
       const context = createChatPageStateContext();
-      const renderLifecycle = { invalidate: vi.fn(), afterCommit: () => () => {} };
+      const renderLifecycle = { afterCommit: () => () => {} };
       const host = {
         dispatchEvent: () => true,
         getBoundingClientRect: () => new DOMRect(0, 0, 1440, 900),
-        querySelector: () => null,
       };
       const state = createPageState(context, renderLifecycle, host);
       state.updateSidebarLayout(openSlot(state.sidebarLayout, "desktop"), {
@@ -24,10 +23,6 @@ it.each(["minimize", "close-resource", "explicit-desktop"])(
       });
       const beforeDismissalReload = createPageState(context, renderLifecycle, host);
       expect(beforeDismissalReload.sidebarLayout.columns).toEqual([]);
-      state.updateSidebarLayout(openSlot(state.sidebarLayout, "browser"), {
-        persist: false,
-        automaticResource: "browser",
-      });
       state.updateSidebarLayout({ ...openSlot(state.sidebarLayout, "workspace"), dock: "bottom" });
       const afterLayoutChange = createPageState(context, renderLifecycle, host);
       expect(
@@ -74,11 +69,10 @@ it.each(["minimize", "close-resource", "explicit-desktop"])(
 it("owns attachment views in Files without replacing Detail content", () => {
   const state = createPageState(
     createChatPageStateContext(),
-    { invalidate: vi.fn(), afterCommit: () => () => {} },
+    { afterCommit: () => () => {} },
     {
       dispatchEvent: () => true,
       getBoundingClientRect: () => new DOMRect(0, 0, 1_440, 0),
-      querySelector: () => null,
     },
   );
   const detailContent = {

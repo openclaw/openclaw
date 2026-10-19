@@ -12,40 +12,19 @@ type GraphTeamsChannel = {
 
 type ListChannelsMSTeamsParams = {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   teamId: string;
-};
-
-type ListChannelsMSTeamsResult = {
-  channels: Array<{
-    id: string | undefined;
-    displayName: string | undefined;
-    description: string | undefined;
-    membershipType: string | undefined;
-  }>;
-  truncated?: boolean;
 };
 
 type GetChannelInfoMSTeamsParams = {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   teamId: string;
   channelId: string;
 };
 
-type GetChannelInfoMSTeamsResult = {
-  channel: {
-    id: string | undefined;
-    displayName: string | undefined;
-    description: string | undefined;
-    membershipType: string | undefined;
-    webUrl: string | undefined;
-    createdDateTime: string | undefined;
-  };
-};
-
-export async function listChannelsMSTeams(
-  params: ListChannelsMSTeamsParams,
-): Promise<ListChannelsMSTeamsResult> {
-  const token = await resolveGraphToken(params.cfg);
+export async function listChannelsMSTeams(params: ListChannelsMSTeamsParams) {
+  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
   const result = await fetchAllGraphPages<GraphTeamsChannel>({
     token,
     path: `/teams/${encodeURIComponent(params.teamId)}/channels?$select=id,displayName,description,membershipType`,
@@ -60,10 +39,8 @@ export async function listChannelsMSTeams(
   return { channels, truncated: result.truncated };
 }
 
-export async function getChannelInfoMSTeams(
-  params: GetChannelInfoMSTeamsParams,
-): Promise<GetChannelInfoMSTeamsResult> {
-  const token = await resolveGraphToken(params.cfg);
+export async function getChannelInfoMSTeams(params: GetChannelInfoMSTeamsParams) {
+  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
   const path = `/teams/${encodeURIComponent(params.teamId)}/channels/${encodeURIComponent(params.channelId)}?$select=id,displayName,description,membershipType,webUrl,createdDateTime`;
   const ch = await fetchGraphJson<GraphTeamsChannel>({ token, path });
   return {

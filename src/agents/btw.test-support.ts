@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import type { AssistantMessage, AssistantMessageEvent } from "../llm/types.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   createOpenClawTestState,
@@ -8,7 +9,6 @@ import {
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
 import {
   streamSimpleMock,
-  readFileMock,
   parseSessionEntriesMock,
   migrateSessionEntriesMock,
   buildSessionContextMock,
@@ -115,7 +115,9 @@ function createSessionEntry(overrides: Partial<SessionEntry> = {}) {
   };
 }
 
-function createAssistantDoneEvent(content: unknown[]) {
+function createAssistantDoneEvent(
+  content: AssistantMessage["content"],
+): Extract<AssistantMessageEvent, { type: "done" }> {
   return {
     type: "done",
     reason: "stop",
@@ -136,12 +138,18 @@ function createDoneEvent(text: string) {
   return createAssistantDoneEvent([{ type: "text", text }]);
 }
 
-function createThinkingOnlyDoneEvent(thinking: string) {
-  return createAssistantDoneEvent([{ type: "thinking", thinking }]);
-}
-
 function mockDoneAnswer(text: string) {
   streamSimpleMock.mockReturnValue(makeAsyncEvents([createDoneEvent(text)]));
+}
+
+function createCliRuntimeConfig(): Parameters<typeof runBtwSideQuestion>[0]["cfg"] {
+  return {
+    agents: {
+      defaults: {
+        models: { "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } } },
+      },
+    },
+  };
 }
 
 function mockCliOutput(output: { text: string; rawText?: string }) {
@@ -153,7 +161,9 @@ function mockCliOutput(output: { text: string; rawText?: string }) {
 }
 
 function registerCodexSideQuestionHarness(
-  overrides: Partial<Pick<AgentHarness, "authBootstrap" | "supports">> = {},
+  overrides: Partial<
+    Pick<AgentHarness, "authBootstrap" | "supports" | "resolveSessionRuntimeOwnershipAsync">
+  > = {},
 ) {
   const runHarnessSideQuestion = vi.fn().mockResolvedValue({ text: "Codex side answer." });
   registerAgentHarness({
@@ -192,7 +202,7 @@ function createSideQuestionParams(
   overrides: Partial<RunBtwSideQuestionParams> = {},
 ): RunBtwSideQuestionParams {
   return {
-    cfg: { agents: { entries: { main: { default: true } } } } as never,
+    cfg: { agents: { entries: { main: {} } } },
     agentId: "main",
     agentDir: DEFAULT_AGENT_DIR,
     provider: DEFAULT_PROVIDER,
@@ -344,15 +354,6 @@ function expectTextBlockContains(block: unknown, text: string): void {
   expect(record.text).toContain(text);
 }
 
-function firstTextBlockIncludes(message: Record<string, unknown>, text: string): boolean {
-  if (!Array.isArray(message.content)) {
-    return false;
-  }
-  const [block] = message.content;
-  const blockText = (block as { text?: unknown } | undefined)?.text;
-  return typeof blockText === "string" && blockText.includes(text);
-}
-
 function expectNoAssistantMessages(context: unknown) {
   expect(
     (context as { messages?: Array<{ role?: string }> }).messages?.filter(
@@ -400,7 +401,6 @@ export function setupBtwTestHooks() {
 
   beforeEach(() => {
     streamSimpleMock.mockReset();
-    readFileMock.mockReset();
     parseSessionEntriesMock.mockReset();
     migrateSessionEntriesMock.mockReset();
     buildSessionContextMock.mockReset();
@@ -462,7 +462,6 @@ export function setupBtwTestHooks() {
     };
     preparedRuntimeSnapshotState.useSnapshotPluginRegistry = false;
 
-    readFileMock.mockResolvedValue("mock transcript");
     loadTranscriptEventsMock.mockResolvedValue([]);
     mockTranscriptEntries([
       createTranscriptEntry({
@@ -530,16 +529,13 @@ export {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   DEFAULT_SESSION_KEY,
-  DEFAULT_STORE_PATH,
   DEFAULT_QUESTION,
-  MATH_QUESTION,
   MATH_ANSWER,
   makeAsyncEvents,
   createSessionEntry,
-  createAssistantDoneEvent,
   createDoneEvent,
-  createThinkingOnlyDoneEvent,
   mockDoneAnswer,
+  createCliRuntimeConfig,
   mockCliOutput,
   registerCodexSideQuestionHarness,
   supportsPreparedOpenAIAuth,
@@ -559,7 +555,6 @@ export {
   streamContext,
   contextMessages,
   expectTextBlockContains,
-  firstTextBlockIncludes,
   expectNoAssistantMessages,
   expectSanitizedAssistantContext,
   expectSeedOnlyUserContext,
@@ -567,9 +562,7 @@ export {
 };
 export {
   streamSimpleMock,
-  readFileMock,
   buildSessionContextMock,
-  ensureOpenClawModelsJsonMock,
   loadPreparedModelRuntimeSnapshotMock,
   snapshotResources,
   discoverAuthStorageMock,
@@ -586,11 +579,8 @@ export {
   resolveAgentWorkspaceDirMock,
   prepareProviderRuntimeAuthMock,
   registerProviderStreamForModelMock,
-  resolveEmbeddedAgentStreamMock,
   prepareCliRunContextMock,
-  executePreparedCliRunMock,
   diagDebugMock,
-  ensureSelectedAgentHarnessPluginMock,
   createAgentHarnessHostCapabilitiesMock,
   closeAgentHarnessHostCapabilitiesMock,
   agentHarnessHostCapabilitiesMock,

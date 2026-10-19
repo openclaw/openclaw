@@ -1,8 +1,38 @@
 import fs from "node:fs/promises";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
+import { afterEach, beforeEach } from "vitest";
+import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
+import { resetThreadLifecycleTestFixtures } from "./thread-lifecycle.test-fixtures.js";
 
 const activeHttpServers = new Set<http.Server>();
+export let tempDir = "";
+
+export function setupUserMcpServerTestHooks(): void {
+  beforeEach(async (context) => {
+    if (!context.codexAttemptRuntime) {
+      throw new Error("Codex MCP server tests require the shared extension runtime fixture");
+    }
+    await context.codexAttemptRuntime.start();
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-80814-"));
+    // Bindings are keyed by session identity, not tempDir, so sibling tests
+    // would otherwise leak resumable threads into fresh-start expectations.
+    resetCodexTestBindingStore();
+  });
+
+  afterEach(async (context) => {
+    if (!context.codexAttemptRuntime) {
+      throw new Error("Codex MCP server tests require the shared extension runtime fixture");
+    }
+    resetThreadLifecycleTestFixtures();
+    await context.codexAttemptRuntime.stop();
+    await closePolicyHttpServers();
+    if (tempDir) {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+}
 
 export async function startPolicyHttpServer(): Promise<string> {
   const server = http.createServer((request, response) => {
@@ -79,7 +109,7 @@ lines.on("line", (line) => {
   return filePath;
 }
 
-export async function closePolicyHttpServers(): Promise<void> {
+async function closePolicyHttpServers(): Promise<void> {
   await Promise.all(
     [...activeHttpServers].map(
       (server) =>

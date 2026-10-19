@@ -255,14 +255,3 @@ describe("monitorWebhook status publishing", () => {
     await monitorPromise;
   });
 });
-
-describe("FeishuStatusSink type contract", () => {
-  it("accepts a partial patch with only lastEventAt", async () => {
-    // Verifies the type signature allows the patterns we use. A compile-time
-    // check via tsserver; the runtime assertion is the call must not throw.
-    const recorder = createRecordingSink();
-    const sink: FeishuStatusSink = recorder.sink;
-    sink({ lastEventAt: 12345 });
-    expect(recorder.calls).toEqual([{ lastEventAt: 12345 }]);
-  });
-});

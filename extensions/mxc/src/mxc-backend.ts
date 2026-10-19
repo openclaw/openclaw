@@ -2,8 +2,8 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ContainerConfig } from "@microsoft/mxc-sdk";
-import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { isPathInside, resolvePathPrefixSync } from "openclaw/plugin-sdk/file-access-runtime";
+import { isNotFoundPathError as isMissingPathError } from "openclaw/plugin-sdk/path-existence-runtime";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import type {
@@ -12,6 +12,7 @@ import type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendManager,
+  SandboxContext,
 } from "openclaw/plugin-sdk/sandbox";
 import { resolveMxcBinaryPath } from "./binary-resolver.js";
 import type { MxcConfig } from "./config.js";
@@ -27,24 +28,15 @@ import { resolveSandboxTempDir, type BaselineHostEnv } from "./sandbox-baseline.
 import { loadSandboxBaselinePolicy } from "./sandbox-policy-loader.js";
 import { createWindowsCommandBridge } from "./windows-command.js";
 import { buildLauncherEnv } from "./windows-env.js";
-import type { MxcWorkspaceAccess } from "./workspace-skill-mounts.js";
-
-type MxcLauncherOptions = {
-  debug: boolean;
-  executablePath?: string;
-  usePty?: boolean;
-};
 
 type MxcExecFinalizeToken = {
   payloadDir: string;
   sandboxTempDir?: string;
 };
 
-// MXC containers are ephemeral (lifecycle.destroyOnExit=true) and named per invocation.
-// Keep the runtimeId as the stable handle identifier (used for logs + SDK tracking) and
-// derive a fresh per-call containerId from it so parallel spawns cannot collide on
-// backend-specific runtime names.
-const CONTAINER_ID_MAX_LEN = 80;
+// MXC uses containerId as the 64-character-limited AppContainer profile name.
+// Keep runtimeId stable for bookkeeping; mint a per-call ID to avoid collisions.
+const CONTAINER_ID_MAX_LEN = 64;
 function uniqueContainerId(runtimeId: string): string {
   const suffix = randomBytes(4).toString("hex");
   const base =
@@ -52,22 +44,6 @@ function uniqueContainerId(runtimeId: string): string {
       ? runtimeId.slice(0, CONTAINER_ID_MAX_LEN - suffix.length - 1)
       : runtimeId;
   return `${base}-${suffix}`;
-}
-
-function createLauncherPayloadFile(
-  payloadJson: string,
-): MxcExecFinalizeToken & { payloadFile: string } {
-  const payloadDir = mkdtempSync(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-mxc-payload-"),
-  );
-  const payloadFile = path.join(payloadDir, "payload.json");
-  try {
-    writeFileSync(payloadFile, payloadJson, { flag: "wx", mode: 0o600 });
-  } catch (err) {
-    rmSync(payloadDir, { force: true, recursive: true });
-    throw err;
-  }
-  return { payloadDir, payloadFile };
 }
 
 function cleanupLauncherPayloadFile(token: unknown): void {
@@ -122,55 +98,40 @@ function realpathForExistingPath(value: string, label: string): string {
   }
 }
 
-// ENOTDIR means a parent component is a file, so the path can never resolve to a
-// directory. Classifying it alongside ENOENT keeps validateWorkdir's "return null
-// for unusable workdirs" contract intact instead of leaking a raw filesystem error.
-function isMissingPathError(err: unknown): boolean {
-  const code = extractErrorCode(err);
-  return code === "ENOENT" || code === "ENOTDIR";
-}
-
-function buildMxcLauncherOptions(config: MxcConfig, usePty: boolean): MxcLauncherOptions {
-  const options: MxcLauncherOptions = {
-    debug: config.debug ?? false,
-    executablePath: resolveMxcBinaryPath(config.mxcBinaryPath),
-  };
-  if (!usePty) {
-    options.usePty = false;
-  }
-  return options;
-}
-
 function createMxcLauncherPayload(
   config: MxcConfig,
   payload: ContainerConfig,
   usePty: boolean,
   sandboxTempDir: string,
 ): MxcExecFinalizeToken & { payloadFile: string } {
-  const token = createLauncherPayloadFile(
-    JSON.stringify({
-      config: payload,
-      options: buildMxcLauncherOptions(config, usePty),
-    }),
+  const payloadJson = JSON.stringify({
+    config: payload,
+    options: {
+      debug: config.debug,
+      executablePath: resolveMxcBinaryPath(config.mxcBinaryPath),
+      ...(!usePty ? { usePty: false } : {}),
+    },
+  });
+  const payloadDir = mkdtempSync(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-mxc-payload-"),
   );
-  token.sandboxTempDir = sandboxTempDir;
-  return token;
+  const payloadFile = path.join(payloadDir, "payload.json");
+  try {
+    writeFileSync(payloadFile, payloadJson, { flag: "wx", mode: 0o600 });
+  } catch (err) {
+    rmSync(payloadDir, { force: true, recursive: true });
+    throw err;
+  }
+  return { payloadDir, payloadFile, sandboxTempDir };
 }
 
-function buildMxcLauncherArgv(payloadFile: string): [string, string, string, string] {
-  return [process.execPath, resolveMxcLauncherPath(), "--payload-file", payloadFile];
-}
-
-/**
- * Creates a SandboxBackendHandle for a specific session.
- */
 export function createMxcSandboxBackendHandle(params: {
   config: MxcConfig;
   runtimeId: string;
   workdir: string;
   agentWorkspaceDir?: string;
   skillsWorkspaceDir?: string;
-  workspaceAccess?: MxcWorkspaceAccess;
+  workspaceAccess?: SandboxContext["workspaceAccess"];
 }): SandboxBackendHandle {
   const baseline = loadSandboxBaselinePolicy({ policyPaths: params.config.mxcPolicyPaths });
 
@@ -197,8 +158,7 @@ export function createMxcSandboxBackendHandle(params: {
         params.workdir,
         workdir ?? params.workdir,
       );
-      const workspaceAccess = params.workspaceAccess ?? "rw";
-      const workspace = resolveMxcWorkspaceContext({ ...params, workspaceAccess });
+      const workspace = resolveMxcWorkspaceContext(params);
       const runtimeWorkdir = resolveMxcRuntimeWorkdir(workspace, effectiveWorkdir);
       const baselineContext = resolveCurrentBaselineContext(workspace.activeWorkspaceDir);
       const sandboxTempDir = createSandboxTempDir(baselineContext.hostEnv);
@@ -207,7 +167,6 @@ export function createMxcSandboxBackendHandle(params: {
           config: params.config,
           baseline,
           baselineContext,
-          runtimeId: params.runtimeId,
           containerId: uniqueContainerId(params.runtimeId),
           command,
           sandboxTempDir,
@@ -231,7 +190,12 @@ export function createMxcSandboxBackendHandle(params: {
         );
 
         return {
-          argv: buildMxcLauncherArgv(payloadFile.payloadFile),
+          argv: [
+            process.execPath,
+            resolveMxcLauncherPath(),
+            "--payload-file",
+            payloadFile.payloadFile,
+          ],
           env: buildLauncherEnv(),
           stdinMode: usePty ? "pipe-open" : "pipe-closed",
           finalizeToken: payloadFile satisfies MxcExecFinalizeToken,
@@ -259,8 +223,7 @@ export function createMxcSandboxBackendHandle(params: {
         timeoutSecondsConfigured: true,
       };
       const effectiveWorkdir = path.resolve(params.workdir);
-      const workspaceAccess = params.workspaceAccess ?? "rw";
-      const workspace = resolveMxcWorkspaceContext({ ...params, workspaceAccess });
+      const workspace = resolveMxcWorkspaceContext(params);
       const runtimeWorkdir = resolveMxcRuntimeWorkdir(workspace, effectiveWorkdir);
       const baselineContext = resolveCurrentBaselineContext(workspace.activeWorkspaceDir);
       const sandboxTempDir = createSandboxTempDir(baselineContext.hostEnv);
@@ -272,13 +235,13 @@ export function createMxcSandboxBackendHandle(params: {
           script: cmdParams.script,
           tempDir: sandboxTempDir,
         });
-        const execInput =
-          cmdParams.stdin === undefined ? Buffer.alloc(0) : toBuffer(cmdParams.stdin);
+        const execInput = Buffer.isBuffer(cmdParams.stdin)
+          ? cmdParams.stdin
+          : Buffer.from(cmdParams.stdin ?? "", "utf-8");
         const payload = buildMxcContainerConfig({
           config: restrictiveConfig,
           baseline,
           baselineContext,
-          runtimeId: params.runtimeId,
           containerId: uniqueContainerId(params.runtimeId),
           command: commandBridge.command,
           args: cmdParams.args,
@@ -294,7 +257,12 @@ export function createMxcSandboxBackendHandle(params: {
           false,
           sandboxTempDir,
         );
-        const argv = buildMxcLauncherArgv(payloadFile.payloadFile);
+        const argv = [
+          process.execPath,
+          resolveMxcLauncherPath(),
+          "--payload-file",
+          payloadFile.payloadFile,
+        ];
         try {
           const result = await runCommandBuffered(argv, {
             baseEnv: buildLauncherEnv(),
@@ -334,13 +302,6 @@ export function createMxcSandboxBackendHandle(params: {
       }
     },
   };
-}
-
-function toBuffer(value: Buffer | string): Buffer {
-  if (Buffer.isBuffer(value)) {
-    return value;
-  }
-  return Buffer.from(value, "utf-8");
 }
 
 /** Manager for `openclaw sandbox list` and `openclaw sandbox remove`. */

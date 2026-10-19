@@ -1,4 +1,3 @@
-// Channel route target helpers normalize channel route targets for delivery.
 import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
@@ -50,14 +49,13 @@ function listConfiguredChannelAccountIds(cfg: OpenClawConfig, channelId: string)
   return Object.entries(channel.accounts)
     .filter(([, value]) => !(hasRecord(value) && value.enabled === false))
     .map(([accountId]) => normalizeAccountId(accountId))
-    .filter(Boolean)
     .toSorted();
 }
 
 function addTarget(byAgent: Map<string, Set<string>>, agentId: string, channel: string): void {
   const normalizedAgentId = normalizeAgentId(agentId);
   const trimmedChannel = channel.trim();
-  if (!normalizedAgentId || !trimmedChannel) {
+  if (!trimmedChannel) {
     return;
   }
   const channels = byAgent.get(normalizedAgentId) ?? new Set<string>();
@@ -94,6 +92,5 @@ export function collectChannelRouteTargets(cfg: OpenClawConfig): ChannelRouteTar
       agentId,
       channels: Array.from(channels).toSorted(),
     }))
-    .filter((target) => target.channels.length > 0)
     .toSorted((a, b) => a.agentId.localeCompare(b.agentId));
 }

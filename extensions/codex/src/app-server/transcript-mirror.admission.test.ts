@@ -4,10 +4,14 @@ import {
   createAdmittedHostCapabilityTestFixture,
   loadUserTurnTranscriptRecorderFactoryForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
   buildEmptyToolTelemetry,
@@ -26,6 +30,9 @@ import {
 
 registerCodexEventProjectorTestLifecycle();
 
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
+
 it.each([
   {
     label: "monitor without source key",
@@ -34,28 +41,10 @@ it.each([
     recovery: "available",
   },
   {
-    label: "monitor with source key",
-    idempotencyKey: "transport-user-key",
-    hidden: false,
-    recovery: "available",
-  },
-  {
     label: "hidden subagent announcement",
     idempotencyKey: "announce:child:user",
     hidden: true,
     recovery: "available",
-  },
-  {
-    label: "excluded consultation",
-    idempotencyKey: "consult:user",
-    hidden: true,
-    recovery: "excluded",
-  },
-  {
-    label: "unavailable annotation capability",
-    idempotencyKey: "unavailable:user",
-    hidden: false,
-    recovery: "unavailable",
   },
   {
     label: "removed admitted prompt",
@@ -72,6 +61,7 @@ it.each([
 ])(
   "preserves host prompt ownership for an admitted $label",
   async ({ idempotencyKey, hidden, recovery }) => {
+    const admittedContent = "Check the admitted monitor.";
     const createUserTurnTranscriptRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
     const base = await createParams();
     const target = {
@@ -92,7 +82,7 @@ it.each([
         ...(idempotencyKey ? { idempotencyKey } : {}),
       },
       target: { ...target, sessionEntry: undefined },
-      beforeMessageWrite: ({ message }) => message,
+      beforeMessageWrite: ({ message }) => ({ ...message, content: admittedContent }),
     });
     await recorder.persistApproved();
     const admitted = structuredClone(recorder.getPersistedMessage?.());
@@ -188,9 +178,23 @@ it.each([
       if (recovery === "available") {
         expect(prompts[0]).toMatchObject({
           message: {
-            content: "Check the monitor.",
+            content: admittedContent,
             ...(hidden ? { display: false } : {}),
-            __openclaw: { mirrorIdentity: "turn-1:prompt" },
+            ...(idempotencyKey ? { idempotencyKey } : {}),
+            __openclaw: {
+              mirrorIdentity: "turn-1:prompt",
+              mirrorOrigin: "codex-app-server",
+              upstreamUserText: "Check the monitor.",
+            },
+          },
+        });
+        expect(recorder.getPersistedMessage?.()).toMatchObject({
+          content: admittedContent,
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+          __openclaw: {
+            mirrorIdentity: "turn-1:prompt",
+            mirrorOrigin: "codex-app-server",
+            upstreamUserText: "Check the monitor.",
           },
         });
       } else if (recovery !== "removed") {

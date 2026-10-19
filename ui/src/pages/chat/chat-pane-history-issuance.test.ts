@@ -1,41 +1,50 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationContext } from "../../app/context.ts";
+import type { AgentsListResult } from "../../api/types.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { requestCalls } from "./chat-host.test-support.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 
-function createCanonicalRoutePane(request: ReturnType<typeof vi.fn>) {
+const agentsList: AgentsListResult = {
+  defaultId: "main",
+  mainKey: "main",
+  scope: "per-sender",
+  agents: [{ id: "main" }],
+};
+
+function createCanonicalRoutePane(
+  handlers: Record<string, () => unknown> = {},
+  fallback: () => unknown = () => ({}),
+) {
+  const request = vi.fn((method: string) =>
+    Promise.resolve(method === "agents.list" ? agentsList : (handlers[method] ?? fallback)()),
+  );
   const client = { request } as unknown as GatewayBrowserClient;
   const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
   vi.spyOn(sessions, "listBranches").mockResolvedValue([]);
-  onTestFinished(() => sessions.dispose());
   const { pane, state } = createTestChatPane({ client, sessions });
-  const hello = {
-    snapshot: {
-      sessionDefaults: {
-        defaultAgentId: "main",
-        mainKey: "main",
-        mainSessionKey: "agent:main:main",
-      },
-    },
-  } as unknown as NonNullable<ApplicationContext["gateway"]["snapshot"]["hello"]>;
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
+  const sessionDefaults = {
+    defaultAgentId: "main",
+    mainKey: "main",
+    mainSessionKey: "agent:main:main",
+  };
+  const hello = { snapshot: { sessionDefaults } } as NonNullable<typeof state.hello>;
   state.hello = hello;
   state.settings = {
     sessionKey: state.sessionKey,
     lastActiveSessionKey: state.sessionKey,
   } as typeof state.settings;
-  pane.sessionKey = "main";
-  pane.connectedClient = null;
-  pane.active = true;
-  pane.presented = true;
+  Object.assign(pane, { sessionKey: "main", connectedClient: null, active: true, presented: true });
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   const snapshot = {
     ...pane.context.gateway.snapshot,
     assistantAgentId: "main",
@@ -43,39 +52,72 @@ function createCanonicalRoutePane(request: ReturnType<typeof vi.fn>) {
     hello,
     phase: "connected" as const,
   };
-  return { pane, state, snapshot };
+  return { pane, state, snapshot, request };
 }
 
 function assistantHistory(text: string) {
-  return {
-    messages: [{ role: "assistant", content: [{ type: "text", text }] }],
-  };
+  return { messages: [{ role: "assistant", content: [{ type: "text", text }] }] };
 }
 
-describe("chat pane history issuance across Gateway connection transitions", () => {
-  it("does not request the optional header platform while initial history is pending", async () => {
-    const history = createDeferred<ReturnType<typeof assistantHistory>>();
-    const request = vi.fn((method: string) =>
-      method === "chat.startup" ? history.promise : Promise.resolve({}),
-    );
-    const { pane, state, snapshot } = createCanonicalRoutePane(request);
-    pane.sessionKey = state.sessionKey;
-    state.loadAssistantIdentity = vi.fn(async () => undefined);
-    const hello = { ...snapshot.hello, features: { methods: ["system.info"], events: [] } };
-    pane.context.gateway.snapshot.hello = hello;
-    try {
-      pane.applyGatewaySnapshot({ ...snapshot, hello });
-      expect(request.mock.calls.some(([method]) => method === "chat.startup")).toBe(true);
-      expect(request.mock.calls.filter(([method]) => method === "system.info")).toEqual([]);
-    } finally {
-      history.resolve(assistantHistory("Selected transcript"));
-      await history.promise;
-    }
-  });
+async function expectRecoveredHistory(
+  state: ReturnType<typeof createCanonicalRoutePane>["state"],
+  request: ReturnType<typeof vi.fn>,
+  method: "chat.history" | "chat.startup",
+  attempts: number,
+  text: string,
+) {
+  await vi.waitFor(() => expect(requestCalls(request, method)).toHaveLength(attempts));
+  expect(request).toHaveBeenCalledWith(
+    method,
+    {
+      sessionKey: state.sessionKey,
+      knownState: {},
+      limit: 80,
+      maxBytes: 256 * 1024,
+      toolResultMaxChars: 2_000,
+    },
+    { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
+  );
+  await vi.waitFor(() => expect(state.chatMessages).toEqual(assistantHistory(text).messages));
+  expect(getChatHistoryLoadState(state).phase).toBe("committed");
+}
 
-  it("issues a disconnected history request once when connection redirects the route", async () => {
-    const request = vi.fn().mockResolvedValue(assistantHistory("Recovered transcript"));
-    const { pane, state, snapshot } = createCanonicalRoutePane(request);
+it("does not request the optional header platform while initial history is pending", async () => {
+  const subscribed = createDeferred();
+  const historyStarted = createDeferred();
+  const history = createDeferred<ReturnType<typeof assistantHistory>>();
+  const { pane, state, snapshot, request } = createCanonicalRoutePane({
+    "sessions.messages.subscribe": () => subscribed.promise.then(() => ({})),
+    "chat.startup": () => {
+      historyStarted.resolve();
+      return history.promise;
+    },
+  });
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
+  pane.sessionKey = state.sessionKey;
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
+  state.loadAssistantIdentity = vi.fn(async () => undefined);
+  const hello = { ...snapshot.hello, features: { methods: ["system.info"], events: [] } };
+  pane.context.gateway.snapshot.hello = hello;
+  try {
+    pane.applyGatewaySnapshot({ ...snapshot, hello });
+    expect(requestCalls(request, "chat.startup")).toHaveLength(0);
+    subscribed.resolve();
+    await historyStarted.promise;
+    expect(requestCalls(request, "chat.startup")).toHaveLength(1);
+    expect(requestCalls(request, "system.info")).toEqual([]);
+  } finally {
+    history.resolve(assistantHistory("Selected transcript"));
+    await history.promise;
+  }
+});
+
+it.each([false, true])(
+  "handles disconnected history after a route change (replaced=%s)",
+  async (replaced) => {
+    const { pane, state, snapshot, request } = createCanonicalRoutePane({}, () =>
+      replaced ? {} : assistantHistory("Recovered transcript"),
+    );
     state.connected = false;
 
     await loadChatHistory(state);
@@ -88,28 +130,24 @@ describe("chat pane history issuance across Gateway connection transitions", () 
     });
     expect(state.chatLoading).toBe(true);
 
-    pane.applyGatewaySnapshot(snapshot);
+    if (replaced) {
+      state.sessionKey = "agent:main:different-session";
+      pane.applyGatewaySnapshot(snapshot);
+      expect(requestCalls(request, "chat.history")).toHaveLength(0);
+      expect(requestCalls(request, "chat.startup")).toHaveLength(0);
+      expect(getChatHistoryLoadState(state)).toEqual({ phase: "idle" });
+      expect(state.chatLoading).toBe(false);
+    } else {
+      pane.applyGatewaySnapshot(snapshot);
+      expect(state.sessionKey).toBe("agent:main:current");
+      await expectRecoveredHistory(state, request, "chat.history", 1, "Recovered transcript");
+    }
+  },
+);
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    expect(request).toHaveBeenCalledWith(
-      "chat.history",
-      {
-        sessionKey: "agent:main:current",
-        limit: 80,
-        maxBytes: 256 * 1024,
-      },
-      { signal: expect.any(AbortSignal) },
-    );
-    await vi.waitFor(() =>
-      expect(state.chatMessages).toEqual([
-        { role: "assistant", content: [{ type: "text", text: "Recovered transcript" }] },
-      ]),
-    );
-    expect(getChatHistoryLoadState(state).phase).toBe("committed");
-  });
-
-  it("automatically retries a retryable history failure when the Gateway reconnects", async () => {
-    const request = vi
+it("automatically retries a retryable history failure when the Gateway reconnects", async () => {
+  const { pane, state, snapshot, request } = createCanonicalRoutePane({
+    "chat.startup": vi
       .fn()
       .mockRejectedValueOnce(
         new GatewayRequestError({
@@ -118,52 +156,19 @@ describe("chat pane history issuance across Gateway connection transitions", () 
           retryable: true,
         }),
       )
-      .mockResolvedValueOnce(assistantHistory("Recovered after reconnect"));
-    const { pane, state, snapshot } = createCanonicalRoutePane(request);
-
-    await loadChatHistory(state, { startup: true });
-
-    expect(getChatHistoryLoadState(state)).toMatchObject({
-      phase: "failed",
-      sessionKey: state.sessionKey,
-      retryable: true,
-      startup: true,
-    });
-    pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
-    pane.applyGatewaySnapshot(snapshot);
-
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "chat.startup",
-      {
-        sessionKey: state.sessionKey,
-        limit: 80,
-        maxBytes: 256 * 1024,
-      },
-      { signal: expect.any(AbortSignal) },
-    );
-    await vi.waitFor(() =>
-      expect(state.chatMessages).toEqual([
-        { role: "assistant", content: [{ type: "text", text: "Recovered after reconnect" }] },
-      ]),
-    );
-    expect(getChatHistoryLoadState(state).phase).toBe("committed");
+      .mockResolvedValue(assistantHistory("Recovered after reconnect")),
   });
 
-  it("discards a disconnected history request after the selected session changes", async () => {
-    const request = vi.fn();
-    const { pane, state, snapshot } = createCanonicalRoutePane(request);
-    state.connected = false;
+  await loadChatHistory(state, { startup: true });
 
-    await loadChatHistory(state);
-
-    expect(getChatHistoryLoadState(state).phase).toBe("pending-connection");
-    state.sessionKey = "agent:main:different-session";
-    pane.applyGatewaySnapshot(snapshot);
-
-    expect(request).not.toHaveBeenCalled();
-    expect(getChatHistoryLoadState(state)).toEqual({ phase: "idle" });
-    expect(state.chatLoading).toBe(false);
+  expect(getChatHistoryLoadState(state)).toMatchObject({
+    phase: "failed",
+    sessionKey: state.sessionKey,
+    retryable: true,
+    startup: true,
   });
+  pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
+  pane.applyGatewaySnapshot(snapshot);
+
+  await expectRecoveredHistory(state, request, "chat.startup", 2, "Recovered after reconnect");
 });

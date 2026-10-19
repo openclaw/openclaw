@@ -1,58 +1,4 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-type ReplayDecision =
-  | {
-      readonly action: "resume";
-      readonly sdkSessionId: string;
-      readonly downgradedFromResume: false;
-    }
-  | {
-      readonly action: "create";
-      readonly downgradedFromResume: boolean;
-      readonly downgradeReason: "no-replay-state" | "no-sdk-session-id" | "replay-invalid";
-    };
-
-interface ReplayShimInput {
-  readonly sdkSessionId?: string;
-  readonly replayInvalid?: boolean;
-}
-
-export function decideReplayAction(input?: ReplayShimInput): ReplayDecision {
-  if (!input) {
-    return {
-      action: "create",
-      downgradedFromResume: false,
-      downgradeReason: "no-replay-state",
-    };
-  }
-  const sdkSessionId = normalizeOptionalString(input.sdkSessionId);
-  if (!sdkSessionId) {
-    return {
-      action: "create",
-      downgradedFromResume: false,
-      downgradeReason: "no-sdk-session-id",
-    };
-  }
-  if (input.replayInvalid === true) {
-    return {
-      action: "create",
-      downgradedFromResume: true,
-      downgradeReason: "replay-invalid",
-    };
-  }
-  return {
-    action: "resume",
-    sdkSessionId,
-    downgradedFromResume: false,
-  };
-}
-
-type ResumeFailureKind = "missing" | "unknown";
-
-interface ResumeFailureClassification {
-  readonly recoverable: boolean;
-  readonly kind: ResumeFailureKind;
-}
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const MISSING_SESSION_CODES = new Set([
   "SESSION_NOT_FOUND",
@@ -70,38 +16,19 @@ const MISSING_SESSION_MESSAGE_PATTERNS: readonly RegExp[] = [
   /\bno such session\b/i,
 ];
 
-function readErrorField(error: unknown, key: string): unknown {
-  if (!error || typeof error !== "object") {
-    return undefined;
-  }
-  return (error as Record<string, unknown>)[key];
-}
-
 // Only missing sessions permit recovery; auth and transport failures must surface.
-export function classifyResumeFailure(error: unknown): ResumeFailureClassification {
-  const status = readErrorField(error, "status");
-  if (status === 404) {
-    return { recoverable: true, kind: "missing" };
+export function isMissingCopilotSessionError(error: unknown): boolean {
+  const record = asOptionalObjectRecord(error);
+  if (record?.status === 404 || record?.statusCode === 404) {
+    return true;
   }
-  const statusCode = readErrorField(error, "statusCode");
-  if (statusCode === 404) {
-    return { recoverable: true, kind: "missing" };
-  }
-
-  const code = readErrorField(error, "code");
-  if (typeof code === "string" && MISSING_SESSION_CODES.has(code)) {
-    return { recoverable: true, kind: "missing" };
-  }
-
-  const message = readErrorField(error, "message");
-  if (
-    typeof message === "string" &&
-    MISSING_SESSION_MESSAGE_PATTERNS.some((pattern) => pattern.test(message))
-  ) {
-    return { recoverable: true, kind: "missing" };
-  }
-
-  return { recoverable: false, kind: "unknown" };
+  const code = record?.code;
+  const message = record?.message;
+  return (
+    (typeof code === "string" && MISSING_SESSION_CODES.has(code)) ||
+    (typeof message === "string" &&
+      MISSING_SESSION_MESSAGE_PATTERNS.some((pattern) => pattern.test(message)))
+  );
 }
 
 interface ReplayMetadataComputeInput {

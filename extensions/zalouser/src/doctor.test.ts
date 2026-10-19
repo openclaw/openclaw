@@ -53,6 +53,9 @@ describe("zalouser doctor", () => {
               "group:trusted": {
                 allow: true,
               },
+              "group:disabled": { allow: true, enabled: false },
+              "group:invalid-enabled": { allow: false, enabled: "invalid" },
+              "group:invalid-allow": { allow: "true" },
             },
             accounts: {
               work: {
@@ -71,6 +74,15 @@ describe("zalouser doctor", () => {
     expect(result.config.channels?.zalouser?.groups?.["group:trusted"]).toEqual({
       enabled: true,
     });
+    expect(result.config.channels?.zalouser?.groups?.["group:disabled"]).toEqual({
+      enabled: false,
+    });
+    expect(result.config.channels?.zalouser?.groups?.["group:invalid-enabled"]).toEqual({
+      enabled: false,
+    });
+    expect(result.config.channels?.zalouser?.groups?.["group:invalid-allow"]).toEqual({
+      allow: "true",
+    });
     expect(
       (
         result.config.channels?.zalouser?.accounts?.work as
@@ -82,7 +94,10 @@ describe("zalouser doctor", () => {
     });
     expect(result.changes).toEqual([
       "Moved channels.zalouser.groups.group:trusted.allow → channels.zalouser.groups.group:trusted.enabled (true).",
+      "Moved channels.zalouser.groups.group:disabled.allow → channels.zalouser.groups.group:disabled.enabled (false).",
+      "Moved channels.zalouser.groups.group:invalid-enabled.allow → channels.zalouser.groups.group:invalid-enabled.enabled (false).",
       "Moved channels.zalouser.accounts.work.groups.group:legacy.allow → channels.zalouser.accounts.work.groups.group:legacy.enabled (false).",
     ]);
+    expect(normalize({ cfg: result.config })).toEqual({ config: result.config, changes: [] });
   });
 });

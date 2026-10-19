@@ -15,6 +15,7 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
   const requestModule = await import("./server-methods.js");
   const admission = await import("../process/gateway-work-admission.js");
   const asyncWork = await import("../shared/async-work-scope.js");
+  const sessionWork = await import("../sessions/session-controller.lifecycle.js");
   const chatModule = selection
     ? undefined
     : await import("./server-methods/chat-send-dispatch-errors.js");
@@ -23,6 +24,12 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
   const retainWork = admission.runWithRetainedGatewayRootWork;
   const continueWork = admission.runWithGatewayIndependentRootWorkContinuation;
   const trackWork = asyncWork.trackAsyncWork;
+  const beginSessionWork = sessionWork.beginSessionEffect;
+  const rootWorkAdmission = admission.tryBeginGatewayRootWorkAdmission;
+  const previousRootWork = vi.isMockFunction(rootWorkAdmission)
+    ? rootWorkAdmission.getMockImplementation()
+    : undefined;
+  const beginRootWork = previousRootWork ?? rootWorkAdmission;
   type ObservedRequest = {
     runId?: string;
     request?: Promise<void>;
@@ -42,6 +49,39 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
     }
     return pending;
   };
+  const rootWorkSpy = vi
+    .spyOn(admission, "tryBeginGatewayRootWorkAdmission")
+    .mockImplementation((origin) => {
+      const lease = beginRootWork(origin);
+      const observed = observedRequest.getStore();
+      if (!lease?.ownsRoot || !observed) {
+        return lease;
+      }
+      return {
+        ...lease,
+        run: (run) =>
+          lease.run(() => {
+            const observeRelease = admission.captureGatewayRootWorkReleaseObserver();
+            if (observeRelease) {
+              const released = createDeferred();
+              observeRelease(() => released.resolve());
+              // Only cleanup joins final release; dispatch-only waits must stay nonblocking.
+              void captureEffect(released.promise);
+            }
+            return run();
+          }),
+      };
+    });
+  const sessionWorkSpy = vi
+    .spyOn(sessionWork, "beginSessionEffect")
+    .mockImplementation((params) => {
+      const pending = beginSessionWork(params);
+      if (observedRequest.getStore()) {
+        // Queued custody can finish outside the request frame after dispatch settles.
+        void captureEffect(pending.then((lease) => lease.released));
+      }
+      return pending;
+    });
   // Best-effort participant persistence is request-owned async work, not a
   // retained Gateway root. Observe its existing promise without changing admission.
   const observeAsyncWork: typeof trackWork = (run) => captureEffect(trackWork(run));
@@ -107,16 +147,27 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
             };
           })
       : undefined;
-  const settleRequest = async (observed: ObservedRequest) => {
+  const settleDispatch = async (observed: ObservedRequest) => {
     // RPC responses and final events assert outcomes; cleanup observes settlement.
     await Promise.allSettled([observed.request]);
     // Request admission can register detached execution after cleanup starts.
     await Promise.allSettled(observed.executions);
+  };
+  const settleRequest = async (observed: ObservedRequest) => {
+    await settleDispatch(observed);
     while (observed.effects.size > 0) {
       await Promise.allSettled(observed.effects);
     }
   };
   return {
+    // Queued custody intentionally retains effects until a later execution settles.
+    async waitForDispatch(runId: string) {
+      for (const observed of requests) {
+        if (observed.runId === runId) {
+          await settleDispatch(observed);
+        }
+      }
+    },
     async waitForCompletion(runId?: string) {
       for (const observed of requests) {
         if (runId !== undefined && observed.runId !== runId) {
@@ -132,11 +183,17 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
         }
       } finally {
         chatSpy?.mockRestore();
+        sessionWorkSpy.mockRestore();
         asyncWorkSpy.mockRestore();
         executionSpy.mockRestore();
         requestSpy.mockRestore();
         effectSpy.mockRestore();
         continuationSpy.mockRestore();
+        if (previousRootWork) {
+          rootWorkSpy.mockImplementation(previousRootWork);
+        } else {
+          rootWorkSpy.mockRestore();
+        }
         observedRequest.disable();
       }
     },

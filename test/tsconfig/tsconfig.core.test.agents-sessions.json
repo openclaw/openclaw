@@ -8,6 +8,12 @@
     "../../src/agents/session-*.test.tsx",
     "../../src/agents/sessions/**/*.test.ts",
     "../../src/agents/sessions/**/*.test.tsx",
+    "../../src/agents/session-maintenance/**/*.test.ts",
+    "../../src/agents/session-maintenance/**/*.test.tsx",
+    "../../src/agents/main-session-recovery/**/*.test.ts",
+    "../../src/agents/main-session-recovery/**/*.test.tsx",
+    "../../src/agents/subagents/**/*.test.ts",
+    "../../src/agents/subagents/**/*.test.tsx",
     "../../src/config/sessions/**/*.test.ts",
     "../../src/config/sessions/**/*.test.tsx"
   ]

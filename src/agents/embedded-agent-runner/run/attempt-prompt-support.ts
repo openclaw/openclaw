@@ -1,3 +1,4 @@
+import { logDecisionToolPrefilter } from "../../../decisions/diagnostics.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -54,6 +55,7 @@ export function createPromptBuildToolPolicy<
   });
   let baseline = captureBaseline();
   let toolsAllow: string[] | undefined;
+  let decisionPruned = false;
   const current = {
     activeToolNames: [...baseline.activeToolNames],
     callableToolNames: [...baseline.activeToolNames],
@@ -61,20 +63,43 @@ export function createPromptBuildToolPolicy<
     uncompactedEffectiveTools: params.uncompactedEffectiveTools,
     tools: params.tools,
   };
-  const apply = (nextToolsAllow: string[] | undefined) => {
-    toolsAllow = nextToolsAllow;
-    Object.assign(current, applyPromptBuildToolsAllow({ ...params, baseline, toolsAllow }));
+  const applyCurrent = () => {
+    Object.assign(
+      current,
+      applyPromptBuildToolsAllow({
+        ...params,
+        baseline,
+        toolsAllow: decisionPruned ? [] : toolsAllow,
+      }),
+    );
     params.onApplied?.(current);
     return current;
+  };
+  const apply = (nextToolsAllow: string[] | undefined, pruneForDecision = false) => {
+    const modelFacingToolsBefore = current.effectiveTools.length;
+    toolsAllow = nextToolsAllow;
+    decisionPruned = pruneForDecision;
+    const applied = applyCurrent();
+    if (decisionPruned) {
+      logDecisionToolPrefilter({
+        effect: "applied",
+        modelFacingToolsBefore,
+        modelFacingToolsAfter: applied.effectiveTools.length,
+      });
+    }
+    return applied;
   };
   return {
     current,
     apply,
+    // The session baseline includes client tools and survives prompt-level pruning.
+    // Read its latest permission generation, not the previous turn's restricted surface.
+    hasBaselineTools: () => baseline.activeToolNames.length > 0,
     refresh: () => {
       // A late hook must filter this generation, never restore retained callable
       // entries from the catalog that the permission owner has just revoked.
       baseline = captureBaseline();
-      return apply(toolsAllow);
+      return applyCurrent();
     },
   };
 }
@@ -118,13 +143,7 @@ export function applyPromptBuildToolsAllow<
   catalogRef?: ToolSearchCatalogRef;
   codeModeControlsEnabled: boolean;
   forceToolNames?: readonly string[];
-}): {
-  activeToolNames: string[];
-  callableToolNames: string[];
-  effectiveTools: TEffectiveTool[];
-  uncompactedEffectiveTools: TUncompactedTool[];
-  tools: TTool[];
-} {
+}) {
   const policyInput = {
     toolsAllow: params.toolsAllow,
     forceToolNames: params.forceToolNames,
@@ -189,7 +208,7 @@ type AttemptPromptObservabilityParams = Pick<
 type CacheTrace = Pick<NonNullable<ReturnType<typeof createCacheTrace>>, "recordStage"> | null;
 type PromptHookRunner = Pick<HookRunner, "hasHooks" | "runLlmInput"> | null;
 type TrajectoryRecorder = Pick<
-  NonNullable<ReturnType<typeof createTrajectoryRuntimeRecorder>>,
+  NonNullable<Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>>,
   "recordEvent"
 > | null;
 type TrajectoryTool = Parameters<typeof toTrajectoryToolDefinitions>[0][number];

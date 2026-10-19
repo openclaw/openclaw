@@ -1,11 +1,13 @@
-// Provider OAuth runtime helpers expose shared browser/OAuth flows for provider plugins.
+import { randomBytes } from "node:crypto";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "../../packages/normalization-core/src/number-coercion.js";
+import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import type { Model } from "../llm/types.js";
+import { generatePkceVerifierChallenge } from "./oauth-utils.js";
 export { oauthErrorHtml, oauthSuccessHtml } from "../shared/oauth-page.js";
 
 export { CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/profile-ids.js";
@@ -122,33 +124,14 @@ export interface OAuthProviderInfo {
   available: boolean;
 }
 
-function base64urlEncode(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/[=]/g, "");
-}
-
 /** Generates an OAuth PKCE verifier and SHA-256 challenge using base64url encoding. */
 export async function generatePKCE(): Promise<{ verifier: string; challenge: string }> {
-  const verifierBytes = new Uint8Array(32);
-  crypto.getRandomValues(verifierBytes);
-  const verifier = base64urlEncode(verifierBytes);
-
-  const encoder = new TextEncoder();
-  const data = encoder.encode(verifier);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const challenge = base64urlEncode(new Uint8Array(hashBuffer));
-
-  return { verifier, challenge };
+  return generatePkceVerifierChallenge();
 }
 
 /** Generates a random base64url OAuth state value for CSRF protection. */
 function generateBase64UrlOAuthState(): string {
-  const stateBytes = new Uint8Array(32);
-  crypto.getRandomValues(stateBytes);
-  return base64urlEncode(stateBytes);
+  return randomBytes(32).toString("base64url");
 }
 
 export { generateBase64UrlOAuthState as generateOAuthState };
@@ -166,14 +149,12 @@ export function parseOAuthAuthorizationInput(
     return {};
   }
 
-  try {
-    const url = new URL(value);
+  const url = URL.parse(value);
+  if (url) {
     return {
       code: url.searchParams.get("code") ?? undefined,
       state: url.searchParams.get("state") ?? undefined,
     };
-  } catch {
-    // Plain pasted code or query-string input.
   }
 
   if (value.includes("#")) {
@@ -250,34 +231,11 @@ export function withOAuthLoginAbort<T>(
     return promise;
   }
 
-  return new Promise<T>((resolve, reject) => {
-    const cleanup = () => {
-      signal.removeEventListener("abort", abort);
-    };
-    const abort = () => {
-      cleanup();
-      onAbort?.();
-      reject(createOAuthLoginCancelledError());
-    };
-
-    if (signal.aborted) {
-      abort();
-      return;
-    }
-
-    signal.addEventListener("abort", abort, { once: true });
-    promise.then(
-      (value) => {
-        // The login step won the race; remove abort listeners so long-lived prompts do not leak.
-        cleanup();
-        resolve(value);
-      },
-      (error: unknown) => {
-        // Preserve Error rejections but wrap non-Error provider/prompt values for lint-safe callers.
-        cleanup();
-        reject(toErrorObject(error, "Non-Error rejection"));
-      },
-    );
+  return racePromiseWithAbortSignal(promise, signal, () => {
+    onAbort?.();
+    return createOAuthLoginCancelledError();
+  }).catch((error: unknown) => {
+    throw toErrorObject(error, "Non-Error rejection");
   });
 }
 

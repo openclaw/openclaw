@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
+FROM node:24-trixie-slim@sha256:7f486cabe892bff8fef04c0f7da8dba84a560be3e4e2740b7a86afc57ebec315
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates git python3 \

@@ -1,8 +1,9 @@
+import { createSignal, onCleanup } from "solid-js";
 import type { ImageLightboxGallery, ImageLightboxItem } from "./image-lightbox.types.ts";
 
 async function decodeImage(item: ImageLightboxItem | null): Promise<ImageLightboxItem | null> {
-  if (!item) {
-    return null;
+  if (!item || item.kind === "video") {
+    return item;
   }
   const image = new Image();
   image.referrerPolicy = "no-referrer";
@@ -16,137 +17,254 @@ async function decodeImage(item: ImageLightboxItem | null): Promise<ImageLightbo
   }
 }
 
-/** The modal owns decoded images and their resource leases until eviction or close. */
-export class ImageLightboxGalleryController {
-  index = 0;
-  current: ImageLightboxItem | undefined;
-  busy = false;
-  failed = false;
-  private gallery: ImageLightboxGallery | undefined;
-  private generation = 0;
-  private readonly images = new Map<number, Promise<ImageLightboxItem | null>>();
+function initialSelection(current?: ImageLightboxItem, gallery?: ImageLightboxGallery) {
+  return {
+    index: gallery?.index ?? 0,
+    count: gallery?.items.length ?? 0,
+    current,
+    busy: false,
+    failed: false,
+    upgrading: false,
+    upgradeFailed: false,
+    videoStatus: "preparing",
+    videoRetryable: true,
+  };
+}
 
-  constructor(private readonly notify: () => void) {}
+/** The modal owns selected media and image resource leases until eviction or close. */
+export function createImageLightboxGallery() {
+  let selection = initialSelection();
+  const [state, setState] = createSignal(selection);
+  let video: HTMLVideoElement | undefined;
+  let disconnectVideo: (() => void) | undefined;
+  let gallery: ImageLightboxGallery | undefined;
+  let images = new Map<number, Promise<ImageLightboxItem | null>>();
+  // Admission and resource callbacks read this same receipt before Solid commits its display.
+  const publish = (patch: Partial<typeof selection>) => {
+    selection = { ...selection, ...patch };
+    setState(selection);
+  };
 
-  get count() {
-    return this.gallery?.items.length ?? 0;
-  }
-
-  reset(gallery: ImageLightboxGallery | undefined, initial: ImageLightboxItem) {
-    this.dispose();
-    this.gallery = gallery;
-    this.index = gallery?.index ?? 0;
-    this.current = initial;
+  function reset(nextGallery: ImageLightboxGallery | undefined, initial: ImageLightboxItem) {
+    dispose();
+    gallery = nextGallery;
+    selection = initialSelection(initial, gallery);
     // The opener retains and releases the initial image independently of the modal.
     const preview = { ...initial, release: undefined };
-    if (initial.loadFullResolution) {
-      this.upgrade(this.index, preview, initial.loadFullResolution);
+    if (initial.loadDisplayImage) {
+      void prepare(selection.index, initial.loadDisplayImage, preview);
     } else {
-      this.images.set(this.index, Promise.resolve(preview));
+      images.set(selection.index, Promise.resolve(preview));
+      publish({});
     }
-    this.preloadNeighbors();
+    evictDistantImages();
   }
 
-  private upgrade(
+  function prepare(
     index: number,
-    preview: ImageLightboxItem,
-    load: () => Promise<ImageLightboxItem | null>,
+    loader: () => Promise<ImageLightboxItem | null>,
+    preview?: ImageLightboxItem,
   ) {
-    const generation = this.generation;
-    const pending = Promise.resolve()
-      .then(() => (generation === this.generation ? load() : null))
+    if (preview) {
+      publish({ upgrading: true, upgradeFailed: false });
+    }
+    const pending: Promise<ImageLightboxItem | null> = Promise.resolve()
+      .then(() => (images.get(index) === pending ? loader() : null))
       .then(decodeImage)
       .catch(() => null)
       .then((item) => {
-        if (
-          item &&
-          generation === this.generation &&
-          this.images.get(index) === pending &&
-          this.index === index
-        ) {
-          this.current = item;
-          this.notify();
+        if (preview && images.get(index) === pending && selection.index === index) {
+          publish({ upgrading: false, upgradeFailed: !item, ...(item ? { current: item } : {}) });
         }
-        return item ?? preview;
+        if (!item && !preview && images.get(index) === pending) {
+          images.delete(index);
+        }
+        return item ?? preview ?? null;
       });
-    this.images.set(index, pending);
-  }
-
-  dispose() {
-    this.generation += 1;
-    for (const image of this.images.values()) {
-      void image.then((item) => item?.release?.());
-    }
-    this.images.clear();
-    this.gallery = undefined;
-    this.current = undefined;
-    this.busy = false;
-    this.failed = false;
-  }
-
-  canMove(delta: number) {
-    const next = this.index + delta;
-    return this.count > 1 && next >= 0 && next < this.count;
-  }
-
-  async move(delta: number): Promise<boolean> {
-    if (this.busy || !this.canMove(delta)) {
-      return false;
-    }
-    const generation = this.generation;
-    const next = this.index + delta;
-    this.busy = true;
-    this.failed = false;
-    this.notify();
-    const item = await this.load(next, true);
-    if (generation !== this.generation) {
-      return false;
-    }
-    this.busy = false;
-    this.failed = !item;
-    if (item) {
-      this.index = next;
-      this.current = item;
-      this.preloadNeighbors();
-    }
-    this.notify();
-    return item !== null;
-  }
-
-  private load(index: number, retryFailed = false): Promise<ImageLightboxItem | null> {
-    const cached = this.images.get(index);
-    if (cached) {
-      return cached;
-    }
-    const load = this.gallery?.items[index];
-    if (!load) {
-      return Promise.resolve(null);
-    }
-    const generation = this.generation;
-    const pending = Promise.resolve()
-      .then(() => (generation === this.generation ? load(retryFailed) : null))
-      .then(decodeImage)
-      .catch(() => null);
-    this.images.set(index, pending);
-    void pending.then((item) => {
-      if (!item && this.images.get(index) === pending) {
-        this.images.delete(index);
-      }
-    });
+    images.set(index, pending);
     return pending;
   }
 
-  private preloadNeighbors() {
-    for (const [index, image] of this.images) {
-      if (Math.abs(index - this.index) > 1) {
-        this.images.delete(index);
+  function dispose() {
+    stopPlayer();
+    for (const image of images.values()) {
+      void image.then((item) => item?.release?.());
+    }
+    images = new Map();
+    gallery = undefined;
+  }
+
+  function canMove(delta: number) {
+    const next = selection.index + delta;
+    return selection.count > 1 && next >= 0 && next < selection.count;
+  }
+
+  async function move(delta: number): Promise<boolean> {
+    if (selection.busy || !canMove(delta)) {
+      return false;
+    }
+    const activeImages = images;
+    const next = selection.index + delta;
+    publish({ busy: true, failed: false });
+    const item = await load(next, true);
+    if (activeImages !== images) {
+      return false;
+    }
+    if (item) {
+      stopPlayer();
+      publish({
+        index: next,
+        current: item,
+        busy: false,
+        failed: false,
+        upgrading: false,
+        upgradeFailed: false,
+      });
+      evictDistantImages();
+    } else {
+      publish({ busy: false, failed: true });
+    }
+    return item !== null;
+  }
+
+  function connectPlayer(nextVideo?: HTMLVideoElement, retryFailed = false) {
+    const item = selection.current;
+    if (!nextVideo || item?.kind !== "video" || video === nextVideo) {
+      return;
+    }
+    stopPlayer();
+    video = nextVideo;
+    publish({ videoStatus: "preparing" });
+    if (item.connectVideo) {
+      disconnectVideo = item.connectVideo(
+        nextVideo,
+        (status, retryable = true) => {
+          if (video === nextVideo && selection.current === item) {
+            publish({
+              videoStatus: status === "ready" && nextVideo.readyState < 2 ? "preparing" : status,
+              videoRetryable: retryable,
+            });
+          }
+        },
+        retryFailed,
+      );
+    } else {
+      nextVideo.src = item.src;
+    }
+  }
+
+  function updateVideoStatus(videoStatus: "ready" | "unavailable") {
+    publish({ videoStatus });
+  }
+
+  function stopPlayer() {
+    disconnectVideo?.();
+    disconnectVideo = undefined;
+    if (video?.hasAttribute("src")) {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    }
+    video = undefined;
+  }
+
+  function retryVideo() {
+    const previous = video;
+    stopPlayer();
+    connectPlayer(previous, true);
+  }
+
+  function load(index: number, retryFailed = false): Promise<ImageLightboxItem | null> {
+    const cached = images.get(index);
+    if (cached) {
+      return cached;
+    }
+    const loader = gallery?.items[index];
+    return loader ? prepare(index, () => loader(retryFailed)) : Promise.resolve(null);
+  }
+
+  function retryDisplayImage() {
+    const current = selection.current;
+    if (current?.loadDisplayImage && !selection.upgrading) {
+      void prepare(selection.index, current.loadDisplayImage, current);
+    }
+  }
+
+  function evictDistantImages() {
+    for (const [index, image] of images) {
+      if (Math.abs(index - selection.index) > 1) {
+        images.delete(index);
         void image.then((item) => item?.release?.());
       }
     }
-    for (const index of [this.index - 1, this.index + 1]) {
-      if (index >= 0 && index < this.count) {
-        void this.load(index);
-      }
-    }
+    // Only selected media starts network/decode work; visited neighbors stay warm.
+  }
+
+  onCleanup(dispose);
+  return {
+    state,
+    peek: () => selection,
+    reset,
+    canMove,
+    move,
+    connectPlayer,
+    updateVideoStatus,
+    stopPlayer,
+    retryVideo,
+    retryDisplayImage,
+  };
+}
+
+/** Native control internals retarget to video; leave their bottom strip and fullscreen alone. */
+export function canSwipeLightboxVideo(video: HTMLVideoElement | undefined, event: PointerEvent) {
+  const root = video?.getRootNode();
+  if (
+    !video ||
+    document.fullscreenElement ||
+    (root instanceof ShadowRoot && root.fullscreenElement)
+  ) {
+    return false;
+  }
+  if (!event.composedPath().includes(video)) {
+    return true;
+  }
+  const bounds = video.getBoundingClientRect();
+  return event.clientY < bounds.bottom - Math.min(80, bounds.height / 2);
+}
+
+/** Native controls can send dialog cancellation instead of a DOM Escape key. */
+export function exitLightboxVideoFullscreen(video: HTMLVideoElement | undefined, event: Event) {
+  if (!video?.matches(":fullscreen")) {
+    return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  void video.ownerDocument.exitFullscreen().catch(() => undefined);
+  return true;
+}
+
+export function trapLightboxTabFocus(event: KeyboardEvent, focusables: Iterable<HTMLElement>) {
+  if (event.key !== "Tab") {
+    return;
+  }
+  const actions = [...focusables]
+    .filter(
+      (action) => action.isConnected && !(action instanceof HTMLButtonElement && action.disabled),
+    )
+    .toSorted((left, right) =>
+      left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+    );
+  const first = actions[0];
+  const last = actions.at(-1);
+  if (!first || !last) {
+    return;
+  }
+  const source = event.composedPath()[0];
+  if (event.shiftKey && source === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && source === last) {
+    event.preventDefault();
+    first.focus();
   }
 }

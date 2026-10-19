@@ -25,6 +25,31 @@ export const SESSION_PERMISSION_BY_EXEC_MODE = {
   full: "full",
 } as const satisfies Record<ExecMode, PreparedSessionPermissionPolicy["mode"]>;
 
+/** A retained mode is a ceiling; unset mode keeps config and host approval policy. */
+export function intersectSessionPermissionModes(
+  retained: PreparedSessionPermissionPolicy["mode"] | undefined,
+  current: PreparedSessionPermissionPolicy["mode"] | undefined,
+): PreparedSessionPermissionPolicy["mode"] | undefined {
+  if (retained === current) {
+    return retained;
+  }
+  if (retained === "read-only" || current === "read-only") {
+    return "read-only";
+  }
+  if (retained === "full") {
+    return current;
+  }
+  if (current === "full") {
+    return retained;
+  }
+  if (retained === undefined || current === undefined) {
+    throw new Error(
+      "The session changed between default and explicit permissions; start a new turn under the current policy.",
+    );
+  }
+  return retained === "guarded" || current === "guarded" ? "guarded" : "workspace";
+}
+
 export function resolveSessionPermissionCoreToolPolicy(
   policy: Pick<PreparedSessionPermissionPolicy, "mode">,
 ) {

@@ -72,27 +72,20 @@ export function writeRfbPreauthFrame(
   });
 }
 
-/** Exact-byte queue shared by stream and WebSocket handshake adapters. */
+/** Exact-byte queue for each sequential stream or WebSocket handshake. */
 export class RfbPreauthBuffer {
   private buffered = Buffer.alloc(0);
   private failure: Error | undefined;
-  private readonly waiters = new Set<() => void>();
+  private wake?: () => void;
 
   push(chunk: Buffer): void {
     this.buffered = Buffer.concat([this.buffered, chunk]);
-    this.wake();
+    this.wake?.();
   }
 
   fail(error: Error): void {
     this.failure = error;
-    this.wake();
-  }
-
-  private wake(): void {
-    for (const waiter of this.waiters) {
-      waiter();
-    }
-    this.waiters.clear();
+    this.wake?.();
   }
 
   private async waitForData(signal: AbortSignal): Promise<void> {
@@ -101,7 +94,7 @@ export class RfbPreauthBuffer {
     }
     await new Promise<void>((resolve, reject) => {
       const cleanup = () => {
-        this.waiters.delete(onWake);
+        this.wake = undefined;
         signal.removeEventListener("abort", onAbort);
       };
       const onWake = () => {
@@ -112,7 +105,7 @@ export class RfbPreauthBuffer {
         cleanup();
         reject(abortReason(signal));
       };
-      this.waiters.add(onWake);
+      this.wake = onWake;
       signal.addEventListener("abort", onAbort, { once: true });
     });
   }
@@ -185,24 +178,22 @@ async function selectSecurityType(params: {
   requiredType: number;
   signal: AbortSignal;
 }): Promise<void> {
-  if (params.protocolMinor < 7) {
-    const selected = (await params.peer.readExactly(4, params.signal)).readUInt32BE(0);
-    if (selected === 0) {
-      const reason = await readReason(params.peer, params.signal);
-      throw new Error(`RFB server rejected security negotiation${reason ? `: ${reason}` : ""}`);
-    }
-    if (selected !== params.requiredType) {
-      throw new Error(`RFB server selected security type ${selected}, want ${params.requiredType}`);
-    }
-    return;
-  }
-
-  const count = (await params.peer.readExactly(1, params.signal))[0] ?? 0;
-  if (count === 0) {
+  const legacy = params.protocolMinor < 7;
+  const header = await params.peer.readExactly(legacy ? 4 : 1, params.signal);
+  const countOrType = legacy ? header.readUInt32BE(0) : (header[0] ?? 0);
+  if (countOrType === 0) {
     const reason = await readReason(params.peer, params.signal);
     throw new Error(`RFB server rejected security negotiation${reason ? `: ${reason}` : ""}`);
   }
-  const offered = await params.peer.readExactly(count, params.signal);
+  if (legacy) {
+    if (countOrType !== params.requiredType) {
+      throw new Error(
+        `RFB server selected security type ${countOrType}, want ${params.requiredType}`,
+      );
+    }
+    return;
+  }
+  const offered = await params.peer.readExactly(countOrType, params.signal);
   if (!offered.includes(params.requiredType)) {
     throw new Error(
       `RFB server did not offer required security type ${params.requiredType} (offered ${[
@@ -229,9 +220,6 @@ function leftPadBigInt(value: bigint, length: number): Buffer {
 }
 
 function modularExponentiation(base: bigint, exponent: bigint, modulus: bigint): bigint {
-  if (modulus <= 0n) {
-    throw new Error("invalid ARD Diffie-Hellman modulus");
-  }
   let result = 1n;
   let factor = base % modulus;
   let power = exponent;
@@ -402,9 +390,28 @@ export async function preauthenticateRfb(params: {
   browser: RfbPreauthPeer;
   preauth: RfbPreauthDescriptor;
   timeoutMs?: number;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
 }): Promise<void> {
   const server = new StreamRfbPreauthPeer(params.server);
   const controller = new AbortController();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, controller.signal])
+    : controller.signal;
+  const currentPeer = (peer: RfbPreauthPeer): RfbPreauthPeer => ({
+    async readExactly(length, requestSignal) {
+      params.assertCurrent?.();
+      const bytes = await peer.readExactly(length, requestSignal);
+      params.assertCurrent?.();
+      return bytes;
+    },
+    async write(bytes, requestSignal) {
+      params.assertCurrent?.();
+      await peer.write(bytes, requestSignal);
+      params.assertCurrent?.();
+    },
+  });
+  const browser = currentPeer(params.browser);
   const timeout = setTimeout(
     () => controller.abort(new RfbPreauthTimeoutError()),
     params.timeoutMs ?? DEFAULT_PREAUTH_TIMEOUT_MS,
@@ -412,10 +419,10 @@ export async function preauthenticateRfb(params: {
   timeout.unref?.();
   try {
     await Promise.all([
-      negotiateServer({ peer: server, preauth: params.preauth, signal: controller.signal }),
-      negotiateBrowser(params.browser, controller.signal),
+      negotiateServer({ peer: currentPeer(server), preauth: params.preauth, signal }),
+      negotiateBrowser(browser, signal),
     ]);
-    await params.browser.write(Buffer.alloc(4), controller.signal);
+    await browser.write(Buffer.alloc(4), signal);
   } finally {
     controller.abort();
     clearTimeout(timeout);

@@ -19,10 +19,14 @@ function widget(viewGeneration = "a".repeat(32)): BoardWidget {
   };
 }
 
-function createHost(waitForRender = false) {
+function createHost(waitForRender = false, deferReady = false) {
   const frame = document.createElement("iframe");
+  if (deferReady) {
+    frame.src = SANDBOX_URL;
+  }
   document.body.append(frame);
-  const onLoadFailed = vi.fn();
+  const onError = vi.fn();
+  const onLoadFailed = deferReady ? onError : vi.fn();
   const onLoaded = vi.fn();
   const options = {
     frame,
@@ -30,28 +34,31 @@ function createHost(waitForRender = false) {
     sandboxOrigin: "https://sandbox.example",
     sandboxUrl: SANDBOX_URL,
     sourceOrigin: "https://gateway.example",
-    resolveFrameUrl: () => "/widget?generation=first",
+    resolveFrameUrl: () => (deferReady ? "/widget" : "/widget?generation=first"),
     confirmPrompt: () => true,
     onFrameUrl: vi.fn(),
     onLoadFailed,
-    onUnauthorized: vi.fn(),
-    onReadyTimeout: vi.fn(),
+    onUnauthorized: deferReady ? onError : vi.fn(),
+    onReadyTimeout: deferReady ? onError : vi.fn(),
     onLoaded,
     onRendered: waitForRender ? vi.fn() : undefined,
-    onError: vi.fn(),
+    onPending: deferReady ? vi.fn() : undefined,
+    onError,
   };
   const host = new BoardWidgetSandboxHost(options);
-  host.handleMessage(
-    new MessageEvent("message", {
-      source: frame.contentWindow,
-      origin: "https://sandbox.example",
-      data: {
-        method: "ui/notifications/sandbox-proxy-ready",
-        params: { sandboxUrl: SANDBOX_URL },
-      },
-    }),
-  );
-  return { host, onLoadFailed, onLoaded, options };
+  const notify = (method: string, params: Record<string, unknown>) =>
+    host.handleMessage(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: "https://sandbox.example",
+        data: { method: `ui/notifications/sandbox-${method}`, params },
+      }),
+    );
+  const ready = () => notify("proxy-ready", { sandboxUrl: SANDBOX_URL });
+  if (!deferReady) {
+    ready();
+  }
+  return { host, onLoadFailed, onLoaded, options, frame, ready, notify };
 }
 
 afterEach(() => {
@@ -93,7 +100,7 @@ describe("BoardWidgetSandboxHost document timeout", () => {
       );
       const { host, onLoadFailed, onLoaded, options } = createHost(phase === "render");
 
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(30_000);
 
       if (phase === "render") {
         expect(onLoadFailed).not.toHaveBeenCalled();
@@ -105,6 +112,51 @@ describe("BoardWidgetSandboxHost document timeout", () => {
         expect(onLoadFailed).toHaveBeenCalledOnce();
       }
       expect(onLoaded).toHaveBeenCalledTimes(phase === "render" ? 1 : 0);
+      host.dispose();
+    },
+  );
+
+  it.each(["document", "proxy", "render"] as const)(
+    "keeps a slow %s load alive beyond the notice threshold",
+    async (phase) => {
+      vi.useFakeTimers();
+      const fetchMock = vi.fn(async () => {
+        if (phase === "document") {
+          await new Promise((resolve) => {
+            window.setTimeout(resolve, 15_000);
+          });
+        }
+        return new Response("<p>Slow success</p>");
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const { host, frame, ready, notify, onLoaded, options } = createHost(
+        phase === "render",
+        true,
+      );
+      const post = vi.spyOn(frame.contentWindow!, "postMessage");
+      if (phase !== "proxy") {
+        ready();
+      }
+      const reload = vi.spyOn(frame, "src", "set");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(options.onPending).toHaveBeenCalled();
+      expect(options.onError).not.toHaveBeenCalled();
+      expect(reload).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5_000);
+      if (phase === "proxy") {
+        ready();
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onLoaded).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledOnce();
+      if (phase === "render") {
+        const delivery = post.mock.calls.find(
+          ([data]) => data.method === "ui/notifications/sandbox-resource-ready",
+        )![0];
+        notify("resource-loaded", { renderId: delivery.params.renderId });
+        expect(options.onRendered).toHaveBeenCalledOnce();
+      }
+      expect(reload).not.toHaveBeenCalled();
       host.dispose();
     },
   );

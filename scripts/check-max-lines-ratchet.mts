@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type * as ts from "typescript/unstable/ast";
+import type * as ts from "typescript/ast";
 import {
   addEnvVarNames,
   isCountedSourcePath,
@@ -19,7 +19,6 @@ import {
   parseRatchetArgs,
   parseRatchetPaths,
   reportRatchetFailures,
-  reportRatchetSuccess,
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
 import { collectTypeScriptCommentRanges } from "./lib/ts-guard-utils.mts";
@@ -184,7 +183,11 @@ function writeBaseline(root: string, entries: string[]) {
 
 function envVarCountArgs(argv: string[]) {
   const args = parseRatchetArgs(argv);
-  return [...(args.staged ? ["--staged"] : []), ...(args.base ? ["--base", args.base] : [])];
+  return [
+    ...(args.staged ? ["--staged"] : []),
+    ...(args.base ? ["--base", args.base] : []),
+    ...(!args.mergeBase ? ["--no-merge-base"] : []),
+  ];
 }
 
 export function main(
@@ -209,7 +212,7 @@ export function main(
       envVarNames,
     });
     const { added, removed: stale } = compareRatchetSets(current, baseline, compareStrings);
-    const baseRef = resolveRatchetBase(root, { base: args.base, staged: args.staged });
+    const baseRef = resolveRatchetBase(root, args);
     const baseBaseline = baseRef
       ? loadRatchetReference(root, baseRef, BASELINE_PATH, parseRatchetPaths)
       : null;
@@ -254,9 +257,7 @@ export function main(
         .filter((entry) => current.includes(entry))
         .toSorted(compareStrings);
       writeBaseline(root, kept);
-      reportRatchetSuccess(
-        "Pruned " + BASELINE_PATH + ": " + baseline.size + " -> " + kept.length + ".",
-      );
+      console.log("Pruned " + BASELINE_PATH + ": " + baseline.size + " -> " + kept.length + ".");
       return 0;
     }
     if (
@@ -272,9 +273,7 @@ export function main(
     }
 
     if (added.length + expanded.length + stale.length === 0) {
-      reportRatchetSuccess(
-        "max-lines ratchet OK: " + current.length + " grandfathered suppressions.",
-      );
+      console.log("max-lines ratchet OK: " + current.length + " grandfathered suppressions.");
     }
     return 0;
   } catch (error) {

@@ -34,6 +34,62 @@ export async function readLocalWorkspaceRuntimes(workspaceDir: string) {
   ];
 }
 
+/** Inspect existing allocation custody; image reads never provision a runtime. */
+export async function prepareLocalWorkspaceImageRead(params: {
+  workspaceDir: string;
+  containerRoot: string;
+  targets: readonly string[];
+  assertCurrent: () => void;
+}) {
+  const runtimes = await readLocalWorkspaceRuntimes(params.workspaceDir);
+  const assertCurrent = () => {
+    params.assertCurrent();
+    for (const runtime of runtimes) {
+      runtime.assertCurrent();
+    }
+  };
+  assertCurrent();
+  if (!runtimes.length) {
+    throw new Error("Sandbox image backing is unavailable");
+  }
+  const { sandboxContainerShowsWorkspacePaths } = await import("./mount-plan.js");
+  for (const runtime of runtimes) {
+    const { engine, backendTarget } = localWorkspaceRuntimeEngine(runtime);
+    await validateSandboxContainerEngineTarget(engine, backendTarget);
+    assertCurrent();
+    if (
+      !(await sandboxContainerShowsWorkspacePaths({
+        ...params,
+        engine,
+        containerName: runtime.entry.containerName,
+        assertCurrent,
+      }))
+    ) {
+      throw new Error("Sandbox image backing is unavailable");
+    }
+  }
+  assertCurrent();
+  return assertCurrent;
+}
+
+function localWorkspaceRuntimeEngine(
+  runtime: Awaited<ReturnType<typeof readLocalWorkspaceRuntimes>>[number],
+) {
+  const backendId = runtime.kind === "browser" ? "docker" : runtime.entry.backendId;
+  const backendTarget = runtime.kind === "container" ? runtime.entry.backendTarget : undefined;
+  if (backendId !== "docker" && backendId !== "podman") {
+    throw new Error("Local workspace backend cannot fence host projection writes");
+  }
+  if (backendId === "podman" && !backendTarget) {
+    throw new Error("Local workspace Podman engine owner is missing");
+  }
+  return {
+    engine:
+      backendId === "podman" ? bindPodmanSandboxEngine(backendTarget!) : DOCKER_SANDBOX_ENGINE,
+    backendTarget,
+  };
+}
+
 export type LocalWorkspacePausedRuntime = { name: string; id: string };
 
 export function parseLocalWorkspacePausedRuntimes(
@@ -64,7 +120,7 @@ export function parseLocalWorkspacePausedRuntimes(
 export async function quiesceLocalWorkspace(params: {
   workspaceDir: string;
   retained: LocalWorkspacePausedRuntime[];
-  persist: (runtimes: LocalWorkspacePausedRuntime[]) => void;
+  persist: (runtimes: LocalWorkspacePausedRuntime[]) => void | Promise<void>;
   assertCurrent: () => void;
 }) {
   const selected = (await readLocalWorkspaceRuntimes(params.workspaceDir)).map((runtime) => ({
@@ -82,16 +138,7 @@ export async function quiesceLocalWorkspace(params: {
   const retirements: Array<() => Promise<void>> = [];
   for (const { runtime, bridges } of selected) {
     const { entry } = runtime;
-    const backendId = runtime.kind === "browser" ? "docker" : runtime.entry.backendId;
-    const backendTarget = runtime.kind === "container" ? runtime.entry.backendTarget : undefined;
-    if (backendId !== "docker" && backendId !== "podman") {
-      throw new Error("Local workspace backend cannot fence host projection writes");
-    }
-    if (backendId === "podman" && !backendTarget) {
-      throw new Error("Local workspace Podman engine owner is missing");
-    }
-    const engine =
-      backendId === "podman" ? bindPodmanSandboxEngine(backendTarget!) : DOCKER_SANDBOX_ENGINE;
+    const { engine, backendTarget } = localWorkspaceRuntimeEngine(runtime);
     // Stopped allocations remain owned resources, but were never live writers.
     const captureRetirement = (id: string | null) =>
       retirements.push(async () => {
@@ -101,10 +148,7 @@ export async function quiesceLocalWorkspace(params: {
           engine,
           id,
           bridges,
-          assertCurrent: () => {
-            params.assertCurrent();
-            runtime.assertCurrent();
-          },
+          assertCurrent: params.assertCurrent,
         });
       });
     await validateSandboxContainerEngineTarget(engine, backendTarget);
@@ -113,7 +157,7 @@ export async function quiesceLocalWorkspace(params: {
     const inspect = await execContainer(
       engine,
       ["inspect", "-f", "{{.Id}} {{.State.Running}} {{.State.Paused}}", entry.containerName],
-      { allowFailure: true },
+      { allowFailure: true, signal: AbortSignal.timeout(30_000) },
     );
     params.assertCurrent();
     if (inspect.code !== 0) {
@@ -151,14 +195,14 @@ export async function quiesceLocalWorkspace(params: {
     }
     if (!retained) {
       paused.push({ name: entry.containerName, id });
-      params.persist(paused);
+      await params.persist(paused);
     }
     if (isPaused !== "true") {
       // A retained receipt may outlive an unpause. Re-fence the live writer
       // before reconciliation rather than trusting stale pause metadata.
       params.assertCurrent();
       runtime.assertCurrent();
-      await execContainer(engine, ["pause", id]);
+      await execContainer(engine, ["pause", id], { signal: AbortSignal.timeout(30_000) });
     }
     releases.push(async () => {
       await validateSandboxContainerEngineTarget(engine, backendTarget);
@@ -167,6 +211,7 @@ export async function quiesceLocalWorkspace(params: {
       // A missing or already-running runtime needs receipt cleanup, not unpause.
       const observed = await execContainer(engine, ["inspect", "-f", "{{.State.Paused}}", id], {
         allowFailure: true,
+        signal: AbortSignal.timeout(30_000),
       });
       params.assertCurrent();
       if (observed.code !== 0) {
@@ -177,7 +222,10 @@ export async function quiesceLocalWorkspace(params: {
         }
       } else if (observed.stdout.trim() === "true") {
         runtime.assertCurrent();
-        const result = await execContainer(engine, ["unpause", id], { allowFailure: true });
+        const result = await execContainer(engine, ["unpause", id], {
+          allowFailure: true,
+          signal: AbortSignal.timeout(30_000),
+        });
         if (
           result.code !== 0 &&
           !/no such (?:container|object)|does not exist/iu.test(result.stderr)
@@ -189,7 +237,7 @@ export async function quiesceLocalWorkspace(params: {
       }
       params.assertCurrent();
       paused = paused.filter((held) => held.name !== entry.containerName || held.id !== id);
-      params.persist(paused);
+      await params.persist(paused);
     });
   }
   return {
@@ -206,7 +254,7 @@ export async function quiesceLocalWorkspace(params: {
         await release();
       }
       params.assertCurrent();
-      params.persist([]);
+      await params.persist([]);
     },
   };
 }

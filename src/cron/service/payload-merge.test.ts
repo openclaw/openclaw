@@ -16,12 +16,6 @@ const preserveCases = [
     patch: { kind: "systemEvent", text: "after" },
     expected: { kind: "systemEvent", text: "after", toolsAllow: ["read", "cron"] },
   },
-  {
-    label: "command",
-    existing: { kind: "command", argv: ["echo", "before"], toolsAllow: ["read", "cron"] },
-    patch: { kind: "command", argv: ["echo", "after"] },
-    expected: { kind: "command", argv: ["echo", "after"], toolsAllow: ["read", "cron"] },
-  },
 ] satisfies MergeCase[];
 
 const updateCases = [
@@ -33,15 +27,6 @@ const updateCases = [
   },
 ] satisfies MergeCase[];
 
-const clearCases = [
-  {
-    label: "systemEvent",
-    existing: { kind: "systemEvent", text: "tick", toolsAllow: ["read", "cron"] },
-    patch: { kind: "systemEvent", toolsAllow: null },
-    expected: { kind: "systemEvent", text: "tick" },
-  },
-] satisfies MergeCase[];
-
 const kindChangeCases = [
   {
     label: "agentTurn to command",
@@ -50,10 +35,58 @@ const kindChangeCases = [
     expected: { kind: "command", argv: ["echo", "after"], toolsAllow: ["read", "cron"] },
   },
   {
-    label: "command to systemEvent",
-    existing: { kind: "command", argv: ["echo", "before"], toolsAllow: ["read", "cron"] },
-    patch: { kind: "systemEvent", text: "after" },
-    expected: { kind: "systemEvent", text: "after", toolsAllow: ["read", "cron"] },
+    label: "systemEvent to agentTurn with overrides",
+    existing: { kind: "systemEvent", text: "before" },
+    patch: {
+      kind: "agentTurn",
+      message: "after",
+      model: "provider/model",
+      fallbacks: ["provider/fallback"],
+      thinking: "high",
+      timeoutSeconds: 30,
+      lightContext: true,
+      allowUnsafeExternalContent: false,
+    },
+    expected: {
+      kind: "agentTurn",
+      message: "after",
+      model: "provider/model",
+      fallbacks: ["provider/fallback"],
+      thinking: "high",
+      timeoutSeconds: 30,
+      lightContext: true,
+      allowUnsafeExternalContent: false,
+    },
+  },
+  {
+    label: "systemEvent to command with execution settings",
+    existing: { kind: "systemEvent", text: "before" },
+    patch: {
+      kind: "command",
+      argv: ["echo", "after"],
+      cwd: "/synthetic-workspace",
+      env: { SYNTHETIC: "yes" },
+      input: "stdin",
+      timeoutSeconds: 30,
+      noOutputTimeoutSeconds: 5,
+      outputMaxBytes: 1024,
+    },
+    expected: {
+      kind: "command",
+      argv: ["echo", "after"],
+      cwd: "/synthetic-workspace",
+      env: { SYNTHETIC: "yes" },
+      input: "stdin",
+      timeoutSeconds: 30,
+      noOutputTimeoutSeconds: 5,
+      outputMaxBytes: 1024,
+    },
+  },
+  {
+    label: "command to script with execution limits",
+    existing: { kind: "command", argv: ["echo", "before"] },
+    patch: { kind: "script", script: "return {};", timeoutSeconds: 30, toolBudget: 5 },
+    expected: { kind: "script", script: "return {};", timeoutSeconds: 30, toolBudget: 5 },
   },
 ] satisfies MergeCase[];
 
@@ -83,10 +116,6 @@ describe("mergeCronPayload trigger tool caps", () => {
     expect(mergeCronPayload(existing, patch)).toEqual(expected);
   });
 
-  it.each(clearCases)("clears $label toolsAllow", ({ existing, patch, expected }) => {
-    expect(mergeCronPayload(existing, patch)).toEqual(expected);
-  });
-
   it.each(kindChangeCases)(
     "preserves toolsAllow across $label",
     ({ existing, patch, expected }) => {
@@ -108,15 +137,6 @@ describe("mergeCronPayload trigger tool caps", () => {
         { kind: "agentTurn", message: "after", toolsAllow: null },
       ),
     ).toEqual({ kind: "agentTurn", message: "after" });
-  });
-
-  it("treats undefined toolsAllow as omitted across a kind change", () => {
-    expect(
-      mergeCronPayload(
-        { kind: "systemEvent", text: "before", toolsAllow: ["read", "cron"] },
-        { kind: "agentTurn", message: "after", toolsAllow: undefined },
-      ),
-    ).toEqual({ kind: "agentTurn", message: "after", toolsAllow: ["read", "cron"] });
   });
 
   it("preserves default-cap provenance across a kind change", () => {

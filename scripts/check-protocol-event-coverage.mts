@@ -3,7 +3,7 @@
 // Guards gateway -> mobile-client event coverage drift.
 //
 // Source of truth for server->client event names is GATEWAY_EVENTS in
-// src/gateway/server-methods-list.ts (the catalog advertised to clients in
+// src/gateway/events.ts (the catalog advertised to clients in
 // hello-ok `features.events`). packages/gateway-protocol only types the event
 // frame envelope (`event: NonEmptyString`), so the gateway catalog is the most
 // canonical single list of wire event names.
@@ -19,13 +19,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-// Dependency-light seam by design: preflight runs this script without
-// installed dependencies (the dependency-free manifest contract), so the
+import { upperCamel } from "./lib/protocol-codegen-names.mts";
+// Dependency-light seam by design: security-fast runs this script without
+// installed dependencies on current targets, so the
 // canonical @openclaw/normalization-core import cannot resolve here.
 import { isRecord } from "./lib/record-shared.mjs";
 
-const GATEWAY_EVENTS_FILE = "src/gateway/server-methods-list.ts";
-const GATEWAY_EVENT_CONSTANTS_FILE = "src/gateway/events.ts";
+const GATEWAY_EVENTS_FILE = "src/gateway/events.ts";
 const ALLOWLIST_FILE = "scripts/protocol-event-coverage.allowlist.json";
 
 // Scan roots per client. The sentinel files are the primary event dispatch
@@ -70,7 +70,6 @@ const KOTLIN_EVENT_CONSTANT_COMPARISON_RE =
 const STRING_LITERAL_RE = /"([^"]+)"/gu;
 
 type StringConstants = ReadonlyMap<string, string>;
-type FsImpl = Pick<typeof fs, "existsSync" | "readFileSync" | "readdirSync">;
 type CoverageParams = {
   client: string;
   serverEvents: string[];
@@ -82,9 +81,8 @@ type ClientCollectionParams = {
   roots: string[];
   extension: string;
   extract: (source: string, context?: StringConstants) => Set<string>;
-  buildExtractContext?: (sources: Iterable<string>) => StringConstants;
+  buildExtractContext: (sources: Iterable<string>) => StringConstants;
   sentinels: string[];
-  fsImpl: FsImpl;
 };
 type KotlinLexicalContext =
   | { type: "code"; templateDepth: number | null }
@@ -105,12 +103,12 @@ function isMainModule(): boolean {
 }
 
 /**
- * Extracts the gateway event name list from server-methods-list.ts source.
+ * Extracts the gateway event name list from events.ts source.
  * Bare identifiers in the array (e.g. GATEWAY_EVENT_UPDATE_AVAILABLE) are
- * resolved against constantsSource (src/gateway/events.ts).
+ * resolved against constants in the same source.
  */
-export function extractGatewayEventNames(listSource: string, constantsSource: string): string[] {
-  const block = GATEWAY_EVENTS_BLOCK_RE.exec(listSource);
+export function extractGatewayEventNames(source: string): string[] {
+  const block = GATEWAY_EVENTS_BLOCK_RE.exec(source);
   if (!block) {
     throw new Error(
       `Could not find the GATEWAY_EVENTS array in ${GATEWAY_EVENTS_FILE}. ` +
@@ -127,12 +125,10 @@ export function extractGatewayEventNames(listSource: string, constantsSource: st
       continue;
     }
     const identifier = requiredCapture(token, 2);
-    const constant = new RegExp(`export const ${identifier} = "([^"]+)"`, "u").exec(
-      constantsSource,
-    );
+    const constant = new RegExp(`export const ${identifier} = "([^"]+)"`, "u").exec(source);
     if (!constant) {
       throw new Error(
-        `Could not resolve GATEWAY_EVENTS identifier "${identifier}" from ${GATEWAY_EVENT_CONSTANTS_FILE}.`,
+        `Could not resolve GATEWAY_EVENTS identifier "${identifier}" from ${GATEWAY_EVENTS_FILE}.`,
       );
     }
     names.push(requiredCapture(constant, 1));
@@ -577,7 +573,7 @@ export function compareEventCoverage(params: CoverageParams): string[] {
   return errors;
 }
 
-function listFilesRecursive(rootDir: string, extension: string, fsImpl: FsImpl): string[] {
+function listFilesRecursive(rootDir: string, extension: string): string[] {
   const files: string[] = [];
   const queue = [rootDir];
   while (queue.length > 0) {
@@ -587,7 +583,7 @@ function listFilesRecursive(rootDir: string, extension: string, fsImpl: FsImpl):
     }
     let entries;
     try {
-      entries = fsImpl.readdirSync(current, { withFileTypes: true });
+      entries = fs.readdirSync(current, { withFileTypes: true });
     } catch {
       continue;
     }
@@ -610,10 +606,10 @@ function listFilesRecursive(rootDir: string, extension: string, fsImpl: FsImpl):
   return files.toSorted((left, right) => left.localeCompare(right));
 }
 
-function readRequiredFile(rootDir: string, relativePath: string, fsImpl: FsImpl): string {
+function readRequiredFile(rootDir: string, relativePath: string): string {
   const fullPath = path.resolve(rootDir, relativePath);
   try {
-    return fsImpl.readFileSync(fullPath, "utf8");
+    return fs.readFileSync(fullPath, "utf8");
   } catch {
     throw new Error(
       `Required file ${relativePath} is missing. If it moved, update scripts/check-protocol-event-coverage.mjs.`,
@@ -621,8 +617,8 @@ function readRequiredFile(rootDir: string, relativePath: string, fsImpl: FsImpl)
   }
 }
 
-function loadAllowlist(rootDir: string, fsImpl: FsImpl) {
-  const raw = readRequiredFile(rootDir, ALLOWLIST_FILE, fsImpl);
+function loadAllowlist(rootDir: string) {
+  const raw = readRequiredFile(rootDir, ALLOWLIST_FILE);
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -643,28 +639,28 @@ function loadAllowlist(rootDir: string, fsImpl: FsImpl) {
 }
 
 function collectClientHandledEvents(params: ClientCollectionParams): Set<string> {
-  const { rootDir, roots, extension, extract, buildExtractContext, sentinels, fsImpl } = params;
+  const { rootDir, roots, extension, extract, buildExtractContext, sentinels } = params;
   const handled = new Set<string>();
   const sources = new Map<string, string>();
   for (const root of roots) {
     const rootPath = path.resolve(rootDir, root);
-    if (!fsImpl.existsSync(rootPath)) {
+    if (!fs.existsSync(rootPath)) {
       throw new Error(
         `Scan root ${root} is missing. If it moved, update scripts/check-protocol-event-coverage.mjs.`,
       );
     }
-    for (const filePath of listFilesRecursive(rootPath, extension, fsImpl)) {
-      sources.set(filePath, fsImpl.readFileSync(filePath, "utf8"));
+    for (const filePath of listFilesRecursive(rootPath, extension)) {
+      sources.set(filePath, fs.readFileSync(filePath, "utf8"));
     }
   }
-  const extractContext = buildExtractContext?.(sources.values());
+  const extractContext = buildExtractContext(sources.values());
   for (const source of sources.values()) {
     for (const event of extract(source, extractContext)) {
       handled.add(event);
     }
   }
   for (const sentinel of sentinels) {
-    const source = readRequiredFile(rootDir, sentinel, fsImpl);
+    const source = readRequiredFile(rootDir, sentinel);
     if (extract(source, extractContext).size === 0) {
       throw new Error(
         `Sentinel dispatch file ${sentinel} no longer matches any event names; ` +
@@ -696,15 +692,11 @@ function collectStringConstants(sources: Iterable<string>, language: "Swift" | "
  * Runs the full coverage check against a repo checkout and returns error
  * strings plus a summary for logging.
  */
-function collectProtocolEventCoverageErrors(params: { rootDir?: string; fs?: FsImpl } = {}) {
-  const rootDir = params.rootDir ?? process.cwd();
-  const fsImpl = params.fs ?? fs;
+function collectProtocolEventCoverageErrors() {
+  const rootDir = process.cwd();
 
-  const serverEvents = extractGatewayEventNames(
-    readRequiredFile(rootDir, GATEWAY_EVENTS_FILE, fsImpl),
-    readRequiredFile(rootDir, GATEWAY_EVENT_CONSTANTS_FILE, fsImpl),
-  );
-  const allowlist = loadAllowlist(rootDir, fsImpl);
+  const serverEvents = extractGatewayEventNames(readRequiredFile(rootDir, GATEWAY_EVENTS_FILE));
+  const allowlist = loadAllowlist(rootDir);
   const clients = [
     {
       client: "ios" satisfies keyof typeof allowlist,
@@ -715,7 +707,6 @@ function collectProtocolEventCoverageErrors(params: { rootDir?: string; fs?: FsI
         extract: extractSwiftHandledEvents,
         buildExtractContext: (sources) => collectStringConstants(sources, "Swift"),
         sentinels: [IOS_SENTINEL_FILE],
-        fsImpl,
       }),
     },
     {
@@ -725,9 +716,17 @@ function collectProtocolEventCoverageErrors(params: { rootDir?: string; fs?: FsI
         roots: [ANDROID_SCAN_ROOT],
         extension: ".kt",
         extract: extractKotlinHandledEvents,
-        buildExtractContext: (sources) => collectStringConstants(sources, "Kotlin"),
+        // GatewayEvent is generated in Gradle's build directory. Source-only
+        // coverage uses the same catalog/name owner without requiring a build.
+        buildExtractContext: (sources) =>
+          new Map([
+            ...collectStringConstants(sources, "Kotlin"),
+            ...serverEvents.map((event): [string, string] => [
+              `GatewayEvent.${upperCamel(event)}`,
+              event,
+            ]),
+          ]),
         sentinels: ANDROID_SENTINEL_FILES,
-        fsImpl,
       }),
     },
   ] as const;

@@ -1,5 +1,3 @@
-// Skills upload methods implement staged archive upload begin/chunk/commit
-// flows with feature gating, validation, and upload-store error mapping.
 import {
   ErrorCodes,
   errorShape,
@@ -16,42 +14,45 @@ import {
 } from "../../skills/lifecycle/upload-install.js";
 import { SkillUploadRequestError } from "../../skills/lifecycle/upload-store-error.js";
 import { defaultSkillUploadStore } from "../../skills/lifecycle/upload-store.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function mapUploadError(err: unknown): ErrorShape {
+  if (err instanceof SessionMutationAuthorizationChangedError) {
+    return err.error;
+  }
   if (err instanceof SkillUploadRequestError) {
     return errorShape(ErrorCodes.INVALID_REQUEST, err.message);
   }
   return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err));
 }
 
-/** Gateway handlers for the staged uploaded-skill archive flow. */
 export const skillsUploadHandlers: GatewayRequestHandlers = {
   "skills.upload.begin": makeUploadHandler(
     "skills.upload.begin",
     validateSkillsUploadBeginParams,
-    (params) => defaultSkillUploadStore.begin(params),
+    (params, guard) => defaultSkillUploadStore.begin(params, guard),
   ),
   "skills.upload.chunk": makeUploadHandler(
     "skills.upload.chunk",
     validateSkillsUploadChunkParams,
-    (params) => defaultSkillUploadStore.chunk(params),
+    (params, guard) => defaultSkillUploadStore.chunk(params, guard),
   ),
   "skills.upload.commit": makeUploadHandler(
     "skills.upload.commit",
     validateSkillsUploadCommitParams,
-    (params) => defaultSkillUploadStore.commit(params),
+    (params, guard) => defaultSkillUploadStore.commit(params, guard),
   ),
 };
 
-/** Wraps each upload stage with feature gating, protocol validation, and error mapping. */
 function makeUploadHandler<P, R>(
   name: string,
   validator: ProtocolValidator<P>,
-  action: (params: P) => Promise<R>,
+  action: (params: P, assertCommitAllowed?: () => void) => Promise<R>,
 ): GatewayRequestHandlers[string] {
-  return async ({ params, respond, context }) => {
+  return async ({ params, respond, context, client }) => {
     if (!areUploadedSkillArchivesEnabled(context.getRuntimeConfig())) {
       respond(
         false,
@@ -64,7 +65,13 @@ function makeUploadHandler<P, R>(
       return;
     }
     try {
-      respond(true, await action(params), undefined);
+      const guard = captureGatewayClientUploadCommitGuard({
+        method: name,
+        requestParams: params,
+        client,
+        context,
+      });
+      respond(true, await action(params, guard), undefined);
     } catch (err) {
       respond(false, undefined, mapUploadError(err));
     }

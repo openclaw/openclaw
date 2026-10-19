@@ -1,23 +1,82 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { resolveActiveReplyRunOwnerForSignal } from "../../sessions/session-controller.barriers.js";
 import {
-  beginReplyMessageInjectionTarget,
-  forceClearReplyOperation,
   ReplyRunSuccessorAdmissionBlockedError,
-  replyRunRegistry,
-  waitForReplyRunSuccessorAdmission,
-} from "./reply-run-registry.js";
-import { resolveActiveReplyRunOwnerForSignal } from "./reply-run-registry.state.js";
-import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
+  createReplyOperation,
+  getSessionControllerOperation,
+} from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
+import { SESSION_WATCHDOG_CLEANUP_MS } from "../../sessions/session-controller.watchdog-state.js";
+import {
+  createTestReplyOperation,
+  queueReplyMessageInjectionTarget,
+} from "./reply-run-registry.test-helpers.js";
 
 const sessionKey = "agent:main:voice-control";
 
-afterEach(() => replyRunRegistry.get(sessionKey)?.complete());
+afterEach(() => getSessionControllerOperation(sessionKey)?.complete());
 
 describe("reply run control ownership", () => {
+  it("retains failed admission for the SDK opt-in until completion", async () => {
+    const operation = createTestReplyOperation({ sessionKey });
+    const settled = vi.fn();
+    void operation.ownerSettlement.then(settled);
+    operation.setPhase("running");
+    operation.retainFailureUntilComplete();
+    operation.fail("run_failed", new Error("provider failed"));
+    await Promise.resolve();
+
+    expect(operation.result).toMatchObject({ kind: "failed", code: "run_failed" });
+    expect(getSessionControllerOperation(sessionKey)).toBe(operation);
+    expect(settled).not.toHaveBeenCalled();
+    expect(() => createTestReplyOperation({ sessionKey })).toThrow();
+
+    operation.complete();
+    await operation.ownerSettlement;
+    expect(settled).toHaveBeenCalledOnce();
+    expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
+    const successor = createTestReplyOperation({ sessionKey, sessionId: "successor" });
+    successor.complete();
+  });
+
+  it.each([undefined, "message_tool_only"] as const)(
+    "preserves source-reply delivery semantics with active mode %s",
+    async (sourceReplyDeliveryMode) => {
+      const queueMessage = vi.fn(async () => {});
+      const operation = createTestReplyOperation({ sessionKey });
+      operation.attachBackend({
+        kind: "embedded",
+        cancel: vi.fn(),
+        sourceReplyDeliveryMode,
+        queueMessage,
+      });
+      operation.setPhase("running");
+      const target = captureCurrentReplyMessageInjectionTarget(operation.key)!;
+      const outcome = await queueReplyMessageInjectionTarget(target, "continue", {
+        sourceReplyDeliveryMode: "message_tool_only",
+      });
+
+      if (sourceReplyDeliveryMode === "message_tool_only") {
+        expect(outcome).toEqual({ status: "accepted" });
+        expect(queueMessage).toHaveBeenCalledExactlyOnceWith(
+          "continue",
+          expect.objectContaining({ sourceReplyDeliveryMode: "message_tool_only" }),
+        );
+      } else {
+        expect(outcome).toEqual({
+          status: "rejected",
+          reason: "source_reply_delivery_mode_mismatch",
+        });
+        expect(queueMessage).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it.each([false, true])(
-    "settles producer handoff before delivery can admit a successor (forced clear=%s)",
-    async (forcedClear) => {
+    "settles producer handoff before delivery can admit a successor (cleanup expired=%s)",
+    async (cleanupExpired) => {
       const controller = new AbortController();
       const operation = createTestReplyOperation({
         sessionKey,
@@ -27,12 +86,16 @@ describe("reply run control ownership", () => {
       const owner = resolveActiveReplyRunOwnerForSignal(controller.signal);
       const persistence = createDeferred();
       const delivery = createDeferred();
+      const producerError = new Error("Producer rejected its partial reply");
       const started = vi.fn();
+      const ownerSettled = vi.fn();
+      void operation.ownerSettlement.then(ownerSettled);
       let handoff: Promise<void> | undefined;
       try {
         expect(
           owner?.handoff((producerCompleted) => {
-            handoff = producerCompleted.then(async () => {
+            handoff = producerCompleted.then(async (error) => {
+              expect(error).toBe(producerError);
               started();
               await persistence.promise;
             });
@@ -41,9 +104,14 @@ describe("reply run control ownership", () => {
         ).toBe(true);
 
         controller.abort();
-        if (forcedClear) {
-          expect(forceClearReplyOperation(operation)).toBe(true);
+        if (cleanupExpired) {
+          await expect(
+            operation.watchdog.tick(Date.now() + SESSION_WATCHDOG_CLEANUP_MS),
+          ).resolves.toMatchObject({ action: "blocked" });
+          expect(getSessionControllerOperation(sessionKey)).toBe(operation);
         }
+        operation.fail("run_failed", producerError);
+        operation.fail("run_failed", new Error("Later cleanup failure"));
         await Promise.resolve();
         expect(started).not.toHaveBeenCalled();
         expect(() => createTestReplyOperation({ sessionKey })).toThrow();
@@ -55,11 +123,22 @@ describe("reply run control ownership", () => {
           ReplyRunSuccessorAdmissionBlockedError,
         );
         const nextAdmission = waitForReplyRunSuccessorAdmission(operation.key, null);
+        if (cleanupExpired) {
+          // Raw delivery settlement cannot settle the separately owned handoff fence.
+          delivery.resolve();
+          await operation.ownerSettlement;
+          expect(() => createTestReplyOperation({ sessionKey })).toThrow(
+            ReplyRunSuccessorAdmissionBlockedError,
+          );
+        }
         persistence.resolve();
         await handoff;
         await expect(nextAdmission).resolves.toMatchObject({ settled: true });
 
-        // Delivery is allowed to depend on a new operation without a settlement cycle.
+        // Delivery may await this successor, but retains its own settlement receipt.
+        if (!cleanupExpired) {
+          expect(ownerSettled).not.toHaveBeenCalled();
+        }
         const successor = createTestReplyOperation({ sessionKey, sessionId: "successor" });
         successor.complete();
         delivery.resolve();
@@ -78,7 +157,7 @@ describe("reply run control ownership", () => {
     "keeps a mismatched input out of a %s reply owner",
     async (terminalReplyExpectation) => {
       const queueMessage = vi.fn(async () => {});
-      const operation = replyRunRegistry.begin({
+      const operation = createReplyOperation({
         sessionKey,
         sessionId: "session-reply-expectation",
         resetTriggered: false,
@@ -90,21 +169,21 @@ describe("reply run control ownership", () => {
         queueMessage,
       });
       operation.setPhase("running");
-      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key);
+      const target = captureCurrentReplyMessageInjectionTarget(operation.key);
       if (!target) {
         throw new Error("Expected a live message injection target");
       }
       await expect(
-        beginReplyMessageInjectionTarget(target, "different input", {
+        queueReplyMessageInjectionTarget(target, "different input", {
           terminalReplyExpectation:
             terminalReplyExpectation === "required" ? "optional" : "required",
-        }).outcome,
+        }),
       ).resolves.toEqual({ status: "rejected", reason: "reply_expectation_mismatch" });
       expect(queueMessage).not.toHaveBeenCalled();
       await expect(
-        beginReplyMessageInjectionTarget(target, "matching input", {
+        queueReplyMessageInjectionTarget(target, "matching input", {
           terminalReplyExpectation,
-        }).outcome,
+        }),
       ).resolves.toEqual({ status: "accepted" });
       expect(queueMessage).toHaveBeenCalledOnce();
     },
@@ -114,7 +193,7 @@ describe("reply run control ownership", () => {
     "fences retained controls after its %s changes",
     (field) => {
       const controller = new AbortController();
-      const operation = replyRunRegistry.begin({
+      const operation = createReplyOperation({
         sessionKey,
         sessionId: "original-session",
         resetTriggered: false,
@@ -137,7 +216,7 @@ describe("reply run control ownership", () => {
 
   it("controls a queued reply only through its admitted upstream signal", () => {
     const controller = new AbortController();
-    const operation = replyRunRegistry.begin({
+    const operation = createReplyOperation({
       sessionKey,
       sessionId: "queued-session",
       resetTriggered: false,
@@ -153,7 +232,7 @@ describe("reply run control ownership", () => {
 
   it("fences retained controls after same-session replacement", () => {
     const controller = new AbortController();
-    const operation = replyRunRegistry.begin({
+    const operation = createReplyOperation({
       sessionKey,
       sessionId: "same-session",
       resetTriggered: false,
@@ -161,7 +240,7 @@ describe("reply run control ownership", () => {
     });
     const owner = resolveActiveReplyRunOwnerForSignal(controller.signal);
     operation.complete();
-    const successor = replyRunRegistry.begin({
+    const successor = createReplyOperation({
       sessionKey,
       sessionId: "same-session",
       resetTriggered: false,

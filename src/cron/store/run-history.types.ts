@@ -23,3 +23,21 @@ export type CronRunRecord = {
   summary?: string;
   detail?: CronJsonValue;
 };
+
+export type CronRunHistoryWrite = {
+  storeKey: string;
+  jobId: string;
+  runId: string;
+  agentId?: string;
+  startedAt: number;
+  endedAt: number;
+  sessionKey?: string;
+  status: string;
+  error?: string;
+  summary?: string;
+  detail: CronJsonValue;
+};
+
+export type CronRunHistoryWorkerOperations = {
+  "cron.recordRun": { input: CronRunHistoryWrite; output: void };
+};

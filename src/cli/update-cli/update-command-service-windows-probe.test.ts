@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildTaskScript, readScheduledTaskCommand } from "../../daemon/schtasks-layout.js";
 import { readScheduledTaskRuntime } from "../../daemon/schtasks-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
@@ -10,9 +9,8 @@ import {
   createMockGatewayService,
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
-import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { withServiceHome } from "./update-command-service-home.test-support.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 
 const mocks = vi.hoisted(() => ({ service: vi.fn<() => GatewayService>() }));
@@ -22,59 +20,30 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
 }));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
-  spawnSync: vi.fn(() => ({
-    pid: 0,
-    output: [null, JSON.stringify({ state: 4, lastRunResult: 0 }), ""],
-    stdout: JSON.stringify({ state: 4, lastRunResult: 0 }),
-    stderr: "",
-    status: 0,
-    signal: null,
-  })),
+  spawnSync: vi.fn(),
 }));
-const dirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   mockSystemAccountHome();
   vi.spyOn(performance, "now").mockReturnValue(1_000);
 });
 afterEach(() => vi.restoreAllMocks());
 
-async function withServiceHome(run: (home: string) => Promise<void>): Promise<void> {
-  const home = dirs.make("openclaw-update-windows-probe-");
-  vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(home);
-  await withEnvAsync(
-    {
-      HOME: home,
-      USERPROFILE: home,
-      APPDATA: path.join(home, "AppData"),
-      OPENCLAW_GATEWAY_PORT: undefined,
-      OPENCLAW_HOME: undefined,
-      OPENCLAW_STATE_DIR: undefined,
-      OPENCLAW_CONFIG_PATH: undefined,
-      OPENCLAW_PROFILE: undefined,
-      OPENCLAW_SUPERVISOR_MODE: undefined,
-      OPENCLAW_SERVICE_MARKER: undefined,
-      OPENCLAW_SERVICE_KIND: undefined,
-    },
-    () => run(home),
-  );
-}
-
 it.each([
   {
     stage: "registration",
-    responses: ["timeout", "found", "found", "found", "found", "found"],
+    responses: ["timeout", "found", "found"],
     recovered: true,
   },
   {
-    stage: "revalidation",
-    responses: ["found", "timeout", "found", "found", "found", "found", "found"],
+    stage: "runtime",
+    responses: ["found", "timeout", "found", "found"],
     recovered: true,
   },
   { stage: "registration", responses: ["timeout", "timeout"], recovered: false },
-  { stage: "revalidation", responses: ["found", "timeout", "found", "timeout"], recovered: false },
+  { stage: "runtime", responses: ["found", "timeout", "found", "timeout"], recovered: false },
   {
     stage: "command then runtime",
-    responses: ["timeout", "found", "found", "timeout"],
+    responses: ["timeout", "found", "timeout"],
     recovered: false,
   },
   { stage: "unavailable", responses: ["unavailable"], recovered: false },
@@ -82,9 +51,16 @@ it.each([
   withServiceHome(async (home) => {
     mockProcessPlatform("win32");
     const scriptPath = "C:\\Registered Service\\gateway.cmd";
+    const programArguments = [
+      process.execPath,
+      path.join(process.cwd(), "openclaw.mjs"),
+      "gateway",
+      "--port",
+      "18789",
+    ];
     const script = Buffer.from(
       buildTaskScript({
-        programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
+        programArguments,
         environment: { HOME: home },
       }),
     );
@@ -93,16 +69,34 @@ it.each([
       pathname === scriptPath ? script : nativeReadFile(pathname, options),
     );
     vi.mocked(spawnSync).mockReset();
-    for (const response of scenario.responses) {
+    const taskResponses = [...scenario.responses];
+    vi.mocked(spawnSync).mockImplementation((_command, args) => {
+      const processProbe = args?.some((arg) => arg.includes("Get-CimInstance Win32_Process"));
+      if (!processProbe && !args?.includes("-EncodedCommand")) {
+        throw new Error("Unexpected native inspection");
+      }
+      const response = processProbe ? "found" : taskResponses.shift();
+      if (!response) {
+        throw new Error("Unexpected Task Scheduler query");
+      }
       const stdout =
         response === "found"
-          ? JSON.stringify({
-              taskPath: "\\OpenClaw Gateway",
-              state: 4,
-              actions: [{ type: 0, path: scriptPath, arguments: "", workingDirectory: "" }],
-            })
+          ? JSON.stringify(
+              processProbe
+                ? [
+                    {
+                      ProcessId: 43210,
+                      CommandLine: programArguments.map((arg) => `"${arg}"`).join(" "),
+                    },
+                  ]
+                : {
+                    taskPath: "\\OpenClaw Gateway",
+                    state: 4,
+                    actions: [{ type: 0, path: scriptPath, arguments: "", workingDirectory: "" }],
+                  },
+            )
           : "";
-      vi.mocked(spawnSync).mockReturnValueOnce({
+      return {
         pid: 0,
         output: [null, stdout, ""],
         stdout,
@@ -112,10 +106,10 @@ it.each([
         ...(response === "timeout"
           ? { error: Object.assign(new Error("probe timed out"), { code: "ETIMEDOUT" }) }
           : {}),
-      });
-    }
+      };
+    });
     const service = createMockGatewayService({
-      readCommand: vi.fn(readScheduledTaskCommand),
+      readCommand: readScheduledTaskCommand,
       readRuntime: readScheduledTaskRuntime,
       isLoaded: async () => true,
     });
@@ -131,33 +125,28 @@ it.each([
     expect(inspected.serviceUpdateVerdict?.kind).toBe(scenario.recovered ? "owned" : "unavailable");
     if (scenario.recovered) {
       expect(inspected.running).toBe(true);
+      expect(inspected.servicePid).toBe(43210);
       expect(inspected.serviceEnv?.HOME).toBe(home);
     } else {
       expect(inspected.serviceMutationSkipMessage).toContain(
         scenario.stage === "unavailable"
-          ? "Task Scheduler probe failed (exit 2)."
-          : scenario.stage === "command then runtime"
-            ? "Scheduled Task probe timed out after 47000 ms (ETIMEDOUT)."
-            : "Task Scheduler probe timed out after 47000 ms.",
+          ? "Task Scheduler check failed (exit 2)."
+          : scenario.stage === "command then runtime" || scenario.stage === "runtime"
+            ? "Scheduled Task check timed out after 47000 ms (ETIMEDOUT)."
+            : "Task Scheduler check timed out after 47000 ms.",
       );
-      if (scenario.stage !== "command then runtime") {
+      if (scenario.stage === "registration" || scenario.stage === "unavailable") {
         expect(inspected.serviceUpdateVerdict).toMatchObject({
           inspectionReason: "windows-task-inspection-failed",
         });
       }
       expect(inspected.serviceEnv).toBeUndefined();
     }
-    expect(spawnSync).toHaveBeenCalledTimes(scenario.responses.length);
+    expect(taskResponses).toEqual([]);
     for (const call of vi.mocked(spawnSync).mock.calls) {
-      expect(call[2]?.timeout).toBe(47_000);
-    }
-    expect(service.readCommand).toHaveBeenCalledTimes(scenario.stage === "unavailable" ? 1 : 2);
-    for (const [, options] of vi.mocked(service.readCommand).mock.calls) {
-      expect(options).toMatchObject({
-        requireEffective: true,
-        requireLoaded: true,
-        timeoutMs: 47_000,
-      });
+      expect(call[2]?.timeout).toBe(
+        call[1]?.some((arg) => arg.includes("Get-CimInstance Win32_Process")) ? 5_000 : 47_000,
+      );
     }
     expect(service.stop).not.toHaveBeenCalled();
     expect(service.install).not.toHaveBeenCalled();

@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { registerListener } from "../shared/listeners.js";
 import { getPluginHttpRouteCanonicalPath } from "./http-path.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import {
@@ -32,10 +33,7 @@ const routeChangeListeners = resolveGlobalSingleton(
 );
 
 export function onPluginHttpRoutesChanged(listener: () => void): () => void {
-  routeChangeListeners.add(listener);
-  return () => {
-    routeChangeListeners.delete(listener);
-  };
+  return registerListener(routeChangeListeners, listener);
 }
 
 export function notifyPluginHttpRoutesChanged(): void {

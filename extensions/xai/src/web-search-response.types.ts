@@ -1,4 +1,3 @@
-// Xai type declarations define plugin contracts.
 export type XaiWebSearchResponse = {
   output?: Array<{
     type?: string;

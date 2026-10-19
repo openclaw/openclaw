@@ -9,9 +9,10 @@ read_when:
 ## Shared test state and process helpers
 
 TypeScript tooling uses the native `typescript` package. The `pnpm tsgo` lanes
-resolve its executable directly; syntax and semantic tools use its unstable API
-with explicit process lifetimes. The package root exports version metadata,
-while AST, filesystem, and compiler APIs live under `typescript/unstable/*`.
+resolve its executable directly; syntax and semantic tools use its native API
+with explicit process lifetimes. The package root exports version metadata.
+AST and filesystem APIs use `typescript/ast` and `typescript/fs`; synchronous and
+asynchronous compiler APIs use `typescript/sync` and `typescript/async`.
 Packaged declaration builds run the same native compiler with semantic checking
 and validate its complete source and package-manifest receipts before bundling.
 The tsdown wrapper defaults declaration builds to one configuration at a time,
@@ -36,6 +37,34 @@ fails acquisition promptly without reclaiming anything. PID death does not prove
 detached descendants stopped. Before manually removing an abandoned lock directory,
 inspect its `owner.json` and verify all associated build, compiler, and lint
 processes, including detached descendants, have stopped; then retry the command.
+
+Runtime-consuming tests prepare checkout artifacts through the explicit build owner,
+not by launching the CLI with `--version`. Preparation reuses source-runner freshness
+checks and checkout artifact ownership, without updater service or database-maintenance
+custody. Current artifacts need no writable checkout or service inspection.
+`build-all` fingerprints production inputs in the existing stamps. Test preparation
+can reuse a coherent runtime after a source refresh or test-only correction,
+including a new private transport commit. Ordinary CLI and immutable deployment
+HEAD checks remain strict; UI E2E preparation also keeps its current-head checks.
+Changed production inputs, build configuration, dependencies, compiler identity,
+or required missing outputs still require preparation. Partial postbuilds that skip
+static assets cannot satisfy readers requiring those assets. A full build before E2E
+checks should use `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build`; scope that flag to the
+build command so its artifacts satisfy the strongest test prerequisite.
+
+Before writing, automatic preparation requires verified artifact separation or an
+observed offline managed Gateway. On Linux it reads the loaded command location without reading service
+environment files, using the existing native manager binding. A native `GetUnit`
+not-loaded result establishes no loaded runtime, not absence of its saved definition.
+An unloaded saved unit does not make an otherwise writable source checkout immutable;
+this is admission-time inspection, not service-start exclusion or a sandbox.
+Physically shared `dist` paths, unreadable artifact paths, incomplete discovery, and
+unknown service state never grant permission to rebuild. Immutable deployments and
+known live overlap remain refused. No new CLI flag or configuration is needed for
+ordinary separate worktrees; use the [existing isolated runner](/help/testing/suites#network-isolated-local-e2e)
+when native separation cannot be established. This inspection is not a sandbox.
+Explicit `pnpm build`, automatic source-CLI rebuilds, and actual update publication
+retain their existing admission policies.
 
 Lint reports its final failure on stderr after child joins and artifact ownership
 have settled, including retained ownership when cleanup is uncertain. Standalone
@@ -91,8 +120,19 @@ containing checkout as the ownership boundary. Other `pnpm tsgo` lanes continue
 to use the native CLI; its wrapper does not create or reuse a shared external
 install.
 
+Canvas A2UI asset builds use the shared build-artifact cache, including
+`BUILD_ALL_CACHE_ROOT` when consecutive update candidates use different checkouts.
+The cache verifies and restores both dialect bundles together. Canvas source,
+its package manifest, the lockfile, workspace dependency settings, patches, build
+scripts, Node version, and build environment invalidate reuse; unrelated root
+package scripts do not. `OPENCLAW_BUILD_CACHE=0` forces compilation. Explicit
+`OPENCLAW_A2UI_BUNDLE_OUT` destinations bypass the shared cache. Sparse checkouts
+retain their existing complete-prebuilt-bundle behavior. Cold A2UI builds default
+the native Rayon and Rolldown worker pools to four threads each, preserving explicit
+`RAYON_NUM_THREADS` and `ROLLDOWN_WORKER_THREADS` overrides.
+
 Packaged SDK declarations belong to one staged owner shared by full, package, and
-`ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss
+`ciArtifacts` builds. It serializes the two standard tsdown SDK groups on a miss
 and caches their complete staged generation. Each successful compiler supplies its
 source and package-manifest membership through a private staged receipt; missing receipts or inputs
 changed during compilation prevent publication. The shared input snapshot policy
@@ -111,7 +151,7 @@ be local, and a valid root `package.json` bounds source-package scope lookup.
 The shared snapshot policy still validates consumed bytes and resolution topology.
 Source and namespace changes during compilation prevent acceptance. New local
 module candidates invalidate cached records, as do ancestor-install appearance
-and removal. Outside probes always see missing files, so later changes to ancestor
+and removal. Outside checks always see missing files, so later changes to ancestor
 package contents cannot enter the compiler's filesystem view.
 Each emitted declaration must have one source-map owner in the successful compiler
 membership. The bundler consumes those declarations under their original source
@@ -154,10 +194,22 @@ JavaScript `process.env` does not change native thread home lookup. Per-worker a
 per-test fixture homes remain separate. Installed Corepack and Playwright browser
 caches retain their caller-selected locations.
 
+Source subprocesses reuse the invocation's temporary TSX disk cache. Fixtures
+with descriptor-heavy source Worker imports opt out locally with
+`TSX_DISABLE_CACHE=1`: those threads share the parent's file descriptor table,
+and bursts of asynchronous cache writes can exhaust it. Tooling shims retain
+their separate cache policy.
+
 Gateway port claims remain in the common temporary directory outside all enclosing
 Vitest namespaces, found through their explicit resource owners. Parallel invocations
 therefore share port ownership while a fixture hands its reserved socket to a child;
 removing one invocation's files cannot remove another fixture's port claim.
+
+A fixture that binds a Gateway, in-process or spawned, on a shared pool port holds
+that port's claim from selection until the Gateway closes. A Gateway retries a busy
+port while starting, so an unclaimed fixture can take another fixture's port during
+its handoff. `getDeterministicFreePortBlock` is a check, not a lease; in-process
+Gateway E2E fixtures use `acquireGatewayE2ePortBlock` with `startClaimedGateway`.
 
 Live-aware setup still loads the original profile and stages live state when
 requested. A bounded invocation artifact carries the original home to that setup;
@@ -195,6 +247,10 @@ this boundary. Forced parent or supervisor death (such as `SIGKILL`) can prevent
 cleanup; unregistered descendants that intentionally escape the owned group remain
 outside this contract. The wrappers do
 not sweep old directories or infer ownership from names, ages, or PIDs.
+The CI shard runner also removes its default include-file and transform-cache
+scratch directory after every admitted group has joined. Caller-supplied scratch
+and persistent cache roots remain caller-owned. Unverified descendant completion
+retains the shard scratch directory and reports its exact path.
 This is home isolation, not a filesystem sandbox: explicit absolute paths,
 `os.userInfo()` account lookup, children with stripped or replaced home variables,
 and intentionally real-home live execution remain outside its protection.
@@ -206,7 +262,7 @@ reuse during the file and releasing it before isolated fork shutdown.
 - `src/test-utils/openclaw-test-state.ts`: use from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
 - `pnpm test:env-mutations:report`: non-blocking report of tests/harnesses that mutate `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_WORKSPACE_DIR`, or related env keys directly. Use it to find migration candidates for the shared test-state helper.
 - `test/helpers/openclaw-test-instance.ts`: process-level E2E tests needing a running Gateway, CLI env, log capture, and cleanup in one place.
-- Docker/Bash E2E lanes that source `scripts/lib/docker-e2e-image.sh` can pass `docker_e2e_test_state_shell_b64 <label> <scenario>` into the container and decode it with `scripts/lib/openclaw-e2e-instance.sh`; multi-home scripts can pass `docker_e2e_test_state_function_b64` and call `openclaw_test_state_create <label> <scenario>` in each flow. `node --import tsx scripts/lib/openclaw-test-state.mts -- create --label <name> --scenario <name> --env-file <path> --json` writes a sourceable host env file (the `--` before `create` keeps newer Node runtimes from treating `--env-file` as a Node flag). Lanes that launch a Gateway can source `scripts/lib/openclaw-e2e-instance.sh` for entrypoint resolution, mock OpenAI startup, foreground/background launch, readiness probes, state env export, log dumps, and process cleanup.
+- Docker/Bash E2E lanes that source `scripts/lib/docker-e2e-image.sh` can pass `docker_e2e_test_state_shell_b64 <label> <scenario>` into the container and decode it with `scripts/lib/openclaw-e2e-instance.sh`; multi-home scripts can pass `docker_e2e_test_state_function_b64` and call `openclaw_test_state_create <label> <scenario>` in each flow. `node --import tsx scripts/lib/openclaw-test-state.mts -- create --label <name> --scenario <name> --env-file <path> --json` writes a sourceable host env file (the `--` before `create` keeps newer Node runtimes from treating `--env-file` as a Node flag). Lanes that launch a Gateway can source `scripts/lib/openclaw-e2e-instance.sh` for entrypoint resolution, mock OpenAI startup, foreground/background launch, readiness checks, state env export, log dumps, and process cleanup.
 
 `createOpenClawTestState` selects and owns temporary paths and process environment
 selectors. It is not filesystem sandboxing and does not stop external producers.

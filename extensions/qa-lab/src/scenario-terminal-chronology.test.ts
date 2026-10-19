@@ -21,7 +21,7 @@ function chronologyActions() {
 }
 
 function replay(fault?: string) {
-  const wire = "tool_call";
+  const wire = "dispatch_action";
   const calls = ["first", "second"].map((id, index) => ({
     plannedToolName: "sessions_spawn",
     plannedWireToolName: wire,
@@ -43,7 +43,7 @@ function replay(fault?: string) {
       env: { runtimeId: "openclaw" },
       privateSpawns: calls,
       privateRequests: fault === "message" ? [...calls, { plannedToolName: "message" }] : calls,
-      privateTasks: [{ endedAt: 200 }],
+      privateRuns: [{ execution: { endedAt: 200 } }],
       privateTranscript: {
         successfulToolCallCounts: { [wire]: fault === "extra" ? 3 : 2 },
         successfulToolCallEvents: events,

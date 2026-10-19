@@ -6,20 +6,8 @@ import {
   createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const BRAVE_CREDENTIAL_PATH = "plugins.entries.brave.config.webSearch.apiKey";
-
-function resolveBraveWebSearchPluginConfig(config: unknown): Record<string, unknown> | undefined {
-  if (!isRecord(config)) {
-    return undefined;
-  }
-  const plugins = isRecord(config.plugins) ? config.plugins : undefined;
-  const entries = isRecord(plugins?.entries) ? plugins.entries : undefined;
-  const entry = isRecord(entries?.brave) ? entries.brave : undefined;
-  const pluginConfig = isRecord(entry?.config) ? entry.config : undefined;
-  return isRecord(pluginConfig?.webSearch) ? pluginConfig.webSearch : undefined;
-}
 
 export function resolveBraveMode(brave?: { mode?: unknown }): "web" | "llm-context" {
   return brave?.mode === "llm-context" ? "llm-context" : "web";
@@ -44,6 +32,5 @@ export function buildBraveWebSearchProviderBase(): Omit<WebSearchProviderPlugin,
       searchCredential: { type: "top-level" },
       configuredCredential: { pluginId: "brave" },
     }),
-    getConfiguredCredentialValue: (config) => resolveBraveWebSearchPluginConfig(config)?.apiKey,
   };
 }

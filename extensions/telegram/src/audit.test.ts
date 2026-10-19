@@ -4,7 +4,9 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 let collectTelegramUnmentionedGroupIds: typeof import("./audit.js").collectTelegramUnmentionedGroupIds;
 let auditTelegramGroupMembership: typeof import("./audit.js").auditTelegramGroupMembership;
 const fetchWithTimeoutMock = vi.hoisted(() => vi.fn());
-const resolveTelegramFetchMock = vi.hoisted(() => vi.fn(() => fetchWithTimeoutMock));
+const resolveTelegramTransportMock = vi.hoisted(() =>
+  vi.fn(() => ({ fetch: fetchWithTimeoutMock, close: async () => {} })),
+);
 const resolveTelegramApiBaseMock = vi.hoisted(() => vi.fn(() => "https://api.telegram.org"));
 
 vi.mock("openclaw/plugin-sdk/text-utility-runtime", () => ({
@@ -54,7 +56,7 @@ describe("telegram audit", () => {
   beforeAll(async () => {
     vi.doMock("./fetch.js", () => ({
       resolveTelegramApiBase: resolveTelegramApiBaseMock,
-      resolveTelegramFetch: resolveTelegramFetchMock,
+      resolveTelegramTransport: resolveTelegramTransportMock,
     }));
     ({ collectTelegramUnmentionedGroupIds, auditTelegramGroupMembership } =
       await import("./audit.js"));
@@ -62,7 +64,7 @@ describe("telegram audit", () => {
 
   beforeEach(() => {
     fetchWithTimeoutMock.mockReset();
-    resolveTelegramFetchMock.mockClear();
+    resolveTelegramTransportMock.mockClear();
     resolveTelegramApiBaseMock.mockClear();
   });
 
@@ -85,7 +87,7 @@ describe("telegram audit", () => {
     expect(res.ok).toBe(true);
     expect(res.groups[0]?.chatId).toBe("-1001");
     expect(res.groups[0]?.status).toBe("member");
-    expect(resolveTelegramFetchMock).toHaveBeenCalled();
+    expect(resolveTelegramTransportMock).toHaveBeenCalled();
   });
 
   it("reports bot not in group when status is left", async () => {

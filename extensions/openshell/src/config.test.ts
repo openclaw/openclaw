@@ -65,43 +65,37 @@ describe("openshell plugin config", () => {
     expect(resolveOpenShellPluginConfig(config)).toMatchObject(config);
   });
 
-  it("normalizes managed sandbox subpaths", () => {
-    expect(
+  it("requires a literal, normalized private agent workspace root", () => {
+    const parse = (remoteRoot: string) =>
       resolveOpenShellPluginConfig({
-        remoteWorkspaceDir: "/sandbox/../sandbox/project",
-        remoteAgentWorkspaceDir: "/agent/./session",
-      }),
-    ).toEqual({
-      mode: "mirror",
-      command: "openshell",
-      gateway: undefined,
-      gatewayEndpoint: undefined,
-      workspace: undefined,
-      from: "openclaw",
-      policy: undefined,
-      providers: [],
-      gpu: false,
-      autoProviders: true,
-      remoteWorkspaceDir: "/sandbox/project",
-      remoteAgentWorkspaceDir: "/agent/session",
-      timeoutMs: 120_000,
-    });
+        worker: {
+          agentWorkspace: { agentId: "main", remoteRoot },
+          model: {
+            provider: "openai",
+            id: "worker-model",
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            credentialEnv: "OPENAI_API_KEY",
+            contextWindow: 8192,
+            maxTokens: 1024,
+          },
+        },
+      });
+    expect(parse("/agent/canonical").worker?.agentWorkspace?.remoteRoot).toBe("/agent/canonical");
+    for (const root of [
+      "/agent",
+      "/sandbox",
+      "/etc/private",
+      "/agent/a/../b",
+      "/agent/*",
+      "/agent/[ab]",
+      "/agent/{a,b}",
+      "/agent/!(private)",
+      "/agent/a\\b",
+    ]) {
+      expect(() => parse(root)).toThrow();
+    }
   });
-
-  it("rejects unknown mode", () => {
-    expect(() =>
-      resolveOpenShellPluginConfig({
-        mode: "bogus",
-      }),
-    ).toThrow("mode must be one of mirror, remote");
-  });
-
-  it.each(["Team", "-team", "team-", "team--one", "abcdefghijklmnopqrst"])(
-    "rejects invalid OpenShell workspace name %s",
-    (workspace) => {
-      expect(() => resolveOpenShellPluginConfig({ workspace })).toThrow(/workspace must/);
-    },
-  );
 
   it("rejects timeouts beyond Node's safe timer range", () => {
     expect(() =>

@@ -1,4 +1,4 @@
-import type { DiscordSourceConfig, Roster, SourceRuntime } from "../../types.js";
+import type { DiscordSourceConfig, SourceRuntime } from "../../types.js";
 
 export const config: DiscordSourceConfig = {
   token: "synthetic-discord-secret",
@@ -9,7 +9,6 @@ export const config: DiscordSourceConfig = {
 };
 
 export const window = { sinceMs: 1462015105000, untilMs: 1462015107000 };
-export const roster: Roster = { members: [], byLogin: new Map(), byDiscordId: new Map() };
 
 export function thread(id: string, archivedMs: number, type = 12) {
   return {
@@ -36,7 +35,6 @@ export function json(body: unknown, status = 200, headers?: HeadersInit) {
 
 export function runtime(
   handler: (url: URL, init?: RequestInit) => Response | Promise<Response> | undefined,
-  signal?: AbortSignal,
 ): SourceRuntime & {
   fetchImpl: NonNullable<SourceRuntime["fetchImpl"]>;
   requests: URL[];
@@ -48,7 +46,6 @@ export function runtime(
   return {
     requests,
     logs,
-    signal,
     logger: { info: log, warn: log, error: log, debug: log },
     fetchImpl: async (input, init) => {
       const url = new URL(input);

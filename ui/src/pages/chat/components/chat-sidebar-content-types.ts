@@ -1,31 +1,42 @@
-import type { TemplateResult } from "lit";
+import type { JSX } from "@solidjs/web";
+import type { ChatMessageGetResult } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { SessionFileDownload } from "../../../api/session-file-download.ts";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
+import type { MarkdownGitHubContext } from "../../../components/markdown-render-options.ts";
+import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
+import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
-import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
-
-type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
-type DetailFullMessageResult = {
-  ok?: boolean;
-  message?: unknown;
-  unavailableReason?: DetailUnavailableReason;
-};
+import type {
+  SessionDiffFileTextLoader,
+  SessionDiffLoader,
+  SessionDiffOwner,
+} from "./session-diff-panel.tsx";
 
 type SidebarFullMessageRequest = {
   sessionKey: string;
   agentId?: string;
+  sessionId?: string;
   messageId: string;
   maxChars?: number;
 };
 
 export type SidebarFullMessageLoader = (
   request: SidebarFullMessageRequest,
-) => Promise<DetailFullMessageResult | null | undefined>;
+) => Promise<Partial<ChatMessageGetResult> | null | undefined>;
 
 type MarkdownSidebarContent = {
   kind: "markdown";
   content: string;
   rawText?: string | null;
+  fileLinkSessionKey?: string;
+  fileDownload?: {
+    path: string;
+    name: string;
+    download: (signal: AbortSignal) => Promise<SessionFileDownload | null>;
+  };
 };
 
 type CanvasSidebarContent = {
@@ -73,7 +84,7 @@ export type AttachmentSidebarRuntime = {
   resolveArtifactDownload?: ArtifactDownloadResolver;
 };
 
-type AttachmentSidebarContent = {
+type AttachmentSidebarContent = Omit<AttachmentSidebarSource, "src"> & {
   kind: "attachment";
   attachmentKind?: "audio" | "video" | "document" | "image";
   title: string;
@@ -81,19 +92,13 @@ type AttachmentSidebarContent = {
   src?: string;
   mimeType?: string | null;
   sourceIdentity?: string;
-  playback?: ChatMediaPlaybackMode;
-  authToken?: string | null;
-  sizeBytes?: number;
-  durationMs?: number;
-  width?: number;
-  height?: number;
   voiceNote?: boolean;
   plainText?: boolean;
-  renderActions?: () => TemplateResult;
+  renderActions?: () => JSX.Element;
   /** Authorize and read fresh bytes for each explicit download. */
   download?: (signal: AbortSignal) => Promise<Blob | null>;
   resolveSource?: (
-    onRequestUpdate: () => void,
+    onSourceChange: () => void,
     runtime: AttachmentSidebarRuntime,
   ) => AttachmentSidebarState;
   rawText?: string | null;
@@ -101,7 +106,7 @@ type AttachmentSidebarContent = {
 
 type SessionDiffSidebarContent = {
   kind: "session-diff";
-  /** Fetches a fresh sessions.diff snapshot; the panel refetches on refresh. */
+  owner: SessionDiffOwner;
   load: SessionDiffLoader;
   loadFileText?: SessionDiffFileTextLoader;
   openFile?: (path: string) => void;
@@ -109,8 +114,8 @@ type SessionDiffSidebarContent = {
 };
 
 type FileSaveOutcome =
-  | { ok: true; hash: string; updatedAtMs?: number }
-  | { ok: false; code: "conflict"; currentHash?: string }
+  | { ok: true; hash: string }
+  | { ok: false; code: "conflict" }
   | { ok: false; code: "error"; message: string };
 
 type FileSidebarEdit = {
@@ -122,11 +127,15 @@ type FileSidebarEdit = {
 
 export type FileSidebarNavigation = { line: number };
 
+export type SessionFileSource = { sessionKey: string; agentId?: string; path: string };
+
 export type FileSidebarContent = {
   kind: "file";
   path: string;
   name: string;
   content: string;
+  download?: (signal: AbortSignal) => Promise<SessionFileDownload | null>;
+  sessionFileSource?: SessionFileSource;
   /** Stable per-session identity used to retain an unsaved in-memory draft. */
   draftKey?: string;
   /** Captured display context; the draft key is opaque and never a UI label. */
@@ -148,7 +157,15 @@ export type ToolOutputSidebarContent = {
   agentId?: string;
 };
 
+type McpAppSidebarContent = {
+  kind: "mcp-app";
+  title: string;
+  launch: import("../../../components/mcp-app-launch.ts").McpAppOpenDetail;
+  rawText?: null;
+};
+
 export type SidebarContent =
+  | McpAppSidebarContent
   | ToolOutputSidebarContent
   | MarkdownSidebarContent
   | CanvasSidebarContent
@@ -166,3 +183,20 @@ export type SidebarSelection = (
   // to unrelated content.
   | { kind: "unavailable"; message: string }
 ) & { fileTab?: { id: string; label: string } };
+
+export type ChatDetailPanelProps = {
+  content: ChatDetailPanelContent | null;
+  fileNavigation: FileSidebarNavigation | null;
+  execNode: string | null;
+  attachmentRuntime: AttachmentSidebarRuntime;
+  basePath: string;
+  canvasPluginSurfaceUrl: string | null;
+  embedSandboxMode: EmbedSandboxMode;
+  allowExternalEmbedUrls: boolean;
+  githubContext: MarkdownGitHubContext;
+  embedded: boolean;
+  onOpenWorkspaceFile: ((target: MarkdownFileLinkTarget) => void) | null;
+  onOpenSessionLink: ((target: SessionLinkTarget) => void) | null;
+  onRevealInWorkspace: ((path: string) => void) | null;
+  onOpenImage: ((item: ImageLightboxItem) => void) | null;
+};

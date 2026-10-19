@@ -1,22 +1,41 @@
-// Shared command runner tests cover update helper command execution and error capture.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../../process/exec-result.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import {
   ensureGitCheckout,
   parseUpdateTimeoutMs,
   resolveGlobalManager,
   resolveUpdateRoot,
   runUpdateStep,
+  tryWriteCompletionCache,
   UpdatePreMutationError,
 } from "./shared.js";
 
 const runCommandWithTimeout = vi.hoisted(() => vi.fn());
+const runCommandBuffered = vi.hoisted(() =>
+  vi.fn(async () => ({
+    stdout: Buffer.alloc(0),
+    stderr: Buffer.alloc(0),
+    code: null,
+    signal: null,
+    killed: false,
+    termination: "error" as const,
+    error: Object.assign(new Error("fixture package database unavailable"), { code: "EACCES" }),
+  })),
+);
 
-vi.mock("../../process/exec.js", () => ({
+vi.mock("../../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runCommandWithTimeout,
+  runCommandBuffered,
 }));
 
 const successfulCommandResult = {
@@ -36,13 +55,81 @@ function cloneTarget(argv: string[]): string {
   return target;
 }
 
+function checkout(
+  dir: string,
+  options: Omit<Parameters<typeof ensureGitCheckout>[0], "dir" | "timeoutMs" | "env"> = {},
+) {
+  return ensureGitCheckout({ dir, timeoutMs: 1_000, env: process.env, ...options });
+}
+
+async function expectFile(directory: string, name: string, content: string) {
+  await expect(fs.readFile(path.join(directory, name), "utf8")).resolves.toBe(content);
+}
+
+function mockCompleteClone(git = false) {
+  runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
+    const stagingDir = cloneTarget(argv);
+    if (git) {
+      await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
+    }
+    await fs.writeFile(path.join(stagingDir, "checkout.marker"), "complete\n");
+    return successfulCommandResult;
+  });
+}
+
 describe("update CLI shared helpers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     runCommandWithTimeout.mockResolvedValue(successfulCommandResult);
   });
 
-  it("requires timeout values to be complete positive integer seconds", () => {
+  it("refreshes standalone completion without a loose launcher", async () => {
+    await withTestDir({ prefix: "completion-standalone-" }, async (root) => {
+      const runtime = path.join(root, "runtime");
+      const executable = path.join(root, "openclaw");
+      await fs.mkdir(runtime);
+      await fs.writeFile(
+        path.join(root, "manifest.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          mode: "jit",
+          executable: { path: "openclaw" },
+          runtime: { path: "runtime" },
+          openclaw: { version: "2026.10.15" },
+          bun: { version: "1.3.0" },
+        }),
+      );
+
+      await expect(tryWriteCompletionCache(runtime, true, 500, executable)).resolves.toBe(
+        "completed",
+      );
+      expect(runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
+        [executable, "completion", "--write-state"],
+        expect.objectContaining({ cwd: runtime, timeoutMs: 500 }),
+      );
+    });
+  });
+
+  it.each([false, true])(
+    "does not hide uncertain completion cleanup (uncertain=%s)",
+    async (uncertain) => {
+      await withTestDir({ prefix: "completion-cleanup-" }, async (root) => {
+        await fs.writeFile(path.join(root, "openclaw.mjs"), "");
+        const error = uncertain
+          ? new CommandProcessCleanupError()
+          : new Error("cache write failed");
+        runCommandWithTimeout.mockRejectedValueOnce(error);
+        const result = tryWriteCompletionCache(root, true, 500);
+        if (uncertain) {
+          await expect(result).rejects.toBe(error);
+        } else {
+          await expect(result).resolves.toBe("failed");
+        }
+      });
+    },
+  );
+
+  it("accepts only complete positive integer timeout seconds", () => {
     for (const timeout of [
       "",
       "1.5",
@@ -57,9 +144,17 @@ describe("update CLI shared helpers", () => {
         "--timeout must be a positive integer (seconds)",
       );
     }
+    for (const [input, milliseconds] of [
+      [" 10 ", 10_000],
+      ["+10", 10_000],
+      ["001", 1_000],
+      [undefined, undefined],
+    ] as const) {
+      expect(parseUpdateTimeoutMs(input)).toBe(milliseconds);
+    }
   });
 
-  it("keeps failed command diagnostics in both progress and the final result", async () => {
+  it("closes install stdin without approval and retains failed command diagnostics", async () => {
     runCommandWithTimeout.mockResolvedValueOnce({
       ...successfulCommandResult,
       code: 1,
@@ -68,9 +163,10 @@ describe("update CLI shared helpers", () => {
     });
     const onStepComplete = vi.fn();
     const result = await runUpdateStep({
-      name: "build",
-      argv: ["pnpm", "build"],
+      name: "package-install",
+      argv: ["pnpm", "add", "-g", "openclaw@2.0.0"],
       timeoutMs: 1200,
+      input: "",
       progress: { onStepComplete },
     });
 
@@ -83,13 +179,10 @@ describe("update CLI shared helpers", () => {
         exitCode: 1,
       }),
     );
-  });
-
-  it("parses complete positive integer timeout values as milliseconds", () => {
-    expect(parseUpdateTimeoutMs(" 10 ")).toBe(10_000);
-    expect(parseUpdateTimeoutMs("+10")).toBe(10_000);
-    expect(parseUpdateTimeoutMs("001")).toBe(1_000);
-    expect(parseUpdateTimeoutMs()).toBeUndefined();
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      ["pnpm", "add", "-g", "openclaw@2.0.0"],
+      expect.objectContaining({ input: "" }),
+    );
   });
 
   it.runIf(process.platform !== "win32")(
@@ -118,56 +211,72 @@ describe("update CLI shared helpers", () => {
     },
   );
 
-  it("refuses a package root without a proven manager owner", async () => {
-    runCommandWithTimeout.mockResolvedValue({
-      ...successfulCommandResult,
-      code: 1,
-      stderr: "not owned",
-    });
+  it.each(["/shared", "/opt/homebrew-custom"])(
+    "refuses unowned packages under %s without treating global npm as a Homebrew formula",
+    async (prefix) => {
+      const root = `${prefix}/lib/node_modules/openclaw`;
+      vi.stubEnv("HOMEBREW_PREFIX", "/opt/homebrew-custom");
+      try {
+        runCommandWithTimeout.mockResolvedValue({
+          ...successfulCommandResult,
+          code: 1,
+          stderr: "not owned",
+        });
 
-    const owner = resolveGlobalManager({
-      root: "/shared/lib/node_modules/openclaw",
-      installKind: "package",
-      timeoutMs: 1_000,
-    });
-    await expect(owner).rejects.toBeInstanceOf(UpdatePreMutationError);
-    await expect(owner).rejects.toMatchObject({
-      name: "UpdatePreMutationError",
-      reason: expect.stringMatching(/^(unmanaged-package-install|container-image-install)$/),
-      failureFacts: [
-        {
-          check: "installation-inspection",
-          code: "installation-unclassified",
-          message: expect.stringMatching(/Installation ownership[\s\S]*retry openclaw update/),
-        },
-      ],
-    });
-    for (const detail of [
-      "Root: /shared/lib/node_modules/openclaw",
-      "Git metadata: absent or unreadable",
-      "node_modules layout: package under node_modules",
-      "local node_modules absent or unreadable",
-      "package.json name: missing or unreadable",
-      "Service unit target: not inspected",
-      "Inspected package-manager owners:",
-      "npm root -g",
-      "pnpm root -g",
-      "prefix -g",
-      "No package changes or Gateway restart were attempted.",
-    ]) {
-      await expect(owner).rejects.toMatchObject({ message: expect.stringContaining(detail) });
-    }
-  });
+        const owner = withMockedPlatform("linux", () =>
+          resolveGlobalManager({
+            root,
+            installKind: "package",
+            timeoutMs: 1_000,
+          }),
+        );
+        await expect(owner).rejects.toBeInstanceOf(UpdatePreMutationError);
+        await expect(owner).rejects.toMatchObject({
+          name: "UpdatePreMutationError",
+          reason: expect.stringMatching(/^(unmanaged-package-install|container-image-install)$/),
+          failureFacts: [
+            {
+              check: "installation-inspection",
+              code: "installation-unclassified",
+              message: expect.stringMatching(/Installation ownership[\s\S]*retry openclaw update/),
+            },
+          ],
+        });
+        for (const detail of [
+          `Root: ${root}`,
+          "Git metadata: absent or unreadable",
+          "node_modules layout: package under node_modules",
+          "local node_modules absent or unreadable",
+          "package.json name: missing or unreadable",
+          "Service unit target: not inspected",
+          "Inspected package-manager owners:",
+          "npm root -g",
+          "pnpm root -g",
+          "prefix -g",
+          "No package changes or Gateway restart were attempted.",
+        ]) {
+          await expect(owner).rejects.toMatchObject({ message: expect.stringContaining(detail) });
+        }
+        await expect(owner).rejects.not.toMatchObject({
+          message: expect.stringContaining("managed by Homebrew"),
+        });
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "guides Homebrew-managed installations to use brew upgrade",
     async () => {
       await expect(
-        resolveGlobalManager({
-          root: "/opt/homebrew/Cellar/openclaw-cli/2026.9.2/libexec/lib/node_modules/openclaw",
-          installKind: "package",
-          timeoutMs: 1_000,
-        }),
+        withMockedPlatform("linux", () =>
+          resolveGlobalManager({
+            root: "/opt/homebrew/Cellar/openclaw-cli/2026.9.2/libexec/lib/node_modules/openclaw",
+            installKind: "package",
+            timeoutMs: 1_000,
+          }),
+        ),
       ).rejects.toMatchObject({
         name: "UpdatePreMutationError",
         reason: "unmanaged-package-install",
@@ -176,43 +285,6 @@ describe("update CLI shared helpers", () => {
       });
     },
   );
-
-  it("does not treat global npm packages under HOMEBREW_PREFIX as Homebrew formula installs", async () => {
-    const originalPrefix = process.env.HOMEBREW_PREFIX;
-    process.env.HOMEBREW_PREFIX = "/opt/homebrew-custom";
-    runCommandWithTimeout.mockResolvedValue({
-      ...successfulCommandResult,
-      code: 1,
-      stderr: "not owned",
-    });
-
-    try {
-      const owner = resolveGlobalManager({
-        root: "/opt/homebrew-custom/lib/node_modules/openclaw",
-        installKind: "package",
-        timeoutMs: 1_000,
-      });
-      await expect(owner).rejects.toBeInstanceOf(UpdatePreMutationError);
-      await expect(owner).rejects.toMatchObject({
-        name: "UpdatePreMutationError",
-        message: expect.stringContaining("Root: /opt/homebrew-custom/lib/node_modules/openclaw"),
-        failureFacts: [
-          expect.objectContaining({
-            check: "installation-inspection",
-            code: "installation-unclassified",
-          }),
-        ],
-      });
-      await expect(owner).rejects.toMatchObject({
-        message: expect.stringContaining("No package changes or Gateway restart were attempted."),
-      });
-      await expect(owner).rejects.not.toMatchObject({
-        message: expect.stringContaining("managed by Homebrew"),
-      });
-    } finally {
-      process.env.HOMEBREW_PREFIX = originalPrefix;
-    }
-  });
 
   it.each([false, true])(
     "keeps build storage stationary while publishing a clone (existing destination: %s)",
@@ -255,7 +327,7 @@ describe("update CLI shared helpers", () => {
           "complete\n",
         );
         await expect(fs.readdir(path.dirname(checkoutDir))).resolves.toEqual(["openclaw"]);
-        await expect(fs.readdir(checkoutDir)).resolves.toEqual([".git", "checkout.marker"]);
+        expect((await fs.readdir(checkoutDir)).toSorted()).toEqual([".git", "checkout.marker"]);
         expect(runCommandWithTimeout).toHaveBeenCalledWith(
           [
             "git",
@@ -270,28 +342,6 @@ describe("update CLI shared helpers", () => {
     },
   );
 
-  it("removes a failed fresh clone without publishing the destination", async () => {
-    await withTestDir({ prefix: "openclaw-update-clone-failure-" }, async (base) => {
-      const checkoutDir = path.join(base, "openclaw");
-      runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
-        const stagingDir = cloneTarget(argv);
-        await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
-        return {
-          ...successfulCommandResult,
-          stderr: "clone interrupted",
-          code: 42,
-        };
-      });
-
-      await expect(
-        ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env }),
-      ).resolves.toMatchObject({ checkoutDir, step: { exitCode: 42 } });
-
-      await expect(fs.stat(checkoutDir)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.readdir(base)).resolves.toEqual([]);
-    });
-  });
-
   it("preserves a destination created while a fresh clone is running", async () => {
     await withTestDir({ prefix: "openclaw-update-clone-race-" }, async (base) => {
       const checkoutDir = path.join(base, "openclaw");
@@ -303,13 +353,9 @@ describe("update CLI shared helpers", () => {
         return successfulCommandResult;
       });
 
-      await expect(
-        ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env }),
-      ).rejects.toThrow("appeared while cloning");
+      await expect(checkout(checkoutDir)).rejects.toThrow("appeared while cloning");
 
-      await expect(fs.readFile(path.join(checkoutDir, "user.marker"), "utf8")).resolves.toBe(
-        "keep\n",
-      );
+      await expectFile(checkoutDir, "user.marker", "keep\n");
       await expect(fs.readdir(base)).resolves.toEqual(["openclaw"]);
     });
   });
@@ -317,6 +363,7 @@ describe("update CLI shared helpers", () => {
   it.each([
     { existing: false, failure: "allocation" },
     { existing: true, failure: "allocation" },
+    { existing: false, failure: "clone" },
     { existing: true, failure: "clone" },
   ])(
     "keeps clone destinations retryable after $failure failure (existing: $existing)",
@@ -349,7 +396,7 @@ describe("update CLI shared helpers", () => {
           return mkdir(target, options);
         });
         try {
-          const first = ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env });
+          const first = checkout(checkoutDir);
           if (failure === "allocation") {
             await expect(first).rejects.toBe(allocationError);
             expect(runCommandWithTimeout).not.toHaveBeenCalled();
@@ -360,12 +407,14 @@ describe("update CLI shared helpers", () => {
           allocation.mockRestore();
         }
         await expect(fs.readdir(existing ? checkoutDir : base)).resolves.toEqual([]);
-        await expect(
-          ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env }),
-        ).resolves.toMatchObject({ checkoutDir, step: { exitCode: 0 } });
-        await expect(fs.readFile(path.join(checkoutDir, "checkout.marker"), "utf8")).resolves.toBe(
-          "complete\n",
-        );
+        if (!existing) {
+          await expect(fs.stat(checkoutDir)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        await expect(checkout(checkoutDir)).resolves.toMatchObject({
+          checkoutDir,
+          step: { exitCode: 0 },
+        });
+        await expectFile(checkoutDir, "checkout.marker", "complete\n");
         expect(runCommandWithTimeout).toHaveBeenCalledTimes(failure === "allocation" ? 1 : 2);
       });
     },
@@ -395,50 +444,19 @@ describe("update CLI shared helpers", () => {
           throw allocationError;
         });
         try {
-          await expect(
-            ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env }),
-          ).rejects.toBe(allocationError);
+          await expect(checkout(checkoutDir)).rejects.toBe(allocationError);
         } finally {
           allocation.mockRestore();
         }
-        expect(await fs.readFile(path.join(retained, "user.marker"), "utf8")).toBe("keep\n");
+        await expectFile(retained, "user.marker", "keep\n");
         expect(runCommandWithTimeout).not.toHaveBeenCalled();
       });
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "preserves a stable alias to an existing empty checkout destination",
-    async () => {
-      await withTestDir({ prefix: "openclaw-update-clone-alias-" }, async (base) => {
-        const targetDir = path.join(base, "checkout-target");
-        const checkoutDir = path.join(base, "openclaw");
-        await fs.mkdir(targetDir);
-        await fs.symlink(targetDir, checkoutDir, "dir");
-        runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
-          const stagingDir = cloneTarget(argv);
-          expect(path.dirname(path.dirname(stagingDir))).toBe(targetDir);
-          await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
-          await fs.writeFile(path.join(stagingDir, "checkout.marker"), "complete\n");
-          return successfulCommandResult;
-        });
-
-        await expect(
-          ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env }),
-        ).resolves.toMatchObject({ checkoutDir: targetDir, step: { exitCode: 0 } });
-
-        expect((await fs.lstat(checkoutDir)).isSymbolicLink()).toBe(true);
-        expect((await fs.lstat(targetDir)).isSymbolicLink()).toBe(false);
-        await expect(fs.readFile(path.join(checkoutDir, "checkout.marker"), "utf8")).resolves.toBe(
-          "complete\n",
-        );
-      });
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "publishes through the original target when an empty-directory alias is retargeted",
-    async () => {
+  it.runIf(process.platform !== "win32").each([false, true])(
+    "publishes through the original empty-directory alias target (retargeted: %s)",
+    async (retargeted) => {
       await withTestDir({ prefix: "openclaw-update-clone-alias-race-" }, async (base) => {
         const targetDir = path.join(base, "checkout-target");
         const replacementDir = path.join(base, "replacement-target");
@@ -451,18 +469,25 @@ describe("update CLI shared helpers", () => {
           expect(path.dirname(path.dirname(stagingDir))).toBe(targetDir);
           await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
           await fs.writeFile(path.join(stagingDir, "checkout.marker"), "complete\n");
-          await fs.unlink(checkoutDir);
-          await fs.symlink(replacementDir, checkoutDir, "dir");
+          if (retargeted) {
+            await fs.unlink(checkoutDir);
+            await fs.symlink(replacementDir, checkoutDir, "dir");
+          }
           return successfulCommandResult;
         });
 
-        await expect(
-          ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env }),
-        ).resolves.toMatchObject({ checkoutDir: targetDir, step: { exitCode: 0 } });
+        await expect(checkout(checkoutDir)).resolves.toMatchObject({
+          checkoutDir: targetDir,
+          step: { exitCode: 0 },
+        });
 
-        await expect(fs.readFile(path.join(targetDir, "checkout.marker"), "utf8")).resolves.toBe(
-          "complete\n",
-        );
+        expect((await fs.lstat(checkoutDir)).isSymbolicLink()).toBe(true);
+        expect((await fs.lstat(targetDir)).isSymbolicLink()).toBe(false);
+        await expectFile(targetDir, "checkout.marker", "complete\n");
+        if (!retargeted) {
+          await expectFile(checkoutDir, "checkout.marker", "complete\n");
+        }
+
         await expect(fs.readdir(replacementDir)).resolves.toEqual([]);
       });
     },
@@ -475,16 +500,10 @@ describe("update CLI shared helpers", () => {
         const checkoutDir = path.join(base, "openclaw");
         const displacedDir = path.join(base, "displaced");
         await fs.mkdir(checkoutDir);
-        runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
-          await fs.writeFile(path.join(cloneTarget(argv), "checkout.marker"), "complete\n");
-          return successfulCommandResult;
-        });
+        mockCompleteClone();
         let replacementStage = "";
         await expect(
-          ensureGitCheckout({
-            dir: checkoutDir,
-            timeoutMs: 1_000,
-            env: process.env,
+          checkout(checkoutDir, {
             useStagedCheckout: async (stagingDir, publish, _targetRoot, storageRoot) => {
               const movedDir =
                 replaced === "destination"
@@ -505,9 +524,7 @@ describe("update CLI shared helpers", () => {
           }),
         ).rejects.toThrow("changed before publication");
         const userDir = replaced === "destination" ? displacedDir : replacementStage;
-        await expect(fs.readFile(path.join(userDir, "user.marker"), "utf8")).resolves.toBe(
-          "keep\n",
-        );
+        await expectFile(userDir, "user.marker", "keep\n");
         if (replaced === "destination") {
           await expect(fs.readdir(checkoutDir)).resolves.toEqual([]);
         } else {
@@ -543,14 +560,8 @@ describe("update CLI shared helpers", () => {
         });
         let retained = "";
         let publicationError: unknown;
-        runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
-          await fs.writeFile(path.join(cloneTarget(argv), "checkout.marker"), "complete\n");
-          return successfulCommandResult;
-        });
-        const result = ensureGitCheckout({
-          dir: checkoutDir,
-          timeoutMs: 1_000,
-          env: process.env,
+        mockCompleteClone();
+        const result = checkout(checkoutDir, {
           progress: { onStepComplete },
           useStagedCheckout: async (stagingDir, publish, _targetRoot, storageRoot) => {
             retained = storageRoot;
@@ -582,9 +593,7 @@ describe("update CLI shared helpers", () => {
               warnings: [expect.stringContaining("ownership could not be verified")],
             },
           });
-          expect(await fs.readFile(path.join(checkoutDir, "checkout.marker"), "utf8")).toBe(
-            "complete\n",
-          );
+          await expectFile(checkoutDir, "checkout.marker", "complete\n");
           if (!missingStorage) {
             expect(
               await fs.readFile(path.join(retained, "repository", "user.marker"), "utf8"),
@@ -597,7 +606,7 @@ describe("update CLI shared helpers", () => {
         if (missingStorage) {
           await expect(fs.stat(retained)).rejects.toMatchObject({ code: "ENOENT" });
         } else {
-          expect(await fs.readFile(path.join(retained, "build.marker"), "utf8")).toBe("keep\n");
+          await expectFile(retained, "build.marker", "keep\n");
         }
         const cleanupSteps = onStepComplete.mock.calls.filter(
           ([step]) => step.name === "git-clone-staging-cleanup",
@@ -616,27 +625,29 @@ describe("update CLI shared helpers", () => {
   );
 
   it.each([
-    { callbackFails: false, cleanupFailure: "remove" },
-    { callbackFails: true, cleanupFailure: "remove" },
-    { callbackFails: false, cleanupFailure: "inspect" },
-    { callbackFails: true, cleanupFailure: "inspect" },
+    { callbackFails: false, cleanupFailure: "remove", reportingUnknown: false },
+    { callbackFails: true, cleanupFailure: "remove", reportingUnknown: false },
+    { callbackFails: false, cleanupFailure: "inspect", reportingUnknown: false },
+    { callbackFails: true, cleanupFailure: "inspect", reportingUnknown: false },
+    { callbackFails: false, cleanupFailure: "remove", reportingUnknown: true },
+    { callbackFails: true, cleanupFailure: "remove", reportingUnknown: true },
   ])(
-    "preserves the published update outcome when clone cleanup fails ($cleanupFailure, callback fails: $callbackFails)",
-    async ({ callbackFails, cleanupFailure }) => {
+    "preserves clone cleanup outcomes ($cleanupFailure, callback fails: $callbackFails, reporting unknown: $reportingUnknown)",
+    async ({ callbackFails, cleanupFailure, reportingUnknown }) => {
       await withTestDir({ prefix: "openclaw-update-clone-cleanup-" }, async (base) => {
         const checkoutDir = path.join(base, "openclaw");
         const callbackError = new Error("candidate operation failed");
-        const onStepComplete = vi.fn((step: { name: string }) => {
+        const reportingError = reportingUnknown
+          ? new CommandProcessCleanupError()
+          : new Error("cleanup warning ledger unavailable");
+        const onStepComplete = vi.fn(async (step: { name: string }) => {
           if (step.name === "git-clone-staging-cleanup") {
-            throw new Error("cleanup warning ledger unavailable");
+            throw reportingError;
           }
         });
         let retained = "";
         let published = false;
-        runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
-          await fs.writeFile(path.join(cloneTarget(argv), "checkout.marker"), "complete\n");
-          return successfulCommandResult;
-        });
+        mockCompleteClone();
         const remove = fs.rm.bind(fs);
         const cleanup = vi.spyOn(fs, "rm").mockImplementation((target, options) => {
           if (cleanupFailure === "remove" && String(target) === retained) {
@@ -656,10 +667,7 @@ describe("update CLI shared helpers", () => {
           return lstat(...args);
         });
         try {
-          const update = ensureGitCheckout({
-            dir: checkoutDir,
-            timeoutMs: 1_000,
-            env: process.env,
+          const update = checkout(checkoutDir, {
             progress: { onStepComplete },
             useStagedCheckout: async (_stagingDir, publish, _targetRoot, storageRoot) => {
               retained = storageRoot;
@@ -671,7 +679,17 @@ describe("update CLI shared helpers", () => {
               }
             },
           });
-          if (callbackFails) {
+          if (reportingUnknown) {
+            const error = await update.catch((cause: unknown) => cause);
+            expect(hasCommandProcessCleanupError(error)).toBe(true);
+            expect(collectNestedErrorCandidates(error)).toContain(reportingError);
+            if (callbackFails) {
+              expect(collectNestedErrorCandidates(error)).toContain(callbackError);
+              expect(error).toMatchObject({ cause: callbackError });
+            } else {
+              expect(error).toBe(reportingError);
+            }
+          } else if (callbackFails) {
             await expect(update).rejects.toBe(callbackError);
           } else {
             await expect(update).resolves.toMatchObject({
@@ -679,10 +697,8 @@ describe("update CLI shared helpers", () => {
               step: { exitCode: 0, warnings: [expect.stringContaining("cleanup denied")] },
             });
           }
-          expect(await fs.readFile(path.join(checkoutDir, "checkout.marker"), "utf8")).toBe(
-            "complete\n",
-          );
-          expect(await fs.readFile(path.join(retained, "build.marker"), "utf8")).toBe("keep\n");
+          await expectFile(checkoutDir, "checkout.marker", "complete\n");
+          await expectFile(retained, "build.marker", "keep\n");
           if (cleanupFailure === "inspect") {
             expect(cleanup).not.toHaveBeenCalledWith(retained, expect.anything());
             expect(onStepComplete).toHaveBeenCalledWith(
@@ -706,16 +722,39 @@ describe("update CLI shared helpers", () => {
     },
   );
 
+  it("retains an unpublished clone when its staged callback reports uncertain cleanup", async () => {
+    await withTestDir({ prefix: "openclaw-update-clone-uncertain-" }, async (base) => {
+      const checkoutDir = path.join(base, "openclaw");
+      const failure = new CommandProcessCleanupError();
+      let stagedFile = "";
+      runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
+        stagedFile = path.join(cloneTarget(argv), "checkout.marker");
+        await fs.writeFile(stagedFile, "retain candidate bytes\n");
+        return successfulCommandResult;
+      });
+      const useStagedCheckout = vi.fn(async (stagingDir: string) => {
+        expect(stagedFile).toBe(path.join(stagingDir, "checkout.marker"));
+        await expect(fs.readFile(stagedFile, "utf8")).resolves.toBe("retain candidate bytes\n");
+        throw failure;
+      });
+
+      await expect(
+        checkout(checkoutDir, {
+          useStagedCheckout,
+        }),
+      ).rejects.toBe(failure);
+
+      expect(useStagedCheckout).toHaveBeenCalledOnce();
+      await expect(fs.readFile(stagedFile, "utf8")).resolves.toBe("retain candidate bytes\n");
+      await expect(fs.access(checkoutDir)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
   it("retains recovery files when publication and rollback both fail", async () => {
     await withTestDir({ prefix: "openclaw-update-clone-rollback-" }, async (base) => {
       const checkoutDir = path.join(base, "openclaw");
       await fs.mkdir(checkoutDir);
-      runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
-        const stagingDir = cloneTarget(argv);
-        await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
-        await fs.writeFile(path.join(stagingDir, "checkout.marker"), "complete\n");
-        return successfulCommandResult;
-      });
+      mockCompleteClone(true);
 
       const realRename = fs.rename.bind(fs);
       const rename = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
@@ -732,16 +771,12 @@ describe("update CLI shared helpers", () => {
       });
 
       try {
-        await expect(
-          ensureGitCheckout({ dir: checkoutDir, timeoutMs: 1_000, env: process.env }),
-        ).rejects.toThrow("recovery files remain");
+        await expect(checkout(checkoutDir)).rejects.toThrow("recovery files remain");
       } finally {
         rename.mockRestore();
       }
 
-      await expect(fs.readFile(path.join(checkoutDir, "checkout.marker"), "utf8")).resolves.toBe(
-        "complete\n",
-      );
+      await expectFile(checkoutDir, "checkout.marker", "complete\n");
       const recoveryDirs = (await fs.readdir(checkoutDir)).filter((entry) =>
         entry.startsWith(".openclaw-clone-"),
       );

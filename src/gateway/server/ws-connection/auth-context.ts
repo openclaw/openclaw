@@ -2,6 +2,8 @@
 import type { IncomingMessage } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ConnectParams } from "../../../../packages/gateway-protocol/src/index.js";
+import type { verifyDeviceBootstrapToken } from "../../../infra/device-bootstrap.js";
+import type { verifyDeviceToken } from "../../../infra/device-pairing-tokens.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
@@ -30,18 +32,6 @@ type ConnectAuthState = {
   deviceTokenCandidateSource?: DeviceTokenCandidateSource;
 };
 
-type SharedGatewayAuthDeviceTokenIssuer = {
-  kind: "shared-gateway-auth";
-  generation: string;
-};
-
-type VerifyDeviceTokenResult = {
-  ok: boolean;
-  reason?: string;
-  issuer?: SharedGatewayAuthDeviceTokenIssuer;
-};
-type VerifyBootstrapTokenResult = { ok: boolean; reason?: string };
-
 type ConnectAuthDecision = {
   authResult: GatewayAuthResult;
   authOk: boolean;
@@ -59,63 +49,9 @@ type ResolveConnectAuthDecisionParams = {
   requireBootstrapToken?: boolean;
   rateLimiter?: AuthRateLimiter;
   clientIp?: string;
-  verifyBootstrapToken: (params: {
-    deviceId: string;
-    publicKey: string;
-    token: string;
-    role: string;
-    scopes: string[];
-  }) => Promise<VerifyBootstrapTokenResult>;
-  verifyDeviceToken: (params: {
-    deviceId: string;
-    token: string;
-    role: string;
-    scopes: string[];
-  }) => Promise<VerifyDeviceTokenResult>;
+  verifyBootstrapToken: typeof verifyDeviceBootstrapToken;
+  verifyDeviceToken: typeof verifyDeviceToken;
 };
-
-function mapDeviceTokenAuthFailureReason(params: {
-  tokenCheckReason?: string;
-  candidateSource?: DeviceTokenCandidateSource;
-  fallbackReason?: string;
-}): string {
-  if (
-    params.tokenCheckReason === "scope-mismatch" ||
-    params.tokenCheckReason === "scope_mismatch"
-  ) {
-    return "scope_mismatch";
-  }
-  if (params.candidateSource === "explicit-device-token") {
-    return "device_token_mismatch";
-  }
-  return params.fallbackReason ?? "device_token_mismatch";
-}
-
-function resolveSharedConnectAuth(
-  connectAuth: ConnectParams["auth"] | null,
-): { token?: string; password?: string } | undefined {
-  const token = normalizeOptionalString(connectAuth?.token);
-  const password = normalizeOptionalString(connectAuth?.password);
-  if (!token && !password) {
-    return undefined;
-  }
-  return { token, password };
-}
-
-function resolveDeviceTokenCandidate(connectAuth: ConnectParams["auth"] | null): {
-  token?: string;
-  source?: DeviceTokenCandidateSource;
-} {
-  const explicitDeviceToken = normalizeOptionalString(connectAuth?.deviceToken);
-  if (explicitDeviceToken) {
-    return { token: explicitDeviceToken, source: "explicit-device-token" };
-  }
-  const fallbackToken = normalizeOptionalString(connectAuth?.token);
-  if (!fallbackToken) {
-    return {};
-  }
-  return { token: fallbackToken, source: "shared-token-fallback" };
-}
 
 export async function resolveConnectAuthState(params: {
   resolvedAuth: ResolvedGatewayAuth;
@@ -127,14 +63,16 @@ export async function resolveConnectAuthState(params: {
   rateLimiter?: AuthRateLimiter;
   clientIp?: string;
 }): Promise<ConnectAuthState> {
-  const sharedConnectAuth = resolveSharedConnectAuth(params.connectAuth);
-  const sharedAuthProvided = Boolean(sharedConnectAuth);
+  const token = normalizeOptionalString(params.connectAuth?.token);
+  const password = normalizeOptionalString(params.connectAuth?.password);
+  const sharedConnectAuth = token || password ? { token, password } : undefined;
   const bootstrapTokenCandidate = params.hasDeviceIdentity
     ? normalizeOptionalString(params.connectAuth?.bootstrapToken)
     : undefined;
-  const { token: deviceCredential, source: deviceCredentialSource } = params.hasDeviceIdentity
-    ? resolveDeviceTokenCandidate(params.connectAuth)
-    : {};
+  const explicitDeviceToken = params.hasDeviceIdentity
+    ? normalizeOptionalString(params.connectAuth?.deviceToken)
+    : undefined;
+  const deviceCredential = params.hasDeviceIdentity ? (explicitDeviceToken ?? token) : undefined;
   const deferRateLimitFailure = Boolean(deviceCredential);
 
   const authResult: GatewayAuthResult = await authorizeWsControlUiGatewayConnect({
@@ -143,7 +81,7 @@ export async function resolveConnectAuthState(params: {
     req: params.req,
     trustedProxies: params.trustedProxies,
     allowRealIpFallback: params.allowRealIpFallback,
-    rateLimiter: sharedAuthProvided ? params.rateLimiter : undefined,
+    rateLimiter: sharedConnectAuth ? params.rateLimiter : undefined,
     clientIp: params.clientIp,
     rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
     deferRateLimitFailure,
@@ -181,7 +119,11 @@ export async function resolveConnectAuthState(params: {
     pendingSharedAuthFailure,
     bootstrapTokenCandidate,
     deviceTokenCandidate: deviceCredential,
-    deviceTokenCandidateSource: deviceCredentialSource,
+    deviceTokenCandidateSource: explicitDeviceToken
+      ? "explicit-device-token"
+      : deviceCredential
+        ? "shared-token-fallback"
+        : undefined,
   };
 }
 
@@ -297,47 +239,43 @@ async function resolveConnectAuthDecisionCore(
     return await finish();
   }
 
-  let deviceTokenRateLimited = false;
-  if (params.rateLimiter) {
-    const deviceRateCheck = params.rateLimiter.check(
-      params.clientIp,
-      AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
-    );
-    if (!deviceRateCheck.allowed) {
-      deviceTokenRateLimited = true;
-      authResult = {
-        ok: false,
-        reason: "rate_limited",
-        rateLimited: true,
-        retryAfterMs: deviceRateCheck.retryAfterMs,
-      };
-    }
+  const deviceRateCheck = params.rateLimiter?.check(
+    params.clientIp,
+    AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+  );
+  if (deviceRateCheck && !deviceRateCheck.allowed) {
+    authResult = {
+      ok: false,
+      reason: "rate_limited",
+      rateLimited: true,
+      retryAfterMs: deviceRateCheck.retryAfterMs,
+    };
+    return await finish();
   }
-  if (!deviceTokenRateLimited) {
-    const tokenCheck = await params.verifyDeviceToken({
-      deviceId: params.deviceId,
-      token: deviceTokenCandidate,
-      role: params.role,
-      scopes: params.scopes,
-    });
-    if (tokenCheck.ok) {
-      authOk = true;
-      authMethod = "device-token";
-      if (tokenCheck.issuer?.kind === "shared-gateway-auth") {
-        deviceTokenSharedGatewaySessionGeneration = tokenCheck.issuer.generation;
-      }
-      params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
-    } else {
-      authResult = {
-        ok: false,
-        reason: mapDeviceTokenAuthFailureReason({
-          tokenCheckReason: tokenCheck.reason,
-          candidateSource: params.state.deviceTokenCandidateSource,
-          fallbackReason: authResult.reason,
-        }),
-      };
-      params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+  const tokenCheck = await params.verifyDeviceToken({
+    deviceId: params.deviceId,
+    token: deviceTokenCandidate,
+    role: params.role,
+    scopes: params.scopes,
+  });
+  if (tokenCheck.ok) {
+    authOk = true;
+    authMethod = "device-token";
+    if (tokenCheck.issuer?.kind === "shared-gateway-auth") {
+      deviceTokenSharedGatewaySessionGeneration = tokenCheck.issuer.generation;
     }
+    params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+  } else {
+    authResult = {
+      ok: false,
+      reason:
+        tokenCheck.reason === "scope-mismatch" || tokenCheck.reason === "scope_mismatch"
+          ? "scope_mismatch"
+          : params.state.deviceTokenCandidateSource === "explicit-device-token"
+            ? "device_token_mismatch"
+            : (authResult.reason ?? "device_token_mismatch"),
+    };
+    params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
   }
 
   return await finish();

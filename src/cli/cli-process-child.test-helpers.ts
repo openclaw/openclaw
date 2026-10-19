@@ -1,14 +1,13 @@
-// Shared child harness for CLI process suites: real Node+TSX children, one
-// deadlock guard each, and failures that always carry the child's own output.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { onTestFinished } from "vitest";
+import { onTestFinished, type TestContext } from "vitest";
 import {
   collectNodeDiagnosticReport,
   NODE_DIAGNOSTIC_REPORT_GRACE_MS as REPORT_GRACE_MS,
+  shouldEnableNodeDiagnosticReports,
 } from "../../scripts/lib/node-diagnostic-report.mts";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
@@ -48,11 +47,9 @@ async function releaseCliProcessChild(child: ChildProcessWithoutNullStreams): Pr
     }),
   );
   try {
-    try {
-      await stopChildProcess(child, CLEANUP_TIMEOUT_MS, { force: true });
-    } catch (error) {
+    await stopChildProcess(child, CLEANUP_TIMEOUT_MS, { force: true }).catch((error: unknown) => {
       failures.push(String(error));
-    }
+    });
     // Local destruction cannot prove an inherited writer released its output.
     if (failures.length === 0) {
       failures.push(...(await ended).filter((error) => error !== undefined));
@@ -92,16 +89,7 @@ async function releaseCliProcessChild(child: ChildProcessWithoutNullStreams): Pr
   return failures;
 }
 
-/**
- * Deadlock guard for one CLI child, never a startup SLO.
- *
- * A source child cold-loads the whole command graph through TSX: seconds when the
- * transpile cache is warm, tens of seconds on a cold checkout or a contended runner,
- * while these suites assert output and exit codes rather than latency. Sizing the
- * guard one case below the shared Vitest deadline keeps the SIGKILL and its captured
- * output ahead of the framework's opaque timeout. Cases stay at one child each so
- * this single budget applies to all of them.
- */
+// A deadlock guard, not a startup SLO: leave time for diagnostics and SIGKILL before Vitest expires.
 export const CLI_PROCESS_DEADLOCK_GUARD_MS = DEFAULT_VITEST_TEST_TIMEOUT_MS - 20_000;
 
 /** A sequential test stops at its first timed-out child, so reserve one diagnostic drain and cleanup. */
@@ -131,7 +119,6 @@ function formatOutputTail(stream: string): string {
     : stream;
 }
 
-/** Renders a child failure with both output tails so CI shows the last startup step. */
 export function formatCliProcessFailure(params: {
   reason: string;
   stdout: string;
@@ -185,7 +172,6 @@ export function waitForCliProcessStderrMarker(
   });
 }
 
-/** Runs one CLI child to completion under {@link CLI_PROCESS_DEADLOCK_GUARD_MS}. */
 export async function runCliProcessChild(params: {
   nodeArgs: string[];
   nodeExecutable?: string;
@@ -196,16 +182,17 @@ export async function runCliProcessChild(params: {
   input?: string;
   interact?: (child: ChildProcessWithoutNullStreams) => Promise<void> | void;
   onStdout?: (stdout: string) => void;
+  /** Concurrent callers bind diagnostic cleanup to their own test context. */
+  onTestFinished?: TestContext["onTestFinished"];
   timeoutMs?: number;
   maxBuffer?: number;
 }): Promise<CliProcessChildResult> {
   const timeoutMs = params.timeoutMs ?? CLI_PROCESS_DEADLOCK_GUARD_MS;
   const executable = params.nodeExecutable ?? process.execPath;
-  const supportsDiagnostics = process.platform !== "win32" && !process.versions.bun;
-  const reports = supportsDiagnostics ? createFixtureLifetime() : undefined;
+  const reports = shouldEnableNodeDiagnosticReports() ? createFixtureLifetime() : undefined;
   let unjoinedWork = false;
   if (reports) {
-    onTestFinished(async () => {
+    (params.onTestFinished ?? onTestFinished)(async () => {
       if (!unjoinedWork) {
         await reports.cleanup();
       }
@@ -239,45 +226,34 @@ export async function runCliProcessChild(params: {
   });
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
-  let stdout = "";
-  let stderr = "";
+  const output = { stdout: "", stderr: "" };
   let collectingOutput = true;
   let timedOut = false;
+  const snapshot = () => ({ ...output, stderr: withoutDiagnosticReadiness(output.stderr) });
+  const failure = (reason: string) => new Error(formatCliProcessFailure({ reason, ...snapshot() }));
   const outputFailure = createDeferredCore<never>();
   const checkOutputLimit = () => {
     if (
       params.maxBuffer !== undefined &&
-      Buffer.byteLength(stdout) + Buffer.byteLength(withoutDiagnosticReadiness(stderr)) >
+      Buffer.byteLength(output.stdout) +
+        Buffer.byteLength(withoutDiagnosticReadiness(output.stderr)) >
         params.maxBuffer
     ) {
-      outputFailure.reject(
-        new Error(
-          formatCliProcessFailure({
-            reason: `CLI process exceeded maxBuffer (${params.maxBuffer} bytes)`,
-            stdout,
-            stderr: withoutDiagnosticReadiness(stderr),
-          }),
-        ),
-      );
+      outputFailure.reject(failure(`CLI process exceeded maxBuffer (${params.maxBuffer} bytes)`));
     }
   };
-  child.stdout.on("data", (chunk: string) => {
-    if (!collectingOutput) {
-      return;
-    }
-    stdout += chunk;
-    checkOutputLimit();
-    if (!timedOut) {
-      params.onStdout?.(stdout);
-    }
-  });
-  child.stderr.on("data", (chunk: string) => {
-    if (!collectingOutput) {
-      return;
-    }
-    stderr += chunk;
-    checkOutputLimit();
-  });
+  for (const name of ["stdout", "stderr"] as const) {
+    child[name].on("data", (chunk: string) => {
+      if (!collectingOutput) {
+        return;
+      }
+      output[name] += chunk;
+      checkOutputLimit();
+      if (name === "stdout" && !timedOut) {
+        params.onStdout?.(output.stdout);
+      }
+    });
+  }
 
   // Wait for stream EOF alongside exit: a respawning entrypoint hands its pipes
   // to a detached grandchild, and only EOF proves the command's output is complete.
@@ -300,74 +276,57 @@ export async function runCliProcessChild(params: {
     Promise.all([closed, interaction]).then(([exit]) => exit),
     outputFailure.promise,
   ]);
-  let guard: NodeJS.Timeout | undefined;
-  const completion = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve, reject) => {
-      void completed.then(
-        (result) => {
-          if (!timedOut) {
-            resolve(result);
-          }
-        },
-        (error: unknown) => {
-          if (!timedOut) {
-            reject(toErrorObject(error, "CLI child process failed"));
-          }
-        },
-      );
-      guard = setTimeout(() => {
-        // The deadline is final: even an exit during diagnostic grace remains a failure.
-        timedOut = true;
-        const reason = `CLI process did not exit before the ${timeoutMs}ms deadlock guard (exitCode=${child.exitCode} signalCode=${child.signalCode})`;
-        const processTree = captureCliProcessTree(child.pid);
-        let diagnosticRequest = "unavailable: preload not ready or runtime unsupported";
-        const finish = (
-          report = "Node diagnostic report unavailable: signal was not requested.",
-        ) => {
-          const diagnosticDump = stderr.match(
-            /\[cli-process-diagnostics\] (\{"pid":[^\n]*\})\n/u,
-          )?.[1];
-          void processTree.then((tree) =>
-            reject(
-              new Error(
-                formatCliProcessFailure({
-                  reason: `${reason}\nChild diagnostics: ${diagnosticRequest}; ${diagnosticDump ? "received" : "no response"}. SIGKILL cleanup attempted.\n--- process tree at deadline ---\n${tree}\n--- Node diagnostic report ---\n${report}\n--- child diagnostics ---\n${diagnosticDump ?? "No child dump received before cleanup."}`,
-                  stderr: withoutDiagnosticReadiness(stderr),
-                  stdout,
-                }),
-              ),
-            ),
-          );
-        };
-        void processTree.then(() => {
-          // An unhandled SIGQUIT would terminate Node before we could inspect it.
-          if (reportDir && stderr.includes(`[cli-process-diagnostics] ready pid=${child.pid}\n`)) {
-            diagnosticRequest = "SIGQUIT was not delivered";
-            try {
-              if (child.kill("SIGQUIT")) {
-                diagnosticRequest = `SIGQUIT requested; report grace<=${REPORT_GRACE_MS}ms`;
-                // Preserve the child's JS diagnostic and trailing pipe output grace.
-                void collectNodeDiagnosticReport(
-                  path.join(reportDir, "diagnostic.json"),
-                  DIAGNOSTIC_GRACE_MS,
-                ).then(finish);
-                return;
-              }
-            } catch (error) {
-              diagnosticRequest = `request failed: ${String(error)}`;
-            }
-          }
-          finish();
-        });
-      }, timeoutMs);
-      guard.unref();
-    },
-  )
-    .finally(() => {
-      if (guard) {
-        clearTimeout(guard);
+  const completion = createDeferredCore<Pick<CliProcessChildResult, "code" | "signal">>();
+  void completed.then(
+    (result) => {
+      if (!timedOut) {
+        completion.resolve(result);
       }
-    })
+    },
+    (error: unknown) => {
+      if (!timedOut) {
+        completion.reject(toErrorObject(error, "CLI child process failed"));
+      }
+    },
+  );
+  const guard = setTimeout(() => {
+    // The deadline is final: even an exit during diagnostic grace remains a failure.
+    timedOut = true;
+    const reason = `CLI process did not exit before the ${timeoutMs}ms deadlock guard (exitCode=${child.exitCode} signalCode=${child.signalCode})`;
+    void captureCliProcessTree(child.pid).then(async (tree) => {
+      let diagnosticRequest = "unavailable: preload not ready or runtime unsupported";
+      let report = Promise.resolve("Node diagnostic report unavailable: signal was not requested.");
+      // An unhandled SIGQUIT would terminate Node before we could inspect it.
+      if (
+        reportDir &&
+        output.stderr.includes(`[cli-process-diagnostics] ready pid=${child.pid}\n`)
+      ) {
+        diagnosticRequest = "SIGQUIT was not delivered";
+        try {
+          if (child.kill("SIGQUIT")) {
+            diagnosticRequest = `SIGQUIT requested; report grace<=${REPORT_GRACE_MS}ms`;
+            // Preserve the child's JS diagnostic and trailing pipe output grace.
+            report = collectNodeDiagnosticReport(
+              path.join(reportDir, "diagnostic.json"),
+              DIAGNOSTIC_GRACE_MS,
+            );
+          }
+        } catch (error) {
+          diagnosticRequest = `request failed: ${String(error)}`;
+        }
+      }
+      const reportText = await report;
+      const dump = output.stderr.match(/\[cli-process-diagnostics\] (\{"pid":[^\n]*\})\n/u)?.[1];
+      completion.reject(
+        failure(
+          `${reason}\nChild diagnostics: ${diagnosticRequest}; ${dump ? "received" : "no response"}. SIGKILL cleanup attempted.\n--- process tree at deadline ---\n${tree}\n--- Node diagnostic report ---\n${reportText}\n--- child diagnostics ---\n${dump ?? "No child dump received before cleanup."}`,
+        ),
+      );
+    });
+  }, timeoutMs);
+  guard.unref();
+  const settled = completion.promise
+    .finally(() => clearTimeout(guard))
     .catch(async (error: unknown) => {
       collectingOutput = false;
       const cleanupFailures = await releaseCliProcessChild(child);
@@ -382,11 +341,6 @@ export async function runCliProcessChild(params: {
       }
       throw error;
     });
-  const exit = await (reports ? reports.track(completion) : completion);
-  return {
-    code: exit.code,
-    signal: exit.signal,
-    stdout,
-    stderr: withoutDiagnosticReadiness(stderr),
-  };
+  const exit = await (reports ? reports.track(settled) : settled);
+  return { ...exit, ...snapshot() };
 }

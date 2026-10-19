@@ -1,27 +1,52 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createNativeSessionBindingLifecycle } from "./binding-lifecycle.js";
 import {
   bindingTestOptions,
   createBindingTestState,
   prepareBindingTestLease,
 } from "./binding.test-support.js";
+import { wrapNativeSessionDeletionMutation } from "./deletion-participant.js";
+
+const deletion = {
+  prepareLease: prepareBindingTestLease,
+  assertCurrent: () => {},
+  assertRecordCurrent: () => {},
+};
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe("native session binding lifecycle", () => {
+  it("revalidates opaque native rollback authority before invoking the released SDK callback", () => {
+    const rollback = vi.fn();
+    const failure = new Error("opaque deletion owner retired");
+    let current = true;
+    const mutation = wrapNativeSessionDeletionMutation(
+      { commit() {}, rollback },
+      {
+        assertCurrent() {
+          if (!current) {
+            throw failure;
+          }
+        },
+        committed() {},
+        rolledBack() {},
+      },
+    );
+    mutation.commit();
+    current = false;
+    expect(() => mutation.rollback()).toThrow(failure);
+    expect(rollback).not.toHaveBeenCalled();
+  });
+
   it("deletes only the requested owner and restores it on transaction rollback", async () => {
     const { state, values } = createBindingTestState();
     const lifecycle = createNativeSessionBindingLifecycle(state, bindingTestOptions);
     const original = { value: "run" };
     values.set("base", { value: "base" });
     values.set("run", original);
-    const deletion = {
-      prepareLease: prepareBindingTestLease,
-      assertCurrent: () => {},
-      assertRecordCurrent: () => {},
-    };
 
     await lifecycle.withDeletion("run", deletion, async (_record, mutation) => {
       mutation.commit();
@@ -50,13 +75,12 @@ describe("native session binding lifecycle", () => {
       lifecycle.withDeletion(
         key,
         {
-          prepareLease: prepareBindingTestLease,
+          ...deletion,
           assertCurrent: () => {
             if (!active) {
               throw new Error("owner revoked");
             }
           },
-          assertRecordCurrent: () => {},
         },
         async (_record, mutation) => {
           active = false;
@@ -69,19 +93,11 @@ describe("native session binding lifecycle", () => {
     // Revocation leaves the bounded lease for expiry; the successor is an independent owner.
     const successor = { value: "successor" };
     values.set(key, successor);
-    await lifecycle.withDeletion(
-      key,
-      {
-        prepareLease: prepareBindingTestLease,
-        assertCurrent: () => {},
-        assertRecordCurrent: () => {},
-      },
-      async (_record, mutation) => {
-        mutation.commit();
-        values.set(key, successor);
-        expect(mutation.rollback).toThrow("changed before session deletion rollback");
-      },
-    );
+    await lifecycle.withDeletion(key, deletion, async (_record, mutation) => {
+      mutation.commit();
+      values.set(key, successor);
+      expect(mutation.rollback).toThrow("changed before session deletion rollback");
+    });
     expect(values.get(key)).toEqual(successor);
   });
 
@@ -101,10 +117,7 @@ describe("native session binding lifecycle", () => {
       };
     };
     const lifecycle = createNativeSessionBindingLifecycle(state, bindingTestOptions);
-    let releaseArchive!: () => void;
-    const archiveReleased = new Promise<void>((resolve) => {
-      releaseArchive = resolve;
-    });
+    const { promise: archiveReleased, resolve: releaseArchive } = createDeferred();
     let archive!: Promise<void>;
     startArchive = () => {
       archive = lifecycle.withExclusiveMutationFence(async () => {
@@ -150,10 +163,7 @@ describe("native session binding lifecycle", () => {
     const withCurrent = state.withCurrent.bind(state);
     let holdRenewal = false;
     let renewalPrepared = false;
-    let releaseRenewal!: () => void;
-    const released = new Promise<void>((resolve) => {
-      releaseRenewal = resolve;
-    });
+    const { promise: released, resolve: releaseRenewal } = createDeferred();
     state.withCurrent = (authority) => {
       const store = withCurrent(authority);
       return {
@@ -170,25 +180,17 @@ describe("native session binding lifecycle", () => {
     };
     const lifecycle = createNativeSessionBindingLifecycle(state, bindingTestOptions);
     try {
-      await lifecycle.withDeletion(
-        "binding",
-        {
-          prepareLease: prepareBindingTestLease,
-          assertCurrent() {},
-          assertRecordCurrent() {},
-        },
-        async (_record, mutation) => {
-          try {
-            holdRenewal = true;
-            await vi.advanceTimersByTimeAsync(bindingTestOptions.lease.renewIntervalMs);
-            expect(renewalPrepared).toBe(true);
-            mutation.commit();
-            expect(values.has("binding")).toBe(false);
-          } finally {
-            releaseRenewal();
-          }
-        },
-      );
+      await lifecycle.withDeletion("binding", deletion, async (_record, mutation) => {
+        try {
+          holdRenewal = true;
+          await vi.advanceTimersByTimeAsync(bindingTestOptions.lease.renewIntervalMs);
+          expect(renewalPrepared).toBe(true);
+          mutation.commit();
+          expect(values.has("binding")).toBe(false);
+        } finally {
+          releaseRenewal();
+        }
+      });
       expect(values.has("binding")).toBe(false);
     } finally {
       releaseRenewal();

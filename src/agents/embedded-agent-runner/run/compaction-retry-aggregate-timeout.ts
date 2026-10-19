@@ -15,8 +15,6 @@ export async function waitForCompactionRetryWithAggregateTimeout(params: {
   waitForCompactionRetry: () => Promise<void>;
   abortable: <T>(promise: Promise<T>) => Promise<T>;
   aggregateTimeoutMs: number;
-  /** Called once when the wait gives up after compaction is no longer active. */
-  onTimeout?: () => void;
   /** Keeps extending the timeout while compaction or its retry is still active. */
   isCompactionRetryStillActive?: () => boolean;
 }): Promise<{ timedOut: boolean }> {
@@ -55,7 +53,6 @@ export async function waitForCompactionRetryWithAggregateTimeout(params: {
         continue;
       }
 
-      params.onTimeout?.();
       return { timedOut: true };
     } finally {
       if (timer !== undefined) {

@@ -133,16 +133,15 @@ type ToolUseResultPairingOptions = {
 
 export { stripToolResultDetails } from "../shared/model-context-message.js";
 
-function collectFollowingToolResults(
+export function collectFollowingToolResults(
   messages: AgentMessage[],
   index: number,
+  currentToolCalls?: ReturnType<typeof extractToolCallsFromAssistant>,
+  hasAssistantToolCall: (message: Extract<AgentMessage, { role: "assistant" }>) => boolean = (
+    message,
+  ) => extractToolCallsFromAssistant(message).length > 0,
 ): { ids: Set<string>; displaced: boolean } {
   const ids = new Set<string>();
-  const assistant = messages[index];
-  const currentToolCalls =
-    assistant && typeof assistant === "object" && assistant.role === "assistant"
-      ? extractToolCallsFromAssistant(assistant)
-      : [];
   let sawNonToolResult = false;
   let displaced = false;
   for (let nextIndex = index + 1; nextIndex < messages.length; nextIndex += 1) {
@@ -151,11 +150,13 @@ function collectFollowingToolResults(
       sawNonToolResult = true;
       continue;
     }
-    if (message.role === "assistant" && extractToolCallsFromAssistant(message).length > 0) {
+    if (message.role === "assistant" && hasAssistantToolCall(message)) {
       break;
     }
     if (message.role === "toolResult") {
-      const normalizedLegacyResult = normalizeLegacyToolResultId(message, currentToolCalls);
+      const normalizedLegacyResult = currentToolCalls
+        ? normalizeLegacyToolResultId(message, currentToolCalls)
+        : message;
       const resultIds = extractToolResultIds(normalizedLegacyResult);
       for (const id of resultIds) {
         ids.add(id);
@@ -201,7 +202,11 @@ export function sanitizeToolCallInputs(
       // the later pairing repair can synthesize missing legacy tool results
       // without mutating provider-owned assistant content.
       const replaySafeToolCalls = extractToolCallsFromAssistant(msg);
-      const followingToolResults = collectFollowingToolResults(messages, index);
+      const followingToolResults = collectFollowingToolResults(
+        messages,
+        index,
+        replaySafeToolCalls,
+      );
       const hasSpawnAttachments = hasSessionsSpawnAttachmentToolCall(msg.content);
       if (
         isReplaySafeThinkingAssistantTurn(msg.content, allowedToolNames, isCompleted) &&
@@ -348,16 +353,21 @@ export function repairToolUseResultPairing(
     pushUnframedRange(frame.startIndex);
     cursor = frame.endIndex;
 
-    if (!(frame.failed && options?.erroredAssistantResultPolicy === "drop")) {
+    const dropFailed = frame.failed && options?.erroredAssistantResultPolicy === "drop";
+    if (!dropFailed) {
       out.push(frame.assistant);
-      for (const occurrence of frame.occurrences) {
-        if (occurrence.result) {
-          out.push(occurrence.result);
-          continue;
+    }
+    for (const occurrence of frame.occurrences) {
+      if (dropFailed) {
+        if (occurrence.sourceResult) {
+          discarded.push({
+            message: occurrence.sourceResult,
+            index: occurrence.sourceResultIndex ?? messages.indexOf(occurrence.sourceResult),
+          });
         }
-        if (frame.failed) {
-          continue;
-        }
+      } else if (occurrence.result) {
+        out.push(occurrence.result);
+      } else if (!frame.failed) {
         const missing = makeMissingToolResult({
           toolCallId: occurrence.id,
           toolName: occurrence.name,
@@ -366,15 +376,6 @@ export function repairToolUseResultPairing(
         occurrence.result = missing;
         added.push(missing);
         out.push(missing);
-      }
-    } else {
-      for (const occurrence of frame.occurrences) {
-        if (occurrence.sourceResult) {
-          discarded.push({
-            message: occurrence.sourceResult,
-            index: occurrence.sourceResultIndex ?? messages.indexOf(occurrence.sourceResult),
-          });
-        }
       }
     }
     out.push(...frame.remainder);

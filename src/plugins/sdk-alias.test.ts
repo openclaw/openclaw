@@ -1310,6 +1310,9 @@ describe("plugin sdk alias helpers", () => {
       ["@openclaw/normalization-core/agent-id", "normalization-core", "agent-id"],
       ["@openclaw/normalization-core/string-coerce", "normalization-core", "string-coerce"],
       ["@openclaw/retry", "retry", "index"],
+      ["@openclaw/worker-runtime", "worker-runtime", "index"],
+      ["@openclaw/worker-runtime/worker", "worker-runtime", "worker"],
+      ["@openclaw/worker-runtime/lifecycle", "worker-runtime", "lifecycle"],
       ["@openclaw/terminal-core", "terminal-core", "index"],
       ["@openclaw/terminal-core/theme", "terminal-core", "theme"],
       ["@openclaw/net-policy", "net-policy", "index"],
@@ -1373,6 +1376,19 @@ describe("plugin sdk alias helpers", () => {
         "dist/normalization-core/record-coerce.js",
       ],
       ["@openclaw/retry", "retry", "index", "dist/retry/index.js"],
+      ["@openclaw/worker-runtime", "worker-runtime", "index", "dist/worker-runtime/index.js"],
+      [
+        "@openclaw/worker-runtime/worker",
+        "worker-runtime",
+        "worker",
+        "dist/worker-runtime/worker.js",
+      ],
+      [
+        "@openclaw/worker-runtime/lifecycle",
+        "worker-runtime",
+        "lifecycle",
+        "dist/worker-runtime/lifecycle.js",
+      ],
       ["@openclaw/terminal-core/links", "terminal-core", "links", "dist/terminal-core/links.js"],
       ["@openclaw/net-policy/url-protocol", "net-policy", "url-protocol"],
       [
@@ -1498,35 +1514,6 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["@openclaw/slack/runtime-api.js"] ?? "")).toBe(
       fs.realpathSync(distRuntimeApiPath),
-    );
-  });
-
-  it("falls back to source plugin-sdk subpath aliases when dist chunks are stale", () => {
-    const fixture = createPluginSdkAliasFixture({
-      srcFile: "provider-entry.ts",
-      distFile: "provider-entry.js",
-      distBody: 'import { entry } from "../missing-provider-entry-chunk.js";\nexport { entry };\n',
-      packageExports: {
-        "./plugin-sdk/provider-entry": { default: "./dist/plugin-sdk/provider-entry.js" },
-      },
-    });
-    const sourceProviderEntryPath = path.join(
-      fixture.root,
-      "src",
-      "plugin-sdk",
-      "provider-entry.ts",
-    );
-    const sourcePluginEntry = writePluginEntry(
-      fixture.root,
-      bundledPluginFile("demo", "src/index.ts"),
-    );
-
-    const distAliases = withEnv({ NODE_ENV: undefined }, () =>
-      buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
-    );
-
-    expect(fs.realpathSync(distAliases["openclaw/plugin-sdk/provider-entry"] ?? "")).toBe(
-      fs.realpathSync(sourceProviderEntryPath),
     );
   });
 
@@ -1733,13 +1720,12 @@ describe("plugin sdk alias helpers", () => {
     }
   });
 
-  it.each(["dist", "fallback", "missing", "javascript-source"])(
+  it.each(["dist", "missing", "javascript-source"])(
     "selects the canonical SDK alias target (%s)",
     (mode) => {
       const fixture = createPluginSdkAliasFixture({
         packageExports: {},
         ...(mode === "javascript-source" ? { srcFile: "core.js" } : {}),
-        ...(mode === "fallback" ? { distBody: 'export * from "./missing.js";\n' } : {}),
       });
       if (mode === "missing") {
         fs.unlinkSync(fixture.srcFile);
@@ -1754,7 +1740,7 @@ describe("plugin sdk alias helpers", () => {
         expect(prepared.resolveAlias("openclaw/plugin-sdk/core")).toBe(
           mode === "missing"
             ? undefined
-            : mode === "fallback" || mode === "javascript-source"
+            : mode === "javascript-source"
               ? fixture.srcFile
               : fixture.distFile,
         );

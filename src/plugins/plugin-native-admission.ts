@@ -7,6 +7,7 @@ import { getPluginCache } from "./plugin-cache.js";
 import type { PluginCache } from "./plugin-cache.types.js";
 import {
   nativeAdmissionStateFor,
+  queuePluginNativeAdmissionPublication,
   retainNativePath,
   snapshotOwners,
   startNativeAdmissionPublication,
@@ -24,17 +25,19 @@ import {
 } from "./plugin-native-namespace.js";
 import {
   admitPluginNativeRecoveryReference,
-  assertPluginNativeReferenceNamespace,
+  createPluginNativeReferenceValidator,
   linkPluginNativeReference,
 } from "./plugin-native-reference.js";
+import { retainPluginNativeRoot } from "./plugin-native-root-lease.js";
 import { resolvePluginModulePackageRoot } from "./plugin-package-metadata-capture.js";
-import { publishPluginSourceAdmission } from "./plugin-source-admission-store.js";
+import { getPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
 import type {
   PluginNativeArtifactFact,
   PluginNativeNamespaceFact,
 } from "./plugin-source-admission.types.js";
 import {
-  createPluginNativeCaptureRoot,
+  type createPluginNativeCaptureRoot,
+  isPluginSourceCaptureRetained,
   retainPluginNativeCapturePath,
 } from "./plugin-source-capture-directory.js";
 import {
@@ -43,10 +46,11 @@ import {
   pluginSourceIdentityChangedOnlyByCtime,
   pluginSourceStatIdentity,
 } from "./plugin-source-file.js";
-import type { PluginSourceInput } from "./plugin-source-verification.js";
 
 type NativeSnapshot = ReturnType<typeof createPluginNativeCaptureRoot>;
 type NativeReceipt = { signature: string; sourceDigest: string };
+// Membership and source paths stay fixed; admission only updates identities and digests.
+const nativeSourceMembers = new WeakMap<PluginNativeNamespaceFact, Map<string, string>>();
 
 function nativeMemberForSource(namespace: PluginNativeNamespaceFact, source: string) {
   const relative = path.relative(namespace.sourceDirectory, source);
@@ -55,7 +59,17 @@ function nativeMemberForSource(namespace: PluginNativeNamespaceFact, source: str
   if (namespace.members[relative]?.source === source) {
     return relative;
   }
-  return Object.entries(namespace.members).find(([, member]) => member.source === source)?.[0];
+  let members = nativeSourceMembers.get(namespace);
+  if (!members) {
+    members = new Map<string, string>();
+    for (const [key, { source: memberSource }] of Object.entries(namespace.members)) {
+      if (!members.has(memberSource)) {
+        members.set(memberSource, key);
+      }
+    }
+    nativeSourceMembers.set(namespace, members);
+  }
+  return members.get(source);
 }
 
 export type PluginNativeRecovery = {
@@ -63,10 +77,51 @@ export type PluginNativeRecovery = {
   references: Map<string, PluginNativeArtifactFact>;
   namespaces: Map<string, PluginNativeNamespaceFact>;
   directories: Map<string, string>;
+  fork(relocate?: (source: string) => string): PluginNativeRecovery;
   retain(cache: PluginCache): void;
   dispose(): void;
   disposeAsync(): Promise<void>;
 };
+/** Native roots cross a worker boundary as independently owned leases, never cache authority. */
+export type PluginNativeRecoverySnapshot = {
+  receipt: NativeReceipt;
+  references: Map<string, PluginNativeArtifactFact>;
+  namespaces: Map<string, PluginNativeNamespaceFact>;
+  directories: Map<string, string>;
+  roots: NativeSnapshot[];
+};
+const recoverySnapshots = new WeakMap<object, () => PluginNativeRecoverySnapshot>();
+
+export function snapshotPluginNativeRecovery(
+  recovery: PluginNativeRecovery,
+): PluginNativeRecoverySnapshot {
+  const snapshot = recoverySnapshots.get(recovery);
+  if (!snapshot) {
+    throw new Error("Native recovery is not owned by plugin admission");
+  }
+  return snapshot();
+}
+
+export function isOwnedPluginNativeRecovery(value: object): value is PluginNativeRecovery {
+  return recoverySnapshots.has(value);
+}
+
+export function restorePluginNativeRecovery(
+  snapshot: PluginNativeRecoverySnapshot,
+): PluginNativeRecovery {
+  for (const root of snapshot.roots) {
+    if (!snapshotOwners.has(root)) {
+      snapshotOwners.set(root, new Set());
+    }
+  }
+  return createNativeRecovery(
+    snapshot.receipt,
+    snapshot.references,
+    snapshot.namespaces,
+    snapshot.directories,
+    snapshot.roots,
+  );
+}
 // Recovery custody contains copied paths and native roots, never the retired registry or instance.
 function createNativeRecovery(
   receipt: NativeReceipt,
@@ -97,11 +152,23 @@ function createNativeRecovery(
       return owners.size === 0;
     });
   };
-  return {
+  const recovery: PluginNativeRecovery = {
     receipt: { ...receipt },
     references,
     namespaces,
     directories,
+    fork(relocate = (source) => source) {
+      if (disposed) {
+        throw new Error("Plugin native recovery has been disposed");
+      }
+      return createNativeRecovery(
+        receipt,
+        new Map([...references].map(([source, fact]) => [relocate(source), { ...fact }])),
+        structuredClone(namespaces),
+        new Map([...directories].map(([source, namespace]) => [relocate(source), namespace])),
+        roots,
+      );
+    },
     retain(cache) {
       if (disposed) {
         throw new Error("Plugin native recovery has been disposed");
@@ -128,6 +195,20 @@ function createNativeRecovery(
       await Promise.all(release().map((root) => root.disposeAsync()));
     },
   };
+  recoverySnapshots.set(recovery, () => {
+    if (disposed) {
+      throw new Error("Plugin native recovery has been disposed");
+    }
+    const leases = roots.map(retainPluginNativeRoot);
+    return {
+      receipt: { ...receipt },
+      references: structuredClone(references),
+      namespaces: structuredClone(namespaces),
+      directories: new Map(directories),
+      roots: leases,
+    };
+  });
+  return recovery;
 }
 
 function isNativeArtifact(
@@ -148,20 +229,28 @@ function isNativeArtifact(
 export function createPluginNativeAdmission(
   rootDir: string,
   directory: string,
-  entryFile?: string,
+  entryFiles?: readonly string[],
   recovery?: PluginNativeRecovery,
   outputRoot?: string,
 ) {
   recovery?.retain(getPluginCache());
   const state = nativeAdmissionStateFor();
-  const key = `${path.resolve(rootDir)}\0${entryFile ? path.resolve(entryFile) : ""}`;
+  const entryKey =
+    entryFiles?.length === 1
+      ? path.resolve(entryFiles[0]!)
+      : entryFiles && JSON.stringify(entryFiles.map((file) => path.resolve(file)));
+  const key = `${path.resolve(rootDir)}\0${entryKey ?? ""}`;
   const owner = state.owners.get(path.resolve(rootDir));
+  const publishAdmission =
+    owner && !state.artifactPreservingReadOnly ? getPluginSourceAdmissionPublisher() : undefined;
   const prepared = recovery?.receipt ?? state.receipts.get(key);
   const selected = new Map<string, PluginNativeNamespaceFact>();
   const priorNamespaces = new Set<PluginNativeNamespaceFact>();
   const files = new Map<string, PluginNativeArtifactFact>();
   const targets = new Map<string, string>();
   const hardlinkedTargets = new Set<string>();
+  const pendingTargets = new Set<string>();
+  let assertReference = createPluginNativeReferenceValidator(directory, owner?.pluginId ?? rootDir);
   const recoveredFiles = new Map<string, PluginNativeArtifactFact>();
   let hostRoot: string | undefined;
   let finalReceipt: NativeReceipt | undefined;
@@ -223,23 +312,71 @@ export function createPluginNativeAdmission(
     previous?: PluginNativeNamespaceFact,
     retainedRoot?: string,
   ) => {
-    const root = createPluginNativeCaptureRoot();
+    const root = state.createRoot();
     state.roots.add(root);
     snapshotOwners.set(root, new Set([state]));
-    const { fact } = capturePluginNativeNamespace({
+    const { fact, changed } = capturePluginNativeNamespace({
       sourceDirectory,
       boundary,
       managed,
+      copyOnly: state.captureStorage.placement === "temporary",
       previous,
       retainedRoot,
       managedRoots: [...state.managedRoots.keys()],
       capturedRoot: root.directory,
       outputRoot,
       inspectionRoots: [...new Set([boundary, ...(owner ? [owner.rootDir] : [])])],
-      inspectedFiles: [owner?.source, owner?.setupSource, entryFile].filter(
+      inspectedFiles: [owner?.source, owner?.setupSource, ...(entryFiles ?? [])].filter(
         (file): file is string => Boolean(file),
       ),
     });
+    // Overlapping managed namespaces share inodes; a new hardlink changes earlier captures too.
+    for (const namespace of state.namespaces.values()) {
+      for (const [relative, member] of Object.entries(namespace.members)) {
+        const identity = changed.get(member.source);
+        const sourceChanged =
+          identity !== undefined &&
+          pluginSourceIdentityChangedOnlyByCtime(member.sourceIdentity, identity);
+        const captureChanged =
+          identity !== undefined &&
+          pluginSourceIdentityChangedOnlyByCtime(member.capturedIdentity, identity);
+        if (!identity || (!sourceChanged && !captureChanged)) {
+          continue;
+        }
+        // Only retired, entirely missing captures may be readmitted from installed bytes.
+        if (
+          !namespace.referenceRoot &&
+          namespace !== previous &&
+          !namespaces().includes(namespace) &&
+          !priorNamespaces.has(namespace) &&
+          !isPluginSourceCaptureRetained(namespace.capturedRoot) &&
+          !fs.lstatSync(namespace.capturedRoot, { throwIfNoEntry: false })
+        ) {
+          break;
+        }
+        if (namespace !== previous || !captureChanged) {
+          const capturedHash = hashPluginSourceFile(
+            pluginNativeNamespaceMemberPath(namespace, relative),
+            pluginNativeNamespaceBoundary(namespace),
+          ).contentHash;
+          if (
+            (member.contentHash && capturedHash !== member.contentHash) ||
+            (sourceChanged &&
+              hashPluginSourceFile(member.source, path.dirname(member.source)).contentHash !==
+                capturedHash)
+          ) {
+            throw new Error("Native plugin companion changed during admission");
+          }
+          member.contentHash ??= capturedHash;
+        }
+        if (sourceChanged) {
+          member.sourceIdentity = identity;
+        }
+        if (captureChanged) {
+          member.capturedIdentity = identity;
+        }
+      }
+    }
     state.namespaces.set(root.directory, fact);
     return fact;
   };
@@ -253,47 +390,33 @@ export function createPluginNativeAdmission(
       retainNativePath(state, path.join(fact.namespace, "content"));
     }
     const used = new Set([...files.values()].map((fact) => fact.namespace));
-    const nativeNamespaces = Object.fromEntries(
-      [...used].map((id) => [id, state.namespaces.get(id)!]),
-    );
     const next = structuredClone({
       ...finalReceipt,
       nativeArtifacts: Object.fromEntries(files),
-      nativeNamespaces,
+      nativeNamespaces: Object.fromEntries([...used].map((id) => [id, state.namespaces.get(id)!])),
     });
     const unchanged = isDeepStrictEqual(state.receipts.get(key), next);
-    state.receipts.set(key, next);
-    if (!owner) {
+    if (!unchanged) {
+      state.receipts.set(key, next);
+    }
+    if (!owner || !publishAdmission) {
       return;
     }
     if (unchanged) {
       startNativeAdmissionPublication(state, key);
       return;
     }
-    const roots = [...state.roots].filter((root) => used.has(root.directory));
-    const publication = () =>
-      publishPluginSourceAdmission({
+    queuePluginNativeAdmissionPublication(
+      state,
+      {
         pluginId: owner.pluginId,
         rootDir: owner.rootDir,
         installRecordHash: owner.installRecordHash,
         key,
         receipt: next,
-      })
-        .then((accepted) => {
-          if (accepted) {
-            for (const root of roots) {
-              root.commit();
-            }
-            if (state.publications.get(key) === publication) {
-              state.publications.delete(key);
-            }
-          }
-        })
-        .catch((error: unknown) =>
-          process.emitWarning(`Plugin source receipt was not recorded: ${String(error)}`),
-        );
-    state.publications.set(key, publication);
-    startNativeAdmissionPublication(state, key);
+      },
+      publishAdmission,
+    );
   };
   const refreshReference = (fact: PluginNativeArtifactFact, input: string, target: string) => {
     const namespace = state.namespaces.get(fact.namespace)!;
@@ -315,25 +438,22 @@ export function createPluginNativeAdmission(
     }
     fact.sourceIdentity = member.sourceIdentity;
     fact.capturedIdentity = linked.capturedIdentity;
-    return linked.sourceIdentity;
+    pendingTargets.add(target);
   };
-  const assertReferenceNamespaces = () => {
-    for (const target of hardlinkedTargets) {
+  const assertReferenceNamespaces = (references: Iterable<string> = pendingTargets) => {
+    for (const target of references) {
+      if (!hardlinkedTargets.has(target)) {
+        continue;
+      }
       const fact = files.get(targets.get(target)!)!;
-      assertPluginNativeReferenceNamespace(
-        target,
-        fact,
-        state.namespaces.get(fact.namespace)!,
-        directory,
-        hostRoot,
-      );
+      assertReference(target, fact, state.namespaces.get(fact.namespace)!, hostRoot);
     }
   };
   const linkHost = (selectedHost: string): void => {
     hostRoot = fs.realpathSync(selectedHost);
     for (const namespace of namespaces()) {
       if (namespace.referenceRoot) {
-        assertPluginNativeNamespaceHost(namespace, hostRoot);
+        assertPluginNativeNamespaceHost(namespace, hostRoot, rootDir);
         continue;
       }
       const link = path.join(namespace.capturedRoot, "node_modules", "openclaw");
@@ -402,36 +522,6 @@ export function createPluginNativeAdmission(
     prepared,
     resolvePreparedSource,
     sourceForPrepared,
-    reconcileSourceInputs(inputs: Map<string, PluginSourceInput>) {
-      for (const namespace of new Set([...priorNamespaces, ...namespaces()])) {
-        for (const [relative, member] of Object.entries(namespace.members)) {
-          if (member.sizeBytes === undefined) {
-            continue;
-          }
-          const capturedPath = pluginNativeNamespaceMemberPath(namespace, relative);
-          for (const [source, identity] of [
-            [member.source, member.sourceIdentity],
-            [capturedPath, member.capturedIdentity],
-          ] as const) {
-            const input = inputs.get(source);
-            if (!input || input.identity === identity) {
-              continue;
-            }
-            if (!pluginSourceIdentityChangedOnlyByCtime(input.identity, identity)) {
-              throw new Error("Plugin source changed during native namespace admission");
-            }
-            member.contentHash ??= hashPluginSourceFile(
-              capturedPath,
-              pluginNativeNamespaceBoundary(namespace),
-            ).contentHash;
-            if (input.contentHash !== member.contentHash) {
-              throw new Error("Plugin source changed during native namespace admission");
-            }
-            input.identity = identity;
-          }
-        }
-      }
-    },
     captureRecovery(
       receipt: NativeReceipt,
       packageRoots: Readonly<Record<string, string>>,
@@ -478,7 +568,7 @@ export function createPluginNativeAdmission(
       if (
         owner?.source === logicalSource ||
         owner?.setupSource === logicalSource ||
-        entryFile === logicalSource
+        entryFiles?.includes(logicalSource)
       ) {
         return undefined;
       }
@@ -488,8 +578,8 @@ export function createPluginNativeAdmission(
       const found = namespaceFor(resolvedSource);
       let namespace = recovered
         ? state.namespaces.get(recovered.namespace)
-        : (namespaces().find((candidate) =>
-            Object.values(candidate.members).some((member) => member.source === resolvedSource),
+        : (namespaces().find(
+            (candidate) => nativeMemberForSource(candidate, resolvedSource) !== undefined,
           ) ?? found?.[1]);
       let alias = found?.[0] ?? path.dirname(resolvedSource);
       if (!namespace) {
@@ -554,15 +644,13 @@ export function createPluginNativeAdmission(
         capturedPath: pluginNativeNamespaceMemberPath(namespace, relative),
         capturedIdentity: member.capturedIdentity,
       };
-      const inputIdentity = refreshReference(fact, source, target);
+      refreshReference(fact, source, target);
       files.set(logicalSource, fact);
       targets.set(target, logicalSource);
       return {
         fact,
         path: fact.capturedPath,
         boundary: pluginNativeNamespaceBoundary(namespace),
-        sourceIdentity: inputIdentity,
-        sourceBoundary: path.dirname(source),
         content: fact.contentHash
           ? { contentHash: fact.contentHash, sizeBytes: fact.sizeBytes }
           : undefined,
@@ -587,8 +675,9 @@ export function createPluginNativeAdmission(
         },
       };
     },
-    finish(_captureDirectory: string, receipt: NativeReceipt) {
-      if (!files.size) {
+    finish(receipt: NativeReceipt) {
+      // Preparation preserves admitted bytes. Only materialization adds native admission work.
+      if (!pendingTargets.size) {
         return;
       }
       for (const namespace of namespaces()) {
@@ -600,12 +689,15 @@ export function createPluginNativeAdmission(
       }
       assertReferenceNamespaces();
       publish();
+      pendingTargets.clear();
     },
     linkHost(selectedHost: string) {
+      // Explicit host selection is a new admission boundary, even without newly captured files.
+      assertReference = createPluginNativeReferenceValidator(directory, owner?.pluginId ?? rootDir);
       linkHost(selectedHost);
-      assertReferenceNamespaces();
+      assertReferenceNamespaces(hardlinkedTargets);
       publish();
-      return new Map([...files].map(([source, fact]) => [source, fact.sourceIdentity]));
+      pendingTargets.clear();
     },
   };
 }

@@ -26,6 +26,11 @@ function quote(value: string): string {
   return /^[a-zA-Z0-9_./:@=-]+$/u.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+/** Regular final releases published to npm `latest` activate GitHub before Docker. */
+function isStableLatestPublication(tag: string, npmDistTag: string | undefined): boolean {
+  return npmDistTag === "latest" && /^v\d{4}\.\d{1,2}\.\d+(?:-\d+)?$/u.test(tag);
+}
+
 export function buildReleasePublishDispatchCommand(
   options: ReleasePublishPreflightOptions,
   attempt: string,
@@ -47,6 +52,12 @@ export function buildReleasePublishDispatchCommand(
     windows_node_tag: options.windowsNodeTag,
     windows_node_installer_digests: options.windowsNodeInstallerDigests,
     npm_telegram_run_id: options.npmTelegramRunId,
+    // Stable policy: GitHub goes Latest right after npm verification, before Docker.
+    finalize_release_before_docker:
+      options.publishOpenclawNpm !== false &&
+      isStableLatestPublication(options.tag, options.npmDistTag)
+        ? "true"
+        : undefined,
   };
   return [
     `gh workflow run openclaw-release-publish.yml --repo ${quote(options.repo)} --ref ${quote(workflowRef)}`,

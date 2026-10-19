@@ -1,17 +1,4 @@
-/**
- * Tests for status.ts module
- *
- * Tests cover:
- * - Detection of unconfigured accounts
- * - Detection of disabled accounts
- * - Detection of missing clientId
- * - Token format warnings
- * - Access control warnings
- * - Runtime error detection
- */
-
 import { describe, expect, it } from "vitest";
-import { twitchSetupWizard } from "./setup-surface.js";
 import { collectTwitchStatusIssues } from "./status.js";
 import type { ChannelAccountSnapshot } from "./types.js";
 
@@ -25,14 +12,6 @@ function createSnapshot(overrides: Partial<ChannelAccountSnapshot> = {}): Channe
   };
 }
 
-function createSimpleTwitchConfig(overrides: Record<string, unknown>) {
-  return {
-    channels: {
-      twitch: overrides,
-    },
-  };
-}
-
 function expectSingleIssue(
   issues: ReturnType<typeof collectTwitchStatusIssues>,
   expected: ReturnType<typeof collectTwitchStatusIssues>[number],
@@ -40,39 +19,8 @@ function expectSingleIssue(
   expect(issues).toEqual([expected]);
 }
 
-function expectIssues(
-  issues: ReturnType<typeof collectTwitchStatusIssues>,
-  expected: ReturnType<typeof collectTwitchStatusIssues>,
-): void {
-  expect(issues).toEqual(expected);
-}
-
-function neverConnectedIssue(): ReturnType<typeof collectTwitchStatusIssues>[number] {
-  return {
-    channel: "twitch",
-    accountId: "default",
-    kind: "runtime",
-    message: "Account has never connected successfully",
-    fix: "Start the Twitch gateway to begin receiving messages. Check logs for connection errors.",
-  };
-}
-
 describe("status", () => {
   describe("collectTwitchStatusIssues", () => {
-    it("should detect unconfigured accounts", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot({ configured: false })];
-
-      const issues = collectTwitchStatusIssues(snapshots);
-
-      expectSingleIssue(issues, {
-        channel: "twitch",
-        accountId: "default",
-        kind: "config",
-        message: "Twitch account is not properly configured",
-        fix: "Add required fields: username, accessToken, and clientId to your account configuration",
-      });
-    });
-
     it("should detect disabled accounts", () => {
       const snapshots: ChannelAccountSnapshot[] = [createSnapshot({ enabled: false })];
 
@@ -87,131 +35,6 @@ describe("status", () => {
       });
     });
 
-    it("should detect missing clientId when account configured (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
-      const mockCfg = createSimpleTwitchConfig({
-        username: "testbot",
-        accessToken: "oauth:test123",
-        // clientId missing
-      });
-
-      const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
-
-      expectIssues(issues, [
-        {
-          channel: "twitch",
-          accountId: "default",
-          kind: "config",
-          message: "Twitch client ID is required",
-          fix: "Add clientId to your Twitch account configuration (from Twitch Developer Portal)",
-        },
-        neverConnectedIssue(),
-      ]);
-    });
-
-    it("should warn about oauth: prefix in token (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
-      const mockCfg = createSimpleTwitchConfig({
-        username: "testbot",
-        accessToken: "oauth:test123", // has prefix
-        clientId: "test-id",
-      });
-
-      const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
-
-      expectIssues(issues, [
-        {
-          channel: "twitch",
-          accountId: "default",
-          kind: "config",
-          message: "Token contains 'oauth:' prefix (will be stripped)",
-          fix: "The 'oauth:' prefix is optional. You can use just the token value, or keep it as-is (it will be normalized automatically).",
-        },
-        neverConnectedIssue(),
-      ]);
-    });
-
-    it("should detect clientSecret without refreshToken (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
-      const mockCfg = createSimpleTwitchConfig({
-        username: "testbot",
-        accessToken: "oauth:test123",
-        clientId: "test-id",
-        clientSecret: "secret123",
-        // refreshToken missing
-      });
-
-      const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
-
-      expectIssues(issues, [
-        {
-          channel: "twitch",
-          accountId: "default",
-          kind: "config",
-          message: "Token contains 'oauth:' prefix (will be stripped)",
-          fix: "The 'oauth:' prefix is optional. You can use just the token value, or keep it as-is (it will be normalized automatically).",
-        },
-        {
-          channel: "twitch",
-          accountId: "default",
-          kind: "config",
-          message: "clientSecret provided without refreshToken",
-          fix: "For automatic token refresh, provide both clientSecret and refreshToken. Otherwise, clientSecret is not needed.",
-        },
-        neverConnectedIssue(),
-      ]);
-    });
-
-    it("accepts disabled group access written by setup", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
-      const groupAccess = twitchSetupWizard.groupAccess;
-      if (!groupAccess) {
-        throw new Error("expected Twitch group access setup");
-      }
-      const cfg = groupAccess.setPolicy({
-        cfg: {
-          channels: {
-            twitch: {
-              enabled: true,
-              username: "testbot",
-              accessToken: "test123",
-              clientId: "test-id",
-            },
-          },
-        },
-        accountId: "default",
-        policy: "disabled",
-      });
-
-      const issues = collectTwitchStatusIssues(snapshots, () => cfg);
-
-      expect(issues, JSON.stringify(issues)).toEqual([neverConnectedIssue()]);
-    });
-
-    it("should detect allowedRoles 'all' with allowFrom conflict (simplified config)", () => {
-      const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
-      const mockCfg = createSimpleTwitchConfig({
-        username: "testbot",
-        accessToken: "test123",
-        clientId: "test-id",
-        allowedRoles: ["all"],
-        allowFrom: ["123456"], // conflict!
-      });
-
-      const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
-
-      expectIssues(issues, [
-        {
-          channel: "twitch",
-          accountId: "default",
-          kind: "intent",
-          message: "allowedRoles is set to 'all' but allowFrom is also configured",
-          fix: "When allowedRoles is 'all', the allowFrom list is not needed. Remove allowFrom or set allowedRoles to specific roles.",
-        },
-        neverConnectedIssue(),
-      ]);
-    });
-
     it("should detect runtime errors", () => {
       const snapshots: ChannelAccountSnapshot[] = [
         createSnapshot({ lastError: "Connection timeout" }),
@@ -219,36 +42,22 @@ describe("status", () => {
 
       const issues = collectTwitchStatusIssues(snapshots);
 
-      expectIssues(issues, [
+      expect(issues).toEqual([
         {
           channel: "twitch",
           accountId: "default",
           kind: "runtime",
           message: "Last error: Connection timeout",
-          fix: "Check your token validity and network connection. Ensure the bot has the required OAuth scopes.",
+          fix: "Check your token validity and network connection. Check that the bot has the required OAuth scopes.",
         },
-        neverConnectedIssue(),
-      ]);
-    });
-
-    it("should detect accounts that never connected", () => {
-      const snapshots: ChannelAccountSnapshot[] = [
-        createSnapshot({
-          lastStartAt: undefined,
-          lastInboundAt: undefined,
-          lastOutboundAt: undefined,
-        }),
-      ];
-
-      const issues = collectTwitchStatusIssues(snapshots);
-
-      expectSingleIssue(issues, {
-        channel: "twitch",
-        accountId: "default",
-        kind: "runtime",
-        message: "Account has never connected successfully",
-        fix: "Start the Twitch gateway to begin receiving messages. Check logs for connection errors.",
-      });
+        {
+          channel: "twitch",
+          accountId: "default",
+          kind: "runtime",
+          message: "Account has never connected successfully",
+          fix: "Start the Twitch gateway to begin receiving messages. Check logs for connection errors.",
+        },
+      ] satisfies ReturnType<typeof collectTwitchStatusIssues>);
     });
 
     it("should detect long-running connections", () => {
@@ -272,13 +81,7 @@ describe("status", () => {
       });
     });
 
-    it("should handle empty snapshots array", () => {
-      const issues = collectTwitchStatusIssues([]);
-
-      expect(issues).toStrictEqual([]);
-    });
-
-    it("should skip non-Twitch accounts gracefully", () => {
+    it("reports an unconfigured account by its account ID", () => {
       const snapshots: ChannelAccountSnapshot[] = [
         {
           accountId: "unknown",

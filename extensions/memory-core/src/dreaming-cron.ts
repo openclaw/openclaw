@@ -1,4 +1,5 @@
 /** Stateless convergence of the memory-core-owned dreaming cron job family. */
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   LEGACY_MEMORY_LIGHT_DREAMING_CRON_NAME,
   LEGACY_MEMORY_LIGHT_DREAMING_CRON_TAG,
@@ -13,7 +14,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -87,7 +87,14 @@ export type CronServiceLike = {
 };
 
 type ReconcileResult = {
-  status: "unavailable" | "disabled" | "doctor-required" | "added" | "updated" | "noop";
+  status:
+    | "unavailable"
+    | "disabled"
+    | "doctor-required"
+    | "owner-required"
+    | "added"
+    | "updated"
+    | "noop";
   removed: number;
 };
 
@@ -190,22 +197,6 @@ function sortManagedJobs(managed: ManagedCronJobLike[]): ManagedCronJobLike[] {
   });
 }
 
-function isCronServiceLike(candidate: unknown): candidate is CronServiceLike {
-  return (
-    isRecord(candidate) &&
-    (candidate.isEnabled === undefined || typeof candidate.isEnabled === "function") &&
-    typeof candidate.list === "function" &&
-    typeof candidate.add === "function" &&
-    typeof candidate.update === "function" &&
-    typeof candidate.remove === "function"
-  );
-}
-
-export function resolveCronServiceFromGatewayContext(context: { getCron?: () => unknown }) {
-  const cron = context.getCron?.();
-  return isCronServiceLike(cron) ? cron : null;
-}
-
 export async function reconcileShortTermDreamingCronJob(params: {
   cron: CronServiceLike | null;
   config: ShortTermPromotionDreamingConfig;
@@ -240,10 +231,9 @@ export async function reconcileShortTermDreamingCronJob(params: {
     );
     return { status: "doctor-required", removed };
   };
-
-  if (!params.config.enabled) {
+  const removeJobs = async (jobs: ManagedCronJobLike[], action: "remove" | "prune duplicate") => {
     let removed = 0;
-    for (const job of managed) {
+    for (const job of jobs) {
       try {
         const result = await cron.remove(job.id);
         if (result.removed === true) {
@@ -251,10 +241,15 @@ export async function reconcileShortTermDreamingCronJob(params: {
         }
       } catch (err) {
         params.logger.warn(
-          `memory-core: failed to remove managed dreaming cron job ${job.id}: ${formatErrorMessage(err)}`,
+          `memory-core: failed to ${action} managed dreaming cron job ${job.id}: ${formatErrorMessage(err)}`,
         );
       }
     }
+    return removed;
+  };
+
+  if (!params.config.enabled) {
+    const removed = await removeJobs(managed, "remove");
     if (removed > 0) {
       params.logger.info(`memory-core: removed ${removed} managed dreaming cron job(s).`);
     }
@@ -269,25 +264,20 @@ export async function reconcileShortTermDreamingCronJob(params: {
   const desired = buildManagedDreamingCronJob(params.config);
   const primary = managed[0];
   if (!primary) {
-    await cron.add(desired);
+    try {
+      await cron.add(desired);
+    } catch (error) {
+      if (extractErrorCode(error) === "AGENT_SELECTION_REQUIRED") {
+        return { status: "owner-required", removed: 0 };
+      }
+      throw error;
+    }
     params.logger.info("memory-core: created managed dreaming cron job.");
     return { status: "added", removed: 0 };
   }
 
   const duplicates = sortManagedJobs(managed.filter((job) => job.id !== primary.id));
-  let removed = 0;
-  for (const duplicate of duplicates) {
-    try {
-      const result = await cron.remove(duplicate.id);
-      if (result.removed === true) {
-        removed += 1;
-      }
-    } catch (err) {
-      params.logger.warn(
-        `memory-core: failed to prune duplicate managed dreaming cron job ${duplicate.id}: ${formatErrorMessage(err)}`,
-      );
-    }
-  }
+  const removed = await removeJobs(duplicates, "prune duplicate");
 
   const patch = buildManagedDreamingPatch(primary, desired);
   if (!patch) {

@@ -1,4 +1,3 @@
-// Check No Extension Test Core Imports script supports OpenClaw repository automation.
 import fs from "node:fs";
 import path from "node:path";
 import { collectFilesSync, isCodeFile, relativeToCwd } from "./check-file-utils.js";
@@ -118,7 +117,6 @@ const RETIRED_EXTENSION_TEST_HELPER_BRIDGE_FILES = [
   "test/helpers/plugins/provider-wizard-contract-suites.ts",
   "test/helpers/plugins/public-artifacts.ts",
   "test/helpers/plugins/public-surface-loader.ts",
-  "test/helpers/plugins/runtime-taskflow.ts",
   "test/helpers/plugins/runtime-env.ts",
   "test/helpers/plugins/send-config.ts",
   "test/helpers/plugins/setup-wizard.ts",
@@ -167,23 +165,6 @@ function isExtensionTestSupportFile(filePath: string): boolean {
       /(?:\.|-|_)test-support\.[cm]?[jt]sx?$/u.test(filePath)) &&
     /\.[cm]?[jt]sx?$/u.test(filePath)
   );
-}
-
-function collectExtensionTestFiles(rootDir: string): string[] {
-  return collectFilesSync(rootDir, {
-    includeFile: (filePath) =>
-      isExtensionTestFile(filePath) || isExtensionTestSupportFile(filePath),
-  });
-}
-
-function lineNumberForOffset(content: string, offset: number): number {
-  let line = 1;
-  for (let index = 0; index < offset; index += 1) {
-    if (content.charCodeAt(index) === 10) {
-      line += 1;
-    }
-  }
-  return line;
 }
 
 function resolvesToRepoSrc(filePath: string, specifier: string): boolean {
@@ -239,7 +220,7 @@ function collectRelativeImportOffenders(
     offenders.push({
       file: filePath,
       hint,
-      line: lineNumberForOffset(content, match.index ?? 0),
+      line: content.slice(0, match.index ?? 0).split("\n").length,
       specifier,
     });
   }
@@ -250,11 +231,14 @@ function main() {
   const extensionsDir = path.join(process.cwd(), "extensions");
   const pluginHelpersDir = path.join(process.cwd(), "test/helpers/plugins");
   const retiredChannelHelpersDir = path.join(process.cwd(), "test/helpers/channels");
-  const files = collectExtensionTestFiles(extensionsDir);
+  const files = collectFilesSync(extensionsDir, {
+    includeFile: (filePath) =>
+      isExtensionTestFile(filePath) || isExtensionTestSupportFile(filePath),
+  });
   const pluginHelperFiles = collectFilesSync(pluginHelpersDir, { includeFile: isCodeFile });
-  const retiredChannelHelperFiles = fs.existsSync(retiredChannelHelpersDir)
-    ? collectFilesSync(retiredChannelHelpersDir, { includeFile: isCodeFile })
-    : [];
+  const retiredChannelHelperFiles = collectFilesSync(retiredChannelHelpersDir, {
+    includeFile: isCodeFile,
+  });
   const offenders: Offender[] = [];
 
   for (const file of retiredChannelHelperFiles) {
@@ -277,12 +261,9 @@ function main() {
 
   for (const file of files) {
     const content = fs.readFileSync(file, "utf8");
-    for (const rule of FORBIDDEN_PATTERNS) {
-      if (!rule.pattern.test(content)) {
-        continue;
-      }
+    const rule = FORBIDDEN_PATTERNS.find(({ pattern }) => pattern.test(content));
+    if (rule) {
       offenders.push({ file, hint: rule.hint });
-      break;
     }
     offenders.push(
       ...collectRelativeImportOffenders(file, content, resolvesToRepoSrc, RELATIVE_CORE_HINT),

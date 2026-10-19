@@ -21,9 +21,52 @@ The Gateway serves static files from `dist/control-ui`:
 pnpm ui:build
 ```
 
-For bundled builds, the Gateway retains manifest-verified assets so already-open tabs can fetch older asset URLs after an update. The cache serves at most three generations and 96 MiB total, preferring the current generation; older generations can be pruned sooner to meet the byte budget. Background startup preparation reuses verified inventories through publication and pruning instead of rereading unchanged retained assets at each step. Newly published assets are verified before reuse, including a concurrent publisher's winning copy. Each pruner claims an old directory before removing it so concurrent publishers do not delete the same tree. Cleanup failures log a warning and may temporarily leave extra files on disk, without discarding a successfully published generation. Later preparation can reclaim abandoned staging directories after one hour. Configured `gateway.controlUi.root` builds do not use this cache.
+Full package builds include matching bundled native plugin assets, including
+Workboard, in the UI distribution. These assets can load from the UI origin when
+the Gateway uses another origin or authenticated HTTP. The running plugin must
+match the packaged version and browser build; custom plugins and source overrides
+retain the Gateway asset route. A standalone UI build without packaged plugin
+artifacts also retains that route.
 
-Bundled public assets (themes, fonts, icons, and artwork) use `?v=<build-id>` URLs with a one-year immutable HTTP cache. The ID includes a digest of the public files, so rebuilding changed files at the same commit also changes their URLs. The Gateway snapshots this identity at startup; restart it after rebuilding an in-place installation. Unversioned requests, stale IDs, documents, `sw.js`, and custom `gateway.controlUi.root` installs keep `Cache-Control: no-cache`. The service worker keeps its network-first policy for public assets, allowing the browser's HTTP cache to satisfy matching versioned requests.
+The build's performance report keeps the initial-entry JavaScript budget separate
+from the complete chat and new-session boot totals. Those route totals include
+the entry assets and the route's measured immediate dynamic imports, counting
+each asset once even when both preload lists reference it. Moving an existing
+boot import into the first request wave therefore remains visible in the byte
+accounting. Initial-entry JavaScript is capped at 339,000 B gzip with one startup
+CSS request. Complete boot JavaScript is capped at 1,550,000 B gzip for chat and
+1,130,000 B gzip for New Session, including the initial-entry assets.
+JSON5 remains in its own lazy chunk so snapshot validation cannot pull the raw
+configuration parser into chat boot. Syntax highlighting and its language grammars
+load on the first code block; code stays escaped and copyable while they load or
+if the optional chunk fails. MarkdownIt owns rendered HTML, while the separate
+CommonMark source parser preserves exact code and reasoning offsets. Every HTML
+render still passes through its sanitizer. `--base-dist` on
+`scripts/check-control-ui-performance.mts` compares route bytes and requests when
+both builds contain route preload templates. Older builds report that comparison
+as unavailable, so use a cold-load network capture to compare their complete boot
+cost.
+
+JavaScript is limited to 9 initial-entry requests, 29 complete chat boot requests,
+and 24 complete New Session boot requests. Each cap leaves two requests above the
+measured build to catch facade regressions caused by top-level await disabling
+chunk optimization. `pnpm ui:check-performance` enforces the route byte and request
+limits locally and in CI; `pnpm ui:build` reports them without rejecting the build.
+Worker scripts and other URL assets remain available in the offline cache without
+being modulepreloaded into the document.
+
+MCP app new-conversation handling loads when the app requests a conversation.
+New Session includes its completion handler in the route bundle, so submission
+does not pause for another chunk before sending the creation request.
+
+Session creation and message sends retain a dispatched result after Stop or view
+cancellation, so the owning flow can reconcile accepted work before settling or
+cleaning up its placement. Cancellation still stops unsent work and requests
+refused before dispatch.
+
+After a Gateway update, already-open tabs reload the current build when they encounter a missing old asset. Reloading is automatic when no unsaved-work guard blocks it; otherwise, save or discard the protected work and use the **Reload** banner. The Gateway and service worker keep only the current build's assets.
+
+Bundled public assets (themes, fonts, icons, and artwork) use `?v=<build-id>` URLs with a one-year immutable HTTP cache. The ID includes a digest of the public files, so rebuilding changed files at the same commit also changes their URLs. The Gateway snapshots this identity at startup; restart it after rebuilding an in-place installation. Unversioned requests, stale IDs, documents, `sw.js`, and custom `gateway.controlUi.root` installs keep `Cache-Control: no-cache`. The service worker caches matching current-build public URLs for offline reuse.
 
 The Gateway shares prepared bundled asset bytes across browsers, including Brotli and gzip variants. Cold file admission and reads run in a worker so simultaneous page loads do not block chat delivery. Custom roots continue to read current files on each request.
 
@@ -62,6 +105,7 @@ the development proxy preserves the browser's Origin and does not provide
 authentication credentials.
 
 Vite serves the UI and its hot reload connection, and proxies Gateway requests.
+If the Gateway disconnects, the proxy retires that connection so the UI can reconnect without restarting Vite.
 The UI keeps credentials and saved settings scoped to the actual Gateway. An
 owner pairing handoff can be delivered on the dev page while retaining its
 original Gateway destination and fragment. To use another Gateway, restart
@@ -117,16 +161,22 @@ between settlement and transport.
 
 Streaming deltas and session-roster notifications must not trigger unrelated
 renders. The shell processes session deletion and document-title updates directly,
-without rendering for roster publications. The chat stream owns its frame queue;
-chat-page session subscriptions coalesce presentation updates through
-`SubscriptionsController`. State synchronization stays immediate, while the Lit
-commit runs inside the scheduled frame so child property bindings do not escape
-into a later microtask. Disconnecting or replacing a subscription retires its
-queued frame. Hidden documents retain immediate invalidation because animation
-frames may be suspended.
+without rendering for roster publications. The pane runtime owns session
+observations and synchronizes their state immediately. The chat state owner
+coalesces eligible background invalidations in an animation frame. Solid
+projections and the pane render lifecycle publish presentation and run
+post-commit work after DOM bindings. Hidden documents bypass frame scheduling;
+retained hidden panes park presentation until shown. Retiring the render-lifecycle
+scope cancels queued background work.
 
 The `chat-stream-runtime-budgets.e2e.test.ts` suite protects streaming with
 structural update counts; chat-page unit tests cover intervening roster publications.
+
+Session descriptors share connection-scoped reads. Full row changes invalidate
+them; unchanged ancestor references reuse the settled read. Swarm progress follows
+the collector's parent summary, not a child provider's terminal status. Child rows
+already update their own presentation, while changed collector summaries and
+membership still refresh the parent details.
 
 Shell callbacks retain their identity across renders so a background session update
 does not redraw navigation twice. The outbox subscription still invalidates draft
@@ -139,6 +189,15 @@ observers own geometry changes. The command palette likewise retains its measure
 input layout while navigating results, and remeasures edits, width changes, and
 reconnected fields. Status clocks pause in hidden tabs and render only when their
 displayed value or properties change.
+
+The first connected, presented transcript commit renders two neighboring rows beyond each
+viewport edge. The next animation frame restores the six-row scrolling buffer;
+pending navigation, focus, or anchor reconciliation uses that full buffer immediately,
+including neighboring controls such as folded-work headers. Focused and anchored
+rows remain retained independently. Link-preview discovery
+waits for browser idle time, then follows transcript mutations instead of rescanning
+unchanged content on every pane update. Hiding or retiring the pane cancels pending
+discovery.
 
 Streaming Markdown retains normalized input, split progress, and rendered prefixes
 in one bounded cache. Completed independent blocks render once; replacements,

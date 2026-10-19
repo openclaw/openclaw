@@ -89,7 +89,7 @@ async function main() {
   if (scenario === "public") {
     await withSuppressedNotes(() =>
       noteSessionTranscriptHealth({
-        cfg: { agents: { entries: { main: { default: true } } } },
+        cfg: { agents: { entries: { main: {} } } },
         env: process.env,
         shouldRepair: true,
       }),

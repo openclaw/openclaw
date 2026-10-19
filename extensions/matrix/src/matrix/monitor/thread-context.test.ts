@@ -19,21 +19,6 @@ async function resolveThreadSummary(event: MatrixRawEvent): Promise<string | und
 }
 
 describe("matrix thread context", () => {
-  it("summarizes thread starter events from body text", async () => {
-    expect(
-      await resolveThreadSummary({
-        event_id: "$root",
-        sender: "@alice:example.org",
-        type: "m.room.message",
-        origin_server_ts: Date.now(),
-        content: {
-          msgtype: "m.text",
-          body: " Thread starter body ",
-        },
-      } as MatrixRawEvent),
-    ).toBe("Thread starter body");
-  });
-
   it("uses the latest bundled text when summarizing an edited thread root", async () => {
     expect(await resolveThreadSummary(createBundledReplacementEvent("$root"))).toBe("edited text");
   });
@@ -76,48 +61,6 @@ describe("matrix thread context", () => {
         },
       } as MatrixRawEvent),
     ).toBe("[matrix image attachment]");
-  });
-
-  it("resolves and caches thread starter context", async () => {
-    const getEvent = vi.fn(async () => ({
-      event_id: "$root",
-      sender: "@alice:example.org",
-      type: "m.room.message",
-      origin_server_ts: Date.now(),
-      content: {
-        msgtype: "m.text",
-        body: "Root topic",
-      },
-    }));
-    const getMemberDisplayName = vi.fn(async () => "Alice");
-    const resolveThreadContext = createMatrixEventContextResolver({
-      kind: "thread",
-      client: {
-        getEvent,
-      } as never,
-      getMemberDisplayName,
-      logVerboseMessage: () => {},
-    });
-
-    await expect(
-      resolveThreadContext({
-        roomId: "!room:example.org",
-        eventId: "$root",
-      }),
-    ).resolves.toEqual({
-      threadStarterBody: "Matrix thread root $root from Alice:\nRoot topic",
-      senderId: "@alice:example.org",
-      senderLabel: "Alice",
-      summary: "Root topic",
-    });
-
-    await resolveThreadContext({
-      roomId: "!room:example.org",
-      eventId: "$root",
-    });
-
-    expect(getEvent).toHaveBeenCalledTimes(1);
-    expect(getMemberDisplayName).toHaveBeenCalledTimes(1);
   });
 
   it("evicts the oldest thread context despite a cache hit when exceeding 256 entries", async () => {

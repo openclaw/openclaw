@@ -1,4 +1,3 @@
-// Setup migration promotion owns durable journals, rollback, and path validation.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -351,12 +350,6 @@ async function listMissingPromotionParents(target: string): Promise<string[]> {
   return missing;
 }
 
-async function reserveEmptyTargetBackupPath(target: string): Promise<string> {
-  const reserved = await fs.mkdtemp(path.join(path.dirname(target), ".openclaw-migration-empty-"));
-  await fs.rmdir(reserved);
-  return reserved;
-}
-
 export async function recordPromotionTargetState(component: PromotionComponent): Promise<void> {
   component.createdParentPaths = await listMissingPromotionParents(component.finalPath);
   if (!(await migrationPathEntryExists(component.finalPath))) {
@@ -369,7 +362,11 @@ export async function recordPromotionTargetState(component: PromotionComponent):
     );
   }
   component.targetWasEmptyDirectory = true;
-  component.emptyTargetBackupPath = await reserveEmptyTargetBackupPath(component.finalPath);
+  const backup = await fs.mkdtemp(
+    path.join(path.dirname(component.finalPath), ".openclaw-migration-empty-"),
+  );
+  await fs.rmdir(backup);
+  component.emptyTargetBackupPath = backup;
 }
 
 export async function moveRecordedEmptyTarget(component: PromotionComponent): Promise<void> {

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import {
   COMPUTER_EXECUTION_ID_PATTERN,
   type ComputerUseCapabilityDescriptor,
@@ -67,13 +68,9 @@ export function registerComputerUseProvider(
     return { executionId, value };
   };
   const getExecution = async (
-    paramsJSON: string | null | undefined,
+    executionId: string,
     context?: OpenClawPluginNodeHostCommandContext,
   ) => {
-    const { executionId } = executionEnvelopeFromParams(paramsJSON);
-    if (!executionId) {
-      throw new Error("COMPUTER_INVALID_REQUEST: executionId is required");
-    }
     // An earlier queued close can replace the barrier while this acquisition resumes.
     for (let barrier = closingPromise; barrier !== undefined; barrier = closingPromise) {
       await barrier;
@@ -174,15 +171,7 @@ export function registerComputerUseProvider(
           availabilityStop,
           closeExecution(undefined, "node-host-stop"),
         ]);
-        const failures = results.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "computer provider shutdown failed");
-        }
+        throwIfSettledRejected(results, "computer provider shutdown failed");
       };
     },
     onDisconnect: async () => await closeExecution(undefined, "gateway-disconnect"),
@@ -190,7 +179,7 @@ export function registerComputerUseProvider(
       const envelope = executionEnvelopeFromParams(paramsJSON);
       if (envelope.executionId) {
         return await (
-          await getExecution(paramsJSON, context)
+          await getExecution(envelope.executionId, context)
         ).snapshot(paramsJSON, context?.signal);
       }
       const executionId = randomUUID();
@@ -224,7 +213,9 @@ export function registerComputerUseProvider(
         );
         return JSON.stringify({ ok: true });
       }
-      return await (await getExecution(paramsJSON, context)).act(paramsJSON, context?.signal);
+      return await (
+        await getExecution(envelope.executionId, context)
+      ).act(paramsJSON, context?.signal);
     },
   });
   // The provider plugin must also register its dangerous `computer.act` invoke

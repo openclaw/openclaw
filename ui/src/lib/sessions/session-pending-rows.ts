@@ -59,6 +59,7 @@ export type SessionPatchRowFact = {
   updatedAt: number | null;
   readCutoff?: number;
   fields:
+    | { label: GatewaySessionRow["label"] }
     | { category: GatewaySessionRow["category"] }
     | SessionPinFields
     | { pinned: true }

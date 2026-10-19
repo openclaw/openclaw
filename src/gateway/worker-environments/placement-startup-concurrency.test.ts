@@ -4,11 +4,20 @@ import {
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
+import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
+import {
+  createCoordinatorTestService,
+  REQUEST,
+} from "./placement-dispatch-coordinator.test-support.js";
 import { BUNDLE_HASH, MANIFEST_REF } from "./placement-dispatch-test-fixtures.js";
 import { createRecoveryService } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { writePlacementEnvironmentFixture } from "./placement-test-fixtures.js";
 import * as support from "./service.test-support.js";
+import { createWorkerEnvironmentCommitAdmission } from "./store-commit-authority.js";
+import { workerEnvironmentProjections } from "./store-projection.js";
 
 const protocolFeatures = [
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
@@ -57,7 +66,7 @@ async function seedActiveNode(
     { to: "active", patch: { activeOwnerEpoch: environment.ownerEpoch } },
   ] as const;
   for (const transition of transitions) {
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId,
       from: placement.state,
       expectedGeneration: placement.generation,
@@ -93,11 +102,15 @@ describe("worker placement startup concurrency", () => {
         worker.inspected.resolve();
         return { status: "active" as const };
       });
+      const projectionReads = vi.spyOn(placements, "readProjection");
       const environments = support.createService(
         support.createProvider({ inspect, supportedExecutionModes: ["worker-turn"] }),
       );
       const adopt = vi.spyOn(placements, "adoptActive");
-      const recovery = createRecoveryService(placements, environments);
+      const recovery = coordinateWorkerPlacementDispatch(
+        await createRecoveryService(placements, environments),
+        (_request, run) => run(),
+      );
       const uninstall = installWorkerPlacementReconcileGuard({
         placements,
         environments,
@@ -118,6 +131,7 @@ describe("worker placement startup concurrency", () => {
       try {
         await Promise.all(workers.slice(0, 8).map((worker) => worker.entered.promise));
         expect(inspect).toHaveBeenCalledTimes(8);
+        expect(projectionReads.mock.calls.filter(([ids]) => ids.length > 1)).toEqual([]);
         expect(outcome).toBe("pending");
         expect(adopt).not.toHaveBeenCalled();
 
@@ -128,7 +142,7 @@ describe("worker placement startup concurrency", () => {
             agentId: "main",
             executionMode: "worker-turn",
           });
-          placements.transition({
+          await placements.transition({
             sessionId: duplicate.sessionId,
             from: "requested",
             to: "provisioning",
@@ -150,9 +164,10 @@ describe("worker placement startup concurrency", () => {
         if (conflictingOwner) {
           await starting;
           expect(outcome).toBe("failed");
-          expect(failure).toEqual(
-            new Error("Worker environment worker-8 has multiple placement owners"),
-          );
+          expect(failure).toBeInstanceOf(Error);
+          expect(failure).toMatchObject({
+            message: "Worker environment worker-8 has multiple placement owners",
+          });
           expect(adopt).not.toHaveBeenCalled();
           return;
         }
@@ -181,6 +196,146 @@ describe("worker placement startup concurrency", () => {
         }
         await starting;
         await uninstall();
+      }
+    },
+  );
+  it.each(["ready", "caller revoked", "profile changed"] as const)(
+    "joins pending setup before reading its changing inventory (%s)",
+    async (outcome) => {
+      const database = support.testState.stateDb;
+      const placements = createWorkerSessionPlacementStore({ database });
+      const environments = support.testState.store;
+      const inventory = workerEnvironmentProjections.get(
+        requireOpenClawStateDatabaseIdentity({ db: database.db }),
+      )!;
+      const environmentId = "pending-environment";
+      writePlacementEnvironmentFixture(database, {
+        environmentId,
+        state: "ready",
+        leaseId: "native-device-lease",
+        nodeDeviceId: "native-device",
+        bootstrapReceipt: { ...support.BOOTSTRAP_RECEIPT, protocolFeatures },
+        ownerEpoch: 1,
+        attachedSessionIds: [],
+        profileId: REQUEST.profileId,
+      });
+      const environment = environments.get(environmentId);
+      if (environment?.state !== "ready") {
+        throw new Error("Setup requires a ready worker environment");
+      }
+      const readyEnvironment = {
+        ...environment,
+        state: "attached" as const,
+        attachedSessionIds: [REQUEST.sessionId],
+      };
+      const joined = createDeferredCore();
+      const entered = createDeferredCore();
+      const finish = createDeferredCore();
+      const token = {};
+      let callerCurrent = true;
+      const dispatch = vi.fn<ReturnType<typeof createCoordinatorTestService>["dispatch"]>(
+        async (request, onTransition) => {
+          let placement = await placements.startDispatch(request);
+          onTransition?.(placement);
+          placement = await placements.transition({
+            sessionId: request.sessionId,
+            from: "requested",
+            to: "provisioning",
+            expectedGeneration: placement.generation,
+            patch: { environmentId },
+          });
+          onTransition?.(placement);
+          // Hold the real inventory's admitted postimage until the setup owner commits it.
+          inventory.fence(
+            createWorkerEnvironmentCommitAdmission({
+              ids: [environmentId],
+              environments: [readyEnvironment],
+              credentials: [],
+              attachments: [],
+            }),
+            token,
+          );
+          entered.resolve();
+          await finish.promise;
+          writePlacementEnvironmentFixture(database, {
+            ...readyEnvironment,
+            profileId: outcome === "profile changed" ? "another-profile" : REQUEST.profileId,
+          });
+          inventory.release(token);
+          const transitions = [
+            { to: "syncing", patch: { workerBundleHash: BUNDLE_HASH } },
+            {
+              to: "starting",
+              patch: { workspaceBaseManifestRef: "manifest", remoteWorkspaceDir: "/workspace" },
+            },
+            { to: "active", patch: { activeOwnerEpoch: 1 } },
+          ] as const;
+          for (const transition of transitions) {
+            placement = await placements.transition({
+              sessionId: request.sessionId,
+              from: placement.state,
+              expectedGeneration: placement.generation,
+              ...transition,
+            });
+            onTransition?.(placement);
+          }
+          if (placement.state !== "active") {
+            throw new Error("Setup did not publish an active placement");
+          }
+          return placement;
+        },
+      );
+      const coordinator = coordinateWorkerPlacementDispatch(
+        createCoordinatorTestService({ dispatch }),
+        (_request, run) => run(),
+        undefined,
+        undefined,
+        { placements, environments, redispatchPlacement: vi.fn(), warn: vi.fn() },
+      );
+      const waitForInitialPlacement = coordinator.waitForInitialPlacement;
+      vi.spyOn(coordinator, "waitForInitialPlacement").mockImplementation(async (...args) => {
+        joined.resolve();
+        return await waitForInitialPlacement(...args);
+      });
+      const setup = coordinator.dispatch(REQUEST);
+      try {
+        await Promise.race([entered.promise, setup]);
+        expect(() => environments.get(environmentId)).toThrow("unsettled mutation");
+        const admission = coordinator.ensurePlacement({
+          request: REQUEST,
+          assertCurrent: () => {
+            if (!callerCurrent) {
+              throw new Error("caller revoked");
+            }
+          },
+          authorizeDispatch: () => {},
+          prepareWorkspace: vi.fn(),
+        });
+        const result = admission.then(
+          (lease) => {
+            lease.release();
+            return "ready";
+          },
+          (error: unknown) => error,
+        );
+        await Promise.race([joined.promise, result]);
+        callerCurrent = outcome !== "caller revoked";
+        finish.resolve();
+        await setup;
+        if (outcome === "ready") {
+          expect(await result).toBe("ready");
+        } else {
+          expect(await result).toMatchObject({
+            message: expect.stringContaining(
+              outcome === "caller revoked" ? "caller revoked" : "another worker profile",
+            ),
+          });
+        }
+        expect(dispatch).toHaveBeenCalledOnce();
+      } finally {
+        finish.resolve();
+        await setup;
+        inventory.release(token);
       }
     },
   );

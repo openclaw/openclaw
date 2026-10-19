@@ -18,58 +18,43 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { startGatewayServerCore } from "./server-start.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { reserveGatewayTestListener } from "./test-helpers.listener.js";
+// Keep cold source transformation of mandatory startup code outside behavior-test deadlines.
+import "./server-reload-managed.js";
 
 export async function createGatewayMetadataCloseFixture(label: string) {
   const original = captureActivePluginRegistrySnapshot();
   const state = await createOpenClawTestState({
     label,
     layout: "home",
-    env: {
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-      VITEST: "1",
-    },
+    env: KERNEL_TEST_ENV,
   });
   const pluginId = "metadata-fixture";
   const rootDir = state.path(pluginId);
   await fs.mkdir(rootDir);
-  await fs.writeFile(
-    path.join(rootDir, "package.json"),
-    JSON.stringify({
-      name: pluginId,
-      version: "1.0.0",
-      type: "commonjs",
-      openclaw: { extensions: ["./index.cjs"] },
-    }),
-  );
-  await fs.writeFile(
-    path.join(rootDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: pluginId,
-      activation: { onStartup: true },
-      configSchema: { type: "object", properties: {} },
-    }),
-  );
-  await fs.writeFile(
-    path.join(rootDir, "index.cjs"),
-    `module.exports = { id: ${JSON.stringify(pluginId)}, register() {} };`,
-  );
+  const write = (name: string, source: string) => fs.writeFile(path.join(rootDir, name), source);
+  const writeJson = (name: string, value: unknown) => write(name, JSON.stringify(value));
+  await writeJson("package.json", {
+    name: pluginId,
+    version: "1.0.0",
+    type: "commonjs",
+    openclaw: { extensions: ["./index.cjs"] },
+  });
+  await writeJson("openclaw.plugin.json", {
+    id: pluginId,
+    activation: { onStartup: true },
+    configSchema: { type: "object", properties: {} },
+  });
+  await write("index.cjs", `module.exports = { id: ${JSON.stringify(pluginId)}, register() {} };`);
   const source = path.join(rootDir, "callback.cjs");
   const dependency = path.join(rootDir, "lazy.mjs");
   const event = `${label}-setup`;
   const listeners = process.listenerCount(event);
   const writeCallback = async (value: string) => {
-    await fs.writeFile(dependency, `export const value = ${JSON.stringify(value)};`);
-    await fs.writeFile(
-      source,
+    await write("lazy.mjs", `export const value = ${JSON.stringify(value)};`);
+    await write(
+      "callback.cjs",
       `module.exports = (lifecycle) => {
         const listener = () => {};
         process.on(${JSON.stringify(event)}, listener);

@@ -23,7 +23,7 @@ const DEFAULT_MEMORY_FLUSH_PROMPT = [
   MEMORY_FLUSH_TARGET_HINT,
   MEMORY_FLUSH_READ_ONLY_HINT,
   MEMORY_FLUSH_APPEND_ONLY_HINT,
-  "Do NOT create timestamped variant files (e.g., YYYY-MM-DD-HHMM.md); always use the canonical YYYY-MM-DD.md filename.",
+  "Do NOT create timestamped variant files (e.g., YYYY-MM-DD-HHMM.md); always use the standard YYYY-MM-DD.md filename.",
   `If nothing to store, reply with ${SILENT_REPLY_TOKEN}.`,
 ].join(" ");
 

@@ -1,12 +1,47 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isPromise } from "node:util/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SearchSchema } from "../infra/database-engine/contract.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   SQLITE_WORKER_PREPARE_COMMAND,
   type SqliteWorkerPreparedBackend,
   type SqliteWorkerCommand,
   type SqliteWorkerOperations,
 } from "../infra/sqlite-worker-contract.js";
+import {
+  requestSqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionRequest,
+} from "../infra/sqlite-worker-operation-admission.js";
+import { admitAgentEngineSearchExtensions } from "./openclaw-agent-db-engine.js";
+
+export type AgentDatabaseAdmissionRestriction = (
+  request: SqliteWorkerAdmissionRequest,
+  dispatch: (request: SqliteWorkerAdmissionRequest) => void,
+) => void;
+
+/** A domain restriction must obtain exactly one grant for the original native stage. */
+export function requestRestrictedAgentDatabaseAdmission(
+  request: SqliteWorkerAdmissionRequest,
+  restriction?: AgentDatabaseAdmissionRestriction,
+): void {
+  const { stage } = request;
+  let admitted = false;
+  const dispatch = (restricted: SqliteWorkerAdmissionRequest) => {
+    if (admitted || restricted.stage !== stage) {
+      throw new Error("Agent admission restriction changed its native stage");
+    }
+    requestSqliteWorkerOperationAdmission(restricted);
+    admitted = true;
+  };
+  if (restriction) {
+    restriction(request, dispatch);
+  } else {
+    dispatch(request);
+  }
+  if (!admitted) {
+    throw new Error("Agent admission restriction omitted its native grant");
+  }
+}
 
 export type AgentDatabaseDomainOperations = {
   "database.domain.bind": {
@@ -32,9 +67,12 @@ export type AgentDatabaseDomainOperations = {
 /** One admitted publication scope borrows the canonical connection; it never owns its close. */
 export function createAgentDatabaseDomainOwner(context: {
   databasePath: string;
-  assertCurrent(): DatabaseSync;
+  assertCurrent(): EngineConnection;
   assertCleanupCurrent(): void;
-  admit(stage: "transaction" | "commit"): void;
+  admit(
+    stage: "transaction" | "commit",
+    requestAdmission?: AgentDatabaseAdmissionRestriction,
+  ): void;
 }) {
   let binding:
     | {
@@ -66,11 +104,23 @@ export function createAgentDatabaseDomainOwner(context: {
       const backend = factory(input.input, {
         databasePath: context.databasePath,
         database,
-        admit: (stage: "transaction" | "commit") => {
+        admitSearchExtensions: (definitions: Readonly<Record<string, SearchSchema>>) => {
+          if (!authority.active) {
+            throw new Error("Agent publication cleanup cannot admit search extensions");
+          }
+          admitAgentEngineSearchExtensions(database, definitions, (stage) => {
+            context.assertCurrent();
+            context.admit(stage);
+          });
+        },
+        admit: (
+          stage: "transaction" | "commit",
+          requestAdmission?: AgentDatabaseAdmissionRestriction,
+        ) => {
           if (!authority.active) {
             throw new Error("Agent publication cleanup cannot admit a transaction");
           }
-          context.admit(stage);
+          context.admit(stage, requestAdmission);
         },
       });
       if (isPromise(backend)) {
@@ -110,9 +160,6 @@ export function createAgentDatabaseDomainOwner(context: {
       await loading;
     }
     await current.backend.prepare?.(input.command);
-    if (requireBinding(input.id) !== current) {
-      throw new Error("Agent publication changed during command preparation");
-    }
   };
   const closeBinding = () => {
     if (!binding) {

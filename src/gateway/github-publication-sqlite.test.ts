@@ -1,27 +1,119 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { updateRegistryWorktree } from "../agents/worktrees/registry.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import { digestGitHubPublicationRequest } from "./github-publication-receipt.js";
+import { readSharedGitHubPublicationRequestInDatabase } from "./github-publication-shared-read.kernel.js";
 import {
-  deferGitHubPublicationRequests,
-  digestGitHubPublicationRequest,
-} from "./github-publication-store.js";
-import { installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
+  claimGitHubPublicationExecutionFixture,
+  claimRepositoryGitHubPublicationFixture,
+  deferGitHubPublicationRequestsFixture,
+  insertRepositoryGitHubPublicationFixture,
+  readRepositoryGitHubPublicationFixture,
+} from "./github-publication-store.test-support.js";
+import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
+import {
+  githubPublicationTestMocks,
+  installGitHubPublicationTestHarness,
+} from "./github-publication.test-support.js";
 import {
   insertSharedWorktreeReceipt,
-  sharedPublicationCoordinator,
+  repositoryReceipt,
   sharedPublicationSession as session,
+  sharedRepositoryWorkspace,
 } from "./github-shared-publication.test-support.js";
 
 installGitHubPublicationTestHarness();
 afterEach(() => vi.restoreAllMocks());
 
 describe("publication SQLite materialization", () => {
+  it("returns fresh shared publication facts without rereading them, preserving current replay", () => {
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
+    const counter = trackSqliteStatementExecutions(db, ["rereads"], (sql) =>
+      /^select\b/i.test(sql) &&
+      /\bfrom "github_publication_(?:requests|session_lifecycles)"/.test(sql)
+        ? "rereads"
+        : null,
+    );
+    let inserted: ReturnType<typeof insertSharedWorktreeReceipt>;
+    try {
+      inserted = insertSharedWorktreeReceipt("inserted", { idempotencyKey: "same-request" });
+      expect(counter.counts.rereads).toBe(0);
+    } finally {
+      counter.restore();
+    }
+    expect(inserted).toMatchObject({ request_id: "inserted", status: "requested" });
+    expect(readGitHubPublicationRequest(db, { requestId: "inserted" })).toEqual(inserted);
+    claimGitHubPublicationExecutionFixture(inserted.request_id, "publisher");
+    expect(
+      insertSharedWorktreeReceipt("replayed", { idempotencyKey: "same-request" }),
+    ).toMatchObject({
+      request_id: "inserted",
+      status: "publishing",
+      gateway_instance_id: "publisher",
+    });
+    expect(() =>
+      insertSharedWorktreeReceipt("mismatched", {
+        idempotencyKey: "same-request",
+        branch: "different-branch",
+      }),
+    ).toThrow("idempotency key was reused");
+    expect(readGitHubPublicationRequest(db, { requestId: "inserted" })).toMatchObject({
+      request_id: "inserted",
+      status: "publishing",
+      branch: inserted.branch,
+    });
+  });
+
+  it("returns fresh repository publication facts without rereading them, preserving current replay", async () => {
+    const workspace = await sharedRepositoryWorkspace();
+    const row = repositoryReceipt(workspace);
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
+    const counter = trackSqliteStatementExecutions(db, ["rereads"], (sql) =>
+      /^select\b/i.test(sql) && /\bfrom "github_repository_publication_requests"/.test(sql)
+        ? "rereads"
+        : null,
+    );
+    try {
+      expect(insertRepositoryGitHubPublicationFixture(row, () => {})).toEqual(row);
+      expect(counter.counts.rereads).toBe(0);
+    } finally {
+      counter.restore();
+    }
+    expect(readRepositoryGitHubPublicationFixture(row.request_id)).toEqual(row);
+    claimRepositoryGitHubPublicationFixture(row, "publisher", {
+      assertCurrent() {},
+      assertCustody() {},
+    });
+    expect(
+      insertRepositoryGitHubPublicationFixture(
+        repositoryReceipt(workspace, { request_id: "replayed" }),
+        () => {},
+      ),
+    ).toMatchObject({
+      request_id: row.request_id,
+      status: "publishing",
+      gateway_instance_id: "publisher",
+    });
+    expect(() =>
+      insertRepositoryGitHubPublicationFixture(
+        repositoryReceipt(workspace, { request_id: "mismatched", title: "Different request" }),
+        () => {},
+      ),
+    ).toThrow("idempotency key was reused");
+    expect(readRepositoryGitHubPublicationFixture(row.request_id)).toMatchObject({
+      request_id: row.request_id,
+      status: "publishing",
+      title: null,
+    });
+  });
+
   it("discovers the latest current receipt without materializing its older history", () => {
-    const coordinator = sharedPublicationCoordinator();
     runOpenClawStateWriteTransaction(() => {
       for (let index = 0; index < 70; index += 1) {
         insertSharedWorktreeReceipt(`history-${index}`, {
@@ -31,7 +123,7 @@ describe("publication SQLite materialization", () => {
       }
       insertSharedWorktreeReceipt("latest", { createdAtMs: 100 });
     });
-    const db = openOpenClawStateDatabase().db;
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
     const readRows = () =>
       db.prepare("SELECT * FROM github_publication_requests ORDER BY request_id").all();
     const before = readRows();
@@ -43,10 +135,14 @@ describe("publication SQLite materialization", () => {
         : null,
     );
     try {
-      expect(coordinator.latestShared(session)).toMatchObject({
-        confirmation: null,
-        result: { requestId: "latest", status: "requested" },
-      });
+      expect(
+        readSharedGitHubPublicationRequestInDatabase(
+          db,
+          session,
+          {},
+          githubPublicationTestMocks().loadSession(session.sessionKey).entry,
+        ),
+      ).toMatchObject({ request_id: "latest", status: "requested" });
       expect(readRows()).toEqual(before);
       expect(observer).not.toHaveBeenCalled();
       expect(counter.counts.receipts).toBeGreaterThan(0);
@@ -57,12 +153,25 @@ describe("publication SQLite materialization", () => {
     }
   });
 
-  it("defers rich receipts with compact notifications while retaining rollback and input order", () => {
+  it("observes no current publication after worktree GC retires the session checkout", async () => {
+    insertSharedWorktreeReceipt("latest");
+    await updateRegistryWorktree(process.env, "worktree-1", { removedAt: 2 });
+    expect(
+      readSharedGitHubPublicationRequestInDatabase(
+        openOpenClawStateDatabase().db,
+        session,
+        {},
+        githubPublicationTestMocks().loadSession(session.sessionKey).entry,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("defers rich receipts with authority postimages while retaining rollback and input order", () => {
     const first = insertSharedWorktreeReceipt("first");
     const second = insertSharedWorktreeReceipt("second", {
       session: { ...session, sessionKey: session.sessionKey + ":other" },
     });
-    const db = openOpenClawStateDatabase().db;
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
     const body = "synthetic publication body ".repeat(512);
     for (const row of [first, second]) {
       db.prepare(
@@ -73,6 +182,7 @@ describe("publication SQLite materialization", () => {
           sessionId: row.session_id,
           idempotencyKey: row.idempotency_key,
           body,
+          draft: row.draft === 1,
         }),
         row.request_id,
       );
@@ -88,7 +198,7 @@ describe("publication SQLite materialization", () => {
       );
       try {
         expect(() =>
-          deferGitHubPublicationRequests(["first", "second", "first", "absent"]),
+          deferGitHubPublicationRequestsFixture(["first", "second", "first", "absent"]),
         ).toThrow("late defer failure");
         expect(readRows()).toEqual(before);
         expect(observer).not.toHaveBeenCalled();
@@ -101,7 +211,7 @@ describe("publication SQLite materialization", () => {
         sql.startsWith('update "github_publication_requests"') ? "defer" : null,
       );
       try {
-        deferGitHubPublicationRequests(["first", "second", "first", "absent"]);
+        deferGitHubPublicationRequestsFixture(["first", "second", "first", "absent"]);
         expect(readRows()).toEqual(
           before.map((row) =>
             Object.assign({}, row, {
@@ -126,7 +236,8 @@ describe("publication SQLite materialization", () => {
         expect(db.isTransaction).toBe(false);
         expect(counter.rowCounts.defer).toBeGreaterThan(0);
         expect(counter.rowCounts.defer).toBeLessThanOrEqual(3);
-        expect(counter.textBytes.defer).toBeLessThan(512);
+        const authorityPostimageTextBudget = 2048;
+        expect(counter.textBytes.defer).toBeLessThan(authorityPostimageTextBudget);
       } finally {
         counter.restore();
         clock.mockRestore();

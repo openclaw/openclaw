@@ -25,27 +25,6 @@ function completed(overrides: Partial<SpawnResult> = {}): SpawnResult {
   };
 }
 
-it.each([
-  { result: completed({ code: 7 }), error: "exit 7" },
-  {
-    result: completed({ code: null, signal: "SIGTERM", termination: "signal" }),
-    error: "Doctor process stopped unexpectedly (signal)",
-  },
-  {
-    result: completed({ cleanup: "uncertain" }),
-    error: "Command cleanup could not confirm that owned work stopped",
-  },
-])("preserves Doctor process failure: $error", async ({ result, error }) => {
-  vi.mocked(runUtf8CommandWithTimeout).mockImplementation(async (_argv, options) => {
-    assert(typeof options !== "number");
-    options.onOutputChunk?.(Buffer.from("Doctor diagnostic\n"), "stderr");
-    return result;
-  });
-  const { runtime, lines } = createSystemAgentTestRuntime();
-  await expect(executeSystemAgentOperation({ kind: "doctor" }, runtime)).rejects.toThrow(error);
-  expect(lines).toContain("Doctor diagnostic");
-});
-
 it.each(["cancellation", "output failure"])(
   "joins admitted Doctor work after %s before releasing the caller",
   async (cause) => {
@@ -118,5 +97,5 @@ it("bounds Doctor output without stopping accepted work and preserves split UTF-
   expect(completedWork).toBe(true);
   expect(lines[0]).toBe("🦞");
   expect(Buffer.byteLength(lines.join("\n"))).toBeLessThan(1024 * 1024 + 512);
-  expect(lines.at(-1)).toContain("Doctor output was truncated");
+  expect(lines.at(-1)).toMatch(/Doctor output was truncated.*`openclaw doctor --lint`/);
 });

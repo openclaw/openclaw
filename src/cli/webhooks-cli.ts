@@ -1,5 +1,4 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-// Webhook CLI registrations, currently Gmail Pub/Sub setup and service runner commands.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { danger } from "../globals.js";
@@ -73,7 +72,6 @@ function addGmailDeliveryOptions(command: Command, defaults = false): Command {
     );
 }
 
-/** Register webhook-related subcommands on the root Commander program. */
 export function registerWebhooksCli(program: Command) {
   const webhooks = program
     .command("webhooks")
@@ -95,8 +93,7 @@ export function registerWebhooksCli(program: Command) {
     .option("--json", "Output JSON summary", false)
     .action(async (opts) => {
       try {
-        const parsed = parseGmailSetupOptions(opts);
-        await runGmailSetup(parsed);
+        await runGmailSetup(parseGmailSetupOptions(opts));
       } catch (err) {
         if (opts.json) {
           throw new Error(formatErrorMessage(err), { cause: err });
@@ -114,8 +111,7 @@ export function registerWebhooksCli(program: Command) {
       .option("--topic <topic>", "Pub/Sub topic path (projects/.../topics/..)"),
   ).action(async (opts) => {
     try {
-      const parsed = parseGmailRunOptions(opts);
-      await runGmailService(parsed);
+      await runGmailService(parseGmailRunOptions(opts));
     } catch (err) {
       defaultRuntime.error(danger(formatErrorMessage(err)));
       defaultRuntime.exit(1);
@@ -124,8 +120,7 @@ export function registerWebhooksCli(program: Command) {
 }
 
 function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions {
-  const accountRaw = raw.account;
-  const account = normalizeOptionalString(accountRaw) ?? "";
+  const account = normalizeOptionalString(raw.account) ?? "";
   if (!account) {
     throw new Error(
       `--account is required. Example: ${formatCliCommand("openclaw webhooks gmail setup --account default")}.`,
@@ -160,7 +155,7 @@ function parseGmailCommonOptions(raw: Record<string, unknown>): Omit<GmailRunOpt
     bind: normalizeOptionalString(raw.bind),
     port: numberOption(raw.port, "--port"),
     path: normalizeOptionalString(raw.path),
-    includeBody: booleanOption(raw.includeBody),
+    includeBody: raw.includeBody == null ? undefined : Boolean(raw.includeBody),
     maxBytes: numberOption(raw.maxBytes, "--max-bytes"),
     renewEveryMinutes: numberOption(raw.renewMinutes, "--renew-minutes"),
     tailscale: tailscaleModeOption(raw.tailscale),
@@ -189,11 +184,4 @@ function numberOption(value: unknown, label: string): number | undefined {
     throw new Error(`${label} must be a positive integer.`);
   }
   return n;
-}
-
-function booleanOption(value: unknown): boolean | undefined {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  return Boolean(value);
 }

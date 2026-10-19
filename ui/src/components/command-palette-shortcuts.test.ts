@@ -1,44 +1,28 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  formatKeyboardShortcutCombo,
-  KEYBOARD_SHORTCUT_COMBOS,
-} from "../lib/keyboard-shortcut-contract.ts";
-import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import { createContext, createGateway, mountPalette } from "./command-palette.test-support.ts";
-import "./command-palette.ts";
+  createContext,
+  createGateway,
+  mountPalette,
+  registerCommandPaletteTestHooks,
+} from "./command-palette.test-support.ts";
+import "./command-palette.tsx";
 
 describe("CommandPalette platform shortcuts", () => {
-  let restoreDialogPolyfill: () => void;
-  let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
+  registerCommandPaletteTestHooks();
 
-  beforeEach(() => {
-    vi.useFakeTimers();
-    restoreDialogPolyfill = installDialogPolyfill();
-    scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
-    Object.defineProperty(Element.prototype, "scrollIntoView", {
-      configurable: true,
-      value: vi.fn(),
-    });
-  });
-
-  afterEach(() => {
-    document.body.replaceChildren();
-    restoreDialogPolyfill();
-    if (scrollIntoViewDescriptor) {
-      Object.defineProperty(Element.prototype, "scrollIntoView", scrollIntoViewDescriptor);
-    } else {
-      delete (Element.prototype as Partial<Element>).scrollIntoView;
-    }
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  it.each(["MacIntel", "Win32", "Linux x86_64"])(
-    "uses the platform palette shortcut on %s without consuming text editing",
-    async (platform) => {
+  it.each(
+    ["MacIntel", "Linux x86_64"].flatMap((platform) =>
+      [
+        { key: "л", code: "KeyK", shiftKey: false },
+        { key: "з", code: "KeyP", shiftKey: false },
+        { key: "З", code: "KeyP", shiftKey: true },
+      ].map(({ key, code, shiftKey }) => ({ platform, key, code, shiftKey })),
+    ),
+  )(
+    "uses $code (shift=$shiftKey) on $platform without consuming text editing",
+    async ({ platform, key, code, shiftKey }) => {
       vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
       const { gateway } = createGateway(true);
       const { palette } = await mountPalette(
@@ -53,8 +37,9 @@ describe("CommandPalette platform shortcuts", () => {
       const other = platform === "MacIntel" ? { ctrlKey: true } : { metaKey: true };
       const chord = (modifiers: KeyboardEventInit) =>
         new KeyboardEvent("keydown", {
-          key: "л",
-          code: "KeyK",
+          key,
+          code,
+          shiftKey,
           bubbles: true,
           cancelable: true,
           ...modifiers,
@@ -65,6 +50,19 @@ describe("CommandPalette platform shortcuts", () => {
       expect(nativeEdit.defaultPrevented).toBe(false);
       expect(palette.isOpen).toBe(false);
       expect(document.activeElement).toBe(editor);
+
+      for (const override of [
+        { isComposing: true },
+        { keyCode: 229 },
+        { key: "Dead" },
+        { altKey: true },
+        { metaKey: true, ctrlKey: true },
+      ]) {
+        const ignored = chord({ ...primary, ...override });
+        editor.dispatchEvent(ignored);
+        expect(ignored.defaultPrevented).toBe(false);
+        expect(palette.isOpen).toBe(false);
+      }
 
       const open = chord(primary);
       editor.dispatchEvent(open);
@@ -78,9 +76,10 @@ describe("CommandPalette platform shortcuts", () => {
       expect(start.disabled).toBe(true);
       expect(start.hidden).toBe(false);
       expect(start.textContent).toContain("New session");
-      expect(start.querySelector("kbd")?.textContent).toBe(
-        formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter),
+      expect(start.querySelector("kbd")?.textContent?.replace(/\s+/gu, "").trim()).toBe(
+        platform === "MacIntel" ? "⌘⏎" : "Ctrl+Enter",
       );
+      expect(start.querySelectorAll("kbd svg")).toHaveLength(platform === "MacIntel" ? 2 : 0);
       const editQuery = chord(other);
       input.dispatchEvent(editQuery);
       expect(editQuery.defaultPrevented).toBe(false);

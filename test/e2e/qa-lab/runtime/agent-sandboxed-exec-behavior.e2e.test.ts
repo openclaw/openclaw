@@ -2,11 +2,17 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "vitest";
+import { afterEach, expect, test } from "vitest";
 import { createOpenClawCodingTools } from "../../../../src/agents/agent-tools.js";
 import { resolveAttemptWorkspaceSandbox } from "../../../../src/agents/workspace-sandbox.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { captureEnv, setTestEnvValue } from "../../../../src/test-utils/env.js";
+
+afterEach(clearRuntimeConfigSnapshot);
 
 function createConfig(params: {
   image: string;
@@ -50,7 +56,7 @@ test("host:auto executes inside the resolved Docker sandbox", async () => {
   const outsideScript = path.join(outsideDir, "must-not-run.sh");
   const outsideMarker = path.join(outsideDir, "executed.txt");
   const workspaceMarker = path.join(workspaceDir, "container-marker.txt");
-  const image = process.env.OPENCLAW_SANDBOX_TEST_IMAGE ?? "openclaw-sandbox:bookworm-slim";
+  const image = process.env.OPENCLAW_SANDBOX_TEST_IMAGE ?? "openclaw-sandbox:trixie-slim";
   const env = captureEnv(["OPENCLAW_STATE_DIR"]);
   let runtimeId: string | undefined;
 
@@ -73,6 +79,7 @@ test("host:auto executes inside the resolved Docker sandbox", async () => {
       prefix: `oc-qa-exec-${process.pid}-`,
       workspaceRoot: path.join(root, "sandboxes"),
     });
+    setRuntimeConfigSnapshot(config);
     const workspace = await resolveAttemptWorkspaceSandbox({
       agentId: "sandboxed-exec",
       config,

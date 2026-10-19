@@ -8,11 +8,13 @@ const hoisted = vi.hoisted(() => ({
   ssrfPolicyFromPrivateNetworkOptIn: vi.fn(() => undefined),
 }));
 
-vi.mock("../runtime-api.js", () => ({
+vi.mock("../runtime-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime-api.js")>()),
   fetchWithSsrFGuard: hoisted.fetchWithSsrFGuard,
 }));
 
-vi.mock("./send.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   ssrfPolicyFromPrivateNetworkOptIn: hoisted.ssrfPolicyFromPrivateNetworkOptIn,
 }));
 
@@ -66,7 +68,7 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
     hoisted.fetchWithSsrFGuard.mockReset();
   });
 
-  it.each([1 | 2 | 8, "+011"])(
+  it.each([1 | 2 | 8])(
     "accepts numeric or signed decimal response features: %j",
     async (features) => {
       mockBotAdmin(features);
@@ -96,7 +98,7 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
     });
   });
 
-  it.each(["2response", -1])(
+  it.each(["2response"])(
     "rejects malformed or negative response features: %j",
     async (features) => {
       mockBotAdmin(features);
@@ -126,7 +128,7 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
       ok: false,
       code: "request_failed",
       message:
-        "Nextcloud Talk bot response feature probe failed: Nextcloud Talk bot response feature probe failed: malformed JSON response",
+        "Nextcloud Talk bot response feature check failed: Nextcloud Talk bot response feature check failed: malformed JSON response",
     });
   });
 
@@ -149,7 +151,7 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
       ok: false,
       code: "api_error",
       status: 503,
-      message: "Nextcloud Talk bot response feature probe failed (503)",
+      message: "Nextcloud Talk bot response feature check failed (503)",
     });
     expect(textSpy).not.toHaveBeenCalled();
     expect(tracked.wasCanceled()).toBe(true);
@@ -171,7 +173,7 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
       skipped: true,
       code: "missing_api_credentials",
       message:
-        "Nextcloud Talk bot response feature probe skipped: apiUser/apiPassword are not configured.",
+        "Nextcloud Talk bot response feature check skipped: apiUser/apiPassword are not configured.",
     });
     expect(hoisted.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });

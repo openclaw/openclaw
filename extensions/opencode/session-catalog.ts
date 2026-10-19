@@ -58,20 +58,15 @@ const SAFE_ENV_KEYS = [
 type OpenCodeQueryCacheEntry = {
   expiresAt: number;
   result: Promise<unknown>;
-  resolved?: true;
 };
 
 type OpenCodeQueryCacheOptions = {
-  configIdentity?: object;
   forceRefresh?: boolean;
 };
 
-const openCodeConfigIdentities = new WeakMap<object, number>();
-// Query results are valid for one immutable OpenClaw config identity, CLI environment, and SQL text.
-// Config/env changes or 32s expiry invalidate them; failures are removed so recovery retries at once.
-// The bounded map prevents pagination variants from growing while avoiding a subprocess every poll.
+// Queries depend on the CLI environment and SQL, not the OpenClaw config object.
+// Retain results across sidebar polls; expiry and explicit refresh control freshness.
 const openCodeQueryCache = new Map<string, OpenCodeQueryCacheEntry>();
-let nextOpenCodeConfigIdentity = 1;
 const log = createSubsystemLogger("opencode/session-catalog");
 let cliVersion: { key: string; expiresAt: number; result: Promise<boolean> } | undefined;
 
@@ -87,22 +82,15 @@ export async function isOpenCodeV2(): Promise<boolean> {
     });
     cliVersion = { key, expiresAt: Date.now() + OPENCODE_QUERY_CACHE_TTL_MS, result };
     result.catch(() => {
-      if (cliVersion?.result === result) {
-        cliVersion = undefined;
-      }
+      cliVersion = undefined;
     });
   }
   return cliVersion.result;
 }
 
-function openCodeQueryCacheKey(query: string, configIdentity: object): string {
-  let identity = openCodeConfigIdentities.get(configIdentity);
-  if (identity === undefined) {
-    identity = nextOpenCodeConfigIdentity++;
-    openCodeConfigIdentities.set(configIdentity, identity);
-  }
+function openCodeQueryCacheKey(query: string): string {
   const environment = SAFE_ENV_KEYS.map((key) => `${key}=${process.env[key] ?? ""}`).join("\0");
-  return `${String(identity)}\0${environment}\0${query}`;
+  return `${environment}\0${query}`;
 }
 
 type OpenCodeSessionPage = {
@@ -267,16 +255,14 @@ async function queryCachedOpenCodeSessions(
   count: number,
   options: OpenCodeQueryCacheOptions,
 ): Promise<unknown> {
-  const key = openCodeQueryCacheKey(query, options.configIdentity ?? process.env);
+  const key = openCodeQueryCacheKey(query);
   const cached = openCodeQueryCache.get(key);
   if (options.forceRefresh !== true && cached && cached.expiresAt > Date.now()) {
     openCodeQueryCache.delete(key);
     openCodeQueryCache.set(key, cached);
     return await cached.result;
   }
-  if (cached) {
-    openCodeQueryCache.delete(key);
-  }
+  openCodeQueryCache.delete(key);
   const result = queryOpenCodeSessions(query, count);
   const entry: OpenCodeQueryCacheEntry = {
     expiresAt: Date.now() + OPENCODE_QUERY_CACHE_TTL_MS,
@@ -285,17 +271,9 @@ async function queryCachedOpenCodeSessions(
   openCodeQueryCache.set(key, entry);
   pruneMapToMaxSize(openCodeQueryCache, OPENCODE_QUERY_CACHE_MAX_ENTRIES);
   try {
-    const value = await result;
-    entry.resolved = true;
-    return value;
+    return await result;
   } catch (error) {
-    if (openCodeQueryCache.get(key) === entry) {
-      if (cached?.resolved) {
-        openCodeQueryCache.set(key, cached);
-      } else {
-        openCodeQueryCache.delete(key);
-      }
-    }
+    openCodeQueryCache.delete(key);
     throw error;
   }
 }

@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "./ip-location.ts";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import "./ip-location.tsx";
 
 function jsonResponse(body: unknown) {
   return { ok: true, status: 200, json: async () => body } as Response;
@@ -24,6 +25,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  document.body.replaceChildren();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -74,6 +77,27 @@ describe("openclaw-ip-location", () => {
     expect(element.textContent?.trim()).toBe("");
   });
 
+  it("clears the previous location while a replacement address is pending", async () => {
+    const replacement = createDeferred<Response>();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ found: true, city: "Vienna", country: "Austria" }))
+      .mockReturnValueOnce(replacement.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const element = document.createElement("openclaw-ip-location");
+    element.ip = "203.0.113.24";
+    document.body.append(element);
+    await settleUntil(element, () => element.textContent?.trim() === "Vienna, Austria");
+
+    element.ip = "203.0.113.25";
+    await element.updateComplete;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(element.textContent?.trim()).toBe("");
+
+    replacement.resolve(jsonResponse({ found: true, city: "Berlin", country: "Germany" }));
+    await settleUntil(element, () => element.textContent?.trim() === "Berlin, Germany");
+  });
+
   it("does not request anything without an address", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -82,5 +106,67 @@ describe("openclaw-ip-location", () => {
 
     await element.updateComplete;
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("resumes an unavailable lookup when the same element reconnects", async () => {
+    vi.useFakeTimers();
+    const first = createDeferred<Response>();
+    const recovered = createDeferred<Response>();
+    const fetchMock = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(recovered.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const element = document.createElement("openclaw-ip-location");
+    element.ip = "203.0.113.22";
+    document.body.append(element);
+    await element.updateComplete;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    first.resolve({ ok: false, status: 503 } as Response);
+    await vi.advanceTimersByTimeAsync(0);
+    element.remove();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    document.body.append(element);
+    await element.updateComplete;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    recovered.resolve(jsonResponse({ found: true, city: "Berlin", country: "Germany" }));
+    await vi.advanceTimersByTimeAsync(0);
+    await element.updateComplete;
+    expect(element.textContent?.trim()).toBe("Berlin, Germany");
+  });
+
+  it("ignores detached completion and reads the cached result after reconnecting", async () => {
+    vi.useFakeTimers();
+    const response = createDeferred<Response>();
+    const fetchMock = vi.fn().mockReturnValue(response.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const element = document.createElement("openclaw-ip-location");
+    element.ip = "203.0.113.23";
+    document.body.append(element);
+    await element.updateComplete;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    element.remove();
+    response.resolve(jsonResponse({ found: true, city: "Vienna", country: "Austria" }));
+    await vi.advanceTimersByTimeAsync(0);
+    await element.updateComplete;
+    expect(element.textContent?.trim()).toBe("");
+
+    document.body.append(element);
+    await vi.advanceTimersByTimeAsync(0);
+    await element.updateComplete;
+    expect(element.textContent?.trim()).toBe("Vienna, Austria");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    element.remove();
+    element.ip = undefined;
+    document.body.append(element);
+    await vi.advanceTimersByTimeAsync(0);
+    await element.updateComplete;
+    expect(element.textContent?.trim()).toBe("");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

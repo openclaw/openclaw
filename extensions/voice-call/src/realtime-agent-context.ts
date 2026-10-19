@@ -3,7 +3,6 @@ import { resolveRealtimeVoiceAgentContextInstructions } from "openclaw/plugin-sd
 import { buildRealtimeVoiceAgentConsultPolicyInstructions } from "openclaw/plugin-sdk/realtime-voice";
 import type { VoiceCallConfig } from "./config.js";
 
-/** Build final realtime instructions from base instructions, consult policy, and agent context. */
 export async function buildRealtimeVoiceInstructions(params: {
   baseInstructions: string;
   config: VoiceCallConfig;
@@ -13,9 +12,11 @@ export async function buildRealtimeVoiceInstructions(params: {
 }): Promise<string> {
   const { config } = params;
   const contextConfig = config.realtime.agentContext;
-  return [
+  const sections = [
     params.baseInstructions,
     buildRealtimeVoiceAgentConsultPolicyInstructions(config.realtime),
+  ];
+  sections.push(
     await resolveRealtimeVoiceAgentContextInstructions({
       config: params.coreConfig,
       agentId: params.agentId,
@@ -25,7 +26,6 @@ export async function buildRealtimeVoiceInstructions(params: {
       maxChars: contextConfig.maxChars,
       warn: params.warn,
     }),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  );
+  return sections.filter(Boolean).join("\n\n");
 }

@@ -6,6 +6,7 @@ import type {
 import {
   OLLAMA_DEFAULT_API_KEY,
   OLLAMA_PROVIDER_ID,
+  getUnlistedOllamaConfiguredModelIds,
   resolveOllamaDiscoveryResult,
   shouldUseSyntheticOllamaAuth,
   type OllamaPluginConfig,
@@ -54,6 +55,7 @@ export const ollamaProviderDiscovery = {
   catalog: {
     order: "late",
     run: runOllamaDiscovery,
+    getUnlistedConfiguredModelIds: getUnlistedOllamaConfiguredModelIds,
   },
 } satisfies ProviderPlugin;
 

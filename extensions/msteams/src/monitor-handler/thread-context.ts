@@ -5,14 +5,17 @@ import type { OpenClawConfig } from "../../runtime-api.js";
 import { formatUnknownError } from "../errors.js";
 import {
   buildThreadContext,
-  fetchChannelMessage,
   fetchChatMessageText,
   fetchThreadReplies,
   type GraphThreadMessage,
 } from "../graph-thread.js";
 import type { extractMSTeamsQuoteInfo } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
-import { createMSTeamsInboundDeadline, withMSTeamsRequestDeadline } from "../request-timeout.js";
+import {
+  createMSTeamsInboundEnrichmentDeadline,
+  type MSTeamsRequestDeadline,
+  withMSTeamsRequestDeadline,
+} from "../request-timeout.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { resolveTeamGroupId } from "../team-identity.js";
@@ -21,12 +24,12 @@ import {
   formatParentContextEvent,
   markParentContextInjected,
   shouldInjectParentContext,
-  summarizeParentMessage,
 } from "../thread-parent-context.js";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
 export function prepareMSTeamsThreadRouting(params: {
   cfg: OpenClawConfig;
+  accountId: string;
   context: MSTeamsTurnContext;
   isDirectMessage: boolean;
   isChannel: boolean;
@@ -40,6 +43,7 @@ export function prepareMSTeamsThreadRouting(params: {
   const route = core.channel.routing.resolveAgentRoute({
     cfg: params.cfg,
     channel: "msteams",
+    accountId: params.accountId,
     teamId: params.teamId,
     peer: {
       kind: params.isDirectMessage ? "direct" : params.isChannel ? "channel" : "group",
@@ -53,11 +57,13 @@ export function prepareMSTeamsThreadRouting(params: {
     replyToId: params.context.activity.replyToId,
   });
 
-  const deadline = createMSTeamsInboundDeadline();
   let teamAadGroupId = params.context.activity.channelData?.team?.aadGroupId?.trim() || undefined;
   const conversationTeamId = params.isChannel ? params.teamId : undefined;
   let teamGroupIdPromise: Promise<string | undefined> | undefined;
-  const resolveTeamAadGroupId = async (): Promise<string | undefined> => {
+  // The first caller's deadline bounds the shared lookup; later callers reuse its result.
+  const resolveTeamAadGroupId = async (
+    deadline: MSTeamsRequestDeadline,
+  ): Promise<string | undefined> => {
     if (!conversationTeamId) {
       return undefined;
     }
@@ -80,7 +86,6 @@ export function prepareMSTeamsThreadRouting(params: {
   return {
     route,
     threadRootId: params.conversationMessageId ?? params.context.activity.replyToId,
-    deadline,
     resolveTeamAadGroupId,
     getTeamAadGroupId: () => teamAadGroupId,
   };
@@ -102,8 +107,11 @@ export async function resolveMSTeamsThreadContext(params: {
 }) {
   const core = getMSTeamsRuntime();
   const activity = params.context.activity;
-  const { route, deadline } = params.routing;
-  const teamAadGroupId = await params.routing.resolveTeamAadGroupId();
+  const { route } = params.routing;
+  // Start the enrichment budget after media resolution so slow attachment
+  // transfers do not starve quote and thread lookups.
+  const deadline = createMSTeamsInboundEnrichmentDeadline();
+  const teamAadGroupId = await params.routing.resolveTeamAadGroupId(deadline);
   let quoteBodyFull: string | undefined;
   let quoteSenderId: string | undefined;
   let quoteSenderName: string | undefined;
@@ -149,15 +157,13 @@ export async function resolveMSTeamsThreadContext(params: {
               teamAadGroupId,
               params.conversationId,
               threadParentId,
-              (token, groupId, requestedChannelId, messageId) =>
-                fetchChannelMessage(token, groupId, requestedChannelId, messageId, deadline),
+              deadline,
             ),
             fetchThreadReplies(
               graphToken,
               teamAadGroupId,
               params.conversationId,
               threadParentId,
-              50,
               deadline,
             ),
           ]),
@@ -187,7 +193,7 @@ export async function resolveMSTeamsThreadContext(params: {
               allowNameMatching: params.allowNameMatching,
             }).allowed,
         });
-      const parentSummary = summarizeParentMessage(parentMsg);
+      const parentContextEvent = formatParentContextEvent(parentMsg);
       const visibleParentMessages = parentMsg
         ? filterSupplementalContextItems({
             items: [parentMsg],
@@ -197,18 +203,18 @@ export async function resolveMSTeamsThreadContext(params: {
           }).items
         : [];
       if (
-        parentSummary &&
+        parentContextEvent &&
         visibleParentMessages.length > 0 &&
         shouldInjectParentContext(route.sessionKey, threadParentId)
       ) {
-        core.system.enqueueSystemEvent(formatParentContextEvent(parentSummary), {
+        core.system.enqueueSystemEvent(parentContextEvent, {
           sessionKey: route.sessionKey,
           contextKey: `msteams:thread-parent:${params.conversationId}:${threadParentId}`,
         });
         markParentContextInjected(route.sessionKey, threadParentId);
       }
       const allMessages = parentMsg ? [parentMsg, ...replies] : replies;
-      quoteSenderId = parentMsg?.from?.user?.id ?? parentMsg?.from?.application?.id ?? undefined;
+      quoteSenderId = parentMsg?.from?.user?.id ?? parentMsg?.from?.application?.id;
       quoteSenderName =
         parentMsg?.from?.user?.displayName ??
         parentMsg?.from?.application?.displayName ??

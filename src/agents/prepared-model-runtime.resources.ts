@@ -1,5 +1,8 @@
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
+import {
+  aggregatePluginRuntimeCloseErrors,
+  hasRetainedPluginRuntimeCloseError,
+} from "../plugins/runtime-close-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { capturePreparedModelRuntimeLifetime } from "./prepared-model-runtime.lifecycle.js";
@@ -89,7 +92,10 @@ class PreparedRegistryResources {
         }
         if (this.failures.length > 0) {
           this.completion.reject(
-            new AggregateError(this.failures, "Prepared plugin resources failed to close"),
+            aggregatePluginRuntimeCloseErrors(
+              this.failures,
+              "Prepared plugin resources failed to close",
+            ),
           );
         } else {
           this.completion.resolve();

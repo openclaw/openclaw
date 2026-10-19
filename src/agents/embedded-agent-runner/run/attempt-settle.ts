@@ -16,13 +16,11 @@ import {
 } from "../../agent-run-terminal-outcome.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { SessionTranscriptMessageCommittedError } from "../../sessions/session-manager-message-error.js";
-import {
-  appendSessionTranscriptNote,
-  withSessionManagerWrite,
-} from "../../sessions/session-manager-write-admission.js";
+import { appendSessionTranscriptNote } from "../../sessions/session-manager-write-admission.js";
 import { log } from "../logger.js";
-import { clearActiveEmbeddedRun } from "../runs.js";
+import { detachActiveEmbeddedRun } from "../runs.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { completeEmbeddedAttemptAfterTurn } from "./attempt-finalize.js";
@@ -38,34 +36,23 @@ import type { PreparedStreamRuntime } from "./attempt-stream-runtime.types.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import { buildPromptImageFailureNotice } from "./images.js";
-import type { EmbeddedAttemptExecutionState, EmbeddedRunAttemptParams } from "./types.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const FAILED_PROMPT_MEDIA_NOTE_TYPE = "openclaw.system-note";
 const FAILED_PROMPT_MEDIA_NOTE_SOURCE = "prompt-image-hydration";
 
 type StreamCleanupInput = {
+  attachment: PreparedStreamRuntime["stream"]["registration"];
   attempt: EmbeddedRunAttemptParams;
   clearAttemptTimeoutTimers: () => void;
-  isProbeSession: boolean;
   queueHandle: PreparedStreamRuntime["stream"]["queueHandle"];
-  state: EmbeddedAttemptExecutionState;
   unsubscribe: () => void;
   deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
 };
 
 function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error | undefined {
-  const { attempt, state } = input;
-  const terminal = projectAgentRunAttemptTerminal(state.terminal);
+  const { attempt } = input;
   input.clearAttemptTimeoutTimers();
-  if (
-    !input.isProbeSession &&
-    (terminal.aborted || terminal.timedOut) &&
-    !terminal.timedOutDuringCompaction
-  ) {
-    log.debug(
-      `run cleanup: runId=${attempt.runId} sessionId=${attempt.sessionId} aborted=${terminal.aborted} timedOut=${terminal.timedOut}`,
-    );
-  }
   // Every release belongs to this owner; one broken callback must not strand
   // the active run or mask the prompt failure that caused teardown.
   let firstCleanupError: Error | undefined;
@@ -77,11 +64,13 @@ function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error
     cleanups.push([
       "active run cleanup",
       () =>
-        clearActiveEmbeddedRun(
+        detachActiveEmbeddedRun(
           attempt.sessionId,
           input.queueHandle,
           attempt.sessionKey,
           attempt.sessionFile,
+          undefined,
+          input.attachment,
         ),
     ]);
   }
@@ -113,7 +102,7 @@ export async function runEmbeddedAttemptSettledPhase(
     toolResultPromptProjectionState,
     transport: { effectivePromptCacheRetention },
   } = sessionRuntime;
-  const { nestedToolActivities } = toolBase;
+  const { nestedToolActivityState } = toolBase;
   const promptState: EmbeddedAttemptPromptState = {
     contextBudgetStatus: undefined,
     preflightRecovery: undefined,
@@ -147,6 +136,13 @@ export async function runEmbeddedAttemptSettledPhase(
       error !== null && error !== undefined ? { error, source: source ?? "prompt" } : null,
     );
   };
+  const markTimedOutDuringCompaction = () => {
+    state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
+      kind: "timeout",
+      phase: "compaction",
+      source: "observation",
+    });
+  };
 
   try {
     const { promptStartedAt, transcriptLeafId } = await runEmbeddedAttemptPromptPhase(
@@ -160,37 +156,31 @@ export async function runEmbeddedAttemptSettledPhase(
       return terminal.timedOutByRunBudget && !terminal.failed;
     };
     const runBudgetTimeoutTerminal = isFailureFreeRunBudgetTimeout();
-    const warnPendingEventsUnsettled = () => {
-      log.warn(
-        `pending subscription events did not settle within ${RUN_LIVENESS_JOIN_TIMEOUT_MS}ms; ` +
-          `proceeding to stream settlement: runId=${attempt.runId}`,
-      );
-    };
-    const drainPendingEventsBounded = () =>
+    const drainPendingEventsBounded = (afterRunBudgetTimeout: boolean) =>
       joinWithRunLivenessDeadline({
         // Partial-reply callbacks cannot mutate the buffer and may be stalled
         // on transport; timeout salvage needs only the serialized event chain.
-        joinWork: () => waitForPendingEvents({ includePartialReplies: false }),
-        onTimeout: warnPendingEventsUnsettled,
+        joinWork: afterRunBudgetTimeout
+          ? () => waitForPendingEvents({ includePartialReplies: false })
+          : waitForPendingEvents,
+        ...(afterRunBudgetTimeout ? {} : { runAbortSignal: input.runAbortController.signal }),
+        onTimeout: () => {
+          log.warn(
+            `pending subscription events did not settle within ${RUN_LIVENESS_JOIN_TIMEOUT_MS}ms; ` +
+              `proceeding to stream settlement: runId=${attempt.runId}`,
+          );
+        },
       });
-    if (runBudgetTimeoutTerminal) {
-      // The timeout already aborted the signal; drain without racing it.
-      await drainPendingEventsBounded();
-    } else {
-      await joinWithRunLivenessDeadline({
-        joinWork: waitForPendingEvents,
-        runAbortSignal: input.runAbortController.signal,
-        onTimeout: warnPendingEventsUnsettled,
-      });
-      // A timeout can fire during the abort-aware join and resolve it before
-      // its queue drains. Re-read terminal ownership, then drain if eligible.
-      if (isFailureFreeRunBudgetTimeout()) {
-        await drainPendingEventsBounded();
-      }
+    if (!runBudgetTimeoutTerminal) {
+      await drainPendingEventsBounded(false);
+    }
+    // A timeout may already have aborted the signal, or fire during the first
+    // join. Re-read ownership before draining without racing that signal.
+    if (runBudgetTimeoutTerminal || isFailureFreeRunBudgetTimeout()) {
+      await drainPendingEventsBounded(true);
     }
     // Ownership can change during the drain; publish only after the final read.
-    const salvageTerminal = readTerminal();
-    if (salvageTerminal.timedOutByRunBudget && !salvageTerminal.failed) {
+    if (isFailureFreeRunBudgetTimeout()) {
       subscription.flushPartialAssistantText();
     }
     const beforeAgentFinalizeRevisionReason = getBeforeAgentFinalizeRevisionReason();
@@ -198,7 +188,7 @@ export async function runEmbeddedAttemptSettledPhase(
     let rewoundBeforeAgentFinalizeRevision = false;
     if (beforeAgentFinalizeRevisionReason && beforeAgentFinalizeRevisionEntryId) {
       await input.sessionLock.withOwnedTranscriptWrite(() =>
-        withSessionManagerWrite(sessionManager, () => {
+        withSessionManagerAppend(sessionManager, async () => {
           const rejectedEntry = sessionManager.getEntry(beforeAgentFinalizeRevisionEntryId);
           if (rejectedEntry?.type !== "message" || rejectedEntry.message.role !== "assistant") {
             throw new Error(
@@ -208,7 +198,7 @@ export async function runEmbeddedAttemptSettledPhase(
           }
           // Keep persistence append-only while excluding the rejected draft and
           // every trailing descendant from the hidden retry's active branch.
-          sessionManager.appendLeafControl({
+          await sessionManager.appendLeafControlAsync({
             targetId: rejectedEntry.parentId,
             appendParentId: rejectedEntry.parentId,
           });
@@ -227,7 +217,6 @@ export async function runEmbeddedAttemptSettledPhase(
         promptError: settleTerminal.promptError,
         promptErrorSource: settleTerminal.promptErrorSource,
         yieldAborted: promptState.yieldAborted,
-        sessionIdUsed,
       };
       try {
         settledStream = await settleEmbeddedAttemptStream({
@@ -243,19 +232,13 @@ export async function runEmbeddedAttemptSettledPhase(
           ),
           subscription,
           readLifecycleState: readTerminal,
-          markTimedOutDuringCompaction: () => {
-            state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
-              kind: "timeout",
-              phase: "compaction",
-              source: "observation",
-            });
-          },
+          markTimedOutDuringCompaction,
           runAbortSignal: input.runAbortController.signal,
           isProbeSession,
           onBlockReplyFlush,
           abortable,
           prePromptMessageCount: sessionRuntimeState.prePromptMessageCount,
-          nestedToolActivities,
+          nestedToolActivityState,
           cache: {
             getObservation: preparedStreamRuntime.cache.getObservation,
             retention: effectivePromptCacheRetention,
@@ -282,11 +265,7 @@ export async function runEmbeddedAttemptSettledPhase(
     // outer teardown still needs the completed stream snapshot and usage state.
     setFailure(settledStream.promptError, settledStream.promptErrorSource);
     if (settledStream.timedOutDuringCompaction) {
-      state.terminal = mergeAgentRunAttemptTerminal(state.terminal, {
-        kind: "timeout",
-        phase: "compaction",
-        source: "observation",
-      });
+      markTimedOutDuringCompaction();
     }
     messagesSnapshot = settledStream.messagesSnapshot;
     sessionIdUsed = settledStream.sessionIdUsed;
@@ -364,14 +343,15 @@ export async function runEmbeddedAttemptSettledPhase(
               }
             };
             if (isIncognitoSessionKey(target.sessionKey)) {
-              await withSessionManagerWrite(sessionManager, appendAndPublish);
+              await withSessionManagerAppend(sessionManager, appendAndPublish);
             } else {
               await appendAndPublish();
             }
           } else {
-            await withSessionManagerWrite(sessionManager, () => {
+            await withSessionManagerAppend(sessionManager, async () => {
               assertBinding();
-              sessionManager.appendMessage(note);
+              await sessionManager.appendMessageAsync(note);
+              assertBinding();
               activeSession.agent.state.messages = [...activeSession.messages, note];
               messagesSnapshot = [...messagesSnapshot, note];
             });
@@ -386,11 +366,10 @@ export async function runEmbeddedAttemptSettledPhase(
     }
   } finally {
     cleanupError = cleanupEmbeddedAttemptStreamExecution({
+      attachment: preparedStreamRuntime.stream.registration,
       attempt,
       clearAttemptTimeoutTimers,
-      isProbeSession,
       queueHandle,
-      state,
       unsubscribe,
       deferredLifecycleOwner: preparedStreamRuntime.stream.deferredLifecycleOwner,
     });

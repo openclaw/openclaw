@@ -1,4 +1,3 @@
-// Skill prompt limits keep every catalog producer within one shared model-context budget.
 import {
   COMPACT_DESCRIPTION_MAX_CHARS,
   formatSkillsCompactForPrompt,

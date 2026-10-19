@@ -62,7 +62,7 @@ async function arrangeMetadata(waveformFails = false) {
     if (waveformFails) {
       throw new Error("waveform conversion failed");
     }
-    const pcm = Buffer.alloc(512);
+    const pcm = Buffer.alloc(6);
     for (let offset = 0; offset < pcm.length; offset += 2) {
       pcm.writeInt16LE(1_000, offset);
     }
@@ -141,6 +141,11 @@ describe("voice metadata settlement owns waveform cleanup", () => {
       expect(result.error).toBeUndefined();
       expect(result.value?.durationSecs).toBe(1.25);
       expect(Buffer.from(result.value?.waveform ?? "", "base64")).toHaveLength(256);
+      if (!waveformFails) {
+        expect(Buffer.from(result.value?.waveform ?? "", "base64")).toEqual(
+          Buffer.concat([Buffer.from([8, 8, 8]), Buffer.alloc(253)]),
+        );
+      }
       expect(await fs.readFile(fixture.inputPath)).toEqual(fixture.original);
       expect(await fs.readdir(media.root)).toEqual(["original.ogg"]);
     },

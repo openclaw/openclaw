@@ -1,43 +1,16 @@
 import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import { runDaemonInstall } from "../daemon-cli/install.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
-
-// A missing target must never select the updater's old native/config writer.
-vi.mock("../daemon-cli/install.js", () => ({ runDaemonInstall: vi.fn() }));
-
-it.each(["git", "unknown"] as const)(
-  "refuses a missing %s target without installing through the old runtime",
-  async (mode) => {
-    vi.mocked(runDaemonInstall).mockClear();
-    await withTestDir({ prefix: "openclaw-native-missing-target-" }, async (root) => {
-      const onGatewayStartAttempted = vi.fn();
-      await expect(
-        runUpdatedInstallGatewayCommand(
-          {
-            result: { root, mode },
-            opts: {},
-            invocationEnv: {},
-            onGatewayStartAttempted,
-          },
-          "install",
-        ),
-      ).rejects.toThrow("updated install entrypoint not found");
-      expect(runDaemonInstall).not.toHaveBeenCalled();
-      expect(onGatewayStartAttempted).not.toHaveBeenCalled();
-    });
-  },
-);
 
 it.each([
   "installed",
   "load-failed",
-  "operator-edit",
   "compensated",
+  "start-refused",
   "invalid-receipt",
   "compensation-failed",
 ])(
@@ -53,19 +26,19 @@ it.each([
       const warning =
         outcome === "compensated"
           ? "previous definition was restored"
-          : outcome === "operator-edit"
-            ? "Service.Nice preserved"
+          : outcome === "start-refused"
+            ? "Service definition was left unchanged"
             : "Service.KillMode repaired";
-      const preserved = outcome === "operator-edit" || outcome === "compensated";
+      const preserved = outcome === "compensated" || outcome === "start-refused";
       const compensationFailed = outcome === "compensation-failed";
       const failed = preserved || compensationFailed || outcome === "load-failed";
       const error = compensationFailed
         ? "UPDATE_NATIVE_AUTHORITY: Service definition recovery is unverified: Error: SERVICE_DEFINITION_UNKNOWN: Scheduled Task changed"
-        : preserved
-          ? outcome === "compensated"
+        : outcome === "start-refused"
+          ? "SERVICE_DEFINITION_UNKNOWN: Service is masked. Run `systemctl --user unmask openclaw-gateway.service`."
+          : preserved
             ? "SERVICE_DEFINITION_UNKNOWN: Service definition refresh failed; the previous definition was restored: Error: ENOSPC"
-            : "SERVICE_DEFINITION_UNKNOWN: Service.Nice"
-          : "load failed";
+            : "load failed";
       await fs.writeFile(
         path.join(root, "dist", "index.mjs"),
         `process.stdout.write(${JSON.stringify(

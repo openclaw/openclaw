@@ -2,7 +2,10 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
-import { buildToolLifecycleErrorResult } from "../../embedded-agent-tool-results.js";
+import {
+  buildToolLifecycleErrorResult,
+  prepareToolResult,
+} from "../../embedded-agent-tool-results.js";
 
 type SubscriptionMock = ReturnType<
   typeof import("../../embedded-agent-subscribe.js").subscribeEmbeddedAgentSession
@@ -17,26 +20,16 @@ export function createSubscriptionMock(): SubscriptionMock {
     getCurrentAttemptAssistant: () => undefined,
     hasSuccessfulModelResponse: () => false,
     getLastAssistantTextMessageIndex: () => undefined,
+    getKeptAnswer: () => undefined,
     getLatestMcpAppChannelView: () => undefined,
     getLatestMcpConnectAction: () => undefined,
     toolMetas: [] as SubscriptionMock["toolMetas"],
-    runToolLifecycle: async <T>(toolParams: {
-      args: unknown;
-      replaySafe?: boolean;
-      execute: (onImplementationStart: () => void) => Promise<T>;
-      onTerminal?: (terminal: {
-        result: unknown;
-        isError: boolean;
-        executedArguments: unknown;
-        effectReceipt: {
-          state: "read_completed" | "failed_no_effect" | "mutation_committed" | "uncertain";
-        };
-      }) => void | Promise<void>;
-    }) => {
+    runToolLifecycle: async (toolParams) => {
       try {
         const result = await toolParams.execute(() => undefined);
         await toolParams.onTerminal?.({
           result,
+          readSanitizedResult: prepareToolResult(result),
           isError: false,
           executedArguments: structuredClone(toolParams.args),
           effectReceipt: {
@@ -45,8 +38,10 @@ export function createSubscriptionMock(): SubscriptionMock {
         });
         return result;
       } catch (error) {
+        const result = buildToolLifecycleErrorResult(error);
         await toolParams.onTerminal?.({
-          result: buildToolLifecycleErrorResult(error),
+          result,
+          readSanitizedResult: prepareToolResult(result),
           isError: true,
           executedArguments: structuredClone(toolParams.args),
           effectReceipt: {
@@ -68,6 +63,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     getMessagingToolSourceReplyPayloads: () => [] as MessagingToolSourceReplyPayload[],
     getSourceReplyDelivered: () => undefined,
     getSourceReplyDeliveryState: () => undefined,
+    endsWithSourceProgress: () => false,
     getHeartbeatToolResponse: () => undefined,
     getPendingToolMediaReply: () => null,
     getToolAutoDeliveryMediaUrls: () => [] as string[],

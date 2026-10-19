@@ -1,7 +1,12 @@
 import { execFile } from "node:child_process";
 import { closeSync, constants, openSync, readSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
 import { setImmediate } from "node:timers/promises";
+import {
+  DarwinProcessInspectionError,
+  readDarwinProcessSnapshot,
+  readDarwinProcessTree,
+  readDarwinProcessCommandLine,
+} from "openclaw/plugin-sdk/process-runtime";
 
 export type PosixProcess = {
   pid: number;
@@ -20,27 +25,46 @@ const PROCESS_COLUMNS = "pid=,ppid=,pgid=,stat=,lstart=";
 const MAX_PROCESS_CONTAINMENT_MS = 2_000;
 const PROCESS_INSPECTION_MAX_BYTES = 8 * 1024 * 1024;
 const PROCFS_COMMAND_PERMISSION_EXIT = 77;
-// cmdline can wait on target memory. Keep those kernel waits outside the Gateway.
-const PROCFS_COMMAND_READER = `
+// Keep cmdline kernel waits and whole-table filesystem work outside the Gateway.
+const PROCFS_READER = `
 const fs = require("node:fs");
-const [pid, maxBytes] = process.argv.slice(-2).map(Number);
-try {
-  const fd = fs.openSync("/proc/" + pid + "/cmdline", "r");
-  const buffer = Buffer.alloc(4096);
+const [target, limit] = process.argv.slice(-2);
+const maxBytes = Number(limit);
+const buffer = Buffer.alloc(4096);
+let bytes = 0;
+function read(file) {
+  const fd = fs.openSync(file, "r");
   const chunks = [];
-  let bytes = 0;
+  let size = 0;
   try {
     for (;;) {
       const count = fs.readSync(fd, buffer, 0, Math.min(buffer.length, maxBytes - bytes + 1), null);
       if (count === 0) break;
       bytes += count;
-      if (bytes > maxBytes) throw new Error("Command byte limit exceeded");
+      if (bytes > maxBytes) throw new Error("Process inspection byte limit exceeded");
       chunks.push(Buffer.from(buffer.subarray(0, count)));
+      size += count;
     }
   } finally {
     fs.closeSync(fd);
   }
-  process.stdout.end(Buffer.concat(chunks, bytes));
+  return Buffer.concat(chunks, size);
+}
+try {
+  if (target === "snapshot") {
+    const rows = [read("/proc/sys/kernel/random/boot_id").toString()];
+    for (const pid of fs.readdirSync("/proc")) {
+      if (!/^\\d+$/.test(pid)) continue;
+      try {
+        rows.push(pid, read("/proc/" + pid + "/stat").toString());
+      } catch (error) {
+        if (!["ENOENT", "ESRCH"].includes(error?.code)) throw error;
+      }
+    }
+    process.stdout.end(rows.join("\\0"));
+  } else {
+    process.stdout.end(read("/proc/" + target + "/cmdline"));
+  }
 } catch (error) {
   process.exitCode = ["EACCES", "EPERM", "ERR_ACCESS_DENIED"].includes(error?.code)
     ? ${PROCFS_COMMAND_PERMISSION_EXIT} : 1;
@@ -51,16 +75,31 @@ export class ProcessInspectionError extends Error {
   constructor(readonly reason: "deadline" | "permission" | "unavailable") {
     const detail = {
       deadline: "Process inspection exceeded its deadline. Retry when the host is responsive.",
-      permission: "Check process inspection permissions (/proc on Linux, ps on macOS), then retry.",
+      permission:
+        "Check process inspection permissions (/proc on Linux, native process inspection on macOS), then retry.",
       unavailable:
-        "Process identity is unavailable or invalid. Check /proc on Linux or ps on macOS, then retry.",
+        "Process identity is unavailable or invalid. Check /proc on Linux or native process inspection on macOS, then retry.",
     }[reason];
     super(`Cannot inspect Codex processes. ${detail}`);
     this.name = "ProcessInspectionError";
   }
 }
 
+function remainingInspectionTime(deadline: number): number {
+  // Use the monotonic clock so NTP adjustments or sleep resumes cannot stretch
+  // or shrink the budget while the inspection timers (also monotonic) are in flight.
+  // Math.floor keeps the value integral for AbortSignal.timeout / setTimeout.
+  const remainingMs = Math.floor(deadline - performance.now());
+  if (remainingMs <= 0) {
+    throw new ProcessInspectionError("deadline");
+  }
+  return remainingMs;
+}
+
 function inspectionFailure(error: unknown): ProcessInspectionError {
+  if (error instanceof DarwinProcessInspectionError) {
+    return new ProcessInspectionError(error.reason);
+  }
   if (error instanceof ProcessInspectionError) {
     return error;
   }
@@ -75,22 +114,30 @@ function inspectionFailure(error: unknown): ProcessInspectionError {
   );
 }
 
+function isMissingProcess(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "ESRCH")
+  );
+}
+
 export async function readCodexAppServerProcessSnapshot(
-  deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS,
+  deadline = performance.now() + MAX_PROCESS_CONTAINMENT_MS,
   pids?: readonly number[],
+  treeRoots?: readonly number[],
 ): Promise<PosixProcess[]> {
   // Registration proves only known owners. Containment still needs the full tree.
   // Include the observer so an empty selected ps result cannot prove disappearance.
   const selected = pids === undefined ? undefined : [...new Set([process.pid, ...pids])];
   const rows =
-    process.platform === "linux"
-      ? await readLinuxProcesses(selected, deadline)
-      : await readProcesses(
-          selected ? ["-o", PROCESS_COLUMNS, "-p", selected.join(",")] : ["-axo", PROCESS_COLUMNS],
-          deadline,
-          selected !== undefined,
-        );
-  if (selected && !rows.some((row) => row.pid === process.pid)) {
+    treeRoots && process.platform === "darwin"
+      ? await readDarwinProcessTree(deadline, treeRoots).catch((error: unknown) => {
+          throw inspectionFailure(error);
+        })
+      : await readProcesses(selected, deadline, selected !== undefined);
+  if ((selected || treeRoots) && !rows.some((row) => row.pid === process.pid)) {
     throw new ProcessInspectionError("unavailable");
   }
   return rows;
@@ -100,10 +147,7 @@ export async function readCodexAppServerProcess(
   pid: number,
   deadline: number,
 ): Promise<PosixProcess | undefined> {
-  const rows =
-    process.platform === "linux"
-      ? await readLinuxProcesses([pid], deadline)
-      : await readProcesses(["-o", PROCESS_COLUMNS, "-p", String(pid)], deadline);
+  const rows = await readProcesses([pid], deadline);
   return rows.find((row) => row.pid === pid);
 }
 
@@ -115,10 +159,7 @@ export async function readCodexAppServerProcessCommand(
   if (process.platform === "linux") {
     let pending = false;
     do {
-      const remainingMs = deadline - Date.now();
-      if (remainingMs <= 0) {
-        throw new ProcessInspectionError("deadline");
-      }
+      remainingInspectionTime(deadline);
       const command = await readProcessOutput(
         { kind: "procfs-command", pid: observed.pid },
         deadline,
@@ -143,6 +184,10 @@ export async function readCodexAppServerProcessCommand(
         await setImmediate();
       }
     } while (pending);
+  } else if (process.platform === "darwin") {
+    output = await readDarwinProcessCommandLine(observed.pid, deadline).catch((error: unknown) => {
+      throw inspectionFailure(error);
+    });
   } else {
     output =
       (
@@ -154,32 +199,50 @@ export async function readCodexAppServerProcessCommand(
         .split("\n")[0]
         ?.trim() ?? "";
   }
-  if (Date.now() >= deadline) {
-    throw new ProcessInspectionError("deadline");
-  }
+  remainingInspectionTime(deadline);
   if (!output) {
     throw new ProcessInspectionError("unavailable");
   }
   return output;
 }
 
-async function readProcesses(
-  args: string[],
+function readProcesses(
+  pids: readonly number[] | undefined,
   deadline: number,
   selected = false,
 ): Promise<PosixProcess[]> {
-  const output = await readProcessOutput({ kind: "ps", args }, deadline);
-  return parseProcesses(output, selected);
+  if (process.platform === "linux") {
+    return readLinuxProcesses(pids, deadline);
+  }
+  if (process.platform === "darwin") {
+    return readDarwinProcessSnapshot(deadline, pids)
+      .then((rows) =>
+        rows.map(({ pid, ppid, pgid, state, startedAt }) => ({
+          pid,
+          ppid,
+          pgid,
+          state,
+          startedAt,
+        })),
+      )
+      .catch((error: unknown) => {
+        throw inspectionFailure(error);
+      });
+  }
+  const args = pids ? ["-o", PROCESS_COLUMNS, "-p", pids.join(",")] : ["-axo", PROCESS_COLUMNS];
+  return readProcessOutput({ kind: "ps", args }, deadline).then((output) =>
+    parseProcesses(output, selected),
+  );
 }
 
 async function readProcessOutput(
-  command: { kind: "ps"; args: string[] } | { kind: "procfs-command"; pid: number },
+  command:
+    | { kind: "ps"; args: string[] }
+    | { kind: "procfs-command"; pid: number }
+    | { kind: "procfs-snapshot" },
   deadline: number,
 ): Promise<string> {
-  const remainingMs = deadline - Date.now();
-  if (remainingMs <= 0) {
-    throw new ProcessInspectionError("deadline");
-  }
+  const remainingMs = remainingInspectionTime(deadline);
   return await new Promise<string>((resolve, reject) => {
     let settled = false;
     const settle = (output: string | ProcessInspectionError) => {
@@ -194,15 +257,15 @@ async function readProcessOutput(
         resolve(output);
       }
     };
-    const procfs = command.kind === "procfs-command";
+    const procfs = command.kind !== "ps";
     const inspector = execFile(
       procfs ? process.execPath : "ps",
       procfs
         ? [
             ...(process.versions.bun ? ["--no-env-file", "--config=/dev/null"] : []),
             "-e",
-            PROCFS_COMMAND_READER,
-            String(command.pid),
+            PROCFS_READER,
+            command.kind === "procfs-command" ? String(command.pid) : "snapshot",
             String(PROCESS_INSPECTION_MAX_BYTES),
           ]
         : command.args,
@@ -215,7 +278,7 @@ async function readProcessOutput(
       },
       (error, stdout) => {
         settle(
-          Date.now() >= deadline
+          performance.now() >= deadline
             ? new ProcessInspectionError("deadline")
             : error
               ? procfs && error.code === PROCFS_COMMAND_PERMISSION_EXIT
@@ -282,55 +345,19 @@ async function readLinuxProcesses(
   if (selected !== undefined) {
     return readSelectedLinuxProcesses(selected, deadline);
   }
-  const remainingMs = deadline - Date.now();
-  if (remainingMs <= 0) {
-    throw new ProcessInspectionError("deadline");
-  }
-  const options = { encoding: "utf8" as const, signal: AbortSignal.timeout(remainingMs) };
-  try {
-    const bootId = parseLinuxBootId(await readFile("/proc/sys/kernel/random/boot_id", options));
-    const pids = await readdir("/proc");
-    const rows: PosixProcess[] = [];
-    let bytes = 0;
-    for (const entry of pids) {
-      if (!/^\d+$/.test(entry)) {
-        continue;
-      }
-      if (Date.now() >= deadline) {
-        throw new ProcessInspectionError("deadline");
-      }
-      const stat = await readFile(`/proc/${entry}/stat`, options).catch((error: unknown) => {
-        // A process may exit between enumeration and read. Other failures must
-        // not turn an unreadable process into proof that an orphan is gone.
-        if (
-          error &&
-          typeof error === "object" &&
-          "code" in error &&
-          (error.code === "ENOENT" || error.code === "ESRCH")
-        ) {
-          return undefined;
-        }
-        throw error;
-      });
-      if (stat === undefined) {
-        continue;
-      }
-      bytes += stat.length;
-      if (bytes > PROCESS_INSPECTION_MAX_BYTES) {
-        throw new ProcessInspectionError("unavailable");
-      }
-      const row = parseLinuxProcess(stat, entry, bootId, false);
-      if (row) {
-        rows.push(row);
-      }
+  const output = await readProcessOutput({ kind: "procfs-snapshot" }, deadline);
+  // procfs comm may contain newlines and ')', but never a NUL byte.
+  const [boot, ...fields] = output.split("\0");
+  const bootId = parseLinuxBootId(boot ?? "");
+  const rows: PosixProcess[] = [];
+  for (let index = 0; index < fields.length; index += 2) {
+    const row = parseLinuxProcess(fields[index + 1]!, fields[index]!, bootId, false);
+    if (row) {
+      rows.push(row);
     }
-    if (Date.now() >= deadline) {
-      throw new ProcessInspectionError("deadline");
-    }
-    return rows;
-  } catch (error) {
-    throw inspectionFailure(error);
   }
+  remainingInspectionTime(deadline);
+  return rows;
 }
 
 function parseLinuxBootId(value: string): string {
@@ -352,7 +379,7 @@ function parseLinuxProcess(
   const fields = stat
     .slice(commEnd + 1)
     .trim()
-    .split(/\s+/);
+    .split(/\s+/, 20);
   const ppid = Number(fields[1]);
   const pgid = Number(fields[2]);
   const startTicks = fields[19];
@@ -388,26 +415,20 @@ function readSelectedProcFile(
   deadline: number,
   maxBytes = PROCESS_INSPECTION_MAX_BYTES,
 ): Buffer {
-  if (Date.now() >= deadline) {
-    throw new ProcessInspectionError("deadline");
-  }
+  remainingInspectionTime(deadline);
   const fd = openSync(file, constants.O_RDONLY | constants.O_NONBLOCK);
   const chunks: Buffer[] = [];
   const buffer = Buffer.alloc(Math.min(4096, maxBytes + 1));
   let bytes = 0;
   try {
     for (;;) {
-      if (Date.now() >= deadline) {
-        throw new ProcessInspectionError("deadline");
-      }
+      remainingInspectionTime(deadline);
       const count = readSync(fd, buffer, {
         offset: 0,
         length: Math.min(buffer.length, maxBytes - bytes + 1),
         position: null,
       });
-      if (Date.now() >= deadline) {
-        throw new ProcessInspectionError("deadline");
-      }
+      remainingInspectionTime(deadline);
       if (count === 0) {
         return Buffer.concat(chunks, bytes);
       }
@@ -441,12 +462,7 @@ function readSelectedLinuxProcesses(selected: readonly number[], deadline: numbe
           PROCESS_INSPECTION_MAX_BYTES - bytes,
         );
       } catch (error) {
-        if (
-          error &&
-          typeof error === "object" &&
-          "code" in error &&
-          (error.code === "ENOENT" || error.code === "ESRCH")
-        ) {
+        if (isMissingProcess(error)) {
           continue;
         }
         throw error;
@@ -457,9 +473,7 @@ function readSelectedLinuxProcesses(selected: readonly number[], deadline: numbe
         rows.push(row);
       }
     }
-    if (Date.now() >= deadline) {
-      throw new ProcessInspectionError("deadline");
-    }
+    remainingInspectionTime(deadline);
     return rows;
   } catch (error) {
     throw inspectionFailure(error);

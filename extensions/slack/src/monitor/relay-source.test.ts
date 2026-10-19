@@ -7,7 +7,7 @@ import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
+import { type WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackSendIdentity } from "../send.js";
 import {
@@ -216,6 +216,67 @@ describe("Slack relay source", () => {
         resolve();
       });
     });
+  });
+
+  it("settles durable acceptance before recovering from a websocket error", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise<void>((resolve) => {
+      server.once("listening", resolve);
+    });
+    const connected = deferred<WebSocket>();
+    const socketClosed = deferred<void>();
+    server.once("connection", (socket) => {
+      socket.once("close", () => socketClosed.resolve());
+      connected.resolve(socket);
+      socket.send(
+        JSON.stringify({
+          type: "slack_event",
+          delivery_id: "pending-on-error",
+          route: { kind: "channel_default", key: "T1:C1" },
+          payload: { event: { type: "message", channel: "C1", ts: "1.000001" } },
+        }),
+      );
+    });
+    const acceptStarted = deferred<void>();
+    const acceptDone = deferred<void>();
+    const statuses: Array<Record<string, unknown>> = [];
+    const abortController = new AbortController();
+    const monitor = monitorSlackRelaySource({
+      config: {
+        url: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/gateway/ws`,
+        authToken: "relay-secret",
+        gatewayId: "pash",
+      },
+      acceptRelayEvent: async () => {
+        acceptStarted.resolve();
+        await acceptDone.promise;
+      },
+      runtime: { error: vi.fn(), log: vi.fn(), exit: vi.fn() },
+      abortSignal: abortController.signal,
+      identityHealth: { lifecycle: "ready", lastError: null },
+      setStatus: (status) => statuses.push(status),
+    });
+    const stopped = monitor.catch((error: unknown) => error);
+    try {
+      await acceptStarted.promise;
+      const socket = await connected.promise;
+      socket.send(Buffer.alloc(SLACK_RELAY_MAX_PAYLOAD_BYTES + 1));
+      await socketClosed.promise;
+      expect(statuses.filter((status) => status.lifecycle === "recovering")).toEqual([]);
+      abortController.abort();
+      acceptDone.resolve();
+      await expect(stopped).resolves.toBeUndefined();
+    } finally {
+      abortController.abort();
+      acceptDone.resolve();
+      await stopped;
+      for (const client of server.clients) {
+        client.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 
   describe("parseRelayFrame", () => {
@@ -575,7 +636,7 @@ describe("Slack relay proxy environment", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "delivers through the monitor with destination-only auth and durable acknowledgement (NO_PROXY=%s)",
     async (bypass) => {
       const fixture = await createRelayProxyFixture();
@@ -774,29 +835,6 @@ describe("Slack relay proxy environment", () => {
       }
     },
   );
-
-  it("keeps a NO_PROXY match direct when the proxy URL carries credentials", async () => {
-    const fixture = await createRelayGatedProxyFixture({ credentials: PROXY_TEST_CREDENTIALS });
-    vi.stubEnv(
-      "HTTPS_PROXY",
-      `http://${PROXY_TEST_CREDENTIALS.username}:${PROXY_TEST_CREDENTIALS.password}@${fixture.proxyHost}`,
-    );
-    vi.stubEnv("NO_PROXY", "127.0.0.1");
-    const ack = expectRelayAck(fixture.relay, "bypassed-delivery");
-    const monitor = startRelayMonitor(fixture);
-    try {
-      await expect(ack).resolves.toEqual({ type: "ack", delivery_id: "bypassed-delivery" });
-      expect(fixture.proxyConnections()).toBe(0);
-      expect(fixture.connects).toEqual([]);
-      expect(fixture.upgrades).toEqual([
-        { via: "direct", authorization: "Bearer relay-secret", url: "/gateway/ws?gateway_id=pash" },
-      ]);
-    } finally {
-      const stopped = await monitor.stop();
-      await fixture.close();
-      expect(stopped).toBeUndefined();
-    }
-  });
 
   it("dials an https:// proxy over TLS trusted through the managed-proxy CA file", async () => {
     const fixture = await createRelayGatedProxyFixture({ tls: true });

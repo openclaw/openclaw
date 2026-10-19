@@ -55,6 +55,25 @@ adjust the printed dashboard URL as described in [Containerized Gateway](/instal
 Use [Health checks](/install/docker#health-checks) to verify the gateway and
 [Update OpenClaw](/install/docker-vm-runtime#update-openclaw) for image updates.
 
+When the CLI shares Gateway state, add `pid: "service:openclaw-gateway"` to the
+`openclaw-cli` service in your Compose override so ownership checks can see the
+Gateway's processes; sharing the network alone does not share the PID namespace.
+Alternatively, run the TUI inside the Gateway container with
+`docker compose exec openclaw-gateway openclaw tui`. A different PID namespace
+now refuses unverifiable ownership instead of reclaiming the running Gateway's
+lock. `tui --local` starts an embedded agent and is not a PID-namespace workaround
+for shared state. Older locks retain their previous recovery behavior until the
+Gateway next starts and writes namespace identity.
+A replacement Gateway reclaims a crashed container's state lock and SQLite owner
+lease after about 90 seconds without an owner heartbeat, even when Docker assigns
+a different hostname. Startup waits up to 95 seconds for fresh ownership evidence
+to age out. Doctor refuses a fresh, unverifiable owner immediately; after stopping
+the previous Gateway, wait up to 90 seconds after its last heartbeat and retry.
+Existing leases from older images use their recorded hostname and heartbeat until
+the replacement publishes boot and PID namespace identity. A verified live owner
+still blocks takeover, even when its lease deadline has passed. Image updates need
+no schema migration or manual lease deletion.
+
 Token setup belongs to the [Docker setup flow](/install/docker#containerized-gateway).
 If you need the Control UI token, read `OPENCLAW_GATEWAY_TOKEN` privately from the
 project `.env`. [`config get <path>`](/cli/config) redacts sensitive values; it
@@ -140,7 +159,7 @@ does not reveal the full token.
     The same Dockerfile preserves the production runtime contract: digest-pinned
     Node and Bun bases, non-root uid 1000, `tini`, the built-in health check, and
     the `/usr/local/bin/openclaw` symlink. Dependabot refreshes the reviewed base
-    digests; do not replace them with floating `FROM node:24-bookworm` tags.
+    digests; do not replace them with floating `FROM node:24-trixie` tags.
 
   </Accordion>
 
@@ -160,7 +179,7 @@ does not reveal the full token.
   </Accordion>
 
   <Accordion title="Base image metadata">
-    The runtime image uses `node:24-bookworm-slim` and runs `tini` as PID 1 so zombie processes are reaped and signals handled correctly in long-running containers. It publishes OCI base-image annotations including `org.opencontainers.image.base.name` and `org.opencontainers.image.source`. Dependabot refreshes the pinned Node base digest, and each build applies current Debian point-release updates. See [OCI image annotations](https://github.com/opencontainers/image-spec/blob/main/annotations.md).
+    The runtime image uses `node:24-trixie-slim` (Debian 13) and runs `tini` as PID 1 so zombie processes are reaped and signals handled correctly in long-running containers. Node 24 stays aligned with Docker release CI. It publishes OCI base-image annotations including `org.opencontainers.image.base.name` and `org.opencontainers.image.source`. Dependabot refreshes the pinned Node base digest, and each build applies current Debian point-release updates. See [OCI image annotations](https://github.com/opencontainers/image-spec/blob/main/annotations.md).
   </Accordion>
 </AccordionGroup>
 

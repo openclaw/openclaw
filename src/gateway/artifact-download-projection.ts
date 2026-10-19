@@ -19,6 +19,8 @@ export type ArtifactDownloadResponse = {
   artifact: ArtifactSummary;
   response: ReturnType<typeof resolveByteResponse>;
   body?: Uint8Array<ArrayBuffer>;
+  /** Lazy bodies own their resources until completion or HTTP cancellation. */
+  stream?: (signal: AbortSignal) => AsyncIterable<Uint8Array>;
 };
 
 function artifactContentDigest(artifact: ArtifactRecord): string {

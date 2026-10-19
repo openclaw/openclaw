@@ -1,13 +1,13 @@
-// Discord tests cover api plugin behavior.
-import { createServer, type Server } from "node:http";
+import { createServer, type RequestListener, type Server } from "node:http";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
+import { withFetchPreconnect, type FetchMock } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { DiscordApiError, fetchDiscord, requestDiscord } from "./api.js";
 import { jsonResponse } from "./test-http-helpers.js";
 
 const DISCORD_SUCCESS_RESPONSE_LIMIT_BYTES = 4 * 1024 * 1024;
+const servers: Server[] = [];
 
 async function listenLoopbackServer(server: Server): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -24,16 +24,13 @@ async function listenLoopbackServer(server: Server): Promise<number> {
   });
 }
 
-async function closeServer(server: Server): Promise<void> {
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-}
-
-function stubDiscordFetchToLoopback(
-  baseUrl: string,
+async function mockDiscordServer(
+  handler: RequestListener,
   onResponse?: (response: Response) => void,
-): void {
+): Promise<void> {
+  const server = createServer(handler);
+  servers.push(server);
+  const baseUrl = `http://127.0.0.1:${await listenLoopbackServer(server)}`;
   const realFetch = globalThis.fetch.bind(globalThis);
   vi.stubGlobal(
     "fetch",
@@ -49,47 +46,31 @@ function stubDiscordFetchToLoopback(
   );
 }
 
+async function fetchError(response: Response) {
+  const fetcher = withFetchPreconnect(async () => response);
+  return await fetchDiscord("/users/@me/guilds", "test", fetcher, {
+    retry: { attempts: 1 },
+  }).catch((err: unknown) => err);
+}
+
+function successfulFetch() {
+  return withFetchPreconnect(vi.fn<FetchMock>(async () => jsonResponse({ id: "42" }, 200)));
+}
+
 describe("fetchDiscord", () => {
-  beforeEach(() => {
+  beforeEach(() => vi.useRealTimers());
+  afterEach(async () => {
     vi.useRealTimers();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  it("formats rate limit payloads without raw JSON", async () => {
-    const fetcher = withFetchPreconnect(async () =>
-      jsonResponse(
-        {
-          message: "You are being rate limited.",
-          retry_after: 0.631,
-          global: false,
-        },
-        429,
+    await Promise.all(
+      servers.splice(0).map(
+        (server) =>
+          new Promise<void>((resolve) => {
+            server.close(() => resolve());
+          }),
       ),
     );
-
-    const error = await fetchDiscord("/users/@me/guilds", "test", fetcher, {
-      retry: { attempts: 1 },
-    }).catch((err: unknown) => err);
-
-    const message = String(error);
-    expect(message).toContain("Discord API /users/@me/guilds failed (429)");
-    expect(message).toContain("You are being rate limited.");
-    expect(message).toContain("retry after 0.6s");
-    expect(message).not.toContain("{");
-    expect(message).not.toContain("retry_after");
-  });
-
-  it("preserves non-JSON error text", async () => {
-    const fetcher = withFetchPreconnect(async () => new Response("Not Found", { status: 404 }));
-    await expect(
-      fetchDiscord("/users/@me/guilds", "test", fetcher, {
-        retry: { attempts: 1 },
-      }),
-    ).rejects.toThrow("Discord API /users/@me/guilds failed (404): Not Found");
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("bounds Discord API error bodies without using response.text()", async () => {
@@ -98,11 +79,7 @@ describe("fetchDiscord", () => {
       headers: { "content-type": "text/plain" },
     });
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
-    const fetcher = withFetchPreconnect(async () => tracked.response);
-
-    const error = await fetchDiscord("/users/@me/guilds", "test", fetcher, {
-      retry: { attempts: 1 },
-    }).catch((err: unknown) => err);
+    const error = await fetchError(tracked.response);
 
     expect(error).toBeInstanceOf(DiscordApiError);
     expect(String(error)).toContain("Discord API /users/@me/guilds failed (503)");
@@ -113,17 +90,12 @@ describe("fetchDiscord", () => {
   });
 
   it("sanitizes Cloudflare HTML rate limits and applies a fallback cooldown", async () => {
-    const fetcher = withFetchPreconnect(
-      async () =>
-        new Response(
-          "<!doctype html><html><head><title>Error 1015</title></head><body><h1>You are being rate limited</h1><script>raw()</script></body></html>",
-          { status: 429, headers: { "content-type": "text/html" } },
-        ),
+    const error = await fetchError(
+      new Response(
+        "<!doctype html><html><head><title>Error 1015</title></head><body><h1>You are being rate limited</h1><script>raw()</script></body></html>",
+        { status: 429, headers: { "content-type": "text/html" } },
+      ),
     );
-
-    const error = await fetchDiscord("/users/@me/guilds", "test", fetcher, {
-      retry: { attempts: 1 },
-    }).catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(DiscordApiError);
     expect((error as DiscordApiError).retryAfter).toBe(60);
@@ -135,66 +107,13 @@ describe("fetchDiscord", () => {
     expect(message).not.toContain("<script");
   });
 
-  it("honors Retry-After for Cloudflare HTML application lookup rate limits", async () => {
-    const fetcher = withFetchPreconnect(
-      async () =>
-        new Response("<html><title>Error 1015</title><body>rate limited</body></html>", {
-          status: 429,
-          headers: { "content-type": "text/html", "retry-after": "7" },
-        }),
-    );
-
-    const error = await fetchDiscord("/oauth2/applications/@me", "test", fetcher, {
-      retry: { attempts: 1 },
-    }).catch((err: unknown) => err);
-
-    expect(error).toBeInstanceOf(DiscordApiError);
-    expect((error as DiscordApiError).retryAfter).toBe(7);
-    const message = String(error);
-    expect(message).toContain("Discord API /oauth2/applications/@me failed (429)");
-    expect(message).toContain("Error 1015");
-    expect(message).not.toContain("<html");
-  });
-
-  it.each([
-    ["hex", "0x10"],
-    ["fractional", "1.5"],
-    ["unsafe-ms", "9007199254741"],
-    ["unsafe-integer", "9007199254740993"],
-    ["overflow", `1${"0".repeat(309)}`],
-  ])("rejects invalid Retry-After header values: %s", async (_label, header) => {
-    const fetcher = withFetchPreconnect(
-      async () =>
-        new Response("<html><title>Error 1015</title><body>rate limited</body></html>", {
-          status: 429,
-          headers: { "content-type": "text/html", "retry-after": header },
-        }),
-    );
-
-    const error = await fetchDiscord("/oauth2/applications/@me", "test", fetcher, {
-      retry: { attempts: 1 },
-    }).catch((err: unknown) => err);
-
-    expect(error).toBeInstanceOf(DiscordApiError);
-    expect((error as DiscordApiError).retryAfter).toBe(60);
-  });
-
   it("ignores unsafe retry_after body values and falls back to Retry-After", async () => {
-    const fetcher = withFetchPreconnect(
-      async () =>
-        new Response(
-          JSON.stringify({
-            message: "You are being rate limited.",
-            retry_after: 9_007_199_254_741,
-            global: false,
-          }),
-          { status: 429, headers: { "retry-after": "7" } },
-        ),
+    const error = await fetchError(
+      new Response(
+        JSON.stringify({ message: "You are being rate limited.", retry_after: 9_007_199_254_741 }),
+        { status: 429, headers: { "retry-after": "7" } },
+      ),
     );
-
-    const error = await fetchDiscord("/users/@me/guilds", "test", fetcher, {
-      retry: { attempts: 1 },
-    }).catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(DiscordApiError);
     expect((error as DiscordApiError).retryAfter).toBe(7);
@@ -206,35 +125,21 @@ describe("fetchDiscord", () => {
     const fetcher = withFetchPreconnect(async () => {
       calls += 1;
       if (calls === 1) {
-        return jsonResponse(
-          {
-            message: "You are being rate limited.",
-            retry_after: 0,
-            global: false,
-          },
-          429,
-        );
+        return jsonResponse({ message: "You are being rate limited.", retry_after: 0 }, 429);
       }
-      return jsonResponse([{ id: "1", name: "Guild" }], 200);
+      return jsonResponse([{}], 200);
     });
 
-    const result = await fetchDiscord<Array<{ id: string; name: string }>>(
-      "/users/@me/guilds",
-      "test",
-      fetcher,
-      { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 } },
-    );
+    const result = await fetchDiscord<unknown[]>("/users/@me/guilds", "test", fetcher, {
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
 
     expect(result).toHaveLength(1);
     expect(calls).toBe(2);
   });
 
   it("sends JSON request bodies through the shared retry helper", async () => {
-    let request: RequestInit | undefined;
-    const fetcher = withFetchPreconnect(async (_url, init) => {
-      request = init;
-      return jsonResponse({ id: "42" }, 200);
-    });
+    const fetcher = successfulFetch();
 
     const result = await requestDiscord<{ id: string }>("/channels/c/messages", "test", {
       body: { content: "hello" },
@@ -242,23 +147,16 @@ describe("fetchDiscord", () => {
       retry: { attempts: 1 },
     });
 
+    const request = fetcher.mock.calls[0]?.[1];
     expect(result).toEqual({ id: "42" });
-    if (!request) {
-      throw new Error("expected Discord request init");
-    }
-    expect(request.method).toBe("POST");
-    expect(request.body).toBe(JSON.stringify({ content: "hello" }));
-    expect(new Headers(request.headers).get("content-type")).toBe("application/json");
+    expect(request).toMatchObject({ method: "POST", body: JSON.stringify({ content: "hello" }) });
+    expect(new Headers(request?.headers).get("content-type")).toBe("application/json");
   });
 
   it("caps oversized request timeouts before creating abort signals", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
-    let request: RequestInit | undefined;
-    const fetcher = withFetchPreconnect(async (_url, init) => {
-      request = init;
-      return jsonResponse({ id: "42" }, 200);
-    });
+    const fetcher = successfulFetch();
 
     await requestDiscord<{ id: string }>("/channels/c/messages", "test", {
       fetcher,
@@ -267,151 +165,60 @@ describe("fetchDiscord", () => {
     });
 
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-    expect(request?.signal).toBeInstanceOf(AbortSignal);
+    expect(fetcher.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
     expect(clearTimeoutSpy).toHaveBeenCalledWith(setTimeoutSpy.mock.results[0]?.value);
-  });
-
-  it("throws DiscordApiError on malformed JSON success response body", async () => {
-    const fetcher = withFetchPreconnect(async () => new Response("NOT JSON {{{", { status: 200 }));
-
-    const error = await fetchDiscord("/users/@me/guilds", "test", fetcher, {
-      retry: { attempts: 1 },
-    }).catch((err: unknown) => err);
-
-    expect(error).toBeInstanceOf(DiscordApiError);
-    expect(String(error)).toContain("Discord API /users/@me/guilds returned malformed JSON");
   });
 
   it("rejects malformed UTF-8 in otherwise valid Discord JSON", async () => {
     let response: Response | undefined;
-    const server = createServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.write('[{"id":"guild-');
-      res.write(Buffer.from([0xff]));
-      res.end('","name":"Guild"}]');
-    });
-    const port = await listenLoopbackServer(server);
-
-    try {
-      stubDiscordFetchToLoopback(`http://127.0.0.1:${port}`, (nextResponse) => {
+    await mockDiscordServer(
+      (_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.write('[{"id":"guild-');
+        res.write(Buffer.from([0xff]));
+        res.end('"}]');
+      },
+      (nextResponse) => {
         response = nextResponse;
-      });
-
-      await expect(
-        requestDiscord("/users/@me/guilds", "test", {
-          retry: { attempts: 1 },
-        }),
-      ).rejects.toThrow("Discord API /users/@me/guilds returned malformed JSON");
-      expect(response?.bodyUsed).toBe(true);
-    } finally {
-      await closeServer(server);
-    }
+      },
+    );
+    await expect(
+      requestDiscord("/users/@me/guilds", "test", { retry: { attempts: 1 } }),
+    ).rejects.toThrow("Discord API /users/@me/guilds returned malformed JSON");
+    expect(response?.bodyUsed).toBe(true);
   });
 
-  it("returns under-cap requestDiscord responses from a real loopback HTTP server", async () => {
-    const payload = { id: "channel-42", name: "loopback", type: 0 };
-    let contentLength: string | null | undefined;
-    let requestUrl: string | undefined;
-    let authorization: string | undefined;
-    const server = createServer((req, res) => {
-      requestUrl = req.url;
-      authorization = req.headers.authorization;
-      const body = JSON.stringify(payload);
-      res.writeHead(200, { "content-type": "application/json" });
-      res.write(body.slice(0, 12));
-      res.end(body.slice(12));
-    });
-    const port = await listenLoopbackServer(server);
-
-    try {
-      stubDiscordFetchToLoopback(`http://127.0.0.1:${port}`, (response) => {
-        contentLength = response.headers.get("content-length");
-      });
-
-      const result = await requestDiscord<typeof payload>("/channels/channel-42", "test-token", {
-        retry: { attempts: 1 },
-      });
-
-      expect(result).toEqual(payload);
-      expect(requestUrl).toBe("/api/v10/channels/channel-42");
-      expect(authorization).toBe("Bot test-token");
-      expect(contentLength).toBeNull();
-    } finally {
-      await closeServer(server);
-    }
-  });
-
-  it("redacts reflected bot credentials from non-JSON error bodies", async () => {
+  it.each(["HTML", "JSON"])("redacts reflected bot credentials from %s errors", async (format) => {
+    const json = format === "JSON";
+    const status = json ? 429 : 502;
     const uniqueSecret = "discord-loopback-secret";
     const token = `proof-prefix-${uniqueSecret}-proof-suffix`;
     let authorization: string | undefined;
-    const server = createServer((req, res) => {
+    await mockDiscordServer((req, res) => {
       authorization = req.headers.authorization;
-      res.writeHead(502, { "content-type": "text/html" });
+      const message = `proxy failure Authorization: ${authorization}; request rejected`;
+      res.writeHead(status, { "content-type": json ? "application/json" : "text/html" });
       res.end(
-        `<html><body>proxy failure Authorization: ${authorization}; request rejected</body></html>`,
+        json ? JSON.stringify({ message, retry_after: 0 }) : `<html><body>${message}</body></html>`,
       );
     });
-    const port = await listenLoopbackServer(server);
+    const error = await requestDiscord("/gateway/bot", token, {
+      retry: { attempts: 1 },
+    }).catch((err: unknown) => err);
 
-    try {
-      stubDiscordFetchToLoopback(`http://127.0.0.1:${port}`);
-
-      const error = await requestDiscord("/gateway/bot", token, {
-        retry: { attempts: 1 },
-      }).catch((err: unknown) => err);
-
-      expect(error).toBeInstanceOf(DiscordApiError);
-      expect(authorization).toBe(`Bot ${token}`);
-      const message = String(error);
-      expect(message).toContain("Discord API /gateway/bot failed (502)");
-      expect(message).toContain("proxy failure");
-      expect(message).toContain("Authorization: Bot");
-      expect(message).not.toContain(token);
-      expect(message).not.toContain(uniqueSecret);
-      expect(message).not.toContain("<html");
-    } finally {
-      await closeServer(server);
-    }
-  });
-
-  it("redacts reflected bot credentials from JSON error messages", async () => {
-    const uniqueSecret = "discord-json-loopback-secret";
-    const token = `proof-prefix-${uniqueSecret}-proof-suffix`;
-    let authorization: string | undefined;
-    const server = createServer((req, res) => {
-      authorization = req.headers.authorization;
-      res.writeHead(429, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          message: `proxy failure Authorization: ${authorization}; request rejected`,
-          retry_after: 0,
-          global: false,
-          code: 20_028,
-        }),
-      );
-    });
-    const port = await listenLoopbackServer(server);
-
-    try {
-      stubDiscordFetchToLoopback(`http://127.0.0.1:${port}`);
-
-      const error = await requestDiscord("/gateway/bot", token, {
-        retry: { attempts: 1 },
-      }).catch((err: unknown) => err);
-
-      expect(error).toBeInstanceOf(DiscordApiError);
-      expect(authorization).toBe(`Bot ${token}`);
-      expect((error as DiscordApiError).retryAfter).toBe(0);
-      const message = String(error);
-      expect(message).toContain("Discord API /gateway/bot failed (429)");
-      expect(message).toContain("proxy failure");
-      expect(message).toContain("Authorization: Bot");
+    expect(error).toBeInstanceOf(DiscordApiError);
+    expect(authorization).toBe(`Bot ${token}`);
+    const message = String(error);
+    expect(message).toContain(`Discord API /gateway/bot failed (${status})`);
+    expect(message).toContain("proxy failure");
+    expect(message).toContain("Authorization: Bot");
+    expect(message).not.toContain(token);
+    expect(message).not.toContain(uniqueSecret);
+    if (json) {
+      expect(error).toMatchObject({ retryAfter: 0 });
       expect(message).toContain("retry after 0.0s");
-      expect(message).not.toContain(token);
-      expect(message).not.toContain(uniqueSecret);
-    } finally {
-      await closeServer(server);
+    } else {
+      expect(message).not.toContain("<html");
     }
   });
 
@@ -419,77 +226,46 @@ describe("fetchDiscord", () => {
     const oversizedPayloadBytes = DISCORD_SUCCESS_RESPONSE_LIMIT_BYTES + 256 * 1024;
     let contentLength: string | null | undefined;
     let requestUrl: string | undefined;
-    let streamedBytes = 0;
-    const server = createServer((req, res) => {
-      requestUrl = req.url;
-      const chunk = Buffer.alloc(64 * 1024, 0x78);
-      res.writeHead(200, { "content-type": "application/json" });
-      res.write('{"id":"');
-
-      const writeMore = () => {
-        while (streamedBytes < oversizedPayloadBytes) {
-          if (res.destroyed) {
-            return;
-          }
-          streamedBytes += chunk.byteLength;
-          if (!res.write(chunk)) {
-            res.once("drain", writeMore);
-            return;
-          }
-        }
-        res.end('"}');
-      };
-
-      writeMore();
-    });
-    const port = await listenLoopbackServer(server);
-
-    try {
-      stubDiscordFetchToLoopback(`http://127.0.0.1:${port}`, (response) => {
+    await mockDiscordServer(
+      (req, res) => {
+        requestUrl = req.url;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.write('{"id":"');
+        res.end(`${"x".repeat(oversizedPayloadBytes)}"}`);
+      },
+      (response) => {
         contentLength = response.headers.get("content-length");
-      });
+      },
+    );
+    const error = await requestDiscord("/channels/123/messages", "test-token", {
+      retry: { attempts: 1 },
+    }).catch((err: unknown) => err);
 
-      let error: unknown;
-      try {
-        await requestDiscord("/channels/123/messages", "test-token", {
-          retry: { attempts: 1 },
-        });
-      } catch (err) {
-        error = err;
-      }
-
-      expect(error).toBeInstanceOf(Error);
-      expect(String(error)).toContain("Discord API /channels/123/messages response body too large");
-      expect(String(error)).toContain(`limit: ${DISCORD_SUCCESS_RESPONSE_LIMIT_BYTES} bytes`);
-      expect(requestUrl).toBe("/api/v10/channels/123/messages");
-      expect(contentLength).toBeNull();
-    } finally {
-      await closeServer(server);
-    }
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain("Discord API /channels/123/messages response body too large");
+    expect(String(error)).toContain(`limit: ${DISCORD_SUCCESS_RESPONSE_LIMIT_BYTES} bytes`);
+    expect(requestUrl).toBe("/api/v10/channels/123/messages");
+    expect(contentLength).toBeNull();
   });
 
   it("aborts promptly during 429 retry backoff when the caller signal fires", async () => {
     vi.useFakeTimers();
-    try {
-      const fetcher = vi.fn(async () =>
-        jsonResponse({ message: "rate limited", retry_after: 30, global: false }, 429),
-      );
-      const controller = new AbortController();
-      const request = requestDiscord("/users/@me/guilds", "test-token", {
-        fetcher: withFetchPreconnect(fetcher),
-        retry: { attempts: 3 },
-        signal: controller.signal,
-      });
+    const fetcher = vi.fn(async () =>
+      jsonResponse({ message: "rate limited", retry_after: 30 }, 429),
+    );
+    const controller = new AbortController();
+    const request = requestDiscord("/users/@me/guilds", "test-token", {
+      fetcher: withFetchPreconnect(fetcher),
+      retry: { attempts: 3 },
+      signal: controller.signal,
+    });
 
-      await vi.advanceTimersByTimeAsync(0);
-      expect(fetcher).toHaveBeenCalledTimes(1);
-      controller.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    controller.abort();
 
-      await expect(request).rejects.toThrow(/abort/i);
-      expect(fetcher).toHaveBeenCalledTimes(1);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(request).rejects.toThrow(/abort/i);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

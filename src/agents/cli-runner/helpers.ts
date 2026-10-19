@@ -7,10 +7,7 @@ import { fileStore } from "@openclaw/fs-safe/store";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChatType } from "../../channels/chat-type.js";
@@ -22,12 +19,11 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
 import { formatCliImageTurnContext } from "../cli-image-turn-correlation.js";
-import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
+import type { EmbeddedContextFile } from "../embedded-agent-helpers/context-file.js";
 import {
   detectAndLoadPromptImages,
   detectImageReferences,
@@ -41,24 +37,12 @@ import { buildSystemPromptParams } from "../system-prompt-params.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import { cliBackendLog } from "./log.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
-/** Re-export CLI reliability helpers used by older runner call sites. */
-export {
-  buildCliSupervisorScopeKey,
-  resolveCliNoOutputTimeoutMs,
-  resolveCliRunTimeoutOverrideMs,
-} from "./reliability.js";
 
-const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const sweptCliImageRoots = new Set<string>();
 
 export function isClaudeCliBackendId(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === "claude-cli";
-}
-
-/** Enqueues a CLI run under a backend/session key to prevent unsafe overlap. */
-export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
-  return CLI_RUN_QUEUE.enqueue(key, task);
 }
 
 export function resolveCliRunQueueKey(params: {
@@ -95,6 +79,8 @@ export function resolveCliRunQueueKey(params: {
 }
 
 export function buildCliAgentSystemPrompt(params: {
+  preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
+  requesterProfileId?: string;
   workspaceDir: string;
   cwd?: string;
   config?: OpenClawConfig;
@@ -102,6 +88,7 @@ export function buildCliAgentSystemPrompt(params: {
     typeof buildConfiguredAgentSystemPrompt
   >[0]["preparedModelRuntime"];
   preparedGitCoauthorPrompt?: string;
+  preparedSessionEntry?: Parameters<typeof buildSystemPromptParams>[0]["preparedSessionEntry"];
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requireExplicitMessageTarget?: boolean;
@@ -109,6 +96,8 @@ export function buildCliAgentSystemPrompt(params: {
   runtimeChannel?: string;
   runtimeChatType?: ChatType;
   runtimeCapabilities?: string[];
+  customInlineButtonHint?: boolean;
+  messageToolHints?: string[];
   ownerNumbers?: string[];
   docsPath?: string;
   sourcePath?: string;
@@ -128,12 +117,14 @@ export function buildCliAgentSystemPrompt(params: {
     agentId: params.agentId,
   });
   const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
-  const { runtimeInfo, userTimezone, userDate } = buildSystemPromptParams({
+  const { runtimeInfo } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
     workspaceDir: runtimeCwd,
     cwd: runtimeCwd,
     preparedGitCoauthorPrompt: params.preparedGitCoauthorPrompt,
+    preparedSessionEntry: params.preparedSessionEntry,
+    requesterProfileId: params.requesterProfileId,
     runtime: {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
@@ -147,11 +138,13 @@ export function buildCliAgentSystemPrompt(params: {
       channel: params.runtimeChannel,
       chatType: params.runtimeChatType,
       capabilities: params.runtimeCapabilities,
+      customInlineButtonHint: params.customInlineButtonHint,
     },
   });
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
     preparedModelRuntime: params.preparedModelRuntime,
+    preparedTtsPreferences: params.preparedTtsPreferences,
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     runtimeCwd,
@@ -169,11 +162,10 @@ export function buildCliAgentSystemPrompt(params: {
       surface: "cli_backend",
     }),
     runtimeInfo,
+    messageToolHints: params.messageToolHints,
     toolNames: params.tools.map((tool) => tool.name),
     messageTool: params.tools.find((tool) => tool.name.trim().toLowerCase() === "message"),
     skillsPrompt: params.skillsPrompt,
-    userTimezone,
-    userDate,
     contextFiles: params.contextFiles,
     bootstrapMode: params.bootstrapMode,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
@@ -186,9 +178,7 @@ export function normalizeCliModel(modelId: string, backend: CliBackendConfig): s
     return trimmed;
   }
   return (
-    backend.modelAliases?.[trimmed] ||
-    backend.modelAliases?.[normalizeLowercaseStringOrEmpty(trimmed)] ||
-    trimmed
+    backend.modelAliases?.[trimmed] || backend.modelAliases?.[trimmed.toLowerCase()] || trimmed
   );
 }
 
@@ -198,20 +188,14 @@ export function resolveSystemPromptUsage(params: {
   systemPrompt?: string;
 }): string | null {
   const systemPrompt = params.systemPrompt?.trim();
-  if (!systemPrompt) {
-    return null;
-  }
   const when = params.backend.systemPromptWhen ?? "first";
-  if (when === "never") {
-    return null;
-  }
-  if (when === "first" && !params.isNewSession) {
-    return null;
-  }
   if (
-    !params.backend.systemPromptArg?.trim() &&
-    !params.backend.systemPromptFileArg?.trim() &&
-    !params.backend.systemPromptFileConfigKey?.trim()
+    !systemPrompt ||
+    when === "never" ||
+    (when === "first" && !params.isNewSession) ||
+    (!params.backend.systemPromptArg?.trim() &&
+      !params.backend.systemPromptFileArg?.trim() &&
+      !params.backend.systemPromptFileConfigKey?.trim())
   ) {
     return null;
   }
@@ -224,28 +208,19 @@ export function resolveSessionIdToSend(params: {
 }): { sessionId?: string; isNew: boolean } {
   const mode = params.backend.sessionMode ?? "always";
   const existing = params.cliSessionId?.trim();
-  if (mode === "none") {
-    return { sessionId: undefined, isNew: !existing };
-  }
-  if (mode === "existing") {
-    return { sessionId: existing, isNew: !existing };
-  }
-  if (existing) {
-    return { sessionId: existing, isNew: false };
-  }
-  return { sessionId: crypto.randomUUID(), isNew: true };
+  const sessionId =
+    mode === "none" ? undefined : mode === "existing" || existing ? existing : crypto.randomUUID();
+  return { sessionId, isNew: !existing };
 }
 
-/** Routes prompt text to argv or stdin based on backend input policy. */
 export function resolvePromptInput(params: { backend: CliBackendConfig; prompt: string }): {
   argsPrompt?: string;
   stdin?: string;
 } {
-  const inputMode = params.backend.input ?? "arg";
-  if (inputMode === "stdin") {
-    return { stdin: params.prompt };
-  }
-  if (params.backend.maxPromptArgChars && params.prompt.length > params.backend.maxPromptArgChars) {
+  if (
+    params.backend.input === "stdin" ||
+    (params.backend.maxPromptArgChars && params.prompt.length > params.backend.maxPromptArgChars)
+  ) {
     return { stdin: params.prompt };
   }
   return { argsPrompt: params.prompt };
@@ -254,13 +229,6 @@ export function resolvePromptInput(params: { backend: CliBackendConfig; prompt: 
 function resolveCliImageFileName(image: ImageContent): string {
   const ext = extensionForMime(image.mimeType) ?? ".bin";
   return `${sha256Hex(`${image.mimeType}\0${image.data}`)}${ext}`;
-}
-
-function resolveCliImageRoot(params: { backend: CliBackendConfig; workspaceDir: string }): string {
-  if (params.backend.imagePathScope === "workspace") {
-    return path.join(params.workspaceDir, ".openclaw-cli-images");
-  }
-  return path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images");
 }
 
 async function sweepCliImageRoot(imageRoot: string): Promise<void> {
@@ -288,11 +256,11 @@ async function writeCliImages(params: {
   backend: CliBackendConfig;
   workspaceDir: string;
   images: ImageContent[];
-}): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
-  const imageRoot = resolveCliImageRoot({
-    backend: params.backend,
-    workspaceDir: params.workspaceDir,
-  });
+}): Promise<string[]> {
+  const imageRoot =
+    params.backend.imagePathScope === "workspace"
+      ? path.join(params.workspaceDir, ".openclaw-cli-images")
+      : path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images");
   await fs.mkdir(imageRoot, { recursive: true, mode: 0o700 });
   await sweepCliImageRoot(imageRoot);
   const store = privateFileStore(imageRoot);
@@ -305,11 +273,9 @@ async function writeCliImages(params: {
   }
   // Keep content-addressed image paths stable across Claude CLI runs so prompt
   // text and argv don't churn on every turn with fresh temp-dir suffixes.
-  const cleanup = async () => {};
-  return { paths, cleanup };
+  return paths;
 }
 
-/** Writes a temporary system prompt file when the backend needs file-based prompts. */
 export async function writeCliSystemPromptFile(params: {
   backend: CliBackendConfig;
   systemPrompt: string;
@@ -348,7 +314,6 @@ export async function prepareCliPromptImagePayload(params: {
 }): Promise<{
   prompt: string;
   imagePaths?: string[];
-  cleanupImages?: () => Promise<void>;
 }> {
   let prompt = params.prompt;
   const imagePrompt = params.imagePrompt ?? prompt;
@@ -379,12 +344,11 @@ export async function prepareCliPromptImagePayload(params: {
   if (resolvedImages.length === 0) {
     return { prompt };
   }
-  const imagePayload = await writeCliImages({
+  const imagePaths = await writeCliImages({
     backend: params.backend,
     workspaceDir: params.workspaceDir,
     images: resolvedImages,
   });
-  const imagePaths = imagePayload.paths;
   if (
     !params.backend.imageArg ||
     params.backend.input === "stdin" ||
@@ -402,7 +366,6 @@ export async function prepareCliPromptImagePayload(params: {
   return {
     prompt,
     imagePaths,
-    cleanupImages: imagePayload.cleanup,
   };
 }
 
@@ -428,34 +391,27 @@ export function buildCliArgs(params: {
   if (params.backend.modelArg && params.modelId) {
     args.push(params.backend.modelArg, params.modelId);
   }
-  if (
-    shouldSendSystemPrompt &&
-    params.systemPrompt &&
-    params.systemPromptFilePath &&
-    params.backend.systemPromptFileArg
-  ) {
-    args.push(params.backend.systemPromptFileArg, params.systemPromptFilePath);
-  } else if (
-    shouldSendSystemPrompt &&
-    params.systemPrompt &&
-    params.systemPromptFilePath &&
-    params.backend.systemPromptFileConfigKey
-  ) {
-    args.push(
-      params.backend.systemPromptFileConfigArg ?? "-c",
-      formatTomlConfigOverride(
-        params.backend.systemPromptFileConfigKey,
-        params.systemPromptFilePath,
-      ),
-    );
-  } else if (shouldSendSystemPrompt && params.systemPrompt && params.backend.systemPromptArg) {
-    args.push(params.backend.systemPromptArg, stripSystemPromptCacheBoundary(params.systemPrompt));
+  if (shouldSendSystemPrompt && params.systemPrompt) {
+    if (params.systemPromptFilePath && params.backend.systemPromptFileArg) {
+      args.push(params.backend.systemPromptFileArg, params.systemPromptFilePath);
+    } else if (params.systemPromptFilePath && params.backend.systemPromptFileConfigKey) {
+      args.push(
+        params.backend.systemPromptFileConfigArg ?? "-c",
+        formatTomlConfigOverride(
+          params.backend.systemPromptFileConfigKey,
+          params.systemPromptFilePath,
+        ),
+      );
+    } else if (params.backend.systemPromptArg) {
+      args.push(
+        params.backend.systemPromptArg,
+        stripSystemPromptCacheBoundary(params.systemPrompt),
+      );
+    }
   }
   if (!params.useResume && params.sessionId) {
-    if (params.backend.sessionArgs && params.backend.sessionArgs.length > 0) {
-      for (const entry of params.backend.sessionArgs) {
-        args.push(entry.replaceAll("{sessionId}", params.sessionId));
-      }
+    for (const entry of params.backend.sessionArgs ?? []) {
+      args.push(entry.replaceAll("{sessionId}", params.sessionId));
     }
   }
   if (params.useResume && params.forkResume) {
@@ -482,16 +438,13 @@ export function buildCliArgs(params: {
       args.push(params.promptArg);
     }
   }
-  if (params.imagePaths && params.imagePaths.length > 0) {
-    const mode = params.backend.imageMode ?? "repeat";
-    const imageArg = params.backend.imageArg;
-    if (imageArg && imageArg !== "@") {
-      if (mode === "list") {
-        args.push(imageArg, params.imagePaths.join(","));
-      } else {
-        for (const imagePath of params.imagePaths) {
-          args.push(imageArg, imagePath);
-        }
+  const imageArg = params.backend.imageArg;
+  if (params.imagePaths?.length && imageArg && imageArg !== "@") {
+    if (params.backend.imageMode === "list") {
+      args.push(imageArg, params.imagePaths.join(","));
+    } else {
+      for (const imagePath of params.imagePaths) {
+        args.push(imageArg, imagePath);
       }
     }
   }

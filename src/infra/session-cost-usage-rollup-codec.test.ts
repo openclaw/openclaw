@@ -1,4 +1,9 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import {
+  decodeUsageCostPartition,
+  partitionUsageCostRollup,
+} from "./session-cost-usage-partitions.js";
 import {
   decodeUsageCostRollup,
   decodeUsageCostRollupEnvelope,
@@ -11,7 +16,6 @@ import {
   createSessionUsageRollupData,
 } from "./session-cost-usage-rollup.js";
 import { createEmptyCostUsageTotals } from "./session-cost-usage-totals.js";
-import { resolveZstdCodec } from "./zstd-codec.js";
 
 function entry(records: number): UsageCostRollupEntry {
   const rollup = createSessionUsageRollupData();
@@ -66,7 +70,7 @@ describe("usage rollup storage codec", () => {
     expect(
       decodeUsageCostRollup(encoded.valueJson, original.pricingFingerprint, encoded.blob),
     ).toEqual(original);
-    if (records > 0 && resolveZstdCodec()) {
+    if (records > 0) {
       expect(metadata?.body.encoding).toBe("zstd");
       expect(encoded.blob.byteLength).toBeLessThan(metadata!.body.bytes / 4);
     } else {
@@ -102,4 +106,56 @@ describe("usage rollup storage codec", () => {
       decodeUsageCostRollup(encoded.valueJson, "different-pricing", encoded.blob),
     ).toBeUndefined();
   });
+
+  it.each([0, 512])("rejects impossible lengths before deferring %i records", (records) => {
+    const original = entry(records);
+    const encoded = encodeUsageCostRollup(original);
+    const metadata = JSON.parse(encoded.valueJson);
+    for (const body of [
+      { ...metadata.body, bytes: 35 * 1024 * 1024 },
+      { ...metadata.body, bytes: metadata.body.storedBytes + 1, encoding: "identity" },
+      { ...metadata.body, bytes: metadata.body.storedBytes, encoding: "zstd" },
+    ]) {
+      expect(
+        decodeUsageCostRollup(
+          JSON.stringify({ ...metadata, body }),
+          original.pricingFingerprint,
+          encoded.blob,
+          { remainingBytes: 0 },
+        ),
+      ).toBeUndefined();
+    }
+    expect(
+      decodeUsageCostRollup(encoded.valueJson, original.pricingFingerprint, encoded.blob, {
+        remainingBytes: 0,
+      }),
+    ).toBeNull();
+  });
+
+  it.each([1, 512])(
+    "rejects impossible partition lengths before deferring %i records",
+    (records) => {
+      const original = entry(records);
+      const partition = expectDefined(
+        partitionUsageCostRollup(original).partitions[0],
+        "Expected generated usage partition",
+      );
+      const metadata = JSON.parse(partition.valueJson);
+      for (const header of [
+        { ...metadata, encoding: "identity", bytes: 35 * 1024 * 1024 },
+        { ...metadata, encoding: "identity", bytes: partition.blob.byteLength + 1 },
+        { ...metadata, encoding: "zstd", bytes: partition.blob.byteLength },
+      ]) {
+        expect(
+          decodeUsageCostPartition(JSON.stringify(header), partition.blob, { remainingBytes: 0 }),
+        ).toBeUndefined();
+      }
+      expect(
+        decodeUsageCostPartition(partition.valueJson, partition.blob, { remainingBytes: 0 }),
+      ).toBeNull();
+      expect(decodeUsageCostPartition(partition.valueJson, partition.blob)).toMatchObject({
+        buckets: { "0": { totals: { totalTokens: records } } },
+      });
+    },
+  );
 });

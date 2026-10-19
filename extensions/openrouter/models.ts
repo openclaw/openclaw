@@ -1,3 +1,4 @@
+import { normalizeOpenRouterModelFamilyId } from "openclaw/plugin-sdk/model-ref-parse";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const OPENROUTER_MISTRAL_MODEL_PREFIXES = [
@@ -19,14 +20,6 @@ const OPENROUTER_SHORT_TO_API_MODEL_ID = new Map([
   ["deepseek-v4-flash", "deepseek/deepseek-v4-flash"],
   ["deepseek-v4-pro", "deepseek/deepseek-v4-pro"],
 ]);
-
-export function normalizeOpenRouterModelFamilyId(modelId: unknown): string | undefined {
-  if (typeof modelId !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return normalized.replace(/^openrouter\//, "").replace(/^~/, "");
-}
 
 export function normalizeOpenRouterApiModelId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {

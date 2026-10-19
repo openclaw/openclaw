@@ -1,38 +1,24 @@
 import { isAgentRunWaitingForCapacity } from "../../../infra/agent-run-capacity-wait.js";
-import {
-  getSubagentRunsForChildSession,
-  getSubagentRunsForRequesterSession,
-  subagentRuns,
-} from "./subagent-registry-memory.js";
+import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  compareSubagentRunGeneration,
-  recordLatestSubagentRun,
-} from "./subagent-run-generation.js";
+import { isSameSubagentRun, recordLatestSubagentRun } from "./subagent-run-generation.js";
 import {
   hasSubagentRunEnded,
   isSubagentRunLive,
   isSubagentRunQueued,
+  isYieldedSubagentRun,
 } from "./subagent-run-liveness.js";
 
 export type SubagentExecutionObservation = {
   state: "queued" | "running" | "waiting" | "finished" | "unknown";
+  currentTool?: { name: string };
   wait?: {
-    kind: "children" | "external";
+    kind: "approval" | "user_input" | "agent_messages" | "children" | "external";
     dependencies?: Array<{ runId: string; sessionKey: string; label?: string }>;
     pendingCount?: number;
   };
 };
-
-function isYieldedSubagentRun(entry: SubagentRunRecord): boolean {
-  return (
-    entry.pauseReason === "sessions_yield" &&
-    !entry.killIntent &&
-    !entry.killReconciliation &&
-    entry.suppressAnnounceReason !== "killed" &&
-    entry.endedReason !== "subagent-killed"
-  );
-}
 
 /** Project recorded execution separately from completion and requester delivery. */
 export function observeSubagentExecution(
@@ -83,52 +69,32 @@ export function observeSubagentExecution(
   if (entry.execution.status === "interrupted") {
     return { state: "unknown" };
   }
-  // Snapshots must match the current registration before using live or queued ownership.
+  // Data-only snapshots may observe matching current execution, but carry no callback custody.
   const current = subagentRuns.get(entry.runId);
-  if (
-    !current ||
-    current.childSessionKey !== entry.childSessionKey ||
-    current.requesterSessionKey !== entry.requesterSessionKey ||
-    (current.taskRunId ?? current.runId) !== (entry.taskRunId ?? entry.runId) ||
-    compareSubagentRunGeneration(current, entry) !== 0
-  ) {
+  if (!current || !isSameSubagentRun(current, entry)) {
     return { state: "unknown" };
   }
   if (isSubagentRunLive(current)) {
-    return {
-      state:
-        current.execution.status === "queued" || isAgentRunWaitingForCapacity(current.runId)
-          ? "queued"
-          : "running",
-    };
-  }
-  if (isSubagentRunQueued(current)) {
-    return { state: "queued" };
-  }
-  return { state: "unknown" };
-}
-
-/** Observe only the current memory owner of this exact delegated task. */
-export function getSubagentExecutionObservation(params: {
-  taskRunId: string;
-  childSessionKey: string;
-  generation?: number;
-}): (SubagentExecutionObservation & { executionRunId: string }) | undefined {
-  let owner: SubagentRunRecord | undefined;
-  for (const entry of getSubagentRunsForChildSession(params.childSessionKey)) {
-    if (!owner || compareSubagentRunGeneration(entry, owner) > 0) {
-      owner = entry;
+    if (current.execution.status === "queued" || isAgentRunWaitingForCapacity(current.runId)) {
+      return { state: "queued" };
     }
+    const context = getAgentRunContext(current.runId);
+    const activity =
+      context?.sessionKey === current.childSessionKey ? context.executionActivity : undefined;
+    if (activity?.approvalOverflow) {
+      return { state: "unknown" };
+    }
+    if (activity?.pendingApprovalIds.length) {
+      return { state: "waiting", wait: { kind: "approval" } };
+    }
+    if (activity?.execution?.state === "unknown") {
+      return { state: "unknown" };
+    }
+    if (activity?.execution?.state === "waiting") {
+      return { state: "waiting", wait: { kind: activity.execution.wait ?? "external" } };
+    }
+    const tool = activity?.tools.at(-1);
+    return { state: "running", ...(tool ? { currentTool: { name: tool.name } } : {}) };
   }
-  if (
-    !owner ||
-    (owner.taskRunId ?? owner.runId) !== params.taskRunId ||
-    (params.generation !== undefined && owner.generation !== params.generation)
-  ) {
-    return undefined;
-  }
-  return {
-    ...observeSubagentExecution(owner, getSubagentRunsForRequesterSession(owner.childSessionKey)),
-    executionRunId: owner.runId,
-  };
+  return { state: isSubagentRunQueued(current) ? "queued" : "unknown" };
 }

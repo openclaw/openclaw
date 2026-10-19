@@ -1,12 +1,13 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitCheckoutContext } from "../infra/git-read-operations.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
-import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import type { TaskPublicationRead } from "../state/github-publication-task-reads.worker.js";
 import { readUserProfileAliasRevision } from "../state/user-profile-events.js";
-import { resolveUserProfileId } from "../state/user-profiles.js";
+import { readResidentUserProfileId } from "../state/user-profile-list.js";
+import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
+import { selectTaskPublicationSessions } from "./control-ui-session-task-prs.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
 import {
@@ -17,59 +18,77 @@ import { READ_SCOPE } from "./operator-scopes.js";
 import { isGatewayClientProfilePending } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
-import { withReadySessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
+import {
+  SessionRowFactsPending,
+  withReadySessionRows,
+  type SessionRowReadView,
+} from "./session-row-prepared-read.js";
+import type { EntryRow, MaterializedRow } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
-import { createSessionListEntryFilter } from "./session-sharing.js";
-import type { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import { createSessionListEntryFilter, resolveSessionVisibility } from "./session-sharing.js";
+import type { GatewaySessionEntryRead } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
+import { resolveSessionWorkspaceRoots } from "./session-workspace-roots.js";
 
 type SelectedSession = Pick<
-  ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+  GatewaySessionEntryRead,
   "cfg" | "agentId" | "canonicalKey" | "storePath" | "readSource" | "entry"
 >;
 
 export type ControlUiSessionPrTarget = {
+  sessionId?: string;
+  lifecycleRevision?: string;
   params: { sessionKey: string; agentId: string };
   identity: string;
+  branchIdentity?: string;
+  taskReceipts?: TaskPublicationRead;
+  taskReceiptsOnly?: boolean;
   readSource: { agentId: string; path: string };
   source: string | GitCheckoutContext | null;
+  githubHost?: string;
+  refreshIndex?: boolean;
   assertCurrent?: () => void;
 };
 
 export type ControlUiSessionPrReadContext = {
   target: ControlUiSessionPrTarget;
   sourceIdentity: string;
+  // Internal consumers can inspect all fetched PRs without expanding the UI.
+  projection?: "publication";
+  onBranchRead?: (snapshot: ControlUiSessionPullRequests) => void;
+  /** Same-source branch-only facts retained by the subscription owner, not a fresh read. */
+  branchSnapshot?: ControlUiSessionPullRequests;
   assertCurrent: () => void;
 };
 
 /** Git facts and cached snapshots belong to the recorded session and workspace source. */
 export function resolveControlUiSessionPrTarget(
   selected: SelectedSession,
-  preparedRepository?: GatewaySessionRow["repository"] | null,
+  preparedRepository: GatewaySessionRow["repository"] | null,
 ): ControlUiSessionPrTarget | undefined {
   const { cfg, agentId, canonicalKey, storePath, readSource, entry } = selected;
   if (!entry?.sessionId || !storePath || !readSource) {
     return undefined;
   }
   let source: ControlUiSessionPrTarget["source"];
+  const githubHost = resolveConfiguredGitHubHost(cfg);
   if (entry.repositoryWorkspaceId) {
-    let repository = preparedRepository;
-    if (repository === undefined) {
-      const workspace = getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId);
-      repository =
-        workspace?.agentId === agentId && workspace.sessionKey === canonicalKey ? workspace : null;
-    }
-    const remote = repository ? parseGitHubRemoteUrl(repository.url) : null;
-    source = remote && repository ? { ...remote, branch: repository.branch } : null;
-  } else {
+    const repository = preparedRepository;
+    const publicRemote = repository ? parseGitHubRemoteUrl(repository.url) : null;
+    const remote =
+      publicRemote ?? (repository ? parseGitHubRemoteUrl(repository.url, githubHost) : null);
     source =
-      normalizeOptionalString(entry.spawnedCwd) ??
-      normalizeOptionalString(entry.spawnedWorkspaceDir) ??
-      normalizeOptionalString(resolveAgentWorkspaceDir(cfg, agentId)) ??
-      null;
+      remote && repository
+        ? { ...remote, ...(!publicRemote ? { host: githubHost } : {}), branch: repository.branch }
+        : null;
+  } else {
+    source = resolveSessionWorkspaceRoots(cfg, agentId, entry).diffCwd ?? null;
   }
   return {
+    sessionId: entry.sessionId,
+    lifecycleRevision: entry.lifecycleRevision,
     params: { sessionKey: canonicalKey, agentId },
+    githubHost,
     readSource,
     identity: JSON.stringify([
       agentId,
@@ -82,22 +101,116 @@ export function resolveControlUiSessionPrTarget(
       entry.repositoryWorkspaceId,
       entry.worktree?.id,
       source,
+      githubHost,
     ]),
     source,
+    refreshIndex: Boolean(entry.worktree && !entry.repositoryWorkspaceId),
+  };
+}
+
+export function resolveProjectedControlUiSessionPrTarget(
+  cfg: OpenClawConfig,
+  record: MaterializedRow,
+) {
+  const { storePath, agentId } = record.storeTarget;
+  return resolveControlUiSessionPrTarget(
+    {
+      cfg,
+      agentId: record.agentId,
+      canonicalKey: record.key,
+      storePath,
+      readSource: { agentId, path: storePath },
+      entry: record.entry,
+    },
+    record.materialized.row.repository ?? null,
+  );
+}
+
+/** Audience and lineage are part of snapshot identity, never inherited from another viewer. */
+function withControlUiTaskPrTarget(
+  target: ControlUiSessionPrTarget | undefined,
+  projection: SessionRowProjection,
+  root: EntryRow,
+  getAllows: () => (row: EntryRow) => boolean,
+  ownerProfileId?: string,
+): ControlUiSessionPrTarget | undefined {
+  if (!target || root.entry.incognito || isIncognitoSessionKey(root.key)) {
+    return target;
+  }
+  const select = () => ({
+    sessions: selectTaskPublicationSessions(projection, root, getAllows()),
+    ...(ownerProfileId ? { ownerProfileId } : {}),
+  });
+  const taskReceipts = select();
+  const taskIdentity = JSON.stringify(taskReceipts);
+  return {
+    ...target,
+    branchIdentity: target.branchIdentity ?? target.identity,
+    taskReceipts,
+    identity: JSON.stringify([target.identity, taskIdentity]),
+    assertCurrent: () => {
+      target.assertCurrent?.();
+      if (JSON.stringify(select()) !== taskIdentity) {
+        throw new Error("Task pull-request audience changed");
+      }
+    },
   };
 }
 
 export type ControlUiSessionPrRead = () => Promise<ControlUiSessionPrTarget | undefined>;
 
+/** Background facts use the Gateway's current row owner, never a completed caller's grant. */
+export async function prepareControlUiSessionPrServiceTarget(
+  getProjection: () => SessionRowProjection | undefined,
+  query: { sessionKey: string; agentId: string },
+): Promise<ControlUiSessionPrTarget | undefined> {
+  const projection = getProjection();
+  if (!projection || isIncognitoSessionKey(query.sessionKey)) {
+    return undefined;
+  }
+  const lookup = { key: query.sessionKey, agentId: query.agentId };
+  return await withReadySessionRows(
+    projection,
+    () => [lookup],
+    (read) => {
+      const record = read.describe(lookup);
+      if (
+        getProjection() !== projection ||
+        !record ||
+        record.entry.incognito ||
+        resolveSessionVisibility(record.entry) === "draft"
+      ) {
+        return undefined;
+      }
+      const target = resolveProjectedControlUiSessionPrTarget(read.state.cfg, record);
+      return target
+        ? {
+            ...target,
+            assertCurrent: () => {
+              target.assertCurrent?.();
+              if (
+                getProjection() !== projection ||
+                projection.capture(lookup) !== record ||
+                !projection.isCurrent(record)
+              ) {
+                throw new Error("Session pull-request target changed");
+              }
+            },
+          }
+        : undefined;
+    },
+  );
+}
+
 /** A watcher may follow a replaced target, but never a replacement person or access grant. */
-export async function prepareControlUiSessionPrRead(params: {
+export function createControlUiSessionPrRead(params: {
   client: GatewayClient;
   sessionKey: string;
   agentId?: string;
   getRuntimeConfig: () => OpenClawConfig;
   getSessionRowProjection: () => SessionRowProjection | undefined;
   isCurrentClient: () => boolean;
-}): Promise<ControlUiSessionPrRead | undefined> {
+}): ControlUiSessionPrRead | undefined {
   const {
     client,
     sessionKey,
@@ -141,7 +254,7 @@ export async function prepareControlUiSessionPrRead(params: {
       }
       const currentAliasRevision = readUserProfileAliasRevision();
       if (currentAliasRevision !== aliasRevision) {
-        if (actorProfile && resolveUserProfileId(actorProfile) !== actorProfile) {
+        if (actorProfile && readResidentUserProfileId(actorProfile) !== actorProfile) {
           return undefined;
         }
         aliasRevision = currentAliasRevision;
@@ -161,14 +274,18 @@ export async function prepareControlUiSessionPrRead(params: {
       if (!requested.ok) {
         return undefined;
       }
-      if (getSessionRowProjection() !== projection || projection.needsMembershipPreparation()) {
+      if (getSessionRowProjection() !== projection) {
         return undefined;
       }
       const query = { key: sessionKey, agentId: requested.agentId };
       const selected = projection.capture(query);
+      // Exact reads prepare this session; unrelated pending membership must not hide it.
       if (
         !selected?.entry ||
         !projection.isCurrent(selected) ||
+        (isIncognitoSessionKey(selected.key)
+          ? projection.needsMembershipPreparation()
+          : projection.sharingTargetState(query).status !== "ready") ||
         createSessionListEntryFilter({ cfg, client })?.(selected.key, selected.entry) === false
       ) {
         return undefined;
@@ -190,23 +307,25 @@ export async function prepareControlUiSessionPrRead(params: {
         return undefined;
       }
       const repository = current.materialized.row.repository ?? null;
-      const target = resolveControlUiSessionPrTarget(
-        {
-          cfg: captured.cfg,
-          agentId: current.agentId,
-          canonicalKey: current.key,
-          storePath,
-          readSource: { agentId: current.storeTarget.agentId, path: storePath },
-          entry: current.entry,
+      const target = withControlUiTaskPrTarget(
+        resolveProjectedControlUiSessionPrTarget(captured.cfg, current),
+        projection,
+        current,
+        () => {
+          const filter = createSessionListEntryFilter({ cfg: getRuntimeConfig(), client });
+          return (row) => filter?.(row.key, row.entry) !== false;
         },
-        repository,
+        actorProfile,
       );
       return target ? { target, repository } : undefined;
-    } catch {
+    } catch (error) {
+      if (error instanceof SessionRowFactsPending) {
+        throw error;
+      }
       return undefined;
     }
   };
-  const readCurrent: ControlUiSessionPrRead = async () => {
+  return async () => {
     try {
       if (getSessionRowProjection() !== projection) {
         return undefined;
@@ -249,17 +368,14 @@ export async function prepareControlUiSessionPrRead(params: {
         ? {
             ...target.target,
             assertCurrent: () => {
+              target.target.assertCurrent?.();
               const current = captureCurrent();
               const original = target.privateSource;
               if (!current) {
                 throw new Error("Session pull-request target changed");
               }
               if (!original) {
-                if (
-                  current.selected !== target.captured ||
-                  !target.captured ||
-                  !projection.isCurrent(target.captured)
-                ) {
+                if (current.selected !== target.captured) {
                   throw new Error("Session pull-request target changed");
                 }
                 return;
@@ -297,5 +413,4 @@ export async function prepareControlUiSessionPrRead(params: {
       return undefined;
     }
   };
-  return (await readCurrent()) ? readCurrent : undefined;
 }

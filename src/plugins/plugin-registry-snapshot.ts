@@ -1,4 +1,3 @@
-// Builds stable snapshots of plugin registry contributions.
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -32,6 +31,7 @@ import {
   hasInstalledPluginIndexWorkspaceScopeMismatch,
   hasMissingConfigPathActivationMetadata,
   loadInstalledPluginIndexWithDiscovery,
+  projectInstalledPluginIndexPolicy,
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
   type InstalledPluginIndexRecord,
@@ -79,7 +79,6 @@ export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
     allowCurrent?: boolean;
   };
 
-// Shared with plugin-registry-refresh.ts.
 export function resolveControlPlaneRegistryParams<T extends LoadInstalledPluginIndexParams>(
   params: T,
 ): T {
@@ -235,9 +234,6 @@ function hasStalePersistedPluginMetadataFiles(index: InstalledPluginIndex): bool
     if (!fs.existsSync(packageJsonPath)) {
       return plugin.enabled;
     }
-    if (!isRealPathInside(plugin.rootDir, packageJsonPath, realpathCache)) {
-      return true;
-    }
     return !fileContentMatches(
       packageJsonPath,
       plugin.packageJson.hash,
@@ -359,8 +355,10 @@ function requiresDerivedRegistryValidation(
     normalizePluginsConfig(params.config?.plugins).loadPaths.length > 0 ||
     hasMissingConfigPathActivationMetadata(index) ||
     hasMissingInstalledPluginOwnerMetadata(index, env) ||
-    index.diagnostics.some(({ pluginId, source }) =>
-      Boolean(pluginId && source && path.isAbsolute(source) && !fs.existsSync(source)),
+    index.diagnostics.some(
+      ({ code, pluginId, source }) =>
+        (params.config !== undefined && code === "configured-plugin-path-unavailable") ||
+        Boolean(pluginId && source && path.isAbsolute(source) && !fs.existsSync(source)),
     ) ||
     hasMismatchedBundledRoot() ||
     hasRecoveredInstallRecordsMissingFromPersistedIndex(index, params, env) ||
@@ -482,33 +480,61 @@ function loadPluginRegistrySnapshotWithPreparedValidation(
       code: "persisted-registry-missing",
       message: "Persisted plugin registry is missing or invalid; using derived plugin index.",
     });
-  } else if (
-    params.config &&
-    persistedIndex.policyHash !==
-      resolveInstalledPluginIndexPolicyHash(params.config, params.env, {
-        artifactPreservingReadOnly: params.artifactPreservingReadOnly,
-      })
-  ) {
-    diagnostics.push({
-      level: "warn",
-      code: "persisted-registry-stale-policy",
-      message:
-        "Persisted plugin registry policy does not match current config; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
-    });
-  } else if (
-    !requiresDerivedRegistryValidation(
-      persistedIndex,
-      params,
-      env,
-      hasStalePluginFiles,
-      hasMismatchedBundledRoot,
-    )
-  ) {
-    return {
-      snapshot: persistedIndex,
-      source: "persisted",
-      diagnostics,
-    };
+  } else {
+    const policyHash = params.config
+      ? resolveInstalledPluginIndexPolicyHash(params.config, params.env, {
+          artifactPreservingReadOnly: params.artifactPreservingReadOnly,
+        })
+      : persistedIndex.policyHash;
+    if (policyHash !== persistedIndex.policyHash) {
+      diagnostics.push({
+        level: "warn",
+        code: "persisted-registry-stale-policy",
+        message:
+          "Persisted plugin registry policy does not match current config; projecting current policy over the persisted inventory. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+      });
+    }
+    if (
+      !requiresDerivedRegistryValidation(
+        persistedIndex,
+        params,
+        env,
+        hasStalePluginFiles,
+        hasMismatchedBundledRoot,
+      )
+    ) {
+      if (policyHash === persistedIndex.policyHash) {
+        return { snapshot: persistedIndex, source: "persisted", diagnostics };
+      }
+      // The inventory on disk is current; only activation changed. Never rescan for policy.
+      const projected: InstalledPluginIndex = {
+        ...persistedIndex,
+        policyHash,
+        plugins: projectInstalledPluginIndexPolicy({
+          plugins: persistedIndex.plugins,
+          config: params.config,
+          env,
+          artifactPreservingReadOnly: params.artifactPreservingReadOnly,
+        }),
+      };
+      // Freshness tolerates missing files only for disabled records; recheck those this policy enables.
+      const activated: InstalledPluginIndex = {
+        ...projected,
+        plugins: projected.plugins.filter(
+          (plugin, index) => plugin.enabled && !persistedIndex.plugins[index]?.enabled,
+        ),
+      };
+      if (
+        activated.plugins.length === 0 ||
+        !(
+          hasStalePersistedPluginMetadataFiles(activated) ||
+          hasStaleDoctorContractFiles(activated, params) ||
+          hasMismatchedPersistedBundledRoot(activated, env)
+        )
+      ) {
+        return { snapshot: projected, source: "derived", diagnostics };
+      }
+    }
   }
 
   const derived = loadInstalledPluginIndexWithDiscovery({

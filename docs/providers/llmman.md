@@ -22,34 +22,34 @@ Three modes are supported:
 | Hybrid            | One `llmman.hybrid/<local>,<provider>/<model>` ref; llmman picks the local or hosted side per request            |
 | Hosted via llmman | `llmman.provider/<provider>/<model>` refs; llmman forwards to a hosted provider while keeping one local endpoint |
 
-| Property         | Value                                                                                    |
-| ---------------- | ---------------------------------------------------------------------------------------- |
-| Provider id      | `llmman` (custom; configure under `models.providers.llmman`)                             |
-| Plugin           | none; not a bundled OpenClaw provider plugin, so models are listed explicitly            |
-| API              | OpenAI-compatible (`api: "openai-completions"`)                                          |
-| Default base URL | `http://127.0.0.1:17434/v1`                                                              |
-| Auth             | llmman has no authentication; OpenClaw sends whatever `apiKey` you configure as a bearer |
-| Reference model  | `qwen3.8` (Qwen3.8 27B, vision-capable, 262,144-token native context)                    |
+| Property         | Value                                                                         |
+| ---------------- | ----------------------------------------------------------------------------- |
+| Provider id      | `llmman` (custom; configure under `models.providers.llmman`)                  |
+| Plugin           | none; not a bundled OpenClaw provider plugin, so models are listed explicitly |
+| API              | OpenAI-compatible (`api: "openai-completions"`)                               |
+| Default base URL | `http://127.0.0.1:17434/v1`                                                   |
+| Auth             | none on loopback; off loopback a key is required, sent as the `apiKey` bearer |
+| Reference model  | `qwen3.8` (Qwen3.8 27B, vision-capable, 262,144-token native context)         |
 
 <Warning>
-`llmman serve` has no authentication and no TLS. Keep the default loopback bind unless a trusted network boundary restricts access, and never expose it on a public interface.
+On loopback with no keys configured, `llmman serve` needs no key. Bound anywhere else, llmman 0.1.386+ refuses to start without `LLMMAN_API_KEYS`. Never use `LLMMAN_AUTH=off` on a public interface.
 </Warning>
 
 <Info>
-Version scope: this page is verified against [llmman v0.1.334](https://github.com/llmmanorg/llmman/releases/tag/v0.1.334), commit [`22b6d73`](https://github.com/llmmanorg/llmman/commit/22b6d7330e1b0882401e83e35fe592817eb7c816). Model names, hybrid routing, vision, and tool calling on this page were exercised against that build with `qwen3.8`.
+Version scope: this page is verified against [llmman v0.1.334](https://github.com/llmmanorg/llmman/releases/tag/v0.1.334), commit [`22b6d73`](https://github.com/llmmanorg/llmman/commit/22b6d7330e1b0882401e83e35fe592817eb7c816). Model names, hybrid routing, vision, and tool calling on this page were exercised against that build with `qwen3.8`. Authentication behavior (key enforcement off loopback and with configured keys) reflects [llmman v0.1.552](https://github.com/llmmanorg/llmman/releases/tag/v0.1.552).
 </Info>
 
 ## Auth rules
 
 <AccordionGroup>
-  <Accordion title="Local llmman has no auth">
-    `llmman serve` never checks credentials. OpenClaw still needs a non-empty `apiKey` on the provider entry so the provider counts as configured. This page uses `LLMMAN_API_KEY=llmman-local` with `apiKey: "${LLMMAN_API_KEY}"`, mirroring the `OLLAMA_API_KEY=ollama-local` convention. A literal `apiKey: "llmman-local"` works too.
+  <Accordion title="Local llmman needs no key by default">
+    With no keys configured, a loopback `llmman serve` does not require credentials; once `LLMMAN_API_KEYS` is set, llmman enforces it on every bind, loopback included, so set OpenClaw's `apiKey` to that key. OpenClaw still needs a non-empty `apiKey` on the provider entry so the provider counts as configured. This page uses `LLMMAN_API_KEY=llmman-local` with `apiKey: "${LLMMAN_API_KEY}"`, mirroring the `OLLAMA_API_KEY=ollama-local` convention. A literal `apiKey: "llmman-local"` works too.
   </Accordion>
   <Accordion title="The bearer matters for hybrid and hosted refs">
     For `llmman.hybrid/...` and `llmman.provider/...` refs, llmman forwards the bearer OpenClaw presents to the hosted provider as that provider's API key. The one exception is the literal placeholder `llmman`, which tells the daemon to use its own key. See [Hybrid inference](#hybrid-inference) for both patterns. A marker such as `llmman-local` would be sent to the hosted provider and rejected there.
   </Accordion>
   <Accordion title="Remote llmman hosts">
-    A daemon started with `LLMMAN_HOST=0.0.0.0` in its environment binds every interface with no auth. Point OpenClaw at a LAN host only inside a network you trust; there is no credential OpenClaw can send that llmman would enforce. A daemon reachable off loopback also refuses to spend its own hosted-provider key for callers that presented none.
+    A daemon started with `LLMMAN_HOST=0.0.0.0` refuses to start without `LLMMAN_API_KEYS=<key>`. Set OpenClaw's `LLMMAN_API_KEY` to that key; the `llmman-local` marker gets a `401`. A daemon reachable off loopback also refuses to spend its own hosted-provider key for callers that presented none.
   </Accordion>
   <Accordion title="Env var substitution">
     `${LLMMAN_API_KEY}` resolves from the Gateway process environment or `~/.openclaw/.env`. If the variable is missing, OpenClaw logs a config warning and treats the provider as unavailable, so put the export where the Gateway can read it. See [Environment](/help/environment).
@@ -88,7 +88,7 @@ Version scope: this page is verified against [llmman v0.1.334](https://github.co
     llmman ps
     ```
 
-    There is no `/health` route; use `/api/version` or `/v1/models` as the readiness probe. `/v1/models` lists fully qualified ids such as `docker.io/ai/qwen3.8:latest`; requests may use either that form or the short name.
+    There is no `/health` route; use `/api/version` or `/v1/models` as the readiness check. `/v1/models` lists fully qualified ids such as `docker.io/ai/qwen3.8:latest`; requests may use either that form or the short name.
 
   </Step>
   <Step title="Set the marker credential">
@@ -182,7 +182,7 @@ llmman pull qwen3.5:9b
 
 ### Smoke tests
 
-A narrow text probe that skips the full agent tool surface:
+A narrow text check that skips the full agent tool surface:
 
 ```bash
 LLMMAN_API_KEY=llmman-local \
@@ -193,7 +193,7 @@ LLMMAN_API_KEY=llmman-local \
     --json
 ```
 
-Add `--file` with an image for a lean vision-model probe (PNG/JPEG/WebP;
+Add `--file` with an image for a lean vision-model check (PNG/JPEG/WebP;
 non-image files are rejected before llmman is called; use
 `openclaw infer audio transcribe` for audio):
 
@@ -207,7 +207,7 @@ LLMMAN_API_KEY=llmman-local \
     --json
 ```
 
-Neither path loads chat tools, memory, or session context. If a probe succeeds
+Neither path loads chat tools, memory, or session context. If a check succeeds
 while normal agent replies fail, the issue is usually tool-schema handling or
 context pressure in the backend, not the endpoint; see
 [Troubleshooting](#troubleshooting).
@@ -468,7 +468,7 @@ openclaw infer image describe --file ./photo.jpg --model llmman/gemma4:e4b --jso
 
 `--model` must be a full `<provider/model>` ref. Use `infer image describe`
 for OpenClaw's image-understanding flow and configured `imageModel`; use
-`infer model run --file` for a raw multimodal probe with a custom prompt.
+`infer model run --file` for a raw multimodal check with a custom prompt.
 
 To make a llmman model the default image-understanding provider for inbound
 media:
@@ -539,7 +539,7 @@ governs the underlying HTTP request for normal model calls.
   </Tab>
 
   <Tab title="LAN llmman host">
-    Start the server on the GPU box with `LLMMAN_HOST=0.0.0.0` (and optionally `LLMMAN_CONTEXT_LENGTH=65536`) in its environment, then point OpenClaw at it:
+    Start the server on the GPU box with `LLMMAN_HOST=0.0.0.0` and `LLMMAN_API_KEYS=<key>` (and optionally `LLMMAN_CONTEXT_LENGTH=65536`) in its environment, then point OpenClaw at it with the same key as `LLMMAN_API_KEY`:
 
     ```bash
     llmman serve
@@ -570,8 +570,10 @@ governs the underlying HTTP request for normal model calls.
     }
     ```
 
+    OpenClaw in Docker reaches a daemon on the Docker host at `http://host.docker.internal:17434/v1`; see [Docker networking](/install/docker/networking-and-storage#host-local-providers).
+
     <Warning>
-    The remote daemon has no authentication. Only do this inside a trusted network, and do not use hybrid refs with "llmman holds the key" against a non-loopback daemon; it refuses to spend its own key for remote callers.
+    Do not use hybrid refs with "llmman holds the key" against a non-loopback daemon; it refuses to spend its own key for remote callers.
     </Warning>
 
   </Tab>
@@ -676,6 +678,8 @@ Replace model ids with names from `llmman list` or
     ```
 
     Use `compat.supportsTools: false` only when the model or server reliably fails on tool schemas; it disables tool use entirely. For a deliberately narrower agent, prefer `tools.profile` or a per-agent tool policy.
+
+    When you switch an existing session to a no-tools model, OpenClaw replays earlier tool names, arguments, and results as assistant text. Stored session history stays unchanged.
 
   </Accordion>
 
@@ -866,7 +870,7 @@ container, or service account.
 
     With this declaration, `openclaw agent --model llmman/qwen3.8 --thinking off`, `/think off`, and `openclaw infer model run --local --model llmman/qwen3.8 --thinking off --prompt "Reply with exactly: pong" --json` map the thinking setting to `chat_template_kwargs.enable_thinking`. Without it, the generic proxy defaults do not send this control or `reasoning_effort`.
 
-    The lean `infer model run` path does not read the agent-level `params` recipe above; use the compatibility declaration and `--thinking off` for that probe. Do not combine a fixed `enable_thinking` agent param with per-run control, since the fixed param overrides the generated value. Apply Qwen-specific controls to a hybrid ref only if both its local and hosted backends accept them.
+    The lean `infer model run` path does not read the agent-level `params` recipe above; use the compatibility declaration and `--thinking off` for that check. Do not combine a fixed `enable_thinking` agent param with per-run control, since the fixed param overrides the generated value. Apply Qwen-specific controls to a hybrid ref only if both its local and hosted backends accept them.
 
   </Accordion>
 
@@ -885,7 +889,7 @@ container, or service account.
   </Accordion>
 
   <Accordion title="GPU and backend selection">
-    llmman probes CUDA, ROCm, Vulkan (Linux/Windows) or Metal (macOS) and downloads a matching `llama-server` release if none is on `PATH`. Override with `LLMMAN_LLM_LIBRARY`: `cpu`, `cuda`, `cuda13`, `rocm`, `vulkan`, or `metal`. Other knobs: `LLMMAN_FLASH_ATTENTION` (`on`/`off`/`auto`), `LLMMAN_KV_CACHE_TYPE` (`f16`, `q8_0`, `q4_0`), `LLMMAN_SCHED_SPREAD` for multi-GPU layer splitting, `LLMMAN_IGPU_ENABLE` to count integrated GPUs. On Linux, `llmman serve --ociman docker|podman` runs `llama-server` from the `ghcr.io/ggml-org/llama.cpp` images instead of a local binary. `LLMMAN_DEBUG=1` prints the probe result.
+    llmman checks CUDA, ROCm, Vulkan (Linux/Windows) or Metal (macOS) and downloads a matching `llama-server` release if none is on `PATH`. Override with `LLMMAN_LLM_LIBRARY`: `cpu`, `cuda`, `cuda13`, `rocm`, `vulkan`, or `metal`. Other knobs: `LLMMAN_FLASH_ATTENTION` (`on`/`off`/`auto`), `LLMMAN_KV_CACHE_TYPE` (`f16`, `q8_0`, `q4_0`), `LLMMAN_SCHED_SPREAD` for multi-GPU layer splitting, `LLMMAN_IGPU_ENABLE` to count integrated GPUs. On Linux, `llmman serve --ociman docker|podman` runs `llama-server` from the `ghcr.io/ggml-org/llama.cpp` images instead of a local binary. `LLMMAN_DEBUG=1` prints the check result.
   </Accordion>
 
   <Accordion title="Memory embeddings">
@@ -910,12 +914,51 @@ container, or service account.
     }
     ```
 
+    Coming from Ollama? llmman also serves `/api/embed`, so the `ollama` provider works with just a new `remote.baseUrl` (no `/v1`). Pull the model, then run `openclaw memory index --force` so every vector comes from one server. Ollama's `nomic-embed-text` and `bge-m3` are not on Docker Hub under those names: pull `nomic-embed-text-v1.5` or `hf.co/ggml-org/bge-m3-Q8_0-GGUF` and use that name as `model`:
+
+    ```json5
+    {
+      memory: {
+        search: {
+          provider: "ollama",
+          model: "embeddinggemma",
+          remote: { baseUrl: "http://127.0.0.1:17434" },
+        },
+      },
+    }
+    ```
+
     Embedding models are capped to their trained context regardless of `LLMMAN_CONTEXT_LENGTH`. See [Memory config](/reference/memory-config#remote-endpoint-config) for the remaining fields.
 
   </Accordion>
 
   <Accordion title="Ollama-compatible API">
-    llmman also implements Ollama's native `/api/chat`, `/api/tags`, `/api/show`, and `/api/ps`, and `OLLAMA_HOST=127.0.0.1:17434 ollama run <model>` works against it. Prefer `api: "openai-completions"` from OpenClaw anyway: llmman's `/api/show` reports only `completion` and `vision` capabilities, so the bundled Ollama plugin's discovery would mark every llmman model `compat.supportsTools: false`. If you do point the Ollama plugin at `http://127.0.0.1:17434` (no `/v1`), list models explicitly instead of relying on discovery.
+    llmman also implements Ollama's native `/api/chat`, `/api/tags`, `/api/show`, and `/api/ps`, and `OLLAMA_HOST=127.0.0.1:17434 ollama run <model>` works against it. The native route also works from OpenClaw. Use a custom provider id such as `llmman`, not `ollama`: discovery on that id reads llmman's `/api/show`, which reports only `completion` and `vision`, and marks every model `compat.supportsTools: false`. Set `api: "ollama"`, omit `/v1`, and list models explicitly:
+
+    ```json5
+    {
+      models: {
+        providers: {
+          llmman: {
+            baseUrl: "http://127.0.0.1:17434",
+            apiKey: "${LLMMAN_API_KEY}",
+            api: "ollama",
+            models: [
+              {
+                id: "qwen3.8",
+                name: "Qwen3.8 (llmman)",
+                reasoning: true,
+                input: ["text", "image"],
+                contextWindow: 65536,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+    }
+    ```
+
   </Accordion>
 
   <Accordion title="Compat flags">
@@ -995,7 +1038,7 @@ container, or service account.
   </Accordion>
 
   <Accordion title="Direct /v1/chat/completions calls pass but openclaw infer model run fails">
-    Both probes are tool-free, so `compat.supportsTools` cannot change this failure. Check the configured base URL, model id, and `LLMMAN_API_KEY`, inspect the daemon and backend logs, and compare the two request payloads.
+    Both checks are tool-free, so `compat.supportsTools` cannot change this failure. Check the configured base URL, model id, and `LLMMAN_API_KEY`, inspect the daemon and backend logs, and compare the two request payloads.
   </Accordion>
 
   <Accordion title="Model run passes but a normal agent turn fails">
@@ -1028,12 +1071,12 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
     Direct hosted access to the models used as the hybrid overflow half.
   </Card>
   <Card title="Inference CLI" href="/cli/infer" icon="terminal">
-    `openclaw infer model run` and the other one-shot probes used on this page.
+    `openclaw infer model run` and the other one-shot checks used on this page.
   </Card>
   <Card title="Model providers" href="/concepts/model-providers" icon="layers">
     Overview of all providers, model refs, and failover behavior.
   </Card>
   <Card title="Gateway troubleshooting" href="/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail" icon="wrench">
-    Debugging local OpenAI-compatible backends that pass probes but fail agent runs.
+    Debugging local OpenAI-compatible backends that pass checks but fail agent runs.
   </Card>
 </CardGroup>

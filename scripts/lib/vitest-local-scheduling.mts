@@ -47,6 +47,13 @@ export function isCiLikeEnv(env: Record<string, string | undefined> = process.en
 }
 
 /** @internal Shared repository-script contract. */
+export function shouldContinueVitestFailures(
+  env: Record<string, string | undefined> = process.env,
+) {
+  return isCiLikeEnv(env) || env.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE === "1";
+}
+
+/** @internal Shared repository-script contract. */
 export function resolveLocalVitestEnv(
   env: Record<string, string | undefined> = process.env,
 ): Record<string, string | undefined> {

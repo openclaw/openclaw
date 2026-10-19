@@ -3,6 +3,7 @@ import { isMainThread } from "node:worker_threads";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -17,22 +18,23 @@ import { createThreadBindingManager } from "./thread-bindings.manager.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
-vi.mock("../runtime.js", () => {
+vi.mock("../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime.js")>();
   const runtime = {
     state: {
-      openKeyedStore: (options: OpenKeyedStoreOptions) =>
-        createPluginStateKeyedStoreForTests("discord", options),
+      openKeyedStoreV2: (options: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStoreV2ForTests("discord", options, { assertCurrent() {} }),
       openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
         createPluginStateSyncKeyedStoreForTests("discord", options),
     },
   };
-  return { getDiscordRuntime: () => runtime, getOptionalDiscordRuntime: () => runtime };
+  return { ...actual, getDiscordRuntime: () => runtime, getOptionalDiscordRuntime: () => runtime };
 });
 
 it("keeps binding restoration, mutation, and shutdown SQL off the process main thread", async () => {
   expect(isMainThread).toBe(true);
   await resetThreadBindingsForTests();
-  await withOpenClawTestState({ label: "discord-binding-worker-sql" }, async (state) => {
+  await withOpenClawTestState({ label: "discord-binding-worker-sql" }, async () => {
     const saved: ThreadBindingRecord = {
       accountId: "work",
       channelId: "parent-1",
@@ -49,7 +51,7 @@ it("keeps binding restoration, mutation, and shutdown SQL off the process main t
       maxEntries: 10_000,
     });
     native.register("work:thread-1", saved);
-    const calibration = observeHostDataSql(state.env);
+    const calibration = observeHostDataSql();
     try {
       expect(native.lookup("work:thread-1")).toEqual(saved);
       expect(calibration.queries.length).toBeGreaterThan(0);
@@ -57,7 +59,7 @@ it("keeps binding restoration, mutation, and shutdown SQL off the process main t
       calibration.restore();
     }
     await closeOpenClawStateDatabaseAsync();
-    const observation = observeHostDataSql(state.env);
+    const observation = observeHostDataSql();
     const raw = [
       vi.spyOn(DatabaseSync.prototype, "prepare"),
       vi.spyOn(DatabaseSync.prototype, "exec"),

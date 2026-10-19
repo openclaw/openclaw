@@ -127,7 +127,6 @@ export async function completeCopilotAttempt(params: {
     assistantTranscriptIdempotencyKey: transcript?.assistantTranscriptIdempotencyKey,
     contextEngineTerminalAnchor: transcript?.terminalAnchor,
     nativeReplayInvalid: transcript?.replayInvalid === true || nativeSessionHistoryUnvalidated,
-    now,
     promptError,
     resumeFailureRecovered,
     sdkSessionId,

@@ -131,7 +131,6 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "runtime-config",
     "secrets",
     "shared-core",
-    "tasks",
     "tooling-docker",
     "tooling-isolated",
     "tooling",

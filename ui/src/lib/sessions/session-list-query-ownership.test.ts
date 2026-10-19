@@ -8,8 +8,106 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 import type { SessionListOptions, SessionListSnapshot } from "./session-capability.ts";
+import { canApplySessionListSnapshot } from "./session-list-query.ts";
+
+it.each([
+  [200, 60, true],
+  [200, 59, false],
+  [2, 2, true],
+  [2, 1, false],
+] as const)(
+  "excludes an old owned ancestor only behind the full owner prefix (limit=%i, owned=%i)",
+  (limit, owned, expected) => {
+    const actor = (id: string) => ({
+      type: "human" as const,
+      id,
+      identity: { type: "profile" as const, id },
+    });
+    const rows: GatewaySessionRow[] = Array.from({ length: limit }, (_, index) => ({
+      key: `agent:main:child-${index}`,
+      sessionId: `child-${index}`,
+      kind: "direct",
+      updatedAt: 1_000 - index,
+      owner: { actor: actor(index < owned ? "viewer" : "other") },
+      parentSessionKey: "agent:main:main",
+    }));
+    const parent: GatewaySessionRow = {
+      key: "agent:main:main",
+      sessionId: "parent",
+      kind: "direct",
+      updatedAt: 1,
+      owner: { actor: actor("viewer") },
+    };
+    const result = {
+      ...sessionsResult(rows, 2_000),
+      hasMore: true,
+      nextOffset: limit,
+    };
+    const event = {
+      reason: "patch",
+      session: { ...rows[0], updatedAt: 2_001 },
+      ancestorSessions: [parent],
+    };
+    const query = { agentId: "main", limit, ownerFirst: true };
+    expect(
+      canApplySessionListSnapshot(result, event, query, "updatedAt", undefined, "viewer"),
+    ).toBe(expected);
+    // A parent that becomes recent may enter the shared page even with a full owner prefix.
+    expect(
+      canApplySessionListSnapshot(
+        result,
+        {
+          ...event,
+          ancestorSessions: [{ ...parent, updatedAt: 2_002 }],
+        },
+        query,
+        "updatedAt",
+        undefined,
+        "viewer",
+      ),
+    ).toBe(false);
+  },
+);
 
 describe("session list replacement options", () => {
+  it("keeps deliberate dock-inclusive queries separate from the ordinary roster", async () => {
+    const ordinary: GatewaySessionRow = { key: "agent:main:ordinary", kind: "direct" };
+    const dock: GatewaySessionRow = { key: "agent:main:board-agent", kind: "direct", isDock: true };
+    const request = vi.fn(async (_method: string, params?: unknown) =>
+      sessionsResult(
+        asOptionalRecord(params)?.excludeDock === false ? [ordinary, dock] : [ordinary],
+        1,
+      ),
+    );
+    const { gateway } = createGatewayHarness(createTestGatewayClient(request));
+    const sessions = createTestSessionCapability(gateway);
+    const query = { agentId: "main", excludeDock: false };
+    const updates = vi.fn<(snapshot: SessionListSnapshot) => void>();
+    const stop = sessions.subscribeList(query, updates);
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.list",
+        expect.objectContaining({ excludeDock: true }),
+      );
+      await sessions.refreshList(query);
+      expect(request).toHaveBeenLastCalledWith("sessions.list", expect.objectContaining(query));
+      expect(sessions.state.result?.sessions).toEqual([ordinary]);
+      expect(sessions.listSnapshot(query).result?.sessions).toEqual([ordinary, dock]);
+      expect(updates.mock.lastCall?.[0].result?.sessions).toEqual([ordinary, dock]);
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.list",
+        expect.objectContaining({ excludeDock: true }),
+      );
+      expect(sessions.state.result?.sessions).toEqual([ordinary]);
+      expect(sessions.listSnapshot(query).result?.sessions).toEqual([ordinary, dock]);
+    } finally {
+      stop();
+      sessions.dispose();
+    }
+  });
+
   it.each(["unfiltered", "excludeSubagents", "excludeCron", "excludeSystem"] as const)(
     "keeps list and subscription membership scoped for %s",
     async (flag) => {
@@ -21,16 +119,14 @@ describe("session list replacement options", () => {
         updatedAt: 1,
       };
       const excluded: GatewaySessionRow = {
+        ...ordinary,
         key:
           flag === "excludeSubagents"
             ? "agent:main:subagent:worker"
             : flag === "excludeCron"
               ? "agent:main:cron:scheduled"
               : "agent:main:system:maintenance",
-        agentId: "main",
         sessionId: "excluded-session",
-        kind: "direct",
-        updatedAt: 1,
       };
       let primaryRows = [ordinary, excluded];
       let issued = 0;

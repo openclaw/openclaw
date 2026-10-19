@@ -1,4 +1,5 @@
 import type { PhotoSize } from "grammy/types";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
@@ -59,12 +60,14 @@ export async function createBotHandlerWithOptions(options: {
   const runtimeError = options.runtimeError ?? vi.fn();
   const runtimeLog = options.runtimeLog ?? vi.fn();
   const effectiveProxyFetch = options.proxyFetch ?? (undiciFetchSpyRef as unknown as typeof fetch);
+  const config = harness.telegramBotDepsForTest.getRuntimeConfig();
+  setRuntimeConfigSnapshot(config);
   await createTelegramBotRef({
     token: "tok",
     // Production always constructs the bot from getMe(), so inbound handlers may
     // resolve the bot user id from botInfo when a test ctx carries only a username.
     botInfo: telegramBotInfoForTest,
-    config: harness.telegramBotDepsForTest.getRuntimeConfig(),
+    config,
     testTimings: TELEGRAM_TEST_TIMINGS,
     ...(effectiveProxyFetch ? { proxyFetch: effectiveProxyFetch } : {}),
     runtime: {
@@ -76,9 +79,9 @@ export async function createBotHandlerWithOptions(options: {
       },
     } as Parameters<typeof createTelegramBotRef>[0]["runtime"],
   });
-  const handler = onSpyRef.mock.calls.find((call) => call[0] === "message")?.[1] as (
-    ctx: Record<string, unknown>,
-  ) => Promise<void>;
+  const handler = onSpyRef.mock.calls.find(([filter]) =>
+    Array.isArray(filter) ? filter.includes("message") : filter === "message",
+  )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
   expect(handler).toBeDefined();
   return { handler, replySpy: replySpyRef, runtimeError };
 }
@@ -108,7 +111,6 @@ async function loadTelegramBotHarness() {
   createTelegramBotRef = (opts) =>
     botModule.createTelegramBot({
       ...opts,
-      telegramDeps: harness.telegramBotDepsForTest,
     });
   replySpyRef = harness.mediaHarnessReplySpy;
 }

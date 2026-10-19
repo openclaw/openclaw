@@ -2,40 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { getOrCreatePromise } from "./lazy-promise.js";
-
-/** Normalizes primitive config values into the truthiness rules used by requirements checks. */
-function isTruthy(value: unknown): boolean {
-  if (typeof value === "number") {
-    return value !== 0;
-  }
-  if (typeof value === "string") {
-    return value.trim().length > 0;
-  }
-  return value !== undefined && value !== null && value !== false;
-}
-
-/** Resolves dotted config paths, tolerating extra dots and missing branches. */
-function resolveConfigPath(config: unknown, pathStr: string): unknown {
-  const parts = pathStr.split(".").filter(Boolean);
-  let current: unknown = config;
-  for (const part of parts) {
-    if (typeof current !== "object" || current === null) {
-      return undefined;
-    }
-    if (isBlockedObjectKey(part)) {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[part];
-  }
-  return current;
-}
-
-function hasBlockedConfigPathSegment(pathStr: string): boolean {
-  return pathStr
-    .split(".")
-    .filter(Boolean)
-    .some((part) => isBlockedObjectKey(part));
-}
+import { isOsRequirementSatisfied, type RequirementsMetadata } from "./requirements.js";
 
 /** Checks a config path with fallback defaults only when the path is unresolved. */
 export function isConfigPathTruthyWithDefaults(
@@ -43,91 +10,73 @@ export function isConfigPathTruthyWithDefaults(
   pathStr: string,
   defaults: Record<string, boolean>,
 ): boolean {
-  const value = resolveConfigPath(config, pathStr);
+  const parts = pathStr.split(".").filter(Boolean);
+  let value: unknown = config;
+  for (const part of parts) {
+    if (typeof value !== "object" || value === null || isBlockedObjectKey(part)) {
+      value = undefined;
+      break;
+    }
+    value = (value as Record<string, unknown>)[part];
+  }
   if (
     value === undefined &&
-    !hasBlockedConfigPathSegment(pathStr) &&
+    !parts.some((part) => isBlockedObjectKey(part)) &&
     Object.hasOwn(defaults, pathStr)
   ) {
     return defaults[pathStr] ?? false;
   }
-  return isTruthy(value);
+  return typeof value === "string"
+    ? value.trim().length > 0
+    : value !== undefined && value !== null && value !== false && value !== 0;
 }
 
-type RuntimeRequires = {
-  bins?: string[];
-  anyBins?: string[];
-  env?: string[];
-  config?: string[];
-};
-
-type RuntimeRequirementEvalParams = {
-  requires?: RuntimeRequires;
-  hasBin: (bin: string) => boolean;
-  hasAnyRemoteBin?: (bins: string[]) => boolean;
-  hasRemoteBin?: (bin: string) => boolean;
-  hasEnv: (envName: string) => boolean;
-  isConfigPathTruthy: (pathStr: string) => boolean;
-};
-
-/** Evaluates binary/env/config requirements against local and optional remote capabilities. */
-function evaluateRuntimeRequires(params: RuntimeRequirementEvalParams): boolean {
+/** Enforces OS compatibility before allowing `always` to bypass runtime requirements. */
+export function evaluateRuntimeEligibility(
+  params: RequirementsMetadata & {
+    platform?: string;
+    remotePlatforms?: string[];
+    always?: boolean;
+    hasBin: (bin: string) => boolean;
+    hasAnyRemoteBin?: (bins: string[]) => boolean;
+    hasRemoteBin?: (bin: string) => boolean;
+    hasEnv: (envName: string) => boolean;
+    isConfigPathTruthy: (pathStr: string) => boolean;
+  },
+): boolean {
+  if (
+    !isOsRequirementSatisfied(params.os ?? [], [
+      params.platform ?? process.platform,
+      ...(params.remotePlatforms ?? []),
+    ])
+  ) {
+    return false;
+  }
   const requires = params.requires;
-  if (!requires) {
+  if (params.always === true || !requires) {
     return true;
   }
-
   for (const envName of requires.env ?? []) {
     if (!params.hasEnv(envName)) {
       return false;
     }
   }
-
   for (const configPath of requires.config ?? []) {
     if (!params.isConfigPathTruthy(configPath)) {
       return false;
     }
   }
-
   for (const bin of requires.bins ?? []) {
     if (!params.hasBin(bin) && !params.hasRemoteBin?.(bin)) {
       return false;
     }
   }
-
   const requiredAnyBins = requires.anyBins ?? [];
-  if (requiredAnyBins.length > 0) {
-    const anyFound = requiredAnyBins.some((bin) => params.hasBin(bin));
-    if (!anyFound && !params.hasAnyRemoteBin?.(requiredAnyBins)) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-/** Enforces OS compatibility before allowing `always` to bypass runtime requirements. */
-export function evaluateRuntimeEligibility(
-  params: {
-    os?: string[];
-    platform?: string;
-    remotePlatforms?: string[];
-    always?: boolean;
-  } & RuntimeRequirementEvalParams,
-): boolean {
-  const osList = params.os ?? [];
-  const remotePlatforms = params.remotePlatforms ?? [];
-  if (
-    osList.length > 0 &&
-    !osList.includes(params.platform ?? process.platform) &&
-    !remotePlatforms.some((platform) => osList.includes(platform))
-  ) {
-    return false;
-  }
-  if (params.always === true) {
-    return true;
-  }
-  return evaluateRuntimeRequires(params);
+  return (
+    requiredAnyBins.length === 0 ||
+    requiredAnyBins.some((bin) => params.hasBin(bin)) ||
+    Boolean(params.hasAnyRemoteBin?.(requiredAnyBins))
+  );
 }
 
 function windowsPathExtensions(raw: string | undefined): string[] {
@@ -157,7 +106,6 @@ function resolveBinarySearch(cache = resolveBinaryCache()) {
   return {
     cache,
     isWindows,
-    pathExt: isWindows ? process.env.PATHEXT : undefined,
     parts: cache.path.split(path.delimiter).filter(Boolean),
     extensions: isWindows ? windowsPathExtensions(process.env.PATHEXT) : [""],
   };
@@ -171,7 +119,6 @@ function* binaryCandidates(search: ReturnType<typeof resolveBinarySearch>, bin: 
   }
 }
 
-/** Checks PATH for an executable binary, including PATHEXT candidates on Windows. */
 export function hasBinary(bin: string): boolean {
   const cache = resolveBinaryCache();
   if (cache.hits.has(bin)) {
@@ -194,27 +141,19 @@ export function hasBinary(bin: string): boolean {
   return false;
 }
 
-/** Binary facts belong to one preparation; missing tools are probed again on the next build. */
+/** Binary facts belong to one preparation; probe installations and removals again next time. */
 export async function prepareBinaryAvailability(
   bins: Iterable<string>,
   assertCurrent?: () => void,
-): Promise<{ hasBinary: (bin: string) => boolean; isCurrent: () => boolean }> {
+): Promise<{ hasBinary: (bin: string) => boolean }> {
   const search = resolveBinarySearch();
   const cwd = process.cwd();
   const pending = new Set(bins).values();
   const available = new Set<string>();
   let failure: { error: unknown } | undefined;
-  const isCurrent = () =>
-    (process.env.PATH ?? "") === search.cache.path &&
-    (search.isWindows ? process.env.PATHEXT : undefined) === search.pathExt &&
-    process.cwd() === cwd;
   const probe = async (bin: string) => {
-    if (search.cache.hits.has(bin)) {
-      available.add(bin);
-      return;
-    }
     for (const candidate of binaryCandidates(search, bin)) {
-      if (failure || !isCurrent()) {
+      if (failure) {
         return;
       }
       assertCurrent?.();
@@ -231,20 +170,14 @@ export async function prepareBinaryAvailability(
         continue;
       }
       assertCurrent?.();
-      if (isCurrent()) {
-        available.add(bin);
-        // A concurrent lookup may have replaced the shared PATH cache while this awaited.
-        if (binaryCache === search.cache) {
-          search.cache.hits.add(bin);
-        }
-      }
+      available.add(bin);
       return;
     }
   };
   const worker = async () => {
     try {
       for (;;) {
-        if (failure || !isCurrent()) {
+        if (failure) {
           return;
         }
         assertCurrent?.();
@@ -264,5 +197,5 @@ export async function prepareBinaryAvailability(
     throw failure.error;
   }
   assertCurrent?.();
-  return { hasBinary: (bin) => available.has(bin), isCurrent };
+  return { hasBinary: (bin) => available.has(bin) };
 }

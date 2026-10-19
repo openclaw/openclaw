@@ -3,11 +3,9 @@ import type {
   AgentHarnessAttemptParamsV2,
   EmbeddedContextFile,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  resolveBootstrapContextForRun,
-  resolveUserPath,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveBootstrapContextForRun } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readResolvedAttemptPath } from "./attempt-config.js";
 
 // The SDK loads AGENTS.md from its instruction directories; do not inject it twice.
 const COPILOT_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
@@ -23,22 +21,16 @@ const COPILOT_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["memory.md", 70],
 ]);
 
-type CopilotWorkspaceBootstrapResult = {
-  bootstrapFiles: Awaited<ReturnType<typeof resolveBootstrapContextForRun>>["bootstrapFiles"];
-  contextFiles: EmbeddedContextFile[];
-  instructions?: string;
-};
-
-export async function resolveCopilotWorkspaceBootstrapContext(params: {
+export async function loadCopilotWorkspaceInstructions(params: {
   attempt: AgentHarnessAttemptParamsV2;
   /** SDK workspace after sandbox resolution; undefined before resolution. */
   effectiveWorkspaceDir: string | undefined;
   warn?: (message: string) => void;
-}): Promise<CopilotWorkspaceBootstrapResult> {
+}): Promise<string | undefined> {
   const { attempt } = params;
-  const workspaceDir = readResolvedWorkspacePath(attempt.workspaceDir);
+  const workspaceDir = readResolvedAttemptPath(attempt.workspaceDir);
   if (!workspaceDir) {
-    return { bootstrapFiles: [], contextFiles: [] };
+    return undefined;
   }
   try {
     const bootstrapContext = await resolveBootstrapContextForRun({
@@ -56,20 +48,16 @@ export async function resolveCopilotWorkspaceBootstrapContext(params: {
     const contextFiles = remapCopilotBootstrapContextFiles({
       files: bootstrapContext.contextFiles,
       sourceWorkspaceDir: workspaceDir,
-      targetWorkspaceDir: readResolvedWorkspacePath(params.effectiveWorkspaceDir) ?? workspaceDir,
+      targetWorkspaceDir: readResolvedAttemptPath(params.effectiveWorkspaceDir) ?? workspaceDir,
     });
-    return {
-      bootstrapFiles: bootstrapContext.bootstrapFiles,
-      contextFiles,
-      instructions: renderCopilotWorkspaceBootstrapInstructions(contextFiles),
-    };
+    return renderCopilotWorkspaceBootstrapInstructions(contextFiles);
   } catch (error) {
     params.warn?.(
       `[copilot-attempt] failed to load workspace bootstrap instructions: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
-    return { bootstrapFiles: [], contextFiles: [] };
+    return undefined;
   }
 }
 
@@ -161,15 +149,4 @@ function normalizeCopilotContextFilePath(filePath: string): string {
 
 function getCopilotContextFileBasename(filePath: string): string {
   return normalizeCopilotContextFilePath(filePath).split("/").pop() ?? "";
-}
-
-function readResolvedWorkspacePath(value: unknown): string | undefined {
-  const raw = readNonBlankString(value);
-  if (!raw) {
-    return undefined;
-  }
-  if (process.platform !== "win32" && /^[A-Za-z]:[\\/]/.test(raw)) {
-    return raw.trim();
-  }
-  return resolveUserPath(raw);
 }

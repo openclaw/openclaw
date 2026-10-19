@@ -8,8 +8,6 @@ import type { RuntimeEnv } from "../runtime-api.js";
 
 export const wsClients = new Map<string, Lark.WSClient>();
 export const botOpenIds = new Map<string, string>();
-export const botNames = new Map<string, string>();
-const botIdentityRevisions = new Map<string, number>();
 export const FEISHU_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 export const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 
@@ -17,31 +15,12 @@ export const feishuWebhookRateLimiter = createFixedWindowRateLimiter(WEBHOOK_RAT
 
 const feishuWebhookAnomalyTracker = createWebhookAnomalyTracker();
 
-export function readFeishuBotIdentityRevision(accountId: string): number {
-  return botIdentityRevisions.get(accountId) ?? 0;
-}
-
-function bumpBotIdentityRevision(accountId: string): void {
-  botIdentityRevisions.set(accountId, readFeishuBotIdentityRevision(accountId) + 1);
-}
-
-export function setFeishuBotIdentityState(
-  accountId: string,
-  identity: { botOpenId: string; botName: string | undefined },
-): void {
-  botOpenIds.set(accountId, identity.botOpenId);
-  if (identity.botName) {
-    botNames.set(accountId, identity.botName);
-  } else {
-    botNames.delete(accountId);
-  }
-  bumpBotIdentityRevision(accountId);
+export function setFeishuBotIdentityState(accountId: string, botOpenId: string): void {
+  botOpenIds.set(accountId, botOpenId);
 }
 
 export function clearFeishuBotIdentityState(accountId: string): void {
   botOpenIds.delete(accountId);
-  botNames.delete(accountId);
-  bumpBotIdentityRevision(accountId);
 }
 
 export function recordWebhookStatus(

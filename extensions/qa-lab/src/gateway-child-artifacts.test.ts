@@ -15,14 +15,18 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { qaGatewayCleanupRuntimeEntrypoint } from "./gateway-child-artifacts-runtime.test-support.js";
 import { cleanupQaGatewayTempRoots } from "./gateway-child-artifacts.js";
+import { createQaGatewaySetupHarness } from "./gateway-child-setup.test-support.js";
+import { resolveQaNodeExecPath } from "./node-exec.js";
 import { readQaAuthProfiles, writeQaAuthProfiles } from "./providers/shared/auth-store.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 import { runQaScenarioCommandLifecycle } from "./test-file-scenario-command-lifecycle.js";
 
 const dirs = createTempDirHarness();
+const setup = createQaGatewaySetupHarness();
 const runtimeRoots: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
+  await setup.cleanup();
   for (const tempRoot of runtimeRoots.splice(0)) {
     await cleanupQaGatewayTempRoots({ tempRoot });
   }
@@ -30,6 +34,54 @@ afterEach(async () => {
 });
 
 describe("cleanupQaGatewayTempRoots", () => {
+  it("removes child scratch and compiler caches without touching the parent temp directory", async () => {
+    const parentTemp = await fs.realpath(await dirs.makeTempDir("qa-parent-temp-"));
+    const inheritedTemp = { TMPDIR: parentTemp, TMP: parentTemp, TEMP: parentTemp };
+    const { tempRoot, env, lifetime } = await setup.prepare(
+      { runtimeEnvPatch: inheritedTemp },
+      { ...inheritedTemp, NODE_DISABLE_COMPILE_CACHE: undefined, NODE_COMPILE_CACHE: undefined },
+    );
+    const result = await runQaScenarioCommandLifecycle({
+      command: await resolveQaNodeExecPath(),
+      args: [
+        "--input-type=module",
+        "-e",
+        `
+import fs from "node:fs";
+import { enableCompileCache, flushCompileCache } from "node:module";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+// openclaw-temp-dir: allow verifies child scratch containment and cleanup
+const scratch = fs.mkdtempSync(path.join(tmpdir(), "qa-child-"));
+const source = path.join(scratch, "fixture.mjs");
+fs.writeFileSync(source, "export const value = 42;\\n");
+const cache = enableCompileCache(path.join(tmpdir(), "node-compile-cache"));
+await import(pathToFileURL(source).href);
+flushCompileCache();
+console.log(JSON.stringify({ scratch, cache }));
+`,
+      ],
+      cwd: tempRoot,
+      env,
+    });
+    expect(result, result.failureMessage).toMatchObject({ exitCode: 0, stderr: "" });
+    const { scratch, cache } = JSON.parse(result.stdout) as {
+      scratch: string;
+      cache: { directory: string };
+    };
+    expect(await fs.realpath(path.dirname(scratch))).toBe(tempRoot);
+    expect(path.relative(tempRoot, await fs.realpath(cache.directory))).not.toMatch(/^\.\./u);
+    const cacheEntries = await fs.readdir(cache.directory, {
+      recursive: true,
+      withFileTypes: true,
+    });
+    expect(cacheEntries.some((entry) => entry.isFile())).toBe(true);
+    expect(await lifetime.stop()).toEqual({ process: "never-spawned", errors: [] });
+    await expect(fs.stat(tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readdir(parentTemp)).toEqual([]);
+  });
+
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "does not inspect child-private state before startup or boundary cleanup",
     async () => {
@@ -107,9 +159,12 @@ describe("cleanupQaGatewayTempRoots", () => {
     expect(JSON.parse(result.stdout)).toEqual({ targetClosed: true, siblingUsable: true });
   }, 120_000);
 
-  it.each(["agent", "shared"] as const)(
+  it.each([
+    ["agent", "tempRoot: Agent database close failed"],
+    ["shared", "tempRoot: close failed"],
+  ] as const)(
     "retains runtime on %s close failure, removes staging, and permits cleanup retry",
-    async (failedStore) => {
+    async (failedStore, expectedDiagnostic) => {
       const tempRoot = await dirs.makeTempDir("qa-cleanup-store-failure-");
       runtimeRoots.push(tempRoot);
       const stagedBundledPluginsRoot = await dirs.makeTempDir("qa-cleanup-store-plugins-");
@@ -121,7 +176,7 @@ describe("cleanupQaGatewayTempRoots", () => {
         stateDir,
         profiles: { fake: { type: "api_key", provider: "openai", key: "qa-synthetic" } },
       });
-      readQaAuthProfiles(agentDir);
+      await readQaAuthProfiles(agentDir);
       const agent = openOpenClawAgentDatabase({
         agentId: "qa",
         env,
@@ -140,7 +195,7 @@ describe("cleanupQaGatewayTempRoots", () => {
         stagedBundledPluginsRoot,
       }).catch((error: unknown) => error);
       expect(outcome).toBeInstanceOf(AggregateError);
-      expect(inspect(outcome, { depth: null })).toContain("tempRoot: close failed");
+      expect(inspect(outcome, { depth: null })).toContain(expectedDiagnostic);
       expect(inspect(outcome, { depth: null })).not.toMatch(
         /synthetic-close-secret|synthetic-close-cause/,
       );

@@ -1,5 +1,7 @@
 package ai.openclaw.app.voice
 
+import ai.openclaw.app.asJsonStringOrNull
+import ai.openclaw.app.node.asObjectOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -24,11 +26,11 @@ internal object ChatEventText {
 
   private fun assistantTextParts(messageEl: JsonElement?): List<String>? {
     val message = messageEl.asObjectOrNull() ?: return null
-    val role = message["role"].asStringOrNull()
+    val role = message["role"].asJsonStringOrNull()
     if (role != "assistant") return null
     return when (val content = message["content"]) {
       is JsonPrimitive -> {
-        content.asStringOrNull()?.let(::listOf)
+        content.asJsonStringOrNull()?.let(::listOf)
       }
 
       is JsonArray -> {
@@ -44,19 +46,15 @@ internal object ChatEventText {
   }
 
   private fun textFromContentPart(part: JsonElement): String? {
-    part.asStringOrNull()?.let { return it }
+    part.asJsonStringOrNull()?.let { return it }
     val obj = part.asObjectOrNull() ?: return null
     val type =
       obj["type"]
-        .asStringOrNull()
+        .asJsonStringOrNull()
         ?.trim()
         ?.lowercase()
         .orEmpty()
     if (type !in visibleAssistantTextTypes) return null
-    return obj["text"].asStringOrNull()
+    return obj["text"].asJsonStringOrNull()
   }
 }
-
-private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
-
-private fun JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content

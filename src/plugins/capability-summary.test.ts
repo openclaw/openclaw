@@ -144,6 +144,8 @@ describe("plugin capability summaries", () => {
       webFetchProviders: ["web-fetch"],
       webSearchProviders: ["web-search"],
       workerProviders: ["worker"],
+      workerProfileSuggestions: ["worker"],
+      storageProviders: ["storage"],
       decisionProviders: ["decision"],
       usageProviders: ["usage"],
       migrationProviders: ["migration"],

@@ -23,7 +23,8 @@ export function resolveGroupThreadConfig(params: {
   if (!entry || typeof entry === "string") {
     return undefined;
   }
-  const configuredAgents = Array.isArray(entry) ? entry : entry.agents;
+  const settings = Array.isArray(entry) ? { agents: entry } : entry;
+  const configuredAgents = settings.agents;
   if (configuredAgents.length === 0) {
     return undefined;
   }
@@ -41,11 +42,9 @@ export function resolveGroupThreadConfig(params: {
       : [],
     qualified,
     configuredAgentCount: participants.length,
-    mentionGating: qualified && (Array.isArray(entry) ? true : (entry.mentionGating ?? true)),
-    maxRounds: !qualified || Array.isArray(entry) ? 1 : boundedCount(entry.maxRounds, 1, 4),
-    maxTurns: !qualified
-      ? agents.length
-      : boundedCount(Array.isArray(entry) ? undefined : entry.maxTurns, participants.length, 32),
+    mentionGating: qualified && (settings.mentionGating ?? true),
+    maxRounds: qualified ? boundedCount(settings.maxRounds, 1, 4) : 1,
+    maxTurns: !qualified ? agents.length : boundedCount(settings.maxTurns, participants.length, 32),
     strategy: cfg.broadcast?.strategy ?? "parallel",
   };
 }

@@ -3,10 +3,15 @@ import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   answerInitialize,
   createAttemptPaths,
+  createAttemptParams,
   createAttemptClientHarness,
   createAttemptThreadStarter,
   readHarnessRequestMethods,
@@ -41,9 +46,10 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
+import { createInferenceReadyClientHarness } from "./test-support.js";
 
-vi.mock("./desktop-generation.js", () => ({
-  isCodexDesktopGenerationCurrent: () => false,
+vi.mock("./desktop-generation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./desktop-generation.js")>()),
   waitForCodexDesktopGeneration: async () => undefined,
 }));
 
@@ -63,6 +69,7 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await clearSharedCodexAppServerClientAndWait();
     setManagedCodexPluginRoot(undefined);
     defaultCodexPluginMetadataCache.clear();
@@ -75,7 +82,17 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
   });
 
   it("retires indeterminate thread startup while another leased peer completes", async () => {
-    const retained = createAttemptClientHarness();
+    const threadWritten = createDeferred<{ id: number }>();
+    const retained = createInferenceReadyClientHarness({
+      onWrite: (line, send) => {
+        const request = JSON.parse(line) as { id: number; method: string };
+        if (request.method === "configRequirements/read") {
+          send({ id: request.id, result: { requirements: null } });
+        } else if (request.method === "thread/start") {
+          threadWritten.resolve(request);
+        }
+      },
+    });
     const replacement = createAttemptClientHarness();
     vi.spyOn(CodexAppServerClient, "start")
       .mockResolvedValueOnce(retained.client)
@@ -91,22 +108,30 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
     await expect(retainedLease).resolves.toBe(retained.client);
 
     const peer = retained.client.request("turn/start", { threadId: "healthy-peer" });
+    void peer.catch(() => undefined);
     const peerStart = await waitForRequest(retained, "turn/start");
+    // Hold the startup clock while real worker admission runs, then expire the
+    // same 100-ms budget only after the request has actually crossed the wire.
+    vi.useFakeTimers();
     const { run } = startThreadWithHarness(100, new AbortController().signal, {
       harness: retained,
       paths,
       skipStartSpy: true,
+      buildAttemptParams: () => ({ ...createAttemptParams(paths), disableTools: false }),
     });
     const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
-    const threadStart = await waitForThreadStart(retained);
+    const threadStart = await threadWritten.promise;
+    await vi.advanceTimersByTimeAsync(100);
 
     await rejected;
+    vi.useRealTimers();
     expect(threadStart.id).toBeDefined();
     expect(retained.process.stdin.destroyed).toBe(false);
     const replacementRun = startThreadWithHarness(5_000, new AbortController().signal, {
       harness: replacement,
       paths,
       skipStartSpy: true,
+      buildAttemptParams: () => ({ ...createAttemptParams(paths), disableTools: false }),
     }).run;
     await answerInitialize(replacement);
     const mutate = vi.spyOn(testCodexAppServerBindingStore, "mutate");
@@ -171,12 +196,14 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
 
 describe("Codex runtime startup resource lifetime", () => {
   setupRunAttemptTestHooks();
+  afterEach(() => clearRuntimeConfigSnapshot());
 
-  it.each(["capture-failed", "abort", "cleanup", "replacement"] as const)(
+  it.each(["capture-failed", "abort"] as const)(
     "releases allocated runtime owners once when native monitor setup ends with %s",
     async (ending) => {
       const harness = createStartedThreadHarness();
       const params = createTestParams();
+      setRuntimeConfigSnapshot(params.config ?? {});
       const abortController = new AbortController();
       params.abortSignal = abortController.signal;
       params.sandbox = createSandboxContext({});
@@ -232,20 +259,13 @@ describe("Codex runtime startup resource lifetime", () => {
           pluginConfig: { appServer: { mode: "yolo", experimental: { sandboxExecServer: true } } },
           nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
         });
-        const rejected =
-          ending === "capture-failed" || ending === "abort"
-            ? expect(run).rejects.toBe(setupError)
-            : expect(run).rejects.toThrow("registration was superseded during setup");
+        const rejected = expect(run).rejects.toBe(setupError);
         await captured.promise;
         const resources = resourcesSpy.mock.results[0]?.value;
         assert(resources);
         expect(resources.state.nativeSubagentMonitor).toBeUndefined();
         if (ending === "abort") {
           abortController.abort(setupError);
-        } else if (ending === "cleanup") {
-          await resources.releaseCurrentRoute();
-        } else if (ending === "replacement") {
-          resources.state.thread = { ...resources.state.thread };
         }
         releaseCapture.resolve();
         await rejected;

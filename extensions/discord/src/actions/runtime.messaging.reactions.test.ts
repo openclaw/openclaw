@@ -1,7 +1,7 @@
 import { ChannelType } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as discordRequestClient from "../proxy-request-client.js";
+import * as discordRest from "../internal/rest.js";
 import { createDiscordLoopbackRest } from "../send.test-harness.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
 
@@ -55,7 +55,9 @@ describe("Discord reaction read target resolution", () => {
         return { id: "444", reactions: [] };
       },
     });
-    vi.spyOn(discordRequestClient, "createDiscordRequestClient").mockReturnValue(loopback.rest);
+    vi.spyOn(discordRest, "RequestClient").mockImplementation(function () {
+      return loopback.rest;
+    });
   });
 
   afterEach(async () => {

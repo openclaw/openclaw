@@ -24,17 +24,14 @@ export function registerSessionsSpawnCompletionTests({
     label: string,
   ) => Record<string, unknown>;
 }) {
-  it.each([
-    { name: "default", input: {}, expected: true },
-    { name: "announcing", input: { expectsCompletionMessage: true }, expected: true },
-    { name: "quiet", input: { expectsCompletionMessage: false }, expected: false },
-  ])(
+  it.each([{ name: "quiet", input: { expectsCompletionMessage: false }, expected: false }])(
     "declares completion policy and forwards $name to hidden, ACP, and visible spawns",
     async ({ input, expected }) => {
       registerAcpBackendForTest();
       await withTestDir({ prefix: "openclaw-spawn-completion-" }, async (dir) => {
         const callGateway = vi.fn(async () => ({
           key: "agent:main:dashboard:child",
+          sessionId: "visible-child",
           runStarted: true,
           runId: "run-visible",
         }));

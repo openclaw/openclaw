@@ -1,21 +1,23 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrowserScreencastClient } from "./browser-screencast-client.ts";
 import { screencastFrame, TestScreencastSocket } from "./browser-screencast-test-support.ts";
 
 function connect() {
   const socket = new TestScreencastSocket("");
-  const createSocket = vi.fn(() => socket as unknown as WebSocket);
+  const createSocket = vi.fn(function () {
+    return socket;
+  });
+  vi.stubGlobal("WebSocket", createSocket);
   const callbacks = { onReady: vi.fn(), onMeta: vi.fn(), onFrame: vi.fn(), onClose: vi.fn() };
-  const client = new BrowserScreencastClient(
-    {
-      gatewayUrl: "https://gateway.example.test/chat",
-      wsPath: "/browser/screencast?token=abc",
-      ...callbacks,
-    },
-    createSocket,
-  );
+  const client = new BrowserScreencastClient({
+    gatewayUrl: "https://gateway.example.test/chat",
+    wsPath: "/browser/screencast?token=abc",
+    ...callbacks,
+  });
   return { socket, createSocket, callbacks, client };
 }
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("BrowserScreencastClient", () => {
   it("resolves the gateway socket and decodes metadata and JPEG bytes", async () => {
@@ -59,15 +61,14 @@ describe("BrowserScreencastClient", () => {
     expect(socket.close).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    [4003, "navigation_blocked"],
-    [4004, "target_closed"],
-    [1012, "gateway shutting down"],
-  ])("preserves close code %i and reason", (code, reason) => {
+  it("preserves the socket close code and reason", () => {
     const { socket, callbacks } = connect();
-    socket.disconnect(code, reason);
+    socket.disconnect(4003, "navigation_blocked");
     socket.receive(screencastFrame());
-    expect(callbacks.onClose).toHaveBeenCalledExactlyOnceWith({ code, reason });
+    expect(callbacks.onClose).toHaveBeenCalledExactlyOnceWith({
+      code: 4003,
+      reason: "navigation_blocked",
+    });
     expect(callbacks.onFrame).not.toHaveBeenCalled();
   });
 

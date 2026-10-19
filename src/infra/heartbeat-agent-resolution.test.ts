@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import * as agentScopeConfig from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { tryResolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";
 import { isHeartbeatOwnerUnresolved, resolveHeartbeatAgents } from "./heartbeat-config.js";
 import { isHeartbeatEnabledForAgent } from "./heartbeat-summary.js";
@@ -10,222 +11,144 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("tryResolveAmbientHeartbeatAgentId", () => {
-  it("prefers an explicit heartbeat owner over the system owner", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, ops: {} },
-        defaults: {
-          heartbeat: { agentId: "ops" },
-          systemAgent: { agentId: "main" },
-        },
-      },
-    };
-    expect(tryResolveAmbientHeartbeatAgentId(cfg)).toBe("ops");
-  });
+function roster(
+  defaults?: NonNullable<OpenClawConfig["agents"]>["defaults"],
+  entries: NonNullable<OpenClawConfig["agents"]>["entries"] = { main: {}, ops: {} },
+): OpenClawConfig {
+  return { agents: { ownership: "explicit", entries, ...(defaults ? { defaults } : {}) } };
+}
+
+function fleetEntries(size: number, every?: string) {
+  return Object.fromEntries(
+    Array.from({ length: size }, (_, i) => [`agent-${i}`, every ? { heartbeat: { every } } : {}]),
+  );
+}
+
+function expectedFleet(size: number, every: string) {
+  return Array.from({ length: size }, (_, i) => ({
+    agentId: `agent-${i}`,
+    heartbeat: { every, target: "owner" },
+  }));
+}
+
+const systemOwnedConfig = roster({ systemAgent: { agentId: "ops" } }, { ops: {}, main: {} });
+const ownerlessConfig = roster(undefined, { ops: {}, main: {} });
+
+it.each([false, true])("checks enrollment without hydration (frozen=%s)", (frozen) => {
+  const size = 512;
+  const cfg = roster(undefined, fleetEntries(size, "0m"));
+  if (frozen) {
+    freezeJsonSnapshot(cfg);
+    resolveHeartbeatAgents(cfg);
+  }
+  const hydrate = vi.spyOn(agentScopeConfig, "resolveAgentConfig");
+  const lastAgentId = `agent-${size - 1}`;
+
+  expect(isHeartbeatEnabledForAgent(cfg, lastAgentId)).toBe(true);
+  const firstCheckHydrations = hydrate.mock.calls.length;
+  expect(isHeartbeatEnabledForAgent(cfg, "missing")).toBe(false);
+  expect(isHeartbeatEnabledForAgent(ownerlessConfig, lastAgentId)).toBe(false);
+  expect(isHeartbeatEnabledForAgent(cfg, lastAgentId)).toBe(true);
+
+  expect(firstCheckHydrations).toBe(0);
 });
 
-describe("resolveHeartbeatAgents", () => {
-  const systemOwnedConfig = {
-    agents: {
-      ownership: "explicit",
-      entries: { ops: {}, main: {} },
-      defaults: { systemAgent: { agentId: "ops" } },
-    },
-  } as OpenClawConfig;
-  const ownerlessConfig = {
-    agents: { ownership: "explicit", entries: { ops: {}, main: {} } },
-  } as OpenClawConfig;
+it("refreshes membership after mutable heartbeat enrollment changes", () => {
+  const entries: Record<string, { heartbeat?: { every: string } }> = {
+    main: {},
+    ops: { heartbeat: { every: "0m" } },
+  };
+  const cfg = roster(undefined, entries);
+  expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
+  entries.ops = { heartbeat: undefined };
+  expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(false);
+  entries.ops = { heartbeat: { every: "5m" } };
+  expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
+});
 
-  it("enrolls the system agent when ambient heartbeat config is absent", () => {
-    expect(resolveHeartbeatAgents(systemOwnedConfig)).toEqual([
-      { agentId: "ops", heartbeat: undefined },
-    ]);
-    expect(isHeartbeatEnabledForAgent(systemOwnedConfig, "ops")).toBe(true);
-    expect(isHeartbeatEnabledForAgent(systemOwnedConfig, "main")).toBe(false);
-    expect(isHeartbeatOwnerUnresolved(systemOwnedConfig)).toBe(false);
-  });
-
-  it("disables ambient heartbeats when an explicit multi-agent roster has no owner", () => {
-    expect(resolveHeartbeatAgents(ownerlessConfig)).toEqual([]);
-    expect(isHeartbeatEnabledForAgent(ownerlessConfig)).toBe(false);
-    expect(isHeartbeatEnabledForAgent(ownerlessConfig, "ops")).toBe(false);
-    expect(isHeartbeatOwnerUnresolved(ownerlessConfig)).toBe(true);
-  });
-
-  it.each([
-    { frozen: false, prepare: (cfg: OpenClawConfig) => cfg },
+it("preserves explicit roster order and duplicate IDs with the first normalized config", () => {
+  const cfg = roster(
+    { heartbeat: { agentId: "main", target: "owner" } },
     {
-      frozen: true,
-      prepare: (cfg: OpenClawConfig) => {
-        freezeJsonSnapshot(cfg);
-        resolveHeartbeatAgents(cfg);
-        return cfg;
-      },
-    },
-  ])("checks enrollment without hydrating a fleet's config (frozen=$frozen)", ({ prepare }) => {
-    const size = 512;
-    const entries = Object.fromEntries(
-      Array.from({ length: size }, (_, index) => [
-        `agent-${index}`,
-        { heartbeat: { every: "0m" } },
-      ]),
-    );
-    const cfg = prepare({ agents: { ownership: "explicit", entries } });
-    const hydrate = vi.spyOn(agentScopeConfig, "resolveAgentConfig");
-    const lastAgentId = `agent-${size - 1}`;
-
-    // Enrollment is independent of the recurring interval, including zero.
-    expect(isHeartbeatEnabledForAgent(cfg, lastAgentId)).toBe(true);
-    const firstCheckHydrations = hydrate.mock.calls.length;
-    expect(isHeartbeatEnabledForAgent(cfg, "missing")).toBe(false);
-    expect(isHeartbeatEnabledForAgent(ownerlessConfig, lastAgentId)).toBe(false);
-    expect(isHeartbeatEnabledForAgent(cfg, lastAgentId)).toBe(true);
-
-    // A membership query must not materialize and discard every agent config.
-    expect(firstCheckHydrations).toBe(0);
-  });
-
-  it("refreshes membership after mutable heartbeat enrollment changes", () => {
-    const entries: Record<string, { heartbeat?: { every: string } }> = {
+      OPS: { heartbeat: { every: "0m" } },
+      ops: { heartbeat: { every: "5m" } },
       main: {},
-      ops: { heartbeat: { every: "0m" } },
-    };
-    const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries } };
-    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
-    entries.ops = { heartbeat: undefined };
-    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(false);
-    entries.ops = { heartbeat: { every: "5m" } };
-    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
-  });
+    },
+  );
+  expect(resolveHeartbeatAgents(cfg)).toEqual([
+    { agentId: "ops", heartbeat: { agentId: "main", target: "owner", every: "0m" } },
+    { agentId: "ops", heartbeat: { agentId: "main", target: "owner", every: "0m" } },
+  ]);
+  expect(isHeartbeatEnabledForAgent(cfg, "OPS")).toBe(true);
+  expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(false);
+});
 
-  it("preserves explicit list order and duplicate IDs with the first normalized config", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        defaults: { heartbeat: { agentId: "main", target: "owner" } },
-        list: [
-          { id: "OPS", heartbeat: { every: "0m" } },
-          { id: "ops", heartbeat: { every: "5m" } },
-          { id: "main" },
-        ],
-      },
-    };
-    expect(resolveHeartbeatAgents(cfg)).toEqual([
-      { agentId: "ops", heartbeat: { agentId: "main", target: "owner", every: "0m" } },
-      { agentId: "ops", heartbeat: { agentId: "main", target: "owner", every: "0m" } },
-    ]);
-    expect(isHeartbeatEnabledForAgent(cfg, "OPS")).toBe(true);
-    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(false);
-  });
-
-  it.each([
-    {
-      name: "explicit heartbeat owner",
-      cfg: {
-        agents: {
-          ownership: "explicit",
-          entries: { main: {}, ops: {} },
-          defaults: { heartbeat: { agentId: "ops" } },
-        },
-      } as OpenClawConfig,
-      expectedAgentIds: ["ops"],
-    },
-    {
-      name: "legacy default marker",
-      cfg: {
-        agents: { entries: { main: { default: true }, ops: {} } },
-      } as OpenClawConfig,
-      expectedAgentIds: ["main"],
-    },
-    {
-      name: "sole agent",
-      cfg: { agents: { ownership: "explicit", entries: { solo: {} } } } as OpenClawConfig,
-      expectedAgentIds: ["solo"],
-    },
-    {
-      name: "per-agent enrollment takes precedence over the default heartbeat owner",
-      cfg: {
-        agents: {
-          ownership: "explicit",
-          entries: { main: {}, ops: { heartbeat: { every: "30m" } } },
-          defaults: { heartbeat: { agentId: "main" } },
-        },
-      } as OpenClawConfig,
-      expectedAgentIds: ["ops"],
-    },
-    {
-      name: "broadcast heartbeat defaults",
-      cfg: {
-        agents: {
-          ownership: "explicit",
-          entries: { main: {}, ops: {} },
-          defaults: { heartbeat: { every: "30m" } },
-        },
-      } as OpenClawConfig,
-      expectedAgentIds: ["main", "ops"],
-    },
-  ])("enrolls exactly the runnable agents for the $name config", ({ cfg, expectedAgentIds }) => {
+it.each([
+  ["system agent", systemOwnedConfig, ["ops"]],
+  ["ownerless roster", ownerlessConfig, []],
+  [
+    "explicit heartbeat owner",
+    roster({ heartbeat: { agentId: "ops" }, systemAgent: { agentId: "main" } }),
+    ["ops"],
+  ],
+  [
+    "migrated legacy default marker",
+    createCanonicalAgentConfigFixture({
+      agents: { entries: { main: { default: true }, ops: {} } },
+    }).config,
+    ["main"],
+  ],
+  ["sole agent", roster(undefined, { solo: {} }), ["solo"]],
+  [
+    "per-agent enrollment overrides the default owner",
+    roster({ heartbeat: { agentId: "main" } }, { main: {}, ops: { heartbeat: { every: "30m" } } }),
+    ["ops"],
+  ],
+  ["broadcast heartbeat defaults", roster({ heartbeat: { every: "30m" } }), ["main", "ops"]],
+] satisfies [string, OpenClawConfig, string[]][])(
+  "enrolls exactly the runnable agents for the %s config",
+  (name, cfg, expectedAgentIds) => {
     const agents = resolveHeartbeatAgents(cfg);
+    if (name === "explicit heartbeat owner") {
+      expect(tryResolveAmbientHeartbeatAgentId(cfg)).toBe("ops");
+    } else if (name === "system agent") {
+      expect(agents).toEqual([{ agentId: "ops", heartbeat: undefined }]);
+      expect(isHeartbeatOwnerUnresolved(cfg)).toBe(false);
+    } else if (name === "ownerless roster") {
+      expect(agents).toEqual([]);
+      expect(isHeartbeatEnabledForAgent(cfg)).toBe(false);
+      expect(isHeartbeatOwnerUnresolved(cfg)).toBe(true);
+    }
     expect(agents.map((agent) => agent.agentId)).toEqual(expectedAgentIds);
     for (const agentId of Object.keys(cfg.agents?.entries ?? {})) {
       expect(isHeartbeatEnabledForAgent(cfg, agentId)).toBe(expectedAgentIds.includes(agentId));
     }
-  });
+  },
+);
 
-  it.each([
-    ["entries", "explicit"],
-    ["entries", "defaults"],
-    ["list", "explicit"],
-    ["list", "defaults"],
-  ] as const)("enrolls a %s %s fleet with linear reads and fresh config", (form, enrollment) => {
-    const size = 64;
-    const rows = Array.from({ length: size }, (_, index) => ({
-      id: `agent-${index}`,
-      ...(enrollment === "explicit" ? { heartbeat: { every: "45m" } } : {}),
-    }));
-    const entries = Object.fromEntries(rows.map(({ id, ...entry }) => [id, entry]));
-    let reads = 0;
-    const observe = <T extends object>(roster: T): T =>
-      new Proxy(roster, {
-        get(target, key, receiver) {
-          if (typeof key === "string" && (key.startsWith("agent-") || /^\d+$/.test(key))) {
-            reads += 1;
-          }
-          return Reflect.get(target, key, receiver);
-        },
-      });
-    const defaults = { heartbeat: { every: "30m", target: "owner" as const } };
-    const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        defaults,
-        ...(form === "entries" ? { entries: observe(entries) } : { list: observe(rows) }),
+it.each(["explicit", "defaults"] as const)("enrolls %s fleets linearly", (enrollment) => {
+  const size = 64;
+  const explicit = enrollment === "explicit";
+  const entries = fleetEntries(size, explicit ? "45m" : undefined);
+  let reads = 0;
+  const observe = <T extends object>(entriesToObserve: T): T =>
+    new Proxy(entriesToObserve, {
+      get(target, key, receiver) {
+        if (typeof key === "string" && (key.startsWith("agent-") || /^\d+$/.test(key))) {
+          reads += 1;
+        }
+        return Reflect.get(target, key, receiver);
       },
-    };
-    const expected = rows.map(({ id }) => ({
-      agentId: id,
-      heartbeat: { every: enrollment === "explicit" ? "45m" : "30m", target: "owner" },
-    }));
+    });
+  const defaults = { heartbeat: { every: "30m", target: "owner" as const } };
+  const cfg = roster(defaults, observe(entries));
+  expect(resolveHeartbeatAgents(cfg)).toEqual(expectedFleet(size, explicit ? "45m" : "30m"));
+  // Bound actual entry reads, allowing several passes while rejecting a scan per agent.
+  expect(reads).toBeLessThanOrEqual(size * 4);
 
-    expect(resolveHeartbeatAgents(cfg)).toEqual(expected);
-    // Bound actual entry reads, allowing several passes while rejecting a scan per agent.
-    expect(reads).toBeLessThanOrEqual(size * 4);
-
-    defaults.heartbeat.every = "20m";
-    if (form === "entries") {
-      delete entries[`agent-${size - 1}`];
-    } else {
-      rows.pop();
-    }
-    reads = 0;
-    expect(resolveHeartbeatAgents(cfg)).toEqual(
-      expected.slice(0, -1).map(({ agentId }) => ({
-        agentId,
-        heartbeat: { every: enrollment === "explicit" ? "45m" : "20m", target: "owner" },
-      })),
-    );
-    expect(reads).toBeLessThanOrEqual(size * 4);
-  });
+  defaults.heartbeat.every = "20m";
+  delete entries[`agent-${size - 1}`];
+  reads = 0;
+  expect(resolveHeartbeatAgents(cfg)).toEqual(expectedFleet(size - 1, explicit ? "45m" : "20m"));
+  expect(reads).toBeLessThanOrEqual(size * 4);
 });

@@ -26,7 +26,7 @@ function interruptedEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
     sessionId: "session-1",
     updatedAt: 100,
-    status: "running",
+    status: "interrupted",
     abortedLastRun: true,
     mainRestartRecovery: recoveryState(),
     ...overrides,
@@ -87,6 +87,27 @@ function projectLifecycle(
 }
 
 describe("main session recovery state", () => {
+  it("reserves an interrupted outcome from its recovery cycle without persisted liveness", () => {
+    const entry = interruptedEntry({ status: "interrupted" });
+    const view = observe(entry, "generation-1");
+    expect(view.status).toBe("recoverable");
+    if (view.status !== "recoverable") {
+      throw new Error("expected recoverable claim");
+    }
+    expect(
+      transitionMainSessionRecovery(entry, {
+        kind: "prepare_attempt",
+        attempt: view.nextAttempt,
+        lifecycleGeneration: "generation-1",
+        now: 200,
+        observation: view.observation,
+        runId: "recovery-1",
+        executionIdentity: { state: "disabled" },
+      }).kind,
+    ).toBe("reserved");
+    expect(entry.status).toBe("interrupted");
+  });
+
   it("allows rollover until the tombstone records its successor", () => {
     expect(
       inspectMainRestartRecoveryRolloverEligibility(
@@ -190,9 +211,7 @@ describe("main session recovery state", () => {
     expect(entry.lastRunId).toBeUndefined();
   });
 
-  it("clears orphaned recovery residue when the row never recorded a status", () => {
-    // Production shape (2026-07-26): fences from two dead gateway generations on
-    // a row whose status was never persisted, so it matched no cleanup branch.
+  it.each([false, true])("clears only fences with terminal evidence (terminal=%s)", (terminal) => {
     const entry = interruptedEntry({
       status: undefined,
       abortedLastRun: false,
@@ -201,15 +220,17 @@ describe("main session recovery state", () => {
         { runId: "stale-run-1", lifecycleGeneration: "dead-generation-1" },
         { runId: "stale-run-2", lifecycleGeneration: "dead-generation-2" },
       ],
+      restartRecoveryTerminalRunIds: terminal ? ["stale-run-1", "stale-run-2"] : undefined,
     });
+    const fences = entry.restartRecoveryRuns;
 
-    expect(claimForeground(entry)).toEqual({ kind: "applied" });
-    expect(entry.restartRecoveryRuns).toBeUndefined();
+    expect(claimForeground(entry)).toEqual({ kind: terminal ? "applied" : "no_change" });
+    expect(entry.restartRecoveryRuns).toEqual(terminal ? undefined : fences);
     expect(entry.mainRestartRecovery).toBeUndefined();
     expect(entry.abortedLastRun).toBe(false);
   });
 
-  it("clears terminal residue while a delivery claim is still recorded", () => {
+  it("keeps interrupted delivery custody authoritative regardless of the recorded outcome", () => {
     const entry = interruptedEntry({
       status: "failed",
       abortedLastRun: true,
@@ -218,9 +239,9 @@ describe("main session recovery state", () => {
       restartRecoveryDeliveryRunId: "pending-delivery",
     });
 
-    expect(claimForeground(entry)).toEqual({ kind: "applied" });
-    expect(entry.abortedLastRun).toBe(false);
-    expect(entry.mainRestartRecovery).toBeUndefined();
+    expect(claimForeground(entry).kind).toBe("foreground_claimed");
+    expect(entry.abortedLastRun).toBe(true);
+    expect(entry.mainRestartRecovery?.foregroundClaims?.tokens).toEqual(["foreground-1"]);
     // The delivery claim is owned by the delivery path, not recovery cleanup.
     expect(entry.restartRecoveryDeliveryRunId).toBe("pending-delivery");
   });
@@ -323,7 +344,7 @@ describe("main session recovery state", () => {
     ).toMatchObject({ kind: "admitted_recovery" });
     expect(entry).toMatchObject({
       abortedLastRun: false,
-      pendingFinalDelivery: { kind: "replayable", text: "captured reply", createdAt: 1 },
+      pendingFinalDelivery: { kind: "replayable", text: " captured reply ", createdAt: 1 },
       restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-1" }],
       mainRestartRecovery: {
         revision: 3,
@@ -353,6 +374,57 @@ describe("main session recovery state", () => {
     expect(entry.lifecycleRunId).toBeUndefined();
     expect(entry.lastRunId).toBeUndefined();
   });
+
+  it.each(["started", "terminal"] as const)(
+    "does not restore a %s recovery attempt during pre-start cleanup",
+    (outcome) => {
+      const entry = interruptedEntry({
+        status: undefined,
+        abortedLastRun: false,
+        lifecycleRunId: "recovery-1",
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-1" }],
+        ...(outcome === "terminal" ? { restartRecoveryTerminalRunIds: ["recovery-1"] } : {}),
+        mainRestartRecovery: recoveryState({
+          chargedAttempts: 1,
+          ...(outcome === "started" ? { startedAttempt: 1 } : {}),
+        }),
+      });
+      const before = structuredClone(entry);
+
+      expect(
+        transitionMainSessionRecovery(entry, {
+          kind: "mark_admitted_recovery_interrupted",
+          cycleId: "cycle-1",
+          attempt: 1,
+          lifecycleGeneration: "generation-1",
+          now: 400,
+          runId: "recovery-1",
+          sessionId: "session-1",
+          unstartedOnly: true,
+        }),
+      ).toEqual({ kind: "rejected", reason: "stale_reservation" });
+      expect(entry).toEqual(before);
+    },
+  );
+
+  it.each([undefined, "interrupted"] as const)(
+    "records an explicit interrupt of owed %s recovery without charging a retry",
+    (status) => {
+      const entry = interruptedEntry({
+        status,
+        restartRecoveryDeliverySourceRunId: "source-1",
+      });
+
+      expect(transitionMainSessionRecovery(entry, { kind: "interrupt_owed", now: 400 })).toEqual({
+        kind: "applied",
+      });
+      expect(entry).toMatchObject({ status: "killed", endedAt: 400, abortedLastRun: false });
+      expect(entry.mainRestartRecovery).toBeUndefined();
+      expect(entry.restartRecoveryDeliverySourceRunId).toBeUndefined();
+      expect(entry.restartRecoveryTerminalRunIds).toContain("source-1");
+    },
+  );
 
   it("rejects a reservation created by an older lifecycle generation", () => {
     const entry = interruptedEntry({
@@ -530,15 +602,7 @@ describe("main session recovery state", () => {
       executionIdentity: { state: "enabled" },
     });
 
-    expect(prepared).toMatchObject({
-      kind: "reserved",
-      reservation: {
-        executionIdentityAdmission: {
-          kind: "retry-reference",
-          token: storedToken,
-        },
-      },
-    });
+    expect(prepared.kind).toBe("reserved");
     expect(entry.mainRestartRecovery?.executionIdentity).toBe(storedToken);
 
     expect(
@@ -659,9 +723,12 @@ describe("main session recovery state", () => {
           lifecycleGeneration: "generation-1",
           data: { phase: "error", stopReason: "restart" },
         },
-        { status: "failed" },
+        { status: "interrupted", abortedLastRun: true, endedAt: 200 },
       ),
-    ).toEqual({ action: "suppress" });
+    ).toEqual({
+      action: "apply",
+      patch: { status: "interrupted", abortedLastRun: true, endedAt: 200 },
+    });
 
     expect(
       projectLifecycle(
@@ -904,6 +971,28 @@ describe("main session recovery state", () => {
     ).toEqual({
       action: "apply",
       patch: { status: "done", abortedLastRun: false },
+    });
+  });
+
+  it("retires a normal start fence without clearing a killed run's aborted outcome", () => {
+    expect(
+      projectLifecycle(
+        { restartRecoveryRuns: [{ runId: "ordinary-run", lifecycleGeneration: "generation-1" }] },
+        {
+          runId: "ordinary-run",
+          lifecycleGeneration: "generation-1",
+          data: { phase: "error", stopReason: "user" },
+        },
+        { status: "killed", abortedLastRun: true },
+      ),
+    ).toEqual({
+      action: "apply",
+      patch: {
+        status: "killed",
+        abortedLastRun: true,
+        restartRecoveryRuns: undefined,
+        mainRestartRecovery: undefined,
+      },
     });
   });
 

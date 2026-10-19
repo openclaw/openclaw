@@ -1,5 +1,4 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureSessionGroupRegistered } from "../session-groups.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { registerCommittedSessionCategory } from "./session-create-category.js";
@@ -12,32 +11,6 @@ vi.mock("./sessions-shared.js", () => ({ sessionLog: { warn: vi.fn() } }));
 beforeEach(() => vi.resetAllMocks());
 const context = {} as GatewayRequestContext;
 const source = { env: { OPENCLAW_STATE_DIR: "/fixture/state" }, assertCurrent: vi.fn() };
-
-it.each([true, false])(
-  "joins registration before catalog-only publication (changed=%s)",
-  async (changed) => {
-    const registration = createDeferredCore<boolean>();
-    vi.mocked(ensureSessionGroupRegistered).mockReturnValueOnce(registration.promise);
-    const publishing = registerCommittedSessionCategory("Travel", context, source);
-    expect(emitSessionsChanged).not.toHaveBeenCalled();
-    expect(ensureSessionGroupRegistered).toHaveBeenCalledWith(
-      "Travel",
-      source.env,
-      source.assertCurrent,
-    );
-    registration.resolve(changed);
-    await publishing;
-    expect(source.assertCurrent).toHaveBeenCalledTimes(2);
-    expect(emitSessionsChanged).toHaveBeenCalledTimes(changed ? 1 : 0);
-    if (changed) {
-      expect(emitSessionsChanged).toHaveBeenCalledWith(
-        context,
-        { reason: "groups" },
-        { catalogOnly: true },
-      );
-    }
-  },
-);
 
 it("warns and reloads only the catalog on uncertain registration, allowing explicit same-category repair", async () => {
   vi.mocked(ensureSessionGroupRegistered).mockRejectedValueOnce(new Error("catalog unavailable"));

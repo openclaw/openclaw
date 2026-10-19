@@ -1,26 +1,18 @@
-/**
- * Installs context guards for oversized tool-result histories.
- */
 import type {
   ContextEngine,
   ContextEngineRuntimeContext,
   ContextEngineRuntimeSettings,
   ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
-import { estimateTokens, type AgentMessage } from "../runtime/index.js";
+import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
+import { estimateTokens, type Agent, type AgentMessage } from "../runtime/index.js";
 import { resolveToolResultContextMaxChars } from "../tool-result-limits.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
-import { log } from "./logger.js";
-import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
-import {
-  shouldPreemptivelyCompactBeforePrompt,
-  type CompactionReplayPressureContext,
-} from "./run/preemptive-compaction.js";
+import { estimateRenderedLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
 import {
   TOOL_IMAGE_CHARS,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
-  createMessageCharEstimateCache,
   estimateMessageChars,
   estimateMessageCharsCached,
   getToolResultText,
@@ -28,91 +20,6 @@ import {
 } from "./tool-result-char-estimator.js";
 import { isToolResultTextBlock } from "./tool-result-text-budget.js";
 import { truncateToolResultMessage, truncateToolResultText } from "./tool-result-truncation.js";
-
-const TRANSCRIPT_PROMPT_TEXT_KEY = "__openclawTranscriptPromptText";
-
-type GuardableTransformContext = (
-  messages: AgentMessage[],
-  signal: AbortSignal,
-) => AgentMessage[] | Promise<AgentMessage[]>;
-
-type GuardableAgent = object;
-
-type GuardableAgentRecord = {
-  transformContext?: GuardableTransformContext;
-};
-
-type MidTurnPrecheckOptions = {
-  getReplay?: () => CompactionReplayPressureContext;
-  enabled?: boolean;
-  contextTokenBudget: number;
-  reserveTokens: () => number;
-  toolResultMaxChars?: number;
-  getSystemPrompt?: () => string | undefined;
-  getPrePromptMessageCount?: () => number;
-  onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
-};
-
-export function markTranscriptPromptText(message: AgentMessage, text: string): void {
-  Object.defineProperty(message, TRANSCRIPT_PROMPT_TEXT_KEY, {
-    configurable: true,
-    enumerable: true,
-    value: text,
-  });
-}
-
-function getTranscriptPromptText(message: AgentMessage): string | undefined {
-  const value = Reflect.get(message, TRANSCRIPT_PROMPT_TEXT_KEY);
-  return typeof value === "string" ? value : undefined;
-}
-
-function restoreTranscriptPromptText(
-  message: AgentMessage,
-  cache: WeakMap<AgentMessage, AgentMessage>,
-): AgentMessage {
-  const transcriptText = getTranscriptPromptText(message);
-  if (transcriptText === undefined || message.role !== "user") {
-    return message;
-  }
-  const cached = cache.get(message);
-  if (cached) {
-    return cached;
-  }
-  const content = (message as { content?: unknown }).content;
-  const messageRest = { ...message };
-  Reflect.deleteProperty(messageRest, TRANSCRIPT_PROMPT_TEXT_KEY);
-  let restoredMessage: AgentMessage = message;
-  if (typeof content === "string") {
-    restoredMessage = Object.assign(messageRest, { content: transcriptText });
-  } else if (Array.isArray(content)) {
-    let restored = false;
-    const nextContent = content.map((block) => {
-      if (restored || !block || typeof block !== "object") {
-        return block;
-      }
-      const textBlock = block as { type?: unknown; text?: unknown };
-      if (textBlock.type !== "text" || typeof textBlock.text !== "string") {
-        return block;
-      }
-      restored = true;
-      return Object.assign({}, block, { text: transcriptText });
-    });
-    if (restored) {
-      restoredMessage = Object.assign(messageRest, { content: nextContent });
-    }
-  }
-  cache.set(message, restoredMessage);
-  return restoredMessage;
-}
-
-function stripTranscriptPromptMarker(message: AgentMessage): AgentMessage {
-  if (getTranscriptPromptText(message) === undefined) {
-    return message;
-  }
-  const messageRest = { ...message };
-  Reflect.deleteProperty(messageRest, TRANSCRIPT_PROMPT_TEXT_KEY);
-  return messageRest;
-}
 
 function projectMessages(
   messages: AgentMessage[],
@@ -141,10 +48,6 @@ function replaceToolResultContent(
   } as AgentMessage;
   Reflect.deleteProperty(result, "details");
   return result;
-}
-
-function estimateBudgetToRawChars(maxChars: number): number {
-  return Math.max(0, Math.floor(maxChars / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE));
 }
 
 function truncateToolResultToChars(
@@ -227,7 +130,9 @@ function truncateToolResultToChars(
       content.filter(isText),
       imageCount > 0
         ? omissionNotice(0)
-        : formatContextLimitTruncationNotice(Math.max(1, estimateBudgetToRawChars(omittedChars))),
+        : formatContextLimitTruncationNotice(
+            Math.max(1, Math.floor(omittedChars / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE)),
+          ),
     );
   }
 
@@ -238,46 +143,21 @@ function truncateToolResultToChars(
   return replaceToolResultContent(msg, truncatedText);
 }
 
-function enforceToolResultLimit(params: {
-  messages: AgentMessage[];
-  maxSingleToolResultChars: number;
-}): AgentMessage[] {
-  const { messages, maxSingleToolResultChars } = params;
-  const estimateCache = createMessageCharEstimateCache();
-  return projectMessages(messages, (message) =>
-    truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache),
-  );
-}
-
-function toMidTurnPrecheckRequest(
-  result: ReturnType<typeof shouldPreemptivelyCompactBeforePrompt>,
-): MidTurnPrecheckRequest | null {
-  if (result.route === "fits") {
-    return null;
-  }
-  return {
-    route: result.route,
-    estimatedPromptTokens: result.estimatedPromptTokens,
-    promptBudgetBeforeReserve: result.promptBudgetBeforeReserve,
-    overflowTokens: result.overflowTokens,
-    toolResultReducibleChars: result.toolResultReducibleChars,
-    effectiveReserveTokens: result.effectiveReserveTokens,
-  };
-}
-
 /**
  * Reassemble each tool-loop iteration for engines that own compaction.
  * Admitted turns advance through their accepted-turn owner; standalone
  * attempts retain their eager lifecycle and finalization checkpoint.
  */
 export function installContextEngineLoopHook(params: {
-  agent: GuardableAgent;
+  agent: Pick<Agent, "transformContext">;
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey?: string;
   sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   tokenBudget?: number;
+  reserveTokens?: () => number;
+  getSystemPrompt?: () => string | undefined;
   modelId: string;
   repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
   getPrePromptMessageCount?: () => number;
@@ -292,26 +172,22 @@ export function installContextEngineLoopHook(params: {
   isHeartbeat?: boolean;
 }): () => void {
   const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
-  const mutableAgent = params.agent as GuardableAgentRecord;
+  const sessionIdentity = { sessionId, sessionKey };
+  const mutableAgent = params.agent;
   const originalTransformContext = mutableAgent.transformContext;
   let lastSeenLength: number | null = null;
   let lastAssembledView: AgentMessage[] | null = null;
   let lastSourceMessages: AgentMessage[] | null = null;
-  const transcriptProjectionCache = new WeakMap<AgentMessage, AgentMessage>();
 
-  mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
+  mutableAgent.transformContext = async (messages, signal) => {
     signal?.throwIfAborted();
     const transformed = originalTransformContext
       ? await originalTransformContext.call(mutableAgent, messages, signal)
       : messages;
     signal?.throwIfAborted();
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-    const transcriptMessages = params.deferredTurn
-      ? sourceMessages
-      : projectMessages(sourceMessages, (message) =>
-          restoreTranscriptPromptText(message, transcriptProjectionCache),
-        );
-    const providerMessages = projectMessages(sourceMessages, stripTranscriptPromptMarker);
+    const transcriptMessages = sourceMessages;
+    const providerMessages = sourceMessages;
     const sourceHistoryChanged =
       lastSeenLength != null &&
       lastSourceMessages != null &&
@@ -344,8 +220,7 @@ export function installContextEngineLoopHook(params: {
       if (!params.deferredTurn) {
         if (typeof contextEngine.afterTurn === "function") {
           await contextEngine.afterTurn({
-            sessionId,
-            sessionKey,
+            ...sessionIdentity,
             sessionTarget: params.sessionTarget,
             sessionFile,
             messages: transcriptMessages,
@@ -362,16 +237,14 @@ export function installContextEngineLoopHook(params: {
           const newMessages = transcriptMessages.slice(prePromptMessageCount);
           if (typeof contextEngine.ingestBatch === "function") {
             await contextEngine.ingestBatch({
-              sessionId,
-              sessionKey,
+              ...sessionIdentity,
               messages: newMessages,
               isHeartbeat: params.isHeartbeat,
             });
           } else {
             for (const message of newMessages) {
               await contextEngine.ingest({
-                sessionId,
-                sessionKey,
+                ...sessionIdentity,
                 message,
                 isHeartbeat: params.isHeartbeat,
               });
@@ -391,16 +264,24 @@ export function installContextEngineLoopHook(params: {
         : providerMessages.length;
       const pendingMessages = providerMessages.slice(historyLength);
       const pendingTokens = pendingMessages.reduce(
-        (sum, message) => sum + estimateTokens(message),
+        (sum, message) => sum + estimateTokens(projectRecordedModelPrompt(message)),
         0,
       );
+      // The pending exchange already includes the active prompt; reserve only
+      // the system prompt here, using the same pressure estimate as turn start.
+      const systemTokens = estimateRenderedLlmBoundaryTokenPressure({
+        systemPrompt: params.getSystemPrompt?.(),
+        prompt: "",
+      });
+      const reserve = Math.max(0, Math.floor(params.reserveTokens?.() ?? 0));
       const assembled = await contextEngine.assemble({
-        sessionId,
-        sessionKey,
+        ...sessionIdentity,
         messages: providerMessages.slice(0, historyLength),
         ...params.deferredTurn,
         tokenBudget:
-          tokenBudget === undefined ? undefined : Math.max(1, tokenBudget - pendingTokens),
+          tokenBudget === undefined
+            ? undefined
+            : Math.max(1, tokenBudget - reserve - systemTokens - pendingTokens),
         model: modelId,
         runtimeSettings: params.runtimeSettings,
       });
@@ -424,7 +305,7 @@ export function installContextEngineLoopHook(params: {
     }
 
     return providerMessages;
-  }) as GuardableTransformContext;
+  };
 
   return () => {
     mutableAgent.transformContext = originalTransformContext;
@@ -432,70 +313,25 @@ export function installContextEngineLoopHook(params: {
 }
 
 export function installToolResultContextGuard(params: {
-  agent: GuardableAgent;
+  agent: Pick<Agent, "transformContext">;
   contextWindowTokens: number;
-  midTurnPrecheck?: MidTurnPrecheckOptions;
 }): () => void {
   const maxSingleToolResultChars = resolveToolResultContextMaxChars(params.contextWindowTokens);
 
-  // Agent.transformContext is private in session runtime, so access it via a
-  // narrow runtime view to keep callsites type-safe while preserving behavior.
-  const mutableAgent = params.agent as GuardableAgentRecord;
+  const mutableAgent = params.agent;
   const originalTransformContext = mutableAgent.transformContext;
-  let lastSeenLength: number | null = null;
 
-  mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
+  mutableAgent.transformContext = async (messages, signal) => {
     const transformed = originalTransformContext
       ? await originalTransformContext.call(mutableAgent, messages, signal)
       : messages;
 
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-    const contextMessages = enforceToolResultLimit({
-      messages: sourceMessages,
-      maxSingleToolResultChars,
-    });
-    if (params.midTurnPrecheck?.enabled) {
-      const prePromptMessageCount = Math.max(
-        0,
-        Math.min(
-          contextMessages.length,
-          lastSeenLength ??
-            params.midTurnPrecheck.getPrePromptMessageCount?.() ??
-            contextMessages.length,
-        ),
-      );
-      lastSeenLength = prePromptMessageCount;
-      if (contextMessages.slice(prePromptMessageCount).some(isToolResultMessage)) {
-        // Use the same post-truncation view the runtime will send to the next model call.
-        // Recovery re-applies truncation to the persisted session manager, so
-        // this precheck is only a routing signal, not the source of truth.
-        const precheck = shouldPreemptivelyCompactBeforePrompt({
-          replay: params.midTurnPrecheck.getReplay?.(),
-          messages: contextMessages,
-          systemPrompt: params.midTurnPrecheck.getSystemPrompt?.(),
-          // During a tool loop, the active user prompt is already part of messages.
-          prompt: "",
-          contextTokenBudget: params.midTurnPrecheck.contextTokenBudget,
-          reserveTokens: params.midTurnPrecheck.reserveTokens(),
-          toolResultMaxChars: params.midTurnPrecheck.toolResultMaxChars,
-        });
-        const request = toMidTurnPrecheckRequest(precheck);
-        log.debug(
-          `[context-overflow-midturn-precheck] tool-result-guard check route=${precheck.route} ` +
-            `messages=${contextMessages.length} prePromptMessageCount=${prePromptMessageCount} ` +
-            `estimatedPromptTokens=${precheck.estimatedPromptTokens} ` +
-            `promptBudgetBeforeReserve=${precheck.promptBudgetBeforeReserve} ` +
-            `overflowTokens=${precheck.overflowTokens}`,
-        );
-        if (request) {
-          params.midTurnPrecheck.onMidTurnPrecheck?.(request);
-          throw new MidTurnPrecheckSignal(request);
-        }
-      }
-      lastSeenLength = contextMessages.length;
-    }
-    return contextMessages;
-  }) as GuardableTransformContext;
+    const estimateCache = new WeakMap<AgentMessage, number>();
+    return projectMessages(sourceMessages, (message) =>
+      truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache),
+    );
+  };
 
   return () => {
     mutableAgent.transformContext = originalTransformContext;

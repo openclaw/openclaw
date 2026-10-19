@@ -1,14 +1,8 @@
-// Ollama stream runtime implements native transport behavior.
 import { randomUUID } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
-import {
-  parseJsonObjectPreservingUnsafeIntegers,
-  parseJsonPreservingUnsafeIntegers,
-} from "openclaw/plugin-sdk/json-unsafe-integers";
 import type {
   AssistantMessage,
-  StopReason,
   TextContent,
   ThinkingContent,
   ToolCall,
@@ -16,24 +10,22 @@ import type {
   Usage,
 } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream, transformMessages } from "openclaw/plugin-sdk/llm";
+import { asNonNegativeFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
-import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth-markers";
 import { readProviderResponseErrorText } from "openclaw/plugin-sdk/provider-http";
 import {
+  buildAssistantMessage as buildStreamAssistantMessage,
+  createEmptyTransportUsage,
   createPlainTextToolCallCompatWrapper,
-  notifyLlmRequestActivity,
-} from "openclaw/plugin-sdk/provider-stream-shared";
-import {
-  describeUnsupportedToolResultMedia,
-  extractToolResultText,
+  createProviderWaitObserver,
   failTransportStream,
-  formatToolResultText,
-  isImageWithMediaPayload,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+  notifyLlmRequestActivity,
   notifyProviderHttpResponse,
   parseTerminalToolCallArguments,
   sortPromptCacheToolsByName,
-} from "openclaw/plugin-sdk/provider-transport-runtime";
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
@@ -45,57 +37,49 @@ import {
   isOllamaCloudOrigin,
   OLLAMA_CLOUD_PROVIDER_ID,
   OLLAMA_DEFAULT_BASE_URL,
+  OLLAMA_DEFAULT_MAX_TOKENS,
 } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
-import { resolveOllamaBaseUrlForRun } from "./provider-base-url.js";
+import { applyOllamaThinkingFloor } from "./model-reasoning.js";
+import { resolveOllamaBaseUrlForRun, resolveOllamaChatUrl } from "./provider-base-url.js";
 import { buildOllamaBaseUrlSsrFPolicy, isOllamaCloudModel } from "./provider-models.js";
 import {
   createOllamaVisibleContentSanitizer,
+  isLikelyGarbledVisibleText,
   sanitizeOllamaFinalVisibleContent,
 } from "./sanitizers/visible-content.js";
 import {
   type OllamaThinkValue,
   resolveOllamaConfiguredNumCtx,
-  resolveOllamaThinkParamValue,
+  resolveOllamaConfiguredThink,
   supportsNativeOllamaMax,
-  shouldForwardNativeOllamaThink,
 } from "./stream-compat.js";
-import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
-import { checkNdjsonRecordCap } from "./stream-ndjson-cap.js";
+import { OLLAMA_INCOMPLETE_STREAM_ERROR, resolveOllamaStopReason } from "./stream-contract.js";
+import {
+  convertToOllamaMessages,
+  type OllamaChatMessage,
+  type OllamaToolCall,
+  type OllamaToolCallNameOptions,
+} from "./stream-messages.js";
+import { parseNdjsonStream, type OllamaChatResponse } from "./stream-ndjson.js";
 import type { OllamaLocalService } from "./stream-registration.js";
+import { normalizeOllamaToolCallName, wrapOllamaToolNames } from "./tool-name-aliases.js";
 import { normalizeOllamaToolSchema } from "./tool-schema.runtime.js";
 
-export {
-  createConfiguredOllamaCompatStreamWrapper,
-  isOllamaCompatProvider,
-  resolveOllamaCompatNumCtxEnabled,
-  shouldInjectOllamaCompatNumCtx,
-  wrapOllamaCompatNumCtx,
-} from "./stream-compat.js";
+export { createConfiguredOllamaCompatStreamWrapper } from "./stream-compat.js";
 
 export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 
 const OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 const OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
-const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
-const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
-const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
-const LETTER_OR_DIGIT_RE = /[\p{L}\p{N}]/gu;
-
-type OllamaStreamCooperativeScheduler = {
-  afterEvent: () => Promise<void>;
-};
-
 function throwIfOllamaStreamAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new Error("Request was aborted");
   }
 }
 
-function createOllamaStreamCooperativeScheduler(
-  signal?: AbortSignal,
-): OllamaStreamCooperativeScheduler {
+function createOllamaStreamCooperativeScheduler(signal?: AbortSignal) {
   let lastYieldedAt = Date.now();
   let eventsSinceYield = 0;
   return {
@@ -119,49 +103,6 @@ function createOllamaStreamCooperativeScheduler(
   };
 }
 
-function countMatches(text: string, re: RegExp): number {
-  re.lastIndex = 0;
-  return Array.from(text.matchAll(re)).length;
-}
-
-function maxCharacterFrequency(text: string): number {
-  const counts = new Map<string, number>();
-  let max = 0;
-  for (const char of text) {
-    const count = (counts.get(char) ?? 0) + 1;
-    counts.set(char, count);
-    max = Math.max(max, count);
-  }
-  return max;
-}
-
-function isKnownOllamaGarbledVisibleTextModel(modelId: string): boolean {
-  return GARBLED_VISIBLE_TEXT_MODEL_RE.test(modelId);
-}
-
-function isLikelyGarbledVisibleText(params: { text: string; modelId: string }): boolean {
-  if (!isKnownOllamaGarbledVisibleTextModel(params.modelId)) {
-    return false;
-  }
-  const compact = params.text.replace(/\s+/g, "");
-  if (compact.length < GARBLED_VISIBLE_TEXT_MIN_CHARS) {
-    return false;
-  }
-
-  const letterOrDigitCount = countMatches(compact, LETTER_OR_DIGIT_RE);
-  const symbolCount = countMatches(compact, GARBLED_VISIBLE_TEXT_SYMBOL_RE);
-  const maxFrequency = maxCharacterFrequency(compact);
-  const letterOrDigitRatio = letterOrDigitCount / compact.length;
-  const symbolRatio = symbolCount / compact.length;
-  const dominantCharacterRatio = maxFrequency / compact.length;
-
-  return (
-    letterOrDigitRatio < 0.08 &&
-    symbolRatio > 0.6 &&
-    (dominantCharacterRatio > 0.22 || /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]{12,}/u.test(compact))
-  );
-}
-
 export { resolveOllamaBaseUrlForRun } from "./provider-base-url.js";
 
 const OLLAMA_OPTION_PARAM_KEYS = new Set([
@@ -178,7 +119,6 @@ const OLLAMA_OPTION_PARAM_KEYS = new Set([
   "presence_penalty",
   "frequency_penalty",
   "stop",
-  "num_ctx",
   "num_batch",
   "num_gpu",
   "main_gpu",
@@ -205,30 +145,30 @@ function resolveOllamaNativeNumCtx(model: ProviderRuntimeModel): number | undefi
     return configured;
   }
   const effective = model.contextTokens;
-  if (typeof effective !== "number" || !Number.isFinite(effective) || effective <= 0) {
-    return undefined;
-  }
-  return Math.floor(effective);
+  return effective !== undefined && effective > 0 ? Math.floor(effective) : undefined;
 }
 
 function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, unknown> {
-  const options: Record<string, unknown> = {};
-  const params = model.params;
-  if (params && typeof params === "object" && !Array.isArray(params)) {
-    for (const [key, value] of Object.entries(params)) {
-      if (key === "num_ctx") {
-        continue;
-      }
-      if (value !== undefined && OLLAMA_OPTION_PARAM_KEYS.has(key)) {
-        options[key] = value;
-      }
-    }
-  }
   const numCtx = resolveOllamaNativeNumCtx(model);
-  if (numCtx !== undefined) {
-    options.num_ctx = numCtx;
-  }
-  return options;
+  return {
+    num_predict:
+      model.maxTokens ??
+      Math.min(
+        OLLAMA_DEFAULT_MAX_TOKENS,
+        model.contextTokens ?? model.contextWindow ?? OLLAMA_DEFAULT_MAX_TOKENS,
+      ),
+    ...pickOllamaParams(model.params, OLLAMA_OPTION_PARAM_KEYS),
+    ...(numCtx !== undefined ? { num_ctx: numCtx } : {}),
+  };
+}
+
+function pickOllamaParams(
+  params: ProviderRuntimeModel["params"],
+  keys: ReadonlySet<string>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(params ?? {}).filter(([key, value]) => value !== undefined && keys.has(key)),
+  );
 }
 
 function normalizeOllamaGreedySamplingOptions(options: Record<string, unknown>): void {
@@ -243,38 +183,10 @@ function normalizeOllamaGreedySamplingOptions(options: Record<string, unknown>):
   }
 }
 
-function resolveOllamaTopLevelParams(
-  model: ProviderRuntimeModel,
-): Record<string, unknown> | undefined {
-  const requestParams: Record<string, unknown> = {};
-  const params = model.params;
-  if (params && typeof params === "object" && !Array.isArray(params)) {
-    for (const [key, value] of Object.entries(params)) {
-      if (value !== undefined && OLLAMA_TOP_LEVEL_PARAM_KEYS.has(key)) {
-        requestParams[key] = value;
-      }
-    }
-  }
-  const think = resolveOllamaThinkParamValue(params, supportsNativeOllamaMax(model));
-  if (think !== undefined && shouldForwardNativeOllamaThink(model, think)) {
-    requestParams.think = think;
-  }
-  return Object.keys(requestParams).length > 0 ? requestParams : undefined;
-}
-
 function resolveStreamingTextDelta(previousText: string, nextText: string): string {
-  if (!nextText) {
-    return "";
-  }
-  if (!previousText) {
-    return nextText;
-  }
-  if (nextText.startsWith(previousText)) {
-    return nextText.slice(previousText.length);
-  }
   // Sanitizers may rewrite previously accumulated content. Fall back to
   // re-emitting the latest complete text so downstream partial state converges.
-  return nextText;
+  return nextText.startsWith(previousText) ? nextText.slice(previousText.length) : nextText;
 }
 
 export function buildOllamaChatRequest(params: {
@@ -331,55 +243,6 @@ type OllamaUsageFallback = Partial<Record<"input" | "output", number | (() => nu
 
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 
-function buildUsageWithNoCost(params: {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  cacheTelemetry?: Usage["cacheTelemetry"];
-  totalTokens?: number;
-  contextUsage?: Usage["contextUsage"];
-}): Usage {
-  const input = params.input ?? 0;
-  const output = params.output ?? 0;
-  const cacheRead = params.cacheRead ?? 0;
-  const cacheWrite = params.cacheWrite ?? 0;
-  const cacheTelemetry =
-    params.cacheTelemetry ??
-    (params.cacheRead !== undefined && params.cacheWrite !== undefined
-      ? { state: "available" as const }
-      : { state: "unavailable" as const });
-  return {
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    cacheTelemetry,
-    totalTokens: params.totalTokens ?? input + output,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    ...(params.contextUsage ? { contextUsage: params.contextUsage } : {}),
-  };
-}
-
-function buildStreamAssistantMessage(params: {
-  model: StreamModelDescriptor;
-  content: AssistantMessage["content"];
-  stopReason: StopReason;
-  usage: Usage;
-  timestamp?: number;
-}): AssistantMessage {
-  return {
-    role: "assistant",
-    content: params.content,
-    stopReason: params.stopReason,
-    api: params.model.api,
-    provider: params.model.provider,
-    model: params.model.id,
-    usage: params.usage,
-    timestamp: params.timestamp ?? Date.now(),
-  };
-}
-
 interface OllamaChatRequest {
   model: string;
   messages: OllamaChatMessage[];
@@ -388,16 +251,6 @@ interface OllamaChatRequest {
   options?: Record<string, unknown>;
   think?: OllamaThinkValue;
   format?: "json" | Record<string, unknown>;
-}
-
-interface OllamaChatMessage {
-  role: "system" | "user" | "assistant" | "tool";
-  content: string;
-  thinking?: string;
-  images?: string[];
-  tool_calls?: OllamaToolCall[];
-  tool_name?: string;
-  tool_call_id?: string;
 }
 
 interface OllamaTool {
@@ -409,61 +262,15 @@ interface OllamaTool {
   };
 }
 
-interface OllamaToolCall {
-  id?: string;
-  function: {
-    name: string;
-    arguments: Record<string, unknown> | string;
-  };
-}
-
-interface OllamaChatResponse extends Record<string, unknown> {
-  model: string;
-  created_at: string;
-  message: {
-    role: "assistant";
-    content: string;
-    thinking?: string;
-    reasoning?: string;
-    tool_calls?: OllamaToolCall[];
-  };
-  done: boolean;
-  done_reason?: string;
-  total_duration?: number;
-  load_duration?: number;
-  prompt_eval_count?: number;
-  prompt_eval_cached_count?: number;
-  prompt_eval_duration?: number;
-  eval_count?: number;
-  eval_duration?: number;
-}
-
-function safeJsonLength(value: unknown): number {
-  try {
-    const serialized = JSON.stringify(value);
-    return typeof serialized === "string" ? estimateStringChars(serialized) : 0;
-  } catch {
-    return 0;
-  }
+function estimateJsonChars(value: unknown): number {
+  return estimateStringChars(JSON.stringify(value) ?? "");
 }
 
 function estimateTokensFromChars(chars: number): number {
-  if (!Number.isFinite(chars) || chars <= 0) {
+  if (chars <= 0) {
     return 0;
   }
   return Math.max(1, Math.round(chars / CHARS_PER_TOKEN_ESTIMATE));
-}
-
-function resolveOllamaStopReason(response: OllamaChatResponse) {
-  // Ollama's length terminal means generation hit its token limit, even when
-  // the partial response already contains a complete-looking tool call.
-  if (response.done_reason === "length") {
-    return "length" as const;
-  }
-  if (response.message.tool_calls?.length) {
-    return "toolUse" as const;
-  }
-  return "stop" as const;
 }
 
 function estimateOllamaPromptTokens(params: {
@@ -474,11 +281,11 @@ function estimateOllamaPromptTokens(params: {
   for (const message of params.messages) {
     chars += estimateStringChars(message.content);
     chars += message.thinking ? estimateStringChars(message.thinking) : 0;
-    chars += safeJsonLength(message.images);
-    chars += safeJsonLength(message.tool_calls);
+    chars += estimateJsonChars(message.images);
+    chars += estimateJsonChars(message.tool_calls);
     chars += message.tool_name ? estimateStringChars(message.tool_name) : 0;
   }
-  chars += safeJsonLength(params.tools);
+  chars += estimateJsonChars(params.tools);
   return estimateTokensFromChars(chars);
 }
 
@@ -491,235 +298,33 @@ function estimateOllamaCompletionTokens(
     estimateStringChars(response.message.content) +
     (response.message.thinking ? estimateStringChars(response.message.thinking) : 0) +
     (response.message.reasoning ? estimateStringChars(response.message.reasoning) : 0) +
-    safeJsonLength(response.message.tool_calls);
+    estimateJsonChars(response.message.tool_calls);
   return estimateTokensFromChars(chars);
 }
 
 function resolveUsageFallback(fallback: OllamaUsageFallback["input"]): number {
   const estimate = typeof fallback === "function" ? fallback() : fallback;
-  return resolveOptionalUsageCount(estimate) ?? 0;
+  return asNonNegativeFiniteNumber(estimate) ?? 0;
 }
-
-function resolveOptionalUsageCount(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-type InputContentPart =
-  | { type: "text"; text: string }
-  | ThinkingContent
-  | { type: "image"; data: string }
-  | { type: "toolCall"; id: string; name: string; arguments: unknown }
-  | { type: "tool_use"; id: string; name: string; input: unknown };
-
-function extractTextContent(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return (content as InputContentPart[])
-    .filter((part): part is { type: "text"; text: string } => part.type === "text")
-    .map((part) => part.text)
-    .join("");
-}
-
-function extractOllamaImages(content: unknown): string[] {
-  if (!Array.isArray(content)) {
-    return [];
-  }
-  return (content as InputContentPart[])
-    .filter((part): part is { type: "image"; data: string } => part.type === "image")
-    .map((part) => part.data);
-}
-
-function extractOllamaThinking(content: unknown): string {
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .filter(
-      (part): part is ThinkingContent =>
-        isRecord(part) &&
-        part.type === "thinking" &&
-        typeof part.thinking === "string" &&
-        !part.redacted,
-    )
-    .map((part) => part.thinking)
-    .join("");
-}
-
-function ensureArgsObject(value: unknown): Record<string, unknown> {
-  return parseJsonObjectPreservingUnsafeIntegers(value) ?? {};
-}
-
-type OllamaToolCallNameOptions = {
-  availableToolNames?: ReadonlySet<string>;
-};
 
 type OllamaAssistantMessageBuildOptions = OllamaToolCallNameOptions & {
   sanitizeVisibleContent?: boolean;
 };
 
-function extractToolCalls(
-  content: unknown,
-  options: OllamaToolCallNameOptions = {},
-): OllamaToolCall[] {
-  if (!Array.isArray(content)) {
-    return [];
-  }
-  const parts = content as InputContentPart[];
-  const result: OllamaToolCall[] = [];
-  for (const part of parts) {
-    if (part.type === "toolCall" || part.type === "tool_use") {
-      const id = normalizeOptionalString(part.id);
-      result.push({
-        ...(id ? { id } : {}),
-        function: {
-          name: normalizeOllamaToolCallName(part.name, options),
-          arguments: ensureArgsObject(part.type === "toolCall" ? part.arguments : part.input),
-        },
-      });
-    }
-  }
-  return result;
-}
-
 function buildOllamaToolNameSet(tools: Tool[] | undefined): ReadonlySet<string> | undefined {
-  if (!tools || !Array.isArray(tools)) {
-    return undefined;
-  }
-  const names = new Set<string>();
-  for (const tool of tools) {
-    if (typeof tool.name === "string" && tool.name.trim()) {
-      names.add(tool.name.trim());
-    }
-  }
+  const names = new Set(tools?.map((tool) => tool.name.trim()).filter(Boolean));
   return names.size > 0 ? names : undefined;
 }
 
-function normalizeOllamaToolCallName(
-  rawName: string,
-  options: OllamaToolCallNameOptions = {},
-): string {
-  const trimmed = rawName.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  const availableToolNames = options.availableToolNames;
-  if (availableToolNames?.has(trimmed)) {
-    return trimmed;
-  }
-
-  const strippedAnySeparator = trimmed.replace(/^(?:functions?|tools?)[./_-]+/iu, "").trim();
-  if (
-    availableToolNames &&
-    strippedAnySeparator !== trimmed &&
-    availableToolNames.has(strippedAnySeparator)
-  ) {
-    return strippedAnySeparator;
-  }
-  if (availableToolNames) {
-    return trimmed;
-  }
-
-  return trimmed.replace(/^(?:functions?|tools?)[./]+/iu, "").trim();
-}
-
-type OllamaInputMessage = {
-  role: string;
-  content: unknown;
-  toolName?: unknown;
-  toolCallId?: unknown;
-  isError?: unknown;
-};
-
-export function convertToOllamaMessages(
-  messages: OllamaInputMessage[],
-  system?: string,
-  options: OllamaToolCallNameOptions = {},
-): OllamaChatMessage[] {
-  const result: OllamaChatMessage[] = [];
-
-  if (system) {
-    result.push({ role: "system", content: system });
-  }
-
-  for (const msg of messages) {
-    if (msg.role === "user") {
-      const text = extractTextContent(msg.content);
-      const images = extractOllamaImages(msg.content);
-      result.push({
-        role: "user",
-        content: text,
-        ...(images.length > 0 ? { images } : {}),
-      });
-      continue;
-    }
-
-    if (msg.role === "assistant") {
-      const text = extractTextContent(msg.content);
-      const thinking = extractOllamaThinking(msg.content);
-      const toolCalls = extractToolCalls(msg.content, options);
-      result.push({
-        role: "assistant",
-        content: text,
-        ...(thinking ? { thinking } : {}),
-        ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-      });
-      continue;
-    }
-
-    if (msg.role === "tool" || msg.role === "toolResult") {
-      const content = Array.isArray(msg.content)
-        ? msg.content
-        : [{ type: "text", text: typeof msg.content === "string" ? msg.content : "" }];
-      const text = extractToolResultText(content, { includeStructured: true });
-      const images = content.filter(isImageWithMediaPayload).map((part) => part.data);
-      const omittedMediaPlaceholder = describeUnsupportedToolResultMedia(content, {
-        images: true,
-        audio: false,
-      });
-      const mediaPlaceholder = images.length > 0 ? "(see attached image)" : undefined;
-      const toolName = typeof msg.toolName === "string" ? msg.toolName : undefined;
-      const toolCallId = typeof msg.toolCallId === "string" ? msg.toolCallId : undefined;
-      result.push({
-        role: "tool",
-        content: formatToolResultText({
-          text,
-          mediaPlaceholder,
-          omittedMediaPlaceholder,
-          isError: msg.isError === true,
-        }),
-        ...(images.length > 0 ? { images } : {}),
-        ...(toolCallId ? { tool_call_id: toolCallId } : {}),
-        ...(toolName ? { tool_name: toolName } : {}),
-      });
-    }
-  }
-
-  return result;
-}
-
 function extractOllamaTools(tools: Tool[] | undefined): OllamaTool[] {
-  if (!tools || !Array.isArray(tools)) {
-    return [];
-  }
-  const result: OllamaTool[] = [];
-  for (const tool of sortPromptCacheToolsByName(tools)) {
-    if (typeof tool.name !== "string" || !tool.name) {
-      continue;
-    }
-    result.push({
-      type: "function",
-      function: {
-        name: tool.name,
-        description: typeof tool.description === "string" ? tool.description : "",
-        parameters: normalizeOllamaToolSchema(tool.parameters, true),
-      },
-    });
-  }
-  return result;
+  return sortPromptCacheToolsByName(tools ?? []).map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: normalizeOllamaToolSchema(tool.parameters, true),
+    },
+  }));
 }
 
 export function buildAssistantMessage(
@@ -760,12 +365,12 @@ export function buildAssistantMessage(
     }
   }
 
-  const reportedPromptTokens = resolveOptionalUsageCount(response.prompt_eval_count);
-  const reportedOutputTokens = resolveOptionalUsageCount(response.eval_count);
+  const reportedPromptTokens = asNonNegativeFiniteNumber(response.prompt_eval_count);
+  const reportedOutputTokens = asNonNegativeFiniteNumber(response.eval_count);
   // Provider counters, including zero, avoid scanning and serializing history for estimates.
   const promptTokens = reportedPromptTokens ?? resolveUsageFallback(usageFallback?.input);
   const outputTokens = reportedOutputTokens ?? resolveUsageFallback(usageFallback?.output);
-  const reportedCacheRead = resolveOptionalUsageCount(response.prompt_eval_cached_count);
+  const reportedCacheRead = asNonNegativeFiniteNumber(response.prompt_eval_cached_count);
   // Ollama includes cached tokens in prompt_eval_count; OpenClaw records input as uncached.
   const cacheRead =
     reportedCacheRead === undefined ? undefined : Math.min(reportedCacheRead, promptTokens);
@@ -775,97 +380,34 @@ export function buildAssistantMessage(
       ? { state: "available", promptTokens, totalTokens: promptTokens + outputTokens }
       : undefined;
 
-  return buildStreamAssistantMessage({
+  const message = buildStreamAssistantMessage({
     model: modelInfo,
     content,
     stopReason: resolveOllamaStopReason(response),
-    usage: buildUsageWithNoCost({
+    usage: {
+      ...createEmptyTransportUsage(),
       input: promptTokens - (cacheRead ?? 0),
       output: outputTokens,
-      contextUsage,
-      ...(cacheRead === undefined
-        ? {}
-        : {
-            cacheRead,
-            cacheWrite: 0,
-            totalTokens: promptTokens + outputTokens,
-          }),
-    }),
+      cacheRead: cacheRead ?? 0,
+      cacheTelemetry: { state: cacheRead === undefined ? "unavailable" : "available" },
+      usageReport: { state: contextUsage ? "available" : "unavailable" },
+      totalTokens: promptTokens + outputTokens,
+      ...(contextUsage ? { contextUsage } : {}),
+    },
   });
-}
-
-export async function* parseNdjsonStream(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-): AsyncGenerator<OllamaChatResponse> {
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  let buffer = "";
-  let pendingRecordBytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      pendingRecordBytes = checkNdjsonRecordCap(value, pendingRecordBytes);
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) {
-          continue;
-        }
-        yield parseOllamaNdjsonRecord(trimmed);
-      }
-    }
-
-    buffer += decoder.decode();
-    if (buffer.trim()) {
-      yield parseOllamaNdjsonRecord(buffer.trim());
-    }
-  } finally {
-    // Start cancellation best-effort; do not await it — a pending cancel
-    // must not stall releaseLock() and keep the reader locked.
-    void reader.cancel().catch(() => undefined);
-    reader.releaseLock();
+  const promptNs = asNonNegativeFiniteNumber(response.prompt_eval_duration);
+  const evalNs = asNonNegativeFiniteNumber(response.eval_duration);
+  const processingMs =
+    promptNs !== undefined && evalNs !== undefined
+      ? asNonNegativeFiniteNumber((promptNs + evalNs) / 1e6)
+      : undefined;
+  if (response.done && processingMs !== undefined) {
+    message.diagnostics = [
+      ...(message.diagnostics ?? []),
+      { type: "provider_timing", timestamp: Date.now(), details: { processingMs } },
+    ];
   }
-}
-
-function parseOllamaNdjsonRecord(value: string): OllamaChatResponse {
-  let parsed: unknown;
-  try {
-    parsed = parseJsonPreservingUnsafeIntegers(value);
-  } catch {
-    throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
-  }
-  if (!isRecord(parsed)) {
-    throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
-  }
-  if (typeof parsed.error === "string") {
-    const status =
-      typeof parsed.status === "number" && Number.isFinite(parsed.status)
-        ? parsed.status
-        : undefined;
-    throw Object.assign(
-      new Error(status === undefined ? parsed.error : `${status}: ${parsed.error}`),
-      {
-        ...(status === undefined ? {} : { status }),
-        body: parsed,
-      },
-    );
-  }
-  if (!isRecord(parsed.message) || typeof parsed.done !== "boolean") {
-    throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
-  }
-  // SAFETY: Required Ollama chat-record fields are validated above; optional fields remain inert.
-  return parsed as OllamaChatResponse;
-}
-
-function resolveOllamaChatUrl(baseUrl: string): string {
-  const trimmed = baseUrl.trim().replace(/\/+$/, "");
-  const normalizedBase = trimmed.replace(/\/v1$/i, "");
-  return `${normalizedBase || OLLAMA_NATIVE_BASE_URL}/api/chat`;
+  return message;
 }
 
 function resolveOllamaModelHeaders(model: {
@@ -905,6 +447,11 @@ function createRawOllamaStreamFn(
 
   return (model, context, options?: OllamaStreamOptions) => {
     const stream = createAssistantMessageEventStream();
+    const localModel =
+      model.provider !== OLLAMA_CLOUD_PROVIDER_ID &&
+      !isOllamaCloudModel(model.id) &&
+      !isOllamaCloudOrigin(baseUrl);
+    const wait = createProviderWaitObserver(localModel ? options : undefined);
 
     const run = async () => {
       try {
@@ -913,30 +460,24 @@ function createRawOllamaStreamFn(
           ? { availableToolNames }
           : {};
         const ollamaMessages = convertToOllamaMessages(
-          transformMessages(context.messages ?? [], model),
+          transformMessages(context.messages, model),
           context.systemPrompt,
           toolCallNameOptions,
         );
         const ollamaTools = extractOllamaTools(context.tools);
 
         const ollamaOptions: Record<string, unknown> = resolveOllamaModelOptions(model);
-        if (typeof options?.temperature === "number") {
-          ollamaOptions.temperature = options.temperature;
-        }
-        if (typeof options?.maxTokens === "number") {
-          ollamaOptions.num_predict = options.maxTokens;
-        }
-        if (typeof options?.topP === "number") {
-          ollamaOptions.top_p = options.topP;
-        }
-        if (typeof options?.frequencyPenalty === "number") {
-          ollamaOptions.frequency_penalty = options.frequencyPenalty;
-        }
-        if (typeof options?.presencePenalty === "number") {
-          ollamaOptions.presence_penalty = options.presencePenalty;
-        }
-        if (typeof options?.seed === "number") {
-          ollamaOptions.seed = options.seed;
+        for (const [option, wireKey] of [
+          ["temperature", "temperature"],
+          ["maxTokens", "num_predict"],
+          ["topP", "top_p"],
+          ["frequencyPenalty", "frequency_penalty"],
+          ["presencePenalty", "presence_penalty"],
+          ["seed", "seed"],
+        ] as const) {
+          if (typeof options?.[option] === "number") {
+            ollamaOptions[wireKey] = options[option];
+          }
         }
         if (options?.stop && options.stop.length > 0) {
           ollamaOptions.stop = options.stop;
@@ -952,15 +493,16 @@ function createRawOllamaStreamFn(
                 baseUrl,
                 modelId: model.id,
               });
+        // Direct completions skip the agent wrapper; configured thinking still wins over off.
+        const think =
+          resolveOllamaConfiguredThink(model, supportsNativeOllamaMax(model, baseUrl)) ??
+          (options?.reasoning === "off" ? false : undefined);
         const requestParams = {
           // OpenClaw owns history compaction. Ask local servers to reject overflow
           // instead of silently discarding messages or shifting the context window.
-          ...(model.provider !== OLLAMA_CLOUD_PROVIDER_ID &&
-          !isOllamaCloudModel(model.id) &&
-          !isOllamaCloudOrigin(baseUrl)
-            ? { truncate: false, shift: false }
-            : {}),
-          ...resolveOllamaTopLevelParams(model),
+          ...(localModel ? { truncate: false, shift: false } : {}),
+          ...pickOllamaParams(model.params, OLLAMA_TOP_LEVEL_PARAM_KEYS),
+          ...(think !== undefined ? { think } : {}),
           ...(responseFormat !== undefined ? { format: responseFormat } : {}),
         };
 
@@ -990,6 +532,8 @@ function createRawOllamaStreamFn(
           model,
           options as { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
         );
+        // Applied after payload hooks, so a `false` from any writer gets the model's floor.
+        const serializedBody = JSON.stringify(applyOllamaThinkingFloor(requestBody, model));
 
         // Acquire after request composition and release after guarded cleanup;
         // reversing either boundary can leak the lease or stop inference mid-stream.
@@ -1006,12 +550,13 @@ function createRawOllamaStreamFn(
             acquisitionDeadline?.signal,
           )
           .finally(acquisitionDeadline?.cleanup);
+        wait.start();
         const guardedFetch = await fetchWithSsrFGuard({
           url: chatUrl,
           init: {
             method: "POST",
             headers,
-            body: JSON.stringify(requestBody),
+            body: serializedBody,
           },
           policy: ssrfPolicy,
           ...(options?.signal ? { signal: options.signal } : {}),
@@ -1084,7 +629,7 @@ function createRawOllamaStreamFn(
               model: modelInfo,
               content,
               stopReason: "stop",
-              usage: buildUsageWithNoCost({}),
+              usage: { ...createEmptyTransportUsage(), cacheTelemetry: { state: "unavailable" } },
             });
 
           const ensureStreamStarted = () => {
@@ -1121,12 +666,18 @@ function createRawOllamaStreamFn(
             });
           };
 
-          const flushVisibleText = (nextVisibleContent: string | undefined) => {
+          const flushVisibleText = (
+            nextVisibleContent: string | undefined,
+            knownDelta?: string,
+          ) => {
             if (nextVisibleContent === undefined) {
               return;
             }
             const previousVisibleContent = accumulatedVisibleContent;
-            const delta = resolveStreamingTextDelta(previousVisibleContent, nextVisibleContent);
+            const delta =
+              knownDelta === undefined
+                ? resolveStreamingTextDelta(previousVisibleContent, nextVisibleContent)
+                : knownDelta;
             if (!delta) {
               return;
             }
@@ -1164,6 +715,7 @@ function createRawOllamaStreamFn(
           };
 
           for await (const chunk of parseNdjsonStream(reader)) {
+            wait.stop();
             throwIfOllamaStreamAborted(options?.signal);
             notifyLlmRequestActivity(options?.signal);
             if (finalResponse) {
@@ -1194,7 +746,10 @@ function createRawOllamaStreamFn(
             if (chunk.message?.content) {
               const rawDelta = chunk.message.content;
               accumulatedRawContent += rawDelta;
-              flushVisibleText(resolveVisibleContent(false));
+              flushVisibleText(
+                resolveVisibleContent(false),
+                visibleContentSanitizer.preservesStreamText ? rawDelta : undefined,
+              );
             }
             if (chunk.message?.tool_calls?.length) {
               // Kimi holds short visible prefixes until a terminal boundary;
@@ -1222,8 +777,10 @@ function createRawOllamaStreamFn(
           }
 
           if (
-            pendingFinalVisibleContent !== undefined &&
-            isLikelyGarbledVisibleText({ text: pendingFinalVisibleContent, modelId: model.id })
+            isLikelyGarbledVisibleText({
+              text: pendingFinalVisibleContent || accumulatedVisibleContent,
+              modelId: model.id,
+            })
           ) {
             throw new Error(
               `Ollama returned non-linguistic garbled visible text for ${model.id}; retry or switch models`,
@@ -1231,12 +788,6 @@ function createRawOllamaStreamFn(
           }
 
           flushVisibleText(pendingFinalVisibleContent);
-
-          if (isLikelyGarbledVisibleText({ text: accumulatedVisibleContent, modelId: model.id })) {
-            throw new Error(
-              `Ollama returned non-linguistic garbled visible text for ${model.id}; retry or switch models`,
-            );
-          }
 
           finalResponse.message.content = accumulatedVisibleContent;
           if (accumulatedThinking) {
@@ -1280,13 +831,16 @@ function createRawOllamaStreamFn(
               stream.push({ type: "toolcall_start", contentIndex, partial: buildPartial() });
               // Replace the placeholder instead of mutating it: queued start
               // snapshots must not see arguments before their delta arrives.
-              streamedToolCalls[streamedToolCalls.length - 1] = completedToolCall;
+              const partialJson = JSON.stringify(completedToolCall.arguments);
+              const streamingCall = { ...completedToolCall, partialJson };
+              streamedToolCalls[streamedToolCalls.length - 1] = streamingCall;
               stream.push({
                 type: "toolcall_delta",
                 contentIndex,
-                delta: JSON.stringify(completedToolCall.arguments),
+                delta: partialJson,
                 partial: buildPartial(),
               });
+              streamedToolCalls[streamedToolCalls.length - 1] = completedToolCall;
               stream.push({
                 type: "toolcall_end",
                 contentIndex,
@@ -1318,10 +872,11 @@ function createRawOllamaStreamFn(
             model,
             content: [],
             stopReason,
-            usage: buildUsageWithNoCost({}),
+            usage: { ...createEmptyTransportUsage(), cacheTelemetry: { state: "unavailable" } },
           }),
         });
       } finally {
+        wait.stop();
         stream.end();
       }
     };
@@ -1335,7 +890,9 @@ export function createOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: Record<string, string>,
 ): StreamFn {
-  return createPlainTextToolCallCompatWrapper(createRawOllamaStreamFn(baseUrl, defaultHeaders));
+  return wrapOllamaToolNames(
+    createPlainTextToolCallCompatWrapper(createRawOllamaStreamFn(baseUrl, defaultHeaders)),
+  );
 }
 
 export function createConfiguredOllamaStreamFn(params: {
@@ -1348,11 +905,13 @@ export function createConfiguredOllamaStreamFn(params: {
     modelBaseUrl,
     providerBaseUrl: params.providerBaseUrl,
   });
-  return createPlainTextToolCallCompatWrapper(
-    createRawOllamaStreamFn(
-      baseUrl,
-      resolveOllamaModelHeaders(params.model),
-      params.providerBaseUrl?.trim() || !modelBaseUrl ? params.localService : undefined,
+  return wrapOllamaToolNames(
+    createPlainTextToolCallCompatWrapper(
+      createRawOllamaStreamFn(
+        baseUrl,
+        resolveOllamaModelHeaders(params.model),
+        params.providerBaseUrl?.trim() || !modelBaseUrl ? params.localService : undefined,
+      ),
     ),
   );
 }

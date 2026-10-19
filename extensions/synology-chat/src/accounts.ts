@@ -5,7 +5,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { resolveDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeOptionalString,
   normalizeStringEntries,
@@ -35,7 +35,7 @@ const { listAccountIds, resolveAccountConfig: resolveMergedSynologyChatAccountCo
 
 export { listAccountIds };
 
-function getRawAccountConfig(
+export function getRawAccountConfig(
   channelCfg: SynologyChatChannelConfig,
   accountId: string,
 ): SynologyChatChannelConfig {
@@ -74,18 +74,10 @@ function parseAllowedUserIds(raw: string | string[] | undefined): string[] {
 }
 
 function normalizeRateLimitPerMinuteValue(raw: unknown): number | undefined {
-  if (typeof raw === "number") {
-    return Number.isSafeInteger(raw) && raw >= 0 ? raw : undefined;
-  }
-  if (typeof raw !== "string") {
+  if (typeof raw === "string" && !/^\d+$/.test(raw.trim())) {
     return undefined;
   }
-  const trimmed = raw.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    return undefined;
-  }
-  const parsed = parseStrictInteger(trimmed);
-  return parsed != null && parsed >= 0 ? parsed : undefined;
+  return parseStrictNonNegativeInteger(raw);
 }
 
 export function resolveAccount(
@@ -94,8 +86,7 @@ export function resolveAccount(
 ): ResolvedSynologyChatAccount {
   const channelCfg = getChannelConfig(cfg) ?? {};
   const id = accountId || DEFAULT_ACCOUNT_ID;
-  const accountOverrides =
-    id === DEFAULT_ACCOUNT_ID ? undefined : (channelCfg.accounts?.[id] ?? undefined);
+  const accountOverrides = id === DEFAULT_ACCOUNT_ID ? undefined : channelCfg.accounts?.[id];
   const rawAccount = getRawAccountConfig(channelCfg, id);
   const merged = resolveMergedSynologyChatAccountConfig(cfg, id);
 

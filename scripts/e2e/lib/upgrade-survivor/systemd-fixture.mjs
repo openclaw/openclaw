@@ -135,7 +135,24 @@ function parseUnit(content) {
   if ([...directives.keys()].some((key) => !supported.has(key))) {
     fail();
   }
+  // Generated units use whole seconds. Missing policy follows systemd's 90s
+  // default; zero/infinity disable the deadline. Reject unsupported spans and
+  // timer overflow instead of silently scheduling Node's 1ms overflow timer.
+  const stopSeconds = single("TimeoutStopSec") || "90";
+  const unlimitedStop = stopSeconds === "infinity" || stopSeconds === "0";
+  const stopTimeoutMs = unlimitedStop
+    ? Infinity
+    : /^\d+$/.test(stopSeconds)
+      ? Number(stopSeconds) * 1_000
+      : Number.NaN;
+  if (
+    !unlimitedStop &&
+    (!Number.isSafeInteger(stopTimeoutMs) || stopTimeoutMs <= 0 || stopTimeoutMs > 2_147_483_647)
+  ) {
+    fail("Unsupported generated TimeoutStopSec policy.");
+  }
   return {
+    stopTimeoutMs,
     programArguments,
     workingDirectory,
     environment,
@@ -157,8 +174,11 @@ function readUnit(reload = false, requireLoaded = false) {
     if (error.code !== "ENOENT") {
       throw error;
     }
-    if (!requireLoaded) {
+    if (reload) {
       fs.rmSync(loadedPath, { force: true });
+    } else if (fs.existsSync(loadedPath)) {
+      // Ordinary status/command inspection cannot unload an admitted definition.
+      return { ...parseUnit(fs.readFileSync(loadedPath, "utf8")), reloadPending: true };
     }
     return null;
   }
@@ -227,14 +247,17 @@ function nativeRuntime() {
       )
     : false;
   const unsettled = counts?.starting || supervisorPid || groupPid || populated;
-  const successful = !last || last.code === 0;
+  const stopFailed = counts?.stopFailed === true;
+  const successful = !stopFailed && (!last || last.code === 0);
   return {
     pid,
     // A manager draining descendants or awaiting restart is not a settled service.
     active: pid ? "active" : unsettled ? "activating" : "inactive",
     sub: pid ? "running" : unsettled ? "auto-restart" : "dead",
     generation: counts?.entered ?? 0,
+    invocationId: counts?.invocationId ?? "",
     settled: !pid && !unsettled,
+    stopFailed,
     controlGroup: pid || unsettled ? paths.controlGroup || "" : "",
     restarts: counts?.restarts ?? 0,
     result: successful ? "success" : "exit-code",
@@ -288,6 +311,7 @@ function inspectLoadedRuntime(args) {
     writeProperties([["o", [object]]]);
     return true;
   }
+  const startPolicy = request.includes("UnitFileState");
   for (const scope of ["Unit", "Service"]) {
     if (
       matches([
@@ -295,37 +319,55 @@ function inspectLoadedRuntime(args) {
         paths.owner,
         object,
         `${manager}.${scope}`,
-        ...commandPropertyNames(scope),
+        ...commandPropertyNames(scope, startPolicy),
       ])
     ) {
-      writeCommandProperties(readUnit(false, true), scope);
+      writeCommandProperties(readUnit(false, true), scope, startPolicy);
       return true;
     }
   }
   const runtime = nativeRuntime();
-  if (
-    matches([
-      "get-property",
-      paths.owner,
-      object,
-      `${manager}.Unit`,
-      "Id",
-      "LoadState",
-      "ActiveState",
-      "SubState",
-      "StartLimitBurst",
-      "ActiveEnterTimestampMonotonic",
-      "InactiveEnterTimestampMonotonic",
-    ])
-  ) {
+  const includeTransitionTimestamps = request.includes("ActiveEnterTimestampMonotonic");
+  const unitRuntimeQuery = [
+    "get-property",
+    paths.owner,
+    object,
+    `${manager}.Unit`,
+    "Id",
+    "LoadState",
+    "ActiveState",
+    "SubState",
+    "StartLimitBurst",
+    ...(includeTransitionTimestamps
+      ? ["ActiveEnterTimestampMonotonic", "InactiveEnterTimestampMonotonic"]
+      : []),
+  ];
+  const runtimeStartPolicy = matches([
+    ...unitRuntimeQuery,
+    "UnitFileState",
+    "RefuseManualStart",
+    "CanStart",
+  ]);
+  if (matches(unitRuntimeQuery) || runtimeStartPolicy) {
     writeProperties([
       ["s", unitName],
       ["s", "loaded"],
       ["s", runtime.active],
       ["s", runtime.sub],
       ["u", 5],
-      ["t", runtime.pid ? runtime.generation : 0],
-      ["t", runtime.pid ? 0 : runtime.generation],
+      ...(includeTransitionTimestamps
+        ? [
+            ["t", runtime.pid ? runtime.generation : 0],
+            ["t", runtime.pid ? 0 : runtime.generation],
+          ]
+        : []),
+      ...(runtimeStartPolicy
+        ? [
+            ["s", "disabled"],
+            ["b", false],
+            ["b", true],
+          ]
+        : []),
     ]);
     return true;
   }
@@ -369,13 +411,19 @@ function writeProperties(properties) {
   }
 }
 
-function commandPropertyNames(scope) {
+function commandPropertyNames(scope, startPolicy = false) {
   return scope === "Unit"
-    ? ["FragmentPath", "DropInPaths", "NeedDaemonReload", "LoadState"]
+    ? [
+        "FragmentPath",
+        "DropInPaths",
+        "NeedDaemonReload",
+        "LoadState",
+        ...(startPolicy ? ["UnitFileState", "ActiveState", "CanStart", "RefuseManualStart"] : []),
+      ]
     : ["ExecStart", "WorkingDirectory", "Environment", "EnvironmentFiles", "UnsetEnvironment"];
 }
 
-function writeCommandProperties(unit, scope) {
+function writeCommandProperties(unit, scope, startPolicy = false) {
   if (!unit) {
     fail("Fixture unit is not loaded.");
   }
@@ -386,6 +434,14 @@ function writeCommandProperties(unit, scope) {
           ["as", []],
           ["b", unit.reloadPending],
           ["s", "loaded"],
+          ...(startPolicy
+            ? [
+                ["s", "disabled"],
+                ["s", nativeRuntime().active],
+                ["b", true],
+                ["b", false],
+              ]
+            : []),
         ]
       : [
           [
@@ -406,9 +462,29 @@ function recordCaller(file, parentPid, action) {
   for (let depth = 0; depth < 64 && Number.isSafeInteger(pid) && pid > 1; depth++) {
     try {
       // Commander replaces argv[0] with these titles before executing the action.
-      const title = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0")[0];
+      const argv = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+      const title = argv[0];
       if (title === "openclaw-doctor" || title === "openclaw-update") {
         roles.push(title.slice("openclaw-".length));
+      } else if (
+        path.basename(argv[1] ?? "") === "update-migrated-finalize.worker.js" &&
+        argv[2] === "--post-core"
+      ) {
+        try {
+          if (
+            fs
+              .readFileSync(`/proc/${pid}/environ`, "utf8")
+              .split("\0")
+              .includes("OPENCLAW_UPDATE_POST_CORE=1")
+          ) {
+            roles.push("update");
+          }
+        } catch (error) {
+          // An unreadable environment is unknown evidence; keep scanning ancestors.
+          if (!["ENOENT", "ESRCH", "EACCES", "EPERM"].includes(error.code)) {
+            throw error;
+          }
+        }
       }
       const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
       pid = Number(stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[1]);
@@ -441,6 +517,16 @@ function run() {
     } finally {
       fs.closeSync(descriptor);
       fs.rmSync(claim);
+    }
+    return;
+  }
+  if (operation === "check-stopped" && !args.length) {
+    const runtime = nativeRuntime();
+    if (!runtime.settled) {
+      fail("Survivor service processes have not settled.");
+    }
+    if (runtime.stopFailed) {
+      fail("Survivor stop policy read failed; process cleanup completed.");
     }
     return;
   }
@@ -478,6 +564,44 @@ function run() {
   }
   if (operation === "reload" && !args.length) {
     readUnit(true);
+    return;
+  }
+  if (
+    ["stop-policy", "stop-timeout-ms", "stop-context"].includes(operation) &&
+    (!args.length ||
+      (operation === "stop-policy" && args.length === 1 && args[0] === "--invocation-id"))
+  ) {
+    // A running generation keeps its loaded policy even if an on-disk edit is
+    // invalid or removed. Only a successful reload replaces that snapshot.
+    const unit = fs.existsSync(loadedPath)
+      ? parseUnit(fs.readFileSync(loadedPath, "utf8"))
+      : readUnit();
+    if (operation === "stop-policy") {
+      console.log(`LoadState=${unit ? "loaded" : "not-found"}`);
+      if (unit) {
+        console.log(
+          `TimeoutStopUSec=${unit.stopTimeoutMs === Infinity ? "infinity" : `${unit.stopTimeoutMs / 1_000}s`}`,
+        );
+        if (args[0] === "--invocation-id") {
+          console.log(`InvocationID=${nativeRuntime().invocationId}`);
+        }
+      }
+    } else {
+      if (!unit) {
+        fail("Cannot stop an absent fixture unit.");
+      }
+      if (operation === "stop-context") {
+        console.log(
+          JSON.stringify({
+            stopTimeoutMs: unit.stopTimeoutMs === Infinity ? "Infinity" : unit.stopTimeoutMs,
+            killMode: unit.killMode,
+            controlGroup: runtimePaths().controlGroup || "",
+          }),
+        );
+      } else {
+        console.log(unit.stopTimeoutMs);
+      }
+    }
     return;
   }
   if (operation === "load-state" && !args.length) {
@@ -570,6 +694,7 @@ function run() {
     "s",
     unitName,
   ]);
+  const startPolicy = args.includes("UnitFileState");
   const commandScope = ["Unit", "Service"].find((scope) =>
     matches([
       ...prefix,
@@ -577,7 +702,7 @@ function run() {
       manager,
       object,
       `${manager}.${scope}`,
-      ...commandPropertyNames(scope),
+      ...commandPropertyNames(scope, startPolicy),
     ]),
   );
   if (!load && !commandScope) {
@@ -593,7 +718,7 @@ function run() {
   if (load) {
     writeProperties([["o", [object]]]);
   } else {
-    writeCommandProperties(unit, commandScope);
+    writeCommandProperties(unit, commandScope, startPolicy);
   }
 }
 

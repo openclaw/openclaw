@@ -8,13 +8,9 @@ import {
   resolveControlUiPluginTabPathname,
 } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type { GatewayControlUiPluginTab } from "../../api/gateway.ts";
-import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
-import {
-  resolveSessionPreferredFaceForKey,
-  sessionNavigationTarget,
-} from "../../lib/sessions/route-navigation.ts";
+import { openPreferredApplicationSession } from "../../lib/sessions/route-navigation.ts";
 
 /**
  * One-way navigation request from an advertised, authenticated same-origin plugin
@@ -104,20 +100,5 @@ export function openPluginFrameSession(
   ) {
     return;
   }
-  const face = resolveSessionPreferredFaceForKey(context, sessionKey, agentId);
-  const target = sessionNavigationTarget({
-    context,
-    face,
-    sessionKey,
-    agentId,
-    preferenceDerivedFace: true,
-    exactKey: true,
-  });
-  selectApplicationSession({
-    selection: context.agentSelection,
-    gateway: context.gateway,
-    sessionKey,
-    agentId,
-  });
-  context.navigate(face, target.options);
+  openPreferredApplicationSession(context, sessionKey, agentId);
 }

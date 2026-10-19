@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
+import { z } from "zod";
 import { createMatrixQaClient } from "../substrate/client.js";
-import { createMatrixQaE2eeScenarioClient } from "../substrate/e2ee-client.js";
 import type { MatrixQaE2eeScenarioId } from "./scenario-contract.js";
 import {
   formatMatrixQaCliCommand,
@@ -11,30 +11,41 @@ import {
   type MatrixQaCliRunResult,
 } from "./scenario-runtime-cli.js";
 import {
+  createMatrixQaE2eeAccountClient,
   formatMatrixQaSasEmoji,
-  requireMatrixQaE2eeOutputDir,
-  requireMatrixQaRegistrationToken,
+  registerMatrixQaE2eeScenarioAccount,
 } from "./scenario-runtime-e2ee-shared.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
-export type MatrixQaCliVerificationStatus = {
-  backup?: {
-    decryptionKeyCached?: boolean | null;
-    keyLoadError?: string | null;
-    matchesDecryptionKey?: boolean | null;
-    trusted?: boolean | null;
-  };
-  backupVersion?: string | null;
-  crossSigningVerified?: boolean;
-  encryptionEnabled?: boolean;
-  pendingVerifications?: number;
-  recoveryKeyStored?: boolean;
-  serverDeviceKnown?: boolean;
-  verified?: boolean;
-  signedByOwner?: boolean;
-  deviceId?: string | null;
-  userId?: string | null;
-};
+const matrixQaCliVerificationStatusSchema = z.looseObject({
+  backup: z
+    .looseObject({
+      decryptionKeyCached: z.boolean().nullish(),
+      keyLoadError: z.string().nullish(),
+      matchesDecryptionKey: z.boolean().nullish(),
+      trusted: z.boolean().nullish(),
+    })
+    .optional(),
+  backupVersion: z.string().nullish(),
+  crossSigningVerified: z.boolean().optional(),
+  encryptionEnabled: z.boolean().optional(),
+  pendingVerifications: z.number().optional(),
+  error: z.string().optional(),
+  recoveryKeyAccepted: z.boolean().optional(),
+  backupUsable: z.boolean().optional(),
+  deviceOwnerVerified: z.boolean().optional(),
+  recoveryKeyStored: z.boolean().optional(),
+  serverDeviceKnown: z.boolean().nullish(),
+  verified: z.boolean().optional(),
+  signedByOwner: z.boolean().optional(),
+  success: z.boolean().optional(),
+  deviceId: z.string().nullish(),
+  userId: z.string().nullish(),
+  imported: z.number().optional(),
+  loadedFromSecretStorage: z.boolean().optional(),
+  total: z.number().optional(),
+});
+export type MatrixQaCliVerificationStatus = z.infer<typeof matrixQaCliVerificationStatusSchema>;
 export type MatrixQaCliEncryptionSetupStatus = {
   accountId?: string;
   bootstrap?: {
@@ -57,11 +68,16 @@ export type MatrixQaCliAccountAddStatus = {
     success?: boolean;
   };
 };
-export type MatrixQaCliBackupRestoreStatus = {
-  success?: boolean;
-  backup?: MatrixQaCliVerificationStatus["backup"];
-  error?: string;
-};
+export type MatrixQaCliBackupRestoreStatus = Pick<
+  MatrixQaCliVerificationStatus,
+  | "success"
+  | "backup"
+  | "backupVersion"
+  | "error"
+  | "imported"
+  | "loadedFromSecretStorage"
+  | "total"
+>;
 
 export function isMatrixQaCliBackupUsable(
   backup: MatrixQaCliVerificationStatus["backup"],
@@ -95,6 +111,10 @@ export function parseMatrixQaCliJson(result: MatrixQaCliRunResult): unknown {
   }
 }
 
+export function parseMatrixQaCliVerificationStatus(result: MatrixQaCliRunResult) {
+  return matrixQaCliVerificationStatusSchema.parse(parseMatrixQaCliJson(result));
+}
+
 export function buildMatrixQaPluginActivationConfig() {
   return {
     plugins: {
@@ -123,25 +143,7 @@ export async function registerMatrixQaCliE2eeAccount(params: {
   deviceName: string;
   scenarioId: MatrixQaE2eeScenarioId;
 }) {
-  const localpartSuffix = params.scenarioId
-    .replace(/^matrix-e2ee-cli-/, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 24);
-  const account = await createMatrixQaClient({
-    baseUrl: params.context.baseUrl,
-  }).registerWithToken({
-    deviceName: params.deviceName,
-    localpart: `qa-cli-${localpartSuffix}-${randomUUID().replaceAll("-", "").slice(0, 8)}`,
-    password: `matrix-qa-${randomUUID()}`,
-    registrationToken: requireMatrixQaRegistrationToken(params.context),
-  });
-  if (!account.deviceId) {
-    throw new Error(
-      `Matrix CLI QA registration for ${params.scenarioId} did not return a device id`,
-    );
-  }
-  return account;
+  return await registerMatrixQaE2eeScenarioAccount({ ...params, kind: "cli" });
 }
 
 export async function loginMatrixQaCliDevice(
@@ -166,16 +168,12 @@ export async function createMatrixQaE2eeCliOwnerClient(params: {
   context: MatrixQaScenarioContext;
   scenarioId: MatrixQaE2eeScenarioId;
 }) {
-  return await createMatrixQaE2eeScenarioClient({
+  return await createMatrixQaE2eeAccountClient(params.context, {
     accessToken: params.account.accessToken,
     actorId: `cli-owner-${randomUUID().slice(0, 8)}`,
-    baseUrl: params.context.baseUrl,
     deviceId: params.account.deviceId,
-    observedEvents: params.context.observedEvents,
-    outputDir: requireMatrixQaE2eeOutputDir(params.context),
     password: params.account.password,
     scenarioId: params.scenarioId,
-    timeoutMs: params.context.timeoutMs,
     userId: params.account.userId,
   });
 }

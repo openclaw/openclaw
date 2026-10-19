@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/health";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { evaluatePolicy } from "./register.js";
+import { evaluatePolicy } from "./evaluation.js";
 import {
   cfgWithPolicy,
   ctx,

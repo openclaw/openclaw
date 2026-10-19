@@ -1,5 +1,4 @@
-// Diffs Language Pack plugin entrypoint registers its OpenClaw integration.
-import { definePluginEntry } from "./api.js";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { registerDiffsLanguagePackPlugin } from "./src/plugin.js";
 
 export default definePluginEntry({

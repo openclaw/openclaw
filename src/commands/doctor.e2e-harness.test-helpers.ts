@@ -1,6 +1,6 @@
 /** Small runtime and orchestration helpers for the doctor E2E harness. */
 import { vi } from "vitest";
-import { defineMockFn, type MockFn } from "../test-utils/vitest-mock-fn.js";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { createDoctorConfigSnapshot } from "./doctor-config-snapshot.test-helpers.js";
 import { createTestConfigFileStore } from "./test-runtime-config-helpers.js";
 
@@ -48,36 +48,30 @@ export function createLegacyConfigSnapshot() {
 
 export function createDoctorServiceMocks() {
   return {
-    findLegacyGatewayServices: defineMockFn(vi.fn().mockResolvedValue([])),
-    uninstallLegacyGatewayServices: defineMockFn(vi.fn().mockResolvedValue([])),
-    findExtraGatewayServices: defineMockFn(vi.fn().mockResolvedValue({ services: [], errors: [] })),
-    findSystemGatewayServices: defineMockFn(vi.fn().mockResolvedValue([])),
-    renderGatewayServiceCleanupHints: defineMockFn(vi.fn().mockReturnValue(["cleanup"])),
-    auditGatewayServiceConfig: defineMockFn(vi.fn().mockResolvedValue({ ok: true, issues: [] })),
-    buildGatewayInstallPlan: defineMockFn(
-      vi.mocked(
-        vi.fn().mockResolvedValue({
-          programArguments: ["node", "cli", "gateway", "--port", "18789"],
-          workingDirectory: "/tmp",
-          environment: {},
-        }),
-      ),
-    ),
-    resolveGatewayAuthTokenForService: defineMockFn(
-      vi.fn().mockResolvedValue({ token: undefined }),
-    ),
-    resolveGatewayProgramArguments: defineMockFn(
+    findLegacyGatewayServices: vi.fn().mockResolvedValue([]),
+    uninstallLegacyGatewayServices: vi.fn().mockResolvedValue([]),
+    findExtraGatewayServices: vi.fn().mockResolvedValue({ services: [], errors: [] }),
+    findSystemGatewayServices: vi.fn().mockResolvedValue([]),
+    renderGatewayServiceCleanupHints: vi.fn().mockReturnValue(["cleanup"]),
+    auditGatewayServiceConfig: vi.fn().mockResolvedValue({ ok: true, issues: [] }),
+    buildGatewayInstallPlan: vi.mocked(
       vi.fn().mockResolvedValue({
         programArguments: ["node", "cli", "gateway", "--port", "18789"],
+        workingDirectory: "/tmp",
+        environment: {},
       }),
     ),
-    serviceInstall: defineMockFn(vi.fn().mockResolvedValue(undefined)),
-    serviceIsLoaded: defineMockFn(vi.fn().mockResolvedValue(false)),
-    serviceStop: defineMockFn(vi.fn().mockResolvedValue(undefined)),
-    serviceRestart: defineMockFn(vi.fn().mockResolvedValue(undefined)),
-    serviceUninstall: defineMockFn(vi.fn().mockResolvedValue(undefined)),
-    serviceReadCommand: defineMockFn(vi.fn().mockResolvedValue(null)),
-    callGateway: defineMockFn(vi.fn().mockRejectedValue(new Error("gateway closed"))),
+    resolveGatewayAuthTokenForService: vi.fn().mockResolvedValue({ token: undefined }),
+    resolveGatewayProgramArguments: vi.fn().mockResolvedValue({
+      programArguments: ["node", "cli", "gateway", "--port", "18789"],
+    }),
+    serviceInstall: vi.fn().mockResolvedValue(undefined),
+    serviceIsLoaded: vi.fn().mockResolvedValue(false),
+    serviceStop: vi.fn().mockResolvedValue(undefined),
+    serviceRestart: vi.fn().mockResolvedValue(undefined),
+    serviceUninstall: vi.fn().mockResolvedValue(undefined),
+    serviceReadCommand: vi.fn().mockResolvedValue(null),
+    callGateway: vi.fn().mockRejectedValue(new Error("gateway closed")),
   };
 }
 
@@ -138,9 +132,9 @@ export function createDoctorConfigTransform(
 
 export function createDoctorRuntime() {
   return {
-    log: defineMockFn(vi.fn()),
-    error: defineMockFn(vi.fn()),
-    exit: defineMockFn(vi.fn()),
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
   };
 }
 

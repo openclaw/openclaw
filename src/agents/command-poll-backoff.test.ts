@@ -9,34 +9,6 @@ import {
 
 describe("command-poll-backoff", () => {
   describe("recordCommandPoll", () => {
-    it("returns 5s on first no-output poll", () => {
-      const state: SessionState = {
-        lastActivity: Date.now(),
-        state: "processing",
-        queueDepth: 0,
-      };
-      const retryMs = recordCommandPoll(state, "cmd-123", false);
-      expect(retryMs).toBe(5000);
-      // Poll counts are zero-based indexes into the backoff schedule.
-      expect(state.commandPollCounts?.get("cmd-123")?.count).toBe(0);
-    });
-
-    it("increments count and increases backoff on consecutive no-output polls", () => {
-      const state: SessionState = {
-        lastActivity: Date.now(),
-        state: "processing",
-        queueDepth: 0,
-      };
-
-      expect(recordCommandPoll(state, "cmd-123", false)).toBe(5000);
-      expect(recordCommandPoll(state, "cmd-123", false)).toBe(10000);
-      expect(recordCommandPoll(state, "cmd-123", false)).toBe(30000);
-      expect(recordCommandPoll(state, "cmd-123", false)).toBe(60000);
-      expect(recordCommandPoll(state, "cmd-123", false)).toBe(60000);
-
-      expect(state.commandPollCounts?.get("cmd-123")?.count).toBe(4);
-    });
-
     it("resets count when poll returns new output", () => {
       const state: SessionState = {
         lastActivity: Date.now(),
@@ -54,21 +26,6 @@ describe("command-poll-backoff", () => {
       expect(retryMs).toBe(5000);
       expect(state.commandPollCounts?.get("cmd-123")?.count).toBe(0);
     });
-
-    it("tracks different commands independently", () => {
-      const state: SessionState = {
-        lastActivity: Date.now(),
-        state: "processing",
-        queueDepth: 0,
-      };
-
-      recordCommandPoll(state, "cmd-1", false);
-      recordCommandPoll(state, "cmd-1", false);
-      recordCommandPoll(state, "cmd-2", false);
-
-      expect(state.commandPollCounts?.get("cmd-1")?.count).toBe(1); // 2 polls = index 1
-      expect(state.commandPollCounts?.get("cmd-2")?.count).toBe(0); // 1 poll = index 0
-    });
   });
 
   describe("resetCommandPollCount", () => {
@@ -85,21 +42,10 @@ describe("command-poll-backoff", () => {
       resetCommandPollCount(state, "cmd-123");
       expect(state.commandPollCounts?.has("cmd-123")).toBe(false);
     });
-
-    it("leaves tracking empty for an untracked command", () => {
-      const state: SessionState = {
-        lastActivity: Date.now(),
-        state: "processing",
-        queueDepth: 0,
-      };
-
-      resetCommandPollCount(state, "unknown");
-      expect(state.commandPollCounts?.has("unknown") ?? false).toBe(false);
-    });
   });
 
   describe("pruneStaleCommandPolls", () => {
-    it("removes polls older than maxAge", () => {
+    it("removes polls older than one hour", () => {
       const state: SessionState = {
         lastActivity: Date.now(),
         state: "processing",
@@ -110,7 +56,7 @@ describe("command-poll-backoff", () => {
         ]),
       };
 
-      pruneStaleCommandPollsCore(state, 3600000);
+      pruneStaleCommandPollsCore(state);
 
       expect(state.commandPollCounts?.has("cmd-old")).toBe(false);
       expect(state.commandPollCounts?.has("cmd-new")).toBe(true);

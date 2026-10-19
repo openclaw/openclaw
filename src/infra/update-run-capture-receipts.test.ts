@@ -2,8 +2,10 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 import { UpdateRunRecordSchema as WireRunSchema } from "../../packages/gateway-protocol/src/schema/update-runs.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -114,6 +116,101 @@ beforeEach(async () => {
 });
 
 describe("durable update capture receipts", () => {
+  it.each(["unreadable-state", "active-mutation", "rollback-state-unverified"])(
+    "retains %s through a 10.2/10.3-compatible record and diagnostic compaction",
+    (dataAtRisk) => {
+      const recovery = {
+        serviceRestartSafe: false,
+        reason: "runtime-verification-failed",
+        packageRollbackVerified: false,
+        dataAtRisk,
+      } as const;
+      const input = { ...record(), verification: { recovery } };
+      for (let index = 0; index < 120; index++) {
+        upsertStep(input, {
+          step: `finalize:fixture:${index}`,
+          status: "completed",
+          detail: "diagnostic ".repeat(45),
+        });
+      }
+      persistRun(ownedDatabase(), input, { env });
+      const row = storedRow();
+      // v2026.10.2 and v2026.10.3 share this strict unsafe-recovery schema.
+      const shippedVerification = z.object({
+        recovery: z.strictObject({
+          serviceRestartSafe: z.literal(false),
+          packageRollbackVerified: z.boolean().optional(),
+          reason: z.enum([
+            "source-rollback-failed",
+            "state-migration-started",
+            "manager-unavailable",
+            "deps-install-failed",
+            "build-failed",
+            "rollback-checkout-dirty",
+            "runtime-verification-failed",
+          ]),
+        }),
+      });
+      expect(shippedVerification.parse(JSON.parse(String(row?.verification_json)))).toEqual({
+        recovery: {
+          serviceRestartSafe: false,
+          reason: "runtime-verification-failed",
+          packageRollbackVerified: false,
+        },
+      });
+      const shippedSteps = z
+        .array(
+          z.object({
+            failureFacts: z
+              .array(z.object({ check: z.string().max(128), code: z.string().max(80) }))
+              .max(5)
+              .optional(),
+          }),
+        )
+        .max(128);
+      expect(shippedSteps.parse(JSON.parse(String(row?.steps_json)))).toContainEqual({
+        failureFacts: [{ check: "update-recovery", code: dataAtRisk }],
+      });
+      expect(Buffer.byteLength(String(row?.steps_json))).toBeLessThanOrEqual(16 * 1024);
+      ownedDatabase().close();
+      database = new (requireNodeSqlite().DatabaseSync)(
+        path.join(root, "state", "receipts.sqlite"),
+      );
+      const recovered = expectDefined(
+        readUpdateRunRecord(ownedDatabase(), input.runId),
+        "persisted update recovery",
+      );
+      const published = toPublicUpdateRun(recovered);
+      expect(Value.Check(WireRunSchema, published)).toBe(true);
+      expect(published.verification.recovery).toEqual({
+        serviceRestartSafe: false,
+        reason: "runtime-verification-failed",
+        packageRollbackVerified: false,
+      });
+      expect(recovered.verification.recovery).toEqual(recovery);
+      mutateRunInTransaction(
+        ownedDatabase(),
+        input.runId,
+        (run) => {
+          run.verification.recovery = { serviceRestartSafe: true, version: "2026.10.3" };
+        },
+        { env },
+      );
+      const repaired = mutateRunInTransaction(
+        ownedDatabase(),
+        input.runId,
+        (run) => {
+          run.verification.recovery = {
+            serviceRestartSafe: false,
+            reason: "runtime-verification-failed",
+          };
+        },
+        { env },
+      );
+      expect(repaired.verification.recovery).not.toHaveProperty("dataAtRisk");
+    },
+  );
+
   it("keeps database recovery locations when later diagnostics exhaust the history budget", () => {
     const summaries = [
       {
@@ -157,79 +254,8 @@ describe("durable update capture receipts", () => {
     expect(Buffer.byteLength(JSON.stringify(recovered.steps))).toBeLessThanOrEqual(16 * 1024);
   });
 
-  it("keeps ordinary runs writable without a capture receipt", () => {
-    const input = { ...record(), reason: "ordinary progress" };
-    persistRun(ownedDatabase(), input, { env });
-    const recovered = readUpdateRunRecord(ownedDatabase(), input.runId);
-    expect(recovered?.reason).toBe("ordinary progress");
-    expect(recovered?.origin.driver).toEqual(input.origin.driver);
-    expect(recovered?.origin.updateRecoveryCapture).toBeUndefined();
-    expect(toPublicUpdateRun(recovered!)).toEqual(recovered);
-    expect(recovered?.updatedAtMs).toBeGreaterThan(2);
-  });
-
-  it("preserves exact receipt paths, hashes and warnings through the real ledger writer and reader", () => {
-    const capture = receipt();
-    const input = {
-      ...record(),
-      reason: `Failure at ${root}`,
-      origin: { ...record().origin, updateRecoveryCapture: capture },
-    };
-    persistRun(ownedDatabase(), input, { env });
-    ownedDatabase().close();
-    database = undefined;
-    database = new (requireNodeSqlite().DatabaseSync)(path.join(root, "state", "receipts.sqlite"));
-    const recovered = readUpdateRunRecord(ownedDatabase(), input.runId);
-    expect(recovered?.origin.updateRecoveryCapture).toEqual(capture);
-    expect(recovered?.origin.driver).toEqual(record().origin.driver);
-    expect(recovered?.reason).not.toContain(root);
-    expect(recovered?.reason).toContain("~");
-    expect(recovered?.status).toBe("failed");
-  });
-
-  it("exports a valid public run without private recovery receipts or changing durable evidence", () => {
-    const capture = receipt();
-    persistRun(
-      ownedDatabase(),
-      { ...record(), origin: { ...record().origin, updateRecoveryCapture: capture } },
-      { env },
-    );
-    const retained = readUpdateRunRecord(ownedDatabase(), record().runId)!;
-    // Directly returning the internal row breaks the closed wire contract and reveals private paths.
-    expect(Value.Check(WireRunSchema, retained)).toBe(false);
-    const output = toPublicUpdateRun(retained);
-    expect(Value.Check(WireRunSchema, output)).toBe(true);
-    expect(output.origin).toEqual(record().origin);
-    expect(JSON.stringify(output)).not.toContain(root);
-    expect(retained.origin.updateRecoveryCapture).toEqual(capture);
-    expect(
-      readUpdateRunRecord(ownedDatabase(), record().runId)?.origin.updateRecoveryCapture,
-    ).toEqual(capture);
-  });
-
-  it("keeps an existing capture when a main consumer updates unrelated run progress", () => {
-    const capture = receipt();
-    // A stored receipt from the capture producer must survive later ledger mutations.
-    ownedDatabase()
-      .prepare("UPDATE update_runs SET origin_json=? WHERE run_id=?")
-      .run(JSON.stringify({ ...record().origin, updateRecoveryCapture: capture }), record().runId);
-    const updated = mutateRunInTransaction(
-      ownedDatabase(),
-      record().runId,
-      (run) => {
-        run.reason = "retained recovery still pending";
-      },
-      { env },
-    );
-    expect(updated.reason).toBe("retained recovery still pending");
-    expect(updated.origin.updateRecoveryCapture).toEqual(capture);
-    expect(
-      readUpdateRunRecord(ownedDatabase(), record().runId)?.origin.updateRecoveryCapture,
-    ).toEqual(capture);
-  });
-
-  it.each(["retirement", "forward"] as const)(
-    "retains %s resolution without changing the failed-run outcome",
+  it.each(["ordinary", "capture", "retirement", "forward"] as const)(
+    "preserves %s evidence through persistence, public export and progress updates",
     (mode) => {
       const capture = receipt();
       const resolution =
@@ -252,48 +278,87 @@ describe("durable update capture receipts", () => {
                 ],
               },
             }
-          : {
-              forwardResolution: {
-                kind: "forward-resolved" as const,
-                binding: {
-                  runId: record().runId,
-                  failedAtMs: 2,
-                  manifestSha256: capture.manifestSha256,
-                  candidateSha256: "d".repeat(64),
-                  preparedSha256: null,
-                  installRoot: root,
-                  stateDir: env.OPENCLAW_STATE_DIR!,
-                  configPath: env.OPENCLAW_CONFIG_PATH!,
-                  incompleteGenerations: { candidate: "e".repeat(64) },
-                },
-                repair: {
-                  root,
-                  packageSha256: "f".repeat(64),
-                  node: path.join(root, "node"),
-                  nodeVersion: "24.20.0",
-                  build: "fixture",
-                  artifact: {
-                    rootIdentity: "fixture-root",
-                    module: path.join(root, "module.mjs"),
-                    entry: path.join(root, "entry.mjs"),
-                    inventorySha256: "1".repeat(64),
-                    executableIdentity: "fixture-executable",
-                    executableSha256: "2".repeat(64),
+          : mode === "forward"
+            ? {
+                forwardResolution: {
+                  kind: "forward-resolved" as const,
+                  binding: {
+                    runId: record().runId,
+                    failedAtMs: 2,
+                    manifestSha256: capture.manifestSha256,
+                    candidateSha256: "d".repeat(64),
+                    preparedSha256: null,
+                    installRoot: root,
+                    stateDir: env.OPENCLAW_STATE_DIR!,
+                    configPath: env.OPENCLAW_CONFIG_PATH!,
+                    incompleteGenerations: { candidate: "e".repeat(64) },
                   },
+                  repair: {
+                    root,
+                    packageSha256: "f".repeat(64),
+                    node: path.join(root, "node"),
+                    nodeVersion: "24.20.0",
+                    build: "fixture",
+                    artifact: {
+                      rootIdentity: "fixture-root",
+                      module: path.join(root, "module.mjs"),
+                      entry: path.join(root, "entry.mjs"),
+                      inventorySha256: "1".repeat(64),
+                      executableIdentity: "fixture-executable",
+                      executableSha256: "2".repeat(64),
+                    },
+                  },
+                  completedAtMs: 3,
                 },
-                completedAtMs: 3,
-              },
-            };
-      const retained = { ...capture, ...resolution };
-      persistRun(
+              }
+            : {};
+      const retained = mode === "ordinary" ? undefined : { ...capture, ...resolution };
+      const input = {
+        ...record(),
+        reason: mode === "ordinary" ? "ordinary progress" : `Failure at ${root}`,
+        origin: { ...record().origin, updateRecoveryCapture: retained },
+      };
+      persistRun(ownedDatabase(), input, { env });
+      ownedDatabase().close();
+      database = undefined;
+      database = new (requireNodeSqlite().DatabaseSync)(
+        path.join(root, "state", "receipts.sqlite"),
+      );
+      const recovered = readUpdateRunRecord(ownedDatabase(), record().runId)!;
+      expect(recovered.origin.updateRecoveryCapture).toEqual(retained);
+      expect(recovered.origin.driver).toEqual(record().origin.driver);
+      expect(recovered.status).toBe("failed");
+      expect(recovered.finishedAtMs).toBe(2);
+      expect(recovered.updatedAtMs).toBeGreaterThan(2);
+      if (retained) {
+        expect(recovered.reason).not.toContain(root);
+        expect(recovered.reason).toContain("~");
+      } else {
+        expect(recovered.reason).toBe("ordinary progress");
+        expect(toPublicUpdateRun(recovered)).toEqual(recovered);
+      }
+      expect(Value.Check(WireRunSchema, recovered)).toBe(!retained);
+      const output = toPublicUpdateRun(recovered);
+      expect(Value.Check(WireRunSchema, output)).toBe(true);
+      expect(output.origin).toEqual(record().origin);
+      expect(JSON.stringify(output)).not.toContain(root);
+      expect(recovered.origin.updateRecoveryCapture).toEqual(retained);
+      expect(
+        readUpdateRunRecord(ownedDatabase(), record().runId)?.origin.updateRecoveryCapture,
+      ).toEqual(retained);
+      const updated = mutateRunInTransaction(
         ownedDatabase(),
-        { ...record(), origin: { updateRecoveryCapture: retained } },
+        record().runId,
+        (run) => {
+          run.reason = "retained recovery still pending";
+        },
         { env },
       );
-      const recovered = readUpdateRunRecord(ownedDatabase(), record().runId);
-      expect(recovered?.origin.updateRecoveryCapture).toEqual(retained);
-      expect(recovered?.status).toBe("failed");
-      expect(recovered?.finishedAtMs).toBe(2);
+      expect(updated.reason).toBe("retained recovery still pending");
+      expect(updated.origin.updateRecoveryCapture).toEqual(retained);
+      expect(
+        readUpdateRunRecord(ownedDatabase(), record().runId)?.origin.updateRecoveryCapture,
+      ).toEqual(retained);
     },
   );
 
@@ -324,49 +389,37 @@ describe("durable update capture receipts", () => {
     );
   });
 
-  it.each([0, 1])("preserves receipts with only %i bytes left for diagnostics", (remaining) => {
+  it("preserves full-capacity receipts while evicting diagnostics", () => {
     const capture = receipt();
     const driver = record().origin.driver;
     const size = Buffer.byteLength(JSON.stringify({ driver, updateRecoveryCapture: capture }));
-    capture.warnings[0]!.message += "w".repeat(16 * 1024 - remaining - size);
+    capture.warnings[0]!.message += "w".repeat(16 * 1024 - size);
     persistRun(
       ownedDatabase(),
       { ...record(), origin: { driver, updateRecoveryCapture: capture, nextAction: "diagnostic" } },
       { env },
     );
     const row = storedRow();
-    expect(Buffer.byteLength(String(row?.origin_json))).toBe(16 * 1024 - remaining);
+    expect(Buffer.byteLength(String(row?.origin_json))).toBe(16 * 1024);
     const recovered = readUpdateRunRecord(ownedDatabase(), record().runId);
     expect(recovered?.origin.updateRecoveryCapture).toEqual(capture);
     expect(recovered?.origin.driver).toEqual(driver);
     expect(recovered?.origin.nextAction).toBeUndefined();
   });
 
-  it("refuses an oversized receipt without replacing the persisted row", () => {
-    const capture = receipt();
-    capture.configWrites = Array.from({ length: 40 }, (_, index) => ({
-      ...capture.configWrites[0]!,
-      path: path.join(root, "state", `${index}-${"x".repeat(600)}.json`),
-    }));
-    const before = storedRow();
-    expect(() =>
-      persistRun(
-        ownedDatabase(),
-        { ...record(), origin: { updateRecoveryCapture: capture } },
-        { env },
-      ),
-    ).toThrow(/recovery receipts exceed the origin byte limit/);
-    expect(storedRow()).toEqual(before);
-  });
-
-  it.each(["hash", "path"] as const)(
+  it.each(["hash", "path", "oversized"] as const)(
     "rejects a malformed receipt %s without changing the stored row",
     (field) => {
       const capture = receipt();
       if (field === "hash") {
         capture.manifestSha256 = "not-a-hash";
-      } else {
+      } else if (field === "path") {
         capture.configWrites[0]!.path = "../unowned.json";
+      } else {
+        capture.configWrites = Array.from({ length: 40 }, (_, index) => ({
+          ...capture.configWrites[0]!,
+          path: path.join(root, "state", `${index}-${"x".repeat(600)}.json`),
+        }));
       }
       const before = storedRow();
       expect(() =>
@@ -375,7 +428,9 @@ describe("durable update capture receipts", () => {
           { ...record(), origin: { updateRecoveryCapture: capture } },
           { env },
         ),
-      ).toThrow();
+      ).toThrow(
+        field === "oversized" ? /recovery receipts exceed the origin byte limit/ : undefined,
+      );
       expect(storedRow()).toEqual(before);
     },
   );

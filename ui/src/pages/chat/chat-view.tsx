@@ -1,0 +1,560 @@
+import { dynamic } from "@solidjs/web";
+import type { Component } from "solid-js";
+import { createMemo, Show, untrack } from "solid-js";
+import type { ControlUiSurfaceProps } from "../../../../src/plugin-sdk/control-ui.js";
+import type { ApplicationContext } from "../../app/context-types.ts";
+import { ExecApprovalCard } from "../../components/exec-approval-card-solid.tsx";
+import { createSkillFileHovercard } from "../../components/skill-file-hovercard.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
+import {
+  KEYBOARD_SHORTCUT_COMBOS,
+  matchesShortcutCombo,
+} from "../../lib/keyboard-shortcut-contract.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
+import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/context.ts";
+import { elementRef } from "../../lib/reactive/element-ref.ts";
+import { t } from "../../lib/reactive/i18n.ts";
+import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
+import { projectPresentation } from "../../lib/reactive/presentation.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
+import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
+import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
+import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
+import { createChatViewFrame, type ChatProps, type ChatViewFrame } from "./chat-view-frame.ts";
+import {
+  renderChatComposerNotices as ChatComposerNoticesView,
+  renderChatTopbarNotices as ChatTopbarNotices,
+} from "./chat-view-notices.tsx";
+import { subscribeAsyncQuestionState } from "./components/chat-async-question.ts";
+import { ChatCommentController } from "./components/chat-comment-controller.ts";
+import {
+  ComposerQuestionDock,
+  createComposerQuestionPanel,
+} from "./components/chat-composer-question.tsx";
+import { ComposerQueue } from "./components/chat-composer-regions.tsx";
+import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
+import { ChatComposer } from "./components/chat-composer.tsx";
+import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
+import { ChatPullRequests } from "./components/chat-pull-requests.tsx";
+import { ChatSelectionAnnotations } from "./components/chat-selection-annotations.tsx";
+import { ChatSessionSuggestions } from "./components/chat-session-suggestions.solid.tsx";
+import { ChatSwarmProgress } from "./components/chat-swarm-progress.solid.tsx";
+import { ChatTaskSuggestionTray } from "./components/chat-task-suggestions.tsx";
+import {
+  getTranscriptState,
+  toggleTranscriptSearch,
+} from "./components/chat-thread-interactions.ts";
+import { ChatThread } from "./components/chat-thread-view.tsx";
+import { TranscriptSearch } from "./components/chat-transcript-search.tsx";
+import "../../components/resizable-divider.ts";
+export type { ChatProps } from "./chat-view-frame.ts";
+
+type ChatViewInput = {
+  props: ChatProps;
+  frame: ChatViewFrame;
+  presented: boolean;
+  application?: ApplicationContext;
+  bindTranscriptViewport: (element: HTMLDivElement) => () => void;
+  getTranscriptElement: () => HTMLDivElement | null;
+};
+
+function ChatTranscript(input: ChatViewInput) {
+  return (
+    <ChatThread
+      props={input.frame.threadProps}
+      transcript={input.props.transcript}
+      bindViewport={input.bindTranscriptViewport}
+    />
+  );
+}
+
+function ChatFooterContent(input: ChatViewInput) {
+  const pendingInputs = () => input.frame.pendingInputs;
+  const pendingButton = (page: "earlier" | "latest") => (
+    <button
+      class="btn btn--sm"
+      type="button"
+      disabled={pendingInputs()?.loading}
+      onClick={() => {
+        if (input.props.historyState) {
+          void loadChatPendingInputs(
+            input.props.historyState,
+            page === "earlier" ? pendingInputs()?.page.nextBefore : undefined,
+          );
+        }
+      }}
+    >
+      {t(`chat.pendingInputs.${page}`)}
+    </button>
+  );
+  return (
+    <>
+      <Show
+        when={
+          pendingInputs() &&
+          (pendingInputs()?.error ||
+            pendingInputs()?.page.nextBefore !== undefined ||
+            pendingInputs()?.before !== undefined)
+        }
+      >
+        <div class="chat-pending-inputs" role="status">
+          <Show when={pendingInputs()?.error}>
+            <span>{pendingInputs()?.error}</span>
+          </Show>
+          <Show when={pendingInputs()?.page.nextBefore !== undefined}>
+            {pendingButton("earlier")}
+          </Show>
+          <Show when={pendingInputs()?.before !== undefined}>{pendingButton("latest")}</Show>
+        </div>
+      </Show>
+      <Show when={input.props.inlineApproval && input.props.onApprovalDecision}>
+        <div class="chat-inline-approval">
+          <ExecApprovalCard
+            props={{
+              approval: input.props.inlineApproval!,
+              sourceSession: input.frame.approvalSourceSession,
+              busy: input.props.approvalBusy === true,
+              connected: input.props.connected,
+              canGrant: input.props.approvalCanGrant,
+              error: input.props.approvalErrors?.get(input.props.inlineApproval!.id) ?? null,
+              variant: "inline",
+              onDecision: input.props.onApprovalDecision!,
+            }}
+          />
+        </div>
+      </Show>
+      <Show when={!input.props.detailsEnabled}>
+        <ChatPullRequests
+          pullRequests={input.props.pullRequests ?? []}
+          gateway={input.props.pullRequestsGateway}
+          sessionId={input.props.pullRequestsSessionId}
+          sessionKey={scopedSessionArtifactKey(
+            input.props.sessionKey,
+            input.props.currentAgentId ?? undefined,
+          )}
+          presented={input.props.presented ?? true}
+          branch={input.props.pullRequestsBranch}
+          branchDismissed={input.props.pullRequestsBranchDismissed}
+          status={input.props.pullRequestsStatus ?? "ready"}
+          onDismiss={(pullRequest) => input.props.onDismissPullRequest?.(pullRequest)}
+          onDismissBranch={input.props.onDismissPullRequestsBranch}
+          onOpenSessionDiff={input.props.onOpenSessionDiff}
+          publication={input.props.githubPublication}
+        />
+      </Show>
+      <ChatSessionSuggestions
+        suggestions={input.props.sessionSuggestions ?? []}
+        role={input.props.sessionSuggestionRole}
+        busyIds={input.props.sessionSuggestionBusyIds ?? new Set()}
+        archived={input.props.sessionSuggestionsArchived === true}
+        canResolve={input.props.canResolveSessionSuggestions === true}
+        onResolve={(suggestion, resolution) =>
+          input.props.onResolveSessionSuggestion?.(suggestion, resolution)
+        }
+      />
+      <Show when={input.props.swarm}>{(swarm) => <ChatSwarmProgress {...swarm()} />}</Show>
+      <Show when={input.application}>
+        <openclaw-plugin-contributions
+          prop:kind="composer"
+          prop:sessionKey={input.props.sessionKey}
+          prop:agentId={input.props.currentAgentId}
+          prop:presented={input.presented}
+        />
+      </Show>
+    </>
+  );
+}
+
+function ChatComposerView(input: ChatViewInput) {
+  return (
+    <ChatComposer
+      {...input.props}
+      getTranscriptElement={input.getTranscriptElement}
+      progressCard={input.props.detailsEnabled ? null : input.props.progressCard}
+      progressCardInitialLoading={
+        input.props.detailsEnabled ? false : input.props.progressCardInitialLoading
+      }
+      asyncQuestions={input.frame.asyncQuestions}
+      displayQueue={input.frame.displayQueue}
+      footerContent={<ChatFooterContent {...input} />}
+      notices={<ChatComposerNoticesView {...input.props} />}
+      onToggleRealtimeTalk={
+        input.props.suggestionComposer ? undefined : input.props.onToggleRealtimeTalk
+      }
+      onOpenImage={input.frame.openImmediateImage}
+    />
+  );
+}
+
+function ChatComposerCompanion(input: ChatViewInput) {
+  // The companion belongs to this pane's lifetime; replacement panes mount a new owner.
+  const initialPaneId = untrack(() => input.props.paneId);
+  const questionPanel = createComposerQuestionPanel(
+    () => ({
+      ...input.props,
+      asyncQuestions: input.frame.asyncQuestions,
+      getTranscriptElement: input.getTranscriptElement,
+    }),
+    getChatComposerState(initialPaneId),
+  );
+  return (
+    <div class="chat-footer__context">
+      <ChatFooterContent {...input} />
+      <div class="agent-chat__composer-notices">
+        <ChatComposerNoticesView {...input.props} />
+      </div>
+      <ComposerQuestionDock panel={questionPanel()} />
+      <ComposerQueue
+        composer={{ ...input.props, displayQueue: input.frame.displayQueue }}
+        showAbortableUi={
+          Boolean(input.props.canAbort && input.props.onAbort) &&
+          !hasTerminalRunStatus(input.props.runStatus)
+        }
+      />
+      <Show when={!input.props.suggestionComposer}>
+        <ChatSelectionAnnotations {...input.props} disabled={!input.props.canSend} />
+      </Show>
+      <Show when={input.props.composerRecovery}>
+        {(recovery) => {
+          const Recovery = dynamic(() => recovery().component);
+          return <Recovery {...recovery()} />;
+        }}
+      </Show>
+    </div>
+  );
+}
+
+/** Plugin mountDefault creates a separate root and must carry its application scope. */
+function ChatSurfaceContent(input: { view: Component<ChatViewInput>; viewProps: ChatViewInput }) {
+  const View = dynamic(() => input.view);
+  return (
+    <Show when={input.viewProps.application} keyed fallback={<View {...input.viewProps} />}>
+      {(application) => (
+        <ApplicationProvider value={application}>
+          <View {...input.viewProps} />
+        </ApplicationProvider>
+      )}
+    </Show>
+  );
+}
+
+type ChatSurfaceBinding = {
+  [Surface in "transcript" | "composer"]: {
+    "prop:surface": Surface;
+    "prop:props": ControlUiSurfaceProps[Surface];
+  };
+}["transcript" | "composer"];
+
+function ChatSurface(input: {
+  binding: ChatSurfaceBinding;
+  viewProps: ChatViewInput;
+  view: Component<ChatViewInput>;
+  companion?: Component<ChatViewInput>;
+  replacementRef?: (element: HTMLElement) => void | (() => void);
+}) {
+  return (
+    <PluginSurface
+      surface={input.binding["prop:surface"]}
+      props={input.binding["prop:props"]}
+      presented={input.viewProps.presented}
+      replacementRef={input.replacementRef}
+      renderDefault={() => <ChatSurfaceContent view={input.view} viewProps={input.viewProps} />}
+      renderCompanion={() => (
+        <Show when={input.companion} keyed>
+          {(View) => <ChatSurfaceContent view={View} viewProps={input.viewProps} />}
+        </Show>
+      )}
+    />
+  );
+}
+
+export function ChatView(input: { props: ChatProps; application?: ApplicationContext }) {
+  return (
+    <Show when={input.application} keyed fallback={<ChatContent props={input.props} />}>
+      {(application) => (
+        <ApplicationProvider value={application}>
+          <ChatContent props={input.props} />
+        </ApplicationProvider>
+      )}
+    </Show>
+  );
+}
+
+function ChatContent(input: { props: ChatProps }) {
+  // Composer sizing needs the viewport even before the virtualizer has rows.
+  let transcriptViewport: HTMLDivElement | undefined;
+  const bindTranscriptViewport = (element: HTMLDivElement) => {
+    transcriptViewport = element;
+    return () => {
+      if (transcriptViewport === element) {
+        transcriptViewport = undefined;
+      }
+    };
+  };
+  const getTranscriptElement = () => (transcriptViewport?.isConnected ? transcriptViewport : null);
+  let replacementComposer: HTMLElement | undefined;
+  const registerReplacementComposer = (element: HTMLElement) => {
+    replacementComposer = element;
+    return () => {
+      if (replacementComposer === element) {
+        replacementComposer = undefined;
+      }
+    };
+  };
+  const application = useOptionalApplication();
+  const gateway = application && projectGateway(application.gateway);
+  const skillFileHovercard = createSkillFileHovercard({
+    get client() {
+      return gateway?.read().snapshot.client ?? null;
+    },
+    get agentId() {
+      return input.props.currentAgentId ?? undefined;
+    },
+    get sessionKey() {
+      return input.props.sessionKey;
+    },
+    onOpenFile: (file, line) =>
+      input.props.onOpenSidebar?.({
+        kind: "file",
+        ...file,
+        name: "SKILL.md",
+        language: "markdown",
+        line,
+      }),
+  });
+  const presentation = createMemo(() => projectPresentation(input.props.presented ?? true));
+  const transcriptVisibility = createMemo(() =>
+    projectPresentation(input.props.transcriptVisible ?? true),
+  );
+  const presented = () => presentation().read();
+  const paneId = createMemo(() => input.props.paneId);
+  const questions = createMemo(() =>
+    projectSource(getTranscriptState(paneId()), {
+      read: (state) => state.asyncQuestionRevision,
+      subscribe: subscribeAsyncQuestionState,
+      equality: "revision",
+    }),
+  );
+  const questionRevision = createParkedProjection(
+    () => questions().read(),
+    () => transcriptVisibility().read(),
+    paneId,
+  );
+  const frame = createMemo(() => {
+    questionRevision();
+    return createChatViewFrame(input.props, (replacement) => {
+      const target =
+        replacement && replacementComposer?.isConnected
+          ? replacementComposer
+          : getChatComposerState(input.props.paneId).composerTextarea;
+      target?.focus({ preventScroll: true });
+    });
+  });
+  const viewProps = () => ({
+    props: input.props,
+    frame: frame(),
+    presented: presented(),
+    application,
+    bindTranscriptViewport,
+    getTranscriptElement,
+  });
+  const historyMessage = () => {
+    const state = frame().historyLoadState;
+    return state?.phase === "failed" ? state.message : "";
+  };
+  const historyFailure = (inline: boolean) => (
+    <div
+      class={["chat-history-error", { "chat-history-error--inline": inline }]}
+      role={inline ? "status" : "alert"}
+    >
+      <span>{historyMessage()}</span>
+      <button
+        class="btn btn--sm"
+        type="button"
+        onClick={() => {
+          const state = input.props.historyState;
+          if (state && getChatHistoryLoadState(state).phase === "failed") {
+            input.props.onRefresh();
+          }
+        }}
+      >
+        {t("common.retry")}
+      </button>
+    </div>
+  );
+  return (
+    <section
+      class={["chat", { "chat--bubbles": input.props.chatBubbleMode }]}
+      style={
+        input.props.chatMessageMaxWidth
+          ? {
+              "--chat-thread-max-width": input.props.chatMessageMaxWidth,
+              "--chat-message-max-width": "100%",
+            }
+          : {}
+      }
+      onDrop={(event) => frame().attachmentDropHandlers.onDrop(event)}
+      onDragEnter={(event) => frame().attachmentDropHandlers.onDragenter(event)}
+      onDragLeave={(event) => frame().attachmentDropHandlers.onDragleave(event)}
+      onDragOver={(event) => frame().attachmentDropHandlers.onDragover(event)}
+      onClick={(event) => openInlineChatImage(event, frame().openImmediateImage)}
+      onKeyDown={(event) => {
+        if (isImageLightboxEvent(event)) {
+          return;
+        }
+        if (
+          (event.key === "Enter" || event.key === " ") &&
+          openInlineChatImage(event, frame().openImmediateImage)
+        ) {
+          return;
+        }
+        if (
+          event.key === "Escape" &&
+          input.props.replyTarget &&
+          !event.defaultPrevented &&
+          !event.isComposing &&
+          event.keyCode !== 229 &&
+          !getChatComposerState(input.props.paneId).composerComposing
+        ) {
+          event.preventDefault();
+          input.props.onClearReply?.();
+          return;
+        }
+        if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.transcriptSearch, event)) {
+          event.preventDefault();
+          toggleTranscriptSearch(input.props.paneId, event, frame().threadProps.onFocusComposer);
+        }
+      }}
+    >
+      <Show when={!input.props.suggestionComposer}>
+        <ChatCommentController
+          paneId={input.props.paneId}
+          onFocusComposer={frame().threadProps.onFocusComposer}
+          visiblePin={(id) => getTranscriptState(input.props.paneId).commentPins?.visiblePin(id)}
+          resolveSourceRange={frame().resolveCommentSource}
+          props={input.props}
+          disabled={!input.props.canSend}
+          sessionKey={input.props.sessionKey}
+          presented={presented()}
+        />
+      </Show>
+      <div class="chat-workbench">
+        <div class="chat-workbench__main">
+          <div class="chat-split-container">
+            <div class="chat-main">
+              <div class="chat-main__conversation-column">
+                <Show when={!input.props.detailsEnabled}>
+                  <ChatTopbarNotices {...input.props} />
+                </Show>
+                <Show when={application}>
+                  <openclaw-plugin-contributions
+                    prop:kind="header"
+                    prop:sessionKey={input.props.sessionKey}
+                    prop:agentId={input.props.currentAgentId}
+                    prop:presented={presented()}
+                  />
+                </Show>
+                <TranscriptSearch search={getTranscriptState(input.props.paneId).search} />
+                <div
+                  class="chat-main__conversation-frame"
+                  ref={[elementRef(input.props.onConversationFrameRef)]}
+                >
+                  <div
+                    class="chat-main__conversation"
+                    ref={skillFileHovercard}
+                    onWheel={(event) =>
+                      forwardChatWheelToTranscript(event, input.props.transcript.scrollElement)
+                    }
+                  >
+                    <Show when={frame().historyFailed && !frame().transcriptEmpty}>
+                      {historyFailure(true)}
+                    </Show>
+                    <Show
+                      when={!(frame().historyFailed && frame().transcriptEmpty)}
+                      fallback={historyFailure(false)}
+                    >
+                      <ChatSurface
+                        binding={{
+                          "prop:surface": "transcript",
+                          "prop:props": {
+                            sessionKey: input.props.sessionKey,
+                            agentId: input.props.currentAgentId,
+                            messages: input.props.messages,
+                            stream: input.props.stream,
+                            loading: input.props.loading,
+                          },
+                        }}
+                        viewProps={viewProps()}
+                        view={ChatTranscript}
+                      />
+                    </Show>
+                    {/* Keep the affordance mounted so showing it never changes transcript layout. */}
+                    <Show when={input.props.onScrollToBottom}>
+                      <div class="chat-scroll-to-bottom-wrap">
+                        <button
+                          class="chat-scroll-to-bottom"
+                          data-visible={input.props.showNewMessages ? "true" : "false"}
+                          type="button"
+                          inert={!input.props.showNewMessages}
+                          aria-hidden={!input.props.showNewMessages ? "true" : "false"}
+                          onClick={() => input.props.onScrollToBottom?.({ smooth: true })}
+                          aria-label={t("chat.actions.scrollToLatest")}
+                        >
+                          <Icon name="arrowDown" />
+                        </button>
+                      </div>
+                    </Show>
+                    <Show
+                      when={
+                        input.props.detailsEnabled || (input.props.taskSuggestions?.length ?? 0) > 0
+                      }
+                    >
+                      <div
+                        class={[
+                          "chat-gutter-stack",
+                          { "chat-gutter-stack--details": input.props.detailsEnabled },
+                        ]}
+                      >
+                        <div class="chat-gutter-header" hidden={!input.props.detailsEnabled}>
+                          <Show when={input.props.detailsEnabled}>
+                            <ChatTopbarNotices {...input.props} />
+                          </Show>
+                        </div>
+                        <ChatTaskSuggestionTray view={input.props} />
+                      </div>
+                    </Show>
+                    <div class="chat-footer" ref={[elementRef(input.props.onFooterElementRef)]}>
+                      <ChatSurface
+                        binding={{
+                          "prop:surface": "composer",
+                          "prop:props": {
+                            sessionKey: input.props.sessionKey,
+                            agentId: input.props.currentAgentId,
+                            draft: input.props.draft,
+                            canSend: input.props.canSend && !input.props.submitDisabledReason,
+                            sending: input.props.sending,
+                            disabledReason:
+                              input.props.submitDisabledReason ?? input.props.disabledReason,
+                            setDraft: input.props.onDraftChange,
+                            send: async () => input.props.onSend(),
+                            abort: input.props.onAbort,
+                          },
+                        }}
+                        viewProps={viewProps()}
+                        view={ChatComposerView}
+                        companion={ChatComposerCompanion}
+                        replacementRef={registerReplacementComposer}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}

@@ -5,7 +5,7 @@ import {
   PROJECT_KEY,
   usePreparedPoolFixture,
 } from "./prepared-pool.test-support.js";
-import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 
 const admit = vi.hoisted(() =>
   vi.fn<typeof import("./repository-project-admission.js").prepareRepositoryWorkerProjectSource>(),
@@ -19,7 +19,6 @@ vi.mock("./repository-project-admission.js", () => ({
 describe("prepared repository source access", () => {
   const fixture = usePreparedPoolFixture();
   it.each([
-    "warm",
     "reopened store",
     "source unavailable",
     "caller revoked",
@@ -63,6 +62,7 @@ describe("prepared repository source access", () => {
       return {
         project,
         setupRecipe: undefined,
+        recipe: { source: "none", inputs: {}, env: {} },
         assertCurrent: () => {
           if (!identityCurrent) {
             throw new Error("Repository identity changed");
@@ -91,6 +91,7 @@ describe("prepared repository source access", () => {
     const access = createWorkerEnvironmentAccess({
       store: fixture.store,
       getCleanupError: () => undefined,
+      readStartStatus: () => undefined,
       getConfig: () => fixture.config,
       projectNamespace: "gateway",
       bindPreparedWorkspace: bind,
@@ -101,11 +102,9 @@ describe("prepared repository source access", () => {
       identityResolverFor: () => {
         throw new Error("No SSH identity should be acquired during source admission");
       },
-      inState: (candidate, ...states) => states.includes(candidate.state),
       isStopping: () => false,
       providerFor: () => fixture.provider,
       resolveProvider: () => fixture.provider,
-      serviceError: (_code, message) => new Error(message),
       withLock: async (_id, run) => await run(),
     });
     const result = access.bindPreparedWorkspace({
@@ -122,8 +121,12 @@ describe("prepared repository source access", () => {
         }
       },
     });
-    if (scenario === "warm" || scenario === "reopened store") {
-      await expect(result).resolves.toEqual(prepared);
+    if (scenario === "reopened store") {
+      const binding = await result;
+      expect(binding).toMatchObject(prepared);
+      binding.assertCurrent();
+      identityCurrent = false;
+      expect(() => binding.assertCurrent()).toThrow("Repository identity changed");
       expect(bind).toHaveBeenCalledOnce();
       expect(revalidate).toHaveBeenCalledOnce();
     } else {

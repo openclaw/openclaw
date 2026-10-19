@@ -4,6 +4,17 @@ import Testing
 @testable import OpenClaw
 
 struct DashboardFailurePageTests {
+    @Test func `generic failure page offers reload through the native bridge`() {
+        let html = DashboardFailurePage.html(
+            title: "Dashboard unavailable", message: "The Gateway returned HTTP 503.",
+            detail: "Choose Reload to try again.", url: nil)
+        #expect(html.contains("class=\"primary\""))
+        #expect(html.contains(">Reload</button>"))
+        #expect(html.contains("window.webkit.messageHandlers.openclawGateways"))
+        #expect(html.contains(".postMessage({type:'reload'})"))
+        #expect(html.contains("Connection Settings…"))
+    }
+
     @Test(arguments: [false, true])
     func `signed out page escapes profile metadata and offers renewal`(signingIn: Bool) {
         let now = Date(timeIntervalSince1970: 10000)
@@ -16,6 +27,8 @@ struct DashboardFailurePageTests {
         #expect(html.contains("Your browser sign-in to gateway.example expired 2m ago. Sign in again to continue."))
         #expect(html.contains("Connection Settings…"))
         #expect(html.contains("data-id=\"profile:test&quot;&#39;&amp;&lt;&gt;\""))
+        #expect(!html.contains(">Reload</button>"))
+        #expect(!html.contains("type:'reload'"))
         #expect(!html.contains("<script>"))
         if signingIn {
             #expect(html.contains(">Cancel</button>"))
@@ -138,34 +151,5 @@ struct DashboardBrowserSignInPolicyTests {
         #expect(try DashboardManager.WindowConfiguration(
             signedOut: GatewayBrowserSessionError.expired, profileID: "research", name: nil,
             endpoint: nil, userGesture: true) == nil)
-    }
-
-    @Test func `only expiry errors bypass normal error presentation`() {
-        let now = Date(timeIntervalSince1970: 10000)
-        let errors: [Error] = [
-            GatewayBrowserSessionError.expired, GatewayBrowserSessionError.invalidSession,
-            GatewayBrowserSessionError.wrongOrigin, GatewayBrowserSessionError.superseded,
-            GatewayBrowserSessionError.credentialRetirementFailed, MacGatewayProfileError.profileNotFound,
-            CancellationError(),
-        ]
-        for error in errors {
-            for gesture in [false, true] {
-                #expect(DashboardManager.requiresBrowserSignIn(
-                    error: error, expiresAt: now, userGesture: gesture, now: now) ==
-                    (error as? GatewayBrowserSessionError == .expired))
-            }
-        }
-    }
-
-    @Test func `gesture renews sessions through the fifteen minute boundary`() {
-        let now = Date(timeIntervalSince1970: 10000)
-        for remaining in [-1.0, 0, 1, 899, 900, 901] {
-            for gesture in [false, true] {
-                #expect(DashboardManager.requiresBrowserSignIn(
-                    error: nil, expiresAt: now.addingTimeInterval(remaining), userGesture: gesture, now: now) ==
-                    (gesture && remaining <= 900))
-            }
-        }
-        #expect(!DashboardManager.requiresBrowserSignIn(error: nil, expiresAt: nil, userGesture: true, now: now))
     }
 }

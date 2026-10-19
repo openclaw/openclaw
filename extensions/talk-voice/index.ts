@@ -1,4 +1,3 @@
-// Talk Voice plugin entrypoint registers its OpenClaw integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -12,12 +11,12 @@ import {
 import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/talk-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 
-function mask(s: string, keep = 6): string {
+function mask(s: string): string {
   const trimmed = s.trim();
-  if (trimmed.length <= keep) {
+  if (trimmed.length <= 6) {
     return "***";
   }
-  return `${trimmed.slice(0, keep)}…`;
+  return `${trimmed.slice(0, 6)}…`;
 }
 
 function isLikelyVoiceId(value: string): boolean {
@@ -84,20 +83,12 @@ function findVoice(voices: SpeechVoiceOption[], query: string): SpeechVoiceOptio
     return null;
   }
   const lower = normalizeLowercaseStringOrEmpty(q);
-  const byId = voices.find((v) => v.id === q);
-  if (byId) {
-    return byId;
-  }
-  const exactName = voices.find((v) => normalizeOptionalLowercaseString(v.name) === lower);
-  if (exactName) {
-    return exactName;
-  }
-  const partial = voices.find((v) => normalizeLowercaseStringOrEmpty(v.name).includes(lower));
-  return partial ?? null;
-}
-
-function asTrimmedString(value: unknown): string {
-  return normalizeOptionalString(value) ?? "";
+  return (
+    voices.find((v) => v.id === q) ??
+    voices.find((v) => normalizeOptionalLowercaseString(v.name) === lower) ??
+    voices.find((v) => normalizeLowercaseStringOrEmpty(v.name).includes(lower)) ??
+    null
+  );
 }
 
 function resolveCommandLabel(channel: string): string {
@@ -123,22 +114,29 @@ export default definePluginEntry({
   description: "Select the active Talk voice and manage Talk voice configuration",
   register(api: OpenClawPluginApi) {
     const loadTool = createLazyRuntimeModule(() => import("./tool.js"));
-    api.registerTool({
-      name: "talk_voice",
-      label: "Talk Voice",
-      description:
-        "List or change the voice of the active realtime Talk call (browser, iOS, or Android) or Discord voice call in this conversation. Use list to see its provider, model, current voice, available voice IDs, and whether it can change. Use set with an available voice ID to reconnect the active call, preserving conversation and ongoing agent work. Success means the replacement call is ready. Saved voice defaults stay unchanged.",
-      parameters: {
-        type: "object",
-        properties: {
-          action: { type: "string", enum: ["list", "set"] },
-          voice: { type: "string", description: "Voice ID from list; required for set." },
-        },
-        required: ["action"],
-        additionalProperties: false,
+    api.registerTool(
+      (ctx) => {
+        const sessionKey = ctx.sessionKey;
+        return {
+          name: "talk_voice",
+          label: "Talk Voice",
+          description:
+            "List or change the voice of the active realtime Talk call (browser, iOS, or Android) or Discord voice call in this conversation. Use list to see its provider, model, current voice, available voice IDs, and whether it can change. Use set with an available voice ID to reconnect the active call, preserving conversation and ongoing agent work. Success means the replacement call is ready. Saved voice defaults stay unchanged.",
+          parameters: {
+            type: "object",
+            properties: {
+              action: { type: "string", enum: ["list", "set"] },
+              voice: { type: "string", description: "Voice ID from list; required for set." },
+            },
+            required: ["action"],
+            additionalProperties: false,
+          },
+          execute: async (...args) =>
+            await (await loadTool()).executeTalkVoiceTool(sessionKey, ...args),
+        };
       },
-      execute: async (...args) => await (await loadTool()).executeTalkVoiceTool(...args),
-    });
+      { name: "talk_voice" },
+    );
     api.registerCommand({
       name: "voice",
       nativeNames: {
@@ -166,10 +164,10 @@ export default definePluginEntry({
         }
         const providerId = active.provider;
         const providerLabel = resolveProviderLabel(providerId);
-        const apiKey = asTrimmedString(active.config.apiKey);
+        const apiKey = normalizeOptionalString(active.config.apiKey);
         const baseUrl = normalizeOptionalString(active.config.baseUrl);
 
-        const currentVoiceId = asTrimmedString(active.config.voiceId);
+        const currentVoiceId = normalizeOptionalString(active.config.voiceId);
 
         if (action === "status") {
           return {
@@ -241,21 +239,17 @@ export default definePluginEntry({
                 : assertOwnerCurrent,
             },
             mutate: (draft) => {
-              const nextConfig = {
-                ...draft,
-                talk: {
-                  ...draft.talk,
-                  provider: providerId,
-                  providers: {
-                    ...draft.talk?.providers,
-                    [providerId]: {
-                      ...draft.talk?.providers?.[providerId],
-                      voiceId: chosen.id,
-                    },
+              draft.talk = {
+                ...draft.talk,
+                provider: providerId,
+                providers: {
+                  ...draft.talk?.providers,
+                  [providerId]: {
+                    ...draft.talk?.providers?.[providerId],
+                    voiceId: chosen.id,
                   },
                 },
               };
-              Object.assign(draft, nextConfig);
             },
           });
 

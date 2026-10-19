@@ -1,4 +1,3 @@
-// Document extractor runtime helpers choose lazy extraction adapters by media type.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -22,12 +21,12 @@ const extractionMetadataSchema = z.object({
   imagesTruncated: z.boolean(),
 });
 
-/** Runs the first matching plugin document extractor and tags successful results with its extractor id. */
+/** Runs the first matching plugin document extractor. */
 export async function extractDocumentContent(
   params: DocumentExtractionRequest & {
     config?: OpenClawConfig;
   },
-): Promise<(DocumentExtractionResult & { extractor: string }) | null> {
+): Promise<DocumentExtractionResult | null> {
   const mimeType = normalizeLowercaseStringOrEmpty(params.mimeType);
   params.signal?.throwIfAborted();
   const extractors = resolvePluginDocumentExtractors({ config: params.config });
@@ -83,7 +82,6 @@ export async function extractDocumentContent(
         return {
           ...content,
           ...(trustedMetadata ? { metadata: trustedMetadata } : {}),
-          extractor: extractor.id,
         };
       }
     } catch (error) {

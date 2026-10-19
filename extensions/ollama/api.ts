@@ -1,4 +1,3 @@
-// Ollama API module exposes the plugin public contract.
 export {
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,

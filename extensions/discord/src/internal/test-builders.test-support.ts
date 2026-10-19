@@ -26,7 +26,6 @@ type FakeRestCall = {
 
 type FakeRestClient = RequestClient & {
   calls: FakeRestCall[];
-  enqueueResponse: (value: unknown) => void;
 };
 
 export function createJsonResponse(body: unknown, init?: ResponseInit): Response {
@@ -69,7 +68,7 @@ export function createInternalTestClient(
   );
 }
 
-function createRestMock(overrides: RestMock = {}): RestMock & RequestClient {
+function createRestMock(overrides: RestMock = {}) {
   return {
     get: vi.fn(async () => undefined),
     post: vi.fn(async () => undefined),
@@ -77,12 +76,12 @@ function createRestMock(overrides: RestMock = {}): RestMock & RequestClient {
     put: vi.fn(async () => undefined),
     delete: vi.fn(async () => undefined),
     ...overrides,
-  } as RestMock & RequestClient;
+  };
 }
 
-export function attachRestMock(client: Client, rest: RestMock): RestMock & RequestClient {
+export function attachRestMock(client: Client, rest: RestMock) {
   const mock = createRestMock(rest);
-  client.rest = mock;
+  client.rest = mock as RestMock & RequestClient;
   return mock;
 }
 
@@ -100,9 +99,6 @@ export function createFakeRestClient(responses: unknown[] = []): FakeRestClient 
   };
   return {
     calls,
-    enqueueResponse: (value: unknown) => {
-      queued.push(value);
-    },
     get: async (path, query) => await request("GET", path, undefined, query),
     post: async (path, data, query) => await request("POST", path, data, query),
     patch: async (path, data, query) => await request("PATCH", path, data, query),

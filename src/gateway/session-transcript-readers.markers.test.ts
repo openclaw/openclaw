@@ -1,27 +1,37 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
-  readRecentSessionMessagesWithStatsAsync,
-  readSessionMessageByIdAsync,
-  readSessionMessageCountAsync,
-  readSessionMessagesAsync,
-  readSessionMessagesAroundIdWithStatsAsync,
-  readSessionMessagesMatchingIdAsync,
-  readSessionMessagesPageWithStatsAsync,
-  visitSessionMessagesAsync,
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { createResetBoundaryTranscriptSource } from "./session-end-transcript-reader.js";
+import { visitSessionMessagesAsync } from "./session-transcript-native.test-support.js";
+import {
+  readRecentSessionMessagesWithStatsAsync as readRecent,
+  readSessionMessageByIdAsync as readById,
+  readSessionMessageCountAsync as readCount,
+  readSessionMessagesAsync as readFull,
+  readSessionMessagesAroundIdWithStatsAsync as readAround,
+  readSessionMessagesMatchingIdAsync as readMatching,
+  readSessionMessagesPageWithStatsAsync as readPage,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(
+  (cleanup) =>
+    afterAll(async () => {
+      await cleanup();
+      clearRuntimeConfigSnapshot();
+    }),
+  "openclaw-transcript-markers-",
+);
 const timestamp = "2026-08-11T18:00:00.000Z";
 
-function message(id: string, content: string, role: "user" | "assistant" | "toolResult" = "user") {
-  return { type: "message" as const, id, message: { role, content } };
+function message(id: string, role: "user" | "assistant" | "toolResult" = "user") {
+  return { type: "message" as const, id, message: { role, content: id } };
 }
 
 function compaction(id: string, firstKeptEntryId: string) {
@@ -52,6 +62,34 @@ function customMessage(id: string, display: unknown, customType = "run-failed-be
   };
 }
 
+type Event = ReturnType<typeof message | typeof compaction | typeof reset | typeof customMessage>;
+type Scenario = [name: string, events: Event[], visible: string, hidden?: string];
+const ids = (text: string) => text.split(" ");
+const old = message("old");
+const oldSummary = compaction("old-summary", "old");
+const oldReset = reset("old-reset");
+const emptyReset = reset("reset");
+const keptUser = message("kept-user");
+const keptAssistant = message("kept-assistant", "assistant");
+const keptReset = reset("reset", "kept-user");
+const fresh = message("fresh");
+const freshSummary = compaction("fresh-summary", "fresh");
+const after = message("after", "assistant");
+const before = message("before");
+const summary = compaction("summary", "before");
+const compactedPast = [old, oldSummary];
+const freshTurn = [fresh, freshSummary];
+const resetSummaries = [
+  compaction("fresh-summary", "reset"),
+  compaction("newest-summary", "reset"),
+];
+const keptSummaries = [
+  compaction("fresh-summary", "kept-user"),
+  compaction("newest-summary", "kept-user"),
+];
+const middleTurn = [message("middle"), compaction("middle-summary", "middle")];
+const orphan = message("orphan-tool", "toolResult");
+
 function messageIds(messages: unknown[]) {
   return messages.map((entry) => (entry as { __openclaw: { id: string } })["__openclaw"].id);
 }
@@ -75,23 +113,41 @@ function historicalWindowIds(
     .map((event) => event.id);
 }
 
+function projectedMessage(entry: Event) {
+  if (entry.type === "message") {
+    return entry.message;
+  }
+  const timed = { timestamp: Date.parse(timestamp) };
+  if (entry.type === "custom_message") {
+    return {
+      ...timed,
+      role: "custom",
+      customType: entry.customType,
+      content: entry.content,
+      display: true,
+    };
+  }
+  return {
+    ...timed,
+    role: "system",
+    __openclaw: { kind: entry.type },
+    content: [{ type: "text", text: entry.type === "compaction" ? "Compaction" : "Reset" }],
+  };
+}
+
 describe("session transcript reader marker projection", () => {
-  let tempDir: string;
   let storePath: string;
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    tempDir = tempDirs.make("openclaw-transcript-markers-");
+    const tempDir = tempDirs.make();
     storePath = path.join(tempDir, "sessions.json");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    setRuntimeConfigSnapshot({});
   });
 
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    envSnapshot.restore();
-  });
+  afterEach(() => envSnapshot.restore());
 
   async function writeTranscript(
     sessionId: string,
@@ -110,36 +166,30 @@ describe("session transcript reader marker projection", () => {
     return scope;
   }
 
-  test("pages pre-compaction history and token savings from the transcript without checkpoints", async () => {
-    const scope = await writeTranscript("metrics", [
-      message("before", "Original conversation"),
-      compaction("summary", "before"),
-      message("after", "Continued conversation", "assistant"),
+  test("reads a bounded ended window without successor turns after same-ID reset", async () => {
+    const boundaryId = "ended-boundary";
+    const scope = await writeTranscript("ended-window", [
+      message("prior-user"),
+      message("prior-assistant", "assistant"),
+      reset(boundaryId),
+      message("successor-user"),
     ]);
-    const messages = await readSessionMessagesAsync(scope, {
-      mode: "full",
-      reason: "Compaction metrics and retained history regression",
-    });
-    expect(messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ __openclaw: expect.objectContaining({ id: "before" }) }),
-        expect.objectContaining({
-          __openclaw: expect.objectContaining({
-            id: "summary",
-            tokensBefore: 100,
-            tokensAfter: 25,
-          }),
-        }),
-        expect.objectContaining({ __openclaw: expect.objectContaining({ id: "after" }) }),
-      ]),
-    );
+    const source = createResetBoundaryTranscriptSource(scope, boundaryId);
+    if (!source.available) {
+      throw new Error("expected available ended transcript source");
+    }
+
+    const result = await source.readTail({ maxMessages: 10, maxBytes: 2_048 });
+
+    expect(messageIds([...result.messages])).toEqual(["prior-user", "prior-assistant"]);
+    expect(result).toMatchObject({ totalMessages: 2, truncated: false });
   });
 
-  test.each([
-    {
-      name: "displayed-custom-messages",
-      events: [
-        message("user", "question"),
+  test.each<Scenario>([
+    [
+      "displayed-custom-messages",
+      [
+        message("user"),
         customMessage("notice", true),
         customMessage("hidden", false),
         customMessage("missing-display", undefined),
@@ -149,203 +199,130 @@ describe("session transcript reader marker projection", () => {
         compaction("summary", "user"),
         customMessage("after-summary", true),
       ],
-      expectedIds: ["user", "notice", "summary", "after-summary"],
-      hiddenIds: [
-        "hidden",
-        "missing-display",
-        "numeric-display",
-        "string-display",
-        "runtime-context",
-      ],
-    },
-    {
-      name: "custom-messages-across-resets",
-      events: [
-        message("old-user", "old question"),
+      "user notice summary after-summary",
+      "hidden missing-display numeric-display string-display runtime-context",
+    ],
+    [
+      "custom-messages-across-resets",
+      [
+        message("old-user"),
         customMessage("old-notice", true),
         customMessage("old-hidden", false),
-        reset("old-reset"),
-        message("middle-user", "middle question"),
+        oldReset,
+        message("middle-user"),
         customMessage("middle-notice", true),
         reset("reset", "middle-user"),
         customMessage("fresh-notice", true),
       ],
-      expectedIds: ["middle-user", "reset", "fresh-notice"],
-      hiddenIds: ["old-hidden"],
-    },
-    {
-      name: "compaction",
-      events: [
-        message("before", "before compaction"),
-        compaction("summary", "before"),
-        message("after", "after compaction", "assistant"),
-      ],
-      expectedIds: ["before", "summary", "after"],
-    },
-    {
-      name: "reset",
-      events: [
-        message("old", "hidden old turn"),
-        message("kept-user", "kept question"),
-        message("kept-assistant", "kept answer", "assistant"),
-        reset("reset", "kept-user"),
-        message("post-reset", "new answer", "assistant"),
-      ],
-      expectedIds: ["kept-user", "kept-assistant", "reset", "post-reset"],
-    },
-    {
-      name: "reset-then-compaction",
-      events: [
-        message("old", "hidden old turn"),
-        compaction("old-summary", "old"),
-        reset("reset"),
-        message("fresh", "fresh user"),
-        compaction("fresh-summary", "fresh"),
-      ],
-      expectedIds: ["reset", "fresh", "fresh-summary"],
-    },
-    {
-      name: "empty-reset-adjacent-compactions",
-      events: [
-        message("old", "hidden old turn"),
-        compaction("old-summary", "old"),
-        reset("reset"),
-        compaction("fresh-summary", "reset"),
-        compaction("newest-summary", "reset"),
-      ],
-      expectedIds: ["reset", "fresh-summary", "newest-summary"],
-    },
-    {
-      name: "kept-reset-adjacent-compactions",
-      events: [
-        message("old", "hidden old turn"),
-        compaction("old-summary", "old"),
-        message("kept-user", "kept question"),
-        message("orphan-tool", "hidden orphan result", "toolResult"),
-        message("kept-assistant", "kept answer", "assistant"),
-        reset("reset", "kept-user"),
-        compaction("fresh-summary", "kept-user"),
-        compaction("newest-summary", "kept-user"),
-      ],
-      expectedIds: ["kept-user", "kept-assistant", "reset", "fresh-summary", "newest-summary"],
-    },
-    {
-      name: "repeated-resets",
-      events: [
-        message("old", "hidden old turn"),
-        compaction("old-summary", "old"),
-        reset("old-reset"),
-        message("middle", "hidden middle turn"),
-        compaction("middle-summary", "middle"),
-        reset("reset"),
-        message("fresh", "fresh user"),
-        compaction("fresh-summary", "fresh"),
+      "middle-user reset fresh-notice",
+      "old-hidden",
+    ],
+    ["compaction", [before, summary, after], "before summary after"],
+    [
+      "reset",
+      [old, keptUser, keptAssistant, keptReset, message("post-reset", "assistant")],
+      "kept-user kept-assistant reset post-reset",
+    ],
+    [
+      "reset-then-compaction",
+      [...compactedPast, emptyReset, ...freshTurn],
+      "reset fresh fresh-summary",
+    ],
+    [
+      "empty-reset-adjacent-compactions",
+      [...compactedPast, emptyReset, ...resetSummaries],
+      "reset fresh-summary newest-summary",
+    ],
+    [
+      "kept-reset-adjacent-compactions",
+      [...compactedPast, keptUser, orphan, keptAssistant, keptReset, ...keptSummaries],
+      "kept-user kept-assistant reset fresh-summary newest-summary",
+    ],
+    [
+      "repeated-resets",
+      [
+        ...compactedPast,
+        oldReset,
+        ...middleTurn,
+        emptyReset,
+        ...freshTurn,
         compaction("newest-summary", "fresh"),
-        message("after", "after compactions", "assistant"),
+        after,
       ],
-      expectedIds: ["reset", "fresh", "fresh-summary", "newest-summary", "after"],
-    },
-  ])("projects $name boundaries through every SQLite history read", async (fixture) => {
-    const hiddenIds = fixture.hiddenIds ?? [];
-    const scope = await writeTranscript(`reader-${fixture.name}`, fixture.events);
-    const full = await readSessionMessagesAsync(scope, {
-      mode: "full",
-      reason: `${fixture.name} boundary projection test`,
-    });
-    const recent = await readRecentSessionMessagesWithStatsAsync(scope, {
-      maxBytes: 16_384,
-      maxLines: 2,
-      maxMessages: 2,
-    });
+      "reset fresh fresh-summary newest-summary after",
+    ],
+  ])(
+    "projects %s boundaries through every SQLite history read",
+    async (name, events, visible, hidden) => {
+      const expectedIds = ids(visible);
+      const hiddenIds = hidden ? ids(hidden) : [];
+      const scope = await writeTranscript(`reader-${name}`, events);
+      const around = (messageId: string) => readAround(scope, { messageId, maxMessages: 10 });
+      const full = await readFull(scope, {
+        mode: "full",
+        reason: `${name} boundary projection test`,
+      });
+      const recent = await readRecent(scope, {
+        maxBytes: 16_384,
+        maxLines: 2,
+        maxMessages: 2,
+      });
 
-    expect(messageIds(full)).toEqual(fixture.expectedIds);
-    const expectedVisits: Array<{ message: unknown; seq: number }> = [];
-    let messageSeq = 0;
-    for (const event of fixture.events) {
-      if (event.type === "message") {
-        messageSeq += 1;
-        if (fixture.expectedIds.includes(event.id)) {
-          expectedVisits.push({ message: event.message, seq: messageSeq });
+      expect(messageIds(full)).toEqual(expectedIds);
+      const expectedVisits = events
+        .filter((event) => event.type === "message")
+        .map((event, index) => ({ id: event.id, message: event.message, seq: index + 1 }))
+        .filter((event) => expectedIds.includes(event.id))
+        .map((entry) => ({ message: entry.message, seq: entry.seq }));
+      const visited: Array<{ message: unknown; seq: number }> = [];
+      await expect(
+        visitSessionMessagesAsync(scope, (entryMessage, seq) =>
+          visited.push({ message: entryMessage, seq }),
+        ),
+      ).resolves.toBe(expectedVisits.length);
+      expect(visited).toEqual(expectedVisits);
+      expect(messageIds(recent.messages)).toEqual(expectedIds.slice(-2));
+      expect(recent.totalMessages).toBe(expectedIds.length);
+      expect(await readCount(scope)).toBe(expectedIds.length);
+      for (const entry of events) {
+        const { id } = entry;
+        const index = expectedIds.indexOf(id);
+        const byId = await readById(scope, id);
+        const anchored = await around(id);
+        expect(await readMatching(scope, id)).toEqual(index < 0 ? [] : [full[index]]);
+        if (index < 0) {
+          if (hiddenIds.includes(id)) {
+            expect(byId).toMatchObject({ found: false });
+            expect(anchored).toMatchObject({ found: false, messages: [] });
+          } else {
+            const historicalIds = historicalWindowIds(events, id, hiddenIds);
+            expect(byId).toMatchObject({ found: true, message: { __openclaw: { id } } });
+            expect(anchored).toMatchObject({ found: true, totalMessages: historicalIds.length });
+            expect(messageIds(anchored.messages)).toEqual(historicalIds);
+            expect(messageIds(anchored.messages)).not.toEqual(expectedIds);
+          }
+          continue;
         }
+        const page = await readPage(scope, {
+          maxMessages: 1,
+          offset: expectedIds.length - index - 1,
+        });
+        expect(messageIds(page.messages)).toEqual([id]);
+        expect(page.totalMessages).toBe(expectedIds.length);
+        expect(byId).toMatchObject({
+          found: true,
+          seq: index + 1,
+          message: { __openclaw: { id, seq: index + 1 } },
+        });
+        expect(byId.message).toMatchObject(projectedMessage(entry));
+        if (entry.type === "compaction") {
+          expect(full[index]).toMatchObject({
+            __openclaw: { tokensBefore: 100, tokensAfter: 25 },
+          });
+        }
+        expect(anchored).toMatchObject({ found: true, totalMessages: expectedIds.length });
+        expect(messageIds(anchored.messages)).toEqual(expectedIds);
       }
-    }
-    const visited: Array<{ message: unknown; seq: number }> = [];
-    await expect(
-      visitSessionMessagesAsync(scope, (entryMessage, seq) =>
-        visited.push({ message: entryMessage, seq }),
-      ),
-    ).resolves.toBe(expectedVisits.length);
-    expect(visited).toEqual(expectedVisits);
-    expect(messageIds(recent.messages)).toEqual(fixture.expectedIds.slice(-2));
-    expect(recent.totalMessages).toBe(fixture.expectedIds.length);
-    expect(await readSessionMessageCountAsync(scope)).toBe(fixture.expectedIds.length);
-    for (const [index, id] of fixture.expectedIds.entries()) {
-      const page = await readSessionMessagesPageWithStatsAsync(scope, {
-        maxMessages: 1,
-        offset: fixture.expectedIds.length - index - 1,
-      });
-      const byId = await readSessionMessageByIdAsync(scope, id);
-      const anchored = await readSessionMessagesAroundIdWithStatsAsync(scope, {
-        messageId: id,
-        maxMessages: 10,
-      });
-      expect(await readSessionMessagesMatchingIdAsync(scope, id)).toEqual([full[index]]);
-      expect(messageIds(page.messages)).toEqual([id]);
-      expect(page.totalMessages).toBe(fixture.expectedIds.length);
-      expect(byId).toMatchObject({ found: true, seq: index + 1 });
-      expect(byId.message).toMatchObject({ __openclaw: { id, seq: index + 1 } });
-      const entry = fixture.events.find((event) => event.id === id)!;
-      expect(byId.message).toMatchObject(
-        entry.type === "message"
-          ? entry.message
-          : entry.type === "custom_message"
-            ? {
-                role: "custom",
-                customType: entry.customType,
-                content: entry.content,
-                display: true,
-                timestamp: Date.parse(timestamp),
-              }
-            : {
-                role: "system",
-                content: [
-                  { type: "text", text: entry.type === "compaction" ? "Compaction" : "Reset" },
-                ],
-                timestamp: Date.parse(timestamp),
-                __openclaw: { kind: entry.type },
-              },
-      );
-      expect(anchored.found).toBe(true);
-      expect(messageIds(anchored.messages)).toEqual(fixture.expectedIds);
-      expect(anchored.totalMessages).toBe(fixture.expectedIds.length);
-    }
-    for (const { id } of fixture.events.filter(
-      (event) => !fixture.expectedIds.includes(event.id),
-    )) {
-      expect(await readSessionMessagesMatchingIdAsync(scope, id)).toEqual([]);
-      if (hiddenIds.includes(id)) {
-        expect(await readSessionMessageByIdAsync(scope, id)).toMatchObject({ found: false });
-        expect(
-          await readSessionMessagesAroundIdWithStatsAsync(scope, {
-            messageId: id,
-            maxMessages: 10,
-          }),
-        ).toMatchObject({ found: false, messages: [] });
-        continue;
-      }
-      const historicalIds = historicalWindowIds(fixture.events, id, hiddenIds);
-      expect(await readSessionMessageByIdAsync(scope, id)).toMatchObject({
-        found: true,
-        message: { __openclaw: { id } },
-      });
-      const anchored = await readSessionMessagesAroundIdWithStatsAsync(scope, {
-        messageId: id,
-        maxMessages: 10,
-      });
-      expect(anchored.found).toBe(true);
-      expect(messageIds(anchored.messages)).toEqual(historicalIds);
-      expect(anchored.totalMessages).toBe(historicalIds.length);
-      expect(messageIds(anchored.messages)).not.toEqual(fixture.expectedIds);
-    }
-  });
+    },
+  );
 });

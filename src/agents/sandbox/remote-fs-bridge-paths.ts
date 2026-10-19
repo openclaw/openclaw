@@ -3,13 +3,11 @@ import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
 import { isPathInsideContainerRoot, normalizeContainerPathCore } from "./path-utils.js";
 
-export type RemoteMountSource = "workspace" | "agent" | "protectedSkill";
-
 export type RemoteMountInfo = {
   localRoot: string;
   containerRoot: string;
   writable: boolean;
-  source: RemoteMountSource;
+  source: "workspace" | "agent" | "protectedSkill";
 };
 
 const MOUNT_SOURCE_PRIORITY = { workspace: 0, agent: 1, protectedSkill: 2 };
@@ -60,7 +58,7 @@ export function buildRemoteProtectedSkillRoots(params: {
 }
 
 export function normalizeContainerPath(value: string): string {
-  const normalized = normalizeContainerPathCore(value.trim() || "/");
+  const normalized = normalizeContainerPathCore(value || "/");
   return normalized.startsWith("/") ? normalized : `/${normalized}`;
 }
 

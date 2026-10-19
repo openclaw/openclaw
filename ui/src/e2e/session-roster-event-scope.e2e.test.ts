@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { AgentsListResult } from "../api/types.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
@@ -23,7 +24,18 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      methodResponses: { "sessions.list": sessionsListResponse([row]) },
+      methodResponses: {
+        "sessions.list": sessionsListResponse([row]),
+        "agents.list": {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "research", name: "Research" },
+          ],
+        } satisfies AgentsListResult,
+      },
       sessionKey: key,
       historyMessages: [
         { role: "assistant", content: [{ type: "text", text: "The weekly report is ready." }] },
@@ -35,8 +47,8 @@ suite.define(() => {
       const selectedRow = sidebar.locator(`[data-session-key="${key}"]`);
       await expect.poll(() => selectedRow.textContent()).toContain("Weekly report");
       await sidebar.locator(".sidebar-agent-card__main").click();
-      await sidebar.locator('wa-dropdown-item[value="command:sidebar-agents"]').click();
-      await expect.poll(() => sidebar.locator(".sidebar-agent-roster__row").count()).toBe(1);
+      await sidebar.locator('[data-value="scope:all"]').click();
+      await expect.poll(() => sidebar.locator(".sidebar-agent-roster__row").count()).toBe(2);
 
       const activityQuery = {
         archived: "all",
@@ -59,7 +71,7 @@ suite.define(() => {
       }
       await captureUiProof(suite, page, "roster-recap-after.png");
       expect((await gateway.getRequests("sessions.list", activityQuery)).length - before).toBe(0);
-      expect(await selectedRow.textContent()).toContain("Weekly report");
+      expect(await sidebar.locator(".sidebar-agent-roster__row").count()).toBe(2);
       expect(await page.locator(".chat-thread").textContent()).toContain(
         "The weekly report is ready.",
       );
@@ -73,9 +85,10 @@ suite.define(() => {
         session: added,
       });
       await expect
-        .poll(() => sidebar.locator(`[data-session-key="${added.key}"]`).textContent())
-        .toContain("New report");
-      expect((await gateway.getRequests("sessions.list", activityQuery)).length - before).toBe(1);
+        .poll(
+          async () => (await gateway.getRequests("sessions.list", activityQuery)).length - before,
+        )
+        .toBe(1);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -97,8 +110,8 @@ suite.define(() => {
     let heldRequest = false;
     try {
       await page.goto(`${suite.server.baseUrl}sessions`);
-      const refresh = page.locator(".settings-section__actions .btn").last();
-      await expect.poll(async () => (await refresh.textContent())?.trim()).toBe("Refresh");
+      const refresh = page.getByRole("button", { name: "Refresh", exact: true });
+      await refresh.waitFor();
       await gateway.waitForRequest("sessions.subscribe");
       await page.waitForTimeout(1_200);
 
@@ -115,7 +128,7 @@ suite.define(() => {
       await page.waitForTimeout(50);
       await captureUiProof(suite, page, "sessions-background-refresh.png");
 
-      expect((await refresh.textContent())?.trim()).toBe("Refresh");
+      expect(await refresh.getAttribute("aria-label")).toBe("Refresh");
       expect(await refresh.isEnabled()).toBe(true);
     } finally {
       if (heldRequest) {
