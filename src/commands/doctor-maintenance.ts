@@ -69,7 +69,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
   // Repair discovery can execute plugins and open writable state. Establish
   // ownership for every admitted repair before running those inspections.
   let stopped: PreManagedServiceStop | undefined;
-  let serviceUpdateVerdict: PreManagedServiceStop["serviceUpdateVerdict"];
+  let serviceVerdict: PreManagedServiceStop["serviceUpdateVerdict"];
   let stopDeadline: number | undefined;
   const warnings: string[] = [];
   const warn = (message: string) => {
@@ -469,10 +469,13 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
             throw error;
           }
           inspection = offlineApp;
-          warn(offlineApp.serviceMutationSkipMessage);
         }
         assertDoctorMaintenanceInspection(inspection, env);
-        serviceUpdateVerdict = inspection.serviceUpdateVerdict;
+        serviceVerdict = inspection.serviceUpdateVerdict;
+        if (serviceVerdict?.kind === "unavailable") {
+          // State admission may refuse a live owner before a maintenance handle exists.
+          warn(serviceVerdict.message);
+        }
         if (inspection.serviceUpdateVerdict?.kind !== "absent" && inspection.offline !== true) {
           assertAuthority(() => {
             const admitted = resolveDoctorUpdateAdmission(env);
@@ -610,9 +613,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
               },
             );
           }
-        } else if (inspection.serviceUpdateVerdict?.kind === "unavailable") {
-          warn(inspection.serviceUpdateVerdict.message);
-        } else if (inspection.serviceUpdateVerdict?.kind !== "absent") {
+        } else if (serviceVerdict?.kind !== "unavailable" && serviceVerdict?.kind !== "absent") {
           params.runtime.log(
             "The stopped Gateway service was left unchanged; repairing Doctor's selected state only.",
           );
@@ -645,7 +646,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
   };
   const maintenance = {
     signal: exit.signal,
-    serviceUpdateVerdict,
+    serviceUpdateVerdict: serviceVerdict,
     warnings,
     failureFacts,
     get databaseWrites() {
@@ -672,7 +673,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     },
     async cleanupRetainedRuntimes() {
       assertHeld(this, "Updater runtime cleanup");
-      await settle(() => state.cleanupRetainedRuntimes(serviceUpdateVerdict !== undefined));
+      await settle(() => state.cleanupRetainedRuntimes(serviceVerdict !== undefined));
     },
     async release() {
       if (this !== maintenance) {

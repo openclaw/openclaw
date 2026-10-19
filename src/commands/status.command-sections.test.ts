@@ -90,24 +90,22 @@ it("prioritizes critical audit findings, caps warnings, and preserves remediatio
 });
 
 it("distinguishes pinned sessions from automatic fallbacks in a session report", () => {
-  const lines = buildStatusModelSelectionLines({
-    recent: [
-      {
-        ...baseStatusSession,
-        key: "pinned",
-        configuredModel: "first/a",
-        selectedModel: "second/b",
-        modelSelectionReason: "session override",
-      },
-      {
-        ...baseStatusSession,
-        key: "fallback",
-        configuredModel: "third/c",
-        selectedModel: "fourth/d",
-        modelSelectionReason: "fallback selected",
-      },
-    ],
-  });
+  const lines = buildStatusModelSelectionLines([
+    {
+      ...baseStatusSession,
+      key: "pinned",
+      configuredModel: "first/a",
+      selectedModel: "second/b",
+      modelSelectionReason: "session override",
+    },
+    {
+      ...baseStatusSession,
+      key: "fallback",
+      configuredModel: "third/c",
+      selectedModel: "fourth/d",
+      modelSelectionReason: "fallback selected",
+    },
+  ]);
   expect(lines).toEqual(
     expect.arrayContaining([
       "Session pinned is pinned to second/b; config primary first/a will apply to new/unpinned sessions.",

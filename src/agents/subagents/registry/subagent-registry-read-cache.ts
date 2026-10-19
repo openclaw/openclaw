@@ -303,9 +303,6 @@ export async function readCompactSubagentRuns(context: OpenClawStateWorkerContex
   if (!reply) {
     return new Map<string, SubagentRunReadRecord>();
   }
-  if (!reply.ok || reply.type !== "subagents.sessionList") {
-    throw new Error("Unexpected compact subagent registry read result");
-  }
   if ("unavailable" in reply) {
     const failure = new Error(reply.unavailable.message);
     retainOpenClawStateWorkerErrorPayload(failure, reply.unavailable.error);

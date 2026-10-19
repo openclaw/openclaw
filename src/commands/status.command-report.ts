@@ -91,15 +91,11 @@ export async function buildStatusCommandReportLines(
         theme.muted(`Deep check: ${formatCliCommand("openclaw status --deep")}`),
       ];
   const width = params.tableWidth;
-  const pluginCompatibilityLines = buildStatusPluginCompatibilityLines({
-    notices: params.pluginCompatibility,
-  });
+  const pluginCompatibilityLines = buildStatusPluginCompatibilityLines(params.pluginCompatibility);
   const pairingRecoveryLines = buildStatusPairingRecoveryLines({
     pairingRecovery: params.pairingRecovery,
   });
-  const modelSelectionLines = buildStatusModelSelectionLines({
-    recent: params.summary.sessions.recent,
-  });
+  const modelSelectionLines = buildStatusModelSelectionLines(params.summary.sessions.recent);
   const channelsColumns = statusChannelsTableColumns;
   const channelsRows = buildStatusChannelsTableRows({
     rows: params.channels.rows,
@@ -114,12 +110,8 @@ export async function buildStatusCommandReportLines(
     recent: params.summary.sessions.recent,
     verbose: params.opts.verbose,
   });
-  const systemEventsRows = buildStatusSystemEventsRows({
-    queuedSystemEvents: params.summary.queuedSystemEvents,
-  });
-  const systemEventsTrailer = buildStatusSystemEventsTrailer({
-    queuedSystemEvents: params.summary.queuedSystemEvents,
-  });
+  const systemEventsRows = buildStatusSystemEventsRows(params.summary.queuedSystemEvents);
+  const systemEventsTrailer = buildStatusSystemEventsTrailer(params.summary.queuedSystemEvents);
   const healthColumns = params.health ? statusHealthColumns : undefined;
   const healthRows = params.health
     ? buildStatusHealthRows({

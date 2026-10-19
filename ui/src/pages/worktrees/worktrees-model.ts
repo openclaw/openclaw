@@ -26,7 +26,6 @@ export class WorktreesModel {
   createBaseRef = "";
   createBranches: string[] = [];
   gateway!: ReturnType<typeof useGatewayPage>;
-  private readonly listeners = new Set<() => void>();
   private readonly listRequest = createPageRequest(() => this.update({}), {
     task: (scope: GatewayConnectionScope, { signal }) =>
       scope.client.request<WorktreesListResult>("worktrees.list", {}, { signal }),
@@ -48,15 +47,13 @@ export class WorktreesModel {
     },
   });
 
-  constructor(private readonly getContext: () => ApplicationContext) {}
+  constructor(
+    private readonly getContext: () => ApplicationContext,
+    private readonly publish: () => void,
+  ) {}
 
   get context() {
     return this.getContext();
-  }
-
-  subscribe(listener: () => void) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
   }
 
   update(
@@ -75,9 +72,7 @@ export class WorktreesModel {
     >,
   ) {
     Object.assign(this, values);
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.publish();
   }
 
   invalidateRequests() {

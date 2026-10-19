@@ -250,6 +250,13 @@ function stripNewCacheMarkers(value: unknown): unknown {
   );
 }
 
+const FORK_TOOL_CHOICE_SHAPES = new Map<Model["api"], "object" | "string">([
+  ["anthropic-messages", "object"],
+  ["openai-responses", "string"],
+  ["openai-chatgpt-responses", "string"],
+  ["openai-completions", "string"],
+]);
+
 /** Replay prepared payload data, never the parent's one-shot admission hooks or tool executor. */
 export async function runEmbeddedSessionFork(params: {
   sessionId: string;
@@ -261,16 +268,10 @@ export async function runEmbeddedSessionFork(params: {
   assertCurrent: () => void;
   onUsage?: (usage: NormalizedUsage | undefined) => void;
 }): Promise<string> {
-  switch (params.model.api) {
-    case "openai-responses":
-    case "openai-chatgpt-responses":
-    case "openai-completions":
-    case "anthropic-messages":
-      break;
-    default:
-      throw new Error(
-        `Session forks do not support provider API ${params.model.api}. Use OpenAI Responses, Chat Completions, or Anthropic Messages.`,
-      );
+  if (!FORK_TOOL_CHOICE_SHAPES.has(params.model.api)) {
+    throw new Error(
+      `Session forks do not support provider API ${params.model.api}. Use OpenAI Responses, Chat Completions, or Anthropic Messages.`,
+    );
   }
   prune();
   const snapshot = snapshots.get(params.sessionId);
@@ -400,17 +401,11 @@ export async function runEmbeddedSessionFork(params: {
         if (Array.isArray(replay.tools) && replay.tools.length > 0) {
           // Keep schemas/cache breakpoints, but prevent provider-hosted execution.
           // Anthropic invalidates its messages cache when tool_choice changes.
-          if (model.api === "anthropic-messages") {
-            replay.tool_choice = { type: "none" };
-          } else if (
-            model.api === "openai-responses" ||
-            model.api === "openai-chatgpt-responses" ||
-            model.api === "openai-completions"
-          ) {
-            replay.tool_choice = "none";
-          } else {
+          const toolChoiceShape = FORK_TOOL_CHOICE_SHAPES.get(model.api);
+          if (!toolChoiceShape) {
             throw new Error("Session fork cannot disable hosted tools for this provider API.");
           }
+          replay.tool_choice = toolChoiceShape === "object" ? { type: "none" } : "none";
         }
         return replay;
       },

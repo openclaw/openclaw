@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { resolveToolVerbAndDetailForArgs } from "./tool-display-common.js";
+import { resolveToolDetailForArgs } from "./tool-display-common.js";
 import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
 
 function preview(value: unknown, includeFalsy = false) {
-  return resolveToolVerbAndDetailForArgs({
+  return resolveToolDetailForArgs({
     toolKey: "custom_tool",
     args: { note: value },
     fallbackDetailKeys: ["note"],
     detailMode: "first",
     detailCoerce: { includeFalsy },
-  }).detail;
+  });
 }
 
 function nested(depth: number) {

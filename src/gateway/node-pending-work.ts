@@ -89,14 +89,6 @@ function sortedItems(state: NodePendingWorkState): NodePendingWorkItem[] {
   );
 }
 
-function resolvePendingWorkExpiresAtMs(expiresInMs: unknown, nowMs: number): number {
-  const ttlMs =
-    typeof expiresInMs === "number" && Number.isFinite(expiresInMs)
-      ? Math.max(1_000, Math.trunc(expiresInMs))
-      : DEFAULT_PENDING_WORK_TTL_MS;
-  return resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs }) ?? 0;
-}
-
 export function enqueueNodePendingWork(params: {
   nodeId: string;
   type: NodePendingWorkType;
@@ -124,7 +116,10 @@ export function enqueueNodePendingWork(params: {
     type: params.type,
     priority: params.priority ?? "normal",
     createdAtMs: nowMs,
-    expiresAtMs: resolvePendingWorkExpiresAtMs(params.expiresInMs, rawNowMs),
+    expiresAtMs:
+      resolveExpiresAtMsFromDurationMs(params.expiresInMs ?? DEFAULT_PENDING_WORK_TTL_MS, {
+        nowMs: rawNowMs,
+      }) ?? 0,
     ...(params.payload ? { payload: params.payload } : {}),
   };
   state.itemsById.set(item.id, item);

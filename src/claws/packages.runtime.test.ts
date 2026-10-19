@@ -50,7 +50,7 @@ function testPackageLease(onRelease: () => void = () => {}) {
       key: "test-package",
       owner: "test-owner",
     },
-    heartbeat: () => {},
+    assertCurrent: () => {},
     release: onRelease,
   };
 }

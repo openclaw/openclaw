@@ -123,7 +123,7 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 export async function sendMessage(
   incomingUrl: string,
   text: string,
-  userId?: string | number,
+  userId?: string,
   allowInsecureSsl = false,
   onPlatformSendDispatch?: () => Promise<void>,
 ): Promise<boolean> {
@@ -182,7 +182,7 @@ export async function sendMessage(
 export async function sendHostedFileUrl(
   incomingUrl: string,
   fileUrl: SynologyHostedMediaUrl,
-  userId?: string | number,
+  userId?: string,
   allowInsecureSsl = false,
   onPlatformSendDispatch?: () => Promise<void>,
 ): Promise<SynologyHostedFileSendResult> {
@@ -308,7 +308,7 @@ export async function resolveLegacyWebhookNameToChatUserId(params: {
   return users.find((user) => normalizeLowercaseStringOrEmpty(user.username) === lower)?.user_id;
 }
 
-function buildWebhookBody(payload: ChatWebhookPayload, userId?: string | number): string {
+function buildWebhookBody(payload: ChatWebhookPayload, userId?: string): string {
   const numericId = parseNumericUserId(userId);
   if (numericId !== undefined) {
     payload.user_ids = [numericId];
@@ -316,12 +316,9 @@ function buildWebhookBody(payload: ChatWebhookPayload, userId?: string | number)
   return `payload=${encodeURIComponent(JSON.stringify(payload))}`;
 }
 
-function parseNumericUserId(userId?: string | number): number | undefined {
+function parseNumericUserId(userId?: string): number | undefined {
   if (userId === undefined) {
     return undefined;
-  }
-  if (typeof userId === "number") {
-    return Number.isSafeInteger(userId) ? userId : undefined;
   }
   return parseStrictNonNegativeInteger(userId);
 }

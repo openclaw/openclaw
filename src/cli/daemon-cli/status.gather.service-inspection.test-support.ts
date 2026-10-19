@@ -206,7 +206,9 @@ export function registerServiceInspectionStatusTests(params: {
             expect(status.service.targetRole).toBe("diagnostic-only");
             expect(output.includes("recorded service unit is stale")).toBe(recorded);
             expect(output.includes("Recorded command:")).toBe(recorded);
-            expect(output).toContain("Restart the Gateway you launched manually");
+            expect(output).toContain(
+              "Manage the Gateway through the supervisor or terminal that started it.",
+            );
             expect(output).not.toContain("Service: LaunchAgent (unknown)");
             expect(output).not.toContain("Retry: openclaw gateway status --deep");
           } else {
