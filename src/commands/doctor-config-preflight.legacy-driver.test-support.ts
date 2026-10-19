@@ -68,9 +68,14 @@ function childEnv(overrides: NodeJS.ProcessEnv) {
   });
 }
 
-function readAgent<T>(file: string, read: (db: DatabaseSync) => T): T {
+function queryAgent(file: string, sql: string[]) {
   using db = new DatabaseSync(file, { readOnly: true });
-  return read(db);
+  return sql.map((statement) => db.prepare(statement).all());
+}
+
+function writeJson(file: string, value: unknown) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(value));
 }
 
 export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
@@ -123,12 +128,7 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
     const originals = [agentPath, sharedPath, state.configPath];
     const bytes = originals.map((file) => fs.readFileSync(file));
     const malformedHandoff = mode.startsWith("managed pnpm ");
-    const managed =
-      mode === "valid managed v1" ||
-      mode === "valid managed pnpm" ||
-      malformedHandoff ||
-      mode === "managed handoff mismatch" ||
-      mode === "managed handoff missing";
+    const managed = mode.includes("managed");
     const relocatesRuntime = mode === "valid managed pnpm" || malformedHandoff;
     // Managed handoff authority includes the install path, so keep those packages private.
     let runtimeRoot = managed
@@ -146,17 +146,10 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
       fs.mkdirSync(path.dirname(current), { recursive: true });
       fs.renameSync(runtimeRoot, current);
       runtimeRoot = fs.realpathSync(current);
-      fs.mkdirSync(previous, { recursive: true });
-      fs.writeFileSync(
-        path.join(previous, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.9.2" }),
-      );
+      writeJson(path.join(previous, "package.json"), { name: "openclaw", version: "2026.9.2" });
       fs.mkdirSync(path.join(project, "node_modules"), { recursive: true });
       fs.writeFileSync(path.join(project, "node_modules", ".modules.yaml"), "layoutVersion: 5\n");
-      fs.writeFileSync(
-        path.join(project, "package.json"),
-        JSON.stringify({ dependencies: { openclaw: VERSION } }),
-      );
+      writeJson(path.join(project, "package.json"), { dependencies: { openclaw: VERSION } });
       fs.symlinkSync(
         current,
         path.join(project, "node_modules", "openclaw"),
@@ -164,19 +157,22 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
       );
       managedRoot = fs.realpathSync(previous);
     }
+    const child = (args: string[], env: NodeJS.ProcessEnv) =>
+      runBuiltRuntime(runtimeRoot, childEnv(env), args, DOCTOR_CHILD_TIMEOUT_MS);
+    const currentSchema = [{ user_version: OPENCLAW_AGENT_SCHEMA_VERSION }];
+    const expectSchema = (output: string) =>
+      expect(queryAgent(agentPath, ["PRAGMA user_version"]), output).toEqual([currentSchema]);
     // Rehearsal preserves these exact bytes. Exercise both package layouts once;
     // the remaining variants differ only at the post-core boundary below.
     if (mode === "valid" || mode === "valid managed pnpm" || mode === "failed schema publication") {
       const resultPath = createUpdatePostInstallDoctorResultPath();
       // The shipped updater disables compile caching before both child handoffs.
-      const result = await runBuiltRuntime(
-        runtimeRoot,
-        childEnv({
+      const result = await child(
+        ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
+        {
           OPENCLAW_DEBUG_PROXY_ENABLED: "1",
           [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: resultPath,
-        }),
-        ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
-        DOCTOR_CHILD_TIMEOUT_MS,
+        },
       );
       const output = `${result.stdout}\n${result.stderr}`;
       const receipt = await consumeUpdatePostInstallDoctorResult(resultPath);
@@ -226,29 +222,26 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
         throw new Error("Could not initialize isolated fixture handoff");
       }
       const { pid, startIdentity } = store.processIdentity();
-      managedRow = {
+      const row = {
         owner: "shipped-owner",
         payload_json: JSON.stringify({ version: 1, pid, startIdentity }),
         updated_at: 7,
       };
-      const row = managedRow;
+      managedRow = row;
       handoffDatabase(true, (db) => {
         db.prepare(
           "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
         ).run(managedRoot, row.owner, row.payload_json, row.updated_at);
       });
       if (mode !== "managed pnpm missing metadata") {
-        fs.writeFileSync(
-          metaPath,
-          JSON.stringify({
-            version: 1,
-            meta: {
-              runId: mode === "managed pnpm missing metadata run" ? undefined : run.runId,
-              root: mode === "managed pnpm partial metadata" ? undefined : managedRoot,
-              handoffId: mode === "managed handoff mismatch" ? "another-owner" : managedRow.owner,
-            },
-          }),
-        );
+        writeJson(metaPath, {
+          version: 1,
+          meta: {
+            runId: mode === "managed pnpm missing metadata run" ? undefined : run.runId,
+            root: mode === "managed pnpm partial metadata" ? undefined : managedRoot,
+            handoffId: mode === "managed handoff mismatch" ? "another-owner" : managedRow.owner,
+          },
+        });
       }
     }
     if (mode === "managed handoff missing") {
@@ -257,29 +250,19 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
       });
     }
     const resume = () =>
-      runBuiltRuntime(
-        runtimeRoot,
-        childEnv({
-          OPENCLAW_UPDATE_POST_CORE: "1",
-          OPENCLAW_UPDATE_RUN_HANDOFF: managed ? "1" : undefined,
-          ...(managed ? { OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META: metaPath } : {}),
-          OPENCLAW_UPDATE_RUN_ID:
-            mode === "missing post-core run" ? "53e56de0-a951-4b3d-af1a-9e4f1ac5a069" : run.runId,
-          OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
-          OPENCLAW_UPDATE_POST_CORE_RESULT_PATH: state.path("post-core-result.json"),
-          OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS: String(Date.now()),
-        }),
-        ["update", "--json", "--yes", "--no-restart"],
-        DOCTOR_CHILD_TIMEOUT_MS,
-      );
+      child(["update", "--json", "--yes", "--no-restart"], {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_RUN_HANDOFF: managed ? "1" : undefined,
+        ...(managed ? { OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META: metaPath } : {}),
+        OPENCLAW_UPDATE_RUN_ID:
+          mode === "missing post-core run" ? "53e56de0-a951-4b3d-af1a-9e4f1ac5a069" : run.runId,
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_RESULT_PATH: state.path("post-core-result.json"),
+        OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS: String(Date.now()),
+      });
     const resumed = await resume();
     if (mode === "valid managed v1" && resumed.code === 0) {
-      readAgent(agentPath, (current) => {
-        expect(
-          current.prepare("PRAGMA user_version").get()?.user_version,
-          `${resumed.stdout}\n${resumed.stderr}`,
-        ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-      });
+      expectSchema(`${resumed.stdout}\n${resumed.stderr}`);
       // A current-schema continuation must retain the same live parent
       // without requiring another migration or a new update-history row.
       const sameSchema = await resume();
@@ -330,18 +313,16 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
       expect(fs.readFileSync(agentPath)).toEqual(bytes[0]);
       return;
     }
-    readAgent(agentPath, (repaired) => {
-      expect(
-        repaired.prepare("PRAGMA user_version").get()?.user_version,
-        `${resumed.stdout}\n${resumed.stderr}`,
-      ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-      expect(repaired.prepare("SELECT value_json,updated_at FROM cache_entries").all()).toEqual([
-        { value_json: '{"keep":true}', updated_at: 7 },
-      ]);
-      expect(repaired.prepare("SELECT event_json,seq FROM transcript_events").all()).toEqual([
-        { event_json: '{ "type": "message", "text": "retained bytes 雪" }', seq: 7 },
-      ]);
-    });
+    const preserved = queryAgent(agentPath, [
+      "PRAGMA user_version",
+      "SELECT value_json,updated_at FROM cache_entries",
+      "SELECT event_json,seq FROM transcript_events",
+    ]);
+    expect(preserved, `${resumed.stdout}\n${resumed.stderr}`).toEqual([
+      currentSchema,
+      [{ value_json: '{"keep":true}', updated_at: 7 }],
+      [{ event_json: '{ "type": "message", "text": "retained bytes 雪" }', seq: 7 }],
+    ]);
   }
 
   it.each(modes)(
