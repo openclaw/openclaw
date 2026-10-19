@@ -6,7 +6,10 @@ import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloa
 import { createDirectPendingFinalCustody } from "./direct-delivery-custody.js";
 import { dispatchRoutedChannelTurn } from "./lifecycle.js";
 import { createCtx } from "./run-channel-turn.delivery.test-helpers.js";
-import type { ChannelProviderOwnedMessageSendingDeliveryAdapter } from "./types.js";
+import type {
+  ChannelProviderOwnedMessageSendingDeliveryAdapter as ProviderDelivery,
+  ChannelTurnDeliveryAdapter,
+} from "./types.js";
 
 const dispatchReplyWithRoutedChannelDispatcherCore = vi.hoisted(() => vi.fn());
 const getGlobalHookRunner = vi.hoisted(() => vi.fn());
@@ -14,28 +17,24 @@ const settlePendingFinalDelivery = vi.hoisted(() =>
   vi.fn(async (_completion: unknown, state: string) => ({ state })),
 );
 
-vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
-  return {
-    ...actual,
-    dispatchInboundMessageWithRoutedChannelDispatcher: dispatchReplyWithRoutedChannelDispatcherCore,
-  };
-});
+vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../auto-reply/dispatch.js")>()),
+  dispatchInboundMessageWithRoutedChannelDispatcher: dispatchReplyWithRoutedChannelDispatcherCore,
+}));
 
-vi.mock("../../plugins/hook-runner-global.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugins/hook-runner-global.js")>();
-  return { ...actual, getGlobalHookRunner };
-});
+vi.mock("../../plugins/hook-runner-global.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/hook-runner-global.js")>()),
+  getGlobalHookRunner,
+}));
 
 vi.mock("../../config/sessions/transcript.js", () => ({
   readRecentUserAssistantTextForSession: vi.fn(async () => []),
 }));
 
-vi.mock("../../infra/outbound/delivery-completion.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../infra/outbound/delivery-completion.js")>();
-  return { ...actual, settlePendingFinalDelivery };
-});
+vi.mock("../../infra/outbound/delivery-completion.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/outbound/delivery-completion.js")>()),
+  settlePendingFinalDelivery,
+}));
 
 function createPayloadDispatch(
   payload: ReplyPayload,
@@ -72,13 +71,43 @@ describe("channel turn failed-send custody", () => {
   const replacementWriter = { ...currentWriter, activeWriterRunId: "run-new" };
   let currentEntry: typeof currentWriter | undefined;
 
+  function writerPayload(pendingFinal = false) {
+    return setReplyPayloadMetadata(
+      { text: "reply" },
+      {
+        ...(pendingFinal ? { pendingFinalDeliveryCompletion: completion } : {}),
+        sessionWriterDeliveryAuthority: {
+          agentId: "main",
+          expectedLifecycleRevision: currentWriter.lifecycleRevision,
+          expectedSessionId: completion.sessionId,
+          expectedWriterRunId: currentWriter.activeWriterRunId,
+          sessionKey: completion.sessionKey,
+          storePath: completion.storePath,
+          readCurrentSession: () => currentEntry,
+        },
+      },
+    );
+  }
+
+  function dispatch(delivery: ChannelTurnDeliveryAdapter) {
+    return dispatchRoutedChannelTurn({
+      cfg: {},
+      channel: "telegram",
+      accountId: "acct",
+      route: { agentId: "main", sessionKey: completion.sessionKey },
+      ctxPayload: createCtx({
+        CommandAuthorized: false,
+        Surface: "telegram",
+        OriginatingTo: "chat-1",
+      }),
+      delivery,
+    });
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     getGlobalHookRunner.mockReturnValue(null);
     currentEntry = undefined;
-    settlePendingFinalDelivery.mockImplementation(async (_completion, state: string) => ({
-      state,
-    }));
   });
 
   it.each([
@@ -87,58 +116,33 @@ describe("channel turn failed-send custody", () => {
   ] as const)(
     "blocks $operation provider I/O when writer authority changes (after refresh: $changesAfterRefresh)",
     async ({ operation, changesAfterRefresh }) => {
-      const payload = setReplyPayloadMetadata(
-        { text: "old writer reply" },
-        {
-          sessionWriterDeliveryAuthority: {
-            agentId: "main",
-            expectedLifecycleRevision: currentWriter.lifecycleRevision,
-            expectedSessionId: completion.sessionId,
-            expectedWriterRunId: currentWriter.activeWriterRunId,
-            sessionKey: completion.sessionKey,
-            storePath: completion.storePath,
-            readCurrentSession: () => currentEntry,
-          },
-        },
-      );
       dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(
-        createPayloadDispatch(payload, operation),
+        createPayloadDispatch(writerPayload(), operation),
       );
       currentEntry = changesAfterRefresh ? currentWriter : replacementWriter;
       const stages: string[] = [];
       const platformSend = vi.fn(async (_payload: ReplyPayload) => ({ visibleReplySent: true }));
-      const providerSend: ChannelProviderOwnedMessageSendingDeliveryAdapter["deliverWithProviderMessageSending"] =
-        async (value, info) => {
-          stages.push("entered");
-          await info.onPlatformSendDispatch();
-          stages.push("refreshed");
-          // Notice reads precede provider entry; revoke only after custody refresh.
-          currentEntry = replacementWriter;
-          info.assertPlatformSendAuthorized();
-          return platformSend(value);
-        };
+      const providerSend: ProviderDelivery["deliverWithProviderMessageSending"] = async (
+        value,
+        info,
+      ) => {
+        stages.push("entered");
+        await info.onPlatformSendDispatch();
+        stages.push("refreshed");
+        // Notice reads precede provider entry; revoke only after custody refresh.
+        currentEntry = replacementWriter;
+        info.assertPlatformSendAuthorized();
+        return platformSend(value);
+      };
       const raw = vi.fn(providerSend);
       const prepared = vi.fn<
-        NonNullable<
-          ChannelProviderOwnedMessageSendingDeliveryAdapter["deliverPreparedWithProviderMessageSending"]
-        >
+        NonNullable<ProviderDelivery["deliverPreparedWithProviderMessageSending"]>
       >((plan, info) => providerSend(plan.payload, info));
       await expect(
-        dispatchRoutedChannelTurn({
-          cfg: {},
-          channel: "telegram",
-          accountId: "acct",
-          route: { agentId: "main", sessionKey: completion.sessionKey },
-          ctxPayload: createCtx({
-            CommandAuthorized: false,
-            Surface: "telegram",
-            OriginatingTo: "chat-1",
-          }),
-          delivery: {
-            preparePayload: async (value) => ({ ...value }),
-            deliverWithProviderMessageSending: raw,
-            deliverPreparedWithProviderMessageSending: prepared,
-          },
+        dispatch({
+          preparePayload: async (value) => ({ ...value }),
+          deliverWithProviderMessageSending: raw,
+          deliverPreparedWithProviderMessageSending: prepared,
         }),
       ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
       expect(stages).toEqual(changesAfterRefresh ? ["entered", "refreshed"] : ["entered"]);
@@ -150,23 +154,7 @@ describe("channel turn failed-send custody", () => {
 
   it("retains custody across posts but rejects a replaced writer", async () => {
     currentEntry = currentWriter;
-    const custody = await createDirectPendingFinalCustody(
-      setReplyPayloadMetadata(
-        { text: "reply" },
-        {
-          pendingFinalDeliveryCompletion: completion,
-          sessionWriterDeliveryAuthority: {
-            agentId: "main",
-            expectedLifecycleRevision: currentWriter.lifecycleRevision,
-            expectedSessionId: completion.sessionId,
-            expectedWriterRunId: currentWriter.activeWriterRunId,
-            sessionKey: completion.sessionKey,
-            storePath: completion.storePath,
-            readCurrentSession: () => currentEntry,
-          },
-        },
-      ),
-    );
+    const custody = await createDirectPendingFinalCustody(writerPayload(true));
     if (!custody) {
       throw new Error("expected pending-final custody");
     }
@@ -181,30 +169,20 @@ describe("channel turn failed-send custody", () => {
   });
 
   it.each([
-    {
-      label: "permanent rejection suppresses",
-      error: new PlatformMessageNotDispatchedError("rejected", {
-        cause: undefined,
-        retryable: false,
-      }),
-      state: "suppressed",
-      expected: ["prepared", "queued", "unknown"],
-    },
-    {
-      label: "untyped failure remains unknown",
-      error: new Error("adapter failed after entry"),
-      state: "unknown",
-      expected: ["queued", "unknown"],
-    },
-    {
-      label: "retryable rejection restores prepared custody",
-      error: new PlatformMessageNotDispatchedError("preflight failed", {
+    [
+      "suppressed",
+      new PlatformMessageNotDispatchedError("rejected", { cause: undefined, retryable: false }),
+      ["prepared", "queued", "unknown"],
+    ],
+    ["unknown", new Error("adapter failed after entry"), ["queued", "unknown"]],
+    [
+      "prepared",
+      new PlatformMessageNotDispatchedError("preflight failed", {
         cause: new Error("local preflight"),
       }),
-      state: "prepared",
-      expected: ["queued", "unknown"],
-    },
-  ])("$label", async ({ error, state, expected }) => {
+      ["queued", "unknown"],
+    ],
+  ] as const)("settles failed-send custody as %s", async (state, error, expected) => {
     dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(
       createPayloadDispatch(
         setReplyPayloadMetadata({ text: "reply" }, { pendingFinalDeliveryCompletion: completion }),
@@ -212,20 +190,9 @@ describe("channel turn failed-send custody", () => {
       ),
     );
     await expect(
-      dispatchRoutedChannelTurn({
-        cfg: {},
-        channel: "telegram",
-        accountId: "acct",
-        route: { agentId: "main", sessionKey: completion.sessionKey },
-        ctxPayload: createCtx({
-          CommandAuthorized: false,
-          Surface: "telegram",
-          OriginatingTo: "chat-1",
-        }),
-        delivery: {
-          deliver: async () => {
-            throw error;
-          },
+      dispatch({
+        deliver: async () => {
+          throw error;
         },
       }),
     ).rejects.toBe(error);

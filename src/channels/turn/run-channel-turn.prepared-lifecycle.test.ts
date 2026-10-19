@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
@@ -35,19 +35,11 @@ type PreparedTurn = PreparedChannelTurn & {
 
 describe("prepared channel turn lifecycle", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  let storePath: string;
-  beforeEach(() => {
-    storePath = path.join(
-      tempDirs.make("openclaw-channel-turn-prepared-lifecycle-"),
-      "sessions.json",
-    );
-  });
-
   function createTurn(): PreparedTurn {
     return {
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
-      storePath,
+      storePath: path.join(tempDirs.make("channel-turn-"), "sessions.json"),
       ctxPayload: createCtx(),
       recordInboundSession: createRecordInboundSession(),
       runDispatch: vi.fn(async () => ({
@@ -136,9 +128,7 @@ describe("prepared channel turn lifecycle", () => {
     const events: string[] = [];
     const turn = createTurn();
     const onFinalize = vi.fn();
-    let resourceOpen = true;
     const onDispatchSkipped = vi.fn(async () => {
-      resourceOpen = false;
       events.push("cleanup");
     });
     turn.recordInboundSession = createRecordInboundSession(events);
@@ -152,7 +142,6 @@ describe("prepared channel turn lifecycle", () => {
     expect(events).toEqual(["record", "cleanup"]);
     expect(turn.runDispatch).not.toHaveBeenCalled();
     expect(onDispatchSkipped).toHaveBeenCalledWith("observeOnly");
-    expect(resourceOpen).toBe(false);
     expect(hasFinalChannelTurnDispatch(result.dispatchResult)).toBe(false);
     expect(onFinalize).toHaveBeenCalledExactlyOnceWith(result);
   });
@@ -189,17 +178,16 @@ it.for(["admitted", "failed", "account-stopped", "gateway-stopped"] as const)(
           migrateAgent: async () => {},
           publishAgent: async () => {},
         });
-        const clock = createGatewaySchedulerClock(0);
-        const gateway = createTestGatewayScheduler(clock.clock);
+        const gateway = createTestGatewayScheduler(createGatewaySchedulerClock(0).clock);
         const { scheduler } = createPluginServiceScheduler(gateway);
         const record = vi.fn(async () => assertAgentDatabaseAdmitted("qa", { env: state.env }));
+        const preDispatchFailure = vi.fn();
+        const log = vi.fn();
+        const sessionKey = "agent:qa:qa-channel:direct:peer";
         const dispatch = vi.fn(async () => ({
           queuedFinal: true,
           counts: { tool: 0, block: 0, final: 1 },
         }));
-        const preDispatchFailure = vi.fn();
-        const log = vi.fn();
-        const sessionKey = "agent:qa:qa-channel:direct:peer";
         const turn = withPluginServiceScheduler(scheduler, () =>
           runPreparedChannelTurn({
             channel: "qa-channel",
