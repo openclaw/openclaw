@@ -36,7 +36,7 @@ function chatPresencePresentation(payload: PresencePayload | undefined, scope: C
 /** Own raw presence synchronously; only chat-visible changes publish to retained views. */
 export function createChatPanePresence(scope: () => ChatPresenceScope) {
   let payload: PresencePayload | undefined;
-  const listeners = new Set<() => void>();
+  let render: (() => void) | undefined;
   return {
     get snapshot() {
       return payload;
@@ -50,14 +50,14 @@ export function createChatPanePresence(scope: () => ChatPresenceScope) {
         chatPresencePresentation(previous, currentScope) !==
           chatPresencePresentation(next, currentScope)
       ) {
-        for (const listener of listeners) {
-          listener();
-        }
+        render?.();
       }
     },
     subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      render = listener;
+      return () => {
+        render = undefined;
+      };
     },
   };
 }

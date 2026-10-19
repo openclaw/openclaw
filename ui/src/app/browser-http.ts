@@ -1,9 +1,11 @@
-const failureListeners = new Set<(url: string) => void>();
+let reportHttpFailure: ((url: string) => void) | undefined;
 const restoredListeners = new Set<() => void>();
 
-export function subscribeBrowserHttpFailures(listener: (url: string) => void): () => void {
-  failureListeners.add(listener);
-  return () => void failureListeners.delete(listener);
+export function bindBrowserHttpFailures(listener: (url: string) => void): () => void {
+  reportHttpFailure = listener;
+  return () => {
+    reportHttpFailure = undefined;
+  };
 }
 
 export function subscribeBrowserAuthRestored(listener: () => void): () => void {
@@ -23,9 +25,7 @@ export function notifyBrowserAuthRestored(): void {
 export async function fetchControlUiResource(url: string, init?: RequestInit): Promise<Response> {
   const reportFailure = () => {
     if (!init?.signal?.aborted) {
-      for (const listener of failureListeners) {
-        listener(url);
-      }
+      reportHttpFailure?.(url);
     }
   };
   try {

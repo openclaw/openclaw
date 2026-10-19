@@ -14,7 +14,7 @@ import { pathDisplayName } from "../../lib/path-display.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
+import { projectCallbackOwner } from "../../lib/reactive/projection.ts";
 import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,
@@ -27,11 +27,14 @@ const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees"
 
 export function WorktreesPage() {
   const context = useApplication();
-  const view = renderWorktreesView(new WorktreesModel(() => context));
-  return <openclaw-worktrees-page>{view}</openclaw-worktrees-page>;
+  const { owner, view } = projectCallbackOwner(
+    (notify) => new WorktreesModel(() => context, notify),
+    (model) => model,
+  );
+  return <openclaw-worktrees-page>{renderWorktreesView(owner, view.read)}</openclaw-worktrees-page>;
 }
 
-export function renderWorktreesView(model: WorktreesModel) {
+export function renderWorktreesView(model: WorktreesModel, view: () => WorktreesModel) {
   model.gateway = useGatewayPage({
     getGateway: () => model.context.gateway,
     onIdentityChange: () => model.update({ records: [], error: null }),
@@ -39,7 +42,6 @@ export function renderWorktreesView(model: WorktreesModel) {
     ensureInitialData: () => void model.load(),
     onSnapshot: () => model.update(model.operatorAccess.canAdmin ? {} : { createOpen: false }),
   });
-  const view = projectOwner(model, (source) => source).read;
 
   const owner = (record: WorktreesModel["records"][number]) => {
     if (record.ownerKind === "session" && record.ownerId) {

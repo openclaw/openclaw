@@ -3,7 +3,7 @@ import { formatUiError } from "../lib/format-error.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { projectOwner } from "../lib/reactive/projection.ts";
+import { projectCallbackOwner } from "../lib/reactive/projection.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { McpAppConfirmation } from "./mcp-app-confirm-solid.tsx";
 import { registerMcpAppUnmountTarget } from "./mcp-app-unmount.ts";
@@ -18,8 +18,11 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
   (props, host) => {
     const context = useApplication();
     const gateway = projectGateway(context.gateway);
-    const owner = createMcpAppView(host, context, onSettled);
-    const read = projectOwner(owner, (current) => current.read()).read;
+    const { owner, view } = projectCallbackOwner(
+      (notify) => createMcpAppView(host, context, onSettled, notify),
+      (current) => current.read(),
+    );
+    const read = view.read;
     owners.set(host, owner);
     const unregister = registerMcpAppUnmountTarget(host);
     onSettled(() => owner.start());

@@ -7,7 +7,7 @@ import { registerLoginEnglish } from "../../i18n/locales/en-login.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
+import { projectCallbackOwner, projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { CustomPluginUiDisabled } from "../../plugins/control-ui-disabled.solid.tsx";
 import { PluginContribution } from "../../plugins/control-ui-view.solid.tsx";
@@ -22,8 +22,10 @@ registerLoginEnglish();
 
 function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
   const context = useApplication();
-  const lifecycle = new PluginPageOwner(props, context, host);
-  const projection = projectOwner(lifecycle, (source) => source);
+  const { owner: lifecycle, view: projection } = projectCallbackOwner(
+    (notify) => new PluginPageOwner(props, context, host, notify),
+    (source) => source,
+  );
   const plugins = context.plugins && projectOwner(context.plugins, (source) => source).read;
   host.style.display = "contents";
   // Gateway receipts retire bundled views and frame-auth work before a replacement connection uses them.
