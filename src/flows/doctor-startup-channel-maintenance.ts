@@ -1,4 +1,3 @@
-// Doctor startup channel maintenance runs channel plugin startup repairs.
 import { runChannelPluginStartupMaintenance } from "../channels/plugins/lifecycle-startup.js";
 import { resolveDoctorChannelPreviewConfig } from "../commands/doctor/shared/preview-warnings.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -6,7 +5,6 @@ import type { HealthFinding } from "./health-checks.js";
 
 const CHANNEL_PREVIEW_WARNINGS_CHECK_ID = "core/doctor/channel-preview-warnings";
 
-// Doctor wrapper for plugin startup maintenance repairs.
 type DoctorStartupMaintenanceRuntime = {
   error: (message: string) => void;
   log: (message: string) => void;
@@ -44,24 +42,18 @@ export async function collectChannelPreviewWarningHealthFindings(params: {
   });
   return warnings.map((warning): HealthFinding => {
     const path = warningPath(warning);
-    const baseFinding = {
-      checkId: CHANNEL_PREVIEW_WARNINGS_CHECK_ID,
-      severity: "warning",
-      message: normalizeWarningMessage(warning),
-      requirement: "Configured channels should not emit doctor preview warnings.",
-      fixHint: `Run \`${doctorFixCommand}\` if the channel warning recommends repair, or update the affected channel config manually.`,
-    } satisfies HealthFinding;
-    if (path) {
-      return {
-        checkId: baseFinding.checkId,
-        severity: baseFinding.severity,
-        message: baseFinding.message,
-        path,
-        requirement: baseFinding.requirement,
-        fixHint: baseFinding.fixHint,
-      };
-    }
-    return baseFinding;
+    return Object.assign(
+      {
+        checkId: CHANNEL_PREVIEW_WARNINGS_CHECK_ID,
+        severity: "warning",
+        message: normalizeWarningMessage(warning),
+      } satisfies HealthFinding,
+      path ? { path } : {},
+      {
+        requirement: "Configured channels should not emit doctor preview warnings.",
+        fixHint: `Run \`${doctorFixCommand}\` if the channel warning recommends repair, or update the affected channel config manually.`,
+      },
+    );
   });
 }
 

@@ -1,13 +1,14 @@
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Frame, Page } from "playwright-core";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { snapshotRoleViaCdpSession } from "./cdp-role-snapshot.js";
 import {
   buildRoleSnapshotFromAiSnapshot,
   finalizeRoleSnapshot,
   type RoleSnapshotIdentityMode,
   type RoleSnapshotOptions,
+  type RoleSnapshotResult,
   type RoleRefMap,
 } from "./pw-role-snapshot.js";
 import { storeRoleRefsForTarget } from "./pw-session.js";
@@ -36,13 +37,7 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
   urls?: boolean;
   maxChars?: number;
   delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
-}): Promise<{
-  snapshot: string;
-  truncated?: boolean;
-  refs: RoleRefMap;
-  stats: { lines: number; chars: number; refs: number; interactive: number };
-  newElements?: number;
-}> {
+}): Promise<RoleSnapshotResult> {
   const snapshot = params.urls
     ? appendSnapshotUrls(
         params.built.snapshot,
@@ -68,7 +63,6 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
   return finalized;
 }
 
-/** Captures a role-ref snapshot used by model-facing browser interaction tools. */
 export async function snapshotRoleViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -82,13 +76,7 @@ export async function snapshotRoleViaPlaywright(opts: {
   signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
   delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
-}): Promise<{
-  snapshot: string;
-  truncated?: boolean;
-  refs: Record<string, { role: string; name?: string; nth?: number }>;
-  stats: { lines: number; chars: number; refs: number; interactive: number };
-  newElements?: number;
-}> {
+}): Promise<RoleSnapshotResult> {
   const page = await prepareSnapshotPageViaPlaywright({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,

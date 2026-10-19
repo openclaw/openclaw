@@ -3,6 +3,8 @@ type UsageHeatmapDay = {
   tokens: number;
   /** 0 = no activity, 1-4 = nonzero-quartile intensity buckets. */
   level: 0 | 1 | 2 | 3 | 4;
+  /** An interrupted response that day leaves its recorded tokens as a lower bound. */
+  partial: boolean;
 };
 
 type UsageHeatmapWeek = {
@@ -16,7 +18,11 @@ export type UsageHeatmap = {
   monthLabels: string[];
 };
 
-type DailyTokensEntry = { date: string; totalTokens: number };
+type DailyTokensEntry = {
+  date: string;
+  totalTokens: number;
+  usageReport?: { state: "available" | "unavailable" };
+};
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_HEATMAP_DAYS = 52 * 7;
@@ -24,10 +30,6 @@ const MAX_HEATMAP_DAYS = 52 * 7;
 /** Interpret a YYYY-MM-DD label at UTC noon so day math never crosses DST edges. */
 function dateToUtcNoon(date: string): number {
   return new Date(`${date}T12:00:00Z`).getTime();
-}
-
-function utcNoonToDate(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10);
 }
 
 function levelThresholds(values: number[]): [number, number, number] {
@@ -69,14 +71,16 @@ export function buildUsageHeatmap(
   const endMs = dateToUtcNoon(rangeEndDate);
   const startMs = Math.max(dateToUtcNoon(rangeStartDate), endMs - (MAX_HEATMAP_DAYS - 1) * DAY_MS);
   const tokensByDate = new Map(daily.map((entry) => [entry.date, entry.totalTokens]));
+  const partialDates = new Set(
+    daily.filter((entry) => entry.usageReport?.state === "unavailable").map((entry) => entry.date),
+  );
   const nonZero = daily
     .filter((entry) => {
       const entryMs = dateToUtcNoon(entry.date);
       return entry.totalTokens > 0 && entryMs >= startMs && entryMs <= endMs;
     })
     .map((entry) => entry.totalTokens);
-  const thresholds =
-    nonZero.length > 0 ? levelThresholds(nonZero) : ([0, 0, 0] as [number, number, number]);
+  const thresholds = levelThresholds(nonZero);
 
   const startWeekday = new Date(startMs).getUTCDay();
   const gridStartMs = startMs - startWeekday * DAY_MS;
@@ -92,9 +96,14 @@ export function buildUsageHeatmap(
         days.push(null);
         continue;
       }
-      const date = utcNoonToDate(dayMs);
+      const date = new Date(dayMs).toISOString().slice(0, 10);
       const tokens = tokensByDate.get(date) ?? 0;
-      days.push({ date, tokens, level: levelFor(tokens, thresholds) });
+      days.push({
+        date,
+        tokens,
+        level: levelFor(tokens, thresholds),
+        partial: partialDates.has(date),
+      });
     }
     weeks.push({ days });
     const firstVisibleDay = days.find((day): day is UsageHeatmapDay => day !== null);

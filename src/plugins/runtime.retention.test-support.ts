@@ -3,7 +3,14 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate as scheduleImmediate } from "node:timers";
 import { setImmediate } from "node:timers/promises";
+import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
+import {
+  emitDiagnosticEvent,
+  onDiagnosticEvent,
+  onInternalDiagnosticEvent,
+} from "../plugin-sdk/diagnostic-runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createPluginCache,
@@ -12,6 +19,7 @@ import {
   withPluginCache,
 } from "./plugin-cache.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { disposePluginRegistryInstances, waitForPluginRegistryRetirement } from "./runtime.js";
@@ -19,23 +27,113 @@ import { createPluginRecord } from "./status.test-helpers.js";
 
 const emptyResult = { cleanupCount: 0, failures: [] };
 
-async function collect() {
+function assertCollected(reference: WeakRef<object>, message: string) {
+  assert.equal(reference.deref(), undefined, message);
+}
+
+function withFixtureEnvironment<T>(root: string, run: () => Promise<T>) {
+  return withEnvAsync(
+    {
+      OPENCLAW_HOME: root,
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+    },
+    run,
+  );
+}
+
+function writeManifest(root: string, additionalProperties?: false) {
+  fs.writeFileSync(
+    path.join(root, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "retention-fixture",
+      configSchema: {
+        type: "object",
+        ...(additionalProperties === false ? { additionalProperties } : {}),
+      },
+      contracts: { tools: ["retention_fixture"] },
+    }),
+  );
+}
+
+function loadFixture(
+  loadOpenClawPlugins: (typeof import("./loader.js"))["loadOpenClawPlugins"],
+  entry: string,
+  previousRegistry?: ReturnType<typeof createEmptyPluginRegistry>,
+) {
+  const cache = createPluginCache();
+  const registry = withPluginCache(cache, () =>
+    loadOpenClawPlugins({
+      config: {
+        plugins: {
+          allow: ["retention-fixture"],
+          load: { paths: [entry] },
+          slots: { memory: "none" },
+        },
+      },
+      pluginSdkResolution: "src",
+      activate: false,
+      cache: false,
+      previousRegistry,
+    }),
+  );
+  assert.deepEqual(
+    registry.plugins.map((record) => record.status),
+    ["loaded"],
+    JSON.stringify(registry.diagnostics),
+  );
+  return { registry, cache };
+}
+
+async function collect(...released: WeakRef<object>[]) {
   const gc = globalThis.gc;
   assert.ok(gc, "The retention child requires --expose-gc");
   const control = new WeakRef({ unowned: true });
   for (let pass = 0; pass < 8; pass += 1) {
-    await setImmediate();
-    gc();
+    // JavaScriptCore's promise-microtask stack can retain completed async values.
+    await new Promise<void>((resolve) => {
+      scheduleImmediate(() => {
+        gc();
+        resolve();
+      });
+    });
+  }
+  // JavaScriptCore also scans native stacks conservatively. Bun's immediate
+  // dispatcher can keep a stale pointer to a completed fixture graph across
+  // every immediate; a timer-phase collection runs from other native frames.
+  // These passes are bounded and do not delay a graph that already collected.
+  for (
+    let pass = 0;
+    pass < 4 && released.some((reference) => reference.deref() !== undefined);
+    pass += 1
+  ) {
+    await new Promise<void>((resolve) => {
+      setTimeout(() => {
+        gc();
+        resolve();
+      }, 0);
+    });
   }
   assert.equal(control.deref(), undefined, "Unowned control must collect");
 }
 
-async function retireSuccessors() {
-  const oldest = createEmptyPluginRegistry();
+function createRetirementRegistry(withInstance: boolean) {
+  const registry = createEmptyPluginRegistry();
+  if (withInstance) {
+    const record = createPluginRecord({ id: "retirement-source" });
+    registry.plugins.push(record);
+    void new PluginInstance(record.id, { record, registry });
+  }
+  return registry;
+}
+
+async function retireSuccessors(withInstance: boolean) {
+  const oldest = createRetirementRegistry(withInstance);
   const successors: WeakRef<ReturnType<typeof createEmptyPluginRegistry>>[] = [];
   let previous = oldest;
   for (let generation = 0; generation < 3; generation += 1) {
-    const next = createEmptyPluginRegistry();
+    const next = createRetirementRegistry(withInstance);
     successors.push(new WeakRef(next));
     assert.deepEqual(
       await disposePluginRegistryInstances(previous, next, { cfg: {} }),
@@ -47,11 +145,12 @@ async function retireSuccessors() {
   return { oldest, successors };
 }
 
-function inspectRetiredSuccessors(
-  inspect: (result: Awaited<ReturnType<typeof retireSuccessors>>) => Promise<void>,
+function inspectAfterFrameRelease<T>(
+  produce: () => Promise<T>,
+  inspect: (result: T) => Promise<void>,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    void retireSuccessors().then((result) => {
+    void produce().then((result) => {
       // Inspect inside the next task so no producer or outer resolution frame stays live.
       void setImmediate().then(() => inspect(result).then(resolve, reject), reject);
     }, reject);
@@ -93,25 +192,10 @@ async function loadReplacement(root: string) {
   const { loadOpenClawPlugins } = await import("./loader.js");
   const previous = createEmptyPluginRegistry();
   const reference = new WeakRef(previous);
-  const cache = createPluginCache();
-  const registry = withPluginCache(cache, () =>
-    loadOpenClawPlugins({
-      config: {
-        plugins: {
-          allow: ["retention-fixture"],
-          load: { paths: [path.join(root, "index.cjs")] },
-          slots: { memory: "none" },
-        },
-      },
-      pluginSdkResolution: "src",
-      activate: false,
-      cache: false,
-      previousRegistry: previous,
-    }),
-  );
-  assert.deepEqual(
-    registry.plugins.map((record) => record.status),
-    ["loaded"],
+  const { registry, cache } = loadFixture(
+    loadOpenClawPlugins,
+    path.join(root, "index.cjs"),
+    previous,
   );
   assert.deepEqual(
     await disposePluginRegistryInstances(previous, registry, { cfg: {} }),
@@ -119,6 +203,40 @@ async function loadReplacement(root: string) {
   );
   assert.deepEqual(await waitForPluginRegistryRetirement(previous), emptyResult);
   return { registry, cache, reference };
+}
+
+async function reloadDiagnosticSubscribers(root: string) {
+  const { loadOpenClawPlugins } = await import("./loader.js");
+  const retired: WeakRef<object>[] = [];
+  let current: Awaited<ReturnType<typeof load>> | undefined;
+  async function load() {
+    const { registry, cache } = loadFixture(loadOpenClawPlugins, root);
+    const tool = registry.tools[0]?.factory({ config: {} });
+    assert.ok(tool && !Array.isArray(tool));
+    const result = await tool.execute("inspect", {});
+    assert.ok(result.details && typeof result.details === "object");
+    const instance = getPluginInstance(registry.plugins[0]!);
+    assert.ok(instance);
+    return { cache, registry, evidence: result.details, instance };
+  }
+  for (let generation = 0; generation < 4; generation++) {
+    if (current) {
+      retired.push(new WeakRef(current.evidence), new WeakRef(current.instance));
+      await disposePluginRegistryInstances(current.registry, undefined, { cfg: {} });
+      await retirePluginCache(current.cache);
+      assert.equal(
+        hasInternalDiagnosticEventListeners(),
+        false,
+        "Retired listeners must be removed",
+      );
+    }
+    current = await load();
+    assert.equal(hasInternalDiagnosticEventListeners(), true);
+    emitDiagnosticEvent({ type: "message.queued", source: "retention-fixture" });
+    assert.deepEqual(current.evidence, { events: 2 });
+  }
+  assert.ok(current);
+  return { current, retired };
 }
 
 async function recoverOwner(root: string, kind: "source" | "bundled-cjs" | "bundled-mjs") {
@@ -156,6 +274,55 @@ async function recoverOwner(root: string, kind: "source" | "bundled-cjs" | "bund
 }
 
 switch (process.argv[2]) {
+  case "diagnostics": {
+    // openclaw-temp-dir: allow -- standalone GC child joins registry cleanup below.
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "diagnostic-retention-")));
+    const sdkKey = Symbol.for("openclaw.test.diagnostic-retention-sdk");
+    // The compiled GC child supplies its real SDK exports without resolving source .ts modules.
+    Reflect.set(globalThis, sdkKey, { onDiagnosticEvent, onInternalDiagnosticEvent });
+    try {
+      writeManifest(root);
+      fs.writeFileSync(
+        path.join(root, "index.cjs"),
+        `
+        const { onDiagnosticEvent, onInternalDiagnosticEvent } = globalThis[Symbol.for("openclaw.test.diagnostic-retention-sdk")];
+        const evidence = { events: 0 };
+        onDiagnosticEvent(() => evidence.events++);
+        module.exports = { id: "retention-fixture", register(api) {
+          onInternalDiagnosticEvent(() => evidence.events++);
+          api.registerTool({ name: "retention_fixture", label: "Fixture", description: "Inspect evidence",
+            parameters: { type: "object", properties: {} },
+            execute: async () => ({ content: [], details: evidence }) });
+        } };
+      `,
+      );
+      await withFixtureEnvironment(root, () =>
+        inspectAfterFrameRelease(
+          () => reloadDiagnosticSubscribers(root),
+          async ({ current, retired }) => {
+            try {
+              await collect();
+              assert.equal(
+                retired.filter((reference) => reference.deref() !== undefined).length,
+                0,
+                "Old evidence and plugin instances must collect",
+              );
+              emitDiagnosticEvent({ type: "message.queued", source: "retention-fixture" });
+              assert.deepEqual(current.evidence, { events: 4 });
+            } finally {
+              await disposePluginRegistryInstances(current.registry, undefined, { cfg: {} });
+              await retirePluginCache(current.cache);
+            }
+            assert.equal(hasInternalDiagnosticEventListeners(), false);
+          },
+        ),
+      );
+    } finally {
+      Reflect.deleteProperty(globalThis, sdkKey);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+    break;
+  }
   case "recovery-source":
   case "recovery-bundled-cjs":
   case "recovery-bundled-mjs": {
@@ -163,39 +330,32 @@ switch (process.argv[2]) {
     assert.ok(kind === "source" || kind === "bundled-cjs" || kind === "bundled-mjs");
     // openclaw-temp-dir: allow -- standalone GC child has no Vitest hooks and joins cleanup below.
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "recovery-retention-")));
-    const result = await recoverOwner(root, kind);
-    try {
-      await collect();
-      assert.equal(result.owner.deref(), undefined, "Live recovery retained its retired instance");
-      assert.equal(
-        result.registry.deref(),
-        undefined,
-        "Live recovery retained its retired registry",
-      );
-      assert.equal(
-        (result.current.loadModule(result.source) as { read(): string }).read(),
-        "recovered source",
-      );
-      // Keep the recovery factory live too: another failed update must still be recoverable.
-      const recovery = result.current.captureModuleLoaderRecovery();
-      recovery.dispose();
-    } finally {
-      await result.current.dispose();
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    await inspectAfterFrameRelease(
+      () => recoverOwner(root, kind),
+      async (result) => {
+        try {
+          await collect(result.owner, result.registry);
+          assertCollected(result.owner, "Live recovery retained its retired instance");
+          assertCollected(result.registry, "Live recovery retained its retired registry");
+          assert.equal(
+            (result.current.loadModule(result.source) as { read(): string }).read(),
+            "recovered source",
+          );
+          // Keep the recovery factory live too: another failed update must still be recoverable.
+          const recovery = result.current.captureModuleLoaderRecovery();
+          recovery.dispose();
+        } finally {
+          await result.current.dispose();
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    );
     break;
   }
   case "loader": {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "plugin-retention-")));
     try {
-      fs.writeFileSync(
-        path.join(root, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: "retention-fixture",
-          configSchema: { type: "object", additionalProperties: false },
-          contracts: { tools: ["retention_fixture"] },
-        }),
-      );
+      writeManifest(root, false);
       fs.writeFileSync(
         path.join(root, "index.cjs"),
         `module.exports = {
@@ -207,33 +367,21 @@ switch (process.argv[2]) {
         }
       };`,
       );
-      await withEnvAsync(
-        {
-          OPENCLAW_HOME: root,
-          OPENCLAW_STATE_DIR: path.join(root, "state"),
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        },
-        async () => {
-          const { registry, cache, reference } = await loadReplacement(root);
-          try {
-            await collect();
-            assert.equal(
-              reference.deref(),
-              undefined,
-              "Live replacement retained its predecessor registry",
-            );
-            const tool = registry.tools[0]?.factory({ config: {} });
-            assert.ok(tool && !Array.isArray(tool));
-            assert.deepEqual(await tool.execute("retention-call", {}), {
-              content: [{ type: "text", text: "current generation" }],
-            });
-          } finally {
-            await disposePluginRegistryInstances(registry, undefined, { cfg: {} });
-            await retirePluginCache(cache);
-          }
-        },
-      );
+      await withFixtureEnvironment(root, async () => {
+        const { registry, cache, reference } = await loadReplacement(root);
+        try {
+          await collect();
+          assertCollected(reference, "Live replacement retained its predecessor registry");
+          const tool = registry.tools[0]?.factory({ config: {} });
+          assert.ok(tool && !Array.isArray(tool));
+          assert.deepEqual(await tool.execute("retention-call", {}), {
+            content: [{ type: "text", text: "current generation" }],
+          });
+        } finally {
+          await disposePluginRegistryInstances(registry, undefined, { cfg: {} });
+          await retirePluginCache(cache);
+        }
+      });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -263,7 +411,7 @@ switch (process.argv[2]) {
   case "instance": {
     const { instance, reference } = await retireCapturedSource();
     await collect();
-    assert.equal(reference.deref(), undefined, "Disposed instance retained its source lookup");
+    assertCollected(reference, "Disposed instance retained its source lookup");
     assert.equal(instance.hasModuleSource("captured-source"), false);
     assert.throws(() => instance.loadModule("captured-source"), /reloaded or disabled/);
     const neverBound = new PluginInstance("never-bound");
@@ -271,40 +419,45 @@ switch (process.argv[2]) {
     assert.equal(neverBound.hasModuleSource("library"), undefined);
     break;
   }
-  case "registry": {
-    await inspectRetiredSuccessors(async ({ oldest, successors }) => {
-      await collect();
-      assert.ok(
-        successors.every((reference) => reference.deref() === undefined),
-        "Completed retirement retained a successor registry",
-      );
-      assert.deepEqual(await waitForPluginRegistryRetirement(oldest), emptyResult);
-      assert.deepEqual(await disposePluginRegistryInstances(oldest), emptyResult);
-    });
+  case "registry":
+  case "registry-instances": {
+    await inspectAfterFrameRelease(
+      () => retireSuccessors(process.argv[2] === "registry-instances"),
+      async ({ oldest, successors }) => {
+        await collect();
+        assert.ok(
+          successors.every((reference) => reference.deref() === undefined),
+          "Completed retirement retained a successor registry",
+        );
+        assert.deepEqual(await waitForPluginRegistryRetirement(oldest), emptyResult);
+        assert.deepEqual(await disposePluginRegistryInstances(oldest), emptyResult);
+      },
+    );
     break;
   }
   case "cache": {
-    const { cache, signal, reference } = await retireCapturedCallback();
-    await collect();
-    assert.equal(reference.deref(), undefined, "Retired cache retained its callback capture");
-    assert.equal(getPluginCacheRetirementSignal(cache), signal);
-    assert.equal(signal.aborted, true);
-    const reason: unknown = signal.reason;
-    const defaultReason: unknown = AbortSignal.abort().reason;
-    assert.ok(reason instanceof DOMException);
-    assert.ok(defaultReason instanceof DOMException);
-    assert.equal(reason.name, defaultReason.name);
-    assert.equal(reason.code, defaultReason.code);
-    assert.equal(reason.message, defaultReason.message);
-    assert.equal(typeof reason.stack, "string");
-    assert.throws(
-      () => signal.throwIfAborted(),
-      (error) => error === reason,
-    );
-    assert.deepEqual(await retirePluginCache(cache), emptyResult);
-    const other = createPluginCache();
-    await retirePluginCache(other);
-    assert.notEqual(getPluginCacheRetirementSignal(other).reason, reason);
+    await inspectAfterFrameRelease(retireCapturedCallback, async ({ cache, signal, reference }) => {
+      await collect();
+      assertCollected(reference, "Retired cache retained its callback capture");
+      assert.equal(getPluginCacheRetirementSignal(cache), signal);
+      assert.equal(signal.aborted, true);
+      const reason: unknown = signal.reason;
+      const defaultReason: unknown = AbortSignal.abort().reason;
+      assert.ok(reason instanceof DOMException);
+      assert.ok(defaultReason instanceof DOMException);
+      assert.equal(reason.name, defaultReason.name);
+      assert.equal(reason.code, defaultReason.code);
+      assert.equal(reason.message, defaultReason.message);
+      assert.equal(typeof reason.stack, "string");
+      assert.throws(
+        () => signal.throwIfAborted(),
+        (error) => error === reason,
+      );
+      assert.deepEqual(await retirePluginCache(cache), emptyResult);
+      const other = createPluginCache();
+      await retirePluginCache(other);
+      assert.notEqual(getPluginCacheRetirementSignal(other).reason, reason);
+    });
     break;
   }
   default:

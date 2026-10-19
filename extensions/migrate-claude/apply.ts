@@ -1,10 +1,14 @@
-// Migrate Claude plugin module implements apply behavior.
 import path from "node:path";
-import { summarizeMigrationItems } from "openclaw/plugin-sdk/migration";
+import {
+  applyMigrationConfigPatchItem,
+  applyMigrationManualItem,
+  summarizeMigrationItems,
+} from "openclaw/plugin-sdk/migration";
 import {
   archiveMigrationItem,
   copyMemoryMigrationFileItem,
   copyMigrationFileItem,
+  resolvePlannedMigrationTargets,
   withCachedMigrationConfigRuntime,
   writeMigrationReport,
 } from "openclaw/plugin-sdk/migration-runtime";
@@ -14,11 +18,9 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { applyConfigItem, applyManualItem } from "./config.js";
 import { appendItem } from "./helpers.js";
 import { buildClaudePlan } from "./plan.js";
 import { applyGeneratedSkillItem } from "./skills.js";
-import { resolveTargets } from "./targets.js";
 
 export async function applyClaudePlan(params: {
   ctx: MigrationProviderContext;
@@ -31,7 +33,7 @@ export async function applyClaudePlan(params: {
     params.ctx.runtime ?? params.runtime,
     params.ctx.config,
   );
-  const targets = resolveTargets(params.ctx);
+  const targets = resolvePlannedMigrationTargets(params.ctx);
   const applyCtx = { ...params.ctx, runtime };
   const items: MigrationItem[] = [];
   for (const item of plan.items) {
@@ -40,9 +42,9 @@ export async function applyClaudePlan(params: {
       continue;
     }
     if (item.kind === "config") {
-      items.push(await applyConfigItem(applyCtx, item));
+      items.push(await applyMigrationConfigPatchItem(applyCtx, item));
     } else if (item.kind === "manual") {
-      items.push(applyManualItem(item));
+      items.push(applyMigrationManualItem(item));
     } else if (item.action === "archive") {
       items.push(await archiveMigrationItem(item, reportDir));
     } else if (item.action === "append") {

@@ -1,0 +1,373 @@
+{
+  "id": "memory-dreaming-settings",
+  "presentationOwner": "memory-core",
+  "configPath": [
+    "plugins",
+    "entries",
+    {
+      "parameter": "configOwner"
+    },
+    "config",
+    "dreaming"
+  ],
+  "intro": {
+    "messageKey": "memoryPage.dreaming.intro",
+    "url": "https://docs.openclaw.ai/concepts/dreaming"
+  },
+  "unsupported": {
+    "titleKey": "memoryPage.dreaming.unsupported.title",
+    "rowTitleKey": "memoryPage.dreaming.unsupported.rowTitle",
+    "descriptionKey": "memoryPage.dreaming.unsupported.description"
+  },
+  "sections": [
+    {
+      "titleKey": "memoryPage.dreaming.schedule.title",
+      "descriptionKey": "memoryPage.dreaming.schedule.description",
+      "fields": [
+        {
+          "kind": "text",
+          "path": [
+            "frequency"
+          ],
+          "labelKey": "memoryPage.dreaming.frequency.label",
+          "helpKey": "memoryPage.dreaming.frequency.help",
+          "displayDefault": "0 3 * * *"
+        },
+        {
+          "kind": "text",
+          "path": [
+            "timezone"
+          ],
+          "labelKey": "memoryPage.dreaming.timezone.label",
+          "helpKey": "memoryPage.dreaming.timezone.help",
+          "displayDefault": {
+            "scope": "document",
+            "path": [
+              "agents",
+              "defaults",
+              "userTimezone"
+            ],
+            "fallbackKey": "memoryPage.dreaming.timezone.default"
+          }
+        },
+        {
+          "kind": "model",
+          "path": [
+            "model"
+          ],
+          "labelKey": "memoryPage.dreaming.model.label",
+          "helpKey": "memoryPage.dreaming.model.help",
+          "displayDefault": {
+            "scope": "section",
+            "path": [
+              "execution",
+              "defaults",
+              "model"
+            ],
+            "fallbackKey": "memoryPage.dreaming.model.default"
+          },
+          "placeholderKey": "memoryPage.dreaming.model.placeholder",
+          "customLabelKey": "cron.form.customModel"
+        },
+        {
+          "kind": "toggle",
+          "path": [
+            "verboseLogging"
+          ],
+          "labelKey": "memoryPage.dreaming.verboseLogging.label",
+          "helpKey": "memoryPage.dreaming.verboseLogging.help",
+          "displayDefault": false
+        }
+      ]
+    },
+    {
+      "titleKey": "memoryPage.dreaming.storage.title",
+      "descriptionKey": "memoryPage.dreaming.storage.description",
+      "fields": [
+        {
+          "kind": "segmented",
+          "path": [
+            "storage",
+            "mode"
+          ],
+          "labelKey": "memoryPage.dreaming.storage.modeLabel",
+          "helpKey": "memoryPage.dreaming.storage.modeHelp",
+          "displayDefault": "separate",
+          "options": [
+            {
+              "value": "inline",
+              "labelKey": "memoryPage.dreaming.storage.modes.inline"
+            },
+            {
+              "value": "separate",
+              "labelKey": "memoryPage.dreaming.storage.modes.separate"
+            },
+            {
+              "value": "both",
+              "labelKey": "memoryPage.dreaming.storage.modes.both"
+            }
+          ]
+        },
+        {
+          "kind": "toggle",
+          "path": [
+            "storage",
+            "separateReports"
+          ],
+          "labelKey": "memoryPage.dreaming.storage.separateReportsLabel",
+          "helpKey": "memoryPage.dreaming.storage.separateReportsHelp",
+          "displayDefault": false
+        }
+      ]
+    },
+    {
+      "titleKey": "memoryPage.dreaming.phases.light.title",
+      "descriptionKey": "memoryPage.dreaming.phases.light.description",
+      "fields": [
+        {
+          "kind": "toggle",
+          "path": [
+            "phases",
+            "light",
+            "enabled"
+          ],
+          "labelKey": "memoryPage.dreaming.phaseFields.enabled",
+          "helpKey": "memoryPage.dreaming.phaseFields.enabledHelp",
+          "displayDefault": true
+        },
+        {
+          "kind": "number",
+          "path": [
+            "phases",
+            "light",
+            "lookbackDays"
+          ],
+          "labelKey": "memoryPage.dreaming.phaseFields.lookbackDays",
+          "helpKey": "memoryPage.dreaming.phaseFields.lookbackDaysHelp",
+          "displayDefault": 2,
+          "bounds": {
+            "integer": true,
+            "min": 0
+          }
+        },
+        {
+          "kind": "number",
+          "path": [
+            "phases",
+            "light",
+            "limit"
+          ],
+          "labelKey": "memoryPage.dreaming.phaseFields.limit",
+          "helpKey": "memoryPage.dreaming.phaseFields.limitHelp",
+          "displayDefault": 100,
+          "bounds": {
+            "integer": true,
+            "min": 0
+          }
+        },
+        {
+          "kind": "number",
+          "path": [
+            "phases",
+            "light",
+            "dedupeSimilarity"
+          ],
+          "labelKey": "memoryPage.dreaming.phaseFields.dedupeSimilarity",
+          "helpKey": "memoryPage.dreaming.phaseFields.dedupeSimilarityHelp",
+          "displayDefault": 0.9,
+          "bounds": {
+            "integer": false,
+            "min": 0,
+            "max": 1
+          }
+        }
+      ]
+    },
+    {
+      "titleKey": "memoryPage.dreaming.phases.deep.title",
+      "descriptionKey": "memoryPage.dreaming.phases.deep.description",
+      "fields": [
+        {
+          "kind": "toggle",
+          "path": [
+            "phases",
+            "deep",
+            "enabled"
+          ],
+          "labelKey": "memoryPage.dreaming.phaseFields.enabled",
+          "helpKey": "memoryPage.dreaming.phaseFields.enabledHelp",
+          "displayDefault": true
+        },
+        {
+          "kind": "number",
+          "path": [
+            "phases",
+            "deep",
+            "limit"
+          ],
+          "labelKey": "memoryPage.dreaming.phaseFields.limit",
+          "helpKey": "memoryPage.dreaming.phaseFields.limitHelp",
+          "displayDefault": 10,
+          "bounds": {
+            "integer": true,
+            "min": 0
+          }
+        },
+        {
+          "kind": "number",
+          "path": [
+            "phases",
+            "deep",
+            "minScore"
+          ],
+          "labelKey": "memoryPage.dreaming.phaseFields.minScore",
+          "helpKey": "memoryPage.dreaming.phaseFields.minScoreHelp",
+          "displayDefault": 0.75,
+          "bounds": {
+            "integer": false,
+            "min": 0,
+            "max": 1
+          }
+        },
+        {
+          "kind": "number",
+          "path": [
+            "phases",
+            "deep",
+            "minRecallCount"
+          ],
+          "labelKey": "memoryPage.dreaming.phaseFields.minRecallCount",
+          "helpKey": "memoryPage.dreaming.phaseFields.minRecallCountHelp",
+          "displayDefault": 3,
+          "bounds": {
+            "integer": true,
+            "min": 0
+          }
+        },
+        {
+          "kind": "number",
+          "path": [
+            "phases",
+            "deep",
+            "minUniqueQueries"
+          ],
+          "labelKey": "memoryPage.dreaming.phaseFields.minUniqueQueries",
+          "helpKey": "memoryPage.dreaming.phaseFields.minUniqueQueriesHelp",
+          "displayDefault": 3,
+          "bounds": {
+            "integer": true,
+            "min": 0
+          }
+        },
+        {
+          "kind": "number",
+          "path": [
+            "phases",
+            "deep",
+            "recencyHalfLifeDays"
+          ],
+          "labelKey": "memoryPage.dreaming.phaseFields.recencyHalfLifeDays",
+          "helpKey": "memoryPage.dreaming.phaseFields.recencyHalfLifeDaysHelp",
+          "displayDefault": 14,
+          "bounds": {
+            "integer": true,
+            "min": 0
+          }
+        },
+        {
+          "kind": "number",
+          "path": [
+            "phases",
+            "deep",
+            "maxAgeDays"
+          ],
+          "labelKey": "memoryPage.dreaming.phaseFields.maxAgeDays",
+          "helpKey": "memoryPage.dreaming.phaseFields.maxAgeDaysHelp",
+          "displayDefault": 30,
+          "bounds": {
+            "integer": true,
+            "min": 1
+          }
+        },
+        {
+          "kind": "number",
+          "path": [
+            "phases",
+            "deep",
+            "maxPromotedSnippetTokens"
+          ],
+          "labelKey": "memoryPage.dreaming.phaseFields.maxPromotedSnippetTokens",
+          "helpKey": "memoryPage.dreaming.phaseFields.maxPromotedSnippetTokensHelp",
+          "displayDefault": 160,
+          "bounds": {
+            "integer": true,
+            "min": 1
+          }
+        }
+      ]
+    },
+    {
+      "titleKey": "memoryPage.dreaming.phases.rem.title",
+      "descriptionKey": "memoryPage.dreaming.phases.rem.description",
+      "fields": [
+        {
+          "kind": "toggle",
+          "path": [
+            "phases",
+            "rem",
+            "enabled"
+          ],
+          "labelKey": "memoryPage.dreaming.phaseFields.enabled",
+          "helpKey": "memoryPage.dreaming.phaseFields.enabledHelp",
+          "displayDefault": true
+        },
+        {
+          "kind": "number",
+          "path": [
+            "phases",
+            "rem",
+            "lookbackDays"
+          ],
+          "labelKey": "memoryPage.dreaming.phaseFields.lookbackDays",
+          "helpKey": "memoryPage.dreaming.phaseFields.lookbackDaysHelp",
+          "displayDefault": 7,
+          "bounds": {
+            "integer": true,
+            "min": 0
+          }
+        },
+        {
+          "kind": "number",
+          "path": [
+            "phases",
+            "rem",
+            "limit"
+          ],
+          "labelKey": "memoryPage.dreaming.phaseFields.limit",
+          "helpKey": "memoryPage.dreaming.phaseFields.limitHelp",
+          "displayDefault": 10,
+          "bounds": {
+            "integer": true,
+            "min": 0
+          }
+        },
+        {
+          "kind": "number",
+          "path": [
+            "phases",
+            "rem",
+            "minPatternStrength"
+          ],
+          "labelKey": "memoryPage.dreaming.phaseFields.minPatternStrength",
+          "helpKey": "memoryPage.dreaming.phaseFields.minPatternStrengthHelp",
+          "displayDefault": 0.75,
+          "bounds": {
+            "integer": false,
+            "min": 0,
+            "max": 1
+          }
+        }
+      ]
+    }
+  ]
+}

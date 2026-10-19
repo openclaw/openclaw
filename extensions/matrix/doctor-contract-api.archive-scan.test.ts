@@ -15,7 +15,11 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stateMigrations } from "./doctor-contract-api.js";
+import {
+  migrationById,
+  writeLegacySyncCache,
+  writeSqliteDedupeSource,
+} from "./doctor-contract-api.test-support.js";
 import { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
 import { createMatrixInboundEventDeduper } from "./src/matrix/monitor/inbound-dedupe.js";
 import { installMatrixTestRuntime } from "./src/test-runtime.js";
@@ -37,30 +41,6 @@ function createMigrationParams(stateDir: string) {
     oauthDir: path.join(stateDir, "oauth"),
     context,
   };
-}
-
-function migrationById(id: string) {
-  const migration = stateMigrations.find((entry) => entry.id === id);
-  if (!migration) {
-    throw new Error(`missing migration ${id}`);
-  }
-  return migration;
-}
-
-function writeLegacySyncCache(storageRootDir: string, nextBatch: string): void {
-  fs.mkdirSync(storageRootDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(storageRootDir, "bot-storage.json"),
-    JSON.stringify({
-      version: 1,
-      savedSync: {
-        nextBatch,
-        accountData: [],
-        roomsData: { join: {}, invite: {}, leave: {}, knock: {} },
-      },
-      cleanShutdown: true,
-    }),
-  );
 }
 
 function createStateRoots(stateDir: string) {
@@ -169,17 +149,11 @@ describe("matrix doctor archive scan boundaries", () => {
     const { activeRoots, excludedRoots } = createStateRoots(stateDir);
     const now = Date.now();
     for (const [index, storageRootDir] of activeRoots.entries()) {
-      fs.mkdirSync(storageRootDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(storageRootDir, "inbound-dedupe.json"),
-        JSON.stringify({
-          version: 1,
-          entries: [{ key: `!room:example.org|$active-${index}`, ts: now - 60_000 }],
-        }),
-      );
-      fs.writeFileSync(
-        path.join(storageRootDir, "storage-meta.json"),
-        JSON.stringify({ accountId: index === 0 ? "sync-cache-backup" : "legacy" }),
+      writeSqliteDedupeSource(
+        storageRootDir,
+        index === 0 ? "sync-cache-backup" : "legacy",
+        `$active-${index}`,
+        now - 60_000,
       );
     }
     for (const storageRootDir of excludedRoots) {
@@ -207,10 +181,9 @@ describe("matrix doctor archive scan boundaries", () => {
     expect(result.changes).toEqual([
       "Migrated Matrix inbound dedupe markers to the claimable dedupe store (2 of 2 entries)",
       ...activeRoots.map(
-        (storageRootDir) =>
-          `Archived Matrix inbound dedupe legacy source -> ${path.join(storageRootDir, "inbound-dedupe.json")}.migrated`,
+        (storageRootDir) => `Retired Matrix inbound dedupe rows for ${storageRootDir}`,
       ),
-      "Recorded Matrix inbound dedupe migration completion (0 SQLite roots, 2 JSON roots scanned)",
+      "Recorded Matrix inbound dedupe migration completion (2 SQLite roots scanned)",
     ]);
     for (const [index, accountId] of ["sync-cache-backup", "legacy"].entries()) {
       const deduper = createMatrixInboundEventDeduper({

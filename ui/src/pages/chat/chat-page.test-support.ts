@@ -1,26 +1,22 @@
+import { createRouter } from "@openclaw/uirouter";
+import { flush } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
-import type { ChatPage } from "./chat-page.ts";
+import { createGatewayHarness } from "../../lib/sessions/session-capability.test-support.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { insertPane } from "./split-layout.ts";
+import "./chat-page.ts";
 
-export function createChatPageSessions(
-  gateway: Parameters<typeof createTestSessionCapability>[0] = {
-    snapshot: { client: null, phase: "stopped", hello: null },
-    subscribe: () => () => undefined,
-    subscribeEvents: () => () => undefined,
-  },
-) {
-  const sessions = createTestSessionCapability(gateway);
-  onTestFinished(() => sessions.dispose());
-  return sessions;
-}
+export { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
 
 export function createChatPageNavigationContext() {
+  const router = createRouter({ routes: [] });
+  onTestFinished(() => router.stop());
   const navigate = vi.fn();
   const replace = vi.fn();
   const patch = vi.fn(async () => null);
@@ -36,6 +32,7 @@ export function createChatPageNavigationContext() {
   };
   const context = {
     basePath: "",
+    router,
     sessions: { ...createChatPageSessions(), patch },
     chatSubmissions: createChatSubmissions(),
     placementStartup: { get: vi.fn(() => null), subscribe: () => () => undefined },
@@ -53,23 +50,29 @@ export function createChatPageNavigationContext() {
   return { chatAttachmentHandoff, context, navigate, replace, setAgent, patch };
 }
 
-export function setNavigationContext(page: ChatPage) {
+export function setNavigationContext(page: HTMLElementTagNameMap["openclaw-chat-page"]) {
   const navigation = createChatPageNavigationContext();
   (page as unknown as { context: ApplicationContext }).context = navigation.context;
   return navigation;
 }
 
-export function setViewerPresenceContext(page: ChatPage) {
+export function setViewerPresenceContext(page: HTMLElementTagNameMap["openclaw-chat-page"]) {
   const navigation = setNavigationContext(page);
   const request = vi.fn<GatewayBrowserClient["request"]>().mockResolvedValue({ sessionKeys: [] });
   const client = { request } as unknown as GatewayBrowserClient;
-  const hello = {
+  const hello: GatewayHelloOk = {
     type: "hello-ok",
     protocol: 1,
     auth: { role: "operator", scopes: [] },
     features: { methods: ["sessions.viewers.set"] },
-    snapshot: { sessionDefaults: { mainSessionKey: "agent:main:main" } },
-  } as GatewayHelloOk;
+    snapshot: {
+      sessionDefaults: {
+        defaultAgentId: "main",
+        mainKey: "main",
+        mainSessionKey: "agent:main:main",
+      },
+    },
+  };
   const snapshotListeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   (navigation.context as unknown as { gateway: ApplicationContext["gateway"] }).gateway = {
     snapshot: {
@@ -87,6 +90,7 @@ export function setViewerPresenceContext(page: ChatPage) {
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: vi.fn(),
     setSessionKey: vi.fn(),
     start: vi.fn(),
@@ -138,10 +142,6 @@ export function createSplitLayout(sessionKey: string): ChatSplitLayout {
   return insertPane(singlePane, "p1", sessionKey, "right");
 }
 
-export function setLayout(page: ChatPage, layout: ChatSplitLayout | undefined) {
-  (page as unknown as { layout: ChatSplitLayout | undefined }).layout = layout;
-}
-
 export function stubMatchMedia(matches: boolean) {
   vi.stubGlobal(
     "matchMedia",
@@ -156,4 +156,37 @@ export function stubMatchMedia(matches: boolean) {
       dispatchEvent: vi.fn(),
     })),
   );
+}
+
+export function createChatPageStateContext() {
+  const { gateway, publish } = createGatewayHarness(createTestGatewayClient(vi.fn()));
+  publish(false, null);
+  return {
+    agents: {
+      state: { agentsList: null },
+      ensureList: vi.fn(async () => null),
+    },
+    agentSelection: { state: { selectedId: "main" } },
+    basePath: "",
+    config: {
+      current: {
+        allowExternalEmbedUrls: false,
+        assistantIdentity: { name: "Assistant" },
+        embedSandboxMode: "scripts",
+      },
+    },
+    gateway: { ...gateway, connection: { gatewayUrl: "ws://gateway.example.test" } },
+    chatSubmissions: createChatSubmissions(),
+    sessions: createChatPageSessions(gateway),
+  } as unknown as ApplicationContext;
+}
+
+/** Settles the bridge and the page-owned Solid projection without a browser timer. */
+export async function settleChatPage(
+  page: HTMLElementTagNameMap["openclaw-chat-page"],
+): Promise<void> {
+  await page.updateComplete;
+  flush();
+  await Promise.resolve();
+  flush();
 }

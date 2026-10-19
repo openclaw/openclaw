@@ -1,6 +1,5 @@
 // Deterministic image buffers for plugin SDK media tests.
-import { deflateSync } from "node:zlib";
-import { expectDefined } from "@openclaw/normalization-core";
+import { crc32, deflateSync } from "node:zlib";
 import { encodePngRgb, encodePngRgba } from "../../media/png-encode.js";
 
 type Rgba = {
@@ -16,28 +15,6 @@ const TINY_JPEG = Buffer.from(
   "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/ASP/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/ASP/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/IV//2gAMAwEAAgADAAAAEP/EFBQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8QH//EFBQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8QH//EFBABAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAT8QH//Z",
   "base64",
 );
-const CRC_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let index = 0; index < table.length; index += 1) {
-    let value = index;
-    for (let bit = 0; bit < 8; bit += 1) {
-      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
-    }
-    table[index] = value >>> 0;
-  }
-  return table;
-})();
-
-function crc32(buffer: Buffer): number {
-  let crc = 0xffffffff;
-  for (const byte of buffer) {
-    crc =
-      expectDefined(CRC_TABLE[(crc ^ byte) & 0xff], "crc table entry at (crc ^ byte) & 0xff") ^
-      (crc >>> 8);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
 function pngChunk(type: string, data: Buffer): Buffer {
   const typeBuffer = Buffer.from(type, "ascii");
   const length = Buffer.alloc(4);

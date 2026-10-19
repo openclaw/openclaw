@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { writeJsonWithoutCharset as sendJson } from "openclaw/plugin-sdk/http-response-runtime";
 
 type MSTeamsQaOutboundActivity = {
   activity: Record<string, unknown>;
@@ -26,11 +27,6 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
   }
   const body = Buffer.concat(chunks).toString("utf8");
   return body ? (JSON.parse(body) as Record<string, unknown>) : {};
-}
-
-function sendJson(response: ServerResponse, status: number, body: unknown) {
-  response.writeHead(status, { "content-type": "application/json" });
-  response.end(JSON.stringify(body));
 }
 
 function parseConversationPath(pathname: string) {
@@ -101,14 +97,4 @@ export async function startMSTeamsQaBotFrameworkServer(options: ServerOptions) {
       await once(server, "close");
     },
   };
-}
-
-export async function reserveMSTeamsQaWebhookPort(): Promise<number> {
-  const server = createServer();
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const { port } = server.address() as AddressInfo;
-  server.close();
-  await once(server, "close");
-  return port;
 }

@@ -1,5 +1,7 @@
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
+import { context, diag, metrics as otelMetrics, propagation, trace } from "@opentelemetry/api";
+import { logs as otelLogs } from "@opentelemetry/api-logs";
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
@@ -8,18 +10,17 @@ import {
   type DiagnosticTraceContext,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   onTrustedInternalDiagnosticEvent,
   registerDiagnosticTracePropagationBridge,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
-import type { OpenClawPluginServiceContext } from "../api.js";
 import type { ExporterHealthUpdate } from "./service-exporter-health.js";
 import { createDiagnosticsOtelService } from "./service.js";
 
 const OTEL_TEST_STATE_DIR = "/tmp/openclaw-diagnostics-otel-test";
 export const OTEL_TEST_ENDPOINT = "http://otel-collector:4318";
-const OTEL_TEST_PROTOCOL = "http/protobuf";
 export const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
 export const SPAN_ID = "00f067aa0ba902b7";
 export const CHILD_SPAN_ID = "1111111111111111";
@@ -27,10 +28,7 @@ export const GRANDCHILD_SPAN_ID = "2222222222222222";
 export const TOOL_SPAN_ID = "3333333333333333";
 export const MODEL_CALL_SPAN_ID = "4444444444444444";
 export const MODEL_USAGE_SPAN_ID = "5555555555555555";
-export const MODEL_FIXTURE = {
-  provider: "openai",
-  model: "gpt-5.4",
-} as const;
+export const MODEL_FIXTURE = { provider: "openai", model: "gpt-5.4" } as const;
 export const RUN_FIXTURE = { runId: "run-1", ...MODEL_FIXTURE } as const;
 export const MODEL_CALL_FIXTURE = { ...RUN_FIXTURE, callId: "call-1" } as const;
 
@@ -38,26 +36,18 @@ const emit = (event: Parameters<typeof emitTrustedDiagnosticEventWithPrivateData
   emitTrustedDiagnosticEventWithPrivateData(event, {});
 
 export async function emitRealSdkSignals(generation = "1") {
-  // Owned mode keeps trace and metric providers private to the service, so the
-  // global API is a no-op there. Emit through the diagnostic event recorders,
-  // which create real SDK spans and metrics via the service's private handles.
+  // Private providers require the real diagnostic recorders, not global APIs.
   const traceContext = createDiagnosticTraceContext();
   const modelTraceContext = createChildDiagnosticTraceContext(traceContext);
   const run = { ...RUN_FIXTURE, runId: `run-${generation}` };
   emit({ type: "run.started", ...run, trace: traceContext });
-  emit({
-    type: "model.call.started",
-    ...run,
-    callId: `call-${generation}`,
-    trace: modelTraceContext,
-  });
+  const call = { ...run, callId: `call-${generation}`, trace: modelTraceContext };
+  emit({ type: "model.call.started", ...call });
   emit({
     type: "model.call.completed",
-    ...run,
-    callId: `call-${generation}`,
+    ...call,
     durationMs: 10,
     usage: { input: 5, output: 3, cacheRead: 0, cacheWrite: 0, total: 8 },
-    trace: modelTraceContext,
   });
   emit({
     type: "log.record",
@@ -80,7 +70,7 @@ type OtelConfig = NonNullable<
 >;
 export type OtelContextFlags = Pick<
   OtelConfig,
-  "traces" | "metrics" | "logs" | "protocol" | "logsExporter" | "captureContent"
+  "traces" | "metrics" | "logs" | "protocol" | "logsExporter" | "captureContent" | "flushIntervalMs"
 >;
 
 type StartOtelServiceOptions = OtelContextFlags & {
@@ -111,14 +101,7 @@ const exporterHealthReports = new WeakMap<OpenClawPluginServiceContext, Reported
 
 export function createOtelContext(
   endpoint: string,
-  {
-    traces = false,
-    metrics = false,
-    logs = false,
-    protocol = OTEL_TEST_PROTOCOL,
-    logsExporter,
-    captureContent,
-  }: OtelContextFlags = {},
+  flags: OtelContextFlags = {},
 ): OpenClawPluginServiceContext {
   const reports: ReportedExporterHealth[] = [];
   const internalDiagnostics: TrustedExporterInternalDiagnostics = {
@@ -134,21 +117,15 @@ export function createOtelContext(
         otel: {
           enabled: true,
           endpoint,
-          protocol,
-          traces,
-          metrics,
-          logs,
-          ...(logsExporter !== undefined ? { logsExporter } : {}),
-          ...(captureContent !== undefined ? { captureContent } : {}),
+          ...flags,
+          protocol: flags.protocol ?? "http/protobuf",
+          traces: flags.traces ?? false,
+          metrics: flags.metrics ?? false,
+          logs: flags.logs ?? false,
         },
       },
     },
-    logger: {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    },
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     stateDir: OTEL_TEST_STATE_DIR,
     internalDiagnostics,
   };
@@ -260,5 +237,46 @@ export function createTestTrace(spanId: string, parentSpanId?: string): Diagnost
     spanId,
     ...(parentSpanId === undefined ? {} : { parentSpanId }),
     traceFlags: "01",
+  };
+}
+
+type OtelGlobals = {
+  context?: Parameters<typeof context.setGlobalContextManager>[0];
+  diag?: Parameters<typeof diag.setLogger>[0];
+  metrics?: Parameters<typeof otelMetrics.setGlobalMeterProvider>[0];
+  propagation?: Parameters<typeof propagation.setGlobalPropagator>[0];
+  trace?: Parameters<typeof trace.setGlobalTracerProvider>[0];
+};
+
+export function registeredOtelGlobals(): OtelGlobals | undefined {
+  return (globalThis as unknown as Record<symbol, OtelGlobals | undefined>)[
+    Symbol.for("opentelemetry.js.api.1")
+  ];
+}
+
+export function registeredOtelLogs(): unknown {
+  return (globalThis as unknown as Record<symbol, unknown>)[
+    Symbol.for("io.opentelemetry.js.api.logs")
+  ];
+}
+
+export function clearOtelGlobals() {
+  context.disable();
+  otelLogs.disable();
+  otelMetrics.disable();
+  propagation.disable();
+  trace.disable();
+}
+
+export function snapshotOtelEnv(keys: readonly string[]) {
+  const original = keys.map((key) => [key, process.env[key]] as const);
+  return () => {
+    for (const [key, value] of original) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
   };
 }

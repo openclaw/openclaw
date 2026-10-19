@@ -1,10 +1,9 @@
-import { nothing, render } from "lit";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { page } from "vitest/browser";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
+import { page, userEvent } from "vitest/browser";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { renderChatImageLightbox } from "../pages/chat/components/chat-image-lightbox.ts";
 import { nextFrame } from "../test-helpers/modal-dialog.ts";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
+import "./image-lightbox.tsx";
 
 const containers = new Set<HTMLElement>();
 let previousViewport: { width: number; height: number };
@@ -16,30 +15,45 @@ beforeEach(async () => {
 
 afterEach(async () => {
   for (const container of containers) {
-    render(nothing, container);
+    container.replaceChildren();
     container.remove();
   }
   containers.clear();
   await page.viewport(previousViewport.width, previousViewport.height);
 });
 
-async function mountImage(item: ImageLightboxItem) {
+async function mountImage(item: ImageLightboxItem, deferredClose = false) {
   const container = document.body.appendChild(document.createElement("div"));
   containers.add(container);
-  render(
-    renderChatImageLightbox(item, () => render(nothing, container)),
-    container,
-  );
-  const viewer = container.querySelector("openclaw-image-lightbox")!;
+  const viewer = document.createElement("openclaw-image-lightbox");
+  Object.assign(viewer, {
+    mediaKind: item.kind ?? "image",
+    gallery: item.gallery,
+    connectVideo: item.connectVideo,
+    loadDisplayImage: item.loadDisplayImage,
+    readOriginalBlob: item.readOriginalBlob,
+    src: item.src,
+    originalSrc: item.originalSrc ?? "",
+    imageTitle: item.title,
+    imageWidth: item.width,
+    imageHeight: item.height,
+  });
+  viewer.addEventListener("image-lightbox-close", () => {
+    if (deferredClose) {
+      queueMicrotask(() => container.replaceChildren());
+    } else {
+      container.replaceChildren();
+    }
+  });
+  container.append(viewer);
   await viewer.updateComplete;
-  const modal = viewer.shadowRoot!.querySelector("openclaw-modal-dialog")!;
+  await expect.poll(() => viewer.querySelector("openclaw-modal-dialog")).not.toBeNull();
+  const modal = viewer.querySelector("openclaw-modal-dialog")!;
   await modal.updateComplete;
-  const waDialog = modal.shadowRoot!.querySelector("wa-dialog")!;
-  await waDialog.updateComplete;
-  const dialog = waDialog.shadowRoot!.querySelector("dialog")!;
+  const dialog = modal.querySelector("dialog")!;
   await expect.poll(() => dialog.open).toBe(true);
   await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
-  const image = viewer.shadowRoot!.querySelector<HTMLImageElement>("img")!;
+  const image = viewer.querySelector<HTMLImageElement>("img")!;
   await image.decode();
   await nextFrame();
   return { viewer, image };
@@ -56,6 +70,73 @@ function imageSource(width: number, height: number, color: string) {
 }
 
 describe("progressive image viewer geometry", () => {
+  it("restores its original tile after Escape removes a still-closing native modal", async () => {
+    const trigger = document.createElement("button");
+    trigger.textContent = "Open image tile";
+    document.body.append(trigger);
+    onTestFinished(() => trigger.remove());
+    trigger.focus();
+    const { viewer } = await mountImage(
+      { src: imageSource(320, 200, "#264060"), title: "Focus return" },
+      true,
+    );
+    const modal = viewer.querySelector("openclaw-modal-dialog")!;
+    const dialog = modal.querySelector("dialog")!;
+    const animation = dialog.animate({ opacity: [1, 0.5] }, { duration: 60_000 });
+    animation.pause();
+    onTestFinished(() => animation.cancel());
+    expect(dialog.matches(":modal")).toBe(true);
+
+    await userEvent.keyboard("{Escape}");
+    await expect.poll(() => viewer.isConnected).toBe(false);
+    expect(dialog.open).toBe(false);
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it.each([false, true])(
+    "returns focus after retained native close without stealing newer focus (newer=%s)",
+    async (newer) => {
+      const trigger = document.createElement("button");
+      trigger.textContent = "Open image tile";
+      document.body.append(trigger);
+      onTestFinished(() => trigger.remove());
+      trigger.focus();
+      const { viewer } = await mountImage({
+        src: imageSource(320, 200, "#264060"),
+        title: "Retained close",
+      });
+      const modal = viewer.querySelector("openclaw-modal-dialog")!;
+      const dialog = modal.querySelector("dialog")!;
+      const animation = dialog.animate({ opacity: [1, 0.5] }, { duration: 60_000 });
+      animation.pause();
+      onTestFinished(() => animation.cancel());
+      const hidden = new Promise<void>((resolve) => {
+        modal.addEventListener("overlay-after-hide", () => resolve(), { once: true });
+      });
+      modal.hide();
+      expect(modal.open).toBe(false);
+      expect(dialog.open).toBe(true);
+      expect(document.activeElement).not.toBe(trigger);
+
+      let expected: HTMLElement = trigger;
+      if (newer) {
+        const next = document.createElement("openclaw-modal-dialog");
+        const input = document.createElement("input");
+        input.autofocus = true;
+        next.append(input);
+        document.body.append(next);
+        onTestFinished(() => next.remove());
+        await next.updateComplete;
+        expect(document.activeElement).toBe(input);
+        expected = input;
+      }
+      animation.finish();
+      await hidden;
+      expect(dialog.open).toBe(false);
+      expect(document.activeElement).toBe(expected);
+    },
+  );
+
   it.each([
     { name: "landscape", width: 1600, height: 960, previewWidth: 1200, previewHeight: 720 },
     { name: "portrait", width: 1600, height: 3000, previewWidth: 640, previewHeight: 1200 },
@@ -70,7 +151,7 @@ describe("progressive image viewer geometry", () => {
         title: "Synthetic screenshot",
         width,
         height,
-        loadFullResolution: () => full.promise,
+        loadDisplayImage: () => full.promise,
       });
       const fitted = image.getBoundingClientRect();
       expect(fitted.width).toBeGreaterThan(0);
@@ -82,8 +163,8 @@ describe("progressive image viewer geometry", () => {
       expect(fitted.top).toBeGreaterThanOrEqual(0);
       expect(fitted.bottom).toBeLessThanOrEqual(window.innerHeight);
 
-      viewer.shadowRoot!.querySelector<HTMLButtonElement>('[aria-label="Zoom in"]')!.click();
-      const zoom = viewer.shadowRoot!.querySelector(".zoom-level")!;
+      viewer.querySelector<HTMLButtonElement>('[aria-label="Zoom in"]')!.click();
+      const zoom = viewer.querySelector(".zoom-level")!;
       await expect.poll(() => zoom.textContent?.trim()).not.toBe("100%");
       await Promise.all(image.getAnimations().map((animation) => animation.finished));
       const zoomBefore = zoom.textContent;
@@ -93,10 +174,51 @@ describe("progressive image viewer geometry", () => {
       await image.decode();
       await nextFrame();
       const after = image.getBoundingClientRect();
+      expect(viewer.querySelector("img")).toBe(image);
       expect(zoom.textContent).toBe(zoomBefore);
       for (const dimension of ["x", "y", "width", "height"] as const) {
         expect(after[dimension]).toBeCloseTo(before[dimension], 1);
       }
+    },
+  );
+
+  it.each([320, 390, 1440])(
+    "places the secondary Download image action after media without covering zoom chrome at %ipx",
+    async (width) => {
+      await page.viewport(width, 1000);
+      const { viewer, image } = await mountImage({
+        src: imageSource(320, 200, "#264060"),
+        originalSrc: "https://example.invalid/original.png",
+        title: "Footer placement",
+      });
+      const original = viewer.querySelector<HTMLButtonElement>(".download-image")!;
+      expect(viewer.querySelector(".open-original")).toBeNull();
+      expect(original.getAttribute("aria-label")).toBe("Download image");
+      await expect.element(original).toBeVisible();
+      const footer = original.closest<HTMLElement>("openclaw-modal-actions")!;
+      expect(footer.parentElement?.lastElementChild).toBe(footer);
+      expect(viewer.querySelector(".header .open-original")).toBeNull();
+      const bounds = original.getBoundingClientRect();
+      const zoom = viewer.querySelector<HTMLElement>(".zoom-controls")!.getBoundingClientRect();
+      expect(bounds.top).toBeGreaterThanOrEqual(image.getBoundingClientRect().bottom);
+      expect(bounds.left).toBeGreaterThanOrEqual(zoom.right);
+      expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
+      expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
+      expect(bounds.width).toBeGreaterThanOrEqual(44);
+      const close = viewer.querySelector<HTMLButtonElement>(".close")!;
+      const external = viewer.querySelector<HTMLAnchorElement>(".external-image")!;
+      expect(external.href).toBe("https://example.invalid/original.png");
+      expect(external.getAttribute("aria-label")).toBe("Open in new tab");
+      expect(external.getBoundingClientRect().width).toBeGreaterThanOrEqual(44);
+      close.focus();
+      await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+      expect(document.activeElement).toBe(external);
+      await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+      expect(document.activeElement).toBe(original);
+      await userEvent.keyboard("{Tab}");
+      expect(document.activeElement).toBe(external);
+      await userEvent.keyboard("{Tab}");
+      expect(document.activeElement).toBe(close);
     },
   );
 
@@ -109,7 +231,7 @@ describe("progressive image viewer geometry", () => {
       height: 960,
       gallery: { index: 0, items: [async () => null, async () => neighbor] },
     });
-    viewer.shadowRoot!.querySelector<HTMLButtonElement>('[aria-label="Next image"]')!.click();
+    viewer.querySelector<HTMLButtonElement>('[aria-label="Next image"]')!.click();
     await expect.poll(() => image.src).toBe(neighbor.src);
     await image.decode();
     await nextFrame();

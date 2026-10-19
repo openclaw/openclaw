@@ -8,70 +8,44 @@ import {
   asyncDiscussionTestStore,
   createDiscussionMemoryStore,
 } from "./discussions/service-test-support.js";
-import type { ClickClackMessage, CoreConfig } from "./types.js";
+import type {
+  ClickClackMessage,
+  ClickClackUser,
+  CoreConfig,
+  ResolvedClickClackAccount,
+} from "./types.js";
+
+const location = { baseUrl: "http://127.0.0.1:8080", workspace: "wsp_1" };
 
 export function createInboundRuntime(includeExecution: boolean): PluginRuntime {
-  const runtime = createPluginRuntimeMock({
-    agent: {
-      runEmbeddedAgent: vi.fn().mockResolvedValue({
-        payloads: [{ text: "service bot online" }],
-        meta: {},
-      }),
-      session: {
-        getSessionEntry: vi.fn(() => ({ sessionId: "session-id", updatedAt: 1 })),
-      },
-    },
-    channel: {
-      routing: {
-        resolveAgentRoute: vi.fn(
-          (params: Parameters<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>[0]) =>
-            resolveAgentRoute(params),
-        ),
-        buildAgentSessionKey: vi.fn(
-          (params: Parameters<PluginRuntime["channel"]["routing"]["buildAgentSessionKey"]>[0]) =>
-            buildAgentSessionKey(params),
-        ),
-      },
-    },
-    llm: {
-      complete: vi.fn().mockResolvedValue({
-        text: "service bot online",
-        provider: "openai",
-        model: "gpt-5.4-mini",
-        agentId: "service-bot",
-        usage: {},
-        ...(includeExecution
-          ? {
-              execution: {
-                mode: "direct-provider",
-                owner: { kind: "provider", id: "openai" },
-              },
-            }
-          : {}),
-        audit: {
-          caller: { kind: "plugin", id: "clickclack" },
-        },
-      }),
-    },
-  } as unknown as PluginRuntime);
-  configureDiscussionStore(runtime);
-  return runtime;
-}
-
-function configureDiscussionStore(runtime: PluginRuntime): void {
+  const runtime = createPluginRuntimeMock();
+  const sessionEntry = () => ({ sessionId: "session-id", updatedAt: 1 });
+  runtime.agent.session.getSessionEntry = vi.fn(sessionEntry);
+  runtime.agent.session.getSessionEntryAsync = vi.fn(async () => sessionEntry());
+  runtime.channel.routing.resolveAgentRoute = vi.fn(resolveAgentRoute);
+  runtime.channel.routing.buildAgentSessionKey = vi.fn(buildAgentSessionKey);
+  runtime.llm.complete = vi.fn().mockResolvedValue({
+    text: "service bot online",
+    provider: "openai",
+    model: "gpt-5.4-mini",
+    agentId: "service-bot",
+    usage: {},
+    ...(includeExecution && {
+      execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
+    }),
+    audit: { caller: { kind: "plugin", id: "clickclack" } },
+  });
   const stores = new Map<string, PluginStateSyncKeyedStore<unknown>>();
   runtime.state.openSyncKeyedStore = vi.fn((options: { namespace: string }) => {
-    const existing = stores.get(options.namespace);
-    if (existing) {
-      return existing;
-    }
-    const created = createDiscussionMemoryStore<unknown>();
-    stores.set(options.namespace, created);
-    return created;
+    const store = stores.get(options.namespace) ?? createDiscussionMemoryStore<unknown>();
+    stores.set(options.namespace, store);
+    return store;
   }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"];
-  runtime.state.openKeyedStore = <T>(
-    options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
-  ) => asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, options);
+  runtime.state.openKeyedStoreV2 = <T>(
+    options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
+    authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
+  ) => asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, options, authority);
+  return runtime;
 }
 
 export function createInboundMessage(
@@ -86,14 +60,7 @@ export function createInboundMessage(
     body: "/fast on",
     body_format: "markdown",
     created_at: "2026-05-09T12:00:00.000Z",
-    author: {
-      id: "usr_owner",
-      kind: "human",
-      display_name: "Peter",
-      handle: "steipete",
-      avatar_url: "",
-      created_at: "2026-05-09T12:00:00.000Z",
-    },
+    author: createInboundAuthor(),
     ...overrides,
   };
 }
@@ -124,12 +91,93 @@ export function createInboundDiscussionConfig(): CoreConfig {
   return {
     channels: {
       clickclack: {
+        ...location,
         enabled: true,
-        baseUrl: "http://127.0.0.1:8080",
         token: "test-token-placeholder",
-        workspace: "wsp_1",
         discussions: { enabled: true, workspace: "wsp_1" },
       },
     },
   };
+}
+
+export function createInboundAgentAccount(
+  overrides: Partial<ResolvedClickClackAccount> = {},
+): ResolvedClickClackAccount {
+  const config = { ...location, allowFrom: ["*"], ...overrides.config };
+  return {
+    ...location,
+    accountId: "default",
+    enabled: true,
+    configured: true,
+    apiEndpoint: "http://127.0.0.1:8080",
+    token: "test-token-placeholder",
+    replyMode: "agent",
+    toolsAllow: [],
+    defaultTo: "channel:general",
+    allowFrom: ["*"],
+    botUserId: "usr_receiver",
+    botHandle: "blackbird",
+    allowBots: false,
+    reconnectMs: 1_500,
+    agentActivity: false,
+    commandMenu: true,
+    discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
+    requireMention: false,
+    mentionPatterns: [],
+    groups: {},
+    ...overrides,
+    config,
+  };
+}
+
+export function createInboundAuthor(overrides: Partial<ClickClackUser> = {}): ClickClackUser {
+  return {
+    id: "usr_owner",
+    kind: "human",
+    display_name: "Peter",
+    handle: "steipete",
+    avatar_url: "",
+    created_at: "2026-05-09T12:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function createInboundAccountConfig(
+  account: ResolvedClickClackAccount,
+  config: CoreConfig = {},
+): CoreConfig {
+  const {
+    accountId,
+    configured: _configured,
+    apiEndpoint,
+    tokenSource: _tokenSource,
+    tokenStatus: _tokenStatus,
+    credentialDiagnostics: _credentialDiagnostics,
+    botHandle: _botHandle,
+    config: authoredConfig,
+    ...settings
+  } = account;
+  const accountConfig = {
+    ...authoredConfig,
+    ...settings,
+    apiBaseUrl: apiEndpoint,
+    workspace: authoredConfig.workspace ?? account.workspace,
+    botUserId: authoredConfig.botUserId,
+  };
+  return {
+    ...config,
+    channels: {
+      ...config.channels,
+      clickclack:
+        accountId === "default" ? accountConfig : { accounts: { [accountId]: accountConfig } },
+    },
+  };
+}
+
+export function publishInboundAccountConfig(
+  runtime: PluginRuntime,
+  account: ResolvedClickClackAccount,
+  config: CoreConfig = {},
+): void {
+  vi.mocked(runtime.config.current).mockReturnValue(createInboundAccountConfig(account, config));
 }

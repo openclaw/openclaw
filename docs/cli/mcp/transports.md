@@ -37,6 +37,29 @@ completes normally; a later connection starts a fresh server. Unconfirmed cleanu
 closure facts, elapsed time, and any failed signal delivery. The cleanup deadline
 does not change when shutdown escalates.
 
+For a supported `docker run` command, OpenClaw assigns container ownership labels
+and a temporary Docker CID file. Closing the connection sends the container's
+configured stop signal with the existing two-second stdio grace, then removes
+that exact container through the same Docker daemon, including when initialization
+times out. On Gateway startup, OpenClaw also reclaims labeled containers from a previous
+Gateway whose process is proven to have exited. Containers without this state
+directory's ownership label are left alone; an unavailable daemon or an unknown
+process identity produces a warning and preserves the container.
+
+Connection deadlines stay unchanged. If Docker is still creating a container,
+cleanup retains its client and exclusive state ownership until Docker reports
+the container ID or the client exits. A warning identifies pending cleanup.
+Unconfirmed removal also retains state ownership; inspect Docker and restart the
+owning OpenClaw process before retrying.
+
+This also supports a single literal `sh -c 'exec docker run ...'` wrapper.
+Shell expansions, pipelines, additional commands, unknown Docker options, existing
+CID files, and `openclaw.mcp.*` label conflicts disable automatic container custody
+and produce a warning. The original command still runs. Use a direct `docker run`
+argument array for predictable cleanup. Recovery inspects only Docker daemons
+referenced by the current enabled MCP configuration, so retain the server definition
+until any containers from an interrupted Gateway have been reclaimed.
+
 <Warning>
 **Stdio env safety filter**
 
@@ -80,6 +103,8 @@ Example:
 ```
 
 Sensitive values in `url` (userinfo) and `headers` are redacted in logs and status output. `openclaw mcp doctor` warns when sensitive-looking `headers` or `env` entries contain literal values, so operators can move those values out of committed config.
+
+Doctor checks the authored values, including values from `$include` files, before environment substitution. References such as `${MCP_TOKEN}` and `Bearer ${MCP_TOKEN}` do not trigger the literal-value warning when the variable is set. Nonempty literal fallbacks such as `${MCP_TOKEN:-literal-token}`, escaped placeholders, and literal text around references still warn; `Bearer` and `Basic` auth scheme prefixes are allowed. Connection probes still use the resolved values.
 
 If a legacy SSE message endpoint returns HTTP 404, or a stateful Streamable HTTP
 session expires, OpenClaw retires that connection and reconnects on the next
@@ -159,6 +184,8 @@ The shared operator flow uses the following commands:
 
     OpenClaw starts the registered loopback callback, prints the authorization URL, and stores temporary OAuth verifier state in shared SQLite. Approve the request in the browser and return to the terminal; token exchange completes automatically after the callback arrives.
 
+    Providers may register an HTTP loopback callback without a port, as allowed by RFC 8252. OpenClaw retains that registration for the same `127.0.0.1`, `[::1]`, or `localhost` callback while sending the listener's port in authorization and token requests. Other callback components must match; non-loopback callbacks still require an exact match.
+
   </Step>
   <Step title="Use the manual fallback when needed">
     If the browser runs on another machine or cannot reach the printed loopback address, copy the returned code and pass it back to OpenClaw.
@@ -205,7 +232,7 @@ If the provider rotates tokens or the authorization state gets stuck, run `openc
 | `clientCert` / `clientKey`  | mTLS client certificate and key paths                                                  |
 | `supportsParallelToolCalls` | Hint that concurrent calls are safe for this server                                    |
 
-OpenClaw config uses `transport: "streamable-http"` as the canonical spelling. CLI-native MCP `type: "http"` values are accepted when saved through `openclaw mcp set` and repaired by `openclaw doctor --fix` in existing config, but `transport` is what embedded OpenClaw consumes directly.
+OpenClaw config uses `transport: "streamable-http"` as the current spelling. CLI-native MCP `type: "http"` values are accepted when saved through `openclaw mcp set` and repaired by `openclaw doctor --fix` in existing config, but `transport` is what embedded OpenClaw consumes directly.
 
 Example:
 

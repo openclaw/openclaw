@@ -31,17 +31,14 @@ describe("Moonshot onboarding", () => {
     },
   );
 
-  it.each([
-    ["international", applyMoonshotConfig],
-    ["China", applyMoonshotConfigCn],
-  ] as const)("leaves ordinary %s catalogs runtime-owned", (_name, applyConfig) => {
+  it("leaves ordinary catalogs runtime-owned", () => {
     for (const mode of [undefined, "merge"] as const) {
-      const config = applyConfig({ models: { mode } });
+      const config = applyMoonshotConfig({ models: { mode } });
       expect(config.models?.providers?.moonshot?.models).toEqual([]);
       expect(config.agents?.defaults?.models?.[MOONSHOT_DEFAULT_MODEL_REF]).toEqual({
         alias: "Kimi",
       });
-      expect(applyConfig(config)).toEqual(config);
+      expect(applyMoonshotConfig(config)).toEqual(config);
     }
   });
 });

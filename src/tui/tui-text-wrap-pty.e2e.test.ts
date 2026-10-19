@@ -5,7 +5,9 @@ import {
   waitForSynchronizedFrameRows,
 } from "./tui-pty-harness-fixture-test-support.js";
 
-it("preserves a long email address in the user's message and assistant reply", async () => {
+it("preserves a long email address in the user's message and assistant reply", async ({
+  signal,
+}) => {
   const address = "alexandertheodorewilliamson@example.org";
   const fixture = await startTuiFixture({
     env: {
@@ -19,6 +21,7 @@ it("preserves a long email address in the user's message and assistant reply", a
     await fixture.run.write(`${address}\r`, { delay: false });
     await fixture.waitForLogEntry(
       (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", address),
+      signal,
     );
     const rows = await waitForSynchronizedFrameRows(
       fixture.run,

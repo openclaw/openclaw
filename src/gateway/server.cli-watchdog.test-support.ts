@@ -26,17 +26,17 @@ const rows = execFileSync("/bin/ps", ["-axo", "pid=,ppid="], { encoding: "utf8" 
     const [pid, parent] = line.trim().split(/\s+/).map(Number);
     return { pid, parent };
   });
-const owned = [{ pid: root, identity: identity(root) }];
-for (let index = 0; index < owned.length; index++) {
-  owned.push(...rows.filter((row) => row.parent === owned[index].pid && row.pid !== process.pid)
-    .map((row) => ({ pid: row.pid, identity: identity(row.pid) })));
-}
+const descendants = (root, resolve) => {
+  const tree = [resolve(root)];
+  for (let index = 0; index < tree.length; index++) {
+    tree.push(...rows.filter((row) => row.parent === tree[index].pid && row.pid !== process.pid)
+      .map((row) => resolve(row.pid)));
+  }
+  return tree;
+};
+const owned = descendants(root, (pid) => ({ pid, identity: identity(pid) }));
 if (!owned.some((entry) => entry.pid === cliPid)) throw new Error("CLI is not in the owned tree");
-const cliTree = [owned.find((entry) => entry.pid === cliPid)];
-for (let index = 0; index < cliTree.length; index++) {
-  cliTree.push(...rows.filter((row) => row.parent === cliTree[index].pid)
-    .map((row) => owned.find((entry) => entry.pid === row.pid)));
-}
+const cliTree = descendants(cliPid, (pid) => owned.find((entry) => entry.pid === pid));
 const stopped = [];
 let finished = false;
 const record = { root, controller: process.pid, owned, armedAt: Date.now() };
@@ -118,12 +118,17 @@ export function createWatchdogClock() {
 const CLI_FIXTURE = String.raw`
 const fs = require("node:fs");
 const path = require("node:path");
+const { createConnection } = require("node:net");
 const { createInterface } = require("node:readline");
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
 const publish = (name, value) => {
   const target = path.join(process.env.OPENCLAW_TEST_CLI_RECEIPTS, name);
   fs.writeFileSync(target + ".tmp", JSON.stringify(value));
   fs.renameSync(target + ".tmp", target);
+  // Filesystem notifications can coalesce or disappear; signal this completed publication directly.
+  const socket = createConnection({ host: "127.0.0.1", port: Number(process.env.OPENCLAW_TEST_CLI_RECEIPT_PORT) });
+  socket.on("error", (error) => { console.error(error); process.exit(1); });
+  socket.end(name);
 };
 if (process.argv.includes("--version")) { console.log("2.1.226 (fixture)"); process.exit(0); }
 if (process.argv.includes("auth")) { send({ loggedIn: true }); process.exit(0); }
@@ -131,7 +136,8 @@ let sessionId;
 let turns = 0;
 let resumed = false;
 const behavior = process.env.OPENCLAW_TEST_CLI_BEHAVIOR;
-const reply = () => send({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Preserved reply." }] } });
+const reply = (text = "Preserved reply.") => send({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
+const complete = (result) => send({ type: "result", subtype: "success", is_error: false, result, session_id: sessionId });
 process.on("SIGCONT", () => {
   if (resumed) return;
   resumed = true;
@@ -141,7 +147,7 @@ process.on("SIGCONT", () => {
 // Completion and heartbeat delays use the same scenario clock as the host watchdog.
 process.on("SIGUSR1", () => {
   reply();
-  if (behavior === "complete") send({ type: "result", subtype: "success", is_error: false, result: "Preserved reply.", session_id: sessionId });
+  if (behavior === "complete") complete("Preserved reply.");
 });
 createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
@@ -152,11 +158,11 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     const index = process.argv.includes("--resume") ? process.argv.indexOf("--resume") : process.argv.indexOf("--session-id");
     sessionId = process.argv[index + 1];
     if (JSON.stringify(message.message).includes("Warm up this session")) {
-      send({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Warm reply." }] } });
-      send({ type: "result", subtype: "success", is_error: false, result: "Warm reply.", session_id: sessionId });
+      reply("Warm reply.");
+      complete("Warm reply.");
       return;
     }
-    send({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Working." }] } });
+    reply("Working.");
     publish("ready.json", { pid: process.pid, time: Date.now(), turns });
   }
 });`;
@@ -228,6 +234,7 @@ export async function createWatchdogFixture() {
         defaults: {
           workspace: state.workspaceDir,
           skipBootstrap: true,
+          utilityModel: "",
           heartbeat: { every: "0m" },
           model: { primary: modelRef },
           models: { [modelRef]: { agentRuntime: { id: "claude-cli" } } },
@@ -253,7 +260,7 @@ export async function createWatchdogFixture() {
     await gateway.server.startupSettled;
     const backends = resolveRuntimeCliBackends();
     expect(backends.some((backend) => backend.id === "claude-cli")).toBe(true);
-    return { state, gateway, backends, token, controllerScript, cleanup, cleanupFailed: false };
+    return { state, gateway, backends, token, controllerScript, cleanup };
   } catch (error) {
     return await runQaGatewayFixture(async () => {
       throw error;

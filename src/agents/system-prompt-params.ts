@@ -1,54 +1,36 @@
 /**
  * System prompt runtime parameter resolver.
  *
- * Collects repository, time, timezone, channel, and shell facts for prompt rendering.
+ * Collects repository, channel, and shell facts for prompt rendering.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ChatType } from "../channels/chat-type.js";
-import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
+import { resolveControlUiPublicSessionUrl } from "../config/control-ui-link-base.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   formatActiveNodeContextLabel,
+  getActiveNodeIdentityScope,
   getCurrentActiveNodeContext,
 } from "../infra/active-node-context.js";
 import { findGitRoot } from "../infra/git-root.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
-import { formatDateStamp, resolveUserTimezone } from "./date-time.js";
-import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { resolveAgentIdentity } from "./identity.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
+import type { SystemPromptRuntimeInfo } from "./system-prompt.types.js";
 
 const MAX_RUNTIME_AGENT_NAME_CHARS = 128;
-const MAX_RUNTIME_SESSION_URL_CHARS = 512;
 
-type RuntimeInfoInput = {
-  agentId?: string;
-  agentName?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  sessionUrl?: string;
-  gitCoauthorPrompt?: string;
-  host: string;
-  os: string;
-  arch: string;
-  node: string;
-  model: string;
-  defaultModel?: string;
-  shell?: string;
-  channel?: string;
-  chatType?: ChatType;
-  capabilities?: string[];
-  repoRoot?: string;
-  activeNode?: string;
-};
+type RuntimeInfoInput = Omit<SystemPromptRuntimeInfo, "chatType"> &
+  Required<Pick<SystemPromptRuntimeInfo, "host" | "os" | "arch" | "node" | "model">> & {
+    chatType?: ChatType;
+  };
 
 type SystemPromptRuntimeParams = {
   runtimeInfo: RuntimeInfoInput;
-  userTimezone: string;
-  userDate: string;
 };
 
 export function buildSystemPromptParams(params: {
@@ -59,28 +41,22 @@ export function buildSystemPromptParams(params: {
   cwd?: string;
   preparedRepoRoot?: string | null;
   preparedGitCoauthorPrompt?: string | null;
+  preparedSessionEntry?: InternalSessionEntry;
+  requesterProfileId?: string;
 }): SystemPromptRuntimeParams {
   const repoRoot = Object.hasOwn(params, "preparedRepoRoot")
     ? (params.preparedRepoRoot ?? undefined)
     : resolveSystemPromptRepoRoot(params);
-  const gitCoauthorPrompt = Object.hasOwn(params, "preparedGitCoauthorPrompt")
-    ? (params.preparedGitCoauthorPrompt ?? undefined)
-    : resolveSessionGitCoauthorPrompt({
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: params.runtime.sessionKey,
-      });
-  const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-  const userDate = formatDateStamp(Date.now(), userTimezone);
   const { runId } = parseCronRunScopeSuffix(params.runtime.sessionKey);
   // Exact isolated-cron URLs expose a volatile run id before prompt rendering can normalize it,
   // defeating byte-identical prompt-prefix reuse across runs of the same job.
   const sessionUrl =
     runId === undefined
-      ? resolveControlUiSessionUrl(params.config, {
+      ? resolveControlUiPublicSessionUrl(params.config, {
           sessionKey: params.runtime.sessionKey,
-          fallbackAgentId: params.agentId,
-          exactKey: true,
+          agentId: params.agentId,
+          sessionId: params.runtime.sessionId,
+          entry: params.preparedSessionEntry,
         })
       : undefined;
   return {
@@ -91,17 +67,14 @@ export function buildSystemPromptParams(params: {
           ? resolveRuntimeAgentName(params.config, params.agentId)
           : undefined,
       ...params.runtime,
-      gitCoauthorPrompt,
-      // Published links must be externally usable and bounded before entering model context.
-      sessionUrl:
-        sessionUrl?.startsWith("https://") && sessionUrl.length <= MAX_RUNTIME_SESSION_URL_CHARS
-          ? sessionUrl
-          : undefined,
-      activeNode: formatActiveNodeContextLabel(getCurrentActiveNodeContext()),
+      gitCoauthorPrompt: params.preparedGitCoauthorPrompt ?? undefined,
+      sessionUrl,
+      activeNode: formatActiveNodeContextLabel(
+        getCurrentActiveNodeContext(params.requesterProfileId),
+      ),
+      activeNodeIdentity: getActiveNodeIdentityScope(params.requesterProfileId),
       repoRoot,
     },
-    userTimezone,
-    userDate,
   };
 }
 

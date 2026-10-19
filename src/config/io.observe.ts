@@ -1,9 +1,12 @@
 import type fs from "node:fs";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
-import { appendConfigAuditRecord, appendConfigAuditRecordSync } from "./io.audit.js";
+import {
+  enqueueConfigAuditRecord,
+  captureConfigAuditAppender,
+  createConfigObserveAuditRecord,
+} from "./io.audit.js";
 import {
   captureConfigHealthStateStore,
-  supersedeConfigHealthObservations,
   readConfigHealthStateFromStore,
   patchConfigHealthEntryToStore,
 } from "./io.health-state.js";
@@ -14,13 +17,12 @@ import type {
 } from "./io.health-state.types.js";
 import {
   createConfigHealthFingerprint,
-  createConfigObserveAuditRecord,
   readConfigFingerprintForPath,
   readConfigFingerprintForPathSync,
   readConfigHealthEntry,
 } from "./io.observe-state.js";
 import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
-import type { NormalizedConfigIoDeps } from "./io.types.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
 function sameFingerprint(
@@ -99,16 +101,12 @@ export async function observeConfigSnapshot(
   }
   assertCurrent?.();
   try {
-    using health = captureConfigHealthStateStore(deps, snapshot.path, assertCurrent);
+    const health = captureConfigHealthStateStore(deps, snapshot.path, assertCurrent);
+    const appendAudit = captureConfigAuditAppender(deps, health.assertCurrent);
     const stat = await deps.fs.promises.stat(snapshot.path).catch(() => null);
-    if (!health.isCurrent()) {
-      return;
-    }
+    health.assertCurrent();
     const current = createObservedFingerprint(snapshot, stat);
     const healthSnapshot = await health.read();
-    if (!healthSnapshot) {
-      return;
-    }
     const healthState = healthSnapshot.state;
     const backupPath = `${snapshot.path}.bak`;
     const initialEntry = readConfigHealthEntry(healthState, snapshot.path);
@@ -116,9 +114,7 @@ export async function observeConfigSnapshot(
       initialEntry.lastKnownGood ??
       (await readConfigFingerprintForPath(deps, backupPath)) ??
       undefined;
-    if (!health.isCurrent()) {
-      return;
-    }
+    health.assertCurrent();
     const { entry, baseline, suspicious } = resolveObservation({
       snapshot,
       current,
@@ -138,24 +134,17 @@ export async function observeConfigSnapshot(
     }
     const backup =
       (baseline?.hash ? baseline : null) ?? (await readConfigFingerprintForPath(deps, backupPath));
-    if (!health.isCurrent()) {
-      return;
-    }
+    health.assertCurrent();
     deps.logger.warn(`Config observe anomaly: ${snapshot.path} (${suspicious.join(", ")})`);
-    await appendConfigAuditRecord(
-      {
-        env: deps.env,
-        homedir: deps.homedir,
-        record: createConfigObserveAuditRecord({
-          configPath: snapshot.path,
-          valid: snapshot.valid,
-          current,
-          suspicious,
-          lastKnownGood: entry.lastKnownGood,
-          backup,
-        }),
-      },
-      assertCurrent,
+    await appendAudit(
+      createConfigObserveAuditRecord({
+        configPath: snapshot.path,
+        valid: snapshot.valid,
+        current,
+        suspicious,
+        lastKnownGood: entry.lastKnownGood,
+        backup,
+      }),
     );
     await health.update({ lastObservedSuspiciousSignature: signature }, healthSnapshot);
   } catch (error) {
@@ -173,7 +162,6 @@ export function observeConfigSnapshotSync(
   if (!snapshot.exists || typeof snapshot.raw !== "string") {
     return;
   }
-  supersedeConfigHealthObservations(deps, snapshot.path);
   const stat = deps.fs.statSync(snapshot.path, { throwIfNoEntry: false }) ?? null;
   const current = createObservedFingerprint(snapshot, stat);
   const healthState = readConfigHealthStateFromStore(deps);
@@ -201,7 +189,7 @@ export function observeConfigSnapshotSync(
   const backup =
     (baseline?.hash ? baseline : null) ?? readConfigFingerprintForPathSync(deps, backupPath);
   deps.logger.warn(`Config observe anomaly: ${snapshot.path} (${suspicious.join(", ")})`);
-  appendConfigAuditRecordSync({
+  enqueueConfigAuditRecord({
     env: deps.env,
     homedir: deps.homedir,
     record: createConfigObserveAuditRecord({

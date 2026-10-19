@@ -25,6 +25,10 @@ When `tts.auto` is `"tagged"`, **directives are required** to trigger
 audio. Streaming block delivery strips directives from visible text before the
 channel sees them, even when split across adjacent blocks.
 
+A reply can consist entirely of a nonempty `[[tts:text]]...[[/tts:text]]`
+block. No visible text prefix is required, including when the model also
+returns reasoning.
+
 `provider=...` is ignored unless `modelOverrides.allowProvider: true`. When a
 reply declares `provider=...`, the other keys in that directive are parsed
 only by that provider; unsupported keys are stripped and reported as TTS
@@ -95,6 +99,11 @@ Slash commands write local overrides to the TTS preferences path. The default is
 moves the retired global `tts.prefsPath` value into shared machine state.
 Advanced multi-agent setups may still set `agents.entries.<id>.tts.prefsPath`
 when agents intentionally use separate preference stores.
+
+Missing preference files use configured defaults. If a file cannot be read or
+contains malformed JSON, read-only operations warn and use those defaults.
+Preference-changing commands refuse until you repair the file or its permissions,
+so they do not overwrite unread settings.
 
 | Stored field | Effect                                                                           |
 | ------------ | -------------------------------------------------------------------------------- |

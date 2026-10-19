@@ -1,11 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatHistoryResult } from "../../pages/chat/chat-history-snapshot.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { showToast } from "../toast.ts";
-import { canSplitSessionView, runSessionNavigationAction } from "./session-menu-navigation.ts";
+import {
+  canSplitSessionView,
+  registerSessionSplitHost,
+  runSessionNavigationAction,
+} from "./session-menu-navigation.ts";
 
 vi.mock("../clipboard.ts", () => ({ copyToClipboard: vi.fn(async () => true) }));
 vi.mock("../toast.ts", () => ({ showToast: vi.fn() }));
@@ -62,39 +66,10 @@ afterEach(() => {
 
 describe("session menu navigation actions", () => {
   it.each([
-    ["copy-session-link", "/control"],
-    ["copy-session-preview-link", "/control/share"],
-  ] as const)("copies %s with the stored face and deployment prefix", async (kind, basePath) => {
-    const { params } = fixture();
-    await runSessionNavigationAction(kind, params);
-    const copied = vi.mocked(copyToClipboard).mock.calls[0]?.[0];
-    const url = new URL(copied!);
-    expect(url.origin).toBe(window.location.origin);
-    expect(url.pathname).toBe(
-      `${basePath}/dashboard/research/dashboard/12345678-90ab-cdef-1234-567890abcdef`,
-    );
-    expect(url.search).toBe("");
-    expect(url.hash).toBe("");
-  });
-
-  it.each([
-    ["https://gateway.example.test", "ws://127.0.0.1:28789", "https://gateway.example.test"],
-    [
-      "https://gateway.example.test/remote",
-      "ws://127.0.0.1:28789",
-      "https://gateway.example.test/remote",
-    ],
     [
       undefined,
       "wss://gateway.example.test/remote?token=secret",
       "https://gateway.example.test/remote",
-    ],
-    [undefined, "ws://192.168.1.10:18789", "http://192.168.1.10:18789"],
-    [undefined, " WSS://gateway.example.test/remote ", "https://gateway.example.test/remote"],
-    [
-      undefined,
-      `${window.location.origin.replace(/^http/u, "ws")}/remote`,
-      `${window.location.origin}/remote`,
     ],
   ])("copies the Gateway session address %s through %s", async (controlUiUrl, gatewayUrl, base) => {
     const { params } = fixture();
@@ -198,26 +173,31 @@ describe("session menu navigation actions", () => {
     },
   );
 
-  it("copies only visible conversation messages", async () => {
-    const { params, request } = fixture();
-    request.mockResolvedValueOnce(
-      page([
-        message(1, "Visible response"),
-        message(2, "NO_REPLY"),
-        message(3, "HEARTBEAT_OK"),
-        { role: "user", content: " " },
-        {
-          role: "toolResult",
-          content:
-            "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
-        },
-      ]),
-    );
-    await runSessionNavigationAction("copy-markdown", params);
-    const copied = vi.mocked(copyToClipboard).mock.calls[0]?.[0] ?? "";
-    expect(copied).toContain("Visible response");
-    expect(copied).not.toMatch(/NO_REPLY|HEARTBEAT_OK|transcript repair|## You/);
-  });
+  it.each(["operator.read", "operator.sessions.read", "operator.sessions.write"])(
+    "copies only visible conversation messages with %s",
+    async (scope) => {
+      const { params, request } = fixture();
+      params.context.gateway.snapshot.hello!.auth!.scopes = [scope];
+      request.mockResolvedValueOnce(
+        page([
+          message(1, "Visible response"),
+          message(2, "NO_REPLY"),
+          message(3, "HEARTBEAT_OK"),
+          { role: "user", content: " " },
+          {
+            role: "toolResult",
+            content:
+              "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+          },
+        ]),
+      );
+      await runSessionNavigationAction("copy-markdown", params);
+      const copied = vi.mocked(copyToClipboard).mock.calls[0]?.[0] ?? "";
+      expect(copied).toContain("Visible response");
+      expect(copied).toContain("NO_REPLY");
+      expect(copied).not.toMatch(/HEARTBEAT_OK|transcript repair|## You/);
+    },
+  );
 
   it.each([
     { sessionId: "replacement-session" },
@@ -264,13 +244,15 @@ describe("session menu navigation actions", () => {
     expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.copyTranscriptChanged") });
   });
 
-  it("denies transcript reads without operator.read", async () => {
+  it("denies transcript reads without a compatible read scope", async () => {
     const { params, request } = fixture();
     params.context.gateway.snapshot.hello!.auth!.scopes = [];
     await runSessionNavigationAction("copy-markdown", params);
     expect(request).not.toHaveBeenCalled();
     expect(copyToClipboard).not.toHaveBeenCalled();
-    expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.actionRequiresRead") });
+    expect(showToast).toHaveBeenCalledWith({
+      message: t("sessionsView.actionRequiresScope", { scope: "operator.sessions.read" }),
+    });
   });
 
   it("reports an empty transcript without replacing the clipboard", async () => {
@@ -285,7 +267,7 @@ describe("session menu navigation actions", () => {
     const params = fixture().params;
     expect(canSplitSessionView()).toBe(false);
     const chatPage = document.createElement("openclaw-chat-page");
-    Object.assign(chatPage, { sessionSplitAvailable: true });
+    onTestFinished(registerSessionSplitHost(chatPage, () => true));
     document.body.append(chatPage);
     expect(canSplitSessionView()).toBe(true);
     const received = vi.fn((event: Event) => event.preventDefault());

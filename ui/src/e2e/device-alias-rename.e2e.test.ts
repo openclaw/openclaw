@@ -51,7 +51,7 @@ function pairedDevice(operatorLabel?: string) {
 }
 
 suite.define(() => {
-  it("retries a rejected alias rename and dismisses unsaved edits on reconnect", async () => {
+  it("retries a rejected alias rename and retains unsaved edits until client replacement", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
@@ -77,7 +77,7 @@ suite.define(() => {
       await captureUiProof(page, "01-devices-inventory.png");
 
       await row.locator(".device-entry__menu-trigger").click();
-      await page.locator('wa-dropdown-item[value="editAlias"]').click();
+      await row.locator('[role="menuitem"][data-value="editAlias"]').click();
       const dialog = page.locator("openclaw-modal-dialog").last();
       await dialog.locator('input[name="value"]').waitFor();
       await captureUiProof(page, "02-alias-dialog-open.png");
@@ -130,15 +130,49 @@ suite.define(() => {
       await dialog.waitFor({ state: "hidden" });
       const renamedRow = page.locator(".device-entry", { hasText: "Office node" });
       await renamedRow.locator(".device-entry__menu-trigger").click();
-      await page.locator('wa-dropdown-item[value="editAlias"]').click();
+      await renamedRow.locator('[role="menuitem"][data-value="editAlias"]').click();
       await dialog.locator('input[name="value"]').fill("Unsaved alias");
       const socketsBefore = await gateway.getSocketCount();
+      const connectsBefore = await gateway.deferNext("connect");
       await gateway.closeLatest();
-      await dialog.waitFor({ state: "hidden" });
+      await gateway.waitForRequest("connect", { after: connectsBefore });
+      await page.waitForFunction(
+        () => window.openclawControlUi?.snapshot().gatewayPhase === "reconnecting",
+      );
+      expect(await dialog.isVisible()).toBe(true);
+      expect(await dialog.locator('input[name="value"]').inputValue()).toBe("Unsaved alias");
+      expect(await dialog.locator('input[name="value"]').isEditable()).toBe(true);
+      await expect.poll(() => dialog.getByRole("button", { name: "Save" }).isEnabled()).toBe(false);
+      expect(await renamedRow.isVisible()).toBe(true);
+
+      await gateway.resolveDeferred("connect");
+      await page.waitForFunction(
+        () => window.openclawControlUi?.snapshot().gatewayPhase === "connected",
+      );
       await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketsBefore);
       await renamedRow.waitFor();
+      expect(await dialog.locator('input[name="value"]').inputValue()).toBe("Unsaved alias");
+      await expect.poll(() => dialog.getByRole("button", { name: "Save" }).isEnabled()).toBe(true);
       expect(await gateway.getRequests("device.pair.rename")).toHaveLength(renamesBefore + 2);
       await captureUiProof(page, "05-alias-after-reconnect.png");
+
+      // Restoring a suspended page replaces the logical client without changing routes.
+      // Unlike the transport reconnect above, this retires identity-scoped dialogs.
+      const connectsBeforeReplacement = (await gateway.getRequests("connect")).length;
+      await page.evaluate(() => {
+        window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+      });
+      await gateway.waitForRequest("connect", { after: connectsBeforeReplacement });
+      await dialog.waitFor({ state: "hidden" });
+      await page.waitForFunction(
+        () => window.openclawControlUi?.snapshot().gatewayPhase === "connected",
+      );
+      await waitForControlUiRoute(page, { pathname: "/settings/devices", routeId: "devices" });
+      await renamedRow.locator(".device-entry__menu-trigger").click();
+      await renamedRow.locator('[role="menuitem"][data-value="editAlias"]').click();
+      expect(await dialog.locator('input[name="value"]').inputValue()).toBe("Office node");
+      expect(await gateway.getRequests("device.pair.rename")).toHaveLength(renamesBefore + 2);
+      await captureUiProof(page, "06-alias-after-client-replacement.png");
     });
   });
 });

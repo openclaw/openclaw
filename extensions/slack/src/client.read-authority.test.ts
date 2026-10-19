@@ -67,9 +67,9 @@ describe("Slack read request authority", () => {
     const reader = authority();
     scope.current = reader.assert;
     reader.revoke();
-    expect(() => options.fetch?.("https://slack.invalid/api/conversations.history")).toThrow(
-      "read authority revoked",
-    );
+    await expect(
+      options.fetch?.("https://slack.invalid/api/conversations.history"),
+    ).rejects.toThrow("read authority revoked");
     expect(fetch).not.toHaveBeenCalled();
   });
 });

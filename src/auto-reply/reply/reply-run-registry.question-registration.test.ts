@@ -8,9 +8,10 @@ import {
 } from "../../agents/harness/gateway-question.js";
 import { withQuestionGateway } from "../../agents/harness/gateway-question.test-support.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { beginReplyMessageInjectionTarget } from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { withQuestionCreator } from "./reply-run-question.test-support.js";
-import { beginReplyMessageInjectionTarget, replyRunRegistry } from "./reply-run-registry.js";
 
 it("leaves hidden-run image input for visible followup when question registration fails", async () => {
   const key = "agent:main:failed-hidden-question-registration";
@@ -74,9 +75,9 @@ it("leaves hidden-run image input for visible followup when question registratio
           5_000,
           "question did not begin Gateway registration",
         );
-        const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(key);
+        const target = captureCurrentReplyMessageInjectionTarget(key);
         expect(target).toBeDefined();
-        const attempt = beginReplyMessageInjectionTarget(target!, run.prompt, {
+        const attempt = await beginReplyMessageInjectionTarget(target!, run.prompt, {
           isInboundUserMessage: true,
           toolAuthorityFingerprint: fingerprint,
           images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],

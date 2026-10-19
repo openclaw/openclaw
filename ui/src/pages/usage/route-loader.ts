@@ -38,7 +38,6 @@ export async function loadUsageRouteData(
     query,
     result: null,
     costSummary: null,
-    providerUsage: { state: "pending" },
     loadedAtMs: null,
     error: null,
   };
@@ -63,10 +62,10 @@ export async function loadUsageRouteData(
       options.signal,
     );
     return result.ok
-      ? { ...pending, ...result.value, loadedAtMs: Date.now() }
+      ? { ...pending, ...result.value, gatewaySnapshot: current, loadedAtMs: Date.now() }
       : {
           ...pending,
-          providerUsage: result.error.providerUsage,
+          gatewaySnapshot: current,
           error: errorMessage(result.error.cause),
         };
   } catch (error) {

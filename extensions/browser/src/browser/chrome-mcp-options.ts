@@ -1,11 +1,11 @@
-// Normalizes Chrome MCP profile options and subprocess arguments.
 import { createRequire } from "node:module";
-import { resolveNodeRuntimeExecutable } from "openclaw/plugin-sdk/process-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  hasNonEmptyString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import parseArgs from "yargs-parser";
 import type {
   ChromeMcpOptionsInput,
-  ChromeMcpProfileOptions,
   NormalizedChromeMcpProfileOptions,
 } from "./chrome-mcp-contracts.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
@@ -18,25 +18,18 @@ const DEFAULT_CHROME_MCP_FEATURE_ARGS = [
 ];
 const CHROME_MCP_USAGE_STATISTICS_FLAG_RE = /^--(?:no-)?usage-?statistics(?:=.*)?$/i;
 
-function normalizeChromeMcpStringList(values?: string[]): string[] {
-  return Array.isArray(values)
-    ? values.filter(
-        (value): value is string => typeof value === "string" && value.trim().length > 0,
-      )
-    : [];
-}
-
 export function normalizeChromeMcpOptions(
   input?: ChromeMcpOptionsInput,
 ): NormalizedChromeMcpProfileOptions {
   if (typeof input === "object" && input && "command" in input && "args" in input) {
     return input;
   }
-  const options = typeof input === "string" ? { userDataDir: input } : (input ?? {});
-  const customCommand = normalizeOptionalString(options.mcpCommand);
+  const options = input ?? {};
+  const configuredCommand = normalizeOptionalString(options.mcpCommand);
   // Explicit npx has always selected OpenClaw's pinned server, including its package prefix.
-  const managedServer = customCommand === undefined || customCommand === "npx";
-  const extraArgs = normalizeChromeMcpStringList(options.mcpArgs);
+  const customCommand = configuredCommand === "npx" ? undefined : configuredCommand;
+  const managedServer = customCommand === undefined;
+  const extraArgs = Array.isArray(options.mcpArgs) ? options.mcpArgs.filter(hasNonEmptyString) : [];
   // Match Chrome MCP's Yargs grammar, including short groups and camel-case
   // aliases. Policy and direct CDP operations must use the endpoint it launches.
   const { argv, error } = parseArgs.detailed(extraArgs, {
@@ -79,12 +72,11 @@ export function normalizeChromeMcpOptions(
   const defaultFeatureArgs = extraArgs.some((arg) => CHROME_MCP_USAGE_STATISTICS_FLAG_RE.test(arg))
     ? DEFAULT_CHROME_MCP_FEATURE_ARGS.filter((arg) => arg !== "--no-usage-statistics")
     : DEFAULT_CHROME_MCP_FEATURE_ARGS;
-  const command = managedServer ? resolveNodeRuntimeExecutable() : customCommand;
-  if (!command) {
-    throw new BrowserProfileUnavailableError("Chrome MCP requires a Node.js executable on PATH.");
-  }
   return {
-    command,
+    // The pinned server runs on the Gateway's own runtime, Node or Bun.
+    command: customCommand ?? process.execPath,
+    // Its update check shells out to npm, which Bun-only installs lack; custom servers keep theirs.
+    env: managedServer ? { CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: "1" } : undefined,
     userDataDir,
     browserUrl,
     args: [
@@ -96,7 +88,7 @@ export function normalizeChromeMcpOptions(
         : []),
       ...connectionArgs,
       ...defaultFeatureArgs,
-      // Stable custom launchers may still need the opt-in flag; pinned 1.8 enables it by default.
+      // Stable custom launchers may still need the opt-in flag; the pinned server enables it by default.
       ...(managedServer ? [] : ["--experimental-page-id-routing"]),
       ...(!overridesConnection && !browserUrl && userDataDir && argv.userDataDir === undefined
         ? ["--userDataDir", userDataDir]
@@ -117,11 +109,4 @@ export function buildChromeMcpSessionCacheKey(
     options.command,
     options.args,
   ]);
-}
-
-export function chromeMcpProfileOptionsFromParams(params: {
-  profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
-}): string | ChromeMcpProfileOptions | undefined {
-  return params.profile ?? params.userDataDir;
 }

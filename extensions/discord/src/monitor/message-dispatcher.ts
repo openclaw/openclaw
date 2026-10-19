@@ -1,4 +1,3 @@
-// Discord plugin module dispatches inbound messages into the processing queue.
 import {
   createChannelInboundDebouncer,
   resolveInboundDebounceMs,
@@ -9,12 +8,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { Client } from "../internal/discord.js";
-import { buildDiscordInboundJob } from "./inbound-job.js";
-import type {
-  createDiscordIngressMonitor,
-  DiscordIngressDispatchResult,
-  DiscordIngressLifecycle,
-} from "./ingress.js";
+import type { DiscordIngressDispatchResult, DiscordIngressLifecycle } from "./ingress.js";
 import type { DiscordMessageEvent } from "./listeners.js";
 import { createDiscordLivePolicyReader, type DiscordLivePolicyReader } from "./live-policy.js";
 import { createDiscordAvatarResolver } from "./message-avatar.js";
@@ -23,17 +17,10 @@ import {
   hasDiscordMessageStickers,
   resolveDiscordReferencedReplyMessageId,
 } from "./message-forwarded.js";
-import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
-import {
-  createDiscordMessageRunQueue,
-  type DiscordMessageRunQueueTestingHooks,
-} from "./message-run-queue.js";
+import { createDiscordMessageRunQueue } from "./message-run-queue.js";
 import { resolveDiscordMessageText } from "./message-text.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
-
-type PreflightDiscordMessage =
-  typeof import("./message-handler.preflight.js").preflightDiscordMessage;
 
 type DiscordMessageHandlerParams = Omit<
   DiscordMessagePreflightParams,
@@ -42,12 +29,6 @@ type DiscordMessageHandlerParams = Omit<
   readPolicy?: DiscordLivePolicyReader;
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
-  testing?: DiscordMessageHandlerTestingHooks;
-};
-
-type DiscordMessageHandlerTestingHooks = DiscordMessageRunQueueTestingHooks & {
-  preflightDiscordMessage?: PreflightDiscordMessage;
-  createIngressMonitor?: typeof createDiscordIngressMonitor;
 };
 
 const loadMessagePreflightRuntime = createLazyRuntimeModule(
@@ -63,10 +44,6 @@ type DiscordMessageDispatcher = (
 type DiscordMessageDispatcherWithLifecycle = DiscordMessageDispatcher & {
   deactivate: () => Promise<void>;
 };
-
-function isNonEmptyString(value: string | undefined): value is string {
-  return typeof value === "string" && value.length > 0;
-}
 
 export function createDiscordMessageDispatcher(
   params: DiscordMessageHandlerParams,
@@ -90,12 +67,10 @@ export function createDiscordMessageDispatcher(
       resolvedAllowlist: { guildEntries: params.guildEntries, allowFrom: params.allowFrom },
     });
   const readConfig = createRuntimeConfigReader(params.cfg);
-  const preflightDiscordMessageImpl = params.testing?.preflightDiscordMessage;
   const messageRunQueue = createDiscordMessageRunQueue({
     runtime: params.runtime,
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
-    testing: params.testing,
   });
   const dispatcherShutdown = new AbortController();
   const avatarResolver = createDiscordAvatarResolver();
@@ -166,10 +141,8 @@ export function createDiscordMessageDispatcher(
           try {
             const policy = await readPolicy();
             const { cfg } = policy;
-            const preflight =
-              preflightDiscordMessageImpl ??
-              (await loadMessagePreflightRuntime()).preflightDiscordMessage;
-            const ctx = await preflight({
+            const { preflightDiscordMessage } = await loadMessagePreflightRuntime();
+            const ctx = await preflightDiscordMessage({
               ...params,
               ...policy,
               isPolicyCurrent: policy.isCurrent,
@@ -194,19 +167,7 @@ export function createDiscordMessageDispatcher(
               await ingress.settle();
               return;
             }
-            applyImplicitReplyBatchGate(ctx, params.replyToMode, entries.length > 1);
-            const ids = entries.map((entry) => entry.data.message?.id).filter(isNonEmptyString);
-            if (entries.length > 1 && ids.length > 0) {
-              const ctxBatch = ctx as typeof ctx & {
-                MessageSids?: string[];
-                MessageSidFirst?: string;
-                MessageSidLast?: string;
-              };
-              ctxBatch.MessageSids = ids;
-              ctxBatch.MessageSidFirst = ids[0];
-              ctxBatch.MessageSidLast = ids[ids.length - 1];
-            }
-            messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { ingressSettlement: ingress }));
+            messageRunQueue.enqueue({ context: ctx, ingressSettlement: ingress });
           } catch (error) {
             if (abortSignal?.aborted) {
               await ingress.cancel();
@@ -281,10 +242,7 @@ export function createDiscordMessageDispatcher(
         pendingDebounceEntries.add(entry);
       }
       await debouncer.enqueue(entry);
-      if (options?.turnAdoptionLifecycle) {
-        return { kind: "deferred" };
-      }
-      return { kind: "completed" };
+      return { kind: options?.turnAdoptionLifecycle ? "deferred" : "completed" };
     } catch (err) {
       params.runtime.error(danger(`handler failed: ${String(err)}`));
       if (options?.turnAdoptionLifecycle) {

@@ -97,13 +97,22 @@ Optional request headers:
 
 `/v1/models` lists top-level agent targets (`openclaw`, `openclaw/default`, `openclaw/<agentId>`), not backend provider models and not sub-agents; sub-agents stay internal execution topology. If you omit `x-openclaw-model`, the selected agent runs with its normal configured model.
 
+The model list and detail endpoints require `operator.read` or a scope that includes it because they expose the global agent target inventory.
+
 `/v1/embeddings` uses the same agent-target `model` ids. Send `x-openclaw-model` (from a shared-secret caller, or an identity-bearing caller with `operator.admin`) to pick a specific embedding model; otherwise the request uses the selected agent's normal embedding setup.
+
+Embedding model overrides stay within the agent's configured embedding provider. A recognized provider prefix must match that provider; other slash-containing values, such as `library/bge-m3` or `hf:org/model`, remain complete model IDs. This also applies to explicitly configured embedding model names.
 
 ## Session behavior
 
 By default the endpoint is **stateless per request** (a new session key is generated each call).
 
 If the request includes an OpenAI `user` string, the Gateway derives a stable session key from it so repeated calls can share an agent session. For custom apps, reuse the same `user` value per conversation thread; avoid account-level identifiers unless you want multiple conversations/devices to share one OpenClaw session. Use `x-openclaw-session-key` only when you need explicit routing control across multiple clients/threads, with application-owned keys that avoid the reserved namespaces above.
+
+If that session is archived, non-streaming requests return HTTP `409` with
+`invalid_request_error` and guidance to restore it in the Control UI. Streaming
+requests report the same error in the stream. Unarchive the session before
+retrying; the rejected request preserves its archived state and history.
 
 ### Explicit incognito session continuation
 
@@ -121,6 +130,9 @@ Explicitly selecting or continuing an incognito conversation with `x-openclaw-se
 Owner/admin callers keep explicit incognito session continuation. A private no-auth request without `x-openclaw-scopes` receives the default operator scopes, including `operator.admin`, and is therefore treated as owner/admin. Reserved internal namespace overrides (`subagent:`, `cron:`, `acp:`) remain a separate validation failure and still return HTTP `400` with `invalid_request_error`.
 
 ## Request limits
+
+`POST /v1/chat/completions`, `/v1/responses`, and `/v1/embeddings` have a
+60-second request-body read deadline. Uploads that exceed it return HTTP `408`.
 
 The endpoint uses built-in limits of 20 MB per request body, 8 `image_url`
 parts from the latest user message, and 20 MB of cumulative decoded image
@@ -220,7 +232,7 @@ When `stream: true`, tool calls arrive as incremental SSE chunks: an initial ass
 
 For required or function-pinned tool choices, prose is held until the matching call is confirmed. When the run returns finalized prose, the stream uses that text instead of provisional deltas.
 
-If `stream_options.include_usage=true`, a trailing usage chunk is emitted before `[DONE]`.
+If `stream_options.include_usage=true` and complete usage is available, a trailing usage chunk is emitted before `[DONE]`. Interrupted responses without final accounting omit that chunk; JSON responses omit `usage` too. Missing or provisional counts are not replaced with zeros.
 
 ### Tool follow-up loop
 
@@ -240,7 +252,7 @@ Set `stream: true` to receive Server-Sent Events:
 
 Failed agent runs, including whole-agent timeouts, return an error instead of a successful completion. A streaming failure emits an `error` object followed by `[DONE]`; partial content may already have reached the client. Timeout settings follow the [agent loop](/concepts/agent-loop#timeouts).
 
-Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests.
+Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests. If the Gateway itself cancels the agent run while the client is still connected, the request fails with `500 api_error` and the message `agent run was cancelled`, not as a provider timeout.
 
 ## Open WebUI quick setup
 
@@ -331,6 +343,12 @@ curl -sS http://127.0.0.1:18789/v1/embeddings \
 ```
 
 `/v1/embeddings` supports `input` as a string or array of strings.
+
+Responses include `usage.prompt_tokens` and `usage.total_tokens`. Native Ollama and OpenAI-compatible embedding providers pass through their reported token counts, including zero. Providers without usage reporting return zero for both fields; OpenClaw does not estimate token usage.
+
+Provider failures use the same error mapping as chat completions: missing provider credentials return `401 authentication_error` with setup guidance, unknown provider models return `404 invalid_request_error`, and provider overload returns `503 api_error`. Credential values are redacted. Unexpected failures return `500 api_error` with `internal error`.
+
+If provider cleanup fails, the Gateway logs restart guidance and blocks further embeddings requests for that agent/provider until restart. Other agent/provider scopes remain available.
 
 For models that support it, a positive integer `dimensions` requests the output vector size. It overrides the selected agent's active `memory.search.outputDimensionality` and also applies when memory search is disabled. Omitting it keeps the configured or provider default size.
 

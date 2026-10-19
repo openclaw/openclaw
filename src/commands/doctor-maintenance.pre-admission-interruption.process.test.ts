@@ -1,0 +1,103 @@
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { afterEach, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { doctorOutputEntrypoints } from "../cli/cli-entrypoint.test-support.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { createNodeEvalArgs, resolveTestNodeExecPath } from "../test-utils/node-process.js";
+
+const directories = useAutoCleanupTempDirTracker(afterEach);
+const registrar = resolveRuntimeWorkerUrl(doctorOutputEntrypoints.maintenance);
+
+it.skipIf(process.platform === "win32").each([
+  ["SIGTERM", 143],
+  ["SIGINT", 130],
+] as const)("settles %s during archive preparation before entering maintenance", (signal, code) => {
+  const home = directories.make("doctor-pre-admission-interruption-");
+  // Keep command and signal owners real; interrupt the synthetic database inspection.
+  const overrides = [
+    [
+      "/commands/doctor-database-preflight.js",
+      `import { once } from "node:events";
+      import { MessageChannel } from "node:worker_threads";
+      export async function prepareDoctorDatabasePreflight() {
+        // Signal listeners alone do not keep Node alive until OS signal delivery.
+        const { port1, port2 } = new MessageChannel();
+        port1.on("message", () => {});
+        try {
+          const interrupted = once(process, ${JSON.stringify(signal)});
+          process.kill(process.pid, ${JSON.stringify(signal)});
+          await interrupted;
+        } finally {
+          port1.close();
+          port2.close();
+        }
+        console.log("preflight settled");
+        return { incompatible: [], indeterminate: [] };
+      }`,
+    ],
+    [
+      "/commands/doctor-maintenance.js",
+      `export async function beginDoctorMaintenance() {
+        throw new Error("maintenance must not start after interruption");
+      }`,
+    ],
+  ];
+  const result = spawnSync(
+    resolveTestNodeExecPath(),
+    createNodeEvalArgs(`
+      import { registerHooks } from "node:module";
+      const overrides = new Map(${JSON.stringify(overrides)});
+      registerHooks({ resolve(specifier, context, nextResolve) {
+        const resolved = nextResolve(specifier, context);
+        if (specifier.includes("?original")) return resolved;
+        const override = [...overrides].find(([suffix]) => resolved.url.endsWith(suffix))?.[1];
+        return override ? { shortCircuit: true, url: "data:text/javascript," + encodeURIComponent(
+          "export * from " + JSON.stringify(resolved.url + "?original") + ";" + override
+        ) } : resolved;
+      } });
+      const { withCliProcessScope, withCliCommandCleanup } = await import(${JSON.stringify(new URL("../runtime-cleanup-scope.js", registrar).href)});
+      const { runCliWithExitFinalization } = await import(${JSON.stringify(new URL("../one-shot-exit.js", registrar).href)});
+      const { closeCliResources } = await import(${JSON.stringify(new URL("../runtime-cleanup.js", registrar).href)});
+      const { registerMaintenanceCommands } = await import(${JSON.stringify(registrar.href)});
+      const { Command } = await import("commander");
+      const program = new Command();
+      registerMaintenanceCommands(program);
+      await runCliWithExitFinalization({
+        run: () => withCliProcessScope(() => withCliCommandCleanup(false, async cleanup => {
+          try {
+            await cleanup.pluginResources.run(() =>
+              program.parseAsync(["node", "openclaw", "doctor", "--fix", "--non-interactive"]));
+          } finally {
+            await closeCliResources(cleanup);
+            await cleanup.pluginResources.release();
+          }
+        })),
+        onError: error => { console.error(String(error)); process.exitCode = 1; },
+      });
+    `),
+    {
+      env: {
+        ...process.env,
+        HOME: home,
+        USERPROFILE: home,
+        OPENCLAW_HOME: home,
+        OPENCLAW_STATE_DIR: path.join(home, "state"),
+        OPENCLAW_CONFIG_PATH: path.join(home, "openclaw.json"),
+        OPENCLAW_UPDATE_IN_PROGRESS: undefined,
+        OPENCLAW_UPDATE_RUN_ID: undefined,
+        VITEST: undefined,
+        VITEST_POOL_ID: undefined,
+        VITEST_WORKER_ID: undefined,
+      },
+      encoding: "utf8",
+      timeout: 10_000,
+    },
+  );
+  expect(result.error, result.stderr).toBeUndefined();
+  expect(result.signal, result.stderr).toBeNull();
+  expect(result.status, result.stderr).toBe(code);
+  expect(result.stdout, result.stderr).toContain("preflight settled");
+  expect(result.stderr).not.toContain("maintenance must not start");
+  expect(result.stderr).not.toContain("unsettled top-level await");
+});

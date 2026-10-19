@@ -1,7 +1,3 @@
-/**
- * ClickClack channel plugin definition: target parsing, account config, status,
- * gateway startup, and outbound delivery wiring.
- */
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,
@@ -9,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-core";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
+  createChannelMessageAdapterFromOutbound,
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -42,6 +39,15 @@ import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const CHANNEL_ID = CLICKCLACK_CHANNEL_ID;
 
+const clickClackTextMessageAdapter = createChannelMessageAdapterFromOutbound<CoreConfig>({
+  outbound: {
+    sendText: async (ctx) => ({
+      channel: CHANNEL_ID,
+      ...(await sendClickClackText(ctx)),
+    }),
+  },
+});
+
 const clickClackMessageAdapter = defineChannelMessageAdapter({
   id: CHANNEL_ID,
   durableFinal: {
@@ -57,48 +63,11 @@ const clickClackMessageAdapter = defineChannelMessageAdapter({
     reconcileUnknownSend: reconcileClickClackUnknownSend,
   },
   send: {
-    text: async (ctx) => {
-      const messageId = await sendClickClackText({
-        cfg: ctx.cfg as CoreConfig,
-        accountId: ctx.accountId,
-        to: ctx.to,
-        text: ctx.text,
-        threadId: ctx.threadId,
-        replyToId: ctx.replyToId,
-        deliveryQueueId: ctx.deliveryQueueId,
-        deliveryPartIndex: ctx.deliveryPartIndex,
-        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
-        assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
-      });
-      const threadId = ctx.threadId == null ? undefined : String(ctx.threadId);
-      const replyToId = ctx.replyToId ?? undefined;
-      return {
-        ...(messageId ? { messageId } : {}),
-        receipt: createMessageReceiptFromOutboundResults({
-          results: messageId ? [{ channel: CHANNEL_ID, messageId }] : [],
-          threadId,
-          replyToId,
-          kind: "text",
-        }),
-      };
-    },
+    ...clickClackTextMessageAdapter.send,
     media: async (ctx) => {
       const messageId = await sendClickClackMedia({
+        ...ctx,
         cfg: ctx.cfg as CoreConfig,
-        accountId: ctx.accountId,
-        to: ctx.to,
-        text: ctx.text,
-        mediaUrl: ctx.mediaUrl,
-        mediaAccess: ctx.mediaAccess,
-        mediaLocalRoots: ctx.mediaLocalRoots,
-        mediaReadFile: ctx.mediaReadFile,
-        threadId: ctx.threadId,
-        replyToId: ctx.replyToId,
-        deliveryQueueId: ctx.deliveryQueueId,
-        deliveryPartIndex: ctx.deliveryPartIndex,
-        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
-        assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
-        onDeliveryResult: ctx.onDeliveryResult,
       });
       const threadId = ctx.threadId == null ? undefined : String(ctx.threadId);
       const replyToId = ctx.replyToId ?? undefined;
@@ -115,9 +84,6 @@ const clickClackMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
-/**
- * Channel plugin instance registered by the bundled ClickClack entry.
- */
 export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = createChatChannelPlugin({
   base: {
     id: CHANNEL_ID,
@@ -221,68 +187,19 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
     },
     attachedResults: {
       channel: CHANNEL_ID,
-      sendText: async ({
-        cfg,
-        to,
-        text,
-        accountId,
-        threadId,
-        replyToId,
-        deliveryQueueId,
-        deliveryPartIndex,
-        onPlatformSendDispatch,
-        assertDirectAdapterHandoff,
-      }) => {
-        const messageId = await sendClickClackText({
-          cfg: cfg as CoreConfig,
-          accountId,
-          to,
-          text,
-          threadId,
-          replyToId,
-          deliveryQueueId,
-          deliveryPartIndex,
-          onPlatformSendDispatch,
-          assertDirectAdapterHandoff,
-        });
-        // Legacy outbound results use an empty id to report an intentional no-send.
-        return { messageId: messageId ?? "" };
-      },
-      sendMedia: async ({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        mediaAccess,
-        mediaLocalRoots,
-        mediaReadFile,
-        accountId,
-        threadId,
-        replyToId,
-        deliveryQueueId,
-        deliveryPartIndex,
-        onPlatformSendDispatch,
-        assertDirectAdapterHandoff,
-        onDeliveryResult,
-      }) => {
+      sendText: async (ctx) => ({
+        messageId: "",
+        ...(await sendClickClackText({ ...ctx, cfg: ctx.cfg as CoreConfig })),
+      }),
+      sendMedia: async (ctx) => {
+        const { mediaUrl, onDeliveryResult } = ctx;
         if (!mediaUrl) {
           throw new Error("ClickClack media send requires mediaUrl");
         }
         const messageId = await sendClickClackMedia({
-          cfg: cfg as CoreConfig,
-          accountId,
-          to,
-          text,
+          ...ctx,
+          cfg: ctx.cfg as CoreConfig,
           mediaUrl,
-          mediaAccess,
-          mediaLocalRoots,
-          mediaReadFile,
-          threadId,
-          replyToId,
-          deliveryQueueId,
-          deliveryPartIndex,
-          onPlatformSendDispatch,
-          assertDirectAdapterHandoff,
           onDeliveryResult: onDeliveryResult
             ? ({ messageId: acceptedMessageId, receipt }) =>
                 onDeliveryResult({ channel: CHANNEL_ID, messageId: acceptedMessageId, receipt })

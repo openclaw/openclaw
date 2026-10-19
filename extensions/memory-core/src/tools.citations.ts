@@ -56,20 +56,10 @@ export function shouldIncludeCitations(params: {
   if (params.mode === "off") {
     return false;
   }
-  return deriveChatTypeFromSessionKey(params.sessionKey) === "direct";
-}
-
-function deriveChatTypeFromSessionKey(sessionKey?: string): "direct" | "group" | "channel" {
-  const parsed = parseAgentSessionKey(sessionKey);
+  const parsed = parseAgentSessionKey(params.sessionKey);
   if (!parsed?.rest) {
-    return "direct";
+    return true;
   }
   const tokens = new Set(normalizeLowercaseStringOrEmpty(parsed.rest).split(":").filter(Boolean));
-  if (tokens.has("channel")) {
-    return "channel";
-  }
-  if (tokens.has("group")) {
-    return "group";
-  }
-  return "direct";
+  return !tokens.has("channel") && !tokens.has("group");
 }

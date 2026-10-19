@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
+import { readDirectoryEntriesSync } from "openclaw/plugin-sdk/path-existence-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CHROME_VERSION_RE = /\b(\d+)(?:\.\d+){1,3}\b/g;
@@ -13,12 +13,17 @@ export function execBrowserProbe(
   args: string[],
   timeoutMs = 1200,
   maxBuffer = 1024 * 1024,
+  extraEnv?: Record<string, string>,
 ): string | null {
   try {
     const output = execFileSync(command, args, {
       timeout: timeoutMs,
       encoding: "utf8",
       maxBuffer,
+      // Probes are diagnostic: capture stdout only and never let child stderr
+      // leak into the caller's stderr (e.g. doctor --json output).
+      stdio: ["ignore", "pipe", "ignore"],
+      ...(extraEnv ? { env: { ...process.env, ...extraEnv } } : {}),
     });
     return normalizeOptionalString(output) ?? null;
   } catch {
@@ -26,7 +31,6 @@ export function execBrowserProbe(
   }
 }
 
-/** Read a browser executable version from platform metadata or a command-line probe. */
 export function readBrowserVersion(executablePath: string): string | null {
   if (process.platform === "darwin") {
     const bundleVersion = readMacBundleBrowserVersion(executablePath);
@@ -45,7 +49,7 @@ export function readBrowserVersion(executablePath: string): string | null {
   if (!output) {
     return null;
   }
-  return output.replace(/\s+/g, " ").trim();
+  return output.replace(/\s+/g, " ");
 }
 
 function readMacBundleBrowserVersion(executablePath: string): string | null {
@@ -65,7 +69,10 @@ export const WINDOWS_VERSION_DIR_RE = /^\d+(?:\.\d+){1,3}$/;
 
 function readWindowsBrowserVersion(executablePath: string): string | null {
   // Read the inspected executable's authoritative PE metadata. Pass the path as
-  // data so a configured path cannot become part of the PowerShell program.
+  // environment data so a configured path (often containing spaces) can never
+  // become part of the PowerShell program; Windows PowerShell appends any extra
+  // -Command argument to the script text, which fails as a ParserError. The
+  // leaf PowerShell child reuses the documented browser-executable name.
   const configuredSystemRoot = normalizeOptionalString(process.env.SystemRoot);
   const systemRoot =
     configuredSystemRoot && path.win32.isAbsolute(configuredSystemRoot)
@@ -84,25 +91,22 @@ function readWindowsBrowserVersion(executablePath: string): string | null {
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      "[System.Diagnostics.FileVersionInfo]::GetVersionInfo($args[0]).ProductVersion",
-      executablePath,
+      "[System.Diagnostics.FileVersionInfo]::GetVersionInfo($env:OPENCLAW_BROWSER_EXECUTABLE_PATH).ProductVersion",
     ],
     WINDOWS_FILE_METADATA_TIMEOUT_MS,
+    undefined,
+    { OPENCLAW_BROWSER_EXECUTABLE_PATH: executablePath },
   );
   if (metadataVersion) {
-    return metadataVersion.replace(/\s+/g, " ").trim();
+    return metadataVersion.replace(/\s+/g, " ");
   }
 
   // Standard Chromium installers also keep a versioned child directory. Only
   // trust that layout when it is unambiguous; updates may leave two builds.
-  try {
-    const versionDirs = fs
-      .readdirSync(path.win32.dirname(executablePath), { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && WINDOWS_VERSION_DIR_RE.test(entry.name));
-    return versionDirs.length === 1 ? (versionDirs[0]?.name ?? null) : null;
-  } catch {
-    return null;
-  }
+  const versionDirs = readDirectoryEntriesSync(path.win32.dirname(executablePath)).filter(
+    (entry) => entry.isDirectory() && WINDOWS_VERSION_DIR_RE.test(entry.name),
+  );
+  return versionDirs.length === 1 ? (versionDirs[0]?.name ?? null) : null;
 }
 
 function resolveMacAppBundlePath(executablePath: string): string | null {
@@ -114,7 +118,6 @@ function resolveMacAppBundlePath(executablePath: string): string | null {
   return parts.slice(0, appIndex + 1).join(path.sep) || path.sep;
 }
 
-/** Parse a major browser version from a raw version string. */
 export function parseBrowserMajorVersion(rawVersion: string | null | undefined): number | null {
   const matches = [...(rawVersion ?? "").matchAll(CHROME_VERSION_RE)];
   const match = matches.at(-1);

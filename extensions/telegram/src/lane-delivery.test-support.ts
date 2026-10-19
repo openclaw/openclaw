@@ -22,6 +22,9 @@ export function createHarness(params?: {
   resolveFinalPayloadCandidate?: Parameters<
     typeof createLaneTextDeliverer
   >[0]["resolveFinalPayloadCandidate"];
+  resolveFinalPresentationText?: Parameters<
+    typeof createLaneTextDeliverer
+  >[0]["resolveFinalPresentationText"];
 }) {
   const answer =
     params?.answerStream === null
@@ -47,33 +50,20 @@ export function createHarness(params?: {
   const sendPayload = vi
     .fn<Parameters<typeof createLaneTextDeliverer>[0]["sendPayload"]>()
     .mockResolvedValue({ visibleReplySent: true });
-  const flushDraftLane = vi.fn().mockImplementation(async (lane: DraftLaneState) => {
-    await lane.stream?.flush();
-  });
-  const stopDraftLane = vi.fn().mockImplementation(async (lane: DraftLaneState) => {
-    await lane.stream?.stop();
-  });
-  const clearDraftLane = vi.fn().mockImplementation(async (lane: DraftLaneState) => {
-    await lane.stream?.clear();
-  });
   const editStreamMessage = vi.fn().mockResolvedValue(undefined);
   const recordPromptContextPreview = vi.fn<PromptContextRecord>().mockResolvedValue(true);
   const createPromptContextSequence = () =>
     createTelegramPromptContextProjectionSequence({ record: recordPromptContextPreview });
-  const log = vi.fn();
   const markDelivered = vi.fn();
 
   const deliverLaneText = createLaneTextDeliverer({
     lanes,
-    applyTextToPayload: (payload: ReplyPayload, text: string) => ({ ...payload, text }),
     sendPayload,
-    flushDraftLane,
-    stopDraftLane,
-    clearDraftLane,
     editStreamMessage,
     createPromptContextSequence,
     resolveFinalPayloadCandidate: params?.resolveFinalPayloadCandidate,
-    log,
+    resolveFinalPresentationText: params?.resolveFinalPresentationText,
+    log: () => {},
     markDelivered,
   });
 
@@ -83,12 +73,8 @@ export function createHarness(params?: {
     answer,
     reasoning,
     sendPayload,
-    flushDraftLane,
-    stopDraftLane,
-    clearDraftLane,
     editStreamMessage,
     recordPromptContextPreview,
-    log,
     markDelivered,
   };
 }
@@ -102,7 +88,7 @@ export async function deliverFinalAnswer(harness: ReturnType<typeof createHarnes
   });
 }
 
-export function createProjectionSequence(
+function createProjectionSequence(
   record: PromptContextRecord,
 ): TelegramPromptContextProjectionSequence {
   return createTelegramPromptContextProjectionSequence({

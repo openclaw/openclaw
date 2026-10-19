@@ -1,11 +1,26 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { vi } from "vitest";
+import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationRouter, RouteId } from "../app-routes.ts";
+import type { ShellNavigationOwner } from "./app-shell-navigation.ts";
+import { createApplicationConfigCapability } from "./config.ts";
 import type { ApplicationContext } from "./context.ts";
 
-export type ShellKeyboardState = {
+export type ShellRouteCommitState = {
   runtime: { context: ApplicationContext };
-  handleDocumentKeydown: (event: KeyboardEvent) => void;
+  activeSessionKey: string;
+  didConsiderNativeRouteRestore: boolean;
+  shellNavigation: ShellNavigationOwner;
+};
+
+export type ShellCustodianRouteState = {
+  custodianMinimizeRequestId: number;
+  shellNavigation: ShellNavigationOwner;
+};
+
+export type ShellKeyboardState = {
+  element: HTMLElement;
+  runtime: { context: ApplicationContext };
 };
 
 export function resetAppHostTestGlobals(): void {
@@ -73,4 +88,60 @@ export function committedRouterState(
     pendingMatches: [],
     cachedMatches: [],
   } as unknown as ReturnType<ApplicationRouter["getState"]>;
+}
+
+export function createShellConfigFixture() {
+  const config = createApplicationConfigCapability({ resourceBasePath: "" });
+  config.refresh = vi.fn(async () => null);
+  return config;
+}
+
+export function createRosterRefreshContext(params: {
+  previous: AgentsListResult;
+  next: AgentsListResult;
+  selectedId: string;
+}) {
+  const agentsState = { agentsList: params.previous };
+  const selectionState = { selectedId: params.selectedId, scopeId: params.selectedId };
+  const refreshList = vi.fn(async () => {
+    agentsState.agentsList = params.next;
+    return params.next;
+  });
+  const invalidateFiles = vi.fn();
+  const invalidateIdentity = vi.fn();
+  const ensureIdentity = vi.fn(async () => undefined);
+  const setSelection = vi.fn((agentId: string) => {
+    selectionState.selectedId = agentId;
+    selectionState.scopeId = agentId;
+  });
+  const refreshConfig = vi.fn(async () => null);
+  const context = {
+    config: createShellConfigFixture(),
+    agents: {
+      state: agentsState,
+      refreshList,
+      invalidateFiles,
+    },
+    agentIdentity: {
+      invalidate: invalidateIdentity,
+      ensure: ensureIdentity,
+    },
+    agentSelection: {
+      state: selectionState,
+      set: setSelection,
+    },
+    runtimeConfig: {
+      state: { configFormDirty: false },
+      refresh: refreshConfig,
+    },
+  } as unknown as ApplicationContext;
+  return {
+    context,
+    refreshList,
+    invalidateFiles,
+    invalidateIdentity,
+    ensureIdentity,
+    setSelection,
+    refreshConfig,
+  };
 }

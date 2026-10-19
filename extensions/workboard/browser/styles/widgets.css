@@ -10,6 +10,11 @@
   padding: 14px;
   text-align: center;
 }
+.workboard-widget__pagination {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
 .workboard-widget-card,
 .workboard-widget-mini {
   display: grid;

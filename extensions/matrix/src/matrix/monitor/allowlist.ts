@@ -5,10 +5,6 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-normalization-runtime";
 
-function normalizeAllowList(list?: Array<string | number>) {
-  return normalizeStringEntries(list);
-}
-
 function normalizeMatrixUser(raw?: string | null): string {
   const value = (raw ?? "").trim();
   if (!value) {
@@ -54,7 +50,7 @@ function normalizeMatrixAllowListEntry(raw: string): string {
 }
 
 export function normalizeMatrixAllowList(list?: Array<string | number>) {
-  return normalizeAllowList(list).map((entry) => normalizeMatrixAllowListEntry(entry));
+  return normalizeStringEntries(list).map(normalizeMatrixAllowListEntry);
 }
 
 type MatrixAllowListMatch = AllowlistMatch<"wildcard" | "id" | "prefixed-id" | "prefixed-user">;
@@ -66,12 +62,6 @@ export function resolveMatrixAllowListMatch(params: {
   userId?: string;
 }): MatrixAllowListMatch {
   const allowList = params.allowList;
-  if (allowList.length === 0) {
-    return { allowed: false };
-  }
-  if (allowList.includes("*")) {
-    return { allowed: true, matchKey: "*", matchSource: "wildcard" };
-  }
   const userId = normalizeMatrixUser(params.userId);
   const candidates: Array<{ value?: string; source: MatrixAllowListMatchSource }> = [
     { value: userId, source: "id" },

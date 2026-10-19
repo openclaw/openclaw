@@ -11,6 +11,30 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
 
 describe("ingestMemoryWikiSource", () => {
+  it("rejects malformed source encodings without replacing the imported page", async () => {
+    const rootDir = await createTempDir("memory-wiki-ingest-encoding-");
+    const inputPath = path.join(rootDir, "notes.txt");
+    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
+    const content = "\uFEFFNotes: café, 東京, 🦞\n";
+    await fs.writeFile(inputPath, content);
+    const result = await ingestMemoryWikiSource({ config, inputPath });
+    const pagePath = path.join(config.vault.path, result.pagePath);
+    const original = await fs.readFile(pagePath);
+    expect(original.toString("utf8")).toContain(content);
+
+    for (const bytes of [
+      Buffer.from([0xff, 0x41]),
+      Buffer.from([0xe2, 0x82]),
+      Buffer.from([0xed, 0xa0, 0x80]),
+      Buffer.concat([Buffer.from("valid UTF-8 café then Latin-1: "), Buffer.from([0xe9])]),
+    ]) {
+      await fs.writeFile(inputPath, bytes);
+      await expect(ingestMemoryWikiSource({ config, inputPath })).rejects.toThrow(/UTF-8/);
+      expect(await fs.readFile(pagePath)).toEqual(original);
+      expect(await fs.readFile(inputPath)).toEqual(bytes);
+    }
+  });
+
   it("copies a local text file into sources markdown", async () => {
     const rootDir = await createTempDir("memory-wiki-ingest-");
     const inputPath = path.join(rootDir, "meeting-notes.txt");
@@ -68,6 +92,34 @@ hello from source
     );
   });
 
+  it("ingests a source with many backtick runs without losing its content", async () => {
+    const rootDir = await createTempDir("memory-wiki-ingest-backticks-");
+    const inputPath = path.join(rootDir, "backticks.txt");
+    const content = "`x".repeat(1_000_000) + "\n````\n";
+    await fs.writeFile(inputPath, content, "utf8");
+    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
+
+    const result = await ingestMemoryWikiSource({
+      config,
+      inputPath,
+      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
+    });
+
+    expect(result).toMatchObject({
+      pagePath: "sources/backticks.md",
+      bytes: 2_000_006,
+      created: true,
+    });
+    expect(result.indexUpdatedFiles.length).toBeGreaterThan(0);
+    const page = await fs.readFile(path.join(config.vault.path, result.pagePath), "utf8");
+    expect(page).toContain(
+      ["## Content", "`````text", content, "`````", "", "## Notes"].join("\n"),
+    );
+    await expect(fs.readFile(path.join(config.vault.path, "index.md"), "utf8")).resolves.toContain(
+      "[backticks](sources/backticks.md)",
+    );
+  });
+
   it("queues behind a held vault mutation instead of writing mid-transaction", async () => {
     const rootDir = await createTempDir("memory-wiki-ingest-lock-");
     const inputPath = path.join(rootDir, "meeting-notes.txt");
@@ -88,12 +140,15 @@ hello from source
     const ingestQueued = deferred();
     const originalEnqueue = Object.getOwnPropertyDescriptor(KeyedAsyncQueue.prototype, "enqueue")
       ?.value as KeyedAsyncQueue["enqueue"];
-    const enqueueSpy = vi
-      .spyOn(KeyedAsyncQueue.prototype, "enqueue")
-      .mockImplementation(function (this: KeyedAsyncQueue, key, task, hooks) {
-        ingestQueued.resolve();
-        return originalEnqueue.call(this, key, task, hooks);
-      });
+    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue").mockImplementation(function (
+      this: KeyedAsyncQueue,
+      key,
+      task,
+      hooks,
+    ) {
+      ingestQueued.resolve();
+      return originalEnqueue.call(this, key, task, hooks);
+    });
     let ingest: ReturnType<typeof ingestMemoryWikiSource> | undefined;
     try {
       ingest = ingestMemoryWikiSource({

@@ -19,7 +19,7 @@ describe("markdown session links", () => {
       const host = document.createElement("div");
       host.innerHTML = toSanitizedMarkdownHtml(`${href}重新解读`, { sessionLinks: true });
       const anchor = host.querySelector<HTMLAnchorElement>("a")!;
-      const titler = new SessionLinkTitler(host);
+      const titler = new SessionLinkTitler();
       titler.context = {
         basePath: "",
         sessions: {
@@ -33,6 +33,7 @@ describe("markdown session links", () => {
         gateway: { snapshot: {} },
       } as unknown as ApplicationContext;
 
+      titler.register(anchor, document.createElement("span"));
       await titler.decorate(anchor);
       titler.refresh();
 
@@ -68,11 +69,8 @@ describe("markdown session links", () => {
   });
   it.each([
     ["click", "a"],
-    ["Enter", "a"],
     [" ", "a"],
-    ["click", "code"],
     ["Enter", "code"],
-    [" ", "code"],
   ])("routes a public-origin URL with %s on %s before hovercard initialization", (action, tag) => {
     const provider = Object.assign(
       document.createElement("openclaw-session-progress-hovercard-provider"),

@@ -1,16 +1,19 @@
 // Local declaration ownership is disjoint from packaged tsdown declarations.
 import fs from "node:fs";
-import path, { resolve } from "node:path";
+import os from "node:os";
+import { resolve } from "node:path";
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import {
   listCacheFiles,
   portableRelativePath,
   readArtifactRecord,
   writeArtifactRecord,
 } from "./lib/build-artifact-cache.mts";
+import { runCancelableCommand } from "./lib/cancelable-command.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import {
@@ -19,21 +22,32 @@ import {
   LOCAL_PLUGIN_ROOT,
   LOCAL_SDK_ROOT,
   BoundaryInputSnapshot,
+  boundaryPreparationArgs,
+  sdkBoundaryUnit,
 } from "./lib/extension-boundary-inputs.mts";
-import { ensureRepoNodeModulesLink, isLocalCheckEnabled } from "./lib/local-check-runtime.mts";
-import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
+import type { resolveExtensionBoundaryPreparation } from "./lib/extension-boundary-projects.mts";
+import {
+  applyLocalTsgoPolicy,
+  ensureRepoNodeModulesLink,
+  isConstrainedCiCheckHost,
+  isLocalCheckEnabled,
+  resolveCheckMemoryCapacityBytes,
+  resolveLocalCheckEnv,
+} from "./lib/local-check-runtime.mts";
+import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
-import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mts";
+import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import { prepareTsgoCommand } from "./run-tsgo.mts";
-const repoRoot = resolveRepoRoot(import.meta.url);
-const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mts");
+import { resolveTsgoTimeoutMs } from "./run-tsgo.mts";
+// Native compiler output uses long Windows paths even when Node entered through an 8.3 alias.
+const repoRoot = fs.realpathSync.native(resolveRepoRoot(import.meta.url));
 const DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
 type NodeStepParams = {
   bin?: string;
   shell?: boolean;
   windowsVerbatimArguments?: boolean;
   abortController?: AbortController;
+  signal?: AbortSignal;
   abortKillGraceMs?: number;
   env?: NodeJS.ProcessEnv;
   onStdoutLine?: (line: string) => boolean;
@@ -43,7 +57,6 @@ type NodeStep = Omit<NodeStepParams, "abortController"> & {
   label: string;
   timeoutMs: number;
 };
-const activeNodeSteps = new Set<Promise<number>>();
 let nodeStepParentSignal: NodeJS.Signals | undefined;
 export function parseMode(argv: string[] = process.argv.slice(2)) {
   const mode = argv.find((arg) => arg.startsWith("--mode="))?.slice("--mode=".length) ?? "all";
@@ -101,6 +114,7 @@ export async function runNodeStep(
   timeoutMs: number,
   params: NodeStepParams = {},
 ) {
+  params.signal?.throwIfAborted();
   if (params.abortController?.signal.aborted || nodeStepParentSignal) {
     throw new Error(`${label} canceled before starting`);
   }
@@ -118,7 +132,10 @@ export async function runNodeStep(
     // Artifact writers must finish before stamps, dependent readers, or lock release.
     requireProcessTreeExit: process.platform !== "win32",
     timeoutMs: resolvedTimeoutMs,
-    signal: params.abortController?.signal,
+    signal:
+      params.signal && params.abortController
+        ? AbortSignal.any([params.signal, params.abortController.signal])
+        : (params.signal ?? params.abortController?.signal),
     abortKillGraceMs: Math.max(
       0,
       Math.floor(params.abortKillGraceMs ?? DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS),
@@ -134,9 +151,12 @@ export async function runNodeStep(
       child.stderr!.on("data", (chunk: string) => stderrWriter.write(chunk));
     },
   });
-  activeNodeSteps.add(command);
   try {
     const code = await command;
+    params.signal?.throwIfAborted();
+    if (nodeStepParentSignal) {
+      throw new DOMException(`${label} canceled after parent signal`, "AbortError");
+    }
     if (code !== 0) {
       throw new Error(`${label} failed with exit code ${code}`);
     }
@@ -146,11 +166,10 @@ export async function runNodeStep(
       code === "ETIMEDOUT"
         ? new Error(`${label} timed out after ${resolvedTimeoutMs}ms`, { cause: error })
         : code === "ABORT_ERR"
-          ? new Error(`${label} canceled after sibling failure`, { cause: error })
+          ? Object.assign(new Error(`${label} canceled after sibling failure`, { cause: error }), {
+              code: "ABORT_ERR",
+            })
           : error;
-    if (nodeStepParentSignal && code === "EPROCESSGROUP_CLEANUP_FAILED") {
-      console.error(failure);
-    }
     if (params.abortController && !params.abortController.signal.aborted) {
       params.abortController.abort(failure);
     }
@@ -158,11 +177,8 @@ export async function runNodeStep(
   } finally {
     stdoutWriter.flush();
     stderrWriter.flush();
-    activeNodeSteps.delete(command);
-    // The last sibling exits only after all managed cancellation has joined.
-    if (nodeStepParentSignal && activeNodeSteps.size === 0) {
-      process.exit(signalExitCode(nodeStepParentSignal));
-    }
+    // Let the caller join sibling steps and release artifact ownership before exiting.
+    // A leaf process.exit() bypasses both that release and the inherited child claim.
   }
 }
 
@@ -202,8 +218,63 @@ export async function runNodeStepsInParallel(steps: NodeStep[]) {
   }
 }
 
+type DeclarationHost = Parameters<typeof isConstrainedCiCheckHost>[0];
+
+function readDeclarationHost(): DeclarationHost {
+  return {
+    logicalCpuCount: os.availableParallelism(),
+    totalMemoryBytes: os.totalmem(),
+    memoryCapacityBytes: readProcessMemoryCapacity({}).capacityBytes,
+  };
+}
+
+function ownsCiHost(env: NodeJS.ProcessEnv) {
+  return (
+    (env.CI === "true" || env.GITHUB_ACTIONS === "true") &&
+    !env.OPENCLAW_LOCAL_CHECK?.trim() &&
+    !env.OPENCLAW_LOCAL_CHECK_MODE?.trim()
+  );
+}
+
+function canPairCiDeclarations(env: NodeJS.ProcessEnv, host = readDeclarationHost()) {
+  return process.platform === "linux" && ownsCiHost(env) && !isConstrainedCiCheckHost(host);
+}
+
+/** Sizes the native compiler's Go runtime for how many declaration owners share the host. */
+export function resolveDeclarationCompilerEnv(
+  env: NodeJS.ProcessEnv,
+  host: DeclarationHost = readDeclarationHost(),
+) {
+  const paired = canPairCiDeclarations(env, host);
+  const memoryCapacityBytes = resolveCheckMemoryCapacityBytes(host);
+  let policyEnv = paired ? { ...env, OPENCLAW_LOCAL_CHECK: "0" } : env;
+  if (ownsCiHost(env) && isConstrainedCiCheckHost(host) && memoryCapacityBytes > 0) {
+    // Owners run one at a time here. Laptop GC limits held the 13k-file SDK to
+    // 220s instead of 135s on 4 CPUs/15 GiB (peak RSS 5.5 vs 8.2 GB).
+    policyEnv = {
+      ...env,
+      GOMAXPROCS: env.GOMAXPROCS?.trim() || String(host.logicalCpuCount),
+      GOGC: env.GOGC?.trim() || "100",
+      GOMEMLIMIT:
+        env.GOMEMLIMIT?.trim() || `${Math.floor((memoryCapacityBytes * 0.75) / 1024 ** 2)}MiB`,
+    };
+  }
+  const { env: compilerEnv } = applyLocalTsgoPolicy([], policyEnv, {
+    logicalCpuCount: host.logicalCpuCount,
+    totalMemoryBytes: host.totalMemoryBytes,
+  });
+  if (paired) {
+    // Two children share at least eight CPUs and 24 GiB; avoid laptop GC limits.
+    compilerEnv.GOMAXPROCS = String(
+      Math.min(4, parsePositiveInt(env.GOMAXPROCS?.trim() || "4", "GOMAXPROCS")),
+    );
+    compilerEnv.GOMEMLIMIT ||= "8GiB";
+  }
+  return compilerEnv;
+}
+
 /**
- * Chooses serial or parallel artifact execution based on local check policy.
+ * Keeps local checks serial and admits bounded declaration pairs on roomy Linux CI.
  */
 export async function runNodeSteps(steps: NodeStep[], env: NodeJS.ProcessEnv = process.env) {
   if (!isLocalCheckEnabled(env)) {
@@ -211,45 +282,51 @@ export async function runNodeSteps(steps: NodeStep[], env: NodeJS.ProcessEnv = p
     return;
   }
 
-  for (const step of steps) {
-    await runNodeStep(step.label, step.args, step.timeoutMs, step);
+  const concurrency = canPairCiDeclarations(env) ? 2 : 1;
+  for (let offset = 0; offset < steps.length; offset += concurrency) {
+    await runNodeStepsInParallel(steps.slice(offset, offset + concurrency));
   }
 }
 
-async function runTsgoSteps(steps: NodeStep[]) {
-  const commands = steps.flatMap((step) => {
-    const command = prepareTsgoCommand(step.args, step.env ?? process.env, repoRoot);
-    return command
-      ? [
-          {
-            ...step,
-            ...command,
-            // Go honors PWD aliases; emitted paths must use this owner's actual cwd.
-            env: { ...command.env, PWD: repoRoot },
-            timeoutMs: Math.min(step.timeoutMs, command.timeoutMs ?? step.timeoutMs),
-          },
-        ]
-      : [];
-  });
-  // The native bin stays in this owner's group; no nested CLI supervisor can escape its join.
-  await runNodeSteps(commands);
-  return new Set(commands.map((command) => command.label));
-}
-
-async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process.argv.slice(2)) {
+async function prepareExtensionPackageBoundaryArtifacts(argv: string[], signal: AbortSignal) {
+  signal.throwIfAborted();
   const mode = parseMode(argv);
-  const sdk = {
-    id: "plugin-sdk",
-    outDir: LOCAL_SDK_ROOT,
-    config: "packages/plugin-sdk/tsconfig.json",
-    rootDir: ".",
-    required: pluginSdkEntrypoints.map((entry) => `${LOCAL_SDK_ROOT}/src/plugin-sdk/${entry}.d.ts`),
-  };
+  await ensureKyselyTypes(repoRoot);
+  signal.throwIfAborted();
+  const selectedArgument = argv.find((arg) => arg.startsWith("--extensions="));
+  let selected: string[] | undefined;
+  let discoverPreparation: typeof resolveExtensionBoundaryPreparation | undefined;
+  let preparation: Awaited<ReturnType<typeof resolveExtensionBoundaryPreparation>> | undefined;
+  if (selectedArgument) {
+    const requested: unknown = JSON.parse(selectedArgument.slice("--extensions=".length));
+    if (
+      mode !== "all" ||
+      !Array.isArray(requested) ||
+      requested.length === 0 ||
+      !requested.every((id) => typeof id === "string" && /^[a-z0-9][a-z0-9-]*$/u.test(id))
+    ) {
+      throw new Error("Invalid selected extension preparation request");
+    }
+    selected = requested;
+    ({ resolveExtensionBoundaryPreparation: discoverPreparation } =
+      await import("./lib/extension-boundary-projects.mts"));
+    signal.throwIfAborted();
+    preparation = await discoverPreparation(repoRoot, selected);
+    signal.throwIfAborted();
+    process.stdout.write(
+      `selected preparation: ${preparation.sdkRoots.length} SDK roots; plugin producers: ${preparation.pluginIds.join(", ") || "none"}\n`,
+    );
+  }
+  const compilerEnv = resolveDeclarationCompilerEnv(resolveLocalCheckEnv(process.env));
+  const compilerTimeoutMs = resolveTsgoTimeoutMs(compilerEnv);
+  const sharedSdk = process.env.OPENCLAW_CI_SHARED_SDK === "1";
+  const sdk = sdkBoundaryUnit(sharedSdk ? undefined : preparation?.sdkRoots);
   const plugins = BOUNDARY_PLUGIN_UNITS.map(([id, entry]) => ({
     id,
     outDir: `${LOCAL_PLUGIN_ROOT}/${id}`,
     config: `extensions/${id}/tsconfig.json`,
     rootDir: `extensions/${id}`,
+    roots: undefined,
     required: [`${LOCAL_PLUGIN_ROOT}/${id}/${entry}.d.ts`],
   }));
   const batches = [[sdk], mode === "all" ? plugins : []].map((batch) =>
@@ -264,65 +341,61 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
       return { ...unit, outputRoot: fs.realpathSync.native(resolve(repoRoot, unit.outDir)) };
     }),
   );
-  for (const batch of batches) {
+  const prepareBatch = async (batch: (typeof batches)[number]) => {
+    signal.throwIfAborted();
     if (!batch.length) {
-      continue;
+      return;
     }
     // Upstream pruning changes consumer topology; snapshot after the preceding batch's cleanup.
     const before = new BoundaryInputSnapshot(repoRoot);
     const pending = batch
       .map((unit) => {
         const recordPath = resolve(repoRoot, BOUNDARY_CACHE_ROOT, `${unit.id}.json`);
-        const buildInfo = `${unit.outDir}/.tsbuildinfo`;
-        const args = [
-          runTsgoScript,
-          "-p",
-          unit.config,
-          "--declaration",
-          "true",
-          "--emitDeclarationOnly",
-          "true",
-          "--noEmit",
-          "false",
-          "--outDir",
-          unit.outDir,
-          "--rootDir",
-          unit.rootDir,
-          "--incremental",
-          "--tsBuildInfoFile",
-          buildInfo,
-          "--listEmittedFiles",
-        ];
+        const inputReceipt = `${unit.outDir}/.inputs.json`;
+        const args = boundaryPreparationArgs(repoRoot, unit);
         const previous = readArtifactRecord(recordPath);
         // Prime config/toolchain/topology before starting even an uncached owner.
         before.signature(unit.config, args, [], unit.outputRoot);
         if (
-          before.matches(
-            previous,
-            unit.config,
+          // A valid full receipt can cover a narrower request; the reverse never applies.
+          [
             args,
-            [...unit.required, buildInfo],
-            unit.outputRoot,
+            ...(unit.roots
+              ? [boundaryPreparationArgs(repoRoot, { ...unit, roots: undefined })]
+              : []),
+          ].some((receiptArgs) =>
+            before.matchesReceipt(
+              previous,
+              unit.config,
+              receiptArgs,
+              [...unit.required, inputReceipt],
+              inputReceipt,
+              unit.outputRoot,
+            ),
           )
         ) {
           process.stdout.write(`[${unit.id} boundary dts] fresh; skipping\n`);
           return null;
         }
         fs.rmSync(recordPath, { force: true });
-        // Historical Matrix/Slack repair: every stale owner gets a full native emit.
+        // Every stale owner emits its complete requested graph, never surviving cache files.
         // Output directories stay intact until a successful complete inventory exists.
-        fs.rmSync(resolve(repoRoot, buildInfo), { force: true });
+        fs.rmSync(resolve(repoRoot, inputReceipt), { force: true });
         const outputs = new Set<string>();
-        return Object.assign(unit, { recordPath, buildInfo, args, outputs, startedAt: 0 });
+        return Object.assign(unit, { recordPath, inputReceipt, args, outputs });
       })
       .filter((unit) => unit !== null);
-    const emitted = await runTsgoSteps(
+    await runNodeSteps(
       pending.map((unit) => {
-        unit.startedAt = Date.now();
         return {
           label: `${unit.id} boundary dts`,
-          args: unit.args.slice(1),
-          timeoutMs: unit.id === "plugin-sdk" ? resolveBoundaryRootShimsTimeoutMs() : 300_000,
+          args: unit.args,
+          env: compilerEnv,
+          signal,
+          timeoutMs: Math.min(
+            unit.id === "plugin-sdk" ? resolveBoundaryRootShimsTimeoutMs() : 300_000,
+            compilerTimeoutMs ?? Number.POSITIVE_INFINITY,
+          ),
           onStdoutLine(line: string) {
             if (!line.startsWith("TSFILE: ")) {
               return true;
@@ -333,32 +406,30 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         };
       }),
     );
+    // Cancellation in an async gap must not admit compilers or publish receipts.
+    signal.throwIfAborted();
     if (!pending.length) {
-      continue;
+      return;
     }
     const after = new BoundaryInputSnapshot(repoRoot);
     // Join and validate every owner before publishing any success in this batch.
-    const completed = pending
-      .filter((unit) => emitted.has(`${unit.id} boundary dts`))
-      .map((unit) => {
-        const outputs = [...unit.outputs].toSorted();
-        if (
-          [...unit.required, unit.buildInfo].some((file) => !unit.outputs.has(file)) ||
-          outputs.some((file) => !file.startsWith(`${unit.outDir}/`))
-        ) {
-          throw new Error(`Incomplete ${unit.id} native declaration inventory`);
-        }
-        const record = after.record(
-          unit.config,
-          unit.args,
-          unit.buildInfo,
-          outputs,
-          before,
-          unit.startedAt,
-          unit.outputRoot,
-        );
-        return Object.assign(unit, { record });
-      });
+    const completed = pending.map((unit) => {
+      const outputs = [...unit.outputs].toSorted();
+      if (
+        [...unit.required, unit.inputReceipt].some((file) => !unit.outputs.has(file)) ||
+        outputs.some((file) => !file.startsWith(`${unit.outDir}/`))
+      ) {
+        throw new Error(`Incomplete ${unit.id} native declaration inventory`);
+      }
+      const record = after.record(
+        unit.config,
+        unit.args,
+        unit.inputReceipt,
+        outputs,
+        unit.outputRoot,
+      );
+      return Object.assign(unit, { record });
+    });
     for (const unit of completed) {
       // Surviving files are cleanup candidates, never evidence of successful emit.
       for (const file of listCacheFiles(
@@ -370,13 +441,60 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
           fs.rmSync(file);
         }
       }
+      fs.rmSync(resolve(repoRoot, unit.outDir, ".tsbuildinfo"), { force: true });
       writeArtifactRecord(unit.recordPath, unit.record);
       process.stdout.write(`[${unit.id} boundary dts] emitted ${unit.outputs.size} files\n`);
     }
+  };
+  if (!preparation) {
+    for (const batch of batches) {
+      await prepareBatch(batch);
+    }
+    return;
+  }
+  const sdkUnit = batches[0]![0]!;
+  while (true) {
+    await prepareBatch([sdkUnit]);
+    // Only admitted SDK output may reveal declaration-only producer edges. Expand
+    // their SDK inputs before compiling any producer or selected package.
+    const discovered = await discoverPreparation!(repoRoot, selected!, {
+      preparedSdk: true,
+    });
+    signal.throwIfAborted();
+    if (sharedSdk) {
+      if (discovered.sdkRoots.length) {
+        throw new Error(
+          `Full SDK preparation is missing inputs: ${discovered.sdkRoots.join(", ")}`,
+        );
+      }
+      for (const id of discovered.pluginIds) {
+        await prepareBatch(batches[1]!.filter((unit) => unit.id === id));
+      }
+      break;
+    }
+    const roots = [...new Set([...sdkUnit.roots!, ...discovered.sdkRoots])].toSorted();
+    if (roots.length !== sdkUnit.roots!.length) {
+      sdkUnit.roots = roots;
+      sdkUnit.required = roots.map(
+        (source) => `${LOCAL_SDK_ROOT}/${source.replace(/\.([cm]?)tsx?$/u, ".d.$1ts")}`,
+      );
+      continue;
+    }
+    for (const id of discovered.pluginIds) {
+      await prepareBatch(batches[1]!.filter((unit) => unit.id === id));
+    }
+    break;
   }
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   // The private entry must observe cleanup metadata before releasing its claim.
-  await withDistArtifactOwnership(repoRoot, () => prepareExtensionPackageBoundaryArtifacts());
+  process.exitCode = await runCancelableCommand(async (signal) => {
+    await withDistArtifactOwnership(
+      repoRoot,
+      () => prepareExtensionPackageBoundaryArtifacts(process.argv.slice(2), signal),
+      signal,
+    );
+    return 0;
+  });
 }

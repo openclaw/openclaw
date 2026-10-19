@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as atomicFiles from "../infra/json-files.js";
 import {
   writeTriageUpdateFailure,
   writeUpdateRunReportArtifact,
@@ -111,7 +110,13 @@ describe("rollback-readable update diagnostics", () => {
         {
           env,
           ...(errorCount === 40
-            ? { outputPath: path.join(tempDirs.make("update-detached-"), "failure.json") }
+            ? {
+                outputPath: path.join(
+                  tempDirs.make("update-detached-"),
+                  "detached-diagnostics-".repeat(5),
+                  "failure.json",
+                ),
+              }
             : {}),
         },
       );
@@ -210,18 +215,79 @@ describe("rollback-readable update diagnostics", () => {
     },
   );
 
+  it("keeps bounded diagnostics when the complete inventory locator cannot fit", async () => {
+    const stateDir = tempDirs.make("openclaw-update-triage-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const outputPath = path.join(
+      tempDirs.make("update-detached-"),
+      ...Array.from({ length: 3 }, () => "detached-diagnostics-".repeat(10)),
+      "failure.json",
+    );
+    await writeTriageUpdateFailure(
+      {
+        error: "Original Doctor failure",
+        result: {
+          status: "error",
+          mode: "npm",
+          steps: [
+            {
+              name: "candidate doctor lint",
+              exitCode: 1,
+              doctorLintFindings: [
+                { checkId: "fixture/check", message: "Startup failed", severity: "error" },
+              ],
+            },
+          ],
+        },
+      },
+      { env, outputPath },
+    );
+    const raw = await fs.readFile(outputPath, "utf8");
+    const released = await readReleasedTriageUpdateFailure(outputPath, { env, stateDir });
+    expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(8 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(released.error))).toBeLessThanOrEqual(768);
+    expect(released.error).toContain("Original Doctor failure");
+    expect(released.error).toContain(
+      "Complete Doctor lint inventory unavailable: diagnostic link exceeds error limit.",
+    );
+    const receipt = JSON.parse(released.error!.split(" Doctor lint receipt: ")[1]!);
+    expect(receipt).toMatchObject({
+      exitCode: 1,
+      counts: { error: 1, warning: 0, info: 0 },
+      errors: [{ checkId: "fixture/check", message: "Startup failed" }],
+    });
+    expect(Buffer.byteLength(JSON.stringify(released))).toBeLessThanOrEqual(4 * 1024);
+    const inventoryName = (await fs.readdir(path.dirname(outputPath))).find((name) =>
+      name.startsWith("openclaw-update-lint-"),
+    );
+    expect(inventoryName).toBeDefined();
+    const inventory = JSON.parse(
+      await fs.readFile(path.join(path.dirname(outputPath), inventoryName!), "utf8"),
+    );
+    expect(inventory.result.steps[0].doctorLintFindings).toEqual([
+      { checkId: "fixture/check", message: "Startup failed", severity: "error" },
+    ]);
+    const copiedPath = await writeTriageUpdateFailure(released, {
+      env,
+      outputPath: path.join(stateDir, "copy.json"),
+    });
+    expect((await readReleasedTriageUpdateFailure(copiedPath, { env, stateDir })).error).toBe(
+      released.error,
+    );
+  });
+
   it("keeps the original bounded failure when the complete inventory cannot be written", async () => {
     const stateDir = tempDirs.make("openclaw-update-triage-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const writeTextAtomic = atomicFiles.writeTextAtomic;
-    const writeInventory = vi
-      .spyOn(atomicFiles, "writeTextAtomic")
-      .mockImplementation((filePath, body, options) => {
-        if (path.basename(filePath).startsWith("openclaw-update-lint-")) {
-          return Promise.reject(new Error("ENOSPC: no space left on device"));
-        }
-        return writeTextAtomic(filePath, body, options);
-      });
+    const rename = fs.rename;
+    let rejectedInventory = 0;
+    const writeInventory = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (path.basename(String(to)).startsWith("openclaw-update-lint-")) {
+        rejectedInventory += 1;
+        throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+      }
+      return rename(from, to);
+    });
     try {
       const outputPath = await writeTriageUpdateFailure(
         {
@@ -247,6 +313,8 @@ describe("rollback-readable update diagnostics", () => {
       expect(failure.error).toContain("Complete Doctor lint inventory unavailable: ENOSPC");
       expect(failure.error).not.toContain("Complete Doctor lint inventory:");
       expect(Buffer.byteLength(await fs.readFile(outputPath))).toBeLessThanOrEqual(8 * 1024);
+      expect(rejectedInventory).toBe(1);
+      expect(await fs.readdir(path.dirname(outputPath))).toEqual([path.basename(outputPath)]);
     } finally {
       writeInventory.mockRestore();
     }

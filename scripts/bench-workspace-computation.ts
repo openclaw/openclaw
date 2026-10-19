@@ -21,6 +21,7 @@ import {
   runBenchmarkEntrypoint,
 } from "./lib/benchmark-harness.mts";
 import { startBenchmarkIntervalDelay } from "./lib/benchmark-interval-delay.ts";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { stopChild } from "./lib/gateway-bench-child.ts";
 
 const exec = promisify(execFile);
@@ -41,18 +42,7 @@ type Options = {
   json: boolean;
   help: boolean;
 };
-type Fixture = {
-  root: string;
-  source: string;
-  scenario: Scenario;
-  size: number;
-  concurrency: number;
-  timeoutMs: number;
-  baseRef: string;
-  currentRef: string;
-  inventorySha256: string;
-  changedEntries: WorkerWorkspaceManifestEntry[];
-};
+type Fixture = Awaited<ReturnType<typeof createFixture>>;
 type Measurement = {
   wallMs: number;
   cpuMs: number;
@@ -66,7 +56,7 @@ type Measurement = {
   processMaxRssBytes: number;
   workerTasks: Array<Record<string, unknown>>;
 };
-type Summary = { count: number; min: number; p50: number; p95: number; p99: number; max: number };
+type Summary = ReturnType<typeof summarize>;
 type Sample = Measurement & {
   phase: "cold" | "warmup" | "warm";
   requestLatencyMs: Summary;
@@ -83,7 +73,7 @@ type ChildMessage =
 const digest = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const nameAt = (index: number) => `file-${String(index).padStart(6, "0")}.txt`;
 
-function summarize(values: number[]): Summary {
+function summarize(values: number[]) {
   assert(values.length > 0, "measurement has no samples");
   const ordered = values.toSorted((a, b) => a - b);
   const percentile = (fraction: number) => ordered[Math.ceil(ordered.length * fraction) - 1]!;
@@ -164,7 +154,7 @@ async function createFixture(params: {
   size: number;
   concurrency: number;
   options: Options;
-}): Promise<Fixture> {
+}) {
   const { root, source, scenario, size, concurrency, options } = params;
   assert(
     size * options.fileBytes <= 4 * 1024 ** 3,
@@ -213,7 +203,7 @@ async function createFixture(params: {
     await fs.mkdir(workspace);
     if (scenario === "inventory" || scenario === "delta" || scenario === "unchanged") {
       await exec("git", ["-c", `core.hooksPath=${os.devNull}`, "init", "--quiet", workspace], {
-        env: { ...isolatedEnv(root), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull },
+        env: isolatedEnv(root),
       });
     }
     if (scenario === "inventory" || scenario === "manifest") {
@@ -255,9 +245,7 @@ function isolatedEnv(root: string): NodeJS.ProcessEnv {
     TMPDIR: process.env.TMPDIR,
     TEMP: process.env.TEMP,
     TMP: process.env.TMP,
-    HOME: path.join(root, "home"),
-    USERPROFILE: path.join(root, "home"),
-    OPENCLAW_HOME: path.join(root, "home"),
+    ...createBuildSmokeEnv(path.join(root, "home"), {}),
     OPENCLAW_STATE_DIR: path.join(root, "state"),
     OPENCLAW_CONFIG_PATH: path.join(root, "config.json"),
     NODE_ENV: "test",
@@ -283,8 +271,8 @@ async function childMain(fixturePath: string): Promise<void> {
   const manifests =
     fixture.scenario === "manifest"
       ? await importOwner<
-          typeof import("../src/gateway/worker-environments/workspace-reconcile-core.js")
-        >(fixture.source, "src/gateway/worker-environments/workspace-reconcile-core.ts")
+          typeof import("../src/gateway/worker-environments/workspace-manifest-worker.js")
+        >(fixture.source, "src/gateway/worker-environments/workspace-manifest-worker.ts")
       : undefined;
   const staging =
     fixture.scenario === "delta" ||
@@ -367,7 +355,7 @@ async function childMain(fixturePath: string): Promise<void> {
             };
           }
           if (manifests) {
-            const result = await manifests.readActualWorkspaceManifest({
+            const result = await manifests.captureWorkspaceManifest({
               root,
               baseCommit: null,
               signal: AbortSignal.timeout(fixture.timeoutMs),
@@ -539,10 +527,7 @@ async function runSource(
   const samples: Sample[] = [];
   try {
     const ready = await receive();
-    assert.equal(ready.type, "ready");
-    if (ready.type !== "ready") {
-      throw new Error("child did not become ready");
-    }
+    assert.equal<"ready">(ready.type, "ready");
     const url = `http://127.0.0.1:${ready.port}/readyz`;
     const initial = await fetch(url, { signal: AbortSignal.timeout(options.timeoutMs) });
     assert.equal(initial.status, 200);

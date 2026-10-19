@@ -1,15 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import type {
-  WorkerDesktopEndpoint,
-  WorkerProfile,
-  WorkerSshEndpoint,
-} from "../../plugins/capability-provider.types.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/capability-provider.types.js";
 import type {
   DB as StateDatabase,
   WorkerEnvironmentCredentials,
@@ -32,15 +28,7 @@ import {
   normalizeCredentialHash,
   normalizeWorkerSshEndpoint,
 } from "./store-validation.js";
-import type {
-  WorkerEnvironmentFacts,
-  WorkerEnvironmentPruneReadInput,
-  WorkerEnvironmentPrunePage,
-} from "./store-worker-contract.js";
-import { readTerminalWorkerEnvironmentPrunePage } from "./terminal-environment-retention.js";
-type Ssh = WorkerSshEndpoint;
-type WorkerEnvironmentProfileSnapshot = WorkerProfile;
-
+import type { WorkerEnvironmentFacts } from "./store.types.js";
 type WorkerDb = Pick<
   StateDatabase,
   | "device_pair_setup_completions"
@@ -52,7 +40,7 @@ type WorkerDb = Pick<
   | "worker_transcript_commit_heads"
 >;
 type Row = Selectable<WorkerEnvironments>;
-type RowWithFallbackPorts = Row & { ssh_fallback_ports_json: string };
+type RowWithFallbackPort = Row & { ssh_fallback_port: number | null };
 type CredentialRow = Selectable<WorkerEnvironmentCredentials>;
 function teardownTerminalStateFrom(
   value: string | null,
@@ -62,7 +50,7 @@ function teardownTerminalStateFrom(
   }
   throw new Error("Worker environment teardown terminal state is invalid");
 }
-function endpointFrom(row: Row, fallbackPorts: readonly number[]): Ssh | null {
+function endpointFrom(row: Row, fallbackPorts: readonly number[]): WorkerSshEndpoint | null {
   const {
     ssh_host: host,
     ssh_port: port,
@@ -80,15 +68,8 @@ function endpointFrom(row: Row, fallbackPorts: readonly number[]): Ssh | null {
     user,
     hostKey,
     // SAFETY: normalizeWorkerSshEndpoint validates this value with isValidSecretRef.
-    keyRef: JSON.parse(encoded) as Ssh["keyRef"],
+    keyRef: JSON.parse(encoded) as WorkerSshEndpoint["keyRef"],
   });
-}
-function desktopFrom(row: Row): WorkerDesktopEndpoint | null {
-  if (row.desktop_json === null) {
-    return null;
-  }
-  // SAFETY: normalizeWorkerDesktopEndpoint validates every decoded endpoint field.
-  return normalizeWorkerDesktopEndpoint(JSON.parse(row.desktop_json) as WorkerDesktopEndpoint);
 }
 function bootstrapReceiptFrom(row: Row): WorkerEnvironmentBootstrapReceipt | null {
   const {
@@ -119,7 +100,7 @@ export function decodeWorkerEnvironmentRow(
     providerId: row.provider_id,
     profileId: row.profile_id,
     // SAFETY: this store writes profile_snapshot_json from its typed profile snapshot.
-    profileSnapshot: JSON.parse(row.profile_snapshot_json) as WorkerEnvironmentProfileSnapshot,
+    profileSnapshot: JSON.parse(row.profile_snapshot_json) as WorkerProfile,
     preparation: readWorkerEnvironmentPreparation(row),
     provisionOperationId: row.provision_operation_id,
     nodeSetupId: row.node_setup_id,
@@ -127,7 +108,10 @@ export function decodeWorkerEnvironmentRow(
     sharedHost: row.shared_host === null ? null : row.shared_host === 1,
     leaseId: row.lease_id,
     sshEndpoint: endpointFrom(row, fallbackPorts),
-    desktop: desktopFrom(row),
+    desktop:
+      row.desktop_json === null
+        ? null
+        : normalizeWorkerDesktopEndpoint(JSON.parse(row.desktop_json)),
     bootstrapReceipt: bootstrapReceiptFrom(row),
     ownerEpoch: row.owner_epoch,
     teardownTerminalState: teardownTerminalStateFrom(row.teardown_terminal_state),
@@ -143,15 +127,7 @@ export function decodeWorkerEnvironmentRow(
     destroyRequestedAtMs: row.destroy_requested_at_ms,
     lastError: row.last_error,
   };
-  assertShape(
-    record.state,
-    record.leaseId,
-    record.nodeDeviceId,
-    record.sshEndpoint,
-    record.desktop,
-    record.bootstrapReceipt,
-    record.attachedSessionIds,
-  );
+  assertShape(record);
   // SAFETY: assertShape validates the state's lease, transport, and attachment invariants.
   return record as WorkerEnvironmentRecord;
 }
@@ -174,40 +150,44 @@ export function json(value: unknown): string {
   }
   return encoded;
 }
-export const queryWorkerEnvironmentStore = (db: DatabaseSync) => getNodeSqliteKysely<WorkerDb>(db);
-function environmentRows(db: DatabaseSync) {
+export const queryWorkerEnvironmentStore = (db: EngineConnection) =>
+  getNodeSqliteKysely<WorkerDb>(db);
+function environmentRows(db: EngineConnection) {
+  // Double precision preserves validation of oversized ports without PostgreSQL REAL rounding.
   return queryWorkerEnvironmentStore(db)
     .selectFrom("worker_environments")
+    .leftJoin(
+      "worker_environment_ssh_fallback_ports as ports",
+      "ports.environment_id",
+      "worker_environments.environment_id",
+    )
     .selectAll("worker_environments")
     .select((eb) =>
-      eb
-        .selectFrom("worker_environment_ssh_fallback_ports")
-        .select(({ fn }) =>
-          fn.agg<string>("json_group_array", ["port"]).orderBy("position").as("ports"),
-        )
-        .whereRef(
-          "worker_environment_ssh_fallback_ports.environment_id",
-          "=",
-          "worker_environments.environment_id",
-        )
-        .$asScalar()
-        .as("ssh_fallback_ports_json"),
-    );
+      eb.cast<number | null>("ports.port", "double precision").as("ssh_fallback_port"),
+    )
+    .orderBy("worker_environments.created_at_ms")
+    .orderBy("worker_environments.environment_id")
+    .orderBy("ports.position");
 }
-function recordsFromRows(rows: readonly RowWithFallbackPorts[]): WorkerEnvironmentRecord[] {
-  return rows.map((row) =>
-    // SAFETY: SQLite aggregates the numeric port column; endpointFrom validates the decoded ports.
-    decodeWorkerEnvironmentRow(row, JSON.parse(row.ssh_fallback_ports_json) as number[]),
-  );
+function recordsFromRows(rows: readonly RowWithFallbackPort[]): WorkerEnvironmentRecord[] {
+  const groups = new Map<string, { row: Row; ports: number[] }>();
+  for (const row of rows) {
+    const group = groups.get(row.environment_id) ?? { row, ports: new Array<number>() };
+    if (row.ssh_fallback_port !== null) {
+      group.ports.push(row.ssh_fallback_port);
+    }
+    groups.set(row.environment_id, group);
+  }
+  return Array.from(groups.values(), ({ row, ports }) => decodeWorkerEnvironmentRow(row, ports));
 }
-export function findWorkerEnvironment(db: DatabaseSync, environmentId: string) {
+export function findWorkerEnvironment(db: EngineConnection, environmentId: string) {
   const rows = executeSqliteQuerySync(
     db,
     environmentRows(db).where("worker_environments.environment_id", "=", environmentId),
   ).rows;
   return recordsFromRows(rows)[0];
 }
-export function findCredential(db: DatabaseSync, environmentId: string) {
+export function findCredential(db: EngineConnection, environmentId: string) {
   const row = executeSqliteQueryTakeFirstSync(
     db,
     queryWorkerEnvironmentStore(db)
@@ -217,26 +197,20 @@ export function findCredential(db: DatabaseSync, environmentId: string) {
   );
   return row ? credentialFromRow(row) : undefined;
 }
-export function getRequiredWorkerEnvironment(db: DatabaseSync, environmentId: string) {
+export function getRequiredWorkerEnvironment(db: EngineConnection, environmentId: string) {
   const record = findWorkerEnvironment(db, environmentId);
   if (!record) {
     throw new Error(`Unknown worker environment: ${environmentId}`);
   }
   return record;
 }
-export function listRows(db: DatabaseSync): WorkerEnvironmentRecord[] {
-  const rows = executeSqliteQuerySync(
-    db,
-    environmentRows(db)
-      .orderBy("worker_environments.created_at_ms")
-      .orderBy("worker_environments.environment_id"),
-  ).rows;
-  return recordsFromRows(rows);
+export function listRows(db: EngineConnection): WorkerEnvironmentRecord[] {
+  return recordsFromRows(executeSqliteQuerySync(db, environmentRows(db)).rows);
 }
 
 /** Prepared inside the owning transaction; absent rows are explicit deletion facts. */
 export function readWorkerEnvironmentFacts(
-  db: DatabaseSync,
+  db: EngineConnection,
   ids?: readonly string[],
 ): WorkerEnvironmentFacts {
   const environments = ids
@@ -261,19 +235,5 @@ export function readWorkerEnvironmentFacts(
     environments,
     credentials,
     attachments,
-  };
-}
-
-export function readWorkerEnvironmentPrunePage(
-  db: DatabaseSync,
-  input: WorkerEnvironmentPruneReadInput,
-): WorkerEnvironmentPrunePage {
-  const { rows, ...page } = readTerminalWorkerEnvironmentPrunePage(db, input);
-  return {
-    ...page,
-    candidates: rows.map((observed) => ({
-      observed,
-      record: decodeWorkerEnvironmentRow(observed, []),
-    })),
   };
 }

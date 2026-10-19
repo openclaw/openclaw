@@ -1,13 +1,16 @@
-import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { z } from "zod";
-import { parseWorkerLaunchPlan, type WorkerLaunchPlan } from "./launch-descriptor.js";
-import { workerProtocolObject } from "./protocol-record.js";
+import { parseWorkerLaunchPlan } from "./launch-descriptor.js";
+import {
+  WorkerGatewayNamespace,
+  workerProtocolIdentifier as identifier,
+  workerProtocolObject,
+} from "./protocol-record.js";
 
-const IDENTIFIER_MAX_CHARS = 256;
-const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const NODE_WORKER_SUPERVISOR_CONTROL_REQUEST_MAX_BYTES = 4 * 1024;
+export const NODE_WORKER_STATUS_WAIT_MAX_MS = 20_000;
 const NODE_WORKER_RESULT_JSON_MAX_BYTES = 64 * 1024;
 const NODE_WORKER_ERROR_TEXT_MAX_BYTES = 4 * 1024;
 const NODE_WORKER_CONNECTION_FAILURE_CAUSE_MAX_BYTES = 64 * 1024;
@@ -21,24 +24,10 @@ function isPlanHash(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
 }
 
-const identifier = (label: string, maxChars = IDENTIFIER_MAX_CHARS) =>
-  z.custom<string>(
-    (value) =>
-      typeof value === "string" &&
-      value.length > 0 &&
-      value.length <= maxChars &&
-      value.trim() === value &&
-      !value.includes("\0"),
-    { error: `INVALID_REQUEST: ${label} must be a bounded non-empty identifier` },
-  );
 const nonNegativeInteger = (label: string) =>
   z.custom<number>(isNonNegativeInteger, {
     error: `INVALID_REQUEST: ${label} must be a non-negative safe integer`,
   });
-const GatewayNamespace = identifier("gatewayNamespace").refine(
-  (value) => typeof value === "string" && GATEWAY_NAMESPACE_PATTERN.test(value),
-  { error: "INVALID_REQUEST: gatewayNamespace must be a safe bounded path component" },
-);
 const IdentityShape = {
   launchId: identifier("launchId"),
   planHash: z.custom<string>(isPlanHash, {
@@ -52,7 +41,7 @@ const IdentityShape = {
 };
 const Identity = workerProtocolObject(IdentityShape);
 const EnvironmentStop = workerProtocolObject({
-  gatewayNamespace: GatewayNamespace,
+  gatewayNamespace: WorkerGatewayNamespace,
   environmentId: IdentityShape.environmentId,
   sessionId: IdentityShape.sessionId,
   ownerEpoch: IdentityShape.ownerEpoch,
@@ -62,8 +51,11 @@ const LaunchInput = workerProtocolObject({
     error: "INVALID_REQUEST: node worker environment lifetime support required",
   }),
   sessionKey: identifier("sessionKey", 1_024).optional(),
+  idleRetention: z
+    .literal(true, { error: "INVALID_REQUEST: idleRetention must be true" })
+    .optional(),
   launchId: IdentityShape.launchId,
-  gatewayNamespace: GatewayNamespace,
+  gatewayNamespace: WorkerGatewayNamespace,
   expectedBundleHash: z.custom<string>(isPlanHash, {
     error: "INVALID_REQUEST: expectedBundleHash must be 64 lowercase hexadecimal characters",
   }),
@@ -80,7 +72,16 @@ const LaunchInput = workerProtocolObject({
   }),
   placementGeneration: IdentityShape.placementGeneration,
 });
-const Lookup = workerProtocolObject({ launchId: IdentityShape.launchId });
+const Lookup = workerProtocolObject({
+  launchId: IdentityShape.launchId,
+  waitMs: z
+    .custom<number>(
+      (value) =>
+        isNonNegativeInteger(value) && value >= 1 && value <= NODE_WORKER_STATUS_WAIT_MAX_MS,
+      { error: "INVALID_REQUEST: waitMs must be an integer between 1 and 20000" },
+    )
+    .optional(),
+});
 const Receipt = z.union([
   workerProtocolObject({ ...IdentityShape, state: z.enum(["pending", "running"]) }),
   workerProtocolObject({
@@ -135,32 +136,25 @@ function decodeRequest(raw?: string | null): unknown {
   }
 }
 
-function assertNodeWorkerLaunchIdentity(
-  input: Pick<NodeWorkerLaunchInput, "launchId" | "expectedBundleHash">,
-  descriptor: WorkerLaunchPlan,
-): void {
-  if (descriptor.assignment.turnId !== input.launchId) {
-    throw new Error("INVALID_REQUEST: launchId must match descriptor assignment turnId");
-  }
-  if (descriptor.admission.handshake.bundleHash !== input.expectedBundleHash) {
-    throw new Error("INVALID_REQUEST: descriptor bundle hash does not match expectedBundleHash");
-  }
-}
-
 export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunchInput {
   return validateNodeWorkerLaunchInput(decodeRequest(raw));
 }
 
 export function validateNodeWorkerLaunchInput(value: unknown): NodeWorkerLaunchInput {
   const input = parseRequest(LaunchInput, value, "launch");
-  assertNodeWorkerLaunchIdentity(input, input.descriptor);
+  if (input.descriptor.assignment.turnId !== input.launchId) {
+    throw new Error("INVALID_REQUEST: launchId must match descriptor assignment turnId");
+  }
+  if (input.descriptor.admission.handshake.bundleHash !== input.expectedBundleHash) {
+    throw new Error("INVALID_REQUEST: descriptor bundle hash does not match expectedBundleHash");
+  }
   if (input.sessionKey === undefined) {
     delete input.sessionKey;
   }
   return input;
 }
 
-export function parseNodeWorkerLookupInput(raw?: string | null): { launchId: string } {
+export function parseNodeWorkerLookupInput(raw?: string | null): z.infer<typeof Lookup> {
   return parseRequest(Lookup, decodeRequest(raw), "lookup");
 }
 
@@ -183,20 +177,24 @@ export function parseNodeWorkerEnvironmentStopInput(
 export function nodeWorkerPlanHash(
   input: Pick<
     NodeWorkerLaunchInput,
-    "descriptor" | "expectedBundleHash" | "gatewayNamespace" | "placementGeneration" | "sessionKey"
+    | "descriptor"
+    | "expectedBundleHash"
+    | "gatewayNamespace"
+    | "placementGeneration"
+    | "sessionKey"
+    | "idleRetention"
   >,
 ): string {
-  return createHash("sha256")
-    .update(
-      stableStringify({
-        expectedBundleHash: input.expectedBundleHash,
-        descriptor: input.descriptor,
-        gatewayNamespace: input.gatewayNamespace,
-        placementGeneration: input.placementGeneration,
-        ...(input.sessionKey === undefined ? {} : { sessionKey: input.sessionKey }),
-      }),
-    )
-    .digest("hex");
+  return sha256Hex(
+    stableStringify({
+      expectedBundleHash: input.expectedBundleHash,
+      descriptor: input.descriptor,
+      gatewayNamespace: input.gatewayNamespace,
+      placementGeneration: input.placementGeneration,
+      ...(input.sessionKey === undefined ? {} : { sessionKey: input.sessionKey }),
+      ...(input.idleRetention ? { idleRetention: true } : {}),
+    }),
+  );
 }
 
 function isBoundedResultJson(value: unknown): value is string {
@@ -207,11 +205,7 @@ function isBoundedResultJson(value: unknown): value is string {
   ) {
     return false;
   }
-  try {
-    return isRecord(JSON.parse(value) as unknown);
-  } catch {
-    return false;
-  }
+  return safeParseJsonRecord(value) !== undefined;
 }
 
 function isBoundedErrorText(value: unknown): value is string {
@@ -233,4 +227,19 @@ export function parseNodeWorkerSupervisorReceipt(
   value: unknown,
 ): NodeWorkerSupervisorReceipt | null {
   return Receipt.safeParse(value).data ?? null;
+}
+
+export function nodeWorkerTurnMatchesIdentity(
+  receipt: NodeWorkerSupervisorIdentity,
+  expected: NodeWorkerSupervisorIdentity,
+): boolean {
+  return (
+    receipt.launchId === expected.launchId &&
+    receipt.planHash === expected.planHash &&
+    receipt.environmentId === expected.environmentId &&
+    receipt.sessionId === expected.sessionId &&
+    receipt.ownerEpoch === expected.ownerEpoch &&
+    receipt.placementGeneration === expected.placementGeneration &&
+    receipt.runId === expected.runId
+  );
 }

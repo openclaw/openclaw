@@ -1,21 +1,9 @@
-// Codex provider module implements model/runtime integration.
 import type {
   MigrationPlan,
   MigrationProviderContext,
   MigrationProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-entry";
-
-function isMemoryOnlyMigration(ctx: MigrationProviderContext): boolean {
-  return Boolean(
-    ctx.itemKinds && ctx.itemKinds.length > 0 && ctx.itemKinds.every((kind) => kind === "memory"),
-  );
-}
-
-function isAuthOnlyMigration(ctx: MigrationProviderContext): boolean {
-  return Boolean(
-    ctx.itemKinds && ctx.itemKinds.length > 0 && ctx.itemKinds.every((kind) => kind === "auth"),
-  );
-}
+import { isOnlyMigrationKind } from "./scope.js";
 
 export function buildCodexMigrationProvider(
   params: {
@@ -33,15 +21,16 @@ export function buildCodexMigrationProvider(
     supportedItemKinds: ["memory", "auth"],
     async detect(ctx) {
       const { discoverCodexSource, hasCodexSource } = await import("./source.js");
+      const memoryOnly = isOnlyMigrationKind(ctx, "memory");
+      const authOnly = isOnlyMigrationKind(ctx, "auth");
       const source = await discoverCodexSource({
         input: ctx.source,
-        memoryOnly: isMemoryOnlyMigration(ctx),
-        authOnly: isAuthOnlyMigration(ctx),
+        memoryOnly,
+        authOnly,
       });
-      const memoryOnly = isMemoryOnlyMigration(ctx);
       const found = memoryOnly
         ? source.memoryFiles.length > 0
-        : isAuthOnlyMigration(ctx)
+        : authOnly
           ? Boolean(source.authPath)
           : hasCodexSource(source);
       return {
@@ -58,7 +47,7 @@ export function buildCodexMigrationProvider(
     },
     deferredApply: { retrySafe: true },
     prepareApply(ctx) {
-      if (isMemoryOnlyMigration(ctx) || isAuthOnlyMigration(ctx)) {
+      if (isOnlyMigrationKind(ctx, "memory") || isOnlyMigrationKind(ctx, "auth")) {
         return undefined;
       }
       return import("./apply.js").then(({ prepareTargetCodexAppServer }) =>

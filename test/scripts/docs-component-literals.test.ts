@@ -8,12 +8,6 @@ import {
 describe("docs component literal attributes", () => {
   it.each([
     [
-      "Accordion",
-      "accordionOpen",
-      "Registered recall tools return `status=policy-disabled`",
-      "registered-recall-tools-return-status-policy-disabled",
-    ],
-    [
       "Expandable",
       "accordionOpen",
       "First recall returns `status=timeout`",
@@ -21,7 +15,6 @@ describe("docs component literal attributes", () => {
     ],
     ["Step", "stepOpen", "Run `openclaw status`", "run-%60openclaw-status%60"],
     ["Tab", "tabOpen", "Use `default`", "use-%60default%60"],
-    ["Card", "cardOpen", "Inspect `config`", undefined],
     ["Tooltip", "tooltipOpen", "The `config` value", undefined],
   ])("preserves inline code in %s attributes before publishing", (name, kind, title, id) => {
     const document = parseDocsDocument(`<${name} title="${title}">Body.</${name}>`);

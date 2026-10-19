@@ -1,11 +1,19 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect } from "vitest";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
 
-type RuntimeOptionsParams = NonNullable<Parameters<typeof resolveCodexAppServerRuntimeOptions>[0]>;
+type RuntimeOptionsParams = Omit<
+  NonNullable<Parameters<typeof resolveCodexAppServerRuntimeOptions>[0]>,
+  "pluginConfig"
+> & { pluginConfig?: unknown };
 
 export function resolveRuntimeForTest(params: RuntimeOptionsParams = {}) {
-  return resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null, ...params });
+  return resolveCodexAppServerRuntimeOptions({
+    env: {},
+    requirementsToml: null,
+    ...params,
+    pluginConfig: readCodexPluginConfig(params.pluginConfig),
+  });
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-capitalized");

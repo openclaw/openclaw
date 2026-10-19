@@ -1,13 +1,44 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
-import { waitForDead, waitForPidFile } from "./process-wait.js";
+import { isProcessAlive, waitForDead, waitForPidFile } from "./process-wait.js";
+import { withinTest } from "./promise.js";
 import { runNodeScript } from "./run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "./temp-dir.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const PID_CLEANUP_HANG_GUARD_MS = 2_000;
+const PROCESS_CLEANUP_HANG_GUARD_MS = 15_000;
+let cleanupFixture: (() => Promise<void>) | undefined;
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    // Timeout hooks can run before the suspended body finishes its finally block.
+    await cleanupFixture?.();
+    cleanupFixture = undefined;
+    cleanup();
+  }),
+);
+
+// The escaped leaf's parent exits, leaving no ChildProcess handle to join.
+async function waitForProcessExit(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      if (!isProcessAlive(pid)) {
+        return;
+      }
+      await delay(5, undefined, { signal });
+    }
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`process still alive: ${pid}`, { cause: error });
+    }
+    throw error;
+  }
+}
 
 it("captures inherited output written after the script exits", async () => {
   const script = join(tempDirs.make("openclaw-node-script-output-"), "parent.mjs");
@@ -33,6 +64,32 @@ child.once("message", () => process.exit(17));
     stderr: "drained stderr\n",
   });
 });
+
+it.for(["node", "current"] as const)(
+  "builds source worker arguments for the selected %s runtime",
+  async (runtime) => {
+    const script = join(tempDirs.make("openclaw-node-script-runtime-"), "worker.ts");
+    writeFileSync(
+      script,
+      `enum Answer { value = 42 }
+console.log(JSON.stringify({ answer: Answer.value, bun: Boolean(process.versions.bun), args: process.argv.slice(2) }));
+`,
+    );
+    const result = await runNodeScript(
+      (workerArgv) => [...workerArgv(pathToFileURL(script)), "worker-argument"],
+      process.env,
+      5_000,
+      { executable: runtime === "current" ? process.execPath : undefined },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      answer: 42,
+      bun: runtime === "current" && Boolean(process.versions.bun),
+      args: ["worker-argument"],
+    });
+  },
+);
 
 it.for(["at limit", "stdout overflow", "stderr overflow"])(
   "preserves independent 2 MiB output failure boundaries: %s",
@@ -109,6 +166,23 @@ child.once('message',()=>process.exit(0));
     const command = fixture.track(
       runNodeScript(script, process.env, undefined, { signal, requireProcessTreeExit: true }),
     );
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        await command;
+        // Rescue only this bounded escaped leaf, and certify its exit before
+        // manually disposing roots the lifetime owner deliberately retained.
+        if (existsSync(pidFile)) {
+          writeFileSync(release, "release");
+          // Cleanup hang guards after the owner released the leaf, not readiness races.
+          const pid = await waitForPidFile(pidFile, AbortSignal.timeout(PID_CLEANUP_HANG_GUARD_MS));
+          await waitForDead(pid, AbortSignal.timeout(PROCESS_CLEANUP_HANG_GUARD_MS));
+        }
+        await fixture.cleanup();
+        rmSync(directory, { recursive: true, force: true });
+        vi.unstubAllEnvs();
+      })());
+    cleanupFixture = cleanup;
     try {
       const result = await command;
       expect(result.error).toMatchObject({
@@ -119,19 +193,13 @@ child.once('message',()=>process.exit(0));
       expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
       expect(existsSync(directory)).toBe(true);
       writeFileSync(release, "release");
-      await waitForDead(await waitForPidFile(pidFile, 2_000), 2_000);
+      // The leaf writes its PID before ready; only that IPC lets the parent exit.
+      const pid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
+      expect(Number.isInteger(pid) && pid > 0).toBe(true);
+      await withinTest(waitForProcessExit(pid, signal), signal);
       expect(readFileSync(read, "utf8")).toBe("still owned");
     } finally {
-      await command;
-      // Rescue only this bounded escaped leaf, and certify its exit before
-      // manually disposing roots the lifetime owner deliberately retained.
-      if (existsSync(pidFile)) {
-        writeFileSync(release, "release");
-        await waitForDead(await waitForPidFile(pidFile, 2_000), 15_000);
-      }
-      await fixture.cleanup();
-      rmSync(directory, { recursive: true, force: true });
-      vi.unstubAllEnvs();
+      await cleanup();
     }
   },
 );

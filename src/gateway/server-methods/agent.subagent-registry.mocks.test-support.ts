@@ -1,18 +1,14 @@
 import { vi } from "vitest";
 import type { runSubagentAnnounceFlow } from "../../agents/subagents/announce/subagent-announce.js";
 import type { maybeWakeRequesterAfterAllChildrenSettled } from "../../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
-import type {
-  persistSubagentRunsToDisk,
-  persistSubagentRunsToDiskOrThrow,
-} from "../../agents/subagents/registry/subagent-registry-state.js";
 import type { callGateway } from "../call.js";
 
 const subagentRegistryMocks = vi.hoisted(() => ({
   registryCallGateway: vi.fn<typeof callGateway>().mockResolvedValue({ status: "pending" }),
   registryAnnounce: vi.fn<typeof runSubagentAnnounceFlow>(),
   registryWake: vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>(),
-  registryPersist: vi.fn<typeof persistSubagentRunsToDisk>(),
-  registryPersistOrThrow: vi.fn<typeof persistSubagentRunsToDiskOrThrow>(),
+  registryWrite: vi.fn<() => void>(),
+  pendingWakeRoots: new Set<Promise<void>>(),
 }));
 
 export { subagentRegistryMocks };
@@ -22,23 +18,27 @@ vi.mock("../server-recovery-runtime-context.js", async (importOriginal) => ({
   bindGatewayLifecycleRequest: () => subagentRegistryMocks.registryCallGateway,
 }));
 
-vi.mock("../../agents/subagents/registry/subagent-registry-state.js", async (importOriginal) => {
+vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => {
   const actual =
-    await importOriginal<
-      typeof import("../../agents/subagents/registry/subagent-registry-state.js")
-    >();
+    await importOriginal<typeof import("../../state/openclaw-state-worker-store.js")>();
   return {
     ...actual,
-    persistSubagentRunsToDisk: (...args: Parameters<typeof actual.persistSubagentRunsToDisk>) =>
-      subagentRegistryMocks.registryPersist.getMockImplementation()
-        ? subagentRegistryMocks.registryPersist(...args)
-        : actual.persistSubagentRunsToDisk(...args),
-    persistSubagentRunsToDiskOrThrow: (
-      ...args: Parameters<typeof actual.persistSubagentRunsToDiskOrThrow>
+    runOpenClawStateWorkerOperation: (
+      ...[context, operation, options]: Parameters<typeof actual.runOpenClawStateWorkerOperation>
     ) =>
-      subagentRegistryMocks.registryPersistOrThrow.getMockImplementation()
-        ? subagentRegistryMocks.registryPersistOrThrow(...args)
-        : actual.persistSubagentRunsToDiskOrThrow(...args),
+      actual.runOpenClawStateWorkerOperation(
+        context,
+        (scope) =>
+          operation({
+            execute(command) {
+              if (command.type === "subagents.persistChanges") {
+                subagentRegistryMocks.registryWrite();
+              }
+              return scope.execute(command);
+            },
+          }),
+        options,
+      ),
   };
 });
 
@@ -61,14 +61,26 @@ vi.mock(
       await importOriginal<
         typeof import("../../agents/subagents/announce/subagent-announce.requester-settle-wake.js")
       >();
+    const { captureGatewayRootWorkReleaseObserver } =
+      await import("../../process/gateway-work-admission.js");
     return {
       ...actual,
       maybeWakeRequesterAfterAllChildrenSettled: (
         ...args: Parameters<typeof actual.maybeWakeRequesterAfterAllChildrenSettled>
-      ) =>
-        subagentRegistryMocks.registryWake.getMockImplementation()
+      ) => {
+        // Cleanup publication precedes this detached wake's worker reads and final release.
+        const observeRelease = captureGatewayRootWorkReleaseObserver();
+        if (observeRelease) {
+          const released = new Promise<void>((resolve) => {
+            observeRelease(() => resolve());
+          });
+          subagentRegistryMocks.pendingWakeRoots.add(released);
+          void released.then(() => subagentRegistryMocks.pendingWakeRoots.delete(released));
+        }
+        return subagentRegistryMocks.registryWake.getMockImplementation()
           ? subagentRegistryMocks.registryWake(...args)
-          : actual.maybeWakeRequesterAfterAllChildrenSettled(...args),
+          : actual.maybeWakeRequesterAfterAllChildrenSettled(...args);
+      },
     };
   },
 );
@@ -82,10 +94,15 @@ vi.mock("../../agents/runtime-plugins.js", async () => {
   return { loadAgentRuntimePluginRegistryHandle: createEmptyPluginRegistry };
 });
 
+export async function settleAgentSubagentWakeRoots(): Promise<void> {
+  while (subagentRegistryMocks.pendingWakeRoots.size > 0) {
+    await Promise.all(subagentRegistryMocks.pendingWakeRoots);
+  }
+}
+
 export function resetSubagentRegistryMocks() {
   subagentRegistryMocks.registryCallGateway.mockReset().mockResolvedValue({ status: "pending" });
   subagentRegistryMocks.registryAnnounce.mockReset();
   subagentRegistryMocks.registryWake.mockReset();
-  subagentRegistryMocks.registryPersist.mockReset();
-  subagentRegistryMocks.registryPersistOrThrow.mockReset();
+  subagentRegistryMocks.registryWrite.mockReset();
 }

@@ -1,5 +1,3 @@
-/* Apps & extensions promo page — hero, card grid, and community pills. */
-
 .apps-hero {
   display: flex;
   flex-direction: column;
@@ -153,17 +151,21 @@
 }
 
 .apps-card__cta {
+  padding: 6px 13px;
+  font: inherit;
+  cursor: var(--cursor-action);
+}
+
+.apps-card__cta,
+.apps-pill {
   display: inline-flex;
   align-items: center;
-  padding: 6px 13px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--card);
   color: var(--text);
-  font: inherit;
   font-size: var(--control-ui-text-sm);
   font-weight: 550;
-  cursor: var(--cursor-action);
   transition:
     transform 140ms ease,
     background 140ms ease,
@@ -176,7 +178,8 @@
   color: var(--bg);
 }
 
-.apps-card__cta:hover {
+.apps-card__cta:hover,
+.apps-pill:hover {
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--border) 40%, var(--text) 60%);
   background: var(--bg-hover);
@@ -187,7 +190,8 @@
   color: var(--bg);
 }
 
-.apps-card__cta:focus-visible {
+.apps-card__cta:focus-visible,
+.apps-pill:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -226,31 +230,8 @@
 }
 
 .apps-pill {
-  display: inline-flex;
-  align-items: center;
   gap: 8px;
   padding: 8px 15px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--card);
-  color: var(--text);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 550;
-  transition:
-    transform 140ms ease,
-    background 140ms ease,
-    border-color 140ms ease;
-}
-
-.apps-pill:hover {
-  transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--border) 40%, var(--text) 60%);
-  background: var(--bg-hover);
-}
-
-.apps-pill:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .apps-pill__icon {

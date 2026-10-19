@@ -1,4 +1,3 @@
-// Ollama web-search runtime implements provider integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   isNonSecretApiKeyMarker,
@@ -11,6 +10,7 @@ import {
   redactProviderResponseErrorText,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  externalContentStamp,
   readPositiveIntegerParam,
   readResponseText,
   readStringParam,
@@ -61,17 +61,9 @@ type OllamaWebSearchAttempt = {
   apiKey?: string;
 };
 
-async function readOllamaWebSearchResponse(response: Response): Promise<OllamaWebSearchResponse> {
-  return await readProviderJsonResponse<OllamaWebSearchResponse>(response, "Ollama web search");
-}
-
 function isOllamaCloudBaseUrl(baseUrl: string): boolean {
-  try {
-    const parsed = new URL(baseUrl);
-    return parsed.protocol === "https:" && parsed.hostname === "ollama.com";
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(baseUrl);
+  return parsed?.protocol === "https:" && parsed.hostname === "ollama.com";
 }
 
 function normalizeOllamaWebSearchApiKey(value: unknown): string | undefined {
@@ -232,7 +224,7 @@ async function runOllamaWebSearch(params: {
       }
       if (response.status === 403) {
         throw new ProviderHttpError(
-          "Ollama web search is unavailable. Ensure cloud-backed web search is enabled on the Ollama host.",
+          "Ollama web search is unavailable. Check that cloud-backed web search is enabled on the Ollama host.",
           { status: response.status },
         );
       }
@@ -249,12 +241,14 @@ async function runOllamaWebSearch(params: {
         }
         throw error;
       }
-      payload = await readOllamaWebSearchResponse(response);
+      payload = await readProviderJsonResponse<OllamaWebSearchResponse>(
+        response,
+        "Ollama web search",
+      );
       params.signal?.throwIfAborted();
       break;
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      throw lastError;
+      throw error instanceof Error ? error : new Error(String(error));
     } finally {
       // The 401/403 branches throw before the stream is touched, leaving release
       // to force-close the active dispatcher. Start cancellation first; awaiting
@@ -282,12 +276,7 @@ async function runOllamaWebSearch(params: {
     provider: "ollama",
     count: results.length,
     tookMs: Date.now() - startedAt,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "ollama",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("ollama"),
     results: results.map((result) => {
       const snippet = truncateText(result.content, OLLAMA_WEB_SEARCH_SNIPPET_MAX_CHARS).text;
       return {
@@ -343,7 +332,7 @@ export function createOllamaWebSearchProvider(): Pick<
   "runSetup" | "createTool"
 > {
   return {
-    runSetup: async (ctx) => await warnOllamaWebSearchPrereqs(ctx),
+    runSetup: warnOllamaWebSearchPrereqs,
     createTool: (ctx) => ({
       description: OLLAMA_WEB_SEARCH_TOOL_DESCRIPTION,
       parameters: OLLAMA_WEB_SEARCH_TOOL_PARAMETERS,

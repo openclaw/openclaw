@@ -1,10 +1,10 @@
-// OpenAI Responses tool helpers convert runtime tools to Responses API schemas.
 import type { FunctionTool } from "openai/resources/responses/responses.js";
 import { getAiTransportHost } from "../host.js";
 import { resolveOpenAICompletionsCompat } from "../transports/openai-completions-compat.js";
 import { resolveOpenAIStrictToolFlagWithDiagnostics } from "../transports/openai-transport-params.js";
 import type { Model, Tool } from "../types.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
+import { prepareOpenAIFunctionTool } from "./openai-function-tool.js";
 import { prepareOpenAITools } from "./openai-tool-projection.js";
 import {
   normalizeOpenAIStrictToolParameters,
@@ -20,13 +20,6 @@ interface ConvertResponsesToolsOptions {
 }
 
 type OpenAIToolSchemaCompat = Parameters<typeof normalizeOpenAIStrictToolParameters>[2];
-type ResponsesFunctionTool = {
-  type: "function";
-  name: string;
-  description?: string;
-  parameters: Record<string, unknown>;
-  strict?: boolean | null;
-};
 
 /** Projects direct provider descriptors before resolving their strict policy. */
 export function convertResponsesToolPayload(
@@ -69,19 +62,16 @@ function convertPreparedResponsesTools(
       : resolveOpenAIProjectedToolsStrictToolFlag(projection, strictSetting);
     // Sort tools before request construction so prompt-cache bytes stay deterministic.
     return sortPromptCacheToolsByName(projection.tools).map((tool) => {
-      const result: ResponsesFunctionTool = {
-        type: "function",
-        name: tool.name,
-        description: tool.description,
-        parameters: normalizeOpenAIStrictToolParameters(
+      const result = prepareOpenAIFunctionTool(
+        tool.name,
+        tool.description,
+        normalizeOpenAIStrictToolParameters(
           tool.parameters,
           strict === true,
           model?.compat as OpenAIToolSchemaCompat,
         ),
-      };
-      if (strict !== undefined) {
-        result.strict = strict;
-      }
+        strict,
+      ).responses;
       // Compatible endpoints can require strict to be absent; the SDK declares it required.
       return result as FunctionTool;
     });

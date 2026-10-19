@@ -9,11 +9,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
-  createAlwaysConfiguredPluginConfig,
+  createActionPluginBase,
   createGatewayActionPlugin,
   messageActionRunnerMocks as mocks,
   resetMessageActionRunnerMocks,
-  runMessageAction,
+  runMessageAction as runAction,
   setMessageActionTestPlugin as setTestPlugin,
   useActionHubPluginFixture,
   readFirstPluginCall,
@@ -24,44 +24,131 @@ import {
 } from "./message-action-runner.test-helpers.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 
+const cli = { clientName: "cli", mode: "cli" } as const;
+
+type SendInput = Omit<Parameters<typeof runAction>[0], "action" | "cfg" | "params"> & {
+  cfg?: OpenClawConfig;
+  params: Record<string, unknown> & { channel: string };
+};
+function runMessageAction({ cfg, ...input }: SendInput) {
+  return runAction({
+    action: "send",
+    dryRun: false,
+    cfg: cfg ?? createEnabledMessageActionConfig(input.params.channel),
+    ...input,
+  });
+}
+function registerGatewayChat(handleAction = vi.fn(async () => jsonResult({ ok: true }))) {
+  setTestPlugin(
+    createGatewayActionPlugin({
+      pluginId: "gatewaychat",
+      label: "Gateway Chat",
+      blurb: "Gateway Chat send test plugin.",
+      actions: ["send"],
+      messaging: { targetResolver: { looksLikeId: () => true } },
+      handleAction,
+    }),
+    "gatewaychat",
+  );
+}
+function gatewayMessageParams() {
+  const call = readMockCallArg(mocks.callGatewayLeastPrivilege, "gateway least privilege call");
+  return readRecordField(
+    readRecordField(call, "params", "gateway call params"),
+    "params",
+    "gateway message params",
+  );
+}
+
 describe("runMessageAction plugin dispatch", () => {
   beforeEach(() => {
     resetMessageActionRunnerMocks();
   });
   describe("alias-based plugin action dispatch", () => {
     useActionHubPluginFixture();
+    it("mirrors an inherited reply through its canonical root", async () => {
+      const sessionKey = "agent:main:forum:channel:123:thread:root-42";
+      vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
+        sessionKey,
+        baseSessionKey: "base",
+        peer: { id: "123", kind: "channel" },
+        chatType: "channel",
+        from: "forum:123",
+        to: "forum:123",
+        threadId: "root-42",
+      });
+      setTestPlugin(
+        createGatewayActionPlugin({
+          pluginId: "forum",
+          label: "Forum",
+          blurb: "Thread routing test plugin.",
+          actions: ["send"],
+          gatewayActions: [],
+          messaging: { targetResolver: { looksLikeId: () => true } },
+          threading: {
+            resolveAutoThreadId: ({ replyToId }) => (replyToId ? undefined : "root-42"),
+            resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit }) => ({
+              replyToId: replyToIsExplicit || threadId == null ? replyToId : String(threadId),
+              threadId: threadId ?? null,
+            }),
+          },
+          handleAction: vi.fn(async () => jsonResult({ ok: true })),
+        }),
+        "forum",
+      );
+      mocks.executeSendAction.mockResolvedValueOnce({ handledBy: "core", payload: { ok: true } });
+
+      await runMessageAction({
+        params: { channel: "forum", target: "forum:123", message: "Reply" },
+        agentId: "main",
+        toolContext: {
+          currentChannelId: "forum:123",
+          currentChannelProvider: "forum",
+          currentMessageId: "child-777",
+          currentThreadTs: "42",
+          replyToMode: "all",
+        },
+      });
+
+      expect(resolveOutboundSessionRoute).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ replyToId: "root-42", threadId: "root-42" }),
+      );
+      expect(mocks.executeSendAction).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          reply: { replyToId: "root-42", source: "implicit", mode: "all" },
+          threadId: "root-42",
+          ctx: expect.objectContaining({
+            params: expect.objectContaining({
+              replyTo: "root-42",
+              threadId: "root-42",
+              __sessionKey: sessionKey,
+              __agentId: "main",
+            }),
+            mirror: expect.objectContaining({ sessionKey }),
+          }),
+        }),
+      );
+    });
     it.each([
-      {
-        name: "suppressed",
-        receipt: { status: "suppressed", reason: "cancelled_by_message_sending_hook" },
-        accepted: false,
-      },
-      {
-        name: "failed with an attempt ID",
-        receipt: { ok: false, error: "send failed", messageId: "attempt-id" },
-        accepted: false,
-      },
-      {
-        name: "dry-run",
-        receipt: { ok: true, dryRun: true, messageId: "dry-run-id" },
-        accepted: false,
-      },
-      {
-        name: "explicit partial delivery",
-        receipt: {
+      ["suppressed", { status: "suppressed", reason: "cancelled_by_message_sending_hook" }, false],
+      [
+        "failed with an attempt ID",
+        { ok: false, error: "send failed", messageId: "attempt-id" },
+        false,
+      ],
+      ["dry-run", { ok: true, dryRun: true, messageId: "dry-run-id" }, false],
+      [
+        "explicit partial delivery",
+        {
           ok: false,
           error: "second part failed",
           sentBeforeError: true,
           messageId: "partial-receipt",
         },
-        accepted: true,
-      },
-      {
-        name: "successful delivery",
-        receipt: { ok: true, messageId: "sent-1" },
-        accepted: true,
-      },
-    ])("handles Gateway-relayed $name receipts", async ({ receipt, accepted }) => {
+        true,
+      ],
+      ["successful delivery", { ok: true, messageId: "sent-1" }, true],
+    ] as const)("handles Gateway-relayed %s receipts", async (_name, receipt, accepted) => {
       vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
         sessionKey: "agent:main:gatewaychat:direct:user-123",
         baseSessionKey: "agent:main:gatewaychat:direct:user-123",
@@ -70,97 +157,77 @@ describe("runMessageAction plugin dispatch", () => {
         from: "gatewaychat:user-123",
         to: "user-123",
       });
-      setTestPlugin(
-        createGatewayActionPlugin({
-          pluginId: "gatewaychat",
-          label: "Gateway Chat",
-          blurb: "Gateway Chat send test plugin.",
-          actions: ["send"],
-          messaging: { targetResolver: { looksLikeId: () => true } },
-          handleAction: vi.fn(),
-        }),
-        "gatewaychat",
-      );
+      registerGatewayChat(vi.fn());
       mocks.callGatewayLeastPrivilege.mockResolvedValue(receipt);
       const result = await runMessageAction({
-        cfg: createEnabledMessageActionConfig("gatewaychat"),
-        action: "send",
         params: { channel: "gatewaychat", target: "user-123", message: "omitted" },
         agentId: "main",
-        gateway: { clientName: "cli", mode: "cli" },
+        gateway: cli,
       });
       expect(result.payload).toEqual(receipt);
       expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(accepted ? 1 : 0);
     });
-    it.each([
-      { name: "raw base64", buffer: "SGVsbG8=" },
-      { name: "data URL", buffer: "data:application/octet-stream;base64,SGVsbG8=" },
-    ])("preserves $name bytes and MIME for gateway-side materialization", async ({ buffer }) => {
-      const gatewayPlugin = createGatewayActionPlugin({
-        pluginId: "gatewaychat",
-        label: "Gateway Chat",
-        blurb: "Gateway Chat send test plugin.",
-        actions: ["send"],
-        messaging: {
-          targetResolver: {
-            looksLikeId: () => true,
-          },
-        },
-        handleAction: vi.fn(async () => jsonResult({ ok: true })),
-      });
-      setTestPlugin(gatewayPlugin, "gatewaychat");
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({
-        ok: true,
-        messageId: "gw-send-buffer",
-      });
-
-      await runMessageAction({
-        cfg: createEnabledMessageActionConfig("gatewaychat"),
-        action: "send",
-        params: {
-          channel: "gatewaychat",
-          target: "user-123",
+    it.each(["gatewaychat", "gatewaydeliver"])(
+      "preserves data URL bytes and MIME through %s",
+      async (channel) => {
+        const buffer = "data:application/octet-stream;base64,SGVsbG8=";
+        const mediaUrl = "buffer://message-send/attachment";
+        const filename = channel === "gatewaychat" ? "gateway.txt" : "delivery.txt";
+        if (channel === "gatewaychat") {
+          registerGatewayChat();
+          mocks.callGatewayLeastPrivilege.mockResolvedValue({
+            ok: true,
+            messageId: "gw-send-buffer",
+          });
+        } else {
+          setTestPlugin(
+            {
+              ...createActionPluginBase(
+                channel,
+                "Gateway Deliver",
+                "Gateway delivery-mode send test plugin.",
+              ),
+              messaging: { targetResolver: { looksLikeId: () => true } },
+              outbound: { deliveryMode: "gateway" },
+            },
+            channel,
+          );
+          mocks.executeSendAction.mockResolvedValueOnce({
+            handledBy: "core",
+            payload: { ok: true },
+            sendResult: { channel, to: "user-123", via: "gateway", mediaUrl },
+          });
+        }
+        await runMessageAction({
+          params: { channel, target: "user-123", buffer, filename, mimeType: "text/plain" },
+          gateway: cli,
+        });
+        const expected = {
+          mediaUrl,
+          mediaUrls: [mediaUrl],
           buffer,
-          filename: "gateway.txt",
-          mimeType: "text/plain",
-        },
-        gateway: {
-          clientName: "cli",
-          mode: "cli",
-        },
-      });
-
-      const gatewayCall = readMockCallArg(
-        mocks.callGatewayLeastPrivilege,
-        "gateway least privilege call",
-      );
-      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
-      expectRecordFields(
-        readRecordField(gatewayParams, "params", "gateway message params"),
-        {
-          to: "user-123",
-          media: "buffer://message-send/attachment",
-          mediaUrl: "buffer://message-send/attachment",
-          mediaUrls: ["buffer://message-send/attachment"],
-          buffer,
-          filename: "gateway.txt",
+          filename,
           contentType: "text/plain",
-        },
-        "gateway message params",
-      );
-      expect(mocks.executeSendAction).not.toHaveBeenCalled();
-    });
+        };
+        if (channel === "gatewaychat") {
+          expectRecordFields(
+            gatewayMessageParams(),
+            { to: "user-123", media: mediaUrl, ...expected },
+            "gateway message params",
+          );
+          expect(mocks.executeSendAction).not.toHaveBeenCalled();
+        } else {
+          expectRecordFields(
+            readMockCallArg(mocks.executeSendAction, "execute send call"),
+            expected,
+            "execute send call",
+          );
+        }
+      },
+    );
 
     it("stages workspace-reader media before gateway dispatch", async () => {
-      const gatewayPlugin = createGatewayActionPlugin({
-        pluginId: "gatewaychat",
-        label: "Gateway Chat",
-        blurb: "Gateway Chat sandbox media test plugin.",
-        actions: ["send"],
-        messaging: { targetResolver: { looksLikeId: () => true } },
-        handleAction: vi.fn(async () => jsonResult({ ok: true })),
-      });
-      setTestPlugin(gatewayPlugin, "gatewaychat");
+      registerGatewayChat();
       mocks.callGatewayLeastPrivilege.mockResolvedValue({
         ok: true,
         messageId: "gw-sandbox-media",
@@ -184,8 +251,6 @@ describe("runMessageAction plugin dispatch", () => {
       });
 
       await runMessageAction({
-        cfg: createEnabledMessageActionConfig("gatewaychat"),
-        action: "send",
         params: {
           channel: "gatewaychat",
           target: "user-123",
@@ -209,15 +274,10 @@ describe("runMessageAction plugin dispatch", () => {
           readFile: workspaceReadFile,
           workspaceDir: "/host-mirror",
         },
-        gateway: { clientName: "cli", mode: "cli" },
+        gateway: cli,
       });
 
-      const gatewayCall = readMockCallArg(
-        mocks.callGatewayLeastPrivilege,
-        "gateway least privilege call",
-      );
-      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
-      const messageParams = readRecordField(gatewayParams, "params", "gateway message params");
+      const messageParams = gatewayMessageParams();
       const stagedPath = String(messageParams.media);
       expect(stagedPath).not.toBe("/sandbox/chart.txt");
       expect(messageParams.mediaUrl).toBe(stagedPath);
@@ -237,84 +297,8 @@ describe("runMessageAction plugin dispatch", () => {
       expect(workspaceReadFile).toHaveBeenCalled();
     });
 
-    it.each([
-      { name: "raw base64", buffer: "SGVsbG8=" },
-      { name: "data URL", buffer: "data:application/octet-stream;base64,SGVsbG8=" },
-    ])("preserves $name bytes and MIME for gateway delivery-mode channels", async ({ buffer }) => {
-      const gatewayDeliveryPlugin: ChannelPlugin = {
-        id: "gatewaydeliver",
-        meta: {
-          id: "gatewaydeliver",
-          label: "Gateway Deliver",
-          selectionLabel: "Gateway Deliver",
-          docsPath: "/channels/gatewaydeliver",
-          blurb: "Gateway delivery-mode send test plugin.",
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: createAlwaysConfiguredPluginConfig(),
-        messaging: {
-          targetResolver: {
-            looksLikeId: () => true,
-          },
-        },
-        outbound: { deliveryMode: "gateway" },
-      };
-      setTestPlugin(gatewayDeliveryPlugin, "gatewaydeliver");
-      mocks.executeSendAction.mockResolvedValueOnce({
-        handledBy: "core",
-        payload: { ok: true },
-        sendResult: {
-          channel: "gatewaydeliver",
-          to: "user-123",
-          via: "gateway",
-          mediaUrl: "buffer://message-send/attachment",
-        },
-      });
-
-      await runMessageAction({
-        cfg: createEnabledMessageActionConfig("gatewaydeliver"),
-        action: "send",
-        params: {
-          channel: "gatewaydeliver",
-          target: "user-123",
-          buffer,
-          filename: "delivery.txt",
-          mimeType: "text/plain",
-        },
-        gateway: {
-          clientName: "cli",
-          mode: "cli",
-        },
-      });
-
-      const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
-      expectRecordFields(
-        executeCall,
-        {
-          mediaUrl: "buffer://message-send/attachment",
-          mediaUrls: ["buffer://message-send/attachment"],
-          buffer,
-          filename: "delivery.txt",
-          contentType: "text/plain",
-        },
-        "execute send call",
-      );
-    });
-
     it("applies TTS before gateway-executed plugin sends", async () => {
-      const gatewayPlugin = createGatewayActionPlugin({
-        pluginId: "gatewaychat",
-        label: "Gateway Chat",
-        blurb: "Gateway Chat send test plugin.",
-        actions: ["send"],
-        messaging: {
-          targetResolver: {
-            looksLikeId: () => true,
-          },
-        },
-        handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
-      });
-      setTestPlugin(gatewayPlugin, "gatewaychat");
+      registerGatewayChat(vi.fn(async () => jsonResult({ ok: true, local: true })));
       mocks.callGatewayLeastPrivilege.mockResolvedValue({
         ok: true,
         messageId: "gw-send-tts",
@@ -327,35 +311,19 @@ describe("runMessageAction plugin dispatch", () => {
 
       await runMessageAction({
         cfg: {
-          channels: {
-            gatewaychat: {
-              enabled: true,
-            },
-          },
-          tts: {
-            auto: "tagged",
-          },
+          ...createEnabledMessageActionConfig("gatewaychat"),
+          tts: { auto: "tagged" },
         } as OpenClawConfig,
-        action: "send",
         params: {
           channel: "gatewaychat",
           target: "user-123",
           message: "[[tts:text]]hello there[[/tts:text]]",
         },
-        gateway: {
-          clientName: "cli",
-          mode: "cli",
-        },
-        dryRun: false,
+        gateway: cli,
       });
 
-      const gatewayCall = readMockCallArg(
-        mocks.callGatewayLeastPrivilege,
-        "gateway least privilege call",
-      );
-      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
       expectRecordFields(
-        readRecordField(gatewayParams, "params", "gateway message params"),
+        gatewayMessageParams(),
         {
           message: "",
           media: "file:///tmp/openclaw-voice.ogg",
@@ -367,66 +335,11 @@ describe("runMessageAction plugin dispatch", () => {
       );
       expect(mocks.executeSendAction).not.toHaveBeenCalled();
     });
-
-    it("applies TTS before local plugin send fallback dispatch", async () => {
-      const handleActionValue = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
-        jsonResult({ ok: true, params }),
-      );
-      const localPlugin = createGatewayActionPlugin({
-        pluginId: "localchat",
-        label: "Local Chat",
-        blurb: "Local Chat send test plugin.",
-        actions: ["send"],
-        gatewayActions: [],
-        messaging: {
-          targetResolver: {
-            looksLikeId: () => true,
-          },
-        },
-        handleAction: handleActionValue,
-      });
-      setTestPlugin(localPlugin, "localchat");
-      mocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
-        mediaUrl: "file:///tmp/openclaw-voice.ogg",
-        audioAsVoice: true,
-        spokenText: "hello there",
-      });
-
-      await runMessageAction({
-        cfg: {
-          channels: {
-            localchat: {
-              enabled: true,
-            },
-          },
-          tts: {
-            auto: "tagged",
-          },
-        } as OpenClawConfig,
-        action: "send",
-        params: {
-          channel: "localchat",
-          target: "user-123",
-          message: "[[tts:text]]hello there[[/tts:text]]",
-        },
-        dryRun: false,
-      });
-
-      const call = readFirstPluginCall(handleActionValue);
-      expectRecordFields(
-        readRecordField(call, "params", "local plugin params"),
-        {
-          message: "",
-          media: "file:///tmp/openclaw-voice.ogg",
-          mediaUrl: "file:///tmp/openclaw-voice.ogg",
-          asVoice: true,
-          audioAsVoice: true,
-        },
-        "local plugin params",
-      );
-    });
   });
   describe("presentation send routing", () => {
+    const chart = (title: string, categories: string[], name: string, values: number[]) => ({
+      blocks: [{ type: "chart", chartType: "line", title, categories, series: [{ name, values }] }],
+    });
     const handleAction = vi.fn(
       async ({ cfg, params }: { cfg: OpenClawConfig; params: Record<string, unknown> }) => {
         const message = typeof params.message === "string" ? params.message : "";
@@ -454,16 +367,7 @@ describe("runMessageAction plugin dispatch", () => {
     );
 
     const cardPlugin: ChannelPlugin = {
-      id: "cardchat",
-      meta: {
-        id: "cardchat",
-        label: "Card Chat",
-        selectionLabel: "Card Chat",
-        docsPath: "/channels/cardchat",
-        blurb: "Card-only send test plugin.",
-      },
-      capabilities: { chatTypes: ["direct"] },
-      config: createAlwaysConfiguredPluginConfig(),
+      ...createActionPluginBase("cardchat", "Card Chat", "Card-only send test plugin."),
       actions: {
         describeMessageTool: () => ({ actions: ["send"], capabilities: ["presentation"] }),
         supportsAction: ({ action }) => action === "send",
@@ -471,6 +375,20 @@ describe("runMessageAction plugin dispatch", () => {
         handleAction,
       },
     };
+
+    function registerLocalCardPlugin() {
+      setTestPlugin(
+        {
+          ...cardPlugin,
+          actions: { ...cardPlugin.actions, resolveExecutionMode: () => "local" },
+          outbound: {
+            deliveryMode: "direct",
+            sendText: async () => ({ channel: "cardchat", messageId: "msg-test" }),
+          },
+        },
+        "cardchat",
+      );
+    }
 
     beforeEach(() => {
       setTestPlugin(cardPlugin, "cardchat");
@@ -483,52 +401,31 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("keeps presentation-only sends on action-only gateway plugins", async () => {
-      const cfg = createEnabledMessageActionConfig("cardchat");
-
       const presentation = {
         blocks: [{ type: "text", text: "Presentation-only payload" }],
       };
       mocks.callGatewayLeastPrivilege.mockResolvedValueOnce({ ok: true, messageId: "card-1" });
 
       const result = await runMessageAction({
-        cfg,
-        action: "send",
         params: {
           channel: "cardchat",
           target: "channel:test-card",
           presentation,
         },
-        gateway: {
-          clientName: "cli",
-          mode: "cli",
-        },
-        dryRun: false,
+        gateway: cli,
       });
 
-      expect(result.kind).toBe("send");
-      expect(result.handledBy).toBe("plugin");
+      expect(result).toMatchObject({ kind: "send", handledBy: "plugin" });
       expect(handleAction).not.toHaveBeenCalled();
       expect(mocks.executeSendAction).not.toHaveBeenCalled();
-      const gatewayCall = readMockCallArg(
-        mocks.callGatewayLeastPrivilege,
-        "gateway least privilege call",
-      );
-      const gatewayActionParams = readRecordField(
-        readRecordField(gatewayCall, "params", "gateway call params"),
-        "params",
-        "gateway action params",
-      );
+      const gatewayActionParams = gatewayMessageParams();
       expect(gatewayActionParams).not.toHaveProperty("message");
       expectRecordFields(gatewayActionParams, { presentation }, "gateway action params");
     });
 
     it("omits a blank shared-schema location from gateway-routed sends", async () => {
       const cfg = {
-        channels: {
-          cardchat: {
-            enabled: true,
-          },
-        },
+        ...createEnabledMessageActionConfig("cardchat"),
         messages: { responsePrefix: "[Nexus]" },
       } as OpenClawConfig;
       mocks.callGatewayLeastPrivilege.mockResolvedValueOnce({
@@ -538,158 +435,52 @@ describe("runMessageAction plugin dispatch", () => {
 
       const result = await runMessageAction({
         cfg,
-        action: "send",
         params: {
           channel: "cardchat",
           target: "channel:test-card",
           message: "hello",
           location: "",
         },
-        gateway: {
-          clientName: "cli",
-          mode: "cli",
-        },
-        dryRun: false,
+        gateway: cli,
       });
 
-      expect(result.kind).toBe("send");
-      expect(result.handledBy).toBe("plugin");
+      expect(result).toMatchObject({ kind: "send", handledBy: "plugin" });
       expect(handleAction).not.toHaveBeenCalled();
-      const gatewayCall = readMockCallArg(
-        mocks.callGatewayLeastPrivilege,
-        "gateway least privilege call",
-      );
-      const gatewayActionParams = readRecordField(
-        readRecordField(gatewayCall, "params", "gateway call params"),
-        "params",
-        "gateway action params",
-      );
+      const gatewayActionParams = gatewayMessageParams();
       expect(gatewayActionParams).not.toHaveProperty("location");
-    });
-
-    it("keeps gateway-routed chart presentations on the gateway", async () => {
-      const presentation = {
-        blocks: [
-          {
-            type: "chart",
-            chartType: "line",
-            title: "Deployments",
-            categories: ["Mon", "Tue"],
-            series: [{ name: "Production", values: [2, 3] }],
-          },
-        ],
-      };
-      mocks.callGatewayLeastPrivilege.mockResolvedValueOnce({ ok: true, messageId: "card-2" });
-      setTestPlugin(
-        {
-          ...cardPlugin,
-          outbound: {
-            deliveryMode: "direct",
-            sendText: async () => ({ channel: "cardchat", messageId: "msg-test" }),
-          },
-        },
-        "cardchat",
-      );
-
-      const result = await runMessageAction({
-        cfg: createEnabledMessageActionConfig("cardchat"),
-        action: "send",
-        params: {
-          channel: "cardchat",
-          target: "channel:test-card",
-          message: "Deployment trend",
-          presentation,
-        },
-        gateway: {
-          clientName: "cli",
-          mode: "cli",
-        },
-        dryRun: false,
-      });
-
-      expect(result.kind).toBe("send");
-      expect(result.handledBy).toBe("plugin");
-      expect(handleAction).not.toHaveBeenCalled();
-      expect(mocks.executeSendAction).not.toHaveBeenCalled();
-      const gatewayCall = readMockCallArg(
-        mocks.callGatewayLeastPrivilege,
-        "gateway least privilege call",
-      );
-      expectRecordFields(
-        readRecordField(
-          readRecordField(gatewayCall, "params", "gateway call params"),
-          "params",
-          "gateway action params",
-        ),
-        { message: "Deployment trend", presentation },
-        "gateway action params",
-      );
     });
 
     it("routes local chart presentations through core delivery", async () => {
       const sourceSessionKey = "agent:main:cardchat:direct:restricted-creator";
-      const presentation = {
-        blocks: [
-          {
-            type: "chart",
-            chartType: "line",
-            title: "Deployments",
-            categories: ["Mon", "Tue"],
-            series: [{ name: "Production", values: [2, 3] }],
-          },
-        ],
-      };
+      const presentation = chart("Deployments", ["Mon", "Tue"], "Production", [2, 3]);
       mocks.executeSendAction.mockResolvedValueOnce({
         handledBy: "core",
         payload: { ok: true },
       });
-      mocks.prepareOutboundMirrorRoute.mockResolvedValueOnce({
-        resolvedThreadId: undefined,
-        outboundRoute: {
-          sessionKey: "agent:main:cardchat:channel:test-card",
-          baseSessionKey: "agent:main:cardchat:channel:test-card",
-          peer: { kind: "channel", id: "test-card" },
-          chatType: "channel",
-          from: "cardchat:channel:test-card",
-          to: "channel:test-card",
-        },
+      vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
+        sessionKey: "agent:main:cardchat:channel:test-card",
+        baseSessionKey: "agent:main:cardchat:channel:test-card",
+        peer: { kind: "channel", id: "test-card" },
+        chatType: "channel",
+        from: "cardchat:channel:test-card",
+        to: "channel:test-card",
       });
-      setTestPlugin(
-        {
-          ...cardPlugin,
-          actions: {
-            ...cardPlugin.actions,
-            resolveExecutionMode: () => "local",
-          },
-          outbound: {
-            deliveryMode: "direct",
-            sendText: async () => ({ channel: "cardchat", messageId: "msg-test" }),
-          },
-        },
-        "cardchat",
-      );
+      registerLocalCardPlugin();
 
       const result = await runMessageAction({
-        cfg: createEnabledMessageActionConfig("cardchat"),
-        action: "send",
         params: {
           channel: "cardchat",
           target: "channel:test-card",
           message: "Deployment trend",
           presentation,
         },
-        gateway: {
-          clientName: "cli",
-          mode: "cli",
-        },
+        gateway: cli,
         agentId: "main",
         sessionKey: sourceSessionKey,
         suppressTranscriptMirror: true,
-        dryRun: false,
       });
 
-      expect(result.kind).toBe("send");
-      expect(result.handledBy).toBe("core");
+      expect(result).toMatchObject({ kind: "send", handledBy: "core" });
       expect(handleAction).not.toHaveBeenCalled();
       expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
       const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
@@ -711,33 +502,11 @@ describe("runMessageAction plugin dispatch", () => {
       ["model-authored message-tool sends", "message-tool" as const, "caller"],
       ["operator CLI and gateway sends", undefined, undefined],
     ])("marks the delivery retry owner for %s", async (_label, actionOrigin, expected) => {
-      const presentation = {
-        blocks: [
-          {
-            type: "chart",
-            chartType: "line",
-            title: "Trend",
-            categories: ["Mon"],
-            series: [{ name: "Prod", values: [1] }],
-          },
-        ],
-      };
+      const presentation = chart("Trend", ["Mon"], "Prod", [1]);
       mocks.executeSendAction.mockResolvedValueOnce({ handledBy: "core", payload: { ok: true } });
-      setTestPlugin(
-        {
-          ...cardPlugin,
-          actions: { ...cardPlugin.actions, resolveExecutionMode: () => "local" },
-          outbound: {
-            deliveryMode: "direct",
-            sendText: async () => ({ channel: "cardchat", messageId: "msg-test" }),
-          },
-        },
-        "cardchat",
-      );
+      registerLocalCardPlugin();
 
       await runMessageAction({
-        cfg: createEnabledMessageActionConfig("cardchat"),
-        action: "send",
         ...(actionOrigin ? { actionOrigin } : {}),
         params: {
           channel: "cardchat",
@@ -745,10 +514,9 @@ describe("runMessageAction plugin dispatch", () => {
           message: "Deployment trend",
           presentation,
         },
-        gateway: { clientName: "cli", mode: "cli" },
+        gateway: cli,
         agentId: "main",
         suppressTranscriptMirror: true,
-        dryRun: false,
       });
 
       const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
@@ -764,32 +532,20 @@ describe("runMessageAction plugin dispatch", () => {
       });
       const result = await runMessageAction({
         cfg: {
-          channels: {
-            cardchat: {
-              enabled: true,
-              responsePrefix: "[Nexus]",
-            },
-          },
+          channels: { cardchat: { enabled: true, responsePrefix: "[Nexus]" } },
         } as OpenClawConfig,
-        action: "send",
         params: {
           channel: "cardchat",
           target: "channel:test-card",
           message: cardJson,
         },
-        dryRun: false,
       });
 
-      expect(result.kind).toBe("send");
-      expect(result.handledBy).toBe("plugin");
-      expectRecordFields(
-        readRecordField(result, "payload", "result payload"),
-        {
-          ok: true,
-          detectedCard: true,
-        },
-        "result payload",
-      );
+      expect(result).toMatchObject({
+        kind: "send",
+        handledBy: "plugin",
+        payload: { ok: true, detectedCard: true },
+      });
       const pluginParams = readRecordField(readFirstPluginCall(handleAction), "params", "params");
       expect(pluginParams.message).toBe(`[Nexus] ${cardJson}`);
     });

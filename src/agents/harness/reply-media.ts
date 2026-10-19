@@ -1,11 +1,11 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
-import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import type { EmbeddedRunAttemptBase } from "../embedded-agent-runner/run/types.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 
 /** Capture policy before plugin invocation; the supplied reader only provides workspace bytes. */
 export function bindHarnessReplyMedia(params: {
-  attempt: Partial<EmbeddedRunAttemptParams>;
+  attempt: Partial<EmbeddedRunAttemptBase>;
   config?: OpenClawConfig;
   assertActive: () => void;
   signal: AbortSignal;
@@ -14,7 +14,7 @@ export function bindHarnessReplyMedia(params: {
   if (!attempt.workspaceDir) {
     return undefined;
   }
-  const context = Object.freeze({
+  const context = {
     cfg: params.config ?? {},
     workspaceDir: attempt.workspaceDir,
     agentId: attempt.agentId,
@@ -31,9 +31,10 @@ export function bindHarnessReplyMedia(params: {
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     runId: attempt.runId,
     reasoningLevel: attempt.reasoningLevel,
-  });
+  };
   const attemptSignal = attempt.abortSignal;
   return async (request) => {
+    const assertSourceCurrent = request.assertCurrent;
     const signal = AbortSignal.any([
       params.signal,
       ...(attemptSignal ? [attemptSignal] : []),
@@ -41,6 +42,7 @@ export function bindHarnessReplyMedia(params: {
     ]);
     const assertCurrent = () => {
       assertActive();
+      assertSourceCurrent?.();
       signal.throwIfAborted();
     };
     assertCurrent();

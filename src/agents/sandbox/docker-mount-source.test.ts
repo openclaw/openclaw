@@ -34,15 +34,16 @@ const wireMount = {
 let target = 0;
 
 function translateSandboxMountSource(
-  params: Omit<
-    Parameters<typeof translateSandboxMountSources>[0],
-    "containerPath" | "shadowedTargets"
-  >,
+  params: Partial<Parameters<typeof translateSandboxMountSources>[0]>,
 ): string {
   return translateSandboxMountSources({
-    ...params,
+    source: "/gateway/workspace",
+    allowedRoots: ["/gateway/workspace"],
+    mounts: parseInspectedSandboxMounts([wireMount]),
+    readOnly: false,
     containerPath: "/workspace",
     shadowedTargets: [],
+    ...params,
   })[0]!.hostPath;
 }
 
@@ -122,10 +123,7 @@ describe("Docker source namespace", () => {
       const mounts = await resolveDockerSourceNamespace(DOCKER_SANDBOX_ENGINE);
       expect(() =>
         translateSandboxMountSource({
-          source: "/gateway/workspace",
-          allowedRoots: ["/gateway/workspace"],
           mounts: mounts!,
-          readOnly: false,
         }),
       ).toThrow(/unsupported (?:nested )?tmpfs mount/);
     },
@@ -203,15 +201,12 @@ describe("managed source translation", () => {
     ]);
     expect(
       translateSandboxMountSource({
-        readOnly: false,
         source: "/gateway/workspace/skills/demo",
-        allowedRoots: ["/gateway/workspace"],
         mounts,
       }),
     ).toBe("/host/special skills/demo");
     expect(() =>
       translateSandboxMountSource({
-        readOnly: false,
         source: "/gateway/workspace-other",
         allowedRoots: ["/gateway/workspace-other"],
         mounts,
@@ -219,9 +214,9 @@ describe("managed source translation", () => {
     ).toThrow("not backed by a Gateway bind mount");
   });
 
-  it.each(["volume", "tmpfs"])("does not reinterpret %s storage as a host bind", (type) => {
+  it("does not reinterpret volume storage as a host bind", () => {
     const mounts = parseInspectedSandboxMounts([
-      { ...wireMount, Type: type, Source: "/var/lib/docker/private" },
+      { ...wireMount, Type: "volume", Source: "/var/lib/docker/private" },
     ]);
     expect(() =>
       translateSandboxMountSource({
@@ -230,7 +225,7 @@ describe("managed source translation", () => {
         allowedRoots: ["/gateway/workspace"],
         mounts,
       }),
-    ).toThrow(`unsupported ${type} mount`);
+    ).toThrow("unsupported volume mount");
   });
 
   it("rejects relative daemon sources", () => {
@@ -245,7 +240,6 @@ describe("managed source translation", () => {
   it("maps a root destination without losing the separator", () => {
     expect(
       translateSandboxMountSource({
-        readOnly: false,
         source: "/workspace",
         allowedRoots: ["/workspace"],
         mounts: parseInspectedSandboxMounts([{ ...wireMount, Destination: "/" }]),
@@ -263,7 +257,6 @@ describe("managed source translation", () => {
   it("does not grant writes through a read-only Gateway bind", () => {
     const params = {
       source: "/gateway/workspace",
-      allowedRoots: ["/gateway/workspace"],
       mounts: parseInspectedSandboxMounts([{ ...wireMount, RW: false }]),
     };
     expect(() => translateSandboxMountSource({ ...params, readOnly: false })).toThrow(
@@ -278,17 +271,11 @@ describe("managed source translation", () => {
     );
     expect(() =>
       translateSandboxMountSource({
-        readOnly: false,
         source: "/gateway/workspace/escape",
-        allowedRoots: ["/gateway/workspace"],
-        mounts: parseInspectedSandboxMounts([wireMount]),
       }),
     ).toThrow("escapes its Gateway workspace roots");
     translateSandboxMountSource({
-      readOnly: false,
       source: "/gateway/workspace",
-      allowedRoots: ["/gateway/workspace"],
-      mounts: parseInspectedSandboxMounts([wireMount]),
     });
     expect(
       vi.mocked(fs.realpathSync).mock.calls.some(([file]) => String(file).startsWith("/host/")),

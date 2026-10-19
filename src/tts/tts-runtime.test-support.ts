@@ -1,4 +1,3 @@
-// TTS runtime tests cover speech synthesis behavior.
 import crypto from "node:crypto";
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -6,10 +5,7 @@ import path from "node:path";
 import type { OpenClawConfig, TtsConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS as MAX_TIMER_TIMEOUT_MS_CORE } from "openclaw/plugin-sdk/number-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import {
-  clearRuntimeConfigSnapshot as clearRuntimeConfigSnapshotCore,
-  setRuntimeConfigSnapshot as setRuntimeConfigSnapshotCore,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type {
   SpeechListVoicesRequest,
   SpeechProviderPlugin,
@@ -18,51 +14,36 @@ import type {
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
 import { expect, vi } from "vitest";
+import { createRequireRecord } from "../../test/helpers/record.js";
 import { CODE_HEAVY_SPOKEN_FALLBACK as CODE_HEAVY_SPOKEN_FALLBACK_CORE } from "./speech-text.js";
 import type { TtsAudioPersistence } from "./tts-synthesis.js";
 
 type MockSpeechSynthesisResult = Awaited<ReturnType<SpeechProviderPlugin["synthesize"]>>;
 
-const synthesizeMock = vi.hoisted(() =>
-  vi.fn(async (request: SpeechSynthesisRequest): Promise<MockSpeechSynthesisResult> => ({
-    audioBuffer: Buffer.from("voice"),
-    fileExtension: ".ogg",
-    outputFormat: "ogg",
-    voiceCompatible: request.target === "voice-note",
-  })),
-);
-const prepareSynthesisMock = vi.hoisted(() =>
-  vi.fn(async (_ctx: SpeechProviderPrepareSynthesisContext) => undefined),
-);
-
-const listSpeechProvidersMock = vi.hoisted(() =>
-  vi.fn<(cfg?: OpenClawConfig) => SpeechProviderPlugin[]>(),
-);
-const getSpeechProviderMock = vi.hoisted(() =>
-  vi.fn<(providerId: string, cfg?: OpenClawConfig) => SpeechProviderPlugin | null | undefined>(),
-);
-const transcodeAudioBufferMock = vi.hoisted(() =>
-  // Default off: most tests rely on the synthesized buffer reaching the
-  // channel unchanged. Tests that exercise the pre-transcode branch override
-  // per-call via `transcodeAudioBufferMock.mockResolvedValueOnce(...)`.
-  // Typed as the helper's full return shape so per-call overrides aren't
-  // narrowed to the default's literal.
-  vi.fn<
-    () => Promise<
-      | { ok: true; buffer: Buffer }
-      | {
-          ok: false;
-          reason:
-            | "platform-unsupported"
-            | "invalid-extension"
-            | "noop-same-container"
-            | "no-recipe"
-            | "transcoder-failed";
-          detail?: string;
-        }
-    >
+const {
+  synthesizeMock,
+  prepareSynthesisMock,
+  listSpeechProvidersMock,
+  getSpeechProviderMock,
+  transcodeAudioBufferMock,
+} = vi.hoisted(() => ({
+  synthesizeMock: vi.fn(
+    async (request: SpeechSynthesisRequest): Promise<MockSpeechSynthesisResult> => ({
+      audioBuffer: Buffer.from("voice"),
+      fileExtension: ".ogg",
+      outputFormat: "ogg",
+      voiceCompatible: request.target === "voice-note",
+    }),
+  ),
+  prepareSynthesisMock: vi.fn(async (_ctx: SpeechProviderPrepareSynthesisContext) => undefined),
+  listSpeechProvidersMock: vi.fn<(cfg?: OpenClawConfig) => SpeechProviderPlugin[]>(),
+  getSpeechProviderMock:
+    vi.fn<(providerId: string, cfg?: OpenClawConfig) => SpeechProviderPlugin | null | undefined>(),
+  // Keep the real return union so individual cases can enable transcoding.
+  transcodeAudioBufferMock: vi.fn<
+    () => ReturnType<typeof import("../media/media-services.js").transcodeAudioBuffer>
   >(async () => ({ ok: false, reason: "platform-unsupported" })),
-);
+}));
 
 vi.mock("../media/media-services.js", () => ({
   transcodeAudioBuffer: transcodeAudioBufferMock,
@@ -92,24 +73,12 @@ vi.mock("../channels/plugins/tts-capabilities.js", () => ({
 vi.mock("./provider-registry.js", async () => {
   const actual =
     await vi.importActual<typeof import("./provider-registry.js")>("./provider-registry.js");
-  const mockProvider: SpeechProviderPlugin = {
-    id: "mock",
-    label: "Mock",
-    autoSelectOrder: 1,
-    isConfigured: () => true,
-    prepareSynthesis: prepareSynthesisMock,
-    synthesize: synthesizeMock,
-  };
-  listSpeechProvidersMock.mockImplementation(() => [mockProvider]);
-  getSpeechProviderMock.mockImplementation((providerId: string) =>
-    providerId === "mock" ? mockProvider : null,
-  );
+  installSpeechProviders([createMockSpeechProvider("mock", { label: "Mock" })]);
+  const normalizeId = (id: string | undefined) => id?.trim().toLowerCase() || undefined;
   return {
     ...actual,
-    canonicalizeSpeechProviderId: (providerId: string | undefined) =>
-      providerId?.trim().toLowerCase() || undefined,
-    normalizeSpeechProviderId: (providerId: string | undefined) =>
-      providerId?.trim().toLowerCase() || undefined,
+    canonicalizeSpeechProviderId: normalizeId,
+    normalizeSpeechProviderId: normalizeId,
     getSpeechProvider: getSpeechProviderMock,
     listSpeechProviders: listSpeechProvidersMock,
   };
@@ -128,10 +97,7 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
     preparePluginCapabilityProviderLookup: ({
       providerId,
       cfg,
-    }: {
-      providerId: string;
-      cfg?: OpenClawConfig;
-    }) => ({
+    }: Parameters<typeof actual.preparePluginCapabilityProviderLookup>[0]) => ({
       load: undefined,
       resolve: () => getSpeechProviderMock(providerId, cfg) ?? undefined,
     }),
@@ -147,8 +113,8 @@ export const {
   testApi,
   buildTtsSystemPromptHint,
   getTtsPersona,
-  getTtsProvider,
-  isTtsProviderConfigured,
+  getTtsProviderAsync,
+  isTtsProviderConfiguredAsync,
   listSpeechVoices,
   prepareTtsRequest,
   resolveTtsConfig,
@@ -165,12 +131,10 @@ export const { textToSpeechCore } = await import("./tts-synthesis.js");
 
 export const CODE_HEAVY_SPOKEN_FALLBACK = CODE_HEAVY_SPOKEN_FALLBACK_CORE;
 export const MAX_TIMER_TIMEOUT_MS = MAX_TIMER_TIMEOUT_MS_CORE;
-export function clearRuntimeConfigSnapshot(): void {
-  clearRuntimeConfigSnapshotCore();
-}
-export const setRuntimeConfigSnapshot = (
-  ...args: Parameters<typeof setRuntimeConfigSnapshotCore>
-) => setRuntimeConfigSnapshotCore(...args);
+export {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 
 export const nativeVoiceNoteChannels = [
   "discord",
@@ -202,6 +166,16 @@ export function installSpeechProviders(providers: SpeechProviderPlugin[]): void 
   );
 }
 
+export function resetTtsRuntime(): void {
+  setTtsMachinePrefsPathResolver();
+  clearRuntimeConfigSnapshot();
+  delete (Object.prototype as Record<string, unknown>).polluted;
+  synthesizeMock.mockClear();
+  prepareSynthesisMock.mockClear();
+  transcodeAudioBufferMock.mockClear();
+  installSpeechProviders([createMockSpeechProvider()]);
+}
+
 // macOS os.tmpdir() is a /var -> /private/var symlink and fs-safe rejects
 // symlinked store roots; resolve the canonical dir before writing prefs.
 const PREFS_TMP_DIR = realpathSync(os.tmpdir());
@@ -225,26 +199,30 @@ export function maybeApplyTtsToPayload(params: Parameters<typeof maybeApplyTtsTo
   return maybeApplyTtsToPayloadCore(params, persistTestTtsAudio);
 }
 
+export async function withTtsPayload(
+  params: Parameters<typeof maybeApplyTtsToPayload>[0],
+  check: (result: Awaited<ReturnType<typeof maybeApplyTtsToPayload>>) => void | Promise<void>,
+) {
+  const result = await maybeApplyTtsToPayload(params);
+  try {
+    await check(result);
+  } finally {
+    if (result.mediaUrl) {
+      rmSync(path.dirname(result.mediaUrl), { recursive: true, force: true });
+    }
+  }
+}
+
 export function prefsPathFor(prefsName: string): string {
   return path.join(PREFS_TMP_DIR, `${prefsName}.json`);
 }
 
-export function createTtsConfig(prefsName: string): OpenClawConfig {
+export function createTtsConfig(prefsName: string, overrides: TtsConfig = {}): OpenClawConfig {
   setTtsMachinePrefsPathResolver(() => prefsPathFor(prefsName));
-  return {
-    tts: {
-      enabled: true,
-      provider: "mock",
-    },
-  };
+  return { tts: { enabled: true, provider: "mock", ...overrides } };
 }
 
-export function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+export const requireRecord = createRequireRecord("record", "expected-label-record");
 
 export function requireFirstCallParam(calls: ReadonlyArray<readonly unknown[]>, label: string) {
   const call = calls[0];
@@ -278,36 +256,24 @@ export async function expectTtsPayloadResult(params: {
   if (params.providerResult) {
     synthesizeMock.mockResolvedValueOnce(params.providerResult);
   }
-  const cfg = createTtsConfig(params.prefsName);
-  let mediaDir: string | undefined;
-  try {
-    const result = await maybeApplyTtsToPayload({
+  await withTtsPayload(
+    {
       payload: { text: params.text },
-      cfg,
+      cfg: createTtsConfig(params.prefsName),
       channel: params.channel,
       kind: params.kind ?? "final",
-    });
-
-    expect(synthesizeMock).toHaveBeenCalled();
-    const request = requireRecord(
-      synthesizeMock.mock.calls.at(-1)?.[0],
-      "latest synthesis request",
-    );
-    expect(request.target).toBe(params.target);
-    expect(result.audioAsVoice).toBe(params.audioAsVoice);
-    expect(result.mediaUrl).toMatch(
-      new RegExp(`voice---[a-f0-9-]+\\.${params.mediaExtension ?? "ogg"}$`),
-    );
-    expect(result.spokenText).toBe(params.text);
-    expect(result.ttsSupplement).toEqual({ spokenText: params.text });
-    expect((result as { trustedLocalMedia?: boolean }).trustedLocalMedia).toBe(true);
-
-    mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
-  } finally {
-    if (mediaDir) {
-      rmSync(mediaDir, { recursive: true, force: true });
-    }
-  }
+    },
+    (result) => {
+      expect(synthesizeMock.mock.lastCall?.[0]?.target).toBe(params.target);
+      expect(result.audioAsVoice).toBe(params.audioAsVoice);
+      expect(result.mediaUrl).toMatch(
+        new RegExp(`voice---[a-f0-9-]+\\.${params.mediaExtension ?? "ogg"}$`),
+      );
+      expect(result.spokenText).toBe(params.text);
+      expect(result.ttsSupplement).toEqual({ spokenText: params.text });
+      expect((result as { trustedLocalMedia?: boolean }).trustedLocalMedia).toBe(true);
+    },
+  );
 }
 
 export { prepareSynthesisMock, synthesizeMock, transcodeAudioBufferMock };

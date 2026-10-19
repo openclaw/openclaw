@@ -1,9 +1,12 @@
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import type { ApplicationContext } from "./context.ts";
+import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 
-export interface ShellNewSessionHost extends HTMLElement {
+export interface ShellNewSessionHost extends Pick<HTMLElement, "isConnected"> {
+  routeOutlet?: ControlUiReadinessOutlet;
   readonly context: ApplicationContext | undefined;
   readonly onboardingMode: boolean;
+  navDrawerElement?: HTMLElement;
   pendingNativeNewSession: boolean;
   openNewSession(agentId: string): void;
 }
@@ -18,7 +21,7 @@ export function openShellNewSession(
     host.onboardingMode ||
     (source === "shortcut" &&
       (document.openClawModalLayers?.size ||
-        document.querySelector(".shell-nav[aria-modal='true']")))
+        host.navDrawerElement?.getAttribute("aria-modal") === "true"))
   ) {
     return false;
   }
@@ -30,16 +33,17 @@ export function openShellNewSession(
     return false;
   }
   if (
-    !readSessionMethodAccess(context.gateway.snapshot, { method: "sessions.create", params: {} })
-      .allowed
+    !readSessionMethodAccess(context.gateway.snapshot, {
+      method: "sessions.create",
+      params: {},
+      sessionScope: true,
+    }).allowed
   ) {
     return false;
   }
   host.openNewSession(context.agentSelection.state.selectedId ?? "");
   if (source === "shortcut") {
-    host
-      .querySelector<HTMLElement & { focusComposer(): void }>("openclaw-new-session-page")
-      ?.focusComposer();
+    host.routeOutlet?.renderedElement?.("openclaw-new-session-page")?.focusComposer();
   }
   return true;
 }

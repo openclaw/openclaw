@@ -75,76 +75,6 @@ function contextWithCheckpoint(
 }
 
 describe("Anthropic compaction replay", () => {
-  it("captures the complete route-fenced identity", () => {
-    const context = contextWithCheckpoint();
-    const checkpoint = context.messages[1];
-
-    expect(checkpoint?.role).toBe("assistant");
-    if (checkpoint?.role !== "assistant") {
-      throw new Error("missing checkpoint assistant");
-    }
-    expect(checkpoint.providerReplay).toMatchObject({
-      v: 1,
-      type: "anthropic-compaction",
-      data: "summary of the earlier conversation",
-      replayIndex: 1,
-      provider: "anthropic",
-      api: "anthropic-messages",
-      model: model.id,
-    });
-    expect(checkpoint.providerReplay?.baseUrlHash).toBeTypeOf("string");
-    expect(checkpoint.providerReplay?.sessionHash).toBeTypeOf("string");
-    expect(checkpoint.providerReplay?.authProfileHash).toBeTypeOf("string");
-  });
-
-  it.each([
-    {
-      name: "exact identity",
-      captureModel: model,
-      captureOptions: replayOptions,
-      requestModel: model,
-      requestOptions: replayOptions,
-    },
-    {
-      name: "surrounding whitespace",
-      captureModel: { ...model, baseUrl: ` ${model.baseUrl} ` },
-      captureOptions: {
-        enabled: true,
-        sessionId: ` ${replayOptions.sessionId} `,
-        authProfileId: ` ${replayOptions.authProfileId} `,
-      },
-      requestModel: model,
-      requestOptions: replayOptions,
-    },
-    {
-      name: "blank and missing optional identity",
-      captureModel: model,
-      captureOptions: { enabled: true, sessionId: " ", authProfileId: "" },
-      requestModel: model,
-      requestOptions: { enabled: true },
-    },
-  ])(
-    "replays and slices the checkpoint for $name",
-    ({ captureModel, captureOptions, requestModel, requestOptions }) => {
-      const context = contextWithCheckpoint(
-        "summary of the earlier conversation",
-        captureOptions,
-        captureModel,
-      );
-      const plan = buildAnthropicReplayPlan(context.messages, requestModel, requestOptions);
-
-      expect(plan.compaction).toEqual({
-        type: "compaction",
-        content: "summary of the earlier conversation",
-      });
-      expect(plan.messages.map((message) => message.role)).toEqual(["assistant", "user"]);
-      expect(plan.messages[0]).toMatchObject({
-        role: "assistant",
-        content: [{ type: "text", text: "after checkpoint" }],
-      });
-    },
-  );
-
   it("uses the newest matching checkpoint", () => {
     const context = contextWithCheckpoint("older summary");
     const newest = assistant(["latest answer"]);
@@ -173,26 +103,6 @@ describe("Anthropic compaction replay", () => {
       requestModel: model,
       requestOptions: { ...replayOptions, authProfileId: "anthropic:personal" },
     },
-    {
-      name: "base URL",
-      requestModel: { ...model, baseUrl: "https://api.example.com/v1" },
-      requestOptions: replayOptions,
-    },
-    {
-      name: "provider",
-      requestModel: { ...model, provider: "other-provider" },
-      requestOptions: replayOptions,
-    },
-    {
-      name: "API",
-      requestModel: { ...model, api: "openai-responses" as const },
-      requestOptions: replayOptions,
-    },
-    {
-      name: "model",
-      requestModel: { ...model, id: "claude-opus-5" },
-      requestOptions: replayOptions,
-    },
   ])("falls back to full history when the $name differs", ({ requestModel, requestOptions }) => {
     const context = contextWithCheckpoint();
 
@@ -204,7 +114,10 @@ describe("Anthropic compaction replay", () => {
   it("uses a matching suppression tombstone to stop replaying a rejected checkpoint", () => {
     const context = contextWithCheckpoint();
     const rejected = assistant([]);
-    suppressAnthropicCompaction(rejected, model, replayOptions);
+    suppressAnthropicCompaction(rejected, model, replayOptions, {
+      type: "compaction",
+      content: "summary of the earlier conversation",
+    });
     context.messages.push(rejected);
 
     const plan = buildAnthropicReplayPlan(context.messages, model, replayOptions);

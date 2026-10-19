@@ -15,18 +15,6 @@ export function getPendingCronSessionCleanup(
   return pendingSessionCleanups.get(cronStoreKey(state.deps.storePath))?.get(jobId)?.done;
 }
 
-/** Deferred session cleanup remains a filesystem owner after its cron row disappears. */
-export function hasPendingCronSessionCleanupForAgent(agentId: string): boolean {
-  for (const jobs of pendingSessionCleanups.values()) {
-    for (const cleanup of jobs.values()) {
-      if (cleanup.agentId === agentId) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 /** Registers cleanup at the store-partition owner shared by sibling service instances. */
 export function registerPendingCronSessionCleanup(
   state: CronServiceState,
@@ -59,10 +47,18 @@ const resolveChain = (promise: Promise<unknown>) =>
   );
 
 /** Serializes operations by their actual SQLite partition and service-local order. */
-export async function locked<T>(state: CronServiceState, fn: () => Promise<T>): Promise<T> {
+export async function locked<T>(
+  state: CronServiceState,
+  fn: () => Promise<T>,
+  opts?: { readOnly?: boolean },
+): Promise<T> {
   const previous = state.op;
   const next = cronOperations.enqueue(cronStoreKey(state.deps.storePath), async () => {
     await resolveChain(previous);
+    if (!opts?.readOnly) {
+      // Include scheduler-local changes that deliberately do not commit a store revision.
+      state.readSnapshot = undefined;
+    }
     return await fn();
   });
   state.op = resolveChain(next);

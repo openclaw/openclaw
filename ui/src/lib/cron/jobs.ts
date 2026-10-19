@@ -1,14 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { CronCompactJob, CronJob, CronJobsListResult } from "../../api/types.ts";
+import type { CronCompactJob, CronJobsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
-import { getCronJobPayload } from "./payload.ts";
 import type { CronJobsState } from "./types.ts";
 
-function hasCronJobPayload(job: CronJob): boolean {
-  return getCronJobPayload(job) !== null;
-}
-
-function readCanonicalCronJobsPage<Row>(
+export function readCanonicalCronJobsPage<Row>(
   value: CronJobsListResult<Row>,
   requestedLimit: number,
 ): CronJobsListResult<Row> {
@@ -39,7 +34,10 @@ function readCanonicalCronJobsPage<Row>(
   return value;
 }
 
-function assertCanonicalCronJobsCursor(page: CronJobsListResult<unknown>, requestedOffset: number) {
+export function assertCanonicalCronJobsCursor(
+  page: CronJobsListResult<unknown>,
+  requestedOffset: number,
+) {
   const nextOffset = requestedOffset + page.jobs.length;
   if (
     page.offset !== requestedOffset ||
@@ -74,15 +72,27 @@ async function drainPendingCronJobsReload<Row>(
   await loadCronJobsProjectionPage(state, projection, { tableFilters });
 }
 
-type CronJobsPageOptions = { append?: boolean; tableFilters?: boolean };
-type CronJobsProjection<Row> = {
+export type CronJobsPageOptions = { append?: boolean; tableFilters?: boolean };
+export type CronJobsProjection<Row> = {
   compact?: true;
   readRows: (rows: Row[]) => Row[];
 };
 
-const fullCronJobsProjection: CronJobsProjection<CronJob> = {
-  readRows: (rows) => rows.filter(hasCronJobPayload),
-};
+const cronInventoryScopes = new WeakMap<
+  CronJobsState<unknown>,
+  CronJobsState["cronAgentId" | "cronSessionFilter"]
+>();
+const cronInventoryRequests = new WeakMap<CronJobsState<unknown>, object>();
+
+export function isCronJobsScopeCurrent(state: CronJobsState<unknown>): boolean {
+  return cronInventoryScopes.get(state) === (state.cronSessionFilter ?? state.cronAgentId);
+}
+
+export function retireCronJobsRequest(state: CronJobsState<unknown>) {
+  cronInventoryRequests.delete(state);
+  state.cronLoading = false;
+  state.cronJobsLoadingMore = false;
+}
 
 function isCronInventoryTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -129,10 +139,6 @@ const compactCronJobsProjection: CronJobsProjection<CronCompactJob> = {
   },
 };
 
-export function loadCronJobsPage(state: CronJobsState, opts?: CronJobsPageOptions) {
-  return loadCronJobsProjectionPage(state, fullCronJobsProjection, opts);
-}
-
 export function loadCompactCronJobsPage(
   state: CronJobsState<CronCompactJob>,
   opts?: CronJobsPageOptions,
@@ -140,7 +146,7 @@ export function loadCompactCronJobsPage(
   return loadCronJobsProjectionPage(state, compactCronJobsProjection, opts);
 }
 
-async function loadCronJobsProjectionPage<Row>(
+export async function loadCronJobsProjectionPage<Row>(
   state: CronJobsState<Row>,
   projection: CronJobsProjection<Row>,
   opts?: CronJobsPageOptions,
@@ -148,6 +154,21 @@ async function loadCronJobsProjectionPage<Row>(
   if (!state.client || !state.connected || state.canRefresh?.() === false) {
     return;
   }
+  const scope = state.cronSessionFilter ?? state.cronAgentId;
+  const request = {};
+  const isCurrentScope = () =>
+    cronInventoryRequests.get(state) === request &&
+    (state.cronSessionFilter ?? state.cronAgentId) === scope;
+  // An editor can survive scope hydration; its inventory cannot. Retire both
+  // retained rows and late responses before a failed replacement can expose them.
+  if (cronInventoryScopes.has(state) && cronInventoryScopes.get(state) !== scope) {
+    state.cronJobs = [];
+    state.cronJobsSnapshotRevision = null;
+    state.cronJobsTotal = 0;
+    state.cronJobsHasMore = false;
+    state.cronJobsNextOffset = null;
+  }
+  cronInventoryScopes.set(state, scope);
   const append = opts?.append === true;
   if (state.cronLoading || state.cronJobsLoadingMore) {
     if (!append) {
@@ -159,11 +180,9 @@ async function loadCronJobsProjectionPage<Row>(
   if (append && !state.cronJobsHasMore) {
     return;
   }
-  if (append) {
-    state.cronJobsLoadingMore = true;
-  } else {
-    state.cronLoading = true;
-  }
+  const loadingKey = append ? "cronJobsLoadingMore" : "cronLoading";
+  cronInventoryRequests.set(state, request);
+  state[loadingKey] = true;
   state.cronJobsError = null;
   try {
     const offset = append ? Math.max(0, state.cronJobsNextOffset ?? state.cronJobs.length) : 0;
@@ -186,6 +205,9 @@ async function loadCronJobsProjectionPage<Row>(
       sortBy: state.cronJobsSortBy,
       sortDir: state.cronJobsSortDir,
     });
+    if (!isCurrentScope()) {
+      return;
+    }
     const page = readCanonicalCronJobsPage<Row>(res, state.cronJobsLimit);
     if (
       append &&
@@ -199,8 +221,7 @@ async function loadCronJobsProjectionPage<Row>(
     }
     assertCanonicalCronJobsCursor(page, offset);
     const jobs = projection.readRows(page.jobs);
-    const nextJobs = append ? [...state.cronJobs, ...jobs] : jobs;
-    state.cronJobs = nextJobs;
+    state.cronJobs = append ? [...state.cronJobs, ...jobs] : jobs;
     state.cronJobsSnapshotRevision = page.snapshotRevision;
     state.cronJobsTotal = page.total;
     state.cronJobsHasMore = page.hasMore;
@@ -208,13 +229,14 @@ async function loadCronJobsProjectionPage<Row>(
     // A filtered/paged list is not deletion authority. Only an explicit remove
     // may clear an editor opened from an exact job definition.
   } catch (err) {
-    state.cronJobsError = formatUiError(err);
-  } finally {
-    if (append) {
-      state.cronJobsLoadingMore = false;
-    } else {
-      state.cronLoading = false;
+    if (isCurrentScope()) {
+      state.cronJobsError = formatUiError(err);
     }
-    await drainPendingCronJobsReload(state, projection);
+  } finally {
+    if (cronInventoryRequests.get(state) === request) {
+      cronInventoryRequests.delete(state);
+      state[loadingKey] = false;
+      await drainPendingCronJobsReload(state, projection);
+    }
   }
 }

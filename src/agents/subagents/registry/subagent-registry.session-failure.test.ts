@@ -1,6 +1,10 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -11,10 +15,19 @@ import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 describe("subagent session failures", () => {
-  it.each(["error", "timeout"] as const)(
-    "persists a bounded %s reason and one durable child notice, then clears only on success",
-    async (outcomeStatus) => {
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
+
+  it.each([
+    { outcomeStatus: "error", interrupted: false },
+    { outcomeStatus: "timeout", interrupted: false },
+    { outcomeStatus: "error", interrupted: true },
+  ] as const)(
+    "persists a bounded $outcomeStatus reason and its child notice (interrupted=$interrupted)",
+    async ({ outcomeStatus, interrupted }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const target = {
           agentId: "main",
           sessionKey: "agent:main:subagent:setup-failure",
@@ -38,6 +51,7 @@ describe("subagent session failures", () => {
             status: "terminal",
             startedAt: 1_001,
             endedAt: 2_000,
+            interruptionReason: interrupted ? "gateway-restart" : undefined,
             outcome: {
               status: outcomeStatus,
               error: `[tool calls omitted]\n<final>${reason}</final>`,
@@ -46,8 +60,11 @@ describe("subagent session failures", () => {
         };
         await persistSubagentSessionTiming(record);
         expect(loadSessionEntry(target)).toMatchObject({
-          status: outcomeStatus === "error" ? "failed" : "timeout",
-          lastRunError: expect.stringContaining("Repository base ref is missing."),
+          status: interrupted ? "interrupted" : outcomeStatus === "error" ? "failed" : "timeout",
+          lastRunError: interrupted
+            ? "Run interrupted by a Gateway restart."
+            : expect.stringContaining("Repository base ref is missing."),
+          ...(interrupted ? { abortedLastRun: true } : {}),
         });
         const lastRunError = loadSessionEntry(target)?.lastRunError;
         expect(lastRunError?.length).toBeLessThanOrEqual(160);
@@ -56,13 +73,17 @@ describe("subagent session failures", () => {
           (await loadTranscriptEvents(target)).filter(
             (event) => isRecord(event) && event.type === "custom_message",
           ),
-        ).toMatchObject([
-          {
-            customType: "run-failed-before-reply",
-            display: true,
-            details: { runId: record.runId, error: reason.slice(0, 512) },
-          },
-        ]);
+        ).toMatchObject(
+          interrupted
+            ? []
+            : [
+                {
+                  customType: "run-failed-before-reply",
+                  display: true,
+                  details: { runId: record.runId, error: reason.slice(0, 512) },
+                },
+              ],
+        );
 
         for (const executionStatus of ["running", "queued"] as const) {
           await persistSubagentSessionTiming({
@@ -70,6 +91,7 @@ describe("subagent session failures", () => {
             execution: { status: executionStatus },
           });
           expect(loadSessionEntry(target)?.lastRunError).toBe(lastRunError);
+          expect(loadSessionEntry(target)?.status).toBeUndefined();
         }
         await persistSubagentSessionTiming({ ...record, endedReason: "subagent-killed" });
         expect(loadSessionEntry(target)?.lastRunError).toBe(lastRunError);
@@ -78,6 +100,7 @@ describe("subagent session failures", () => {
           execution: { ...record.execution, outcome: { status: "ok" } },
         });
         expect(loadSessionEntry(target)?.lastRunError).toBeUndefined();
+        expect(loadSessionEntry(target)?.abortedLastRun).toBeUndefined();
       });
     },
   );

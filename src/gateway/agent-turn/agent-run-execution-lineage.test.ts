@@ -1,21 +1,29 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { executionIdentitySpawnAdmission } from "../../audit/execution-identity-spawn-admission.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { withAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lineage.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
-import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
+import { prepareAgentRunExecutionIdentityFacts } from "./agent-run-execution-lineage.js";
 
-function parentIdentity(params: {
+function parentAdmission(params: {
   runtime: "acp" | "subagent";
   withToken: boolean;
   depth?: number;
-}): AgentRuntimeIdentity {
-  return {
+}) {
+  const operationalRunInstance = { instanceId: "parent-instance", runId: "parent-run" };
+  const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+  onTestFinished(() => void releaseAgentRunDelegatedAuthority(delegatedAuthority));
+  const identity: AgentRuntimeIdentity = {
     kind: "agentRuntime",
     agentId: "parent-agent",
     sessionKey: "agent:parent:main",
-    operationalRunInstance: { instanceId: "parent-instance", runId: "parent-run" },
-    delegatedAuthority: {} as AgentRuntimeIdentity["delegatedAuthority"],
+    operationalRunInstance,
+    delegatedAuthority: { ...delegatedAuthority, kind: "local" },
     ...(params.withToken
       ? {
           executionIdentity: createExecutionIdentityAdmissionToken("parent-run", {
@@ -39,12 +47,20 @@ function parentIdentity(params: {
       },
     ),
   };
+  return {
+    client: { internal: { agentRuntimeIdentity: identity } },
+    context: {
+      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
+    },
+    isRestartRecoveryResumeRun: false,
+  };
 }
 
 describe("child execution identity lineage", () => {
   it("consumes the exact parent correlation and all narrowing-input categories", () => {
-    const facts = resolveExecutionIdentitySpawnFacts(
-      parentIdentity({ runtime: "subagent", withToken: true, depth: 3 }),
+    const facts = prepareAgentRunExecutionIdentityFacts(
+      parentAdmission({ runtime: "subagent", withToken: true, depth: 3 }),
+      {},
     );
 
     expect(facts).toMatchObject({
@@ -87,8 +103,9 @@ describe("child execution identity lineage", () => {
   });
 
   it("reports missing parent evidence and unsupported ACP-native callbacks without inference", () => {
-    const facts = resolveExecutionIdentitySpawnFacts(
-      parentIdentity({ runtime: "acp", withToken: false }),
+    const facts = prepareAgentRunExecutionIdentityFacts(
+      parentAdmission({ runtime: "acp", withToken: false }),
+      {},
     );
 
     expect(facts?.ingress.kind).toBe("acp");

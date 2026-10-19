@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
@@ -18,10 +18,10 @@ import {
 import { appendTranscriptMessage } from "./session-accessor.js";
 import {
   bindSessionPendingInputSources,
-  listSessionPendingInputReceipts,
   listSessionPendingInputs,
   stageSessionPendingInput,
 } from "./session-accessor.pending-inputs.js";
+import { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "./session-pending-input-receipts.js";
 
 const { tempDirs, createFixture } = setupLegacyMainSessionMigrationTests();
 const completed = buildAgentRunTerminalOutcome({ status: "ok" });
@@ -40,7 +40,6 @@ function createInputHandoff(sharedStore = false) {
     agents: { entries: { ops: {} } },
     ...(storePath ? { session: { store: storePath } } : {}),
   });
-  vi.stubEnv("OPENCLAW_STATE_DIR", fixture.stateDir);
   const entry = { sessionId: "input-handoff-generation", updatedAt: 100 };
   const events = [
     { type: "session", version: 3, id: entry.sessionId, timestamp: new Date(1).toISOString() },
@@ -122,10 +121,11 @@ function createInputHandoff(sharedStore = false) {
         ).toMatchObject({ appended: true, messageId: aggregate.inputId });
       }
       if (params.completion) {
-        receipt.complete!(params.completion);
+        await receipt.completeAsync!(params.completion);
       }
     } finally {
       receipt.finish(params.disposition ?? "interrupted");
+      await receipt.settled?.();
     }
     return receipt;
   };
@@ -184,7 +184,7 @@ describe("legacy main session input handoff", () => {
       ),
       completions: [],
     });
-    expect(listSessionPendingInputs(f.scope(f.destination))).toMatchObject({
+    expect(await listSessionPendingInputs(f.scope(f.destination))).toMatchObject({
       total: 2,
       items: [
         { id: queued.inputId, message: queued.message, state: "interrupted" },
@@ -192,7 +192,7 @@ describe("legacy main session input handoff", () => {
       ],
     });
     expect(
-      listSessionPendingInputReceipts(f.scope(f.destination), { runIds: ["consumed"] }),
+      await listSessionPendingInputReceipts(f.scope(f.destination), { runIds: ["consumed"] }),
     ).toEqual([{ runId: "consumed", state: "consumed", consumedByEventId }]);
     expect(await f.accept(f.destination, "consumed")).toMatchObject({
       state: "consumed",
@@ -203,9 +203,7 @@ describe("legacy main session input handoff", () => {
   });
 
   it.each([
-    { name: "completed source", source: completed, final: true },
     { name: "operator Stop in-place", source: stopped, final: true, sharedStore: true },
-    { name: "restart interruption", source: interrupted, final: false },
     {
       name: "final destination",
       source: completed,

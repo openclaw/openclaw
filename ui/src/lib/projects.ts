@@ -1,5 +1,6 @@
 import type { ProjectsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { parseProjectGitUrl } from "../../../src/projects/project-git-url.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import type { MarkdownGitHubRepositoryAliases } from "../components/markdown-github-repositories.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
@@ -12,6 +13,7 @@ type ProjectCatalogSnapshot = {
 };
 export type ProjectCatalog = {
   readonly snapshot: ProjectCatalogSnapshot;
+  readonly loading: boolean;
   subscribe: (listener: () => void) => () => void;
   refresh: (invalidate?: boolean) => Promise<void>;
 };
@@ -81,6 +83,8 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
   const listeners = new Set<() => void>();
   let snapshot: ProjectCatalogSnapshot = { result: null, repositories: [], ready: false };
   let signature = "";
+  let client = gateway.snapshot.client;
+  let presentationKey = gatewayPresentationScope(gateway).key;
   let pending: Promise<void> | null = null;
   let unsubscribe: (() => void) | undefined;
   const retire = () => {
@@ -88,26 +92,34 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
     pending = null;
     snapshot = { result: null, repositories: [], ready: false };
   };
-  const notify = () => {
-    for (const listener of listeners) {
-      listener();
-    }
-  };
+  const notify = () => listeners.forEach((listener) => listener());
   const synchronize = () => {
     const next = gateway.snapshot;
-    const nextSignature = JSON.stringify([
-      gateway.connection.gatewayUrl,
-      gateway.connectionRevision,
-      next.selfUser?.id,
-      next.hello?.auth?.recoveryScope,
-      next.hello?.auth?.role,
-      [...(next.hello?.auth?.scopes ?? [])].toSorted(),
-      canCallGatewayMethod(next, "projects.list", "operator.read"),
-    ]);
+    const nextPresentationKey = gatewayPresentationScope(gateway).key;
+    const nextSignature =
+      next.phase === "connected"
+        ? JSON.stringify([
+            gateway.connection.gatewayUrl,
+            gateway.connectionRevision,
+            nextPresentationKey,
+            next.hello?.auth?.role,
+            [...(next.hello?.auth?.scopes ?? [])].toSorted(),
+            canCallGatewayMethod(next, "projects.list", "operator.read"),
+          ])
+        : signature;
     const transitioned = connection.transition(next);
-    if (transitioned || nextSignature !== signature) {
+    const identityChanged =
+      client !== next.client ||
+      nextSignature !== signature ||
+      presentationKey !== nextPresentationKey;
+    client = next.client;
+    presentationKey = nextPresentationKey;
+    if (transitioned || identityChanged) {
       signature = nextSignature;
-      retire();
+      pending = null;
+      if (identityChanged) {
+        retire();
+      }
       return true;
     }
     return false;
@@ -164,16 +176,28 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
       }
       return snapshot;
     },
+    get loading() {
+      return pending !== null;
+    },
     refresh,
     subscribe(listener) {
       listeners.add(listener);
       if (!unsubscribe) {
-        unsubscribe = gateway.subscribe(() => {
+        const unsubscribeGateway = gateway.subscribe(() => {
           if (synchronize()) {
             notify();
             void refresh();
           }
         });
+        const unsubscribeEvents = gateway.subscribeEvents((event) => {
+          if (event.event === "config.changed") {
+            void refresh(true);
+          }
+        });
+        unsubscribe = () => {
+          unsubscribeGateway();
+          unsubscribeEvents();
+        };
       }
       synchronize();
       if (!snapshot.ready) {

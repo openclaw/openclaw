@@ -10,16 +10,16 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
-import {
-  maybeRestartService,
-  maybeStopManagedServiceBeforeMutableUpdate,
-} from "./update-command-service.js";
+import { serviceUpdateResult } from "./update-command-service-recovery.test-support.js";
+import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service.js";
 
 export function registerGenerationRecoveryTests(
   fixture: () => {
@@ -35,51 +35,6 @@ export function registerGenerationRecoveryTests(
     };
   },
 ) {
-  it("records a stopped service when activation throws before health verification", async () => {
-    const { root, mocks } = fixture();
-    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, ".openclaw") };
-    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-    recordUpdateRunVerification(
-      run.runId,
-      { serviceRunning: true, runningVersion: VERSION },
-      { env },
-    );
-    const before = await maybeStopManagedServiceBeforeMutableUpdate({
-      root,
-      updateInstallKind: "package",
-      shouldRestart: true,
-      jsonMode: true,
-    });
-    mocks.child.mockRejectedValueOnce(new Error("candidate gateway exited 70"));
-    expect(
-      await maybeRestartService({
-        shouldRestart: true,
-        result: {
-          status: "ok",
-          mode: "npm",
-          root,
-          before: { version: VERSION },
-          after: { version: "9999.1.1" },
-          steps: [],
-          durationMs: 0,
-        },
-        opts: { json: true, run },
-        refreshServiceEnv: false,
-        serviceUpdateVerdict: before.serviceUpdateVerdict,
-        serviceManagerUid: before.serviceManagerUid,
-        serviceEnv: before.serviceEnv,
-        gatewayPort: 19305,
-        requireRunningServiceAfterRestart: true,
-        timeoutMs: 1000,
-      }),
-    ).toBe("failed");
-    const record = getUpdateRun(run.runId, { env })!;
-    expect(record.verification.serviceRunning).toBe(false);
-    expect(renderUpdateRunReport({ ...record, status: "failed" }).headline).not.toContain(
-      "gateway is running",
-    );
-  });
-
   it.each([false, true])(
     "restores the previous running generation after candidate stamp advancement (content changed=%s)",
     async (contentChanged) => {
@@ -90,6 +45,7 @@ export function registerGenerationRecoveryTests(
         runId: createUpdateRun({ trigger: "cli", before: { version: VERSION } }, { env }).runId,
         env,
       };
+      const { recordPhase } = createUpdateCommandExecutionGuards({ run }, root);
       const configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
       const schemas = await readUpdateStateSchemaVersions({
         stateDir: env.OPENCLAW_STATE_DIR,
@@ -115,6 +71,7 @@ export function registerGenerationRecoveryTests(
         shouldRestart: true,
         jsonMode: true,
         updateRun: run,
+        recordPhase,
       });
       const previousBytes = await fs.readFile(path.join(root, "dist/index.js"));
       await fs.writeFile(
@@ -154,16 +111,13 @@ export function registerGenerationRecoveryTests(
           typeof options === "object" ? options.env : undefined,
           () => runDaemonRestart({ json: true, preserveDefinition: true }),
         );
-        return {
+        return commandResult({
           code: healthy ? 0 : 1,
           stdout: JSON.stringify(mocks.writeJson.mock.lastCall?.[0]),
-          stderr: "",
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        });
       });
       mocks.health.mockImplementation(async ({ port, expectedVersion }) => ({
+        outcome: mocks.running ? "ready" : "failed",
         healthy: mocks.running,
         staleGatewayPids: [],
         runtime: {
@@ -175,15 +129,10 @@ export function registerGenerationRecoveryTests(
         expectedVersion: expectedVersion ?? undefined,
         portUsage: { port, status: mocks.running ? "busy" : "free", listeners: [], hints: [] },
       }));
-      const result = {
-        status: "ok" as const,
-        mode: "npm" as const,
-        root,
+      const result = serviceUpdateResult(root, {
         before: { version: VERSION },
         after: { version: "9999.1.1" },
-        steps: [],
-        durationMs: 0,
-      };
+      });
       let completedStatus: string | undefined;
       const error = await finishUpdate({
         mutationStarted: true,

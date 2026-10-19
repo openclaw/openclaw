@@ -1,6 +1,23 @@
 import { pathKey } from "../../components/config-form.shared.ts";
 import type { ConfigProps, ConfigViewState } from "./view-types.ts";
 
+export function createMediaDeviceState(): Omit<
+  NonNullable<ConfigProps["microphone"]>,
+  "selectedDeviceId"
+> & {
+  loaded: boolean;
+  requestsPermission: boolean;
+} {
+  return {
+    devices: [],
+    permissionRequired: true,
+    loading: false,
+    error: null,
+    loaded: false,
+    requestsPermission: false,
+  };
+}
+
 export function createConfigViewState(): ConfigViewState {
   return {
     rawRevealed: false,
@@ -8,7 +25,6 @@ export function createConfigViewState(): ConfigViewState {
     envRevealed: false,
     validityDismissed: false,
     revealedSensitivePaths: new Set(),
-    lastCustomThemeImportFocusToken: null,
     lastConfigContextKey: null,
     lastFormModeForScroll: null,
   };
@@ -20,7 +36,6 @@ export function resetConfigEphemeralState(viewState: ConfigViewState) {
   viewState.envRevealed = false;
   viewState.validityDismissed = false;
   viewState.revealedSensitivePaths.clear();
-  viewState.lastCustomThemeImportFocusToken = null;
   viewState.rawDiffCache = undefined;
 }
 

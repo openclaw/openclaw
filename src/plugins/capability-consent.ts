@@ -138,6 +138,8 @@ export async function resolvePluginCapabilityConsent(params: {
   env?: NodeJS.ProcessEnv;
   acknowledge?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  /** Record explicit acceptance even when official provenance permits activation. */
+  recordOfficialCapabilities?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
   beforePersistentApply?: () => void;
   metadata?: PluginMetadataSnapshot;
@@ -176,7 +178,7 @@ export async function resolvePluginCapabilityConsent(params: {
     if (!manifest) {
       throw new ManagedPluginLifecycleError(`Plugin "${pluginId}" has no installed manifest.`);
     }
-    if (manifest.trustedOfficialInstall) {
+    if (manifest.trustedOfficialInstall && !params.recordOfficialCapabilities) {
       pendingPluginCapabilityReviews.delete(pluginId);
       return;
     }
@@ -231,7 +233,7 @@ export async function resolvePluginCapabilityConsent(params: {
         ...records,
         [installOwner]: acceptManagedPluginDeclaredSurface(persistedRecord, currentDeclared),
       },
-      { env, config: params.config, lease },
+      { env, config: params.config, lease, assertCurrent: params.beforePersistentApply },
     );
     pendingPluginCapabilityReviews.delete(pluginId);
   });
@@ -247,6 +249,8 @@ async function resolvePluginArtifactCapabilityConsent(params: {
   env?: NodeJS.ProcessEnv;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  requireCapabilityConsent?: boolean;
+  recordOfficialCapabilities?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
   previousDeclared?: PluginAcceptedDeclaredSurface;
   previousRecord?: PluginInstallRecord;
@@ -267,14 +271,19 @@ async function resolvePluginArtifactCapabilityConsent(params: {
       record: params.sourceRecord,
     });
   const official = isOfficialArtifact(manifest);
-  const review = buildPluginCapabilityConsentReview({
-    pluginId: params.pluginId,
-    manifest: manifest ?? { name: params.pluginId },
-    record: params.sourceRecord ?? params.record,
-    config: params.config,
-    declared,
-    ...(params.previousDeclared ? { previousDeclared: params.previousDeclared } : {}),
-  });
+  const reviewArtifact = (
+    artifactDeclared: PluginAcceptedDeclaredSurface,
+    artifactManifest: typeof manifest,
+  ) =>
+    buildPluginCapabilityConsentReview({
+      pluginId: params.pluginId,
+      manifest: artifactManifest ?? { name: params.pluginId },
+      record: params.sourceRecord ?? params.record,
+      config: params.config,
+      declared: artifactDeclared,
+      ...(params.previousDeclared ? { previousDeclared: params.previousDeclared } : {}),
+    });
+  const review = reviewArtifact(declared, manifest);
   let acceptanceCurrent = false;
   if (params.mode === "update" && params.previousDeclared) {
     const { hasWidening } = diffDeclaredSurfaceWidening(params.previousDeclared, declared);
@@ -286,8 +295,9 @@ async function resolvePluginArtifactCapabilityConsent(params: {
     // Reinstalls preserve authored disablement; required consent still precedes commit.
     // Only update-only flows defer it in preparePluginUpdateCapabilityConsent.
   }
-  const acknowledgment =
-    official || !params.enabled || acceptanceCurrent
+  const acknowledgment = params.requireCapabilityConsent
+    ? await params.onCapabilityConsent?.(review)
+    : (official && !params.recordOfficialCapabilities) || !params.enabled || acceptanceCurrent
       ? { reviewToken: review.reviewToken }
       : (params.acknowledgeCapabilities ?? (await params.onCapabilityConsent?.(review)));
   // Review and staged-package rollback remain cancellable. Lock only when
@@ -308,18 +318,7 @@ async function resolvePluginArtifactCapabilityConsent(params: {
     (official && !isOfficialArtifact(finalManifest))
   ) {
     const finalReview =
-      finalToken === review.reviewToken
-        ? review
-        : buildPluginCapabilityConsentReview({
-            pluginId: params.pluginId,
-            manifest: finalManifest ?? {
-              name: params.pluginId,
-            },
-            record: params.sourceRecord ?? params.record,
-            config: params.config,
-            declared: finalDeclared,
-            ...(params.previousDeclared ? { previousDeclared: params.previousDeclared } : {}),
-          });
+      finalToken === review.reviewToken ? review : reviewArtifact(finalDeclared, finalManifest);
     const outcome = params.currentArtifactDir ? "updated" : "installed";
     return throwManagedPluginCapabilityConsentRequired(
       finalReview,
@@ -328,7 +327,9 @@ async function resolvePluginArtifactCapabilityConsent(params: {
   }
   pendingPluginCapabilityReviews.delete(params.pluginId);
   // Provenance alone is not operator acceptance; an explicit review is.
-  return !official && (params.enabled || acceptanceCurrent) ? finalDeclared : undefined;
+  return (!official || params.recordOfficialCapabilities) && (params.enabled || acceptanceCurrent)
+    ? finalDeclared
+    : undefined;
 }
 
 /** Bind artifact consent to verified staged bytes and carry acceptance into the record commit. */
@@ -340,7 +341,10 @@ export function createManagedPluginArtifactConsentHandler(params: {
   expectedIntegrity?: string;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
-  beforePersistentEffect?: () => void | Promise<void>;
+  requireCapabilityConsent?: boolean;
+  /** Preserve official provenance while recording an explicit setup acceptance. */
+  recordOfficialCapabilities?: boolean;
+  beforePersistentEffect?: (artifact: PluginInstallArtifactConsentRequest) => void | Promise<void>;
   previousRecords?: Record<string, PluginInstallRecord>;
   previousPluginOwners?: ReadonlyMap<string, string>;
   /** Update-only flows may defer consent while every known package entry is disabled. */
@@ -405,7 +409,11 @@ export function createManagedPluginArtifactConsentHandler(params: {
         sourceRecord: artifact.sourceRecord,
         acknowledgeCapabilities: params.acknowledgeCapabilities,
         onCapabilityConsent: params.onCapabilityConsent,
-        beforePersistentEffect: params.beforePersistentEffect,
+        requireCapabilityConsent: params.requireCapabilityConsent,
+        recordOfficialCapabilities: params.recordOfficialCapabilities,
+        ...(params.beforePersistentEffect
+          ? { beforePersistentEffect: () => params.beforePersistentEffect?.(artifact) }
+          : {}),
         ...(previousRecord ? { previousRecord } : {}),
         ...(previousDeclared ? { previousDeclared } : {}),
         mode: artifact.mode,

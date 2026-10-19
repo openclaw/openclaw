@@ -11,17 +11,22 @@ import {
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { createCodexInferenceProxy, type CodexInferenceProxy } from "./inference-proxy.js";
 
-const transport = vi.hoisted(() => ({
-  upstream: "",
-  fetch: vi.fn(),
-  resolve: vi.fn(),
-  downstreams: [] as WebSocket[],
-  remotes: [] as WebSocket[],
-  servers: [] as ReturnType<typeof createServer>[],
-  decompressions: undefined as (() => void)[] | undefined,
-  decompressionStarted: undefined as (() => void) | undefined,
-  upstreamOptions: undefined as ((options: ClientOptions) => ClientOptions) | undefined,
-}));
+const transport = vi.hoisted(() => {
+  const proxyOptions: Pick<Parameters<typeof createCodexInferenceProxy>[0], "bindModelExecution"> =
+    {};
+  return {
+    upstream: "",
+    fetch: vi.fn(),
+    resolve: vi.fn(),
+    downstreams: [] as WebSocket[],
+    remotes: [] as WebSocket[],
+    servers: [] as ReturnType<typeof createServer>[],
+    decompressions: undefined as (() => void)[] | undefined,
+    decompressionStarted: undefined as (() => void) | undefined,
+    upstreamOptions: undefined as ((options: ClientOptions) => ClientOptions) | undefined,
+    proxyOptions,
+  };
+});
 vi.mock("node:zlib", async (original) => {
   const actual = await original<typeof import("node:zlib")>();
   return {
@@ -141,6 +146,7 @@ beforeEach(async () => {
   proxy = await createCodexInferenceProxy({
     upstream: new URL("https://api.openai.com/v1"),
     assertCurrent: () => {},
+    ...transport.proxyOptions,
   });
 });
 afterEach(async () => {
@@ -165,14 +171,14 @@ afterEach(async () => {
   });
 });
 
-function connect() {
-  const client = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
+function connect(path = "/responses") {
+  const client = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + path);
   client.on("error", () => {});
   clients.push(client);
   return client;
 }
-async function open() {
-  const client = connect();
+async function open(path = "/responses") {
+  const client = connect(path);
   await once(client, "open");
   const upstream = upstreams.at(-1);
   if (!upstream) {
@@ -182,7 +188,7 @@ async function open() {
   assert(remote);
   return { client, upstream, remote };
 }
-async function send(client: WebSocket, upstream: WebSocket, body = child) {
+async function send(client: WebSocket, upstream: WebSocket, body: Record<string, unknown> = child) {
   const received = once(upstream, "message");
   client.send(JSON.stringify(body));
   await received;
@@ -192,16 +198,31 @@ async function complete(client: WebSocket, upstream: WebSocket, frame = complete
   upstream.send(frame);
   expect((await received)[0].toString()).toBe(frame);
 }
-async function post(signal?: AbortSignal, compressed = false) {
+async function post(
+  signal?: AbortSignal,
+  compressed = false,
+  options: {
+    path?: string;
+    body?: Record<string, unknown>;
+    headers?: Record<string, string>;
+  } = {},
+) {
   return await new Promise<{ status?: number; retryAfter?: string; body: string }>(
     (resolve, reject) => {
       const req = request(
-        proxy.baseUrl + "/responses",
+        proxy.baseUrl + (options.path ?? "/responses"),
         {
           method: "POST",
           agent: false,
           signal,
-          ...(compressed ? { headers: { "content-encoding": "zstd" } } : {}),
+          ...(compressed || options.headers
+            ? {
+                headers: {
+                  ...options.headers,
+                  ...(compressed ? { "content-encoding": "zstd" } : {}),
+                },
+              }
+            : {}),
         },
         (res) => {
           const chunks: Buffer[] = [];
@@ -217,7 +238,7 @@ async function post(signal?: AbortSignal, compressed = false) {
         },
       );
       req.on("error", reject);
-      const bytes = Buffer.from(JSON.stringify(child));
+      const bytes = Buffer.from(JSON.stringify(options.body ?? child));
       req.end(compressed ? zstdCompressSync(bytes) : bytes);
     },
   );

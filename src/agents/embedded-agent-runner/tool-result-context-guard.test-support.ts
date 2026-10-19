@@ -1,4 +1,4 @@
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { Agent, AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { expect } from "vitest";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { installToolResultContextGuard } from "./tool-result-context-guard.js";
@@ -84,55 +84,18 @@ export function getToolResultText(msg: AgentMessage): string {
   return typeof block?.text === "string" ? block.text : "";
 }
 
-export function makeGuardableAgent(
-  transformContext?: (
-    messages: AgentMessage[],
-    signal: AbortSignal,
-  ) => AgentMessage[] | Promise<AgentMessage[]>,
-) {
+export function makeGuardableAgent(transformContext?: Agent["transformContext"]) {
   return { transformContext };
 }
 
 export async function applyGuardToContext(
-  agent: { transformContext?: (messages: AgentMessage[], signal: AbortSignal) => unknown },
+  agent: Pick<Agent, "transformContext">,
   contextForNextCall: AgentMessage[],
   contextWindowTokens = 1_000,
 ) {
   installToolResultContextGuard({
     agent,
     contextWindowTokens,
-  });
-  return await agent.transformContext?.(contextForNextCall, new AbortController().signal);
-}
-
-export async function applyMidTurnPrecheckGuardToContext(
-  agent: { transformContext?: (messages: AgentMessage[], signal: AbortSignal) => unknown },
-  contextForNextCall: AgentMessage[],
-  options: {
-    contextWindowTokens?: number;
-    contextTokenBudget?: number;
-    reserveTokens?: number;
-    toolResultMaxChars?: number;
-    prePromptMessageCount?: number;
-    systemPrompt?: string;
-  } = {},
-) {
-  // Mid-turn precheck simulates a new tool result being appended after the
-  // original prompt fence; it raises structured signals instead of mutating history.
-  const contextWindowTokens = options.contextWindowTokens ?? options.contextTokenBudget ?? 20_000;
-  installToolResultContextGuard({
-    agent,
-    contextWindowTokens,
-    midTurnPrecheck: {
-      enabled: true,
-      contextTokenBudget: options.contextTokenBudget ?? contextWindowTokens,
-      reserveTokens: () => options.reserveTokens ?? 10_000,
-      toolResultMaxChars: options.toolResultMaxChars,
-      getSystemPrompt: () => options.systemPrompt,
-      ...(options.prePromptMessageCount !== undefined
-        ? { getPrePromptMessageCount: () => options.prePromptMessageCount as number }
-        : {}),
-    },
   });
   return await agent.transformContext?.(contextForNextCall, new AbortController().signal);
 }

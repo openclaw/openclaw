@@ -1,14 +1,9 @@
-/**
- * Remote shell-backed sandbox filesystem bridge.
- *
- * Resolves sandbox paths against uploaded remote mounts and performs guarded operations through backend shell commands.
- */
 import path from "node:path";
-import { parseDirectoryEntries, type DirectoryEntry } from "../../infra/directory-entries.js";
 import {
   GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE,
   GUEST_FILESYSTEM_READ_NOT_FOUND_EXIT_CODE,
-} from "../../infra/guest-filesystem.js";
+} from "@openclaw/fs-safe/guest";
+import { parseDirectoryEntries, type DirectoryEntry } from "../../infra/directory-entries.js";
 import type {
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,
@@ -16,6 +11,7 @@ import type {
 import { SANDBOX_FILE_IDENTITY } from "./file-mutation-identity.js";
 import {
   buildPinnedMutationArgs,
+  PINNED_MUTATION_ACTION_LABELS,
   SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL,
 } from "./fs-bridge-mutation-helper.js";
 import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
@@ -40,17 +36,14 @@ import {
 } from "./remote-fs-bridge-paths.js";
 import {
   authorizedRemotePinnedPath,
-  remotePinnedActionLabel,
-  resolveRemotePinnedTarget,
+  resolveRemotePinnedCanonicalFrame,
   type RemotePinnedTarget,
-  type RemotePinnedTargetParams,
 } from "./remote-fs-bridge-pinned-frame.js";
 import type { ResolvedRemotePath, RemoteShellSandboxHandle } from "./remote-fs-bridge.types.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./workspace-mounts.js";
 
 export type { RemoteShellSandboxHandle } from "./remote-fs-bridge.types.js";
 
-/** Create the filesystem bridge for remote shell-backed sandbox runtimes. */
 export function createRemoteShellSandboxFsBridge(params: {
   sandbox: SandboxFsBridgeContext;
   runtime: RemoteShellSandboxHandle;
@@ -123,12 +116,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     ) {
       throw new Error(`Invalid sandbox entry target: ${target.containerPath}`);
     }
-    const pinned = await this.resolvePinnedTarget({
-      containerPath: target.containerPath,
-      mountRootPath: target.mountRootPath,
-      action: "read files",
-      signal: params.signal,
-    });
+    const pinned = await this.resolvePinnedTarget(target, "read files", params.signal);
     const result = await this.runMutation({
       args: buildPinnedMutationArgs({
         kind: "read",
@@ -172,12 +160,8 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     params: Parameters<NonNullable<SandboxFsBridge["readDirectory"]>>[0],
   ): Promise<DirectoryEntry[]> {
     const target = this.resolveTarget(params);
-    const pinned = await this.resolvePinnedTarget({
-      containerPath: target.containerPath,
-      mountRootPath: target.mountRootPath,
-      action: "list directories",
+    const pinned = await this.resolvePinnedTarget(target, "list directories", params.signal, {
       directory: true,
-      signal: params.signal,
     });
     const result = await this.runMutation({
       args: buildPinnedMutationArgs({
@@ -198,27 +182,18 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     await this.ensureRemoteWritable(destination, "copy files", params.signal);
     await this.assertNoHardlinkedFile({
       containerPath: destination.containerPath,
-      action: "copy files",
       signal: params.signal,
     });
-    const sourcePinned = await this.resolvePinnedTarget({
-      containerPath: source.containerPath,
-      mountRootPath: source.mountRootPath,
-      action: "copy files",
-      signal: params.signal,
-    });
-    const destinationPinned = await this.resolvePinnedTarget({
-      containerPath: destination.containerPath,
-      mountRootPath: destination.mountRootPath,
-      action: "copy files",
-      requireWritable: true,
-      pinnedCanonicalPath: authorizedRemotePinnedPath(
-        params.pinnedPath,
-        destination.containerPath,
-        "copy files",
-      ),
-      signal: params.signal,
-    });
+    const sourcePinned = await this.resolvePinnedTarget(source, "copy files", params.signal);
+    const destinationPinned = await this.resolvePinnedTarget(
+      destination,
+      "copy files",
+      params.signal,
+      {
+        pinnedPath: params.pinnedPath,
+        requireWritable: true,
+      },
+    );
     await this.runMutation({
       args: buildPinnedMutationArgs({
         kind: "copy",
@@ -231,86 +206,58 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
   }
 
   async writeFile(params: Parameters<SandboxFsBridge["writeFile"]>[0]): Promise<void> {
-    const target = this.resolveTarget(params);
-    await this.ensureRemoteWritable(target, "write files", params.signal);
-    const pinned = await this.resolvePinnedTarget({
-      containerPath: target.containerPath,
-      mountRootPath: target.mountRootPath,
-      action: "write files",
-      requireWritable: true,
-      pinnedCanonicalPath: authorizedRemotePinnedPath(
-        params.pinnedPath,
-        target.containerPath,
-        "write files",
-      ),
-      signal: params.signal,
-    });
-    await this.assertNoHardlinkedFile({
-      containerPath: target.containerPath,
-      action: "write files",
-      signal: params.signal,
-    });
-    const buffer = Buffer.isBuffer(params.data)
-      ? params.data
-      : Buffer.from(params.data, params.encoding ?? "utf8");
-    await this.runMutation({
-      args: buildPinnedMutationArgs({
-        kind: "write",
-        pinned,
-        mkdir: params.mkdir !== false,
-      }),
-      stdin: buffer,
-      signal: params.signal,
-    });
+    await this.writeFileContents(params, "write");
   }
 
   async createFileExclusive(
     params: Parameters<NonNullable<SandboxFsBridge["createFileExclusive"]>>[0],
   ): Promise<"created" | "exists"> {
-    const target = this.resolveTarget(params);
-    await this.ensureRemoteWritable(target, "create files", params.signal);
-    const pinned = await this.resolvePinnedTarget({
-      containerPath: target.containerPath,
-      mountRootPath: target.mountRootPath,
-      action: "create files",
-      requireWritable: true,
-      pinnedCanonicalPath: authorizedRemotePinnedPath(
-        params.pinnedPath,
-        target.containerPath,
-        "create files",
-      ),
-      signal: params.signal,
-    });
-    const buffer = Buffer.isBuffer(params.data)
-      ? params.data
-      : Buffer.from(params.data, params.encoding ?? "utf8");
-    const result = await this.runMutation({
-      args: buildPinnedMutationArgs({
-        kind: "create",
-        pinned,
-        mkdir: params.mkdir !== false,
-      }),
-      stdin: buffer,
-      allowFailure: true,
-      signal: params.signal,
-    });
+    const { result, containerPath } = await this.writeFileContents(params, "create");
     if (result.code === GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE) {
       return "exists";
     }
     if (result.code !== 0) {
       throw new Error(
-        `Sandbox create failed for ${target.containerPath}: ${result.stderr.toString("utf8").trim()}`,
+        `Sandbox create failed for ${containerPath}: ${result.stderr.toString("utf8").trim()}`,
       );
     }
     return "created";
   }
 
-  async mkdirp(params: {
-    filePath: string;
-    cwd?: string;
-    pinnedPath?: string;
-    signal?: AbortSignal;
-  }): Promise<void> {
+  private async writeFileContents(
+    params: Parameters<SandboxFsBridge["writeFile"]>[0],
+    kind: "write" | "create",
+  ) {
+    const action = PINNED_MUTATION_ACTION_LABELS[kind];
+    const target = this.resolveTarget(params);
+    await this.ensureRemoteWritable(target, action, params.signal);
+    const pinned = await this.resolvePinnedTarget(target, action, params.signal, {
+      pinnedPath: params.pinnedPath,
+      requireWritable: true,
+    });
+    if (kind === "write") {
+      await this.assertNoHardlinkedFile({
+        containerPath: target.containerPath,
+        signal: params.signal,
+      });
+    }
+    const buffer = Buffer.isBuffer(params.data)
+      ? params.data
+      : Buffer.from(params.data, params.encoding ?? "utf8");
+    const result = await this.runMutation({
+      args: buildPinnedMutationArgs({
+        kind,
+        pinned,
+        mkdir: params.mkdir !== false,
+      }),
+      stdin: buffer,
+      allowFailure: kind === "create" ? true : undefined,
+      signal: params.signal,
+    });
+    return { result, containerPath: target.containerPath };
+  }
+
+  async mkdirp(params: Parameters<SandboxFsBridge["mkdirp"]>[0]): Promise<void> {
     const target = this.resolveTarget(params);
     await this.ensureRemoteWritable(target, "create directories", params.signal);
     const relativePath = path.posix.relative(target.mountRootPath, target.containerPath);
@@ -322,19 +269,10 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     if (relativePath === "" || relativePath === ".") {
       return;
     }
-    const pinned = await this.resolvePinnedTarget({
-      containerPath: target.containerPath,
-      mountRootPath: target.mountRootPath,
-      action: "create directories",
+    const pinned = await this.resolvePinnedTarget(target, "create directories", params.signal, {
+      pinnedPath: params.pinnedPath,
       requireWritable: true,
       directory: true,
-      pinnedCanonicalPath: authorizedRemotePinnedPath(
-        params.pinnedPath,
-        target.containerPath,
-        "create directories",
-        { directory: true },
-      ),
-      signal: params.signal,
     });
     await this.runMutation({
       args: buildPinnedMutationArgs({
@@ -355,19 +293,10 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       }
       return;
     }
-    const pinned = await this.resolvePinnedTarget({
-      containerPath: target.containerPath,
-      mountRootPath: target.mountRootPath,
-      action: "remove files",
+    const pinned = await this.resolvePinnedTarget(target, "remove files", params.signal, {
+      pinnedPath: params.pinnedPath,
       requireWritable: true,
       includeDescendants: params.recursive,
-      allowFinalSymlinkForUnlink: true,
-      pinnedCanonicalPath: authorizedRemotePinnedPath(
-        params.pinnedPath,
-        target.containerPath,
-        "remove files",
-      ),
-      signal: params.signal,
     });
     await this.runMutation({
       args: buildPinnedMutationArgs({
@@ -385,22 +314,13 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     const { from, to } = this.resolveRenameTargets(params);
     await this.ensureRemoteWritable(from, "rename files", params.signal, true);
     await this.ensureRemoteWritable(to, "rename files", params.signal, true);
-    const fromPinned = await this.resolvePinnedTarget({
-      containerPath: from.containerPath,
-      mountRootPath: from.mountRootPath,
-      action: "rename files",
+    const fromPinned = await this.resolvePinnedTarget(from, "rename files", params.signal, {
       requireWritable: true,
       includeDescendants: true,
-      allowFinalSymlinkForUnlink: true,
-      signal: params.signal,
     });
-    const toPinned = await this.resolvePinnedTarget({
-      containerPath: to.containerPath,
-      mountRootPath: to.mountRootPath,
-      action: "rename files",
+    const toPinned = await this.resolvePinnedTarget(to, "rename files", params.signal, {
       requireWritable: true,
       includeDescendants: true,
-      signal: params.signal,
     });
     await this.runMutation({
       args: buildPinnedMutationArgs({
@@ -426,7 +346,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     });
     await this.assertNoHardlinkedFile({
       containerPath: canonicalPath,
-      action: "stat files",
       signal: params.signal,
     });
     const result = await this.runtime.runRemoteShellScript({
@@ -564,7 +483,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       containerPath: params.containerPath,
       writable: params.mount.writable,
       mountRootPath: params.mount.containerRoot,
-      source: params.mount.source,
     };
   }
 
@@ -634,18 +552,16 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     containerPath: string;
     mountRootPath: string;
     action: string;
-    allowFinalSymlinkForUnlink?: boolean;
     signal?: AbortSignal;
   }): Promise<RemoteCanonicalPath> {
     return await resolveRemoteCanonicalPath({
       ...params,
-      runRemoteShellScript: async (command) => await this.runtime.runRemoteShellScript(command),
+      runRemoteShellScript: (command) => this.runtime.runRemoteShellScript(command),
     });
   }
 
   private async assertNoHardlinkedFile(params: {
     containerPath: string;
-    action: string;
     signal?: AbortSignal;
   }): Promise<void> {
     // Remote mutation helpers pin by parent path. Rejecting hardlinked regular
@@ -676,7 +592,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     params: Parameters<NonNullable<SandboxFsBridge["resolvePinnedMutationTarget"]>>[0],
   ): Promise<{ policyPath: string; pinnedPath: string }> {
     const target = this.resolveTarget(params);
-    const action = remotePinnedActionLabel(params.action);
+    const action = PINNED_MUTATION_ACTION_LABELS[params.action];
     const { canonicalPath, logicalPath } = await this.resolveCanonicalPath({
       // mkdirp pins the directory itself; file operations pin their parent.
       containerPath: normalizeContainerPath(
@@ -705,14 +621,90 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     };
   }
 
-  private resolvePinnedTarget(params: RemotePinnedTargetParams): Promise<RemotePinnedTarget> {
-    return resolveRemotePinnedTarget(params, {
-      mounts: this.getMounts(),
-      resolveCanonicalPath: (canonicalParams) => this.resolveCanonicalPath(canonicalParams),
-      assertRemoteProtectedPathWritable: (protectedParams) =>
-        this.assertRemoteProtectedPathWritable(protectedParams),
-      runRemoteShellScript: (command) => this.runtime.runRemoteShellScript(command),
-    });
+  private async resolvePinnedTarget(
+    target: ResolvedRemotePath,
+    action: string,
+    signal: AbortSignal | undefined,
+    options: {
+      requireWritable?: boolean;
+      directory?: boolean;
+      includeDescendants?: boolean;
+      pinnedPath?: string;
+    } = {},
+  ): Promise<RemotePinnedTarget> {
+    const { pinnedPath, ...pinOptions } = options;
+    const params = {
+      containerPath: target.containerPath,
+      mountRootPath: target.mountRootPath,
+      action,
+      signal,
+      ...pinOptions,
+      pinnedCanonicalPath: authorizedRemotePinnedPath(
+        pinnedPath,
+        target.containerPath,
+        action,
+        options,
+      ),
+    };
+    const mounts = this.getMounts();
+    const basename = params.directory ? "" : path.posix.basename(params.containerPath);
+    if (!params.directory && (!basename || basename === "." || basename === "/")) {
+      throw new Error(`Invalid sandbox entry target: ${params.containerPath}`);
+    }
+    const { canonicalPath, canonicalMountRoot, logicalPath } =
+      params.pinnedCanonicalPath !== undefined
+        ? await resolveRemotePinnedCanonicalFrame({
+            // mkdirp pins the directory itself; file operations pin their parent.
+            pinnedPath: params.pinnedCanonicalPath,
+            directory: params.directory === true,
+            mountRootPath: params.mountRootPath,
+            action: params.action,
+            signal: params.signal,
+            runRemoteShellScript: (command) => this.runtime.runRemoteShellScript(command),
+          })
+        : await this.resolveCanonicalPath({
+            // Resolve the full parent; the guest mutation owns the final entry's
+            // no-follow unlink/rename semantics after the basename is separated.
+            containerPath: normalizeContainerPath(
+              params.directory ? params.containerPath : path.posix.dirname(params.containerPath),
+            ),
+            mountRootPath: params.mountRootPath,
+            action: params.action,
+            signal: params.signal,
+          });
+    const mount = resolveRemoteMountByContainerPath(mounts, logicalPath);
+    if (!mount) {
+      throw new Error(
+        `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.containerPath}`,
+      );
+    }
+    if (params.requireWritable && !mount.writable) {
+      throw new Error(
+        `Sandbox path is read-only; cannot ${params.action}: ${params.containerPath}`,
+      );
+    }
+    if (params.requireWritable) {
+      await this.assertRemoteProtectedPathWritable({
+        containerPath: path.posix.join(logicalPath, basename),
+        action: params.action,
+        displayPath: params.containerPath,
+        signal: params.signal,
+        includeDescendants: params.includeDescendants,
+      });
+    }
+    // Resolve mount policy in the logical namespace, but pin mutations to the
+    // canonical root so a legitimate symlinked workspace root is not reopened.
+    const relativeParentPath = path.posix.relative(canonicalMountRoot, canonicalPath);
+    if (relativePathEscapesContainerRoot(relativeParentPath)) {
+      throw new Error(
+        `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.containerPath}`,
+      );
+    }
+    return {
+      mountRootPath: canonicalMountRoot,
+      relativeParentPath: relativeParentPath === "." ? "" : relativeParentPath,
+      basename,
+    };
   }
 
   private async runMutation(params: {
@@ -727,10 +719,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
         `python_script=${SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL}`,
         'python3 -c "$python_script" "$@"',
       ].join("\n"),
-      args: params.args,
-      stdin: params.stdin,
-      signal: params.signal,
-      allowFailure: params.allowFailure,
+      ...params,
     });
   }
 }

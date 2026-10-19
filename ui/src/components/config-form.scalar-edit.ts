@@ -1,57 +1,37 @@
 // Scalar edit sessions keep their initial primitive branch while focused rerenders apply patches.
+type ScalarControl = HTMLInputElement | HTMLTextAreaElement;
 type ScalarValueBranch = "string" | "number" | "boolean";
 
 export type ScalarEditHint = {
   branch?: ScalarValueBranch;
 };
 
-type ScalarEditState = {
+type ScalarInputState = {
   edit?: ScalarEditHint;
+  controlIdentity: unknown;
+  sourceIdentity: unknown;
   pathKey: string;
   presentationIdentity: string;
+  renderedValue: string;
 };
 
-const scalarEditState = new WeakMap<HTMLInputElement, ScalarEditState>();
+const scalarInputState = new WeakMap<ScalarControl, ScalarInputState>();
+const controlErrors = new WeakMap<ScalarControl, HTMLElement>();
 
-export function scalarValueBranch(value: unknown): ScalarValueBranch | undefined {
-  if (typeof value === "string") {
-    return "string";
-  }
-  if (typeof value === "number") {
-    return "number";
-  }
-  if (typeof value === "boolean") {
-    return "boolean";
-  }
-  return undefined;
+export function bindControlError(target: ScalarControl, error: HTMLElement): void {
+  controlErrors.set(target, error);
 }
 
-export function syncScalarEditIdentity(
-  element: Element | undefined,
-  pathKey: string,
-  presentationIdentity: string,
-): void {
-  if (!(element instanceof HTMLInputElement)) {
-    return;
-  }
-  const previous = scalarEditState.get(element);
-  const preserveEdit =
-    previous?.edit !== undefined &&
-    element.ownerDocument.activeElement === element &&
-    previous.pathKey === pathKey &&
-    previous.presentationIdentity === presentationIdentity;
-  scalarEditState.set(element, {
-    edit: preserveEdit ? previous.edit : undefined,
-    pathKey,
-    presentationIdentity,
-  });
+export function scalarValueBranch(value: unknown): ScalarValueBranch | undefined {
+  const type = typeof value;
+  return type === "string" || type === "number" || type === "boolean" ? type : undefined;
 }
 
 export function beginScalarEdit(
-  target: HTMLInputElement,
+  target: ScalarControl,
   initialBranch: ScalarValueBranch | undefined,
 ): ScalarEditHint {
-  const state = scalarEditState.get(target);
+  const state = scalarInputState.get(target);
   if (!state) {
     return { branch: initialBranch };
   }
@@ -60,40 +40,26 @@ export function beginScalarEdit(
 }
 
 export function scalarEditHintForInput(
-  target: HTMLInputElement,
+  target: ScalarControl,
   initialBranch: ScalarValueBranch | undefined,
 ): ScalarEditHint {
-  return scalarEditState.get(target)?.edit ?? { branch: initialBranch };
+  return scalarInputState.get(target)?.edit ?? { branch: initialBranch };
 }
 
-export function finishScalarEdit(target: HTMLInputElement): void {
-  const state = scalarEditState.get(target);
+export function finishScalarEdit(target: ScalarControl): void {
+  const state = scalarInputState.get(target);
   if (state) {
     state.edit = undefined;
   }
 }
 
-export function finishScalarEditFromEvent(event: Event): void {
-  if (event.currentTarget instanceof HTMLInputElement) {
-    finishScalarEdit(event.currentTarget);
-  }
-}
-
-const scalarInputState = new WeakMap<
-  HTMLInputElement,
-  {
-    controlIdentity: unknown;
-    sourceIdentity: unknown;
-    pathKey: string;
-    presentationIdentity: string;
-    renderedValue: string;
-  }
->();
-
-export function setControlValidity(target: HTMLInputElement, message: string): boolean {
+export function setControlValidity(
+  target: HTMLInputElement | HTMLTextAreaElement,
+  message: string,
+): boolean {
   target.setCustomValidity(message);
   target.setAttribute("aria-invalid", String(Boolean(message)));
-  const error = target.closest(".settings-row")?.querySelector<HTMLElement>(".cfg-field__error");
+  const error = controlErrors.get(target);
   if (error) {
     error.hidden = !message;
     error.textContent = message;
@@ -108,12 +74,18 @@ export function syncScalarInputIdentity(
   pathKey: string,
   presentationIdentity: string,
   renderedValue: string,
-  revalidate: (target: HTMLInputElement) => void,
+  revalidate: (target: ScalarControl) => void,
 ): void {
-  if (!(element instanceof HTMLInputElement)) {
+  if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
     return;
   }
   const previous = scalarInputState.get(element);
+  const edit =
+    element.ownerDocument.activeElement === element &&
+    previous?.pathKey === pathKey &&
+    previous.presentationIdentity === presentationIdentity
+      ? previous.edit
+      : undefined;
   if (previous) {
     if (
       !Object.is(previous.sourceIdentity, sourceIdentity) ||
@@ -137,6 +109,7 @@ export function syncScalarInputIdentity(
     }
   }
   scalarInputState.set(element, {
+    edit,
     controlIdentity,
     sourceIdentity,
     pathKey,

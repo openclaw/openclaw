@@ -8,6 +8,7 @@ import {
   INBOUND_METADATA_MARKERS,
   stripInboundMetadata,
 } from "../../auto-reply/reply/strip-inbound-meta.js";
+import { RUNTIME_CONTEXT_HEADER } from "../../llm/types.js";
 import { coerceChatContentText } from "../../shared/chat-content.js";
 import { escapeRegExp } from "../../shared/regexp.js";
 import {
@@ -22,9 +23,10 @@ import {
   isInsideCode,
   stripLinesOutsideCode,
 } from "../../shared/text/code-regions.js";
-import { stripFinalTags } from "../../shared/text/final-tags.js";
+import { createFinalTagProbe, stripFinalTags } from "../../shared/text/final-tags.js";
 import {
   applyTextFilters,
+  createConditionalTextProjector,
   duplicateParagraphTextFilter,
   leadingEmptyLinesTextFilter,
   type TextFilter,
@@ -66,12 +68,14 @@ type VerifiedConversationContext = {
   incompleteMarkdownWrapper?: RegExp;
 };
 
+const CONVERSATION_CONTEXT_MARKERS = [
+  HISTORY_CONTEXT_MARKER,
+  RECENT_HISTORY_CONTEXT_MARKER,
+  CURRENT_MESSAGE_MARKER,
+];
+
 function hasConversationContextMarker(text: string): boolean {
-  return (
-    text.includes(HISTORY_CONTEXT_MARKER) ||
-    text.includes(RECENT_HISTORY_CONTEXT_MARKER) ||
-    text.includes(CURRENT_MESSAGE_MARKER)
-  );
+  return CONVERSATION_CONTEXT_MARKERS.some((marker) => text.includes(marker));
 }
 
 function prepareVerifiedConversationContext(
@@ -81,11 +85,7 @@ function prepareVerifiedConversationContext(
     return undefined;
   }
   const sourceCodeRegions = findCodeRegions(source);
-  const ownsConversationContext = [
-    HISTORY_CONTEXT_MARKER,
-    RECENT_HISTORY_CONTEXT_MARKER,
-    CURRENT_MESSAGE_MARKER,
-  ].some((marker) => {
+  const ownsConversationContext = CONVERSATION_CONTEXT_MARKERS.some((marker) => {
     let markerOffset = source.indexOf(marker);
     while (markerOffset !== -1) {
       const markerEnd = markerOffset + marker.length;
@@ -243,7 +243,10 @@ export function userFacingTextFilters(
 ): readonly TextFilter[] {
   const key = `${errorContext ? "error" : "normal"}${streaming ? "-stream" : ""}` as const;
   return (userFacingFilters[key] ??= [
-    { transform: stripFinalTags, activationTokens: ["<"] },
+    {
+      transform: stripFinalTags,
+      create: () => createConditionalTextProjector(stripFinalTags, createFinalTagProbe()),
+    },
     {
       transform: streaming
         ? (text) => stripInternalRuntimeContext(text, { streaming: true })
@@ -252,6 +255,8 @@ export function userFacingTextFilters(
         streaming ? "<" : INTERNAL_RUNTIME_CONTEXT_BEGIN,
         INTERNAL_RUNTIME_CONTEXT_END,
         OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+        // Activate before any ambiguous carrier prefix can reach a user-visible stream.
+        streaming ? RUNTIME_CONTEXT_HEADER.charAt(0) : RUNTIME_CONTEXT_HEADER,
       ],
     },
     { transform: stripInboundMetadata, activationTokens: INBOUND_METADATA_MARKERS },

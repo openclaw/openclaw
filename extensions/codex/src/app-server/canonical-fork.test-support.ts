@@ -8,12 +8,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { upsertSessionUpstreamLink } from "openclaw/plugin-sdk/session-catalog";
+import { upsertSessionUpstreamLinkAsync } from "openclaw/plugin-sdk/session-catalog";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { createStageTimingTracker } from "openclaw/plugin-sdk/time-runtime";
 import { continueLocalCodexSession } from "../session-catalog-adoption.js";
 import { createCodexSessionCatalogControl } from "../session-catalog-control.js";
-import { codexSessionCatalogRuntime } from "../session-catalog.js";
+import { registerCodexSessionCatalog } from "../session-catalog.js";
 import {
   codexUpstreamContinueResult,
   type CodexUpstreamBaseline,
@@ -26,8 +27,7 @@ import {
   resolveCodexSupervisionAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./config.js";
-import { createCodexDynamicToolBuildStageTracker } from "./dynamic-tool-build.js";
-import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
+import { prepareCodexNativeExecutionPolicyForRun } from "./native-execution-policy.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { prepareCodexAttemptTools } from "./run-attempt-tool-setup.js";
@@ -35,23 +35,22 @@ import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
 } from "./session-binding-store.js";
-import {
-  createCodexAppServerBindingStore,
-  sessionBindingIdentity,
-  type StoredCodexAppServerBinding,
-} from "./session-binding.js";
+import { createCodexAppServerBindingStore, sessionBindingIdentity } from "./session-binding.js";
+import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
-  resetSharedCodexAppServerClientForTests,
-  resolveCodexNativeConfigFenceKey,
 } from "./shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
+import { createCodexTestModel } from "./test-support.js";
 import {
   codexTranscriptMirrorRuntime,
   createCodexAppServerUserMessagePersistenceNotifier,
   mirrorPromptAtTurnStartBestEffort,
 } from "./transcript-mirror.js";
 import { promptSnapshot } from "./user-prompt-message.js";
+
+type Invalidate = (reason: "closed" | "aborted" | "replaced" | "claim") => Promise<void>;
 
 export async function createCanonicalForkFixture(params: {
   runtime: PluginRuntime;
@@ -73,9 +72,9 @@ export async function createCanonicalForkFixture(params: {
     workerOwned?: boolean;
   }) => Promise<{
     capabilities: EmbeddedRunAttemptParamsV2["hostCapabilities"];
-    close: () => void;
+    close: () => void | Promise<void>;
     abortController: AbortController;
-    invalidate: (reason: "closed" | "aborted" | "replaced" | "claim") => Promise<void>;
+    invalidate: Invalidate;
     runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
     userTurnTranscriptRecorder: EmbeddedRunAttemptParamsV2["userTurnTranscriptRecorder"];
   }>;
@@ -97,7 +96,7 @@ export async function createCanonicalForkFixture(params: {
     appServer: {
       command: process.execPath,
       args: ["app-server"],
-      approvalsReviewer: "user" as const,
+      approvalsReviewer: "user",
     },
   };
   const controls = createCodexSessionCatalogControl({
@@ -120,15 +119,16 @@ export async function createCanonicalForkFixture(params: {
   );
   const storePath = resolveStorePath(config.session?.store, { agentId: "main" });
   const bindingStore = createCodexAppServerBindingStore(
-    runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>({
+    createCodexSqliteTestBindingStateStore({
       namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
       maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
       overflowPolicy: "reject-new",
+      env: { ...process.env },
     }),
   );
   const captured = createCapturedPluginRegistration({ id: "codex", config });
   const api = { ...captured.api, runtime };
-  codexSessionCatalogRuntime.register({
+  registerCodexSessionCatalog({
     resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
     api,
     bindingStore,
@@ -166,55 +166,48 @@ export async function createCanonicalForkFixture(params: {
       senderId?: string;
       workerOwned?: boolean;
       developerInstructions?: string;
-      beforeStartup?: (
-        invalidate: (reason: "closed" | "aborted" | "replaced" | "claim") => Promise<void>,
-      ) => Promise<void> | void;
+      beforeStartup?: (invalidate: Invalidate) => Promise<void> | void;
       inspectTools?: (tools: {
         bridge: Awaited<ReturnType<typeof prepareCodexAttemptTools>>["toolBridge"];
-        invalidate: (reason: "closed" | "aborted" | "replaced" | "claim") => Promise<void>;
+        invalidate: Invalidate;
       }) => Promise<void>;
     } = {},
   ) => {
     const senderIsOwner = options.senderIsOwner ?? params.senderIsOwner;
     const session = identity(key);
-    const runId = randomUUID();
-    const host = await params.createHost({
+    const turnInput = {
       sessionId: session.sessionId,
       sessionKey: key,
-      runId,
-      storePath,
+      runId: randomUUID(),
       prompt: text,
       senderIsOwner,
       senderId: options.senderId,
+    };
+    const host = await params.createHost({
+      ...turnInput,
+      storePath,
       workerOwned: options.workerOwned,
     });
     try {
       return await host.runWithScope(async () => {
         const model = {
+          ...createCodexTestModel("openai", ["text", "image"]),
           id: "gpt-5.6-luna",
           name: "gpt-5.6-luna",
-          provider: "openai",
-          api: "openai-chatgpt-responses",
-          reasoning: true,
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: undefined,
           maxTokens: undefined,
         };
         // The host owns admission and publication readiness; the native transport
         // supplies connection facts without provider authentication or a model turn.
         const attempt = {
+          ...turnInput,
           config,
           agentId: "main",
           agentDir,
-          sessionId: session.sessionId,
-          sessionKey: key,
           workspaceDir,
           cwd: workspaceDir,
           sessionTarget: { ...session, storePath },
-          runId,
           userTurnTranscriptRecorder: host.userTurnTranscriptRecorder,
-          prompt: text,
           provider: "codex",
           modelId: model.id,
           model,
@@ -222,8 +215,6 @@ export async function createCanonicalForkFixture(params: {
           timeoutMs: 10_000,
           authProfileStore: { version: 1, profiles: {} },
           githubPublicationAvailable: false,
-          senderIsOwner,
-          senderId: options.senderId,
           abortSignal: host.abortController.signal,
         } as unknown as EmbeddedRunAttemptParamsV2;
         const runAbortController = host.abortController;
@@ -234,64 +225,66 @@ export async function createCanonicalForkFixture(params: {
           cfg: config,
           toolsEnabled: true,
         });
+        const connectionContext = {
+          agentDir,
+          pluginConfig,
+          appServer: home.appServer,
+          effectiveWorkspace: workspaceDir,
+          effectiveCwd: workspaceDir,
+          sessionAgentId: "main",
+          attemptClientFactory: getLeasedSharedCodexAppServerClient,
+        };
+        const nativeSurface = {
+          nativeToolSurfaceEnabled: true,
+          nativeProviderWebSearchSupport: "supported" as const,
+          bundleMcpThreadConfig,
+        };
         // SAFETY: fixture connection facts replace native/auth startup only.
         // Tool factories, admitted composition, and schema projection remain real.
         const toolRuntime = {
           connection: {
+            ...connectionContext,
             assertCurrent: host.capabilities.assertActive,
             params: attempt,
-            attemptClientFactory: getLeasedSharedCodexAppServerClient,
             startupClientAuthProfileId: null,
-            preDynamicStartupStages: createCodexDynamicToolBuildStageTracker(),
+            preDynamicStartupStages: createStageTimingTracker(),
             mutable: { startupBinding },
             resolvedWorkspace: workspaceDir,
-            effectiveWorkspace: workspaceDir,
-            effectiveCwd: workspaceDir,
             sandboxSessionKey: key,
             sandbox: null,
             runAbortController,
-            sessionAgentId: "main",
             policyAgentId: "main",
             contextSessionKey: key,
-            pluginConfig,
             profilerEnabled: false,
-            agentDir,
-            appServer: home.appServer,
             usesSupervisionConnection: true,
           },
           runtimeParams: attempt,
           effectiveRuntimeModelId: model.id,
-          nativeToolSurfaceEnabled: true,
-          nativeProviderWebSearchSupport: "supported",
-          bundleMcpThreadConfig,
+          nativeExecutionPolicy: await prepareCodexNativeExecutionPolicyForRun(attempt, {
+            agentId: "main",
+            runtimeSessionKey: key,
+            sandbox: null,
+          }),
+          ...nativeSurface,
         } as unknown as CodexAttemptRuntime;
         const preparedTools = await prepareCodexAttemptTools(toolRuntime);
         let startup: Awaited<ReturnType<typeof startCodexAttemptThread>> | undefined;
         try {
           await options.beforeStartup?.(host.invalidate);
           startup = await startCodexAttemptThread({
-            attemptClientFactory: getLeasedSharedCodexAppServerClient,
+            ...connectionContext,
+            ...nativeSurface,
+            config,
             bindingStore,
             buildAttemptParams: () => attempt,
-            pluginConfig,
             computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig }),
-            startupAuthProfileId: null,
-            startupAuthBindingFingerprint: undefined,
+            clientOptions: { authProfileId: null },
             startupAuthAccountCacheKey: undefined,
             startupEnvApiKeyCacheKey: undefined,
-            sessionAgentId: "main",
-            agentDir,
-            config,
-            effectiveWorkspace: workspaceDir,
-            effectiveCwd: workspaceDir,
-            appServer: home.appServer,
             dynamicTools: preparedTools.toolBridge.specs,
-            nativeToolSurfaceEnabled: true,
-            nativeProviderWebSearchSupport: "supported",
             webSearchAllowed: preparedTools.toolState.webSearchAllowed,
             persistentWebSearchAllowed: preparedTools.toolState.persistentWebSearchAllowed,
             developerInstructions: options.developerInstructions,
-            bundleMcpThreadConfig,
             sandboxExecServerEnabled: false,
             sandbox: null,
             contextEngineProjection: undefined,
@@ -350,7 +343,7 @@ export async function createCanonicalForkFixture(params: {
         }
       });
     } finally {
-      host.close();
+      await host.close();
     }
   };
   return {
@@ -365,10 +358,6 @@ export async function createCanonicalForkFixture(params: {
         releaseLeasedSharedCodexAppServerClient(client);
       }
     },
-    holdConfiguration: (client: CodexAppServerClient) =>
-      acquireCodexNativeConfigFence(
-        expectDefined(resolveCodexNativeConfigFenceKey({ client }), "native configuration fence"),
-      ),
     bindingStore,
     identity,
     readEntries,
@@ -394,7 +383,7 @@ export async function createCanonicalForkFixture(params: {
       );
       // Seed the catalog response through the same canonical link store as its Gateway caller.
       if (
-        !upsertSessionUpstreamLink({
+        !(await upsertSessionUpstreamLinkAsync({
           sessionKey: result.sessionKey,
           agentId: "main",
           catalogId: "codex",
@@ -403,7 +392,7 @@ export async function createCanonicalForkFixture(params: {
           upstreamKind: upstream.kind,
           upstreamRef: upstream.ref,
           marker: upstream.marker,
-        })
+        }))
       ) {
         throw new Error("Failed to seed catalog upstream link");
       }

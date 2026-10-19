@@ -6,39 +6,9 @@ import {
 import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import { matchesVitestGlob } from "./vitest.pattern-file.ts";
 import { createUiE2eVitestConfig } from "./vitest.ui-e2e.config.ts";
-import { uiE2eRealGatewayTestFiles } from "./vitest.ui-paths.mjs";
+import { uiE2ePrebuiltParallelTestFiles, uiE2eRealGatewayTestFiles } from "./vitest.ui-paths.mjs";
 
-// New real-Gateway files stay serial until their shared readers/writers are audited.
-// Listed fixtures own their HOME, state, ports, and cleanup; UI bytes are either
-// borrowed from the invocation preview or read by their prepared Gateway child.
-const parallelFiles = new Set([
-  "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-flow.catalog-bootstrap.e2e.test.ts",
-  "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
-  "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
-  "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
-  "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
-  "ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts",
-  "ui/src/e2e/logs-lifecycle.e2e.test.ts",
-  "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
-  "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
-  "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
-  "ui/src/e2e/profile-page.real-gateway.e2e.test.ts",
-  "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
-  "ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts",
-  "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
-  "ui/src/e2e/worker-initial-setup.real-gateway.e2e.test.ts",
-  "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
-  "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
-  "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
-  "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
-]);
+const parallelFiles = new Set(uiE2ePrebuiltParallelTestFiles);
 
 export function createPrebuiltUiE2eVitestConfig(
   env: Record<string, string | undefined> = process.env,

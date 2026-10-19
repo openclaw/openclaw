@@ -1,10 +1,8 @@
 import type { CopilotClient } from "@github/copilot-sdk";
 import type { AgentHarnessAttemptResult as AgentHarnessAttemptResultContract } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type {
-  AgentHarnessTaskRecord,
-  AgentHarnessTaskRuntime,
-} from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import { runInHarnessToolAuthorityForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
+import { runCopilotAttempt as runCopilotAttemptImpl } from "./attempt.js";
 import type { CopilotClientPool } from "./runtime.js";
 
 type AgentHarnessAttemptResult = Extract<AgentHarnessAttemptResultContract, { terminal: unknown }>;
@@ -23,32 +21,11 @@ export function projectAgentRunAttemptTerminal(terminal: AgentHarnessAttemptResu
   };
 }
 
-export function makeFailingNativeTaskRuntime(failure: Error): AgentHarnessTaskRuntime {
-  const task: AgentHarnessTaskRecord = {
-    taskId: "native-task",
-    runId: "copilot-agent:call-1",
-    runtime: "subagent",
-    taskKind: "copilot-native",
-    requesterSessionKey: "agent:main:main",
-    ownerKey: "agent:main:main",
-    scopeKind: "session",
-    task: "inspect",
-    status: "running",
-    notifyPolicy: "silent",
-    deliveryStatus: "not_applicable",
-    createdAt: 0,
-  };
-  return {
-    assertTaskAssignmentSupported: () => undefined,
-    createRunningTaskRun: () => task,
-    tryCreateRunningTaskRun: () => task,
-    recordTaskRunProgressByRunId: () => [],
-    finalizeTaskRunByRunId: () => {
-      throw failure;
-    },
-    setDetachedTaskDeliveryStatusByRunId: () => [],
-    listTaskRecords: () => [task],
-  };
+/** Runs a Copilot attempt inside an admitted session turn, the way Gateway runs reach it. */
+export function runCopilotAttempt(...[params, deps]: Parameters<typeof runCopilotAttemptImpl>) {
+  return runInHarnessToolAuthorityForTest(params, "copilot", (admitted) =>
+    runCopilotAttemptImpl(admitted, deps),
+  );
 }
 
 export type SessionEventShape = {
@@ -67,7 +44,9 @@ export type FakeSession = {
   disconnect: ReturnType<typeof vi.fn<() => Promise<void>>>;
   emit: (eventType: string, data: Record<string, unknown>) => void;
   id: string;
-  off: ReturnType<typeof vi.fn>;
+  off: ReturnType<
+    typeof vi.fn<(eventType: string, handler: (event: SessionEventShape) => void) => void>
+  >;
   on: ReturnType<typeof vi.fn>;
   rpc: {
     history: {
@@ -105,6 +84,13 @@ export function makeAssistantMessageEvent(
 
 function createFakeSession(cfg: Record<string, unknown>, id: string): FakeSession {
   const listeners = new Map<string, Array<(event: SessionEventShape) => void>>();
+  const off = vi.fn((eventType: string, handler: (event: SessionEventShape) => void) => {
+    const handlers = listeners.get(eventType) ?? [];
+    listeners.set(
+      eventType,
+      handlers.filter((existing) => existing !== handler),
+    );
+  });
   return {
     abort: vi.fn<() => Promise<void>>(async () => undefined),
     cfg,
@@ -120,17 +106,12 @@ function createFakeSession(cfg: Record<string, unknown>, id: string): FakeSessio
       }
     },
     id,
-    off: vi.fn((eventType: string, handler: (event: SessionEventShape) => void) => {
-      const handlers = listeners.get(eventType) ?? [];
-      listeners.set(
-        eventType,
-        handlers.filter((existing) => existing !== handler),
-      );
-    }),
+    off,
     on: vi.fn((eventType: string, handler: (event: SessionEventShape) => void) => {
       const handlers = listeners.get(eventType) ?? [];
       handlers.push(handler);
       listeners.set(eventType, handlers);
+      return () => off(eventType, handler);
     }),
     rpc: {
       history: {

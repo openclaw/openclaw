@@ -1,4 +1,3 @@
-// Builds PATH values for OpenClaw child processes.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +7,8 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { resolveBrewPathDirs } from "./brew.js";
 import { isTruthyEnvValue } from "./env.js";
-import { isPathInside } from "./path-guards.js";
+import { canAccessSync } from "./path-existence.js";
+import { isPathInside, safeStatSync } from "./path-guards.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 
 type EnsureOpenClawPathOpts = {
@@ -22,33 +22,10 @@ type EnsureOpenClawPathOpts = {
   platform?: NodeJS.Platform;
   /** Existing PATH value to merge with; defaults to process.env.PATH. */
   pathEnv?: string;
-  /** Opt-in to append cwd/node_modules/.bin after trusted system paths. */
-  allowProjectLocalBin?: boolean;
 };
 
-function isExecutable(filePath: string): boolean {
-  try {
-    fs.accessSync(filePath, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function isDirectory(dirPath: string): boolean {
-  try {
-    return fs.statSync(dirPath).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function splitPathParts(pathEnv: string): Set<string> {
-  return new Set(normalizeStringEntries(pathEnv.split(path.delimiter)));
-}
-
 function isKnownPathDir(existingPathParts: ReadonlySet<string>, dirPath: string): boolean {
-  return existingPathParts.has(dirPath) || isDirectory(dirPath);
+  return existingPathParts.has(dirPath) || safeStatSync(dirPath)?.isDirectory() === true;
 }
 
 function realpathExistingPath(candidate: string): string | undefined {
@@ -113,24 +90,6 @@ function normalizeTrustedPackageManagerRoot(params: {
   return normalized;
 }
 
-function isLinuxbrewPath(dirPath: string): boolean {
-  return dirPath.split(path.sep).includes(".linuxbrew");
-}
-
-function resolvePathBootstrapBrewDirs(params: {
-  homeDir: string;
-  platform: NodeJS.Platform;
-  existingPathParts: ReadonlySet<string>;
-}): string[] {
-  const candidates = resolveBrewPathDirs({ homeDir: params.homeDir });
-  if (params.platform !== "darwin") {
-    return candidates;
-  }
-  return candidates.filter(
-    (candidate) => !isLinuxbrewPath(candidate) || params.existingPathParts.has(candidate),
-  );
-}
-
 function resolveMiseDataDir(params: { homeDir: string; platform: NodeJS.Platform }): string {
   const miseDataDir = process.env.MISE_DATA_DIR;
   if (miseDataDir !== undefined) {
@@ -150,14 +109,6 @@ function resolveMiseDataDir(params: { homeDir: string; platform: NodeJS.Platform
   return path.join(params.homeDir, ".local", "share", "mise");
 }
 
-function mergePath(params: { existing: string; prepend?: string[]; append?: string[] }): string {
-  return normalizeUniqueStringEntries([
-    ...(params.prepend ?? []),
-    ...params.existing.split(path.delimiter),
-    ...(params.append ?? []),
-  ]).join(path.delimiter);
-}
-
 function candidateBinDirs(
   opts: EnsureOpenClawPathOpts,
   existingPathParts: ReadonlySet<string>,
@@ -172,34 +123,21 @@ function candidateBinDirs(
 
   // Keep the active runtime directory ahead of PATH hardening so shebang-based
   // subprocesses keep using the same Node/Bun the current OpenClaw process is on.
-  try {
-    const execDir = path.dirname(execPath);
-    if (isExecutable(execPath)) {
-      prepend.push(execDir);
-    }
-  } catch {
-    // ignore
+  const execDir = path.dirname(execPath);
+  if (canAccessSync(execPath, fs.constants.X_OK)) {
+    prepend.push(execDir);
   }
 
   // Bundled macOS app: `openclaw` lives next to the executable (process.execPath).
-  try {
-    const execDir = path.dirname(execPath);
-    const siblingCli = path.join(execDir, "openclaw");
-    if (isExecutable(siblingCli)) {
-      prepend.push(execDir);
-    }
-  } catch {
-    // ignore
+  if (canAccessSync(path.join(execDir, "openclaw"), fs.constants.X_OK)) {
+    prepend.push(execDir);
   }
 
   // Project-local installs are a common repo-based attack vector (bin hijacking). Keep this
   // disabled by default; if an operator explicitly enables it, only append (never prepend).
-  const allowProjectLocalBin =
-    opts.allowProjectLocalBin === true ||
-    isTruthyEnvValue(process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN);
-  if (allowProjectLocalBin && cwd) {
+  if (isTruthyEnvValue(process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN) && cwd) {
     const localBinDir = path.join(cwd, "node_modules", ".bin");
-    if (isExecutable(path.join(localBinDir, "openclaw"))) {
+    if (canAccessSync(path.join(localBinDir, "openclaw"), fs.constants.X_OK)) {
       append.push(localBinDir);
     }
   }
@@ -212,15 +150,21 @@ function candidateBinDirs(
   // shadow trusted OS binaries.
   // This includes Brew/Homebrew dirs, which are useful for finding `openclaw`
   // in launchd/minimal environments but must not be treated as trusted.
-  append.push(...resolvePathBootstrapBrewDirs({ homeDir, platform, existingPathParts }));
+  append.push(
+    ...resolveBrewPathDirs({ homeDir }).filter(
+      (candidate) =>
+        platform !== "darwin" ||
+        !candidate.split(path.sep).includes(".linuxbrew") ||
+        existingPathParts.has(candidate),
+    ),
+  );
   const pnpmHome = normalizeTrustedPackageManagerRoot({
     value: process.env.PNPM_HOME,
     cwd,
     homeDir,
   });
   if (pnpmHome) {
-    append.push(pnpmHome);
-    append.push(path.join(pnpmHome, "bin"));
+    append.push(pnpmHome, path.join(pnpmHome, "bin"));
   }
   const npmPrefix = normalizeTrustedPackageManagerRoot({
     value: process.env.NPM_CONFIG_PREFIX,
@@ -236,8 +180,10 @@ function candidateBinDirs(
     append.push(miseShims);
   }
   if (platform === "darwin") {
-    append.push(path.join(homeDir, "Library", "pnpm", "bin"));
-    append.push(path.join(homeDir, "Library", "pnpm"));
+    append.push(
+      path.join(homeDir, "Library", "pnpm", "bin"),
+      path.join(homeDir, "Library", "pnpm"),
+    );
   }
   if (process.env.XDG_BIN_HOME) {
     append.push(process.env.XDG_BIN_HOME);
@@ -268,13 +214,17 @@ export function ensureOpenClawCliOnPath(opts: EnsureOpenClawPathOpts = {}) {
   process.env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
 
   const existing = opts.pathEnv ?? process.env.PATH ?? "";
-  const existingPathParts = splitPathParts(existing);
+  const existingPathParts = new Set(normalizeStringEntries(existing.split(path.delimiter)));
   const { prepend, append } = candidateBinDirs(opts, existingPathParts);
   if (prepend.length === 0 && append.length === 0) {
     return;
   }
 
-  const merged = mergePath({ existing, prepend, append });
+  const merged = normalizeUniqueStringEntries([
+    ...prepend,
+    ...existing.split(path.delimiter),
+    ...append,
+  ]).join(path.delimiter);
   if (merged) {
     process.env.PATH = merged;
   }

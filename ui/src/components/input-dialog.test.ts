@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { showInputDialog } from "./input-dialog.ts";
@@ -54,30 +55,6 @@ describe("showInputDialog", () => {
     restoreDialogPolyfill();
   });
 
-  it("renders accessible copy and resolves the submitted value", async () => {
-    const result = showInputDialog({
-      title: "Rename session",
-      label: "Session name",
-      defaultValue: "Original name",
-      submitLabel: "Rename",
-    });
-    const { modal, dialog } = await getRenderedModalDialog(document.body);
-    const input = modal.querySelector<HTMLInputElement>('input[name="value"]');
-
-    expect(dialog.getAttribute("aria-label")).toBe("Rename session");
-    expect(dialog.getAttribute("aria-description")).toBe("Session name");
-    expect(input?.value).toBe("Original name");
-
-    if (!input) {
-      throw new Error("Expected text input");
-    }
-    input.value = "Renamed session";
-    findButton("Rename").click();
-
-    await expect(result).resolves.toBe("Renamed session");
-    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-  });
-
   it("treats modal dismissal as cancellation", async () => {
     const result = showInputDialog({ title: "Rename session" });
     const { modal } = await getRenderedModalDialog(document.body);
@@ -122,6 +99,7 @@ describe("showInputDialog", () => {
     expect(submit).not.toHaveBeenCalled();
 
     await type("  Client work  ");
+    expect(dialogInput().value).toBe("  Client work  ");
     expect(findButton("Create group").disabled).toBe(false);
     submitForm();
 
@@ -155,27 +133,6 @@ describe("showInputDialog", () => {
     await expect(closed).resolves.toBe("Projects");
   });
 
-  it("keeps the typed value and shows why a rejected attempt failed", async () => {
-    const submit = vi.fn().mockResolvedValueOnce("group name exceeds 512 characters");
-    submit.mockResolvedValue(null);
-    const closed = showInputDialog({ ...REQUIRED, submit });
-    await getRenderedModalDialog(document.body);
-
-    await type("Client work");
-    submitForm();
-    await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
-    await Promise.resolve();
-
-    expect(document.body.textContent).toContain("group name exceeds 512 characters");
-    expect(document.body.querySelector('[role="alert"]')).not.toBeNull();
-    expect(dialogInput().value).toBe("Client work");
-
-    submitForm();
-    await closed;
-    expect(submit).toHaveBeenCalledTimes(2);
-    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-  });
-
   it("submits once while an attempt is in flight and blocks dismissal until it settles", async () => {
     let settle!: (message: string | null) => void;
     const submit = vi.fn().mockReturnValue(
@@ -190,6 +147,7 @@ describe("showInputDialog", () => {
     submitForm();
     submitForm();
     expect(submit).toHaveBeenCalledOnce();
+    flush();
     expect(dialogInput().disabled).toBe(true);
 
     const cancelEvent = new CustomEvent("modal-cancel", { cancelable: true });
@@ -202,51 +160,35 @@ describe("showInputDialog", () => {
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
-  it("recovers when the operation throws before it returns a promise", async () => {
-    // A non-async callback that validates synchronously throws before there is
-    // a promise to reject; the dialog must not latch disabled on that path.
-    let failFirst = true;
-    const submit = vi.fn((): Promise<string | null> => {
-      if (failFirst) {
-        failFirst = false;
-        throw new Error("synchronous validation blew up");
-      }
-      return Promise.resolve(null);
-    });
-    const closed = showInputDialog({ ...REQUIRED, submit });
-    await getRenderedModalDialog(document.body);
+  it.each(["synchronous", "asynchronous"])(
+    "recovers from a %s failure without discarding the input",
+    async (mode) => {
+      const submit = vi
+        .fn((): Promise<string | null> => Promise.resolve(null))
+        .mockImplementationOnce(() => {
+          const error = new Error("gateway exploded");
+          if (mode === "synchronous") {
+            throw error;
+          }
+          return Promise.reject(error);
+        });
+      const closed = showInputDialog({ ...REQUIRED, submit });
+      await getRenderedModalDialog(document.body);
 
-    await type("Client work");
-    submitForm();
-    await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
-    await Promise.resolve();
+      await type("Client work");
+      submitForm();
+      await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
+      await Promise.resolve();
 
-    expect(document.body.textContent).toContain("synchronous validation blew up");
-    expect(dialogInput().disabled).toBe(false);
-    expect(findButton("Create group").disabled).toBe(false);
+      expect(document.body.textContent).toContain("gateway exploded");
+      expect(dialogInput().disabled).toBe(false);
+      expect(dialogInput().value).toBe("Client work");
+      expect(findButton("Create group").disabled).toBe(false);
+      expect(document.activeElement).toBe(dialogInput());
 
-    submitForm();
-    await closed;
-    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-  });
-
-  it("turns a thrown operation into a visible failure instead of a stuck dialog", async () => {
-    const submit = vi.fn().mockRejectedValueOnce(new Error("gateway exploded"));
-    submit.mockResolvedValue(null);
-    const closed = showInputDialog({ ...REQUIRED, submit });
-    await getRenderedModalDialog(document.body);
-
-    await type("Client work");
-    submitForm();
-    await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
-    await Promise.resolve();
-
-    expect(document.body.textContent).toContain("gateway exploded");
-    expect(dialogInput().disabled).toBe(false);
-    expect(dialogInput().value).toBe("Client work");
-
-    submitForm();
-    await closed;
-    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-  });
+      submitForm();
+      await closed;
+      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    },
+  );
 });

@@ -60,6 +60,13 @@ export function resolveSqliteDatabaseFilePaths(pathname: string): string[] {
   return SQLITE_DATABASE_FILE_SUFFIXES.map((suffix) => `${pathname}${suffix}`);
 }
 
+export function hasOrphanedSqliteSidecars(pathname: string): boolean {
+  return (
+    !fs.existsSync(pathname) &&
+    SQLITE_SIDECAR_SUFFIXES.some((suffix) => fs.existsSync(`${pathname}${suffix}`))
+  );
+}
+
 function findMatchingOrphanedSidecarCopy(
   sourcePath: string,
   sourceSize: number,

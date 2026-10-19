@@ -1,17 +1,12 @@
-// Discord ask_user component dispatch and ephemeral feedback.
 import { ButtonStyle } from "discord-api-types/v10";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
-import { Button, type ButtonInteraction, type ComponentData } from "../internal/discord.js";
+import { Button, type BaseComponentInteraction, type ComponentData } from "../internal/discord.js";
 import { parseDiscordQuestionData } from "../question-custom-id.js";
-import {
-  type AgentComponentContext,
-  resolveAuthorizedComponentInteraction,
-} from "./agent-components-helpers.js";
+import { resolveAuthorizedComponentInteraction } from "./agent-components-guild-auth.js";
+import type { AgentComponentContext } from "./agent-components.types.js";
 
 type ResolveQuestionParams = Parameters<typeof questionGatewayRuntime.resolveOption>[0];
-type QuestionResolver = (
-  params: ResolveQuestionParams,
-) => ReturnType<typeof questionGatewayRuntime.resolveOption>;
+type QuestionResolver = typeof questionGatewayRuntime.resolveOption;
 
 class QuestionButton extends Button {
   override label = "question";
@@ -23,13 +18,13 @@ class QuestionButton extends Button {
       cfg: ResolveQuestionParams["cfg"];
       accountId: string;
       resolveQuestion: QuestionResolver;
-      authorizeQuestion: (interaction: ButtonInteraction) => Promise<boolean>;
+      authorizeQuestion: (interaction: BaseComponentInteraction) => Promise<boolean>;
     },
   ) {
     super();
   }
 
-  override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
+  override async run(interaction: BaseComponentInteraction, data: ComponentData): Promise<void> {
     const callback = parseDiscordQuestionData(data);
     if (!callback) {
       await interaction.reply({ content: "This question is no longer valid.", ephemeral: true });
@@ -40,7 +35,9 @@ class QuestionButton extends Button {
     }
     try {
       await interaction.acknowledge();
-    } catch {}
+    } catch {
+      // The Gateway can accept the answer even when Discord cannot acknowledge it.
+    }
     let content: string;
     try {
       const result = await this.ctx.resolveQuestion({
@@ -71,7 +68,7 @@ export function createDiscordQuestionButton(params: {
   cfg: ResolveQuestionParams["cfg"];
   accountId: string;
   authContext?: AgentComponentContext;
-  authorizeQuestion?: (interaction: ButtonInteraction) => Promise<boolean>;
+  authorizeQuestion?: (interaction: BaseComponentInteraction) => Promise<boolean>;
   resolveQuestion?: QuestionResolver;
 }): Button {
   const authContext = params.authContext ?? { cfg: params.cfg, accountId: params.accountId };
@@ -89,7 +86,6 @@ export function createDiscordQuestionButton(params: {
             label: "discord question",
             componentLabel: "button",
             unauthorizedReply: "You are not authorized to answer this question.",
-            defer: false,
           }),
         )),
   });

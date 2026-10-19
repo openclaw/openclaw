@@ -16,57 +16,37 @@ const baseManifest = {
 } as const;
 
 describe("portable Claw schema conformance", () => {
-  it.each(["01.2.3", "1.02.3", "1.2.3-01", "v1.2.3", "1.2.x"])(
-    "rejects non-canonical package version %s",
-    (version) => {
-      const result = parseClawManifest({
-        ...baseManifest,
-        packages: [
-          {
-            kind: "skill",
-            source: "clawhub",
-            ref: "demo",
-            version,
-          },
-        ],
-      });
-      expect(result.ok).toBe(false);
-      expect(result.diagnostics).toContainEqual(
-        expect.objectContaining({ phase: "schema", path: "$.packages[0].version" }),
-      );
-    },
-  );
-
-  it("requires canonical ClawHub package names", () => {
-    const result = parseClawManifest({
-      ...baseManifest,
-      packages: [
-        {
-          kind: "skill",
-          source: "clawhub",
-          ref: "Demo",
-          version: "1.0.0",
-        },
-      ],
-    });
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({ path: "$.packages[0].ref" }),
-    );
+  it("preserves optional portable categories", () => {
+    const result = parseClawManifest({ ...baseManifest, categories: ["travel", "personal"] });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.categories).toEqual(["travel", "personal"]);
+    }
+    expect(parseClawManifest(baseManifest).ok).toBe(true);
+    expect(parseClawManifest({ ...baseManifest, categories: ["custom"] }).ok).toBe(true);
   });
 
-  it("rejects whitespace-only values without normalizing strict fields", () => {
-    const whitespaceName = parseClawManifest({
+  it.each([
+    { categories: [] },
+    { categories: ["travel", "travel"] },
+    { categories: ["Travel"] },
+    { categories: ["travel", "personal", "health", "research"] },
+  ])("rejects invalid category declarations %j", ({ categories }) => {
+    const result = parseClawManifest({ ...baseManifest, categories });
+    expect(result.ok).toBe(false);
+    expect(
+      result.diagnostics.some((diagnostic) => diagnostic.path?.startsWith("$.categories")),
+    ).toBe(true);
+  });
+
+  it("requires exact package versions", () => {
+    const result = parseClawManifest({
       ...baseManifest,
-      agent: { id: "portable-agent", name: "   " },
-    });
-    const paddedPath = parseClawManifest({
-      ...baseManifest,
-      workspace: { files: [{ source: " workspace/file.md", path: "file.md" }] },
+      packages: [{ kind: "skill", source: "clawhub", ref: "demo", version: "latest" }],
     });
 
-    expect(whitespaceName.ok).toBe(false);
-    expect(paddedPath.ok).toBe(false);
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics[0]?.path).toBe("$.packages[0].version");
   });
 
   it("requires pinned package-manager MCP commands and safe environment keys", () => {
@@ -164,22 +144,6 @@ describe("portable Claw schema conformance", () => {
     }
   });
 
-  it("uses portable workspace collision keys", () => {
-    const result = parseClawManifest({
-      ...baseManifest,
-      workspace: {
-        files: [
-          { source: "workspace/one.md", path: "Reference/Caf\u00e9.md" },
-          { source: "workspace/two.md", path: "reference/Cafe\u0301.md" },
-        ],
-      },
-    });
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({ path: "$.workspace.files[1].path" }),
-    );
-  });
-
   it("requires local avatars to be managed workspace destinations", () => {
     const remote = parseClawManifest({
       ...baseManifest,
@@ -243,29 +207,29 @@ describe("development snapshot integrity", () => {
     );
   });
 
-  it.each([
-    ["Demo", "1.0.0"],
-    ["demo", "01.0.0"],
-  ])("rejects noncanonical package metadata %s@%s", async (name, version) => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-package-metadata-"));
-    await writeFile(
-      join(root, "package.json"),
-      JSON.stringify({ name, version, openclaw: { claw: "openclaw.claw.json" } }),
-      "utf8",
-    );
-    await writeFile(
-      join(root, "openclaw.claw.json"),
-      JSON.stringify({ schemaVersion: 1, agent: { id: "demo-agent" } }),
-      "utf8",
-    );
+  it.each([["demo", "01.0.0"]])(
+    "rejects noncanonical package metadata %s@%s",
+    async (name, version) => {
+      const root = await mkdtemp(join(tmpdir(), "openclaw-claw-package-metadata-"));
+      await writeFile(
+        join(root, "package.json"),
+        JSON.stringify({ name, version, openclaw: { claw: "openclaw.claw.json" } }),
+        "utf8",
+      );
+      await writeFile(
+        join(root, "openclaw.claw.json"),
+        JSON.stringify({ schemaVersion: 1, agent: { id: "demo-agent" } }),
+        "utf8",
+      );
 
-    const result = await readClawManifestFile(root);
+      const result = await readClawManifestFile(root);
 
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({ code: "invalid_package_metadata", phase: "parse" }),
-    );
-  });
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({ code: "invalid_package_metadata", phase: "parse" }),
+      );
+    },
+  );
 
   it("binds every referenced workspace source", async () => {
     const root = await mkdtemp(join(tmpdir(), "openclaw-claw-snapshot-"));

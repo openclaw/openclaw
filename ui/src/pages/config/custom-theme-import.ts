@@ -21,14 +21,11 @@ type TweakcnThemeResolution = {
 function normalizeThemeIdFromPath(pathname: string): string | null {
   const segments = pathname.split("/").filter(Boolean);
   const themeId = segments.at(-1);
-  if (!themeId) {
-    return null;
-  }
-  if (segments.length === 2 && segments[0] === "themes") {
-    requireThemeId(themeId);
-    return themeId;
-  }
-  if (segments.length === 3 && segments[0] === "r" && segments[1] === "themes") {
+  if (
+    themeId &&
+    ((segments.length === 2 && segments[0] === "themes") ||
+      (segments.length === 3 && segments[0] === "r" && segments[1] === "themes"))
+  ) {
     requireThemeId(themeId);
     return themeId;
   }
@@ -141,15 +138,12 @@ async function readJsonResponseWithLimit(response: Response): Promise<unknown> {
   }
 }
 
-export async function importCustomThemeFromUrl(
-  input: string,
-  fetchImpl: typeof fetch = fetch,
-): Promise<ImportedCustomTheme> {
+export async function importCustomThemeFromUrl(input: string): Promise<ImportedCustomTheme> {
   const resolution = normalizeTweakcnThemeUrl(input);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TWEAKCN_FETCH_TIMEOUT_MS);
   try {
-    const response = await fetchImpl(resolution.fetchUrl, {
+    const response = await fetch(resolution.fetchUrl, {
       headers: { accept: "application/json" },
       redirect: "error",
       signal: controller.signal,

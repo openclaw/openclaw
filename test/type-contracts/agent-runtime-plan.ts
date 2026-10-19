@@ -1,7 +1,7 @@
 // Runtime plan type-compat tests keep copied structural aliases aligned with
 // their source runtime contracts without importing those sources in production.
 import { expectTypeOf } from "vitest";
-import type { FailoverReason as ProtocolFailoverReason } from "../../packages/gateway-protocol/src/failover-reasons.js";
+import type { FAILOVER_REASONS } from "../../packages/gateway-protocol/src/failover-reasons.js";
 import type {
   buildAgentRuntimeDeliveryPlan,
   buildAgentRuntimePlan,
@@ -37,7 +37,7 @@ type AgentRuntimeThinkLevel = NonNullable<BuildAgentRuntimePlanParams["thinkingL
 
 // keeps scalar unions and the failover projection aligned with their owners
 expectTypeOf<AgentRuntimeThinkLevel>().toEqualTypeOf<Exclude<ThinkLevel, "ultra">>();
-expectTypeOf<AgentRuntimeFailoverReason>().toEqualTypeOf<ProtocolFailoverReason>();
+expectTypeOf<AgentRuntimeFailoverReason>().toEqualTypeOf<(typeof FAILOVER_REASONS)[number]>();
 expectTypeOf<AgentRuntimePromptMode>().toEqualTypeOf<PromptMode>();
 
 // keeps reply payload shapes structurally compatible with the runtime leaf payload shape

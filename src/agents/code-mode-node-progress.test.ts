@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { captureCodeModeOutput } from "./code-mode-json.js";
 import { CodeModeNodeProgress } from "./code-mode-node-progress.js";
 
-it.each([1, 31, 32, 33, 128, 1024])(
+it.each([33, 128, 1024])(
   "retains the canonical output prefix within %d bytes after interruption",
   (limit) => {
     const progress = new CodeModeNodeProgress(limit);

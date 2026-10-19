@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listGoogleMeetCalendarEvents } from "./calendar.js";
 import { exportGoogleDriveDocumentText } from "./drive.js";
-import { fetchGoogleMeetSpace } from "./meet.js";
+import { fetchGoogleMeetSpace } from "./meet-api.js";
 import { resolveGoogleMeetAccessToken } from "./oauth.js";
 
 afterEach(() => {
@@ -11,6 +11,10 @@ afterEach(() => {
 });
 
 const requests = [
+  {
+    name: "Calendar events.list",
+    run: () => listGoogleMeetCalendarEvents({ accessToken: "test-token" }),
+  },
   {
     name: "Meet v2",
     run: () => fetchGoogleMeetSpace({ accessToken: "test-token", meeting: "abc-defg-hij" }),
@@ -27,10 +31,6 @@ const requests = [
         clientId: "client-id",
         refreshToken: "refresh-token",
       }),
-  },
-  {
-    name: "Calendar events.list",
-    run: () => listGoogleMeetCalendarEvents({ accessToken: "test-token" }),
   },
 ] as const;
 

@@ -1,14 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
+import { getImageMetadata } from "openclaw/plugin-sdk/media-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { FileChooser, Locator, Page } from "playwright-core";
-import { getImageMetadata } from "../media/media-services.js";
-import { ACT_MAX_WAIT_TIME_MS, resolveActWaitTimeoutMs } from "./act-policy.js";
+import { resolveActWaitTimeoutMs } from "./act-policy.js";
 import {
   DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
   DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
+  EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
 } from "./constants.js";
 import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
 import { resolveStrictExistingUploadPaths } from "./paths.js";
@@ -26,9 +29,7 @@ import {
   type GuardedInteractionOptions,
   type InteractionTargetOptions,
   interactionNavigationPolicy,
-  type NavigationTargetOptions,
   reconcileRemoteDialogAfterActionSettled,
-  resolveBoundedDelayMs,
   runCancellablePageInteraction,
   throwIfInteractionAborted,
 } from "./pw-tools-core.interactions.navigation.js";
@@ -47,17 +48,25 @@ import {
 
 const DEFAULT_UPLOAD_MIME_TYPE = "application/octet-stream";
 const PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES = 50 * 1024 * 1024;
+/**
+ * Aggregate upload size below which the byte-payload branch is known to fit a
+ * single extension-relay WebSocket message. Playwright delivers file payloads to
+ * CDP-attached browsers as base64 inside an evaluate command, so the relay-safe
+ * bound is three quarters of the relay's message cap, minus headroom for JSON
+ * framing. Extension uploads at or above this bound take the local path handoff
+ * so a file that the relay could not carry as bytes still uploads for extensions
+ * with local file access.
+ */
+const PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES =
+  Math.floor((EXTENSION_RELAY_MAX_PAYLOAD_BYTES * 3) / 4) - 1024 * 1024;
 
-type PlaywrightFilePayload = {
-  name: string;
-  mimeType: string;
-  buffer: Buffer;
-  lastModifiedMs?: number;
-};
-
-async function toPlaywrightFilePayloads(paths: string[]): Promise<PlaywrightFilePayload[]> {
+async function toPlaywrightFilePayloads(paths: string[], fallbackOnPayloadLimit: boolean) {
   const stats = await Promise.all(paths.map(async (filePath) => await fs.stat(filePath)));
   const totalSize = stats.reduce((size, stat) => size + stat.size, 0);
+  // Local extension handoff avoids a base64 payload larger than the relay accepts.
+  if (fallbackOnPayloadLimit && totalSize >= PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES) {
+    return paths;
+  }
   if (totalSize >= PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES) {
     throw new Error(
       "Cannot set buffer larger than 50Mb, please write it to a file and pass its path instead.",
@@ -76,30 +85,24 @@ async function toPlaywrightFilePayloads(paths: string[]): Promise<PlaywrightFile
   );
 }
 
-function shouldUsePlaywrightFilePayloads(
-  opts: Pick<NavigationTargetOptions, "browserFilesystemLocal" | "ssrfPolicy">,
-): boolean {
-  return Boolean(opts.ssrfPolicy) && opts.browserFilesystemLocal !== true;
-}
-
 async function resolvePlaywrightUploadFiles(opts: GuardedInteractionOptions & { paths: string[] }) {
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
-  try {
-    return await awaitActionWithAbort(
-      (async () => {
-        const resolved = await resolveStrictExistingUploadPaths({ requestedPaths: opts.paths });
-        if (!resolved.ok) {
-          throw new Error(resolved.error);
-        }
-        return shouldUsePlaywrightFilePayloads(opts)
-          ? await toPlaywrightFilePayloads(resolved.paths)
-          : resolved.paths;
-      })(),
-      abortPromise,
-    );
-  } finally {
-    cleanup();
-  }
+  return await racePromiseWithAbortSignal(
+    (async () => {
+      const resolved = await resolveStrictExistingUploadPaths({ requestedPaths: opts.paths });
+      if (!resolved.ok) {
+        throw new Error(resolved.error);
+      }
+      if (!(opts.ssrfPolicy && opts.browserFilesystemLocal !== true)) {
+        return resolved.paths;
+      }
+      return await toPlaywrightFilePayloads(
+        resolved.paths,
+        opts.uploadPathsFallbackOnPayloadLimit === true,
+      );
+    })(),
+    opts.signal,
+    ({ reason }) => toErrorObject(reason ?? new Error("aborted"), "Non-Error rejection"),
+  );
 }
 
 type BrowserWaitPredicateState = {
@@ -155,9 +158,8 @@ export async function waitForViaPlaywright(
   },
 ): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
   const timeout = resolveActWaitTimeoutMs(opts.timeoutMs);
-  const fn = normalizeOptionalString(opts.fn) ?? "";
+  const fn = opts.fn;
   const predicateSource = fn ? normalizeBrowserEvaluateFunctionSource(fn) : "";
   const predicate = fn ? createBrowserWaitPredicate(predicateSource) : undefined;
   const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
@@ -173,55 +175,40 @@ export async function waitForViaPlaywright(
   const runWaitSequence = async (
     waitFor: <T>(stepPromise: Promise<T>) => Promise<void>,
   ): Promise<void> => {
-    if (typeof opts.timeMs === "number" && Number.isFinite(opts.timeMs)) {
-      await waitFor(
-        page.waitForTimeout(
-          resolveBoundedDelayMs(opts.timeMs, "wait timeMs", ACT_MAX_WAIT_TIME_MS),
-        ),
-      );
+    if (opts.timeMs !== undefined) {
+      await waitFor(page.waitForTimeout(opts.timeMs));
     }
-    if (opts.text) {
-      await waitFor(
-        page.getByText(opts.text).first().waitFor({
-          state: "visible",
-          timeout,
-        }),
-      );
-    }
-    if (opts.textGone) {
-      await waitFor(
-        page.getByText(opts.textGone).first().waitFor({
-          state: "hidden",
-          timeout,
-        }),
-      );
+    for (const field of ["text", "textGone"] as const) {
+      const text = opts[field];
+      if (text) {
+        const state = field === "text" ? "visible" : "hidden";
+        await waitFor(page.getByText(text).first().waitFor({ state, timeout }));
+      }
     }
     if (opts.selector) {
-      const selector = normalizeOptionalString(opts.selector) ?? "";
-      if (selector) {
-        await waitFor(page.locator(selector).first().waitFor({ state: "visible", timeout }));
-      }
+      await waitFor(page.locator(opts.selector).first().waitFor({ state: "visible", timeout }));
     }
     if (opts.url) {
-      const url = normalizeOptionalString(opts.url) ?? "";
-      if (url) {
-        await waitFor(page.waitForURL(url, { timeout }));
-      }
+      await waitFor(page.waitForURL(opts.url, { timeout }));
     }
     if (opts.loadState) {
       await waitFor(page.waitForLoadState(opts.loadState, { timeout }));
     }
     if (fn) {
       if (opts.assertCurrent) {
-        await assertInteractionCurrent(opts);
+        const assertion = assertInteractionCurrent(opts);
+        if (assertion) {
+          await assertion;
+        }
         throwIfInteractionAborted(opts.signal);
       }
       // Passing the live document handle makes Playwright fail instead of
       // recreating this predicate in a replacement execution context.
       const documentHandle = await page.evaluateHandle(() => globalThis.document);
       try {
-        if (opts.assertCurrent) {
-          await assertInteractionCurrent(opts);
+        const assertion = assertInteractionCurrent(opts);
+        if (assertion) {
+          await assertion;
         }
         throwIfInteractionAborted(opts.signal);
         await waitFor(
@@ -405,7 +392,6 @@ export async function takeScreenshotViaPlaywright(
 type LabeledScreenshotOptions = InteractionTargetOptions &
   ScreenshotOptions & {
     refs?: Record<string, { role: string; name?: string; nth?: number }>;
-    maxLabels?: number;
     ref?: string;
     element?: string;
   };
@@ -427,13 +413,8 @@ async function screenshotWithLabelsOnPage(
   annotations: AnnotationItem[];
 }> {
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
-  const maxLabels =
-    typeof opts.maxLabels === "number" && Number.isFinite(opts.maxLabels)
-      ? Math.max(1, Math.floor(opts.maxLabels))
-      : ANNOTATION_MAX_LABELS_DEFAULT;
-
-  const refKey = normalizeOptionalString(opts.ref) ?? undefined;
-  const elementSelector = normalizeOptionalString(opts.element) ?? undefined;
+  const refKey = normalizeOptionalString(opts.ref);
+  const elementSelector = normalizeOptionalString(opts.element);
   const locator = screenshotLocator(page, refKey, elementSelector);
   const space: CoordinateSpace = opts.fullPage
     ? "fullpage"
@@ -494,7 +475,7 @@ async function screenshotWithLabelsOnPage(
     }
     const target = refLocator(page, ref);
     // Full-page tail refs cannot contribute annotations after the label budget fills.
-    if (space === "fullpage" && inputs.length >= maxLabels) {
+    if (space === "fullpage" && inputs.length >= ANNOTATION_MAX_LABELS_DEFAULT) {
       skippedRefs += 1;
       continue;
     }
@@ -523,7 +504,6 @@ async function screenshotWithLabelsOnPage(
     scroll: origin,
     viewport: view,
     elementRect,
-    maxLabels,
   });
 
   try {
@@ -594,7 +574,6 @@ export async function setInputFilesViaPlaywright(
   },
 ): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   if (!opts.paths.length) {
     throw new Error("paths are required");

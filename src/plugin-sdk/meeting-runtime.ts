@@ -1,7 +1,3 @@
-/**
- * Public SDK subpath for shared browser-meeting audio transports and realtime engines.
- */
-
 export {
   startMeetingRealtimeEngine,
   type MeetingAgentConsultParams,
@@ -105,3 +101,11 @@ export {
   type MeetingBrowserNodeStartConfig,
 } from "../meeting-bot/node-invoke-policy.js";
 export { createMeetingNodeHost, type MeetingNodeHostOptions } from "../meeting-bot/node-host.js";
+
+export { runMeetingParticipationWithBrowser } from "../meeting-bot/participation-browser.js";
+export type {
+  MeetingParticipationRequest,
+  MeetingParticipationSource,
+  MeetingParticipationAttempt,
+  MeetingBrowserParticipationAdapter,
+} from "../meeting-bot/participation-types.js";

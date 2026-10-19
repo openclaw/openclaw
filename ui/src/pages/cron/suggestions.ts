@@ -1,12 +1,13 @@
 /**
- * Curated automation ideas for the Automations page.
- *
  * Pure UI data: each idea prefills the inline create form. Nothing here talks
  * to the gateway or adds config surface.
  */
 
 import { t } from "../../i18n/index.ts";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import type { CronFormState } from "../../lib/cron/types.ts";
+
+registerCronEnglish();
 
 type CronSuggestion = {
   id: string;

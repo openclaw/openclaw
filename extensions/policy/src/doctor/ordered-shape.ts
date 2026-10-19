@@ -187,6 +187,16 @@ export function createOrderedPolicyShape(value: unknown, context: PolicyShapeCon
             hint,
           });
     },
+    string(path: string, hint: string, required = false) {
+      const current = paths(path).value;
+      return (current === undefined && !required) ||
+        (typeof current === "string" && current.trim() !== "")
+        ? undefined
+        : diagnostic(path, {
+            message: "{policy} {property} must be a non-empty string.",
+            hint,
+          });
+    },
     enum(path: string, allowed: readonly string[], text: Diagnostic) {
       const current = paths(path).value;
       return current === undefined || (typeof current === "string" && allowed.includes(current))

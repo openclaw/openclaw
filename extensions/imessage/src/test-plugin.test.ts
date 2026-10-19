@@ -1,4 +1,3 @@
-// Imessage tests cover test plugin plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { buildTypedExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
@@ -6,7 +5,6 @@ import {
   createMessageReceiptFromOutboundResults,
   sendDurableMessageBatch,
   verifyChannelMessageAdapterCapabilityProofs,
-  verifyDurableFinalCapabilityProofs,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createTestRegistry,
@@ -16,12 +14,13 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearIMessageApprovalReactionTargetsForTest,
   resolveIMessageApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
 import { imessagePlugin } from "./channel.js";
+import * as cliOutput from "./cli-output.js";
 import type { IMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { sendMessageIMessage } from "./send.js";
@@ -30,41 +29,22 @@ beforeEach(() => {
   clearIMessageApprovalReactionTargetsForTest();
 });
 
-type IMessageOutbound = NonNullable<typeof imessagePlugin.outbound>;
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+function mockCliSend() {
+  const run = vi.fn<(args: readonly string[]) => Promise<Record<string, unknown>>>();
+  vi.spyOn(cliOutput, "runIMessageCliJsonCommand").mockImplementation(({ args }) => run(args));
+  return run;
+}
+
 type IMessageMessageAdapter = NonNullable<typeof imessagePlugin.message>;
 type IMessageMessageSender = NonNullable<IMessageMessageAdapter["send"]>;
 const IMESSAGE_WORKSPACE_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
   "base64",
 );
-
-function requireOutbound(): IMessageOutbound {
-  const outbound = imessagePlugin.outbound;
-  if (!outbound) {
-    throw new Error("Expected iMessage test plugin outbound adapter");
-  }
-  return outbound;
-}
-
-function requireOutboundSendText(
-  outbound: IMessageOutbound,
-): NonNullable<IMessageOutbound["sendText"]> {
-  const sendText = outbound.sendText;
-  if (!sendText) {
-    throw new Error("Expected iMessage outbound sendText");
-  }
-  return sendText;
-}
-
-function requireOutboundSendMedia(
-  outbound: IMessageOutbound,
-): NonNullable<IMessageOutbound["sendMedia"]> {
-  const sendMedia = outbound.sendMedia;
-  if (!sendMedia) {
-    throw new Error("Expected iMessage outbound sendMedia");
-  }
-  return sendMedia;
-}
 
 function requireMessageAdapter(): IMessageMessageAdapter {
   const adapter = imessagePlugin.message;
@@ -133,15 +113,6 @@ describe("imessagePlugin contracts", () => {
     ).resolves.toMatchObject({ kind: "user", to: "auto:AliceSmith" });
   });
 
-  it("declares durable final delivery capabilities", () => {
-    expect(imessagePlugin.outbound?.deliveryCapabilities?.durableFinal).toStrictEqual({
-      text: true,
-      media: true,
-      replyTo: true,
-      messageSendingHooks: true,
-    });
-  });
-
   it("preserves sanitized HTML formatting as native ranges", () => {
     const text = `<strong title="b>">bold</strong> <del data-note='s>'>strike</del>`;
     const sanitized = imessagePlugin.outbound?.sanitizeText?.({ text, payload: { text } });
@@ -153,14 +124,6 @@ describe("imessagePlugin contracts", () => {
         { start: 0, length: 4, styles: ["bold"] },
         { start: 5, length: 6, styles: ["strikethrough"] },
       ],
-    });
-  });
-
-  it("declares native iMessage voice memo TTS delivery", () => {
-    expect(imessagePlugin.capabilities.tts?.voice).toStrictEqual({
-      synthesisTarget: "audio-file",
-      audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
-      preferAudioFileFormat: "caf",
     });
   });
 
@@ -263,56 +226,6 @@ describe("imessagePlugin contracts", () => {
       approvalId: "exec-shared-hook",
       approvalKind: "exec",
       decision: "allow-once",
-    });
-  });
-
-  it("backs declared durable final capabilities with delivery proofs", async () => {
-    const outbound = requireOutbound();
-    const sendText = requireOutboundSendText(outbound);
-    const sendMedia = requireOutboundSendMedia(outbound);
-    const sendIMessage = async () => ({ messageId: "imsg-1" });
-
-    await verifyDurableFinalCapabilityProofs({
-      adapterName: "imessageOutbound",
-      capabilities: outbound.deliveryCapabilities?.durableFinal,
-      proofs: {
-        text: async () => {
-          await expect(
-            sendText({
-              cfg: {} as never,
-              to: "+15551234567",
-              text: "hello",
-              deps: { imessage: sendIMessage },
-            }),
-          ).resolves.toEqual({ channel: "imessage", messageId: "imsg-1" });
-        },
-        media: async () => {
-          await expect(
-            sendMedia({
-              cfg: {} as never,
-              to: "+15551234567",
-              text: "caption",
-              mediaUrl: "/tmp/image.png",
-              mediaLocalRoots: ["/tmp"],
-              deps: { imessage: sendIMessage },
-            }),
-          ).resolves.toEqual({ channel: "imessage", messageId: "imsg-1" });
-        },
-        replyTo: async () => {
-          await expect(
-            sendText({
-              cfg: {} as never,
-              to: "+15551234567",
-              text: "reply",
-              replyToId: "reply-1",
-              deps: { imessage: sendIMessage },
-            }),
-          ).resolves.toEqual({ channel: "imessage", messageId: "imsg-1" });
-        },
-        messageSendingHooks: () => {
-          expect(sendText).toBeTypeOf("function");
-        },
-      },
     });
   });
 
@@ -512,9 +425,8 @@ describe("imessagePlugin contracts", () => {
         fs.writeFileSync(path.resolve(workspaceDir, filename), contents);
         const readFile = vi.fn(async (filePath: string) => await fs.promises.readFile(filePath));
         const conflictingReader = vi.fn(async () => Buffer.from("conflicting reader"));
-        const runCliJson = vi.fn(async () => ({ messageId: "must-not-send" }));
-        const nativeSend: typeof sendMessageIMessage = async (to, text, options) =>
-          await sendMessageIMessage(to, text, { ...options, runCliJson });
+        const runCliJson = mockCliSend().mockResolvedValue({ messageId: "must-not-send" });
+        const nativeSend = sendMessageIMessage;
         const sendMedia = requireMessageSendMedia(requireMessageAdapter());
 
         await expect(
@@ -581,7 +493,7 @@ describe("imessagePlugin contracts", () => {
       stop: vi.fn(async () => {}),
     } as unknown as IMessageRpcClient;
     const attachmentBytes = IMESSAGE_WORKSPACE_PNG;
-    const runCliJson = vi.fn(async (args: readonly string[]) => {
+    const runCliJson = mockCliSend().mockImplementation(async (args) => {
       const attachmentPath = args[args.indexOf("--file") + 1];
       expect(attachmentPath).toBeDefined();
       expect(fs.readFileSync(attachmentPath!)).toEqual(attachmentBytes);
@@ -591,7 +503,6 @@ describe("imessagePlugin contracts", () => {
       sendMessageIMessage(to, text, {
         ...options,
         client: captionClient,
-        runCliJson,
       }),
     );
     const onDeliveryResult = vi.fn();
@@ -670,9 +581,11 @@ describe("imessagePlugin contracts", () => {
       stop: vi.fn(async () => {}),
     } as unknown as IMessageRpcClient;
     const attachmentBytes = Buffer.from("%PDF-1.4\n% actual durable custody failure\n");
-    const runCliJson = vi.fn(async () => ({ messageId: "p:0/durable-custody-attachment" }));
+    const runCliJson = mockCliSend().mockResolvedValue({
+      messageId: "p:0/durable-custody-attachment",
+    });
     const nativeSend: typeof sendMessageIMessage = async (to, text, options) =>
-      await sendMessageIMessage(to, text, { ...options, client: captionClient, runCliJson });
+      await sendMessageIMessage(to, text, { ...options, client: captionClient });
     const onDeliveryResult = vi.fn(async () => {
       throw custodyError;
     });

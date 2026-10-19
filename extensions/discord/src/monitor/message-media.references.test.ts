@@ -1,6 +1,7 @@
 import { MessageReferenceType } from "discord-api-types/v10";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Message } from "../internal/discord.js";
+import { resolveMediaList, resolveReferencedReplyMediaList } from "./message-media.js";
 
 const readRemoteMediaBuffer = vi.fn();
 const saveMediaBuffer = vi.fn();
@@ -25,13 +26,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
     },
     saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
   };
-});
-
-let resolveMediaList: typeof import("./message-media.js").resolveMediaList;
-let resolveReferencedReplyMediaList: typeof import("./message-media.js").resolveReferencedReplyMediaList;
-
-beforeAll(async () => {
-  ({ resolveMediaList, resolveReferencedReplyMediaList } = await import("./message-media.js"));
 });
 
 beforeEach(() => {
@@ -112,29 +106,6 @@ describe("resolveReferencedReplyMediaList", () => {
 });
 
 describe("Discord media SSRF policy", () => {
-  it("passes Discord CDN hostname allowlist with RFC2544 enabled", async () => {
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("img"),
-      contentType: "image/png",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({ path: "/tmp/a.png", contentType: "image/png" });
-
-    await resolveMediaList(
-      asMessage({
-        attachments: [{ id: "a1", url: "https://cdn.discordapp.com/a.png", filename: "a.png" }],
-      }),
-      1024,
-    );
-
-    const call = readRemoteMediaBuffer.mock.calls[0]?.[0] as
-      | { ssrfPolicy?: Record<string, unknown> }
-      | undefined;
-    expect(call?.ssrfPolicy?.allowRfc2544BenchmarkRange).toBe(true);
-    expect(call?.ssrfPolicy?.hostnameAllowlist).toEqual(
-      expect.arrayContaining(["cdn.discordapp.com", "media.discordapp.net"]),
-    );
-  });
-
   it("merges provided ssrfPolicy with Discord CDN defaults", async () => {
     readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("img"),

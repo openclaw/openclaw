@@ -1,5 +1,6 @@
 // Covers web provider resolution candidate selection.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveManifestDeclaredWebProviderCandidatePluginIds } from "./web-provider-resolution-shared.js";
 
 const mocks = vi.hoisted(() => ({
   loadPluginRegistrySnapshot: vi.fn(),
@@ -28,14 +29,7 @@ vi.mock("./plugin-metadata-snapshot.js", () => ({
     mocks.resolvePluginMetadataSnapshot(...args),
 }));
 
-let resolveManifestDeclaredWebProviderCandidatePluginIds: typeof import("./web-provider-resolution-shared.js").resolveManifestDeclaredWebProviderCandidatePluginIds;
-
 describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
-  beforeAll(async () => {
-    ({ resolveManifestDeclaredWebProviderCandidatePluginIds } =
-      await import("./web-provider-resolution-shared.js"));
-  });
-
   beforeEach(() => {
     mocks.loadPluginRegistrySnapshot.mockReset();
     mocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });

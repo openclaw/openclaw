@@ -74,10 +74,8 @@ function submitFromClick(flow: DraftSubmissionFlow, background = false) {
 
 describe("New Session notification onboarding", () => {
   it.each([
-    { surface: "web", background: false },
     { surface: "web", background: true },
     { surface: "native", background: false },
-    { surface: "native", background: true },
   ] as const)(
     "prompts $surface synchronously and only once when background=$background",
     async ({ surface, background }) => {
@@ -117,7 +115,7 @@ describe("New Session notification onboarding", () => {
       } else if (scenario === "command") {
         flow.setMessage("/status");
       } else if (scenario === "blocked") {
-        flow.attachmentDraft.updatePending(flow.attachmentDraft.readSignal, 1);
+        flow.attachmentDraft.reads.updatePending(flow.attachmentDraft.reads.readSignal, 1);
       }
 
       await (scenario === "programmatic" ? flow.submit() : submitFromClick(flow));

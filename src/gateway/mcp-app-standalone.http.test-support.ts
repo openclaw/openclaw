@@ -1,7 +1,9 @@
 import { EventEmitter } from "node:events";
-import type { IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
+import type { AddressInfo } from "node:net";
 import { Readable } from "node:stream";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createStandaloneHostBrowserHarness,
   type StandaloneHostBrowserOptions,
@@ -15,8 +17,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
-  completeDeferredSessionMcpRuntimeRetirement: mocks.completeRetirement,
   peekSessionMcpRuntime: mocks.peekSessionMcpRuntime,
+}));
+vi.mock("../agents/agent-bundle-mcp-manager-cleanup.js", () => ({
+  completeDeferredSessionMcpRuntimeRetirement: mocks.completeRetirement,
 }));
 vi.mock("../agents/mcp-ui-resource.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/mcp-ui-resource.js")>()),
@@ -26,20 +30,19 @@ vi.mock("../agents/mcp-ui-resource.js", async (importOriginal) => ({
 // Keep exported production bindings local: Vitest's mock hoisting rewrites static
 // imports but not their export specifiers, leaving those exports undefined.
 const { executeMcpAppOperation, resolveMcpAppActiveView } = await import("./mcp-app-operations.js");
-const {
-  createMcpAppStandaloneTicket,
-  handleMcpAppStandaloneHttpRequest,
-  mcpAppStandaloneTesting,
-  verifyMcpAppStandaloneTicket,
-} = await import("./mcp-app-standalone.js");
+const { createMcpAppStandaloneTicket, handleMcpAppStandaloneHttpRequest } =
+  await import("./mcp-app-standalone.js");
 
 function issueTicket(
   params: Omit<Parameters<typeof createMcpAppStandaloneTicket>[0], "toolOperationsAuthorized"> & {
     toolOperationsAuthorized?: boolean;
+    nowMs?: number;
   },
 ) {
+  const { nowMs: issuedAt = nowMs, ...ticketParams } = params;
+  vi.spyOn(Date, "now").mockReturnValue(issuedAt);
   const issued = createMcpAppStandaloneTicket({
-    ...params,
+    ...ticketParams,
     toolOperationsAuthorized: params.toolOperationsAuthorized ?? true,
   });
   if (!issued) {
@@ -48,8 +51,8 @@ function issueTicket(
   return issued;
 }
 
-const nowMs = 1_800_000_000_000;
-const secret = Buffer.alloc(32, 7);
+let nowMs = 1_800_000_000_000;
+afterEach(() => vi.restoreAllMocks());
 const releaseRuntimeLease = vi.fn();
 const runtime = {
   sessionId: "runtime-session",
@@ -113,12 +116,19 @@ async function request(params: {
   clock?: () => number;
   now?: number;
   body?: unknown;
+  beforeBody?: () => void;
   socket?: EventEmitter;
 }) {
-  const { res, end, setHeader } = makeMockHttpResponse();
+  const { res, end } = makeMockHttpResponse();
   Object.assign(res, { socket: null });
   const serialized = params.body === undefined ? undefined : JSON.stringify(params.body);
-  const req = Object.assign(Readable.from(serialized === undefined ? [] : [serialized]), {
+  async function* body() {
+    if (serialized !== undefined) {
+      params.beforeBody?.();
+      yield serialized;
+    }
+  }
+  const req = Object.assign(Readable.from(body()), {
     url: params.url,
     method: params.method ?? "GET",
     headers: {
@@ -127,14 +137,59 @@ async function request(params: {
     },
     socket: params.socket ?? new EventEmitter(),
   }) as IncomingMessage;
+  vi.spyOn(Date, "now").mockImplementation(params.clock ?? (() => params.now ?? nowMs));
   const handled = await handleMcpAppStandaloneHttpRequest(req, res, {
     gatewayPort: 18_789,
     sandboxPort: 18_790,
-    now: params.clock,
-    nowMs: params.now ?? nowMs,
-    ticketSecret: secret,
   });
-  return { handled, res, end, setHeader };
+  return { handled, res, end };
+}
+
+export async function startStandaloneHttp(
+  options: Parameters<typeof handleMcpAppStandaloneHttpRequest>[2] = {
+    gatewayPort: 18_789,
+    sandboxPort: 18_790,
+  },
+) {
+  const entered = createDeferred();
+  const handled = createDeferred();
+  const state: { error: unknown; leakedCloseListeners: number } = {
+    error: undefined,
+    leakedCloseListeners: 0,
+  };
+  const server = createServer((req, res) => {
+    const originalListeners = new Set(req.socket.listeners("close"));
+    entered.resolve();
+    void handleMcpAppStandaloneHttpRequest(req, res, options)
+      .catch((error: unknown) => {
+        state.error = error;
+        res.destroy();
+      })
+      .finally(() => {
+        state.leakedCloseListeners = req.socket
+          .listeners("close")
+          .filter((listener) => !originalListeners.has(listener)).length;
+        handled.resolve();
+      });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  return {
+    origin,
+    url: `${origin}/__openclaw__/mcp-app/view`,
+    entered: entered.promise,
+    handled: handled.promise,
+    state,
+    async close() {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    },
+  };
 }
 
 async function createSerializedHost(options: StandaloneHostBrowserOptions = {}) {
@@ -143,7 +198,7 @@ async function createSerializedHost(options: StandaloneHostBrowserOptions = {}) 
   if (!source) {
     throw new Error("standalone shell script missing");
   }
-  const ticket = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret }).ticket;
+  const ticket = issueTicket({ sessionKey: "agent:main:main", view, nowMs }).ticket;
   const loaded = await request({
     url: "/__openclaw__/mcp-app/view",
     authorization: `MCP-App ${ticket}`,
@@ -153,13 +208,16 @@ async function createSerializedHost(options: StandaloneHostBrowserOptions = {}) 
 }
 
 export function resetStandaloneMcpAppTestState() {
-  mcpAppStandaloneTesting.clearTickets();
+  // Expire the preceding case through the normal ticket lifecycle.
+  nowMs += 15 * 60_000;
+  vi.spyOn(Date, "now").mockReturnValue(nowMs);
   vi.clearAllMocks();
   mocks.completeRetirement.mockResolvedValue(undefined);
   Object.assign(view, {
     allowedAppToolNames: new Set(["shared", "app-only"]),
     authorizeAppInteraction: undefined,
     readOnly: undefined,
+    expiresAtMs: nowMs + 10 * 60_000,
     requestWindowStartedAtMs: nowMs,
     requestCount: 0,
     toolCallCount: 0,
@@ -175,14 +233,11 @@ export {
   executeMcpAppOperation,
   handleMcpAppStandaloneHttpRequest,
   issueTicket,
-  mcpAppStandaloneTesting,
   mocks,
   nowMs,
   releaseRuntimeLease,
   request,
   resolveMcpAppActiveView,
   runtime,
-  secret,
   view,
-  verifyMcpAppStandaloneTicket,
 };

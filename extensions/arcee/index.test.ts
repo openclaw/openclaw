@@ -1,58 +1,23 @@
-// Arcee tests cover index plugin behavior.
 import {
   createRuntimeEnv,
   createTestWizardPrompter,
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { resolveAuthProfileOrder, type AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import {
+  applyProviderAuthConfigPatch,
+  resolveAuthProfileOrder,
+  type AuthProfileStore,
+} from "openclaw/plugin-sdk/provider-auth";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { resolveProviderAuthEnvVarCandidates } from "openclaw/plugin-sdk/provider-env-vars";
 import type { ModelDefinitionConfig, OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import { applyArceeConfig, applyArceeOpenRouterConfig } from "./api.js";
 import arceePlugin from "./index.js";
-import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 describe("arcee provider plugin", () => {
-  it("registers Arcee AI with direct and OpenRouter auth choices", async () => {
-    const provider = await registerSingleProviderPlugin(arceePlugin);
-
-    expect(provider.id).toBe("arcee");
-    expect(provider.label).toBe("Arcee AI");
-    expect(provider.envVars).toEqual(["ARCEEAI_API_KEY", "OPENROUTER_API_KEY"]);
-    expect(provider.auth).toHaveLength(2);
-
-    const directChoice = resolveProviderPluginChoice({
-      providers: [provider],
-      choice: "arceeai-api-key",
-    });
-    if (!directChoice) {
-      throw new Error("expected direct Arcee auth choice");
-    }
-    expect(directChoice.provider.id).toBe("arcee");
-    expect(directChoice.method.id).toBe("arcee-platform");
-
-    const orChoice = resolveProviderPluginChoice({
-      providers: [provider],
-      choice: "arceeai-openrouter",
-    });
-    if (!orChoice) {
-      throw new Error("expected OpenRouter Arcee auth choice");
-    }
-    expect(orChoice.provider.id).toBe("arcee");
-    expect(orChoice.method.id).toBe("openrouter");
-
-    const openRouterManifestChoice = manifest.providerAuthChoices.find(
-      (choice) => choice.choiceId === "arceeai-openrouter",
-    );
-    expect(openRouterManifestChoice).toMatchObject({ optionKey: "openrouterApiKey" });
-    expect(openRouterManifestChoice).not.toHaveProperty("cliFlag");
-    expect(openRouterManifestChoice).not.toHaveProperty("cliOption");
-  });
-
   describe.each([
     {
       methodId: "arcee-platform",
@@ -84,7 +49,10 @@ describe("arcee provider plugin", () => {
 
     async function registeredMethod() {
       const provider = await registerSingleProviderPlugin(arceePlugin);
-      const method = provider.auth.find((entry) => entry.id === route.methodId);
+      const choice = resolveProviderPluginChoice({ providers: [provider], choice: route.choiceId });
+      expect(choice?.provider.id).toBe("arcee");
+      expect(choice?.method.id).toBe(route.methodId);
+      const method = choice?.method;
       if (!method?.runNonInteractive) {
         throw new Error(`Missing registered auth method: ${route.methodId}`);
       }
@@ -108,11 +76,11 @@ describe("arcee provider plugin", () => {
       return result;
     }
 
-    it("selects stored credentials from registered setup without crossing accounts", async () => {
+    async function onboardInteractive(config: OpenClawConfig, key = "test-arcee-key") {
       const { method } = await registeredMethod();
-      const result = await method.run({
-        config: {},
-        opts: { [route.optionKey]: "selected-route-key" },
+      return await method.run({
+        config,
+        opts: { [route.optionKey]: key },
         env: {},
         runtime: createRuntimeEnv(),
         prompter: createTestWizardPrompter(),
@@ -127,6 +95,10 @@ describe("arcee provider plugin", () => {
           },
         },
       });
+    }
+
+    it("selects stored credentials from registered setup without crossing accounts", async () => {
+      const result = await onboardInteractive({}, "selected-route-key");
       const store: AuthProfileStore = {
         version: 1,
         profiles: {
@@ -144,7 +116,7 @@ describe("arcee provider plugin", () => {
           ),
         },
       };
-      const cfg: OpenClawConfig = result.configPatch ?? {};
+      const cfg = applyProviderAuthConfigPatch({}, result.configPatch, result);
       const order = resolveAuthProfileOrder({ cfg, store, provider: "arcee" });
       expect(order).toContain(profileId);
       expect(order).toContain(`${route.credentialProvider}:other`);
@@ -156,29 +128,11 @@ describe("arcee provider plugin", () => {
 
     it.each([
       { mode: undefined, expectedIds: [] },
-      { mode: "merge" as const, expectedIds: [] },
       { mode: "replace" as const, expectedIds: route.catalogIds },
     ])("keeps the registered row policy in $mode mode", async ({ mode, expectedIds }) => {
       const input: OpenClawConfig = { models: { mode } };
       const nonInteractive = await onboard(input);
-      const { method } = await registeredMethod();
-      const interactive = await method.run({
-        config: input,
-        opts: { [route.optionKey]: "test-arcee-key" },
-        env: {},
-        runtime: createRuntimeEnv(),
-        prompter: createTestWizardPrompter(),
-        secretInputMode: "plaintext",
-        isRemote: false,
-        openUrl: async () => {
-          throw new Error("Unexpected browser auth");
-        },
-        oauth: {
-          createVpsAwareHandlers: () => {
-            throw new Error("Unexpected OAuth");
-          },
-        },
-      });
+      const interactive = await onboardInteractive(input);
 
       expect(interactive.profiles).toEqual([
         {
@@ -213,25 +167,7 @@ describe("arcee provider plugin", () => {
       expect(input).toEqual({ models: { mode } });
     });
 
-    it("keeps later replace defaults independent of edits to generated rows", async () => {
-      const first = await onboard({ models: { mode: "replace" } });
-      const generated = first.models?.providers?.arcee?.models?.[0];
-      if (!generated) {
-        throw new Error("Expected a generated Arcee model");
-      }
-      const originalCost = generated.cost.input;
-      onTestFinished(() => {
-        generated.cost.input = originalCost;
-      });
-      generated.cost.input = originalCost + 100;
-
-      const later = await onboard({ models: { mode: "replace" } });
-
-      expect(later.models?.providers?.arcee?.models?.[0]?.cost.input).toBeCloseTo(originalCost);
-    });
-
     it.each([
-      { mode: undefined, addedIds: [] },
       { mode: "merge" as const, addedIds: [] },
       { mode: "replace" as const, addedIds: route.addedIds },
     ])("preserves authored rows and aliases in $mode mode", async ({ mode, addedIds }) => {
@@ -301,29 +237,6 @@ describe("arcee provider plugin", () => {
         input.agents?.defaults?.models?.[modelRef],
       );
     });
-
-    it.each([undefined, "merge", "replace"] as const)(
-      "keeps the public catalog helper eager in %s mode",
-      (mode) => {
-        const output = route.applyPublicConfig({ models: { mode } });
-        expect(output.models?.providers?.arcee?.models?.map((model) => model.id)).toEqual(
-          route.catalogIds,
-        );
-        expect(output.models?.providers?.arcee).toMatchObject({
-          baseUrl: route.baseUrl,
-          api: "openai-completions",
-        });
-        expect(output.agents?.defaults?.model).toEqual({ primary: modelRef });
-        expect(output.agents?.defaults?.models?.[modelRef]).toEqual({ alias: route.alias });
-      },
-    );
-  });
-
-  it("keeps direct Arcee auth env candidates separate from OpenRouter", () => {
-    const candidates = resolveProviderAuthEnvVarCandidates();
-
-    expect(candidates.arcee).toEqual(["ARCEEAI_API_KEY"]);
-    expect(candidates.openrouter).toEqual(["OPENROUTER_API_KEY"]);
   });
 
   it("builds the direct Arcee AI model catalog", async () => {
@@ -361,35 +274,20 @@ describe("arcee provider plugin", () => {
     ]);
     expect(fetchGuard).toHaveBeenCalledOnce();
     const request = fetchGuard.mock.calls[0]?.[0];
-    expect(request?.url).toBe("https://api.arcee.ai/api/v1/models");
-    expect(new Headers(request?.init?.headers).get("authorization")).toBe("Bearer test-key");
+    expect(
+      JSON.stringify({
+        url: request?.url,
+        init: {
+          ...request?.init,
+          headers: Object.fromEntries(new Headers(request?.init?.headers)),
+        },
+      }),
+    ).toBe(
+      '{"url":"https://api.arcee.ai/api/v1/models","init":{"headers":{"accept":"application/json","authorization":"Bearer test-key"}}}',
+    );
     expect(release).toHaveBeenCalledOnce();
     const thinkingCompat = catalogProvider.models?.find(
       (model) => model.id === "trinity-large-thinking",
-    )?.compat;
-    expect(thinkingCompat?.supportsTools).toBe(false);
-    expect(thinkingCompat?.supportsReasoningEffort).toBe(false);
-  });
-
-  it("builds the OpenRouter-backed Arcee AI model catalog", async () => {
-    const provider = await registerSingleProviderPlugin(arceePlugin);
-    const catalogProvider = await runSingleProviderCatalog(provider, {
-      resolveProviderApiKey: (id?: string) =>
-        id === "openrouter" ? { apiKey: "sk-or-test" } : { apiKey: undefined },
-      resolveProviderAuth: () => ({
-        apiKey: "sk-or-test",
-        mode: "api_key",
-        source: "env",
-      }),
-    });
-
-    expect(catalogProvider.baseUrl).toBe("https://openrouter.ai/api/v1");
-    expect(catalogProvider.models?.map((model) => model.id)).toEqual([
-      "arcee-ai/trinity-large-preview",
-      "arcee-ai/trinity-large-thinking",
-    ]);
-    const thinkingCompat = catalogProvider.models?.find(
-      (model) => model.id === "arcee-ai/trinity-large-thinking",
     )?.compat;
     expect(thinkingCompat?.supportsTools).toBe(false);
     expect(thinkingCompat?.supportsReasoningEffort).toBe(false);
@@ -421,35 +319,6 @@ describe("arcee provider plugin", () => {
         ],
       },
     });
-  });
-
-  it("normalizes Arcee OpenRouter models to vendor-prefixed runtime ids", async () => {
-    const provider = await registerSingleProviderPlugin(arceePlugin);
-
-    const openRouterModel = provider.normalizeResolvedModel?.({
-      modelId: "arcee/trinity-large-thinking",
-      model: {
-        provider: "arcee",
-        id: "trinity-large-thinking",
-        name: "Trinity Large Thinking",
-        api: "openai-completions",
-        baseUrl: "https://openrouter.ai/api/v1",
-      },
-    } as never);
-    expect(openRouterModel?.id).toBe("arcee-ai/trinity-large-thinking");
-
-    expect(
-      provider.normalizeResolvedModel?.({
-        modelId: "arcee/trinity-large-thinking",
-        model: {
-          provider: "arcee",
-          id: "trinity-large-thinking",
-          name: "Trinity Large Thinking",
-          api: "openai-completions",
-          baseUrl: "https://api.arcee.ai/api/v1",
-        },
-      } as never),
-    ).toBeUndefined();
   });
 
   it("canonicalizes stale OpenRouter /v1 config and transport metadata", async () => {

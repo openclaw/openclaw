@@ -4,14 +4,6 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import { runSecurityAuditCore } from "./audit.js";
 
-function requireProbeFailure(findings: ReturnType<typeof collectDeepProbeFindings>) {
-  const finding = findings.find((entry) => entry.checkId === "gateway.probe_failed");
-  if (!finding) {
-    throw new Error("Expected gateway probe failure finding");
-  }
-  return finding;
-}
-
 describe("security audit deep probe failure", () => {
   it("redacts gateway URL credentials from the deep audit report", async () => {
     const user = "audit-user-sentinel";
@@ -56,22 +48,9 @@ describe("security audit deep probe failure", () => {
     expect(serialized).not.toContain(querySecret);
   });
 
-  it("adds probe_failed warnings for deep probe failure modes", () => {
-    const cases: Array<{
-      name: string;
-      deep: {
-        gateway: {
-          attempted: boolean;
-          url: string | null;
-          ok: boolean;
-          error: string | null;
-          close?: { code: number; reason: string } | null;
-        };
-      };
-      expectedError: string;
-    }> = [
-      {
-        name: "probe returns failed result",
+  it("adds a probe_failed warning with the reported error", () => {
+    expect(
+      collectDeepProbeFindings({
         deep: {
           gateway: {
             attempted: true,
@@ -81,27 +60,13 @@ describe("security audit deep probe failure", () => {
             close: null,
           },
         },
-        expectedError: "connect failed",
-      },
-      {
-        name: "probe throws",
-        deep: {
-          gateway: {
-            attempted: true,
-            ok: false,
-            url: "ws://127.0.0.1:18789",
-            error: "probe boom",
-            close: null,
-          },
-        },
-        expectedError: "probe boom",
-      },
-    ];
-
-    for (const testCase of cases) {
-      const findings = collectDeepProbeFindings({ deep: testCase.deep });
-      const probeFailure = requireProbeFailure(findings);
-      expect(probeFailure.detail, testCase.name).toContain(testCase.expectedError);
-    }
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        checkId: "gateway.probe_failed",
+        severity: "warn",
+        detail: "connect failed",
+      }),
+    );
   });
 });

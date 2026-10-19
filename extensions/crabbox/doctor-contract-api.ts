@@ -167,6 +167,8 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "crabbox-warm-profile-v3",
     label: "Crabbox warm profiles",
     doctorOnly: true,
+    // The host recovery inventory already includes shared plugin-state SQLite.
+    collectBackupResources: () => [],
     async detectLegacyState({ context }) {
       const images = await context
         .openPluginStateKeyedStore<unknown>({
@@ -254,9 +256,23 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         try {
           // The maintenance owner excludes the Gateway; compare again so a changed row
           // cannot lose a paid capture or retirement obligation during publication.
-          const changed = await store.update?.(key, (current) =>
-            JSON.stringify(current) === JSON.stringify(value) ? migrated : undefined,
-          );
+          let changed = false;
+          if (store.observe && store.compareAndApply) {
+            const serialized = JSON.stringify(value);
+            let observation = await store.observe(key);
+            while (JSON.stringify(observation.value) === serialized) {
+              const result = await store.compareAndApply(key, observation.comparison, {
+                operation: "update",
+                action: "set",
+                value: migrated,
+              });
+              if (result.status !== "conflict") {
+                changed = result.status === "applied";
+                break;
+              }
+              observation = result.current;
+            }
+          }
           if (changed) {
             changes.push(
               `Migrated Crabbox warm profile ${key}, preserving resource obligations without inventing preparation, cache identity, purpose or demand.`,

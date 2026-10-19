@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { setTimeout as delay } from "node:timers/promises";
+import { createRequire } from "node:module";
 import type * as LanceDB from "@lancedb/lancedb";
-import { Field, FixedSizeList, Float32, Float64, Schema, Utf8 } from "apache-arrow";
+import type * as Arrow from "apache-arrow";
 import type { MemoryCategory } from "./config.js";
 import { loadLanceDbModule } from "./lancedb-runtime.js";
 import {
@@ -12,8 +12,12 @@ import {
   quoteLanceSqlString,
 } from "./lancedb-schema.js";
 
+// LanceDB's CJS serializer needs Arrow datatypes from the same module instance.
+const { Field, FixedSizeList, Float32, Float64, Schema, Utf8 }: typeof Arrow = createRequire(
+  import.meta.url,
+)("apache-arrow");
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const TABLE_INITIALIZATION_ATTEMPTS = 3;
 
 export type MemoryEntry = {
   id: string;
@@ -53,7 +57,7 @@ type StoredMemoryRow = MemoryEntry & {
   agentId: string;
 };
 
-function createMemoryTableSchema(vectorDim: number): Schema {
+function createMemoryTableSchema(vectorDim: number): Arrow.Schema {
   return new Schema([
     new Field("id", new Utf8(), true),
     new Field("text", new Utf8(), true),
@@ -63,35 +67,6 @@ function createMemoryTableSchema(vectorDim: number): Schema {
     new Field("createdAt", new Float64(), true),
     new Field("agentId", new Utf8(), true),
   ]);
-}
-
-async function openOrCreateMemoryTable(
-  db: LanceDB.Connection,
-  vectorDim: number,
-): Promise<LanceDB.Table> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= TABLE_INITIALIZATION_ATTEMPTS; attempt += 1) {
-    let table: LanceDB.Table | null = null;
-    try {
-      const tables = await db.tableNames();
-      table = tables.includes(MEMORY_TABLE_NAME)
-        ? await db.openTable(MEMORY_TABLE_NAME)
-        : await db.createEmptyTable(MEMORY_TABLE_NAME, createMemoryTableSchema(vectorDim), {
-            existOk: true,
-          });
-      // A concurrent create can expose the table name before its first version
-      // is readable. Probe the schema and retry the whole dependency boundary.
-      await table.schema();
-      return table;
-    } catch (error) {
-      table?.close();
-      lastError = error;
-      if (attempt < TABLE_INITIALIZATION_ATTEMPTS) {
-        await delay(attempt * 10);
-      }
-    }
-  }
-  throw lastError;
 }
 
 function formatQueryFilter(filter: MemoryQueryFilter): string {
@@ -147,7 +122,13 @@ export class MemoryDB {
     const db = await lancedb.connect(this.dbPath, connectionOptions);
     let table: LanceDB.Table | null = null;
     try {
-      table = await openOrCreateMemoryTable(db, this.vectorDim);
+      const tables = await db.tableNames();
+      // A competing initializer may need to retry startup before its first version is readable.
+      table = tables.includes(MEMORY_TABLE_NAME)
+        ? await db.openTable(MEMORY_TABLE_NAME)
+        : await db.createEmptyTable(MEMORY_TABLE_NAME, createMemoryTableSchema(this.vectorDim), {
+            existOk: true,
+          });
       if (!hasAgentScopeColumn(await table.schema())) {
         throw legacyMemorySchemaError();
       }
@@ -215,16 +196,10 @@ export class MemoryDB {
     limit?: number,
     options: MemoryListOptions = {},
   ): Promise<MemoryListEntry[]> {
-    await this.ensureInitialized();
-
-    let query = this.table!.query()
-      .where(memoryAgentPredicate(agentId))
-      .select(["id", "text", "importance", "category", "createdAt"]);
-    if (!options.orderByCreatedAt && limit !== undefined) {
-      query = query.limit(limit);
-    }
-
-    const rows = await query.toArray();
+    const rows = await this.query(agentId, {
+      columns: [...MEMORY_QUERY_COLUMNS],
+      limit: options.orderByCreatedAt ? undefined : limit,
+    });
     const entries = rows.map((row) => ({
       id: row.id as string,
       text: row.text as string,
@@ -261,11 +236,6 @@ export class MemoryDB {
     const predicate = scopedPredicate(agentId, { column: "id", operator: "=", value: id });
     const result = await this.table!.delete(predicate);
     return result.numDeletedRows > 0;
-  }
-
-  async count(agentId: string): Promise<number> {
-    await this.ensureInitialized();
-    return await this.table!.countRows(memoryAgentPredicate(agentId));
   }
 
   close(): void {

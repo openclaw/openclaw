@@ -12,9 +12,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
+import * as stateMetadata from "../../infra/update-candidate-state.sizes.js";
 import {
+  createUpdateRun,
   getUpdateRun,
   listUpdateRuns,
+  recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
@@ -29,6 +32,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";
+import * as restartHealth from "../daemon-cli/restart-health.js";
 import { registerUpdateCli } from "../update-cli.js";
 
 const mocks = vi.hoisted(() => ({
@@ -52,7 +56,14 @@ vi.mock("../../daemon/gateway-entrypoint.js", () => ({
   resolveGatewayInstallEntrypoint: mocks.entrypoint,
 }));
 vi.mock("./update-command-plugins.js", () => ({ updatePluginsAfterCoreUpdate: mocks.plugins }));
-vi.mock("./progress.js", () => ({ printResult: mocks.print }));
+vi.mock("./progress.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./progress.js")>()),
+  printResult: mocks.print,
+  prepareResult:
+    async (...args: Parameters<typeof import("./progress.js").printResult>) =>
+    () =>
+      mocks.print(...args.slice(0, 3)),
+}));
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
   resolveUpdateRoot: mocks.root,
@@ -107,10 +118,28 @@ let entrypoint: string;
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation((files, { signal }) =>
+    stateMetadata.readUpdateStateDatabaseSizesInProcess(files, signal),
+  );
   mocks.publication.mockReset().mockImplementation(async (params, publish) => {
     params.assertCurrent();
     return await publish(async () => params.assertCurrent());
   });
+  // Ordinary lease cases have no Gateway; restoration cases supply their managed service state.
+  const readHealth = async ({
+    port,
+  }: {
+    port: number;
+  }): Promise<Awaited<ReturnType<typeof restartHealth.waitForGatewayHealthyRestart>>> => ({
+    outcome: "failed",
+    runtime: { status: "stopped" },
+    portUsage: { port, status: "free", listeners: [], hints: [] },
+    healthy: false,
+    staleGatewayPids: [],
+    waitOutcome: "stopped-free",
+  });
+  vi.spyOn(restartHealth, "waitForGatewayHealthyRestart").mockImplementation(readHealth);
+  vi.spyOn(restartHealth, "inspectGatewayRestart").mockImplementation(readHealth);
   state = await createOpenClawTestState({
     label: "update-lease",
     env: {
@@ -214,7 +243,6 @@ async function invoke(
       {
         json: true,
         yes: true,
-        restart: false,
         timeout: "15",
         deferCompletionCache: true,
       },
@@ -403,7 +431,8 @@ describe("update orchestration lifecycle ownership", () => {
       shape: "malformed-prepare",
       version: VERSION,
       source: "export const prepareBundledPluginRuntime = 1;",
-      failure: /cannot complete its runtime artifacts/,
+      failure:
+        /^Installed runtime staging is unavailable: .+[/\\]scripts[/\\]stage-bundled-plugin-runtime\.mts$/u,
     },
     {
       shape: "missing-dependency",
@@ -788,7 +817,6 @@ describe("update orchestration lifecycle ownership", () => {
       channel: "beta",
       json: true,
       yes: true,
-      restart: false,
       deferCompletionCache: true,
     });
     expectSuccess("repair");
@@ -860,33 +888,44 @@ describe("update orchestration lifecycle ownership", () => {
       return { ...pluginResult, changed: false };
     });
 
-    await expect(invoke("repair", [recovery.runId])).rejects.toThrow("An update resumed");
+    await expect(invoke("repair", [recovery.runId])).rejects.toThrow(
+      "did not assume the update resumed",
+    );
 
     expect(getUpdateRun(recovery.runId)).toMatchObject({ status: "running", reason: null });
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
-  it("continues restart handling with a warning after a final Doctor execution failure", async () => {
-    await writeScenario("current-process", { failDoctor: "post", hostVersion: "1.0.0" });
-    await invoke("current-process");
-    expect(mocks.print.mock.lastCall?.[0]).toMatchObject({
-      status: "ok",
-      postUpdate: {
-        plugins: {
-          status: "warning",
-          warnings: [expect.objectContaining({ reason: "doctor-advisory" })],
-        },
-      },
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
-        }),
-      ]),
-    });
-    expect(mocks.restart).toHaveBeenCalledOnce();
-    expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
-    expectDoctorDiagnostics();
-    expect(await events()).toEqual(["post-attempt", "post-acquired", "validate", "readiness"]);
+  it("repair reports unverified recorded ownership for a captured old-host run", async () => {
+    const driver = { host: "renamed-host.example", pid: 424_242, startIdentity: "1" };
+    const created = createUpdateRun({ trigger: "cli", origin: { driver } });
+    const recovery = recordUpdateRunPhase(created.runId, "verifying");
+    await writeScenario("repair", { pluginUpdate: { ...pluginResult, changed: false } });
+
+    const error = await invoke("repair", [recovery.runId]).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    const message = String(error);
+    expect(message).toContain(`Update ${recovery.runId} remains recorded as running (verifying);`);
+    expect(message).toContain("driver PID 424242 on renamed-host.example, liveness: not observed");
+    expect(message).toContain(
+      "Repair could not verify that the recorded update work stopped; it did not assume the update resumed.",
+    );
+    expect(message).toContain(
+      'Check each named host or supervisor: this host cannot safely determine liveness when a driver is shown as "not observed".',
+    );
+    expect(message).toContain(
+      "If a driver is active, wait for it or stop it through its owning host or supervisor.",
+    );
+    expect(message).toContain(
+      "If this is the same machine after a rename, restore its recorded hostname before retrying `openclaw update repair`; otherwise contact support.",
+    );
+    expect(message).not.toContain("An update resumed");
+    expect(getUpdateRun(recovery.runId)).toMatchObject({ status: "running", phase: "verifying" });
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -904,19 +943,25 @@ describe("update orchestration lifecycle ownership", () => {
     ],
     ["repair" as const, "finding" as const, "post-plugin-update-readiness-failed"],
     ["repair" as const, "execution" as const, "post-plugin-update-readiness-execution-failed"],
-  ])("%s leaves the Gateway stopped after a readiness %s", async (lane, failure, reason) => {
+  ])("%s preserves a readiness %s outcome", async (lane, failure, reason) => {
     await writeScenario(lane, {
       readinessFailure: failure,
       hostVersion: lane === "current-process" ? "1.0.0" : undefined,
     });
 
-    await invokeReportedFailure(lane);
+    if (failure === "finding") {
+      await invokeReportedFailure(lane);
+    } else {
+      await invoke(lane);
+    }
 
     expect(reportedResult(lane)).toMatchObject({
-      status: "error",
-      postUpdate: { plugins: { reason } },
+      status: failure === "finding" ? "error" : lane === "repair" ? "warning" : "ok",
+      postUpdate: { plugins: { status: failure === "finding" ? "error" : "warning", reason } },
     });
-    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(mocks.restart).toHaveBeenCalledTimes(
+      failure === "execution" && lane !== "repair" ? 1 : 0,
+    );
     expect(await events()).toEqual([
       ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
       ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),

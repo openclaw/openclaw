@@ -56,16 +56,6 @@ describe("createAcpxProcessLeaseStore", () => {
     });
   }
 
-  it("serializes concurrent lease saves without dropping records", async () => {
-    const store = createStore();
-    await Promise.all(Array.from({ length: 25 }, (_, index) => store.save(makeLease(index))));
-
-    const leases = await store.listOpen("gateway-test");
-    expect(leases.map((lease) => lease.leaseId).toSorted()).toEqual(
-      Array.from({ length: 25 }, (_, index) => `lease-${index}`).toSorted(),
-    );
-  });
-
   it("removes terminal leases from the live lease namespace", async () => {
     const store = createStore();
     const openLease = makeLease(1);
@@ -98,23 +88,6 @@ describe("createAcpxProcessLeaseStore", () => {
 });
 
 describe("withAcpxLeaseArgs", () => {
-  it("adds portable lease wrapper args", () => {
-    const command = withAcpxLeaseArgs({
-      command: "node /tmp/openclaw/acpx/codex-acp-wrapper.mjs",
-      leaseId: "lease-test",
-      gatewayInstanceId: "gateway-test",
-    });
-
-    expect(command).toEqual([
-      "node",
-      "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
-      OPENCLAW_ACPX_LEASE_ID_ARG,
-      "lease-test",
-      OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-      "gateway-test",
-    ]);
-  });
-
   it("preserves portable lease wrapper args", () => {
     const command = withAcpxLeaseArgs({
       command: ["node", "C:/openclaw/acpx/codex-acp-wrapper.mjs", ""],

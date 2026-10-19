@@ -19,32 +19,22 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
-concurrency:
-  # Skipped edits must not cancel running or replace pending labeling.
-  group: >-
-    ${{ github.workflow }}-${{
-      github.event_name == 'pull_request_target' &&
-      github.event.action == 'edited' &&
-      !github.event.changes.title &&
-      !github.event.changes.base &&
-      format('ignored-edit-{0}', github.run_id) ||
-      github.event.pull_request.number || github.ref || github.run_id
-    }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
-
 permissions: {}
 
 jobs:
   label:
     if: >-
-      ${{
+      ${{ (
         github.event_name == 'pull_request_target' &&
         (
           github.event.action != 'edited' ||
           github.event.changes.title ||
           github.event.changes.base
         )
-      }}
+      ) }}
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     permissions:
       contents: read
       pull-requests: write
@@ -54,7 +44,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         continue-on-error: true
         with:
@@ -65,7 +55,7 @@ jobs:
           permission-members: read
           permission-metadata: read
           permission-pull-requests: write
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
@@ -524,6 +514,9 @@ jobs:
 
   backfill-pr-labels:
     if: github.event_name == 'workflow_dispatch'
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+      cancel-in-progress: false
     permissions:
       contents: read
       pull-requests: write
@@ -533,7 +526,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         continue-on-error: true
         with:
@@ -543,7 +536,7 @@ jobs:
           permission-members: read
           permission-metadata: read
           permission-pull-requests: write
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
@@ -852,7 +845,12 @@ jobs:
             core.info(`Processed ${processed} pull requests.`);
 
   label-issues:
-    if: github.event_name == 'issues'
+    if: >-
+      ${{ (github.event_name == 'issues' &&
+        (github.event.action != 'edited' || !github.event.changes || github.event.changes.title)) }}
+    concurrency:
+      group: ${{ github.workflow }}-issue-${{ github.event.issue.number }}
+      cancel-in-progress: true
     permissions:
       contents: read
       issues: write
@@ -862,7 +860,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         continue-on-error: true
         with:
@@ -870,7 +868,7 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           permission-issues: write
           permission-members: read
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:

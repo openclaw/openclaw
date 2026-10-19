@@ -658,6 +658,30 @@
             ]
           }
         ],
+        "contracts": {
+          "webSearchProviders": [
+            "deepseek"
+          ]
+        },
+        "webSearchProviders": [
+          {
+            "id": "deepseek",
+            "label": "DeepSeek",
+            "hint": "Structured search results from DeepSeek's search engine",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "credentialLabel": "DeepSeek API key",
+            "envVars": [
+              "DEEPSEEK_API_KEY"
+            ],
+            "placeholder": "sk-...",
+            "signupUrl": "https://platform.deepseek.com/api_keys",
+            "docsUrl": "https://docs.openclaw.ai/providers/deepseek#web-search",
+            "credentialPath": "plugins.entries.deepseek.config.webSearch.apiKey",
+            "autoDetectOrder": 80
+          }
+        ],
         "install": {
           "clawhubSpec": "clawhub:@openclaw/deepseek-provider",
           "npmSpec": "@openclaw/deepseek-provider",
@@ -977,7 +1001,10 @@
             "endpointClass": "opencode-native",
             "baseUrls": [
               "https://opencode.ai/zen",
-              "https://opencode.ai/zen/v1"
+              "https://opencode.ai/zen/v1",
+              "https://opencode.ai/inference/openai/v1",
+              "https://opencode.ai/inference/anthropic/v1",
+              "https://opencode.ai/inference/google/v1beta"
             ]
           }
         ],
@@ -1206,7 +1233,11 @@
             "endpointClass": "opencode-go-native",
             "baseUrls": [
               "https://opencode.ai/zen/go",
-              "https://opencode.ai/zen/go/v1"
+              "https://opencode.ai/zen/go/v1",
+              "https://opencode.ai/inference/go/openai/v1",
+              "https://opencode.ai/inference/go/anthropic",
+              "https://opencode.ai/inference/go/anthropic/v1",
+              "https://opencode.ai/inference/go/google/v1beta"
             ]
           }
         ],
@@ -1841,6 +1872,57 @@
       }
     },
     {
+      "name": "@telnyx/openclaw-provider",
+      "description": "Official Telnyx AI inference provider plugin for OpenClaw.",
+      "source": "external",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "telnyx",
+          "label": "Telnyx"
+        },
+        "providers": [
+          {
+            "id": "telnyx",
+            "name": "Telnyx",
+            "docs": "/providers/telnyx",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "TELNYX_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "telnyx-api-key",
+                "choiceLabel": "Telnyx API key",
+                "choiceHint": "OpenAI-compatible Telnyx AI inference endpoint",
+                "groupId": "telnyx",
+                "groupLabel": "Telnyx",
+                "groupHint": "OpenAI-compatible Telnyx AI inference endpoint",
+                "optionKey": "telnyxApiKey",
+                "cliFlag": "--telnyx-api-key",
+                "cliOption": "--telnyx-api-key <key>",
+                "cliDescription": "Telnyx API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@telnyx/openclaw-provider@0.2.0",
+          "npmSpec": "@telnyx/openclaw-provider@0.2.0",
+          "defaultChoice": "npm",
+          "expectedIntegrity": "sha512-htqOJfPx+TlLWE/nmpdJJVgrg8zDqRIX87smzY3CnKcdJPlx51Rc1kWzarvE+2hvhpm2lzD5sKkxRSIWKz2AaA==",
+          "minHostVersion": ">=2026.8.1"
+        }
+      }
+    },
+    {
       "name": "@openclaw/venice-provider",
       "description": "OpenClaw Venice provider plugin",
       "source": "official",
@@ -1900,6 +1982,14 @@
           "id": "vercel-ai-gateway",
           "label": "Vercel AI Gateway"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "vercel-ai-gateway",
+            "hosts": [
+              "ai-gateway.vercel.sh"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "vercel-ai-gateway",

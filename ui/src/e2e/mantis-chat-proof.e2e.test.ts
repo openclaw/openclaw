@@ -100,7 +100,7 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
       await page.getByText("Mantis web UI proof is ready.").waitFor({ timeout: 10_000 });
       await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
       // The working timer starts at the send click; pause first so the elapsed
-      // reading is exactly the fastForward below, not inflated by real time.
+      // reading is exactly the virtual duration below, not inflated by real time.
       await pauseVirtualClock(page);
       await page.getByRole("button", { name: "Send message" }).click();
 
@@ -115,15 +115,24 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
 
       await page.getByText("saved 875.3k tokens", { exact: true }).waitFor();
       await page.locator(".chat-working-indicator").waitFor();
-      const workingLabel = page.locator(".chat-working-indicator__status > .sr-only");
-      expect(await workingLabel.textContent()).toBe("Working…");
+      const workingLabel = page.locator(".chat-working-indicator__status > span:first-child");
+      expect(await workingLabel.textContent()).toBe("Waiting for turn to start…");
       expect(
-        await page.locator(".chat-working-indicator__status > span:not(.sr-only)").count(),
-      ).toBe(0);
-      await page.clock.fastForward(177_000);
+        await page
+          .locator(".chat-working-indicator__status > span:not(.sr-only)")
+          .allTextContents(),
+      ).toEqual(["Waiting for turn to start…", "·"]);
+      await expect.poll(() => gateway.getRequests("connect")).toHaveLength(1);
+      // Keep each elapsed-time/heartbeat tick, without rendering every frame
+      // between the one-second clock readings or suspending pending RPC replies.
+      for (let elapsedMs = 0; elapsedMs < 177_000; elapsedMs += 1_000) {
+        await page.clock.fastForward(1_000);
+      }
       await expect
         .poll(() => page.locator(".chat-working-indicator__elapsed").textContent())
         .toBe("2m 57s");
+      expect(await gateway.getRequests("connect")).toHaveLength(1);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       await writeFile(
         path.join(artifactDir, "web-ui-chat.png"),
         await takeControlUiViewportScreenshot(page, page.locator(".shell"), [

@@ -1,6 +1,7 @@
+import type { Locale } from "../../../../src/shared/control-ui-locale.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { i18n } from "./translate.ts";
-import type { Locale, TranslationMap } from "./types.ts";
+import type { TranslationMap } from "./types.ts";
 
 type LocaleTranslationLoader = (locale: Locale) => Promise<TranslationMap | null>;
 type TranslateTestApi = {

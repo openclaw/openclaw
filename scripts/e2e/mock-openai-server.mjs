@@ -4,8 +4,9 @@ import { readFileSync } from "node:fs";
 import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { escapeRegExp } from "../lib/regexp.mjs";
+import { resolveAgentPluginBundleResponse } from "./lib/agent-plugin-bundle-response.mjs";
 import { readPositiveIntEnv, readTcpPortEnv } from "./lib/env-limits.mjs";
-import { summarizeMockInferenceRequest } from "./lib/mock-inference-facts.ts";
+import { readMockUserText, summarizeMockInferenceRequest } from "./lib/mock-inference-facts.ts";
 import {
   boundedRequestLogBody,
   isRequestBodyTooLargeError,
@@ -14,6 +15,7 @@ import {
   writeJson,
   writeSse,
 } from "./lib/mock-openai-http.mjs";
+import { createTelegramBindingScenario } from "./lib/telegram-binding-scenario.mjs";
 
 const port =
   process.env.MOCK_PORT?.trim() === "0"
@@ -46,6 +48,7 @@ const LEGACY_MEDIA_PATTERN =
 const MEDIA_DATA_URL_PATTERN =
   /^data:([a-z][a-z0-9.+-]*\/[a-z0-9.+-]+)(?:;[^,]*)*;base64,([\s\S]*)$/iu;
 let scriptState;
+const telegramBindingScenario = createTelegramBindingScenario();
 
 function parseMediaDataUrl(value) {
   if (typeof value !== "string") {
@@ -326,15 +329,14 @@ function splitResponseText(text) {
   return [text.slice(0, splitAt), text.slice(splitAt)];
 }
 
-function responseEvents(text, deltas = [text]) {
-  const itemId = "msg_e2e_1";
+function messageEvents(item, text, deltas) {
   return [
     {
       type: "response.output_item.added",
       output_index: 0,
       item: {
         type: "message",
-        id: itemId,
+        id: item.id,
         role: "assistant",
         content: [],
         status: "in_progress",
@@ -342,52 +344,53 @@ function responseEvents(text, deltas = [text]) {
     },
     ...deltas.map((delta) => ({
       type: "response.output_text.delta",
-      item_id: itemId,
+      item_id: item.id,
       output_index: 0,
       content_index: 0,
       delta,
     })),
     {
       type: "response.output_text.done",
-      item_id: itemId,
+      item_id: item.id,
       output_index: 0,
       content_index: 0,
       text,
     },
-    {
-      type: "response.output_item.done",
-      output_index: 0,
-      item: {
-        type: "message",
-        id: itemId,
-        role: "assistant",
-        status: "completed",
-        content: [{ type: "output_text", text, annotations: [] }],
-      },
-    },
-    {
-      type: "response.completed",
-      response: {
-        id: "resp_e2e",
-        status: "completed",
-        output: [
-          {
-            type: "message",
-            id: itemId,
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text, annotations: [] }],
-          },
-        ],
-        usage: {
-          input_tokens: 11,
-          output_tokens: 7,
-          total_tokens: 18,
-          input_tokens_details: { cached_tokens: 0 },
-        },
-      },
-    },
+    { type: "response.output_item.done", output_index: 0, item },
   ];
+}
+
+function completedResponseEvent(id, output, inputTokens, outputTokens) {
+  return {
+    type: "response.completed",
+    response: {
+      id,
+      status: "completed",
+      output,
+      usage: {
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        total_tokens: inputTokens + outputTokens,
+        input_tokens_details: { cached_tokens: 0 },
+      },
+    },
+  };
+}
+
+function assistantMessage(text, phase, id = "msg_e2e_1") {
+  return {
+    type: "message",
+    id,
+    role: "assistant",
+    status: "completed",
+    ...(phase ? { phase } : {}),
+    content: [{ type: "output_text", text, annotations: [] }],
+  };
+}
+
+function responseEvents(text, deltas = [text]) {
+  const item = assistantMessage(text);
+  return [...messageEvents(item, text, deltas), completedResponseEvent("resp_e2e", [item], 11, 7)];
 }
 
 async function writeDefaultResponseEvents(res, text, chunkDelayMs) {
@@ -440,6 +443,17 @@ function buildMockFunctionCall(name, args) {
   };
 }
 
+function functionCallEvents(call) {
+  return [
+    {
+      type: "response.output_item.added",
+      item: { ...call.item, arguments: "" },
+    },
+    { type: "response.function_call_arguments.delta", delta: call.serialized },
+    { type: "response.output_item.done", item: call.item },
+  ];
+}
+
 // Progress-draft proof: assistant text emitted BEFORE a tool call is tagged as
 // commentary, which channels render as the draft's status headline. Streaming
 // text and then a call in one response is the only way to exercise
@@ -448,89 +462,19 @@ function buildMockFunctionCall(name, args) {
 // transport reads it straight off the item, so an untagged item produces no
 // preamble at all and the scenario silently proves nothing.
 function preambleThenToolCallEvents(preamble, name, args) {
-  const messageItemId = "msg_e2e_preamble";
+  const item = assistantMessage(preamble, "commentary", "msg_e2e_preamble");
   const call = buildMockFunctionCall(name, args);
   return [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: {
-        type: "message",
-        id: messageItemId,
-        role: "assistant",
-        content: [],
-        status: "in_progress",
-      },
-    },
-    ...splitResponseText(preamble).map((delta) => ({
-      type: "response.output_text.delta",
-      item_id: messageItemId,
-      output_index: 0,
-      content_index: 0,
-      delta,
-    })),
-    {
-      type: "response.output_text.done",
-      item_id: messageItemId,
-      output_index: 0,
-      content_index: 0,
-      text: preamble,
-    },
-    {
-      type: "response.output_item.done",
-      output_index: 0,
-      item: {
-        type: "message",
-        id: messageItemId,
-        role: "assistant",
-        status: "completed",
-        phase: "commentary",
-        content: [{ type: "output_text", text: preamble, annotations: [] }],
-      },
-    },
-    {
-      type: "response.output_item.added",
-      item: {
-        type: "function_call",
-        id: call.itemId,
-        call_id: call.item.call_id,
-        name,
-        arguments: "",
-      },
-    },
-    { type: "response.function_call_arguments.delta", delta: call.serialized },
-    { type: "response.output_item.done", item: call.item },
-    {
-      type: "response.completed",
-      response: {
-        id: call.responseId,
-        status: "completed",
-        output: [
-          {
-            type: "message",
-            id: messageItemId,
-            role: "assistant",
-            status: "completed",
-            phase: "commentary",
-            content: [{ type: "output_text", text: preamble, annotations: [] }],
-          },
-          call.item,
-        ],
-        usage: {
-          input_tokens: 64,
-          output_tokens: 24,
-          total_tokens: 88,
-          input_tokens_details: { cached_tokens: 0 },
-        },
-      },
-    },
+    ...messageEvents(item, preamble, splitResponseText(preamble)),
+    ...functionCallEvents(call),
+    completedResponseEvent(call.responseId, [item, call.item], 64, 24),
   ];
 }
 
 function hasCurrentTurnToolOutput(messages) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message?.role === "user") {
+    if (readMockUserText(message) !== undefined) {
       return false;
     }
     if (message?.role === "tool" || message?.type === "function_call_output") {
@@ -551,7 +495,7 @@ function progressDraftEvents(body, bodyText) {
       return null;
     }
     return preambleThenToolCallEvents("Checking the workspace before answering.", "exec", {
-      command: "sleep 3 && echo openclaw-draft-proof",
+      command: "sleep 2 && echo openclaw-draft-proof",
     });
   }
   return responseEvents("OPENCLAW_E2E_DRAFTPROOF");
@@ -560,32 +504,8 @@ function progressDraftEvents(body, bodyText) {
 function toolCallEvents(name, args) {
   const call = buildMockFunctionCall(name, args);
   return [
-    {
-      type: "response.output_item.added",
-      item: {
-        type: "function_call",
-        id: call.itemId,
-        call_id: call.item.call_id,
-        name,
-        arguments: "",
-      },
-    },
-    { type: "response.function_call_arguments.delta", delta: call.serialized },
-    { type: "response.output_item.done", item: call.item },
-    {
-      type: "response.completed",
-      response: {
-        id: call.responseId,
-        status: "completed",
-        output: [call.item],
-        usage: {
-          input_tokens: 64,
-          output_tokens: 16,
-          total_tokens: 80,
-          input_tokens_details: { cached_tokens: 0 },
-        },
-      },
-    },
+    ...functionCallEvents(call),
+    completedResponseEvent(call.responseId, [call.item], 64, 16),
   ];
 }
 
@@ -608,28 +528,37 @@ function writeResponsesEvents(res, stream, events) {
   writeSse(res, events);
 }
 
-function writeChatCompletion(res, stream, text = successMarker) {
-  if (stream) {
-    writeSse(res, [
-      {
-        id: "chatcmpl_e2e",
-        object: "chat.completion.chunk",
-        choices: [{ index: 0, delta: { role: "assistant", content: text } }],
-      },
-      {
-        id: "chatcmpl_e2e",
-        object: "chat.completion.chunk",
-        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-      },
-    ]);
-    return;
-  }
+function writeChatCompletionChunks(res, choices) {
+  writeSse(
+    res,
+    choices.map((choice) => ({
+      id: "chatcmpl_e2e",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, ...choice }],
+    })),
+  );
+}
+
+function writeChatCompletionMessage(res, message, finishReason, promptTokens, completionTokens) {
   writeJson(res, 200, {
     id: "chatcmpl_e2e",
     object: "chat.completion",
-    choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
-    usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
+    choices: [{ index: 0, message, finish_reason: finishReason }],
+    usage: {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: promptTokens + completionTokens,
+    },
   });
+}
+
+function writeChatCompletion(res, stream, text = successMarker) {
+  const message = { role: "assistant", content: text };
+  if (stream) {
+    writeChatCompletionChunks(res, [{ delta: message }, { delta: {}, finish_reason: "stop" }]);
+    return;
+  }
+  writeChatCompletionMessage(res, message, "stop", 11, 7);
 }
 
 /** Streams assistant content, then a tool call, in one chat-completions turn. */
@@ -637,56 +566,30 @@ function writeChatCompletionPreambleToolCall(res, stream, preamble, name, args) 
   const serialized = JSON.stringify(args);
   const callId = `call_mock_${name}_${createHash("sha256").update(name).update(serialized).digest("hex").slice(0, 10)}`;
   if (!stream) {
-    writeJson(res, 200, {
-      id: "chatcmpl_e2e",
-      object: "chat.completion",
-      choices: [
-        {
-          index: 0,
-          message: {
-            role: "assistant",
-            content: preamble,
-            tool_calls: [
-              { id: callId, type: "function", function: { name, arguments: serialized } },
-            ],
-          },
-          finish_reason: "tool_calls",
-        },
-      ],
-      usage: { prompt_tokens: 24, completion_tokens: 18, total_tokens: 42 },
-    });
+    writeChatCompletionMessage(
+      res,
+      {
+        role: "assistant",
+        content: preamble,
+        tool_calls: [{ id: callId, type: "function", function: { name, arguments: serialized } }],
+      },
+      "tool_calls",
+      24,
+      18,
+    );
     return;
   }
-  writeSse(res, [
+  writeChatCompletionChunks(res, [
+    { delta: { role: "assistant", content: "" } },
+    ...splitResponseText(preamble).map((content) => ({ delta: { content } })),
     {
-      id: "chatcmpl_e2e",
-      object: "chat.completion.chunk",
-      choices: [{ index: 0, delta: { role: "assistant", content: "" } }],
+      delta: {
+        tool_calls: [
+          { index: 0, id: callId, type: "function", function: { name, arguments: serialized } },
+        ],
+      },
     },
-    ...splitResponseText(preamble).map((delta) => ({
-      id: "chatcmpl_e2e",
-      object: "chat.completion.chunk",
-      choices: [{ index: 0, delta: { content: delta } }],
-    })),
-    {
-      id: "chatcmpl_e2e",
-      object: "chat.completion.chunk",
-      choices: [
-        {
-          index: 0,
-          delta: {
-            tool_calls: [
-              { index: 0, id: callId, type: "function", function: { name, arguments: serialized } },
-            ],
-          },
-        },
-      ],
-    },
-    {
-      id: "chatcmpl_e2e",
-      object: "chat.completion.chunk",
-      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
-    },
+    { delta: {}, finish_reason: "tool_calls" },
   ]);
 }
 
@@ -704,16 +607,31 @@ function writeImageGeneration(res) {
   });
 }
 
-function resolveResponseText(bodyText) {
+function resolveResponseText(bodyText, body) {
+  let markerBody;
+  for (const key of ["input", "messages"]) {
+    if (!Array.isArray(body?.[key])) {
+      continue;
+    }
+    const messages = body[key].filter(
+      (message) => message?.role !== "user" || readMockUserText(message) !== undefined,
+    );
+    if (messages.length !== body[key].length) {
+      markerBody ??= { ...body };
+      markerBody[key] = messages;
+    }
+  }
+  // Runtime carriers can quote older markers after the user's current request.
+  const markerText = markerBody ? JSON.stringify(markerBody) : bodyText;
   const servingChecks = Array.from(
-    bodyText.matchAll(
+    markerText.matchAll(
       /This is an OpenClaw update serving check\. Do not use tools\. Reply with exactly: (update-verified-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/gu,
     ),
   );
   if (servingChecks.length > 0) {
     return servingChecks.at(-1)[1];
   }
-  const matches = Array.from(bodyText.matchAll(/\bOPENCLAW_E2E_[A-Z0-9]+(?:_[A-Z0-9]+)*\b/gu));
+  const matches = Array.from(markerText.matchAll(/\bOPENCLAW_E2E_[A-Z0-9]+(?:_[A-Z0-9]+)*\b/gu));
   return matches.at(-1)?.[0] ?? successMarker;
 }
 
@@ -742,14 +660,7 @@ function collectText(value) {
 }
 
 function stringifyFunctionCallOutput(output) {
-  if (typeof output === "string") {
-    return output;
-  }
-  try {
-    return JSON.stringify(output);
-  } catch {
-    return "";
-  }
+  return typeof output === "string" ? output : JSON.stringify(output);
 }
 
 function collectFunctionCallOutputText(body) {
@@ -777,11 +688,9 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
     if (!hasDeclaredTool(bodyText, "exec")) {
       return null;
     }
-    const catalogExpression =
-      process.env.OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE === "legacy"
-        ? "ALL_TOOLS.some((tool) => tool.source === 'mcp')"
-        : "catalog.all().some((tool) => tool.source === 'mcp')";
+    const catalogExpression = "catalog.all().some((tool) => tool.source === 'mcp')";
     return toolCallEvents("exec", {
+      title: "Read the MCP fixture note",
       code: [
         'const files = await API.list("mcp");',
         'const root = await API.read("mcp/index.d.ts");',
@@ -842,22 +751,29 @@ function mcpAppConformanceEvents(body, bodyText) {
     : responseEvents("MCP_APP_CONFORMANCE_FAIL");
 }
 
-function agentPluginBundleEvents(body, bodyText) {
-  const allText = collectText(body).join("\n");
-  if (!/agent plugin bundle qa check/i.test(allText)) {
+function agentPluginBundleEvents(body, inferenceFacts) {
+  if (inferenceFacts?.purpose === "activity-recap") {
     return null;
   }
-  const toolOutput = collectFunctionCallOutputText(body);
-  if (!toolOutput) {
-    return hasDeclaredTool(bodyText, "weather-probe__weather_probe")
-      ? toolCallEvents("weather-probe__weather_probe", {})
-      : responseEvents("AGENT_BUNDLE_MCP_FAIL tool-not-declared");
+  const input = Array.isArray(body?.input) ? body.input : [];
+  const userText = input.map(readMockUserText).findLast((text) => text !== undefined) ?? "";
+  if (!/agent plugin bundle qa check/i.test(userText)) {
+    return null;
   }
-  return toolOutput.includes("probe ok") &&
-    toolOutput.includes("PLUGIN_ROOT=") &&
-    toolOutput.includes("PLUGIN_DATA=")
-    ? responseEvents("AGENT_BUNDLE_MCP_OK")
-    : responseEvents("AGENT_BUNDLE_MCP_FAIL unexpected-tool-output");
+  const response = resolveAgentPluginBundleResponse(body);
+  return response.tool
+    ? toolCallEvents(response.tool.name, response.tool.args)
+    : responseEvents(response.text);
+}
+
+function telegramBindingEvents(body) {
+  const response = telegramBindingScenario(body);
+  if (!response) {
+    return null;
+  }
+  return response.spawn
+    ? toolCallEvents("sessions_spawn", response.spawn)
+    : responseEvents(response.text);
 }
 
 function countAutomaticSelection(events) {
@@ -868,7 +784,7 @@ function countAutomaticSelection(events) {
 const server = http.createServer((req, res) => {
   void (async () => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    if (req.method === "GET" && url.pathname === "/health") {
+    if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/health") {
       writeJson(res, 200, { ok: true, requests });
       return;
     }
@@ -924,6 +840,7 @@ const server = http.createServer((req, res) => {
         ? { response: controlSelection.models[body.model] }
         : undefined
       : controlSelection;
+    const inferenceFacts = scriptedRoute ? summarizeMockInferenceRequest(body) : undefined;
     if (
       writeRequestLogEntryOrFail(res, {
         requestLog,
@@ -934,12 +851,15 @@ const server = http.createServer((req, res) => {
           requestBytes: Buffer.byteLength(bodyText),
           body: boundedRequestLogBody(requestLogBody, requestLogBody),
           ...summarizeRequestContent(body),
-          ...(scriptedRoute ? { inferenceFacts: summarizeMockInferenceRequest(body) } : {}),
+          ...(inferenceFacts ? { inferenceFacts } : {}),
           ...(selectedResponse?.scriptEntry ? { scriptEntry: selectedResponse.scriptEntry } : {}),
         },
       })
     ) {
       return;
+    }
+    if (requestLog) {
+      process.send?.({ type: "mock-openai:request-logged", seq: requestLogSeq });
     }
     if (selectedResponse) {
       requests.selections[controlSelection.models ? "model" : "global"] += 1;
@@ -953,10 +873,11 @@ const server = http.createServer((req, res) => {
     if (route === "responses") {
       if (!selectedResponse) {
         const events =
-          agentPluginBundleEvents(body, bodyText) ??
+          agentPluginBundleEvents(body, inferenceFacts) ??
           mcpAppConformanceEvents(body, bodyText) ??
           mcpCodeModeApiFileEvents(body, bodyText) ??
-          progressDraftEvents(body, bodyText);
+          progressDraftEvents(body, bodyText) ??
+          telegramBindingEvents(body);
         if (events) {
           countAutomaticSelection(events);
           writeResponsesEvents(res, body.stream, events);
@@ -971,21 +892,13 @@ const server = http.createServer((req, res) => {
         writeResponsesEvents(res, body.stream, response.events);
         return;
       }
-      const responseText = selectedResponse ? response.text : resolveResponseText(bodyText);
+      const responseText = selectedResponse ? response.text : resolveResponseText(bodyText, body);
       if (body.stream === false) {
         writeJson(res, 200, {
           id: "resp_e2e",
           object: "response",
           status: "completed",
-          output: [
-            {
-              type: "message",
-              id: "msg_e2e_1",
-              role: "assistant",
-              status: "completed",
-              content: [{ type: "output_text", text: responseText, annotations: [] }],
-            },
-          ],
+          output: [assistantMessage(responseText)],
           usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 },
         });
         return;
@@ -1008,7 +921,7 @@ const server = http.createServer((req, res) => {
             body.stream !== false,
             "Checking the workspace before answering.",
             "exec",
-            { command: "sleep 3 && echo openclaw-draft-proof" },
+            { command: "sleep 2 && echo openclaw-draft-proof" },
           );
           return;
         }
@@ -1025,7 +938,7 @@ const server = http.createServer((req, res) => {
       }
       const responseText = selectedResponse
         ? selectedResponse.response.text
-        : resolveResponseText(bodyText);
+        : resolveResponseText(bodyText, body);
       writeChatCompletion(res, body.stream !== false, responseText);
       return;
     }

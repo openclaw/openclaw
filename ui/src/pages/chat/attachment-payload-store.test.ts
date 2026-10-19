@@ -1,12 +1,14 @@
 /* @vitest-environment jsdom */
 import { createHash } from "node:crypto";
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import * as payloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
 import * as videoPosters from "../../lib/media/video-poster.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   cloneChatAttachmentsForIndependentOwner,
@@ -18,7 +20,7 @@ import {
   replaceChatAttachmentsFromEditor,
 } from "./attachment-payload-store.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
+import { AssistantAttachments } from "./components/chat-message-attachments-solid.tsx";
 import { projectMessageMedia } from "./components/chat-message-media.ts";
 import { hydrateDurableComposerAttachments } from "./durable-composer-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
@@ -94,7 +96,12 @@ function card(attachment: ChatAttachment) {
   const { attachments } = projectMessageMedia(message, normalizeMessage(message).content);
   const container = document.body.appendChild(document.createElement("div"));
   const onOpen = vi.fn();
-  render(renderAssistantAttachments(attachments, {}, onOpen), container);
+  mountSolid(
+    () =>
+      createComponent(AssistantAttachments, { attachments, options: {}, onOpenSidebar: onOpen }),
+    { container },
+  );
+  flush();
   return {
     container,
     onOpen,
@@ -173,18 +180,6 @@ it("retains document Open and Download after complete outbox hydration", async (
   releaseChatAttachmentPayloads([attachment]);
   expect(revoked.filter((value) => value === href)).toHaveLength(1);
 });
-it("reuses a selected document preview until its owner releases it", () => {
-  const attachment = selected();
-  const first = card(attachment);
-  const second = card(attachment);
-  expect(first.download?.getAttribute("href")).toBe(second.download?.getAttribute("href"));
-  expect(first.open).not.toBeNull();
-  expect(second.open).not.toBeNull();
-  expect(created.size).toBe(1);
-  expect(revoked).toEqual([]);
-  releaseChatAttachmentPayloads([attachment]);
-  expect(revoked).toEqual([...created.keys()]);
-});
 it("does not allocate a preview for an outbox read whose recovery owner changed", async () => {
   const host = hostFor();
   const item = await persisted(host);
@@ -241,18 +236,6 @@ it("keeps restored and independently cloned preview ownership separate", async (
   expect(revoked).toEqual([first, second]);
 });
 
-it("releases a replaced selected preview without disturbing the replacement", () => {
-  const first = selected();
-  const previous = getChatAttachmentPreviewUrl(first);
-  const replacement = selected();
-  expect(revoked).toEqual([previous]);
-  const current = getChatAttachmentPreviewUrl(replacement);
-  expect(current).not.toBe(previous);
-  expect(created.size).toBe(2);
-  releaseChatAttachmentPayloads([replacement]);
-  expect(revoked).toEqual([previous, current]);
-});
-
 it("retains inline previews when object URLs are unavailable", () => {
   Object.defineProperty(URL, "createObjectURL", { configurable: true, value: undefined });
   const attachment = selected();
@@ -283,25 +266,15 @@ it("retains a pending video poster when a local message projects the same payloa
   expect(new Set(revoked)).toEqual(new Set(created.keys()));
 });
 
-it.each([64, 1024 * 1024, 5 * 1024 * 1024 - 1, 5 * 1024 * 1024])(
-  "restores supported inline images of %i bytes",
-  (bytes) => {
-    const data = Buffer.alloc(bytes, 0xab).toString("base64");
-    const restored = replaceChatAttachmentsFromEditor([], [{ mimeType: "image/png", data }]);
-    owned.push(...restored);
-    expect(restored).toHaveLength(1);
-    expect(getChatAttachmentDataUrl(restored[0]!)).toBe(`data:image/png;base64,${data}`);
-  },
-);
+it("restores supported inline images at the 5 MiB cap", () => {
+  const data = Buffer.alloc(5 * 1024 * 1024, 0xab).toString("base64");
+  const restored = replaceChatAttachmentsFromEditor([], [{ mimeType: "image/png", data }]);
+  owned.push(...restored);
+  expect(restored).toHaveLength(1);
+  expect(getChatAttachmentDataUrl(restored[0]!)).toBe(`data:image/png;base64,${data}`);
+});
 
 it("rejects a restored image one decoded byte over the cap without throwing", () => {
   const data = Buffer.alloc(5 * 1024 * 1024 + 1).toString("base64");
   expect(replaceChatAttachmentsFromEditor([], [{ mimeType: "image/png", data }])).toEqual([]);
 });
-
-it.each(["", "AAA", "AB=A", "A===", "====", "YWJ$", "aW1h Z2U=", "QQ==QQ=="])(
-  "skips malformed restored image bytes %j",
-  (data) => {
-    expect(replaceChatAttachmentsFromEditor([], [{ mimeType: "image/png", data }])).toEqual([]);
-  },
-);

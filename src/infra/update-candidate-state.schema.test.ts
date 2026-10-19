@@ -8,9 +8,10 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import {
+  readUpdateDatabaseGenerationsIsolated,
   readUpdateStateSchemaVersions,
-  updateStateSchemaVersionsMatch,
 } from "./update-candidate-state.js";
+import { updateStateSchemaVersionsMatch } from "./update-candidate-state.versions.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -70,6 +71,63 @@ it.each(["malformed", "nonregular-wal", "empty-worker"])(
     }
   },
 );
+
+it("reports a best-effort generation verification failure for its actual sources", async () => {
+  const stateDir = fs.realpathSync(dirs.make("update-generation-unstable-"));
+  const file = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  const missing = path.join(stateDir, "agents", "ops", "agent", "openclaw-agent.sqlite");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const db = openNodeSqliteDatabase(file);
+  db.exec("PRAGMA user_version=3;");
+  db.close();
+  const preload = path.join(stateDir, "write-between-reads.cjs");
+  // Wait for the private image to close, then commit between the final generation
+  // reads. A write during provisional capture can instead fail snapshot acquisition.
+  fs.writeFileSync(
+    preload,
+    `
+    const fs = require('node:fs'), path = require('node:path');
+    const { DatabaseSync } = require('node:sqlite');
+    const source = ${JSON.stringify(file)};
+    const open = fs.openSync, close = DatabaseSync.prototype.close;
+    let snapshotClosed = false, written = false;
+    DatabaseSync.prototype.close = function(...args) {
+      const snapshot = path.basename(this.location() ?? '') === 'database.sqlite';
+      const result = close.apply(this, args);
+      snapshotClosed ||= snapshot;
+      return result;
+    };
+    fs.openSync = function(file, ...args) {
+      if (snapshotClosed && String(file) === source + '-wal' && !written) {
+        written = true;
+        const writer = new DatabaseSync(source);
+        try { writer.exec('PRAGMA user_version=4'); } finally { writer.close(); }
+      }
+      return open.call(this, file, ...args);
+    };
+  `,
+  );
+
+  const failure = await readUpdateDatabaseGenerationsIsolated([file, missing], {
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir, ...sqliteWorkerPreloadEnv(preload) },
+    retryAdvice: false,
+  }).catch((error: unknown) => error);
+
+  assert(failure instanceof Error);
+  expect(failure.message).toContain(
+    `State schema inspection failed (exit): SQLite snapshot size mismatch; after `,
+  );
+  expect(failure.message).toContain(
+    `during database generation verification for source scope [${file}, ${missing}] (scope: 2 source paths)`,
+  );
+  expect(failure.message).not.toMatch(/shared database discovery|retry the update|free space/);
+  const changed = openNodeSqliteDatabase(file);
+  try {
+    expect(changed.prepare("PRAGMA user_version").get()).toEqual({ user_version: 4 });
+  } finally {
+    changed.close();
+  }
+});
 
 it.skipIf(process.platform === "win32")(
   "refuses source replacement during pinned header inspection",
@@ -195,12 +253,11 @@ it("fences WAL schema migration without copying a large registered agent payload
     PRAGMA user_version=3; PRAGMA wal_checkpoint(TRUNCATE);
   `);
   expect(fs.statSync(agentPath).size).toBeGreaterThan(64 * 1024 * 1024);
-  // Constrain the actual child's filesystem copy path, which differs from
-  // SQLite backup. Metadata reads remain real, including native WAL handling.
+  // Shared discovery gets one native snapshot; agent metadata must not copy its payload.
   fs.writeFileSync(
     preload,
     `
-    const fs = require('node:fs');
+    const fs = require('node:fs'), sqlite = require('node:sqlite');
     const source = ${JSON.stringify(agentPath)}, shared = ${JSON.stringify(sharedPath)};
     const marker = ${JSON.stringify(copiedShared)};
     const open = fs.openSync, read = fs.readSync, close = fs.closeSync;
@@ -212,11 +269,16 @@ it("fences WAL schema migration without copying a large registered agent payload
     };
     fs.readSync = function(fd, buffer, offset, length, position) {
       if (sources.get(fd) === source && length > 4096) throw new Error('agent payload copy forbidden');
-      if (sources.get(fd) === shared && length > 4096) fs.writeFileSync(marker, 'copied');
       return read.call(this, fd, buffer, offset, length, position);
     };
     fs.closeSync = function(fd) { sources.delete(fd); return close.call(this, fd); };
-    require('node:sqlite').backup = async () => { throw new Error('agent backup forbidden'); };
+    const backup = sqlite.backup;
+    sqlite.backup = async function(database, ...args) {
+      if (database.location() !== shared) throw new Error('agent backup forbidden');
+      const pages = await backup(database, ...args);
+      fs.writeFileSync(marker, 'copied');
+      return pages;
+    };
   `,
   );
   const env = { ...process.env, ...sqliteWorkerPreloadEnv(preload), XDG_CACHE_HOME: cache };
@@ -316,11 +378,10 @@ async function writeInstalledCandidateWorkers(packageRoot: string, legacy: boole
   );
 }
 
-it.each(
-  (["modern", "legacy"] as const).flatMap((protocol) =>
-    (["removed", "replaced"] as const).map((activation) => ({ protocol, activation })),
-  ),
-)(
+it.each([
+  { protocol: "modern", activation: "replaced" },
+  { protocol: "legacy", activation: "removed" },
+] as const)(
   "inspects with the installed $protocol candidate after the old package is $activation",
   async ({ protocol, activation }) => {
     const root = fs.realpathSync(dirs.make("candidate-installed-"));

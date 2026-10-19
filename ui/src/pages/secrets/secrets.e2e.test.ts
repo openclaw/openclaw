@@ -5,6 +5,7 @@ import { beforeEach, expect, it } from "vitest";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 
@@ -114,22 +115,12 @@ async function tableBodyContrast(page: Page): Promise<number> {
 }
 
 async function activeGatewayIdentity(page: Page) {
-  return await page.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: {
-        context: {
-          gateway: {
-            connection: { gatewayUrl: string };
-            snapshot: { client: { instanceId: string } | null; phase: string };
-          };
-        };
-      };
-    };
-    const gateway = app.runtime?.context.gateway;
+  return await evaluateControlUiContext(page, (context) => {
+    const gateway = context.gateway;
     return {
-      clientInstanceId: gateway?.snapshot.client?.instanceId,
-      gatewayUrl: gateway?.connection.gatewayUrl,
-      phase: gateway?.snapshot.phase,
+      clientInstanceId: gateway.snapshot.client?.instanceId,
+      gatewayUrl: gateway.connection.gatewayUrl,
+      phase: gateway.snapshot.phase,
     };
   });
 }
@@ -281,7 +272,7 @@ suite.define(() => {
 
       const existingSecretRow = page.getByRole("row", { name: /SERVICE_API_KEY/u });
       await existingSecretRow.getByRole("button", { name: "Actions: SERVICE_API_KEY" }).click();
-      await existingSecretRow.locator('wa-dropdown-item[value="edit"]').click();
+      await existingSecretRow.locator('.oc-menu-item[data-value="edit"]').click();
       const editSecretDialog = page.locator('openclaw-modal-dialog[label="Edit"]');
       await editSecretDialog.getByRole("button", { name: "Save", exact: true }).click();
       await editSecretDialog.getByRole("alert").getByText("Enter a value.").waitFor();
@@ -462,7 +453,7 @@ suite.define(() => {
 
         const bulkRow = page.getByRole("row", { name: /BULK_URL/u });
         await bulkRow.getByRole("button", { name: "Actions: BULK_URL" }).click();
-        await bulkRow.locator('wa-dropdown-item[value="delete"]').click();
+        await bulkRow.locator('.oc-menu-item[data-value="delete"]').click();
         const confirm = page.locator('openclaw-modal-dialog[label="Delete"]');
         await confirm.getByRole("button", { name: "Delete", exact: true }).click();
         await page.getByRole("status").getByText("Deleted BULK_URL.").waitFor();
@@ -496,27 +487,16 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/secrets`);
       const entryRow = page.getByRole("row", { name: /SERVICE_URL/u });
       await entryRow.getByRole("button", { name: "Actions: SERVICE_URL" }).click();
-      await entryRow.locator('wa-dropdown-item[value="delete"]').click();
+      await entryRow.locator('.oc-menu-item[data-value="delete"]').click();
       const confirmation = page.locator('openclaw-modal-dialog[label="Delete"]');
       await confirmation.getByText("Delete SERVICE_URL?", { exact: true }).waitFor();
 
       const socketCount = await gateway.getSocketCount();
       const listCount = (await gateway.getRequests("secrets.store.list")).length;
-      const originalGateway = await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            context: {
-              gateway: {
-                connection: { gatewayUrl: string };
-                connect: (options: { token: string }) => void;
-                snapshot: { client: { instanceId: string } | null };
-              };
-            };
-          };
-        };
-        const activeGateway = app.runtime?.context.gateway;
-        const client = activeGateway?.snapshot.client;
-        if (!activeGateway || !client) {
+      const originalGateway = await evaluateControlUiContext(page, (context) => {
+        const activeGateway = context.gateway;
+        const client = activeGateway.snapshot.client;
+        if (!client) {
           throw new Error("Expected a connected Gateway client before confirmation");
         }
         const identity = {
@@ -575,7 +555,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/secrets`);
       const entryRow = page.getByRole("row", { name: /SERVICE_URL/u });
       await entryRow.getByRole("button", { name: "Actions: SERVICE_URL" }).click();
-      await entryRow.locator('wa-dropdown-item[value="delete"]').click();
+      await entryRow.locator('.oc-menu-item[data-value="delete"]').click();
       const confirmation = page.locator('openclaw-modal-dialog[label="Delete"]');
       await confirmation.getByText("Delete SERVICE_URL?", { exact: true }).waitFor();
 

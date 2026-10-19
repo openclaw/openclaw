@@ -1,17 +1,10 @@
-/**
- * Supports prompt construction and observation between session setup and submission.
- * It may assume resolved tools, hook context, and diagnostic inputs are ready.
- */
+import { logDecisionToolPrefilter } from "../../../decisions/diagnostics.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
   type DiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
-import {
-  buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields,
-} from "../../../plugins/hook-agent-context.js";
 import type { PluginHookLlmInputEvent } from "../../../plugins/hook-types.js";
 import type { HookRunner } from "../../../plugins/hooks.js";
 import {
@@ -25,6 +18,7 @@ import type { AgentSession } from "../../sessions/index.js";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
 import type { ToolSearchCatalogEntry, ToolSearchCatalogRef } from "../../tool-search.js";
 import { log } from "../logger.js";
+import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import { summarizeSessionContext } from "./attempt-context-summary.js";
 import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 import type { ResolvedToolPromptFinalizer } from "./params.js";
@@ -61,6 +55,7 @@ export function createPromptBuildToolPolicy<
   });
   let baseline = captureBaseline();
   let toolsAllow: string[] | undefined;
+  let decisionPruned = false;
   const current = {
     activeToolNames: [...baseline.activeToolNames],
     callableToolNames: [...baseline.activeToolNames],
@@ -68,20 +63,43 @@ export function createPromptBuildToolPolicy<
     uncompactedEffectiveTools: params.uncompactedEffectiveTools,
     tools: params.tools,
   };
-  const apply = (nextToolsAllow: string[] | undefined) => {
-    toolsAllow = nextToolsAllow;
-    Object.assign(current, applyPromptBuildToolsAllow({ ...params, baseline, toolsAllow }));
+  const applyCurrent = () => {
+    Object.assign(
+      current,
+      applyPromptBuildToolsAllow({
+        ...params,
+        baseline,
+        toolsAllow: decisionPruned ? [] : toolsAllow,
+      }),
+    );
     params.onApplied?.(current);
     return current;
+  };
+  const apply = (nextToolsAllow: string[] | undefined, pruneForDecision = false) => {
+    const modelFacingToolsBefore = current.effectiveTools.length;
+    toolsAllow = nextToolsAllow;
+    decisionPruned = pruneForDecision;
+    const applied = applyCurrent();
+    if (decisionPruned) {
+      logDecisionToolPrefilter({
+        effect: "applied",
+        modelFacingToolsBefore,
+        modelFacingToolsAfter: applied.effectiveTools.length,
+      });
+    }
+    return applied;
   };
   return {
     current,
     apply,
+    // The session baseline includes client tools and survives prompt-level pruning.
+    // Read its latest permission generation, not the previous turn's restricted surface.
+    hasBaselineTools: () => baseline.activeToolNames.length > 0,
     refresh: () => {
       // A late hook must filter this generation, never restore retained callable
       // entries from the catalog that the permission owner has just revoked.
       baseline = captureBaseline();
-      return apply(toolsAllow);
+      return applyCurrent();
     },
   };
 }
@@ -125,13 +143,7 @@ export function applyPromptBuildToolsAllow<
   catalogRef?: ToolSearchCatalogRef;
   codeModeControlsEnabled: boolean;
   forceToolNames?: readonly string[];
-}): {
-  activeToolNames: string[];
-  callableToolNames: string[];
-  effectiveTools: TEffectiveTool[];
-  uncompactedEffectiveTools: TUncompactedTool[];
-  tools: TTool[];
-} {
+}) {
   const policyInput = {
     toolsAllow: params.toolsAllow,
     forceToolNames: params.forceToolNames,
@@ -142,21 +154,15 @@ export function applyPromptBuildToolsAllow<
     catalogEntries: params.baseline.catalogEntries,
     codeModeControlsEnabled: params.codeModeControlsEnabled,
   }).apply(policyInput);
-  const allowedUncompactedTools = createAgentHarnessPromptToolPolicy({
-    tools: params.uncompactedEffectiveTools,
-    codeModeControlsEnabled: false,
-  }).apply(policyInput).tools;
-  const allowedTools = createAgentHarnessPromptToolPolicy({
-    tools: params.tools,
-    codeModeControlsEnabled: false,
-  }).apply(policyInput).tools;
+  const filterTools = <T extends NamedTool>(tools: T[]) =>
+    createAgentHarnessPromptToolPolicy({ tools, codeModeControlsEnabled: false }).apply(policyInput)
+      .tools;
+  const allowedUncompactedTools = filterTools(params.uncompactedEffectiveTools);
+  const allowedTools = filterTools(params.tools);
   const allowedActiveNames = new Set(
-    createAgentHarnessPromptToolPolicy({
-      tools: params.baseline.activeToolNames.map((name) => ({ name })),
-      codeModeControlsEnabled: false,
-    })
-      .apply(policyInput)
-      .tools.map((tool) => normalizeToolPolicyName(tool.name)),
+    filterTools(params.baseline.activeToolNames.map((name) => ({ name }))).map((tool) =>
+      normalizeToolPolicyName(tool.name),
+    ),
   );
   for (const tool of [...promptPolicy.tools, ...allowedUncompactedTools, ...allowedTools]) {
     allowedActiveNames.add(normalizeToolPolicyName(tool.name));
@@ -202,7 +208,7 @@ type AttemptPromptObservabilityParams = Pick<
 type CacheTrace = Pick<NonNullable<ReturnType<typeof createCacheTrace>>, "recordStage"> | null;
 type PromptHookRunner = Pick<HookRunner, "hasHooks" | "runLlmInput"> | null;
 type TrajectoryRecorder = Pick<
-  NonNullable<ReturnType<typeof createTrajectoryRuntimeRecorder>>,
+  NonNullable<Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>>,
   "recordEvent"
 > | null;
 type TrajectoryTool = Parameters<typeof toTrajectoryToolDefinitions>[0][number];
@@ -221,7 +227,6 @@ export function observeEmbeddedAttemptPrompt(input: {
   isRawModelRun: boolean;
   llmBoundaryPromptForPrecheck: string;
   promptForModel: string;
-  promptSubmissionRuntimeOnly?: boolean;
   reserveTokens: number;
   runTrace: DiagnosticTraceContext;
   sessionMessages: AgentMessage[];
@@ -274,7 +279,6 @@ export function observeEmbeddedAttemptPrompt(input: {
     : resolvePromptSubmissionSkipReason({
         prompt: input.promptForModel,
         messages: input.sessionMessages,
-        runtimeOnly: input.promptSubmissionRuntimeOnly,
         imageCount: input.imageCount,
       });
   if (promptSkipReason) {
@@ -360,22 +364,11 @@ export function observeEmbeddedAttemptPrompt(input: {
           imagesCount: input.imageCount,
           tools: input.tools,
         },
-        {
-          runId: attempt.runId,
-          trace: freezeDiagnosticTraceContext(input.diagnosticTrace),
-          agentId: input.hookAgentId,
-          sessionKey: attempt.sessionKey,
-          sessionId: attempt.sessionId,
-          workspaceDir: attempt.workspaceDir,
-          trigger: attempt.trigger,
-          ...buildAgentHookContextChannelFields(attempt),
-          ...buildAgentHookContextIdentityFields({
-            trigger: attempt.trigger,
-            senderId: attempt.senderId,
-            chatId: attempt.chatId,
-            channelContext: attempt.channelContext,
-          }),
-        },
+        buildEmbeddedAgentHookContext(
+          attempt,
+          input.hookAgentId,
+          freezeDiagnosticTraceContext(input.diagnosticTrace),
+        ),
       )
       .catch((err: unknown) => {
         log.warn(`llm_input hook failed: ${String(err)}`);

@@ -2,8 +2,17 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import {
+  claimAgentRunApprovalAuthority,
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
+import { getCanonicalGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
@@ -19,65 +28,214 @@ import {
 } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./common.js";
 import {
-  getGatewayToolCallerIdentity,
+  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity as getCaller,
+  withGatewayPersonalToolUser,
   withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
   wrapToolWithGatewayCallerIdentity,
 } from "./gateway-caller-context.js";
 
+type CallerIdentity = NonNullable<Parameters<typeof withGatewayToolCallerIdentity>[0]>;
+type Caller = Partial<CallerIdentity>;
+const defaultCaller = { agentId: "main", sessionKey: "agent:main:session" };
+const agentCaller = { agentId: "agent-a", sessionKey: "agent-a:session" };
+
+function withCaller<T>(identity: Caller, run: () => T | Promise<T>) {
+  return withGatewayToolCallerIdentity({ ...defaultCaller, ...identity }, run);
+}
+
+function withCallers<T>(identities: Caller[], run: () => T | Promise<T>): Promise<T> {
+  const [identity, ...nested] = identities;
+  return identity ? withCaller(identity, () => withCallers(nested, run)) : Promise.resolve(run());
+}
+
+const runInstance = (name: string) => ({ instanceId: `${name}-instance`, runId: `${name}-run` });
+const admittedCaller = (name: string, turnSourceChannel: string, admitted = true) => ({
+  agentId: name,
+  sessionKey: `agent:${name}:session`,
+  turnSourceChannel,
+  ...(admitted
+    ? {
+        operationalRunInstance: runInstance(name),
+        executionIdentityToken: createExecutionIdentityAdmissionToken(`${name}-run`),
+      }
+    : {}),
+});
+const denyTool = (denied: string) => (name: string) => {
+  if (name === denied) {
+    throw new Error(`${name} denied`);
+  }
+};
+
+function makeTool(): AnyAgentTool {
+  return {
+    name: "plugin_tool",
+    label: "Plugin tool",
+    description: "plugin tool",
+    parameters: Type.Object({}),
+    execute: vi.fn(async () => ({ content: [], details: {} })),
+  };
+}
+
 describe("gateway caller context wrapper", () => {
-  it("preserves every delegated tool restriction through same-run wrappers", async () => {
-    const identity = { agentId: "main", sessionKey: "agent:main:preview" };
-    await withGatewayToolCallerIdentity(
+  it("keeps prepared caller authority live through personal selection without synchronous source reads", async () => {
+    const refusal = new Error("requesting session authority was revoked");
+    let active = true;
+    const assertSourceCurrent = () => {
+      if (!active) {
+        throw refusal;
+      }
+    };
+    const synchronousSource = vi.fn(assertSourceCurrent);
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "source-profile",
+      scopes: ["operator.write"],
+      assertCurrent: Object.assign(synchronousSource, {
+        prepareSessionSource: async () => ({ assertCurrent: assertSourceCurrent, checks: [] }),
+      }),
+    });
+    await withCaller(
       {
-        ...identity,
-        assertToolAllowed: (name) => {
-          if (name === "exec") {
-            throw new Error("exec denied");
-          }
-        },
+        operationalRunInstance: runInstance("source"),
+        operatorAuthority,
+        receiptAuthority: () => true,
+        cronAuthorityCheck: () => false,
       },
       () =>
-        withGatewayToolCallerIdentity(
-          {
-            ...identity,
-            assertToolAllowed: (name) => {
-              if (name === "process") {
-                throw new Error("process denied");
-              }
-            },
+        withGatewayPersonalToolUser(undefined, async () => {
+          const assertion = expectDefined(captureGatewayToolCallerAssertion(), "captured caller");
+          expect(() => assertion("sessions.abort")).not.toThrow();
+          expect(() => assertion("cron.update")).toThrow(
+            "Automation caller authority is no longer active.",
+          );
+          synchronousSource.mockClear();
+          const prepared = await prepareSessionSourceAuthority(assertion);
+          try {
+            prepared.assertCurrent();
+            expect(synchronousSource).not.toHaveBeenCalled();
+            active = false;
+            expect(() => prepared.assertCurrent()).toThrow(refusal);
+            expect(() => assertion("sessions.abort")).toThrow(refusal);
+            expect(synchronousSource).not.toHaveBeenCalled();
+          } finally {
+            await prepared.release?.();
+          }
+        }),
+    );
+  });
+
+  it.each(["outer", "inner", "unrelated"] as const)(
+    "narrows nested approval scopes: %s",
+    async (narrower) => {
+      const run = { instanceId: `context-${narrower}`, runId: `context-${narrower}` };
+      const root = claimAgentRunDelegatedAuthority(run);
+      const lifetime = new AbortController();
+      const worker = claimAgentRunApprovalAuthority(root, [lifetime.signal]);
+      const outer = narrower === "inner" ? root : worker;
+      const inner =
+        narrower === "unrelated"
+          ? claimAgentRunApprovalAuthority(root, [new AbortController().signal])
+          : narrower === "inner"
+            ? worker
+            : root;
+      const entered = vi.fn(() => {
+        const retained = expectDefined(
+          getCaller()?.approvalAuthority,
+          "retained approval authority",
+        );
+        expect(validateAgentRunDelegatedAuthority(retained)).toBe(true);
+        lifetime.abort();
+        expect(validateAgentRunDelegatedAuthority(retained)).toBe(false);
+        expect(validateAgentRunDelegatedAuthority(root)).toBe(true);
+      });
+      try {
+        const pending = withCaller({ operationalRunInstance: run, approvalAuthority: outer }, () =>
+          withCaller({ operationalRunInstance: run, approvalAuthority: inner }, entered),
+        );
+        if (narrower === "unrelated") {
+          await expect(pending).rejects.toThrow("approval scopes do not retain the same source");
+          expect(entered).not.toHaveBeenCalled();
+        } else {
+          await pending;
+          expect(entered).toHaveBeenCalledOnce();
+        }
+      } finally {
+        releaseAgentRunDelegatedAuthority(root);
+      }
+    },
+  );
+
+  it("preserves every delegated tool restriction through same-run wrappers", async () => {
+    await withCallers(
+      [
+        {
+          sessionEventToolsAllow: ["read", "process"],
+          sessionEventSettings: {
+            permissionMode: "workspace",
+            toolOverrides: { webSearch: false },
           },
-          () =>
-            withGatewayToolCallerIdentity(identity, () => {
-              const caller = getGatewayToolCallerIdentity();
-              expect(() => caller?.assertToolAllowed?.("exec")).toThrow("exec denied");
-              expect(() => caller?.assertToolAllowed?.("process")).toThrow("process denied");
-              expect(() => caller?.assertToolAllowed?.("read")).not.toThrow();
-            }),
-        ),
+          assertToolAllowed: denyTool("exec"),
+        },
+        {
+          sessionEventToolsAllow: ["read", "exec"],
+          sessionEventSettings: {
+            permissionMode: "full",
+            toolOverrides: { mcpServers: { fixture: false } },
+          },
+          assertToolAllowed: denyTool("process"),
+        },
+        {},
+      ],
+      () => {
+        const caller = getCaller();
+        expect(caller?.sessionEventToolsAllow).toEqual(["read"]);
+        expect(caller?.sessionEventSettings).toEqual({
+          permissionMode: "workspace",
+          toolOverrides: { webSearch: false, mcpServers: { fixture: false } },
+        });
+        expect(() => caller?.assertToolAllowed?.("exec")).toThrow("exec denied");
+        expect(() => caller?.assertToolAllowed?.("process")).toThrow("process denied");
+        expect(() => caller?.assertToolAllowed?.("read")).not.toThrow();
+      },
+    );
+  });
+
+  it.each(["full", "guarded"] as const)(
+    "retains default permissions through %s wrappers",
+    async (permissionMode) => {
+      const execute = vi.fn(() => getCaller()?.sessionEventSettings);
+      const wrapped = withCallers(
+        [{ sessionEventSettings: {} }, { sessionEventSettings: { permissionMode } }, {}],
+        execute,
+      );
+      if (permissionMode === "guarded") {
+        await expect(wrapped).rejects.toThrow("changed between default and explicit permissions");
+        expect(execute).not.toHaveBeenCalled();
+      } else {
+        await expect(wrapped).resolves.toEqual({ permissionMode: undefined });
+        expect(execute).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it.each(["outer", "inner"] as const)("retains %s delivery restrictions", async (restricted) => {
+    await withCallers(
+      ["outer", "inner", "wrapper"].map((scope) =>
+        scope === restricted ? { sessionEventDelivery: false } : {},
+      ),
+      () => expect(getCaller()?.sessionEventDelivery).toBe(false),
     );
   });
 
   it("preserves tool metadata used by policy and presentation layers", () => {
-    const tool: AnyAgentTool = {
-      name: "plugin_tool",
-      label: "Plugin tool",
-      description: "plugin tool",
-      parameters: Type.Object({}),
-      execute: vi.fn(async () => ({
-        content: [{ type: "text" as const, text: "ok" }],
-        details: {},
-      })),
-    };
+    const tool = makeTool();
     setPluginToolMeta(tool, { pluginId: "plugin-a", optional: false });
     setChannelAgentToolMeta(tool as never, { channelId: "telegram" });
     setToolTerminalPresentation(tool, () => ({ text: "done" }));
 
     const beforeWrapped = wrapToolWithBeforeToolCallHook(tool);
-    const wrapped = wrapToolWithGatewayCallerIdentity(beforeWrapped, {
-      agentId: "agent-a",
-      sessionKey: "agent-a:session",
-    });
+    const wrapped = wrapToolWithGatewayCallerIdentity(beforeWrapped, agentCaller);
 
     expect(getPluginToolMeta(wrapped)).toEqual({ pluginId: "plugin-a", optional: false });
     expect(getChannelAgentToolMeta(wrapped as never)).toEqual({ channelId: "telegram" });
@@ -85,31 +243,34 @@ describe("gateway caller context wrapper", () => {
     expect(isToolWrappedWithBeforeToolCallHook(wrapped)).toBe(true);
   });
 
+  it("retains the source receiver while executing in the admitted caller context", async () => {
+    const tool = makeTool();
+    tool.execute = async function () {
+      expect(this).toBe(tool);
+      expect(getCaller()).toEqual(agentCaller);
+      return { content: [], details: {} };
+    };
+
+    const wrapped = wrapToolWithGatewayCallerIdentity(tool, agentCaller);
+    await wrapped.execute("caller-context", {});
+    expect(getCaller()).toBeUndefined();
+  });
+
   it("applies caller identity to private preparation and execution", async () => {
     const seen: unknown[] = [];
-    const tool = attachInternalToolExecutionPreparer(
-      {
-        name: "plugin_tool",
-        label: "Plugin tool",
-        description: "plugin tool",
-        parameters: Type.Object({}),
-        execute: vi.fn(async () => ({ content: [], details: {} })),
-      },
-      async () => {
-        seen.push(getGatewayToolCallerIdentity());
-        return {
-          kind: "ready",
-          args: {},
-          execute: async () => {
-            seen.push(getGatewayToolCallerIdentity());
-            return { content: [], details: {} };
-          },
-          dispose: vi.fn(),
-        };
-      },
-    );
-    const identity = { agentId: "agent-a", sessionKey: "agent-a:session" };
-    const wrapped = wrapToolWithGatewayCallerIdentity(tool as never, identity);
+    const tool = attachInternalToolExecutionPreparer(makeTool(), async () => {
+      seen.push(getCaller());
+      return {
+        kind: "ready",
+        args: {},
+        execute: async () => {
+          seen.push(getCaller());
+          return { content: [], details: {} };
+        },
+        dispose: vi.fn(),
+      };
+    });
+    const wrapped = wrapToolWithGatewayCallerIdentity(tool, agentCaller);
     const preparer = expectDefined(
       getInternalToolExecutionPreparer(wrapped),
       "gateway-adapted preparer",
@@ -121,89 +282,73 @@ describe("gateway caller context wrapper", () => {
       await prepared.execute();
     }
 
-    expect(seen).toEqual([identity, identity]);
+    expect(seen).toEqual([agentCaller, agentCaller]);
   });
 
   it("pins caller identity to the Gateway present at admission", async () => {
     const admitted = {} as GatewayRequestContext;
     const replacement = {} as GatewayRequestContext;
+    admitted.resolveGatewayContext = () => admitted;
+    replacement.resolveGatewayContext = () => replacement;
     let current = admitted;
+    const selectGateway = vi.fn(() => current);
+    const captureResolver = () =>
+      expectDefined(getCaller()?.gatewayContextResolver, "admitted caller Gateway");
 
-    await withGatewayToolCallerIdentity(
-      {
-        agentId: "agent-a",
-        sessionKey: "agent-a:session",
-        gatewayContextResolver: () => current,
-      },
-      () => {
-        const resolveGatewayContext = getGatewayToolCallerIdentity()?.gatewayContextResolver;
-        expect(resolveGatewayContext?.()).toBe(admitted);
-        current = replacement;
-        expect(resolveGatewayContext?.()).toBeUndefined();
-      },
-    );
+    const first = await withCaller({ gatewayContextResolver: selectGateway }, () => {
+      const resolveGatewayContext = captureResolver();
+      expect(resolveGatewayContext()).toBe(admitted);
+      current = replacement;
+      expect(resolveGatewayContext()).toBeUndefined();
+      return resolveGatewayContext;
+    });
+    const second = await withCaller({ gatewayContextResolver: selectGateway }, captureResolver);
+    const callsBeforeLookup = selectGateway.mock.calls.length;
+    expect(getCanonicalGatewayContextResolver(first)).toBe(admitted.resolveGatewayContext);
+    expect(getCanonicalGatewayContextResolver(second)).toBe(replacement.resolveGatewayContext);
+    expect(selectGateway).toHaveBeenCalledTimes(callsBeforeLookup);
+    expect(first()).toBeUndefined();
+    expect(second()).toBe(replacement);
   });
 
   it("scopes nested approval ownership without replacing the native runtime owner", async () => {
-    let nestedOwner: string | undefined;
-    let restoredOwner: string | undefined;
-
-    await withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:session-1",
-        operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
-        approvalOwnerPluginId: "codex",
-      },
+    await withCaller(
+      { operationalRunInstance: runInstance("owner"), approvalOwnerPluginId: "codex" },
       async () => {
         await withGatewayToolApprovalOwner("policy-plugin", async () => {
-          nestedOwner = getGatewayToolCallerIdentity()?.approvalOwnerPluginId;
+          expect(getCaller()?.approvalOwnerPluginId).toBe("policy-plugin");
         });
-        restoredOwner = getGatewayToolCallerIdentity()?.approvalOwnerPluginId;
+        expect(getCaller()?.approvalOwnerPluginId).toBe("codex");
       },
     );
-
-    expect(nestedOwner).toBe("policy-plugin");
-    expect(restoredOwner).toBe("codex");
   });
 
-  it("preserves admitted host authority through nested built-in tool wrappers", async () => {
-    const operationalRunInstance = { instanceId: "instance-1", runId: "run-1" };
-    const executionIdentityToken = createExecutionIdentityAdmissionToken("run-1");
-    let nestedIdentity: ReturnType<typeof getGatewayToolCallerIdentity>;
-
-    await withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:session-1",
-        operationalRunInstance,
-        executionIdentityToken,
-        turnSourceChannel: "telegram",
-      },
-      async () => {
-        await withGatewayToolCallerIdentity(
+  it.each(["wrapper", "admitted run"] as const)(
+    "selects the authority root for a nested %s",
+    async (kind) => {
+      const distinct = kind === "admitted run";
+      const outer = admittedCaller("outer", "telegram");
+      const child = admittedCaller("child", "discord", distinct);
+      const identity = await withCallers(
+        [
           {
-            agentId: "nested",
-            sessionKey: "agent:nested:session-2",
-            cronSelfManagementJobId: "job-1",
-            turnSourceChannel: "discord",
+            ...outer,
+            ...(distinct ? { fullPermission: true, cronSelfManagementJobId: "outer-job" } : {}),
           },
-          () => {
-            nestedIdentity = getGatewayToolCallerIdentity();
+          {
+            ...child,
+            ...(!distinct ? { cronSelfManagementJobId: "job-1" } : {}),
           },
-        );
-      },
-    );
-
-    expect(nestedIdentity).toMatchObject({
-      agentId: "main",
-      sessionKey: "agent:main:session-1",
-      operationalRunInstance,
-      executionIdentityToken,
-      cronSelfManagementJobId: "job-1",
-      turnSourceChannel: "telegram",
-    });
-  });
+        ],
+        getCaller,
+      );
+      expect(identity).toMatchObject(
+        distinct
+          ? { ...child, cronSelfManagementJobId: undefined, fullPermission: undefined }
+          : { ...outer, cronSelfManagementJobId: "job-1" },
+      );
+    },
+  );
 
   it.each([
     [undefined, true, true],
@@ -211,142 +356,43 @@ describe("gateway caller context wrapper", () => {
     [true, false, false],
     [false, true, false],
   ])("narrows same-run Full Access from %s and %s to %s", async (outer, inner, expected) => {
-    await withGatewayToolCallerIdentity(
-      { agentId: "main", sessionKey: "agent:main:session", fullPermission: outer },
-      () =>
-        withGatewayToolCallerIdentity(
-          { agentId: "main", sessionKey: "agent:main:session", fullPermission: inner },
-          () => expect(getGatewayToolCallerIdentity()?.fullPermission).toBe(expected),
-        ),
+    await withCallers(
+      [outer, inner].map((fullPermission) => ({ fullPermission })),
+      () => expect(getCaller()?.fullPermission).toBe(expected),
     );
   });
 
-  it("starts a new authority root for a nested admitted run", async () => {
-    const outerRun = { instanceId: "outer-instance", runId: "outer-run" };
-    const childRun = { instanceId: "child-instance", runId: "child-run" };
-    const childToken = createExecutionIdentityAdmissionToken("child-run");
-    let nestedIdentity: ReturnType<typeof getGatewayToolCallerIdentity>;
-
-    await withGatewayToolCallerIdentity(
-      {
-        agentId: "outer",
-        sessionKey: "agent:outer:session",
-        operationalRunInstance: outerRun,
-        fullPermission: true,
-        executionIdentityToken: createExecutionIdentityAdmissionToken("outer-run"),
-        cronSelfManagementJobId: "outer-job",
-        turnSourceChannel: "telegram",
-      },
-      async () => {
-        await withGatewayToolCallerIdentity(
-          {
-            agentId: "child",
-            sessionKey: "agent:child:session",
-            operationalRunInstance: childRun,
-            executionIdentityToken: childToken,
-            turnSourceChannel: "discord",
-          },
-          () => {
-            nestedIdentity = getGatewayToolCallerIdentity();
-          },
-        );
-      },
-    );
-
-    expect(nestedIdentity).toMatchObject({
-      agentId: "child",
-      sessionKey: "agent:child:session",
-      operationalRunInstance: childRun,
-      executionIdentityToken: childToken,
-      turnSourceChannel: "discord",
-    });
-    expect(nestedIdentity?.cronSelfManagementJobId).toBeUndefined();
-    expect(nestedIdentity?.fullPermission).toBeUndefined();
-  });
-
-  it("composes same-run receipt authority without dropping either closure", async () => {
-    const operationalRunInstance = { instanceId: "instance-1", runId: "run-1" };
-    let outerActive = true;
+  it.each(["same", "distinct"] as const)("retains %s run receipts and signals", async (kind) => {
+    const sameRun = kind === "same";
+    const run = runInstance("outer");
+    let outerActive = sameRun;
     let innerActive = true;
     const outer = vi.fn(() => outerActive);
     const inner = vi.fn(() => innerActive);
-    let receiptAuthority: (() => boolean | void) | undefined;
-    const outerSignal = new AbortController();
-    const innerSignal = new AbortController();
-    let approvalSignals: readonly AbortSignal[] | undefined;
-
-    await withGatewayToolCallerIdentity(
-      {
-        agentId: "outer",
-        sessionKey: "agent:outer:session",
-        operationalRunInstance,
-        receiptAuthority: outer,
-        approvalSignals: [outerSignal.signal],
-      },
-      async () => {
-        await withGatewayToolCallerIdentity(
-          {
-            agentId: "inner",
-            sessionKey: "agent:inner:session",
-            operationalRunInstance,
-            receiptAuthority: inner,
-            approvalSignals: [innerSignal.signal],
-          },
-          () => {
-            receiptAuthority = getGatewayToolCallerIdentity()?.receiptAuthority;
-            approvalSignals = getGatewayToolCallerIdentity()?.approvalSignals;
-          },
-        );
-      },
+    const outerSignal = sameRun ? new AbortController().signal : AbortSignal.abort();
+    const innerSignal = new AbortController().signal;
+    const identity = await withCallers(
+      [outer, inner].map((receiptAuthority, index) => ({
+        operationalRunInstance: index === 0 || sameRun ? run : runInstance("child"),
+        receiptAuthority,
+        approvalSignals: [index === 0 ? outerSignal : innerSignal],
+      })),
+      getCaller,
     );
-
-    expect(receiptAuthority?.()).toBe(true);
-    outerActive = false;
-    expect(receiptAuthority?.()).toBe(false);
-    outerActive = true;
-    innerActive = false;
-    expect(receiptAuthority?.()).toBe(false);
-    expect(outer).toHaveBeenCalledTimes(3);
-    expect(inner).toHaveBeenCalledTimes(3);
-    expect(approvalSignals).toEqual([outerSignal.signal, innerSignal.signal]);
-  });
-
-  it("starts distinct admitted runs with a new receipt-authority root", async () => {
-    const outer = vi.fn(() => false);
-    const child = vi.fn(() => true);
-    let receiptAuthority: (() => boolean | void) | undefined;
-    const outerSignal = AbortSignal.abort();
-    const childSignal = new AbortController().signal;
-    let approvalSignals: readonly AbortSignal[] | undefined;
-
-    await withGatewayToolCallerIdentity(
-      {
-        agentId: "outer",
-        sessionKey: "agent:outer:session",
-        operationalRunInstance: { instanceId: "outer-instance", runId: "outer-run" },
-        receiptAuthority: outer,
-        approvalSignals: [outerSignal],
-      },
-      async () => {
-        await withGatewayToolCallerIdentity(
-          {
-            agentId: "child",
-            sessionKey: "agent:child:session",
-            operationalRunInstance: { instanceId: "child-instance", runId: "child-run" },
-            receiptAuthority: child,
-            approvalSignals: [childSignal],
-          },
-          () => {
-            receiptAuthority = getGatewayToolCallerIdentity()?.receiptAuthority;
-            approvalSignals = getGatewayToolCallerIdentity()?.approvalSignals;
-          },
-        );
-      },
-    );
-
-    expect(receiptAuthority?.()).toBe(true);
-    expect(child).toHaveBeenCalledOnce();
-    expect(outer).not.toHaveBeenCalled();
-    expect(approvalSignals).toEqual([childSignal]);
+    expect(identity?.receiptAuthority?.()).toBe(true);
+    if (sameRun) {
+      outerActive = false;
+      expect(identity?.receiptAuthority?.()).toBe(false);
+      outerActive = true;
+      innerActive = false;
+      expect(identity?.receiptAuthority?.()).toBe(false);
+      expect(outer).toHaveBeenCalledTimes(3);
+      expect(inner).toHaveBeenCalledTimes(3);
+      expect(identity?.approvalSignals).toEqual([outerSignal, innerSignal]);
+    } else {
+      expect(inner).toHaveBeenCalledOnce();
+      expect(outer).not.toHaveBeenCalled();
+      expect(identity?.approvalSignals).toEqual([innerSignal]);
+    }
   });
 });

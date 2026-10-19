@@ -8,11 +8,30 @@ import {
   stubScreenshotMedia,
   TestBrowserPanelHost,
 } from "./browser-panel-controller-test-support.ts";
-import { BrowserPanelController } from "./browser-panel-controller.ts";
 
 setupBrowserPanelTestCleanup();
 
 describe("Browser dashboard panel target ownership", () => {
+  it("does not download a document through a session-scoped dashboard", async () => {
+    const { client, request } = createBrowserClient(async () => {
+      throw new Error("Scoped dashboards cannot download documents");
+    });
+    const host = Object.assign(new TestBrowserPanelHost(client), {
+      dashboardTarget: {
+        sessionKey: "agent:main:dashboard",
+        name: "preview",
+        instanceId: "instance",
+        sessionScoped: true,
+      },
+    });
+    const controller = host.createPanel();
+    controller.activeTargetId = "kept-tab";
+    controller.view = createView("kept-tab");
+    expect(controller.download.available).toBe(false);
+    await controller.download.save();
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("clears a missing dashboard target without showing another tab", async () => {
     const { client, request } = createBrowserClient(async () => ({
       running: true,
@@ -26,7 +45,7 @@ describe("Browser dashboard panel target ownership", () => {
         instanceId: "instance",
       },
     });
-    const controller = new BrowserPanelController(host);
+    const controller = host.createPanel();
     controller.activeTargetId = "kept-tab";
     controller.view = createView("kept-tab");
 
@@ -47,7 +66,7 @@ describe("Browser dashboard panel target ownership", () => {
     const host = Object.assign(new TestBrowserPanelHost(client), {
       fixedTab: { target: "host" as const, profile: "openclaw", targetId: "kept-tab" },
     });
-    const controller = new BrowserPanelController(host);
+    const controller = host.createPanel();
     controller.activeTargetId = "kept-tab";
     controller.view = createView("kept-tab");
 
@@ -87,7 +106,7 @@ describe("Browser dashboard panel target ownership", () => {
         instanceId: "instance",
       },
     });
-    const controller = new BrowserPanelController(host);
+    const controller = host.createPanel();
     controller.activeTargetId = targetId;
     await controller.refreshAll();
     expect(controller.errorText).toBeNull();

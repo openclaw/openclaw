@@ -71,7 +71,7 @@ export function createFeishuCardInteractionEnvelope(
   };
 }
 
-export function buildFeishuCardActionTextFallback(event: FeishuCardActionEventLike): string {
+function buildFeishuCardActionTextFallback(event: FeishuCardActionEventLike): string {
   const actionValue = event.action.value;
   if (isRecord(actionValue)) {
     if (typeof actionValue.text === "string") {
@@ -106,28 +106,22 @@ export function decodeFeishuCardAction(params: {
     return { kind: "invalid", reason: "malformed" };
   }
 
-  if (actionValue.m !== undefined) {
-    if (!isRecord(actionValue.m)) {
-      return { kind: "invalid", reason: "malformed" };
-    }
-    for (const value of Object.values(actionValue.m)) {
-      if (!isMetadataValue(value)) {
-        return { kind: "invalid", reason: "malformed" };
-      }
-    }
+  if (
+    actionValue.m !== undefined &&
+    (!isRecord(actionValue.m) || !Object.values(actionValue.m).every(isMetadataValue))
+  ) {
+    return { kind: "invalid", reason: "malformed" };
   }
 
   if (actionValue.c !== undefined) {
     if (!isRecord(actionValue.c)) {
       return { kind: "invalid", reason: "malformed" };
     }
-    if (actionValue.c.u !== undefined && typeof actionValue.c.u !== "string") {
-      return { kind: "invalid", reason: "malformed" };
-    }
-    if (actionValue.c.h !== undefined && typeof actionValue.c.h !== "string") {
-      return { kind: "invalid", reason: "malformed" };
-    }
-    if (actionValue.c.s !== undefined && typeof actionValue.c.s !== "string") {
+    if (
+      (actionValue.c.u !== undefined && typeof actionValue.c.u !== "string") ||
+      (actionValue.c.h !== undefined && typeof actionValue.c.h !== "string") ||
+      (actionValue.c.s !== undefined && typeof actionValue.c.s !== "string")
+    ) {
       return { kind: "invalid", reason: "malformed" };
     }
     if (actionValue.c.e !== undefined && !Number.isFinite(actionValue.c.e)) {

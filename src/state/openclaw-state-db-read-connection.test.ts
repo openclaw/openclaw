@@ -8,8 +8,8 @@ const mocks = vi.hoisted(() => {
     releaseToken,
     acquireToken: vi.fn(() => releaseToken),
     identity: vi.fn<(location: string, expected: string) => void>(),
-    openTracked: vi.fn(() => db),
-    openPrivate: vi.fn(() => db),
+    openTracked: vi.fn<() => typeof db>(),
+    openPrivate: vi.fn<() => typeof db>(),
     closeHandle: vi.fn<(owner: { db: typeof db; afterClose: () => void }) => unknown[]>(),
     schema: vi.fn<() => void>(),
     policy: vi.fn(() => false),
@@ -19,16 +19,33 @@ const mocks = vi.hoisted(() => {
 vi.mock("../infra/sqlite-snapshot-staging.js", () => ({
   acquireSqliteSnapshotReadToken: mocks.acquireToken,
 }));
-vi.mock("../infra/sqlite-worker-identity.js", () => ({
+vi.mock("../infra/sqlite-worker-identity.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/sqlite-worker-identity.js")>(
+    "../infra/sqlite-worker-identity.js",
+  )),
   assertExistingDatabaseIdentity: mocks.identity,
 }));
 vi.mock("../infra/node-sqlite.js", () => ({
   openNodeSqliteDatabase: mocks.openPrivate,
 }));
+vi.mock("../infra/bun-sqlite-library.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/bun-sqlite-library.js")>()),
+  // The fake handles close synchronously, independently of the host runtime.
+  getSqliteRuntimeCapabilities: () => ({
+    explicitSqliteCloseReleasesNativeResources: true,
+    decided: true,
+    reason: "synchronous fixture close",
+  }),
+}));
+vi.mock("../infra/sqlite-schema-facts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/sqlite-schema-facts.js")>()),
+  admitSqliteSchema: vi.fn(),
+}));
 vi.mock("./openclaw-state-db-handle.js", () => ({
   openTrackedStateDatabaseResult: () => ({ status: "available", database: mocks.openTracked() }),
 }));
-vi.mock("./openclaw-state-db-schema-version.js", () => ({
+vi.mock("./openclaw-state-db-schema-version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-state-db-schema-version.js")>()),
   assertSupportedStateSchemaVersion: mocks.schema,
 }));
 vi.mock("./openclaw-state-db-schema-policy.js", () => ({
@@ -39,24 +56,47 @@ vi.mock("./openclaw-state-db-cache.js", () => ({
 }));
 
 import {
-  openOpenClawStateReadConnection,
-  readOpenClawStateReadOnlyLocation,
-  withOpenClawStateReadOnlyLocation,
+  openOpenClawStateReadConnection as openConnection,
+  readOpenClawStateReadOnlyLocation as readLocation,
+  withOpenClawStateReadOnlyLocation as withLocation,
 } from "./openclaw-state-db-read-connection.js";
 
 const pathname = "/fixture/state.sqlite";
 const expectedIdentity = "file:1:2";
+const cleanupMessage = "Shared-state snapshot cleanup is incomplete.";
+const value = () => "value";
+const failWith = (error: Error) => () => {
+  throw error;
+};
+
+function caught(run: () => unknown) {
+  try {
+    run();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("Expected an exception");
+}
+
+function readPrivate(prepared: ReturnType<typeof snapshot>, identity?: string) {
+  return readLocation(value, pathname, prepared, undefined, identity, "/fixture");
+}
+
+function expectAggregate(error: unknown, primary: Error, cleanup: unknown) {
+  expect(error).toBeInstanceOf(AggregateError);
+  expect(error).toMatchObject({ cause: primary, errors: [primary, cleanup] });
+}
 
 beforeEach(() => {
-  mocks.identity.mockReset();
-  mocks.schema.mockReset();
-  mocks.policy.mockReset().mockReturnValue(false);
+  for (const mock of [mocks.identity, mocks.schema, mocks.policy, mocks.releaseToken]) {
+    mock.mockReset();
+  }
+  mocks.policy.mockReturnValue(false);
   mocks.acquireToken.mockClear();
-  mocks.releaseToken.mockReset();
-  mocks.openTracked.mockClear();
-  mocks.openPrivate.mockClear();
-  mocks.db.isOpen = true;
-  mocks.db.close.mockReset().mockImplementation(() => {
+  mocks.db = { isOpen: true, close: vi.fn<() => void>() };
+  mocks.openTracked.mockReset().mockImplementation(() => mocks.db);
+  mocks.openPrivate.mockReset().mockImplementation(() => mocks.db);
+  mocks.db.close.mockImplementation(() => {
     mocks.db.isOpen = false;
   });
   mocks.closeHandle.mockReset().mockImplementation((owner) => {
@@ -70,274 +110,161 @@ beforeEach(() => {
   });
 });
 
-it.each(["schema", "query"])("certifies a %s failure only after native cleanup", (phase) => {
+it.each([
+  "schema",
+  "query",
+  "policy",
+  "handle policy",
+  "admission",
+  "admission cleanup",
+  "native cleanup",
+])("settles a %s failure only after releasing native custody", (phase) => {
   const failure = new Error(`${phase} failed`);
-  const read = () => {
-    if (phase === "query") {
-      throw failure;
-    }
-    return "value";
+  const fail = failWith(failure);
+  const configure: Partial<Record<typeof phase, () => unknown>> = {
+    schema: () => mocks.schema.mockImplementation(fail),
+    policy: () => mocks.policy.mockImplementation(fail),
+    "handle policy": () => mocks.policy.mockReturnValueOnce(false).mockImplementationOnce(fail),
+    "native cleanup": () => mocks.db.close.mockImplementation(fail),
   };
-  if (phase === "schema") {
-    mocks.schema.mockImplementation(() => {
-      throw failure;
-    });
+  configure[phase]?.();
+  const read = phase === "query" ? fail : value;
+  const admission =
+    phase === "admission" ? fail : phase === "admission cleanup" ? () => fail : undefined;
+  const run = () => readLocation(read, pathname, pathname, admission);
+  const unavailable = phase === "schema" || phase === "query";
+  if (unavailable) {
+    expect(run()).toEqual({ status: "unavailable", error: failure });
+  } else {
+    expect(run).toThrow(failure);
   }
-  expect(readOpenClawStateReadOnlyLocation(read, pathname, pathname)).toEqual({
-    status: "unavailable",
-    error: failure,
-  });
-  expect(mocks.db.isOpen).toBe(false);
-  expect(mocks.closeHandle).toHaveBeenCalledOnce();
-  mocks.db.isOpen = true;
-  expect(() => withOpenClawStateReadOnlyLocation(read, pathname, pathname)).toThrow(failure);
+  expect(mocks.closeHandle).toHaveBeenCalledTimes(phase === "policy" ? 0 : 1);
+  if (phase === "policy") {
+    expect(mocks.openTracked).not.toHaveBeenCalled();
+  } else {
+    expect(mocks.db.isOpen).toBe(phase === "native cleanup");
+  }
+  if (unavailable) {
+    mocks.db.isOpen = true;
+    expect(() => withLocation(read, pathname, pathname)).toThrow(failure);
+  }
 });
 
-it.each(["policy", "handle policy", "admission", "admission cleanup", "native cleanup"])(
-  "preserves a sole %s failure instead of certifying ordinary unavailability",
-  (phase) => {
-    const failure = new Error(`${phase} failed`);
-    const fail = () => {
-      throw failure;
-    };
-    if (phase === "policy") {
-      mocks.policy.mockImplementation(fail);
-    }
-    if (phase === "handle policy") {
-      mocks.policy.mockReturnValueOnce(false).mockImplementationOnce(fail);
-    }
-    if (phase === "native cleanup") {
-      mocks.db.close.mockImplementation(fail);
-    }
-    const admission =
-      phase === "admission" ? fail : phase === "admission cleanup" ? () => fail : undefined;
-    expect(() =>
-      readOpenClawStateReadOnlyLocation(() => "value", pathname, pathname, admission),
-    ).toThrow(failure);
-    if (phase === "policy") {
-      expect(mocks.openTracked).not.toHaveBeenCalled();
-      expect(mocks.closeHandle).not.toHaveBeenCalled();
-    } else {
-      expect(mocks.closeHandle).toHaveBeenCalledOnce();
-      expect(mocks.db.isOpen).toBe(phase === "native cleanup");
-    }
-  },
-);
+function snapshot(cleaned = true) {
+  return {
+    location: "/fixture/private.sqlite",
+    cleanup: vi.fn(() => cleaned),
+    cleanupAsync: async () => true,
+  };
+}
 
-it("does not turn a failed read into availability while snapshot cleanup needs retry", () => {
+it.each([false, true])("rejects incomplete snapshot cleanup (query failed: %s)", (queryFailed) => {
   const failure = new Error("query failed");
-  const snapshot = {
-    location: "/fixture/private.sqlite",
-    cleanup: vi.fn(() => false),
-    cleanupAsync: async () => true,
-  };
-  let caught: unknown;
-  try {
-    readOpenClawStateReadOnlyLocation(
-      () => {
-        throw failure;
-      },
-      pathname,
-      snapshot,
-    );
-  } catch (error) {
-    caught = error;
-  }
-  expect(caught).toMatchObject({
-    cause: failure,
-    errors: [
+  const prepared = snapshot(false);
+  const read = queryFailed ? failWith(failure) : value;
+  if (queryFailed) {
+    expectAggregate(
+      caught(() => readLocation(read, pathname, prepared)),
       failure,
-      expect.objectContaining({ message: "Shared-state snapshot cleanup is incomplete." }),
-    ],
-  });
+      expect.objectContaining({ message: cleanupMessage }),
+    );
+  } else {
+    expect(() => withLocation(read, pathname, prepared)).toThrow(cleanupMessage);
+  }
   expect(mocks.db.isOpen).toBe(false);
-  expect(snapshot.cleanup).toHaveBeenCalledOnce();
+  expect(prepared.cleanup).toHaveBeenCalledOnce();
 });
 
-it("rejects incomplete snapshot cleanup after a successful read", () => {
-  const snapshot = {
-    location: "/fixture/private.sqlite",
-    cleanup: () => false,
-    cleanupAsync: async () => true,
-  };
-  expect(() => withOpenClawStateReadOnlyLocation(() => "read", pathname, snapshot)).toThrow(
-    "Shared-state snapshot cleanup is incomplete.",
+it.each([
+  "private policy",
+  "private identity",
+  "private token",
+  "native pre-open identity",
+  "native post-open identity",
+  "native identity and close",
+])("releases only acquired resources after %s refusal", (phase) => {
+  const primary = new Error("reader admission refused");
+  const cleanup = new Error("native reader close failed");
+  const fail = failWith(primary);
+  const privateSource = phase.startsWith("private");
+  const afterOpen = phase === "native post-open identity" || phase === "native identity and close";
+  const closeFailed = phase === "native identity and close";
+  const nativeClose = mocks.db.close;
+  if (phase === "private policy") {
+    mocks.policy.mockImplementation(fail);
+  } else if (phase === "private token") {
+    mocks.acquireToken.mockImplementationOnce(fail);
+  } else if (afterOpen) {
+    mocks.identity.mockImplementationOnce(() => {}).mockImplementationOnce(fail);
+  } else {
+    mocks.identity.mockImplementation(fail);
+  }
+  if (closeFailed) {
+    mocks.db.close.mockImplementation(failWith(cleanup));
+  }
+  const prepared = snapshot();
+  const failure = caught(() =>
+    privateSource
+      ? readPrivate(prepared, expectedIdentity)
+      : openConnection(pathname, pathname, expectedIdentity),
   );
+  if (closeFailed) {
+    expectAggregate(failure, primary, cleanup);
+  } else {
+    expect(failure).toBe(primary);
+  }
+  expect(mocks.openPrivate).not.toHaveBeenCalled();
+  expect(mocks.openTracked).toHaveBeenCalledTimes(afterOpen ? 1 : 0);
+  expect(mocks.closeHandle).toHaveBeenCalledTimes(afterOpen ? 1 : 0);
+  if (privateSource) {
+    expect(prepared.cleanup).toHaveBeenCalledOnce();
+  } else {
+    expect(mocks.identity).toHaveBeenCalledWith(pathname, expectedIdentity);
+  }
+  if (afterOpen) {
+    expect(mocks.closeHandle).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ db: mocks.db, path: pathname }),
+    );
+    expect(nativeClose).toHaveBeenCalledOnce();
+    expect(mocks.db.isOpen).toBe(closeFailed);
+  }
 });
 
-it.each(["policy", "identity", "token"])(
-  "cleans prepared source bytes after a pre-open %s refusal",
-  (phase) => {
-    const failure = new Error(`${phase} refused`);
-    const fail = () => {
-      throw failure;
-    };
-    if (phase === "policy") {
-      mocks.policy.mockImplementation(fail);
+it.each(["clean", "token failure", "incomplete snapshot"])(
+  "preserves private open failure with %s cleanup",
+  (cleanupKind) => {
+    const primary = new Error("private native database open failed");
+    const tokenFailure = new Error("private reader token close failed");
+    mocks.openPrivate.mockImplementationOnce(failWith(primary));
+    if (cleanupKind === "token failure") {
+      mocks.releaseToken.mockImplementationOnce(failWith(tokenFailure));
     }
-    if (phase === "identity") {
-      mocks.identity.mockImplementation(fail);
+    const prepared = snapshot(cleanupKind !== "incomplete snapshot");
+    if (cleanupKind === "clean") {
+      expect(readPrivate(prepared)).toEqual({ status: "unavailable", error: primary });
+    } else {
+      const failure = caught(() =>
+        openConnection(
+          pathname,
+          prepared,
+          undefined,
+          cleanupKind === "token failure" ? "/fixture" : undefined,
+        ),
+      );
+      expectAggregate(
+        failure,
+        primary,
+        cleanupKind === "token failure"
+          ? tokenFailure
+          : expect.objectContaining({ message: cleanupMessage }),
+      );
     }
-    if (phase === "token") {
-      mocks.acquireToken.mockImplementationOnce(fail);
+    if (cleanupKind !== "incomplete snapshot") {
+      expect(mocks.acquireToken).toHaveBeenCalledExactlyOnceWith("/fixture");
+      expect(mocks.releaseToken).toHaveBeenCalledOnce();
     }
-    const snapshot = {
-      location: "/fixture/private.sqlite",
-      cleanup: vi.fn(() => true),
-      cleanupAsync: async () => true,
-    };
-    expect(() =>
-      readOpenClawStateReadOnlyLocation(
-        () => "read",
-        pathname,
-        snapshot,
-        undefined,
-        expectedIdentity,
-        "/fixture",
-      ),
-    ).toThrow(failure);
-    expect(snapshot.cleanup).toHaveBeenCalledOnce();
-    expect(mocks.openPrivate).not.toHaveBeenCalled();
+    expect(mocks.openPrivate).toHaveBeenCalledOnce();
+    expect(prepared.cleanup).toHaveBeenCalledOnce();
+    expect(mocks.closeHandle).not.toHaveBeenCalled();
   },
 );
-
-it("certifies a private open failure only after its token and snapshot are released", () => {
-  const failure = new Error("native open failed");
-  mocks.openPrivate.mockImplementationOnce(() => {
-    throw failure;
-  });
-  const snapshot = {
-    location: "/fixture/private.sqlite",
-    cleanup: vi.fn(() => true),
-    cleanupAsync: async () => true,
-  };
-  expect(
-    readOpenClawStateReadOnlyLocation(
-      () => "value",
-      pathname,
-      snapshot,
-      undefined,
-      undefined,
-      "/fixture",
-    ),
-  ).toEqual({ status: "unavailable", error: failure });
-  expect(mocks.releaseToken).toHaveBeenCalledOnce();
-  expect(snapshot.cleanup).toHaveBeenCalledOnce();
-});
-
-it("refuses a changed physical identity before opening a native reader", () => {
-  const primary = new Error("SQLite file identity changed");
-  mocks.identity.mockImplementation(() => {
-    throw primary;
-  });
-
-  expect(() => openOpenClawStateReadConnection(pathname, pathname, expectedIdentity)).toThrow(
-    primary,
-  );
-  expect(mocks.identity).toHaveBeenCalledWith(pathname, expectedIdentity);
-  expect(mocks.openTracked).not.toHaveBeenCalled();
-  expect(mocks.openPrivate).not.toHaveBeenCalled();
-  expect(mocks.closeHandle).not.toHaveBeenCalled();
-});
-
-it("closes the opened reader before reporting a post-open identity change", () => {
-  const primary = new Error("SQLite file identity changed after open");
-  mocks.identity
-    .mockImplementationOnce(() => {})
-    .mockImplementationOnce(() => {
-      throw primary;
-    });
-
-  expect(() => openOpenClawStateReadConnection(pathname, pathname, expectedIdentity)).toThrow(
-    primary,
-  );
-  expect(mocks.openTracked).toHaveBeenCalledOnce();
-  expect(mocks.closeHandle).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ db: mocks.db, path: pathname }),
-  );
-  expect(mocks.db.close).toHaveBeenCalledOnce();
-  expect(mocks.db.isOpen).toBe(false);
-});
-
-it("preserves identity and close failures from a still-open native reader", () => {
-  const primary = new Error("SQLite file identity changed after open");
-  const cleanup = new Error("native reader close failed");
-  mocks.identity
-    .mockImplementationOnce(() => {})
-    .mockImplementationOnce(() => {
-      throw primary;
-    });
-  mocks.db.close.mockImplementation(() => {
-    throw cleanup;
-  });
-
-  let failure: unknown;
-  try {
-    openOpenClawStateReadConnection(pathname, pathname, expectedIdentity);
-  } catch (error) {
-    failure = error;
-  }
-  expect(failure).toBeInstanceOf(AggregateError);
-  expect(failure).toMatchObject({ cause: primary, errors: [primary, cleanup] });
-  expect(mocks.identity).toHaveBeenCalledWith(pathname, expectedIdentity);
-  expect(mocks.openTracked).toHaveBeenCalledOnce();
-  expect(mocks.closeHandle).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ db: mocks.db, path: pathname }),
-  );
-  expect(mocks.db.isOpen).toBe(true);
-});
-
-it("preserves a native open failure and token cleanup failure while cleaning its snapshot", () => {
-  const primary = new Error("private native database open failed");
-  const tokenFailure = new Error("private reader token close failed");
-  mocks.openPrivate.mockImplementationOnce(() => {
-    throw primary;
-  });
-  mocks.releaseToken.mockImplementationOnce(() => {
-    throw tokenFailure;
-  });
-  const snapshot = {
-    location: "/fixture/snapshot/database.sqlite",
-    cleanup: vi.fn(() => true),
-    cleanupAsync: async () => true,
-  };
-  let failure: unknown;
-  try {
-    openOpenClawStateReadConnection(pathname, snapshot, undefined, "/fixture/snapshot");
-  } catch (error) {
-    failure = error;
-  }
-  expect(mocks.acquireToken).toHaveBeenCalledExactlyOnceWith("/fixture/snapshot");
-  expect(mocks.openPrivate).toHaveBeenCalledOnce();
-  expect(mocks.releaseToken).toHaveBeenCalledOnce();
-  expect(snapshot.cleanup).toHaveBeenCalledOnce();
-  expect(failure).toBeInstanceOf(AggregateError);
-  expect(failure).toMatchObject({ cause: primary, errors: [primary, tokenFailure] });
-  expect(mocks.closeHandle).not.toHaveBeenCalled();
-});
-
-it("reports incomplete snapshot cleanup alongside the native open failure", () => {
-  const primary = new Error("private native database open failed");
-  mocks.openPrivate.mockImplementationOnce(() => {
-    throw primary;
-  });
-  const snapshot = {
-    location: "/fixture/snapshot/database.sqlite",
-    cleanup: vi.fn(() => false),
-    cleanupAsync: async () => true,
-  };
-  let failure: unknown;
-  try {
-    openOpenClawStateReadConnection(pathname, snapshot);
-  } catch (error) {
-    failure = error;
-  }
-  expect(snapshot.cleanup).toHaveBeenCalledOnce();
-  expect(failure).toMatchObject({
-    cause: primary,
-    errors: [
-      primary,
-      expect.objectContaining({ message: "Shared-state snapshot cleanup is incomplete." }),
-    ],
-  });
-});

@@ -10,13 +10,7 @@ export async function readSkillLibrarySelectionDescriptions(
     type: "skills.library.descriptions",
     input: selections.map(({ skillId, revision }) => ({ skillId, revision })),
   });
-  if (result === undefined) {
-    return undefined;
-  }
-  if (result.ok && result.type === "skills.library.descriptions") {
-    return result.value;
-  }
-  throw new Error("Unexpected skill library descriptions result");
+  return result?.value;
 }
 
 export async function readSkillLibrarySelectionManifests(
@@ -30,11 +24,5 @@ export async function readSkillLibrarySelectionManifests(
     type: "skills.library.manifests",
     input: selections.map(({ skillId, revision }) => ({ skillId, revision })),
   });
-  if (result === undefined) {
-    return undefined;
-  }
-  if (result.ok && result.type === "skills.library.manifests") {
-    return result.value;
-  }
-  throw new Error("Unexpected skill library manifests result");
+  return result?.value;
 }

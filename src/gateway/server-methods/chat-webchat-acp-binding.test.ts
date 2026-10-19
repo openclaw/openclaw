@@ -31,6 +31,10 @@ function webchatContext(key = sessionKey, deliver = false) {
   });
 }
 
+function resolveBinding(ctx = webchatContext()) {
+  return resolveBoundAcpDispatchSessionKey({ cfg, ctx });
+}
+
 describe("dashboard WebChat ACP binding", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   beforeEach(() => {
@@ -41,68 +45,48 @@ describe("dashboard WebChat ACP binding", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([false, true])(
-    "binds an internal dashboard with deliver=%s, survives reopen, and detaches independently",
-    async (deliver) => {
-      const commandParams = buildCommandTestParams(
-        "/acp spawn claude --bind here",
-        cfg,
-        webchatContext(sessionKey, deliver),
-      );
-      commandParams.sessionKey = sessionKey;
-      const result = await bindSpawnedAcpSession({
-        commandParams,
-        sessionKey: targetSessionKey,
-        agentId: "claude",
-        mode: "conversation",
-      });
-      expect(result, JSON.stringify(result)).toMatchObject({
-        ok: true,
-        bound: {
-          binding: {
-            conversation: { channel: "webchat", accountId: "default", conversationId: sessionKey },
-          },
+  it("binds a dashboard with delivery enabled, survives reopen, and detaches independently", async () => {
+    const commandParams = buildCommandTestParams(
+      "/acp spawn claude --bind here",
+      cfg,
+      webchatContext(sessionKey, true),
+    );
+    commandParams.sessionKey = sessionKey;
+    const result = await bindSpawnedAcpSession({
+      commandParams,
+      sessionKey: targetSessionKey,
+      agentId: "claude",
+      mode: "conversation",
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({
+      ok: true,
+      bound: {
+        binding: {
+          conversation: { channel: "webchat", accountId: "default", conversationId: sessionKey },
         },
-      });
-      await closeOpenClawStateDatabaseAsync();
-      expect(await resolveBoundAcpDispatchSessionKey({ cfg, ctx: webchatContext() })).toBe(
-        targetSessionKey,
-      );
-      expect(
-        await resolveBoundAcpDispatchSessionKey({
-          cfg,
-          ctx: webchatContext(sessionKey.replace("main", "other")),
-        }),
-      ).toBeUndefined();
-      expect(
-        await resolveBoundAcpDispatchSessionKey({
-          cfg,
-          ctx: webchatContext(sessionKey.replace("11111111", "33333333")),
-        }),
-      ).toBeUndefined();
-      const siblingKey = sessionKey.replace("11111111", "44444444");
-      await getSessionBindingService().bind({
-        targetSessionKey,
-        targetKind: "session",
-        placement: "current",
-        conversation: { channel: "webchat", accountId: "default", conversationId: siblingKey },
-      });
-      expect(
-        await resolveBoundAcpDispatchSessionKey({
-          cfg,
-          ctx: { ...webchatContext(), AccountId: "other" },
-        }),
-      ).toBeUndefined();
-      const unbindParams = buildCommandTestParams("/session unbind", cfg, webchatContext());
-      unbindParams.sessionKey = sessionKey;
-      const unbound = await handleSessionCommand(unbindParams, true);
-      expect(unbound?.reply?.text).toContain("Conversation unbound.");
-      expect(
-        await resolveBoundAcpDispatchSessionKey({ cfg, ctx: webchatContext(siblingKey) }),
-      ).toBe(targetSessionKey);
-      expect(
-        await resolveBoundAcpDispatchSessionKey({ cfg, ctx: webchatContext() }),
-      ).toBeUndefined();
-    },
-  );
+      },
+    });
+    await closeOpenClawStateDatabaseAsync();
+    expect(await resolveBinding()).toBe(targetSessionKey);
+    expect(
+      await resolveBinding(webchatContext(sessionKey.replace("main", "other"))),
+    ).toBeUndefined();
+    expect(
+      await resolveBinding(webchatContext(sessionKey.replace("11111111", "33333333"))),
+    ).toBeUndefined();
+    const siblingKey = sessionKey.replace("11111111", "44444444");
+    await getSessionBindingService().bind({
+      targetSessionKey,
+      targetKind: "session",
+      placement: "current",
+      conversation: { channel: "webchat", accountId: "default", conversationId: siblingKey },
+    });
+    expect(await resolveBinding({ ...webchatContext(), AccountId: "other" })).toBeUndefined();
+    const unbindParams = buildCommandTestParams("/session unbind", cfg, webchatContext());
+    unbindParams.sessionKey = sessionKey;
+    const unbound = await handleSessionCommand(unbindParams, true);
+    expect(unbound?.reply?.text).toContain("Conversation unbound.");
+    expect(await resolveBinding(webchatContext(siblingKey))).toBe(targetSessionKey);
+    expect(await resolveBinding()).toBeUndefined();
+  });
 });

@@ -1,8 +1,10 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { CliPluginInvocationResources } from "../../cli/plugin-invocation-resources.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetPluginLoaderTestStateForTest } from "../../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -12,11 +14,18 @@ import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-re
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { captureAsyncWorkTracker, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  prepareSystemAgentRunAdmission,
+} from "../admitted-run-context.js";
+import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
 import { createAgentCleanupScope, runOwnedAgentCleanup } from "../run-cleanup-timeout.js";
 import { SessionManager } from "../sessions/session-manager.js";
-import { immediateEnqueue } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import {
+  createEmbeddedAgentRunnerOpenAiConfig,
+  immediateEnqueue,
+} from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { runEmbeddedAgent } from "./run-orchestrator.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
@@ -33,15 +42,16 @@ type Registration = {
 const fixtureKey = "__openclawCandidateCleanupResources";
 
 it.each([
+  "model-denied",
   "late-success",
   "late-failure",
   "required-timeout",
   "ordinary-error",
   "parent-cancel",
+  "dispose-failure",
 ] as const)(
-  "holds the candidate's actual registry through %s cleanup and descendants",
+  "keeps candidate registration and cleanup within execution authority for %s",
   async (mode) => {
-    // Direct cases rely solely on the public runner's work owner.
     const state = await createOpenClawTestState({
       label: "candidate-cleanup-resources",
       env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS: "25" },
@@ -49,7 +59,12 @@ it.each([
     const records = new Map<string, Registration>();
     Object.defineProperty(globalThis, fixtureKey, {
       configurable: true,
-      value: { records, next: 0, deferred: createDeferred },
+      value: {
+        records,
+        next: 0,
+        deferred: createDeferred,
+        failDispose: mode === "dispose-failure",
+      },
     });
     const cleanupStarted = createDeferred();
     const finishCleanup = createDeferred();
@@ -64,10 +79,10 @@ it.each([
     let selected: Registration | undefined;
     let nested: Promise<number> | undefined;
     let lateRead: number | undefined;
-    let signalAbortedAtLogicalResult: boolean | undefined;
     let workSignal: AbortSignal | undefined;
     let logical: Promise<EmbeddedAgentRunResult> | undefined;
     let actualCleanup: Promise<void> | undefined;
+    let cleanupSettlement: Promise<void> | undefined;
     let admission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
     const cliResources = mode === "parent-cancel" ? new CliPluginInvocationResources() : undefined;
     let parentSignal: AbortSignal | undefined;
@@ -98,16 +113,23 @@ it.each([
           record.disposed++;
           db.close();
           record.close.resolve();
+          if (state.failDispose) throw new Error("candidate dispose failure");
         } });
       } };`,
       );
+      const modelProvider = createEmbeddedAgentRunnerOpenAiConfig(["candidate-model"]).models
+        ?.providers?.openai;
+      assert(modelProvider, "Expected the model catalog fixture");
       const cfg: OpenClawConfig = {
         agents: {
-          entries: { main: { default: true, workspace: state.workspaceDir } },
+          entries: { main: { workspace: state.workspaceDir } },
           defaults: {
-            workspace: state.workspaceDir,
-            model: "candidate-provider/candidate-model",
-            models: { "candidate-provider/candidate-model": { agentRuntime: { id: "openclaw" } } },
+            models: {
+              "candidate-provider/candidate-model": { agentRuntime: { id: "openclaw" } },
+              ...(mode === "model-denied"
+                ? { "candidate-provider/restricted-model": { alias: "blocked-alias" } }
+                : {}),
+            },
           },
         },
         models: {
@@ -116,17 +138,7 @@ it.each([
               api: "openai-completions",
               apiKey: "synthetic-candidate-key",
               baseUrl: "http://127.0.0.1:9/v1",
-              models: [
-                {
-                  id: "candidate-model",
-                  name: "Candidate model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 1024,
-                },
-              ],
+              models: modelProvider.models,
             },
           },
         },
@@ -137,18 +149,16 @@ it.each([
           entries: { [fixture.pluginId]: { enabled: true } },
         },
       };
+      setRuntimeConfigSnapshot(cfg);
       loop.mockImplementation(async (_refresh, input) => {
+        cleanupSettlement = input.runParams.runCleanupSettlement;
         const prepared = input.preparedModelRuntime;
-        if (!prepared) {
-          throw new Error("Runner did not supply its prepared candidate runtime");
-        }
+        assert(prepared, "Runner did not supply its prepared candidate runtime");
         const label = prepared.pluginRegistry?.providers.find(
           (entry) => entry.provider.id === fixture.providerId,
         )?.provider.label;
         const record = label ? records.get(label) : undefined;
-        if (!record) {
-          throw new Error("Candidate did not supply its registered provider source");
-        }
+        assert(record, "Candidate did not supply its registered provider source");
         selected = record;
         expect(record.read()).toBe(42);
         input.onInitialWriterPrepared({
@@ -176,11 +186,7 @@ it.each([
           oneShotCliRun: mode !== "ordinary-error",
           ...(mode === "required-timeout" ? { settlement: "required" as const } : {}),
           step: "candidate-fixture",
-          log: {
-            warn: (message) => {
-              warnings.push(message);
-            },
-          },
+          log: { warn: (message) => void warnings.push(message) },
           cleanup: () => {
             actualCleanup = (async () => {
               cleanupStarted.resolve();
@@ -202,19 +208,35 @@ it.each([
         });
         return {
           payloads: [{ text: "candidate complete" }],
-          meta: {
-            durationMs: 1,
-            stopReason: "completed",
-            agentMeta: {
-              sessionId: input.runParams.sessionId,
-              provider: input.provider,
-              model: input.modelId,
-            },
-          },
+          meta: { durationMs: 1, stopReason: "completed" },
         };
       });
       const runId = `candidate-cleanup-${mode}`;
-      admission = prepareSystemAgentRunAdmission(cfg, runId, "main", "candidate-cleanup-test");
+      const operatorAuthority =
+        mode === "model-denied"
+          ? createAdmittedRunOperatorAuthority({
+              profileId: "candidate-reader",
+              scopes: ["operator.write"],
+              assertCurrent: () => {},
+              modelPolicy: prepareOperatorModelPolicy({
+                cfg,
+                policy: {
+                  sourceAgent: "main",
+                  allow: ["candidate-provider/*"],
+                  deny: ["candidate-provider/restricted-*"],
+                },
+                manifestPlugins: [],
+              }),
+            })
+          : undefined;
+      admission = prepareSystemAgentRunAdmission(
+        cfg,
+        runId,
+        "main",
+        "candidate-cleanup-test",
+        undefined,
+        operatorAuthority,
+      );
       const params: RunEmbeddedAgentInternalParams = {
         config: cfg,
         agentId: "main",
@@ -224,7 +246,7 @@ it.each([
         sessionKey: `agent:main:${runId}`,
         runId,
         provider: fixture.providerId,
-        model: "candidate-model",
+        model: mode === "model-denied" ? "blocked-alias" : "candidate-model",
         prompt: "Complete the synthetic candidate",
         timeoutMs: 5000,
         enqueue: immediateEnqueue,
@@ -243,13 +265,18 @@ it.each([
           : runEmbeddedAgent(params),
       );
       void logical.catch(() => {});
-      await Promise.race([
+      if (mode === "model-denied") {
+        await expect(logical).rejects.toThrow("operator role cannot use this model");
+        expect(records.size).toBe(0);
+        expect(loop).not.toHaveBeenCalled();
+        return;
+      }
+      await awaitGateBeforeSettlement(
         cleanupStarted.promise,
-        logical.then(() => {
-          throw new Error("Run completed before cleanup started");
-        }),
-      ]);
-      if (mode === "ordinary-error") {
+        logical,
+        "Run completed before cleanup started",
+      );
+      if (mode === "ordinary-error" || mode === "dispose-failure") {
         finishCleanup.resolve();
       }
       if (mode === "required-timeout" || mode === "ordinary-error") {
@@ -261,15 +288,13 @@ it.each([
       } else {
         expect((await logical).payloads?.[0]?.text).toBe("candidate complete");
       }
-      if (!selected) {
-        throw new Error("Candidate registry source was not selected");
-      }
+      assert(selected, "Candidate registry source was not selected");
       admission.close();
-      signalAbortedAtLogicalResult = workSignal?.aborted;
-      expect.soft(selected.disposed).toBe(0);
-      expect.soft(signalAbortedAtLogicalResult ?? false).toBe(false);
-      expect(cleanupScope.outcome).toBe("uncertain");
-      if (mode !== "ordinary-error") {
+      const generationCleanup = cleanupSettlement;
+      assert(generationCleanup, "Attempt did not receive its generation cleanup settlement");
+      expect.soft([selected.disposed, workSignal?.aborted ?? false]).toEqual([0, false]);
+      expect(cleanupScope.outcome).toBe(mode === "dispose-failure" ? "closed" : "uncertain");
+      if (mode !== "ordinary-error" && mode !== "dispose-failure") {
         expect(
           warnings.some((warning) => warning.includes("step=candidate-fixture timeoutMs=25")),
         ).toBe(true);
@@ -288,25 +313,36 @@ it.each([
       finishCleanup.resolve();
       await nestedStarted.promise;
       await cleanupSettled.promise;
-      expect.soft(lateRead).toBe(42);
-      expect.soft(selected.disposed).toBe(0);
-      expect.soft(workSignal?.aborted ?? false).toBe(mode === "parent-cancel");
+      expect
+        .soft([lateRead, selected.disposed, workSignal?.aborted ?? false])
+        .toEqual([42, 0, mode === "parent-cancel"]);
       finishNested.resolve();
-      if (!nested) {
-        throw new Error("Cleanup did not start its nested work");
-      }
+      assert(nested, "Cleanup did not start its nested work");
       await expect(nested).resolves.toBe(42);
       await initialWriterStarted.promise;
-      expect(selected.disposed).toBe(0);
-      expect(initialWriterDisposals).toBe(1);
+      expect([selected.disposed, initialWriterDisposals]).toEqual([0, 1]);
       finishInitialWriter.resolve();
       await selected.close.promise;
       await parentClose;
       if (cliResources) {
         expect(parentClosed).toBe(true);
       }
-      expect(selected.disposed).toBe(1);
-      expect(cleanupScope.outcome).toBe("uncertain");
+      if (mode === "dispose-failure") {
+        await expect(generationCleanup).rejects.toThrow(
+          "Prepared plugin generation cleanup failed",
+        );
+        const embeddedRunState = Reflect.get(
+          globalThis,
+          Symbol.for("openclaw.embeddedRunState"),
+        ) as { pendingCleanupOwners?: Set<{ runId: string }> } | undefined;
+        expect(embeddedRunState?.pendingCleanupOwners).toBeUndefined();
+      } else {
+        await generationCleanup;
+      }
+      expect([selected.disposed, cleanupScope.outcome]).toEqual([
+        1,
+        mode === "dispose-failure" ? "closed" : "uncertain",
+      ]);
       if (mode === "late-failure") {
         expect(
           warnings.some(

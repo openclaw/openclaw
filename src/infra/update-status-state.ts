@@ -16,6 +16,16 @@ export function getUpdateSchedule(): UpdateScheduleState | null {
   return updateScheduleCache;
 }
 
+export function withoutUpdateCampaign(schedule: UpdateScheduleState): UpdateScheduleState {
+  const { campaign: _campaign, ...rest } = schedule;
+  return rest;
+}
+
+export function withoutUpdateTarget(schedule: UpdateScheduleState): UpdateScheduleState {
+  const { target: _target, campaign: _campaign, ...rest } = schedule;
+  return rest;
+}
+
 function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | null): boolean {
   if (a === b) {
     return true;
@@ -36,15 +46,11 @@ function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | nul
   );
 }
 
-function sameUpdateSchedule(a: UpdateScheduleState | null, b: UpdateScheduleState): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
 export function setUpdateScheduleCache(params: {
   next: UpdateScheduleState;
   onUpdateScheduleChange?: (schedule: UpdateScheduleState) => void;
 }): void {
-  if (sameUpdateSchedule(updateScheduleCache, params.next)) {
+  if (JSON.stringify(updateScheduleCache) === JSON.stringify(params.next)) {
     return;
   }
   updateScheduleCache = params.next;

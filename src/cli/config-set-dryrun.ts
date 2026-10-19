@@ -2,18 +2,14 @@ import { info } from "../globals.js";
 import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 
-// Shared dry-run result contract for `openclaw config set` validation-only paths.
-/** Config-set input mode that produced the simulated operation. */
 export type ConfigSetDryRunInputMode = "value" | "json" | "builder" | "unset";
 
-/** One validation error found during config-set dry-run processing. */
 export type ConfigSetDryRunError = {
   kind: "missing-path" | "schema" | "resolvability" | "model" | "conflict";
   message: string;
   ref?: string;
 };
 
-/** Dry-run summary returned by config-set command handlers and tests. */
 export type ConfigSetDryRunResult = {
   ok: boolean;
   operations: number;

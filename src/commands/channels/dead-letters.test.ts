@@ -1,39 +1,21 @@
 // Channels dead-letter command tests exercise the operator-visible recovery path.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTestRuntime } from "../test-runtime-config-helpers.js";
 import {
   channelsDeadLettersListCommand,
   channelsDeadLettersResubmitCommand,
 } from "./dead-letters.js";
 
-const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-
 async function withTempState(run: (stateDir: string) => Promise<void>): Promise<void> {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-channel-dead-letters-"));
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  try {
-    await run(stateDir);
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
+  await withOpenClawTestState(
+    { layout: "state-only", prefix: "openclaw-channel-dead-letters-" },
+    ({ stateDir }) => run(stateDir),
+  );
 }
 
 describe("channel dead-letter commands", () => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
-  });
-
   it("lists retained failures as JSON", async () => {
     await withTempState(async () => {
       const queue = createChannelIngressQueue<{ text: string }>({

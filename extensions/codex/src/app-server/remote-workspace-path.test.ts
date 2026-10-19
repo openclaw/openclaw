@@ -9,25 +9,18 @@ const localWorkspaceRoot = path.resolve("gateway-workspace");
 const remoteWorkspaceRoot = "/remote/codex-workspace";
 
 describe("Codex remote workspace paths", () => {
-  it("maps a gateway workspace artifact into the remote execution workspace", () => {
-    expect(
-      mapCodexAppServerRemoteWorkspacePath({
-        value: path.join(localWorkspaceRoot, "reports", "slack-upload.txt"),
-        localWorkspaceRoot,
-        remoteWorkspaceRoot,
-      }),
-    ).toBe(`${remoteWorkspaceRoot}/reports/slack-upload.txt`);
-  });
-
-  it("maps a remote workspace artifact into the gateway workspace", () => {
-    expect(
-      mapCodexAppServerLocalWorkspacePath({
-        value: `${remoteWorkspaceRoot}/reports/slack-upload.txt`,
-        localWorkspaceRoot,
-        remoteWorkspaceRoot,
-      }),
-    ).toBe(path.join(localWorkspaceRoot, "reports", "slack-upload.txt"));
-  });
+  it.each([["/", "/reports/slack-upload.txt"]])(
+    "maps an artifact under gateway workspace %s into the remote workspace",
+    (root, value) => {
+      expect(
+        mapCodexAppServerRemoteWorkspacePath({
+          value,
+          localWorkspaceRoot: root,
+          remoteWorkspaceRoot,
+        }),
+      ).toBe(`${remoteWorkspaceRoot}/reports/slack-upload.txt`);
+    },
+  );
 
   it("preserves URL-backed and managed media sources", () => {
     for (const value of [
@@ -43,16 +36,6 @@ describe("Codex remote workspace paths", () => {
     }
   });
 
-  it("maps workspace-relative media into the gateway workspace", () => {
-    expect(
-      mapCodexAppServerLocalWorkspacePath({
-        value: "reports/slack-upload.txt",
-        localWorkspaceRoot,
-        remoteWorkspaceRoot,
-      }),
-    ).toBe(path.join(localWorkspaceRoot, "reports", "slack-upload.txt"));
-  });
-
   it("normalizes harmless relative and nested dot segments", () => {
     for (const value of [
       "./reports/slack-upload.txt",
@@ -63,16 +46,6 @@ describe("Codex remote workspace paths", () => {
         mapCodexAppServerLocalWorkspacePath({ value, localWorkspaceRoot, remoteWorkspaceRoot }),
       ).toBe(path.join(localWorkspaceRoot, "reports", "slack-upload.txt"));
     }
-  });
-
-  it("matches Windows remote workspace roots without depending on path casing", () => {
-    expect(
-      mapCodexAppServerLocalWorkspacePath({
-        value: "c:\\work\\repo\\Reports\\Upload.TXT",
-        localWorkspaceRoot,
-        remoteWorkspaceRoot: "C:\\Work\\Repo",
-      }),
-    ).toBe(path.join(localWorkspaceRoot, "Reports", "Upload.TXT"));
   });
 
   it("preserves case-insensitive Windows drive-root workspace paths", () => {

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -8,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import type {
   TranscriptSessionDescriptor,
@@ -31,12 +31,12 @@ type MeetingTranscriptUtteranceRow = Selectable<
   OpenClawStateKyselyDatabase["meeting_transcript_utterances"]
 >;
 
-export function meetingTranscriptDb(db: DatabaseSync) {
+export function meetingTranscriptDb(db: EngineConnection) {
   return getNodeSqliteKysely<MeetingTranscriptsDatabase>(db);
 }
 
 export function meetingTranscriptSessionQuery(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
 ) {
   return meetingTranscriptDb(database)
@@ -60,8 +60,15 @@ export function transcriptSummaryInputRevisionFromRow(
   });
 }
 
+/** Descriptor custody tolerates accepted speech, but not changed metadata. */
+export function transcriptSessionInputRevisionFromRow(
+  row: Pick<MeetingTranscriptSessionRow, "title" | "source_json" | "metadata_json" | "stopped_at">,
+): string {
+  return transcriptSummaryInputRevisionFromRow({ ...row, next_utterance_seq: 0 });
+}
+
 export function readTranscriptSummaryInputRevision(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
 ): string | undefined {
   const row = executeSqliteQueryTakeFirstSync(
@@ -79,7 +86,7 @@ export function readTranscriptSummaryInputRevision(
 }
 
 export function readStoredTranscriptSummaryRevision(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
 ): string | undefined {
   const row = executeSqliteQueryTakeFirstSync(
@@ -93,7 +100,7 @@ export function readStoredTranscriptSummaryRevision(
   return row ? sha256Hex(JSON.stringify(row)) : undefined;
 }
 
-export function readTranscriptSummaryKeys(database: DatabaseSync): Set<string> {
+export function readTranscriptSummaryKeys(database: EngineConnection): Set<string> {
   const rows = executeSqliteQuerySync(
     database,
     meetingTranscriptDb(database)
@@ -104,7 +111,7 @@ export function readTranscriptSummaryKeys(database: DatabaseSync): Set<string> {
 }
 
 export function readRecentStoppedTranscriptSession(
-  database: DatabaseSync,
+  database: EngineConnection,
   source: TranscriptSourceLocator,
   stoppedAfter: string,
   stoppedBefore: string,
@@ -119,13 +126,17 @@ export function readRecentStoppedTranscriptSession(
       .where("stopped_at", "<=", stoppedBefore)
       .where((eb) =>
         eb.and(
-          (["accountId", "guildId", "channelId", "meetingUrl", "threadTs", "fileId"] as const).map(
-            (key) =>
-              eb(
-                eb.fn<string | null>("json_extract", [eb.ref("source_json"), eb.val(`$.${key}`)]),
-                source[key] === undefined ? "is" : "=",
-                source[key] ?? null,
-              ),
+          (
+            [
+              ["accountId", "source_account_id"],
+              ["guildId", "source_guild_id"],
+              ["channelId", "source_channel_id"],
+              ["meetingUrl", "source_meeting_url"],
+              ["threadTs", "source_thread_ts"],
+              ["fileId", "source_file_id"],
+            ] as const
+          ).map(([key, column]) =>
+            eb(column, source[key] === undefined ? "is" : "=", source[key] ?? null),
           ),
         ),
       )
@@ -140,7 +151,7 @@ export function readRecentStoppedTranscriptSession(
 }
 
 export function meetingTranscriptUtteranceQuery(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
 ) {
   return meetingTranscriptDb(database)
@@ -149,29 +160,28 @@ export function meetingTranscriptUtteranceQuery(
     .where("session_started_at", "=", session.startedAt);
 }
 
-function hasExactMeetingTranscriptUtterance(params: {
-  database: DatabaseSync;
+export function appendMeetingTranscriptUtterance(params: {
+  database: EngineConnection;
   metadataJson: string | null;
+  now: number;
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
-  utterance: TranscriptUtterance & { id: string };
-}): boolean {
-  const utterance = params.utterance;
-  // SQLite bindings replace lone surrogates, so these cannot exactly match stored text.
+  utterance: TranscriptUtterance;
+}): void {
+  const { database, session, utterance } = params;
+  const db = meetingTranscriptDb(database);
   if (
-    [
+    utterance.id &&
+    // SQLite bindings replace lone surrogates, so these cannot exactly match stored text.
+    ![
       utterance.startedAt,
       utterance.endedAt,
       utterance.speaker?.id,
       utterance.speaker?.label,
       utterance.text,
-    ].some((value) => value != null && toUSVString(value) !== value)
-  ) {
-    return false;
-  }
-  return Boolean(
+    ].some((value) => value != null && toUSVString(value) !== value) &&
     executeSqliteQueryTakeFirstSync(
-      params.database,
-      meetingTranscriptUtteranceQuery(params.database, params.session)
+      database,
+      meetingTranscriptUtteranceQuery(database, session)
         .select("sequence")
         .where("utterance_id", "=", utterance.id)
         .where("started_at", "is", utterance.startedAt ?? null)
@@ -182,27 +192,7 @@ function hasExactMeetingTranscriptUtterance(params: {
         .where("final", "is", utterance.final === undefined ? null : utterance.final ? 1 : 0)
         .where("metadata_json", "is", params.metadataJson)
         .limit(1),
-    ),
-  );
-}
-
-export function appendMeetingTranscriptUtterance(params: {
-  database: DatabaseSync;
-  metadataJson: string | null;
-  now: number;
-  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
-  utterance: TranscriptUtterance;
-}): void {
-  const { database, session, utterance } = params;
-  const db = meetingTranscriptDb(database);
-  if (
-    utterance.id &&
-    hasExactMeetingTranscriptUtterance({
-      database,
-      metadataJson: params.metadataJson,
-      session,
-      utterance: { ...utterance, id: utterance.id },
-    })
+    )
   ) {
     return;
   }
@@ -240,7 +230,7 @@ export function appendMeetingTranscriptUtterance(params: {
   );
 }
 
-function parseOptionalJsonRecord(value: string | null): Record<string, unknown> | undefined {
+export function parseOptionalJsonRecord(value: string | null): Record<string, unknown> | undefined {
   if (!value) {
     return undefined;
   }

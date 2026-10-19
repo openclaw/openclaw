@@ -1,7 +1,6 @@
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import type { JsonSchema } from "../components/config-form.shared.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -139,16 +138,7 @@ suite.define(() => {
         });
         // A captured request precedes the Gateway reply; reload only after
         // the existing writer has acknowledged and retained the saved value.
-        await expect
-          .poll(() =>
-            page.evaluate(
-              () =>
-                document.querySelector<HTMLElement & { context: ApplicationContext }>(
-                  "openclaw-plugins-page",
-                )?.context.runtimeConfig.state.configAutoSaveStatus,
-            ),
-          )
-          .toBe("saved");
+        await page.locator(".settings-save-indicator--saved").waitFor();
         await page.reload();
         await page
           .locator(".plugin-editor")

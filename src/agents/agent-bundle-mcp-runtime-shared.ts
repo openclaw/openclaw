@@ -17,8 +17,7 @@ export const SESSION_MCP_MAX_LIVE_RUNTIMES = 256;
 
 /** Idle eviction is opt-in; zero retains the session lifetime. */
 export function resolveSessionMcpRuntimeIdleTtlMs(cfg?: OpenClawConfig): number {
-  const raw = cfg?.mcp?.sessionIdleTtlMs;
-  return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
+  return Math.floor(cfg?.mcp?.sessionIdleTtlMs ?? 0);
 }
 
 /** Checks whether harness-scoped MCP can affect a turn without loading its runtime graph. */
@@ -38,6 +37,7 @@ export function shouldLoadRequesterScopedMcpHarnessRuntime(params: {
 export type CreateSessionMcpRuntime = (params: {
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
   workspaceDir: string;
   agentDir?: string;
   cfg?: OpenClawConfig;

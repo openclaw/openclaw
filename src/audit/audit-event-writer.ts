@@ -1,7 +1,7 @@
 /** Non-blocking process-owned queue for audit metadata persistence. */
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { AuditEventInput } from "./audit-event-types.js";
@@ -9,11 +9,8 @@ import {
   formatAuditWriterError,
   formatAuditWriterRequestError,
 } from "./audit-event-writer.errors.js";
-import type {
-  AuditWriterOperations,
-  AuditWriterRequest,
-  AuditWriterResult,
-} from "./audit-event-writer.types.js";
+import type { AuditWriterRequest, AuditWriterResult } from "./audit-event-writer.types.js";
+import type { AuditWriterOperations } from "./audit-event-writer.worker.js";
 import { parseExecutionDecisionWork } from "./execution-decision-work.js";
 import type { ExecutionDecisionWork } from "./execution-decision-work.types.js";
 import type { ExecutionIdentityAdmissionWork } from "./execution-identity-admission.js";
@@ -40,14 +37,14 @@ export type AuditEventWriter = {
 };
 
 /** Start one bounded queue; retain the owner environment or claimed state rejects its writes. */
-export function createAuditEventWriter(
-  options: {
-    stateDir?: string;
-    maxPending?: number;
-    onContention?: (message: string) => void;
-    onError?: (error: string) => void;
-  } = {},
-): AuditEventWriter {
+export function createAuditEventWriter(options: {
+  scheduler: GatewayScheduler;
+  stateDir?: string;
+  maxPending?: number;
+  onContention?: (message: string) => void;
+  onError?: (error: string) => void;
+}): AuditEventWriter {
+  const { scheduler } = options;
   const database = {
     env: { ...process.env, OPENCLAW_STATE_DIR: options.stateDir ?? resolveStateDir(process.env) },
   };
@@ -56,9 +53,7 @@ export function createAuditEventWriter(
   let stopped = false;
   let draining = false;
   let shutdownExpired = false;
-  let unavailable = false;
   let maintenancePending = true;
-  let readyPending = true;
   let scheduled: ReturnType<typeof setImmediate> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let lockRetryAttempt = 0;
@@ -78,31 +73,29 @@ export function createAuditEventWriter(
   const reportContention = (message: string) => {
     options.onContention?.(formatAuditWriterError(message));
   };
-  const execute = async (
-    command: SqliteWorkerCommand<AuditWriterOperations>,
-  ): Promise<AuditWriterResult> => {
+  const execute = async <Key extends keyof AuditWriterOperations>(command: {
+    type: Key;
+    input: AuditWriterOperations[Key]["input"];
+  }): Promise<AuditWriterOperations[Key]["output"] | undefined> => {
     const context = captureOpenClawStateWorkerContext(database);
     const { runOpenClawStateWorkerOperation } =
       await import("../state/openclaw-state-worker-store.js");
     if (shutdownExpired) {
-      return { status: "settled" };
+      return undefined;
     }
-    // Existing state opens lazily inside the zero-busy-timeout audit command.
-    const result = await runOpenClawStateWorkerOperation<AuditWriterResult>(
+    // Existing state opens lazily inside the audit command.
+    const result = await runOpenClawStateWorkerOperation<
+      AuditWriterOperations[Key]["output"] | undefined
+    >(context, (scope) => (shutdownExpired ? Promise.resolve(undefined) : scope.execute(command)), {
+      existingOnly: true,
+    });
+    if (result !== undefined || shutdownExpired) {
+      return result;
+    }
+    return runOpenClawStateWorkerOperation<AuditWriterOperations[Key]["output"] | undefined>(
       context,
-      (scope) =>
-        shutdownExpired ? Promise.resolve({ status: "settled" } as const) : scope.execute(command),
-      { existingOnly: true },
+      (scope) => (shutdownExpired ? Promise.resolve(undefined) : scope.execute(command)),
     );
-    return (
-      result ??
-      runOpenClawStateWorkerOperation<AuditWriterResult>(context, (scope) =>
-        shutdownExpired ? Promise.resolve({ status: "settled" } as const) : scope.execute(command),
-      )
-    );
-  };
-  const observeLockContention = () => {
-    lockRetryAttempt += 1;
   };
   const resetLockContention = () => {
     lockRetryAttempt = 0;
@@ -111,29 +104,30 @@ export function createAuditEventWriter(
   };
   const reportMaintenance = async (): Promise<AuditMaintenanceAttempt> => {
     let more = false;
-    for (const family of ["events", "identity", "decisions", "progress"] as const) {
-      if (shutdownExpired) {
-        break;
-      }
-      try {
-        const result = await execute({ type: "audit.writer.prune", input: family });
+    try {
+      // A submitted pass settles all remaining bounded families even after the shutdown deadline.
+      const results = await execute({ type: "audit.writer.prune", input: undefined });
+      for (const result of results ?? []) {
         if (result.status === "retry") {
-          observeLockContention();
+          lockRetryAttempt += 1;
           return "retry";
         }
         if (result.error !== undefined) {
           fail(result.error);
         }
         more = (result.deleted ?? 0) > 0 || more;
-      } catch (error) {
-        fail(error);
       }
+    } catch (error) {
+      // A rejected transport can follow committed families; never replay an unknown pass.
+      fail(error);
     }
     return more ? "more" : "settled";
   };
   const processRequest = async (request: AuditWriterRequest): Promise<AuditWriterResult> => {
     try {
-      return await execute({ type: "audit.writer.process", input: request });
+      return (
+        (await execute({ type: "audit.writer.process", input: request })) ?? { status: "settled" }
+      );
     } catch (error) {
       // Rejected transport/settlement can follow a commit; never replay that request.
       return { status: "settled", error: formatAuditWriterRequestError(request, error) };
@@ -174,7 +168,7 @@ export function createAuditEventWriter(
   const scheduleRetry = () => {
     const delayMs = Math.min(
       AUDIT_LOCK_RETRY_MAX_DELAY_MS,
-      AUDIT_LOCK_RETRY_DELAY_MS * 2 ** Math.min(6, Math.max(0, lockRetryAttempt - 1)),
+      AUDIT_LOCK_RETRY_DELAY_MS * 2 ** Math.min(6, lockRetryAttempt - 1),
     );
     lockContentionDelayMs += delayMs;
     if (!lockContentionReported && lockContentionDelayMs >= AUDIT_LOCK_CONTENTION_REPORT_MS) {
@@ -200,10 +194,7 @@ export function createAuditEventWriter(
       if (maintenancePending) {
         maintenancePending = false;
         const maintenance = await reportMaintenance();
-        if (readyPending) {
-          readyPending = false;
-          resolveReady();
-        }
+        resolveReady();
         maintenancePending ||= maintenance !== "settled";
         if (maintenance === "retry") {
           retry = true;
@@ -219,7 +210,7 @@ export function createAuditEventWriter(
       if (request) {
         const result = await processRequest(request);
         if (result.status === "retry") {
-          observeLockContention();
+          lockRetryAttempt += 1;
           retry = true;
         } else {
           // Release settled capacity before an error observer can enqueue or throw.
@@ -243,21 +234,21 @@ export function createAuditEventWriter(
       }
     }
   }
-  const maintenanceTimer = setInterval(() => {
-    maintenancePending = true;
-    schedule();
-  }, AUDIT_MAINTENANCE_INTERVAL_MS);
-  maintenanceTimer.unref?.();
+  const maintenanceJob = scheduler.schedule({
+    id: "audit:maintenance",
+    atMs: scheduler.now() + AUDIT_MAINTENANCE_INTERVAL_MS,
+    everyMs: AUDIT_MAINTENANCE_INTERVAL_MS,
+    run: () => {
+      maintenancePending = true;
+      schedule();
+    },
+  });
   schedule();
 
   const enqueue = (message: AuditWriterRequest): boolean => {
-    if (stopped || unavailable || queue.length >= maxPending) {
+    if (stopped || queue.length >= maxPending) {
       if (!stopped) {
-        fail(
-          unavailable
-            ? "audit event writer is unavailable; dropping metadata"
-            : `audit event queue is full (${maxPending}); dropping metadata`,
-        );
+        fail(`audit event queue is full (${maxPending}); dropping metadata`);
       }
       return false;
     }
@@ -278,7 +269,6 @@ export function createAuditEventWriter(
             : "audit execution decision receipt could not be queued",
         );
       } else {
-        unavailable = true;
         fail(error);
       }
       return false;
@@ -297,7 +287,7 @@ export function createAuditEventWriter(
         return stopPromise;
       }
       stopped = true;
-      clearInterval(maintenanceTimer);
+      maintenanceJob.cancel();
       maintenancePending = true;
       stopPromise = new Promise<void>((resolve) => {
         resolveStop = resolve;
@@ -314,12 +304,9 @@ export function createAuditEventWriter(
             retryTimer = undefined;
           }
           fail("audit event writer shutdown timed out; pending metadata may be lost");
-          if (readyPending && !draining) {
-            readyPending = false;
-            resolveReady();
-          }
           // The deadline drops waiting metadata, but a submitted mutation must settle.
           if (!draining) {
+            resolveReady();
             finishStop();
           }
         }, AUDIT_WRITER_SHUTDOWN_TIMEOUT_MS);

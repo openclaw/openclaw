@@ -7,9 +7,13 @@ import {
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
+import {
+  clearCronJobActive,
+  markCronJobActive,
+  requestActiveCronJobCancellation,
+} from "../active-jobs.js";
 import { runCronCommandJob } from "../command-runner.js";
 import {
-  cancelActiveCronTaskRun,
   getSuspensionVisibleCronTaskRunCount,
   waitForActiveCronTaskRuns,
 } from "./active-run-cancellation.js";
@@ -49,12 +53,11 @@ describe("scheduled command timeouts", () => {
         sendCronWebhook,
       });
 
+      const activeJobMarker = markCronJobActive(job.id);
       try {
-        const run = executeJobCoreWithTimeout(state, job, { runId: job.id });
+        const run = executeJobCoreWithTimeout(state, job, { runId: job.id, activeJobMarker });
         if (interruption === "operator cancellation") {
-          expect(cancelActiveCronTaskRun({ runId: job.id, reason: "Cancelled by operator." })).toBe(
-            true,
-          );
+          requestActiveCronJobCancellation(job.id, "Cancelled by operator.");
         }
         const result = await run;
         if (interruption === "operator cancellation") {
@@ -80,7 +83,11 @@ describe("scheduled command timeouts", () => {
         expect(isPidAlive(pid)).toBe(false);
         expect(sendCronWebhook).not.toHaveBeenCalled();
       } finally {
-        await command;
+        try {
+          await command;
+        } finally {
+          clearCronJobActive(job.id, activeJobMarker);
+        }
       }
     },
   );

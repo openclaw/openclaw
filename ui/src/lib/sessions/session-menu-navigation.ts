@@ -4,9 +4,9 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import type { ChatHistoryResult } from "../../pages/chat/chat-history-snapshot.ts";
 import { buildChatMarkdown } from "../../pages/chat/export.ts";
-import type { SessionSplitHost } from "../../pages/chat/split-layout-types.ts";
 import { nativeHistoryMessageIdentity } from "../chat/history-message-identity.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { formatUiError } from "../format-error.ts";
@@ -19,6 +19,8 @@ import {
   sessionNavigationTarget,
 } from "./route-navigation.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
+
+registerSessionOrganizationEnglish();
 
 type SessionNavigationActionKind =
   | "copy-session-id"
@@ -38,16 +40,25 @@ type SessionNavigationTarget<TRouteId extends string> = {
   isCurrent: () => boolean;
 };
 
+const sessionSplitHosts = new Map<HTMLElement, () => boolean>();
+
+/** Chat publishes its mounted capability without exposing its DOM to menu callers. */
+export function registerSessionSplitHost(host: HTMLElement, available: () => boolean) {
+  sessionSplitHosts.set(host, available);
+  return () => {
+    sessionSplitHosts.delete(host);
+  };
+}
+
 export function canSplitSessionView(): boolean {
-  return (
-    document.querySelector<SessionSplitHost>("openclaw-chat-page")?.sessionSplitAvailable === true
-  );
+  return [...sessionSplitHosts].some(([host, available]) => host.isConnected && available());
 }
 
 export function canCopySessionMarkdown(snapshot: ApplicationGatewaySnapshot | undefined): boolean {
   return readSessionMethodAccess(snapshot, {
     method: "chat.history",
     requiredScope: "operator.read",
+    sessionScope: true,
   }).allowed;
 }
 
@@ -60,6 +71,7 @@ async function copySessionMarkdown<TRouteId extends string>(
   const access = readSessionMethodAccess(gateway.snapshot, {
     method: "chat.history",
     requiredScope: "operator.read",
+    sessionScope: true,
   });
   if (!access.allowed || !client) {
     throw new Error(access.allowed ? t("sessionsView.actionRequiresConnection") : access.reason);
@@ -155,6 +167,7 @@ export async function runSessionNavigationAction<TRouteId extends string>(
         !window.dispatchEvent(
           new CustomEvent(UI_COMMAND_EVENT, {
             detail: {
+              agentId: params.agentId,
               command: {
                 kind: "split",
                 direction: kind === "split-right" ? "right" : "down",

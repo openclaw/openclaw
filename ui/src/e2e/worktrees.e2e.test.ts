@@ -1,6 +1,7 @@
 // Control UI tests cover Worktrees mutation failures through the rendered settings page.
 import path from "node:path";
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -27,6 +28,43 @@ const restorableWorktree = {
 };
 
 suite.define(() => {
+  it.each([1440, 390])(
+    "keeps the Worktrees title above left-aligned hub tabs at %ipx",
+    async (width) => {
+      await suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: { "worktrees.list": { worktrees: [] } },
+        });
+        await page.goto(`${suite.server.baseUrl}worktrees`);
+        await evaluateControlUiContext(page, (context) => context.theme.setMode("dark"));
+        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
+        const heading = page.getByRole("heading", { name: "Worktrees", level: 1 });
+        const tabs = page.getByRole("tablist", { name: "Session sections" });
+        expect(await heading.isVisible()).toBe(true);
+        expect(await tabs.isVisible()).toBe(true);
+        const titleBox = await heading.boundingBox();
+        const tabsBox = await tabs.boundingBox();
+        expect(titleBox).not.toBeNull();
+        expect(tabsBox).not.toBeNull();
+        expect(tabsBox!.y).toBeGreaterThan(titleBox!.y + titleBox!.height);
+        expect(Math.abs(tabsBox!.x - titleBox!.x)).toBeLessThan(12);
+        await page.screenshot({
+          path: path.join(suite.artifactDir, `worktrees-header-dark-${width}.png`),
+        });
+        await page.getByRole("tab", { name: "Sessions", exact: true }).click();
+        await page.getByRole("heading", { name: "Sessions", level: 1 }).waitFor();
+        expect(await page.locator(".page-subtitle").textContent()).toContain(
+          "Active sessions and defaults.",
+        );
+        await page.getByRole("tab", { name: "Worktrees", exact: true }).click();
+        await heading.waitFor();
+        expect(await page.locator(".page-subtitle").textContent()).toContain(
+          "Isolated agent task checkouts and recovery snapshots.",
+        );
+      });
+    },
+  );
+
   it("uses the remote default until a base branch is explicitly selected", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {

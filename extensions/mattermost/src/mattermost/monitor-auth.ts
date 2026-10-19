@@ -1,4 +1,3 @@
-// Mattermost plugin module implements monitor auth behavior.
 import type {
   ChannelIngressDecision,
   ChannelIngressEventInput,
@@ -75,39 +74,12 @@ export function resolveMattermostTrustedChatKind(params: {
     : (params.fallback ?? "direct");
 }
 
-type MattermostCommandAuthDecision =
-  | {
-      ok: true;
-      commandAuthorized: boolean;
-      channelInfo: MattermostChannel;
-      kind: "direct" | "group" | "channel";
-      chatType: "direct" | "group" | "channel";
-      channelName: string;
-      channelDisplay: string;
-      roomLabel: string;
-    }
-  | {
-      ok: false;
-      denyReason:
-        | "unknown-channel"
-        | "dm-disabled"
-        | "dm-pairing"
-        | "unauthorized"
-        | "channels-disabled"
-        | "channel-no-allowlist";
-      commandAuthorized: false;
-      channelInfo: MattermostChannel | null;
-      kind: "direct" | "group" | "channel";
-      chatType: "direct" | "group" | "channel";
-      channelName: string;
-      channelDisplay: string;
-      roomLabel: string;
-    };
-
-type MattermostCommandDenyReason = Extract<
-  MattermostCommandAuthDecision,
-  { ok: false }
->["denyReason"];
+type MattermostCommandDenyReason =
+  | "dm-disabled"
+  | "dm-pairing"
+  | "unauthorized"
+  | "channels-disabled"
+  | "channel-no-allowlist";
 
 export async function resolveMattermostMonitorInboundAccess(params: {
   account: ResolvedMattermostAccount;
@@ -143,7 +115,7 @@ export async function resolveMattermostMonitorInboundAccess(params: {
   const readStoreAllowFrom =
     params.readStoreAllowFrom ??
     (storeAllowFrom != null ? async () => [...storeAllowFrom] : undefined);
-  const ingress = await getMattermostRuntime().channel.inbound.ingress.resolveStable({
+  return await getMattermostRuntime().channel.inbound.ingress.resolveStable({
     channelId: "mattermost",
     accountId: account.accountId,
     identity: mattermostIngressIdentity,
@@ -177,7 +149,6 @@ export async function resolveMattermostMonitorInboundAccess(params: {
       directGroupAllowFrom: kind === "direct" ? "effective" : "none",
     },
   });
-  return ingress;
 }
 
 /** Live and recovered history share the same trigger-versus-visibility policy. */
@@ -244,7 +215,7 @@ export async function authorizeMattermostCommandInvocation(params: {
   readStoreAllowFrom?: () => Promise<Array<string | number>>;
   allowTextCommands: boolean;
   hasControlCommand: boolean;
-}): Promise<MattermostCommandAuthDecision> {
+}) {
   const {
     account,
     cfg,
@@ -260,12 +231,12 @@ export async function authorizeMattermostCommandInvocation(params: {
 
   if (!channelInfo?.type) {
     return {
-      ok: false,
-      denyReason: "unknown-channel",
-      commandAuthorized: false,
+      ok: false as const,
+      denyReason: "unknown-channel" as const,
+      commandAuthorized: false as const,
       channelInfo,
-      kind: "channel",
-      chatType: "channel",
+      kind: "channel" as const,
+      chatType: "channel" as const,
       channelName: "",
       channelDisplay: "",
       roomLabel: `#${channelId}`,
@@ -302,28 +273,15 @@ export async function authorizeMattermostCommandInvocation(params: {
     dmPolicy: account.config.dmPolicy ?? "pairing",
   });
 
-  if (denyReason) {
-    return {
-      ok: false,
-      denyReason,
-      commandAuthorized: false,
-      channelInfo,
-      kind,
-      chatType,
-      channelName,
-      channelDisplay,
-      roomLabel,
-    };
-  }
-
   return {
-    ok: true,
-    commandAuthorized: ingress.commandAccess.authorized,
     channelInfo,
     kind,
     chatType,
     channelName,
     channelDisplay,
     roomLabel,
+    ...(denyReason
+      ? { ok: false as const, denyReason, commandAuthorized: false as const }
+      : { ok: true as const, commandAuthorized: ingress.commandAccess.authorized }),
   };
 }

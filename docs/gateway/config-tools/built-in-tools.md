@@ -37,7 +37,13 @@ Values shown are defaults except `applyPatch.allowModels` (empty/unset by defaul
 
 ## `tools.loopDetection`
 
-Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.entries.*.tools.loopDetection`.
+Rolling tool-loop detection is **disabled by default**. Set `enabled: true` to activate it. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.entries.*.tools.loopDetection`.
+
+Independently, three consecutive identical tool errors always end the turn with
+a recorded failure and recovery guidance, even when `enabled` is `false`.
+Changed arguments or results and successful calls reset that error streak.
+See [Tool-loop detection](/tools/loop-detection) for the separate post-compaction
+guard and rolling detection behavior.
 
 ```json5
 {

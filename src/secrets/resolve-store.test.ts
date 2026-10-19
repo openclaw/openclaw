@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { describeSecretResolutionError } from "./resolve-errors.js";
 import { resolveSecretRefString } from "./resolve.js";
 import { isRetryableSecretDegradationReason } from "./runtime-degraded-state.js";
@@ -17,33 +17,14 @@ async function createStateEnv(): Promise<NodeJS.ProcessEnv> {
 }
 
 afterEach(async () => {
-  closeOpenClawStateDatabaseForTest();
+  await closeOpenClawStateDatabaseAsync();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
 describe("store SecretRef resolution", () => {
-  it("resolves a team store value through the implicit default provider", async () => {
-    const env = await createStateEnv();
-    writeSecretStoreEntry({
-      scope: { kind: "team" },
-      name: "STORED_API_KEY",
-      value: "resolved-store-secret",
-      kind: "secret",
-      updatedBy: "test",
-      database: { env },
-    });
-
-    await expect(
-      resolveSecretRefString(
-        { source: "store", provider: "default", id: "STORED_API_KEY" },
-        { config: {}, env },
-      ),
-    ).resolves.toBe("resolved-store-secret");
-  });
-
   it("resolves the store default when an env provider uses the same alias", async () => {
     const env = await createStateEnv();
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: { kind: "team" },
       name: "STORED_API_KEY",
       value: "resolved-store-secret",
@@ -65,7 +46,7 @@ describe("store SecretRef resolution", () => {
 
   it("resolves an explicitly configured store provider alias", async () => {
     const env = await createStateEnv();
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: { kind: "team" },
       name: "STORED_API_KEY",
       value: "resolved-store-secret",

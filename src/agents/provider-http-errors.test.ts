@@ -1,870 +1,380 @@
-// Verifies provider HTTP error parsing, redaction, and response-size limits.
-import { describe, expect, it, vi } from "vitest";
+import assert from "node:assert/strict";
+import { afterEach, expect, it, vi } from "vitest";
 import {
-  assertOkOrThrowProviderError,
-  assertOkOrThrowHttpError,
-  createProviderHttpError,
-  extractProviderErrorDetail,
-  extractProviderRequestId,
-  formatProviderErrorPayload,
+  assertOkOrThrowProviderError as assertProviderOk,
+  assertOkOrThrowHttpError as assertHttpOk,
+  createProviderCredentialMatcher as credentialMatcher,
+  createProviderErrorTextRedactor as textRedactor,
+  createProviderHttpError as createError,
+  extractProviderErrorDetail as errorDetail,
+  extractProviderRequestId as requestId,
+  formatProviderErrorPayload as formatPayload,
   ProviderHttpError,
-  readProviderBinaryResponse,
-  readProviderJsonResponse,
-  readProviderTextResponse,
-  readResponseTextLimited,
+  readProviderBinaryResponse as readBinary,
+  readProviderJsonResponse as readJson,
+  readProviderJsonObjectResponse as readJsonObject,
+  readProviderTextResponse as readText,
+  readResponseTextLimited as readLimited,
 } from "./provider-http-errors.js";
 
-function createStreamingBinaryResponse(params: {
-  chunkCount: number;
-  chunkSize: number;
-  byte: number;
-}): { response: Response; getReadCount: () => number } {
-  // Streaming fixture proves oversized binary reads stop before buffering everything.
-  let reads = 0;
-  const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (reads >= params.chunkCount) {
-        controller.close();
-        return;
-      }
-      reads += 1;
-      controller.enqueue(new Uint8Array(params.chunkSize).fill(params.byte));
+const streamResponse = (
+  source: UnderlyingSource<Uint8Array>,
+  status = 200,
+  headers?: HeadersInit,
+) => new Response(new ReadableStream<Uint8Array>(source), { status, headers });
+const byteResponse = (contentType?: string) =>
+  new Response(
+    new Uint8Array([1]),
+    contentType === undefined ? undefined : { headers: { "content-type": contentType } },
+  );
+
+const label = "Provider API error";
+const jsonResponse = (payload: unknown, status = 400, headers?: HeadersInit) =>
+  new Response(JSON.stringify(payload), { status, headers });
+const jsonError = (error: unknown, status: number, headers?: HeadersInit) =>
+  jsonResponse({ error }, status, headers);
+const stalledResponse = (cancel: () => void) =>
+  streamResponse({ pull: () => new Promise<void>(() => {}), cancel }, 503);
+const matcher = (
+  headers: HeadersInit,
+  overrides: Partial<Parameters<typeof credentialMatcher>[0]> = {},
+) =>
+  credentialMatcher({
+    headers: new Headers(headers),
+    defaultAuthHeader: "Authorization",
+    ...overrides,
+  });
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
+it("matches only active credential values, including the redaction marker itself", () => {
+  const empty = matcher({ Accept: "application/json" });
+  expect(empty("Bearer demo application/json")).toBe(false);
+  const active = matcher({ Authorization: "Bearer ***" }, { defaultAuthPrefix: "Bearer " });
+  expect(active("***")).toBe(true);
+  expect(active("Bearer demo")).toBe(false);
+  const basic = matcher({
+    Authorization: "Basic " + Buffer.from("fixture-user:fixture-password").toString("base64"),
+  });
+  expect(basic("fixture-password")).toBe(true);
+});
+it("matches the active values of configured headers without matching transport defaults", () => {
+  const matches = matcher(
+    {
+      Accept: "application/json",
+      "X-API-Key": "active-key",
+      "X-Request-Key": "request-key",
     },
-  });
-  return {
-    response: new Response(stream, {
-      status: 200,
-      headers: { "Content-Type": "audio/mpeg" },
-    }),
-    getReadCount: () => reads,
-  };
-}
-
-function createStreamingJsonResponse(params: { chunkCount: number; chunkSize: number }): {
-  response: Response;
-  getReadCount: () => number;
-} {
-  // Streaming fixture proves oversized JSON reads stop before buffering everything.
-  let reads = 0;
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (reads >= params.chunkCount) {
-        controller.close();
-        return;
-      }
-      reads += 1;
-      controller.enqueue(encoder.encode("a".repeat(params.chunkSize)));
+    {
+      configuredHeaderNames: ["X-API-Key"],
+      request: { headers: { "X-Request-Key": "overridden-key" } },
     },
+  );
+  expect(matches("active-key")).toBe(true);
+  expect(matches("request-key")).toBe(true);
+  expect(matches("overridden-key application/json Bearer demo")).toBe(false);
+});
+it("redacts canonical JSON and URL encodings after removing a custom auth prefix", () => {
+  const value = 'synthetic-"quoted-token';
+  const redact = textRedactor({
+    headers: new Headers({ "X-Server-Key": "Token " + value }),
+    request: { auth: { mode: "header", headerName: "X-Server-Key", prefix: "Token ", value } },
+    defaultAuthHeader: "Authorization",
   });
-  return {
-    response: new Response(stream, {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
+  expect(redact(JSON.stringify({ model: value }))).toBe('{"model":"***"}');
+  expect(redact(encodeURIComponent(value))).toBe("***");
+  expect(redact(value.slice(0, -3), { truncated: true })).toBe("***");
+});
+it.each([
+  ["string", "provider failure", undefined],
+  ["empty object", {}, undefined],
+  ["type-only metadata", { type: " rate ", code: " " }, "[type=rate]"],
+] as const)("formats the public %s payload", (_name, payload, expected) => {
+  expect(formatPayload(payload)).toBe(expected);
+});
+
+it("reads string error fields and fallback request id headers", async () => {
+  const response = jsonResponse({ error: "Invalid API key" }, 401, {
+    "request-id": "fallback_req",
+  });
+
+  expect(await errorDetail(response)).toBe("Invalid API key");
+  expect(requestId(response)).toBe("fallback_req");
+});
+
+it("preserves OAuth error descriptions as actionable details", async () => {
+  const response = jsonResponse({
+    error: "invalid_request",
+    error_description: "AADSTS7000215: Invalid client secret provided.",
+  });
+
+  await expect(assertProviderOk(response, "OAuth token exchange failed")).rejects.toThrow(
+    "OAuth token exchange failed (400): AADSTS7000215: Invalid client secret provided. [code=invalid_request]",
+  );
+});
+
+it("does not split UTF-16 surrogate pairs when truncating provider error details", async () => {
+  const safePrefix = "a".repeat(218);
+  const message = `${safePrefix}😀suffix`;
+  const response = jsonResponse({ error: { message, code: "utf16_test" } });
+
+  await expect(assertProviderOk(response, label)).rejects.toThrow(
+    `Provider API error (400): ${safePrefix}… [code=utf16_test]`,
+  );
+});
+
+it.each(["elapsed", "expired"])("propagates an %s error-body deadline", async (deadline) => {
+  vi.useFakeTimers();
+  const cancel = vi.fn();
+  const message =
+    deadline === "elapsed" ? "provider body timed out 50" : "provider deadline already expired";
+  const assertion = expect(
+    assertHttpOk(stalledResponse(cancel), label, {
+      bodyTimeoutMs: () => {
+        if (deadline === "expired") {
+          throw new Error(message);
+        }
+        return 50;
+      },
+      onBodyTimeout: ({ timeoutMs }) => new Error(`provider body timed out ${timeoutMs}`),
     }),
-    getReadCount: () => reads,
-  };
-}
+  ).rejects.toThrow(message);
+  if (deadline === "elapsed") {
+    await vi.advanceTimersByTimeAsync(50);
+  }
+  await assertion;
+  expect(cancel).toHaveBeenCalledTimes(1);
+});
 
-function createStreamingTextResponse(params: { chunkCount: number; chunkSize: number }): {
-  response: Response;
-  getReadCount: () => number;
-} {
-  let reads = 0;
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (reads >= params.chunkCount) {
-        controller.close();
-        return;
-      }
-      reads += 1;
-      controller.enqueue(encoder.encode("x".repeat(params.chunkSize)));
-    },
-  });
-  return {
-    response: new Response(stream, {
-      status: 200,
-      headers: { "Content-Type": "text/plain" },
-    }),
-    getReadCount: () => reads,
-  };
-}
+it("preserves the request timeout that interrupts an error body", async () => {
+  const timeout = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+  const response = streamResponse({ start: (controller) => controller.error(timeout) }, 503);
 
-describe("provider error utils", () => {
-  it.each([
-    ["undefined", undefined, undefined],
-    ["null", null, undefined],
-    ["string", "provider failure", undefined],
-    ["number", 429, undefined],
-    ["boolean", false, undefined],
-    ["function", () => "provider failure", undefined],
-    ["array", [{ message: "ignored" }], undefined],
-    ["empty object", {}, undefined],
-    ["blank fields", { message: " ", detail: "\n", type: " ", code: " " }, undefined],
-    [
-      "nested error before detail and root",
-      {
-        error: { message: " nested ", type: " invalid ", code: " bad " },
-        detail: { message: "ignored detail" },
-        message: "ignored root",
-      },
-      "nested [type=invalid, code=bad]",
-    ],
-    [
-      "array error before object detail",
-      { error: [{ message: "ignored" }], detail: { message: " detail ", status: " retry " } },
-      "detail [code=retry]",
-    ],
-    ["array detail before root", { detail: ["ignored"], message: " root " }, "root"],
-    [
-      "blank nested message before root fallback",
-      { error: { message: " ", detail: 7 }, detail: { message: "ignored" }, message: " root " },
-      "root",
-    ],
-    [
-      "nested detail before OAuth description",
-      { error: { message: " ", detail: " nested detail ", error_description: "ignored" } },
-      "nested detail",
-    ],
-    ["root detail before flat error", { detail: " detail ", error: "ignored" }, "detail"],
-    [
-      "OAuth description and raw error code",
-      { error: " invalid_request ", error_description: " Needs configuration " },
-      "Needs configuration [code=invalid_request]",
-    ],
-    ["flat error without OAuth description", { error: " invalid_request " }, "invalid_request"],
-    [
-      "blank OAuth description without inferred code",
-      { error: " invalid_request ", error_description: " " },
-      "invalid_request",
-    ],
-    [
-      "explicit code before status and OAuth code",
-      {
-        message: "retry",
-        code: " limited ",
-        status: "ignored",
-        error: "ignored",
-        error_description: "ignored",
-      },
-      "retry [code=limited]",
-    ],
-    ["non-string code before status", { code: 3, status: " bad " }, "[code=bad]"],
-    ["type-only metadata", { type: " rate ", code: " " }, "[type=rate]"],
-    ["raw public text", { message: "api_key=not-a-real-key" }, "api_key=not-a-real-key"],
-  ] as const)("formats the public %s payload", (_name, payload, expected) => {
-    expect(formatProviderErrorPayload(payload)).toBe(expected);
-  });
+  await expect(assertProviderOk(response, label)).rejects.toBe(timeout);
+});
 
-  it("preserves changing public getters and skips lower-priority fields", () => {
-    const reads: string[] = [];
-    let messageReads = 0;
-    const subject = {
-      get error_description() {
-        reads.push("subject.error_description");
-        return undefined;
+it.each([
+  ["complete", 64, "provider error", 0],
+  ["truncated", 8, "provider", 1],
+] as const)(
+  "releases %s body readers and cancels only truncation",
+  async (kind, limit, expected, cancellations) => {
+    const releaseLock = vi.spyOn(ReadableStreamDefaultReader.prototype, "releaseLock");
+    const cancel = vi.spyOn(ReadableStreamDefaultReader.prototype, "cancel");
+    const response = streamResponse({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("provider error"));
+        if (kind === "complete") {
+          controller.close();
+        }
       },
-      get message() {
-        reads.push("subject.message");
-        return ++messageReads === 1 ? " first " : " second ";
-      },
-      get detail() {
-        throw new Error("lower-priority subject detail must stay unread");
-      },
-      get type() {
-        reads.push("subject.type");
-        return " rate ";
-      },
-      get code() {
-        reads.push("subject.code");
-        return " limited ";
-      },
-      get status() {
-        throw new Error("lower-priority status must stay unread");
-      },
-    };
-    const payload = {
-      get detail() {
-        reads.push("root.detail");
-        return { message: "ignored detail" };
-      },
-      get error() {
-        reads.push("root.error");
-        return subject;
-      },
-      get error_description() {
-        reads.push("root.error_description");
-        return undefined;
-      },
-      get message() {
-        throw new Error("lower-priority root message must stay unread");
-      },
-    };
-
-    for (const expected of [
-      "first [type=rate, code=limited]",
-      "second [type=rate, code=limited]",
-    ]) {
-      reads.length = 0;
-      expect(formatProviderErrorPayload(payload)).toBe(expected);
-      expect(reads).toEqual([
-        "root.detail",
-        "root.error",
-        "subject.error_description",
-        "root.error_description",
-        "subject.message",
-        "subject.type",
-        "subject.code",
-      ]);
-    }
-  });
-
-  it("formats nested provider error details with request ids", async () => {
-    const response = new Response(
-      JSON.stringify({
-        detail: {
-          message: "Quota exceeded",
-          status: "quota_exceeded",
-        },
-      }),
-      {
-        status: 429,
-        headers: { "x-request-id": "req_123" },
-      },
-    );
-
-    await expect(assertOkOrThrowProviderError(response, "Provider API error")).rejects.toThrow(
-      "Provider API error (429): Quota exceeded [code=quota_exceeded] [request_id=req_123]",
-    );
-  });
-
-  it("reads string error fields and fallback request id headers", async () => {
-    const response = new Response(JSON.stringify({ error: "Invalid API key" }), {
-      status: 401,
-      headers: { "request-id": "fallback_req" },
     });
+    await expect(readLimited(response, limit)).resolves.toBe(expected);
+    expect(cancel).toHaveBeenCalledTimes(cancellations);
+    expect(releaseLock).toHaveBeenCalledOnce();
+  },
+);
 
-    expect(await extractProviderErrorDetail(response)).toBe("Invalid API key");
-    expect(extractProviderRequestId(response)).toBe("fallback_req");
-  });
-
-  it("preserves OAuth error descriptions as actionable details", async () => {
-    const response = new Response(
-      JSON.stringify({
-        error: "invalid_request",
-        error_description: "AADSTS7000215: Invalid client secret provided.",
-      }),
-      { status: 400 },
-    );
-
-    await expect(
-      assertOkOrThrowProviderError(response, "OAuth token exchange failed"),
-    ).rejects.toThrow(
-      "OAuth token exchange failed (400): AADSTS7000215: Invalid client secret provided. [code=invalid_request]",
-    );
-  });
-
-  it("does not split UTF-16 surrogate pairs when truncating provider error details", async () => {
-    const safePrefix = "a".repeat(218);
-    const message = `${safePrefix}😀suffix`;
-    const response = new Response(
-      JSON.stringify({
-        error: { message, code: "utf16_test" },
-      }),
-      { status: 400 },
-    );
-
-    await expect(assertOkOrThrowProviderError(response, "Provider API error")).rejects.toThrow(
-      `Provider API error (400): ${safePrefix}… [code=utf16_test]`,
-    );
-  });
-
-  it("keeps HTTP status metadata when error body reads fail", async () => {
-    const response = {
-      ok: false,
-      status: 503,
-      headers: new Headers(),
-      body: {
-        getReader: () => ({
-          read: async () => {
-            throw new Error("broken response stream");
-          },
-          cancel: async () => undefined,
-        }),
-      },
-    } as unknown as Response;
-
-    await expect(
-      assertOkOrThrowProviderError(response, "Provider API error"),
-    ).rejects.toMatchObject({
-      name: "ProviderHttpError",
-      status: 503,
-      statusCode: 503,
-      message: "Provider API error (503)",
-    } satisfies Partial<ProviderHttpError>);
-  });
-
-  it("propagates a bounded error-body timeout instead of hanging normalization", async () => {
-    vi.useFakeTimers();
-    try {
-      const cancel = vi.fn();
-      const response = new Response(
-        new ReadableStream<Uint8Array>({
-          pull() {
-            return new Promise<void>(() => {});
-          },
-          cancel,
-        }),
-        { status: 503 },
-      );
-      const assertion = expect(
-        assertOkOrThrowHttpError(response, "Provider API error", {
-          bodyTimeoutMs: () => 50,
-          onBodyTimeout: ({ timeoutMs }) => new Error(`provider body timed out ${timeoutMs}`),
-        }),
-      ).rejects.toThrow("provider body timed out 50");
-
-      await vi.advanceTimersByTimeAsync(50);
-      await assertion;
-      expect(cancel).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("preserves the request timeout that interrupts an error body", async () => {
-    const timeout = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.error(timeout);
-        },
-      }),
-      { status: 503 },
-    );
-
-    await expect(assertOkOrThrowProviderError(response, "Provider API error")).rejects.toBe(
-      timeout,
-    );
-  });
-
-  it("propagates an already-expired lazy error-body deadline", async () => {
-    const cancel = vi.fn();
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        pull() {
-          return new Promise<void>(() => {});
-        },
-        cancel,
-      }),
-      { status: 503 },
-    );
-
-    await expect(
-      assertOkOrThrowHttpError(response, "Provider API error", {
-        bodyTimeoutMs: () => {
-          throw new Error("provider deadline already expired");
-        },
-      }),
-    ).rejects.toThrow("provider deadline already expired");
-    expect(cancel).toHaveBeenCalledTimes(1);
-  });
-
-  it("releases provider error body reader locks after bounded reads complete", async () => {
-    const releaseLock = vi.fn();
-    const cancel = vi.fn(async () => undefined);
-    const chunks: Array<ReadableStreamReadResult<Uint8Array>> = [
-      { done: false, value: new TextEncoder().encode("provider error") },
-      { done: true, value: undefined },
-    ];
-    const response = {
-      body: {
-        getReader: () => ({
-          read: async () => chunks.shift() ?? { done: true, value: undefined },
-          cancel,
-          releaseLock,
-        }),
-      },
-    } as unknown as Response;
-
-    await expect(readResponseTextLimited(response, 64)).resolves.toBe("provider error");
-    expect(cancel).not.toHaveBeenCalled();
-    expect(releaseLock).toHaveBeenCalledTimes(1);
-  });
-
-  it("cancels and releases provider error body readers after diagnostic truncation", async () => {
-    const releaseLock = vi.fn();
-    const cancel = vi.fn(async () => undefined);
-    const response = {
-      body: {
-        getReader: () => ({
-          read: async () => ({ done: false, value: new TextEncoder().encode("provider error") }),
-          cancel,
-          releaseLock,
-        }),
-      },
-    } as unknown as Response;
-
-    await expect(readResponseTextLimited(response, 8)).resolves.toBe("provider");
-    expect(cancel).toHaveBeenCalledTimes(1);
-    expect(releaseLock).toHaveBeenCalledTimes(1);
-  });
-
-  it("drops partial UTF-8 characters when provider error body reads truncate", async () => {
-    const response = new Response(new Blob([new TextEncoder().encode("ab😀cd")]).stream());
-
-    await expect(readResponseTextLimited(response, 3)).resolves.toBe("ab");
-  });
-
-  it("attaches structured provider error metadata", async () => {
-    // API-key-like substrings must be redacted from stored error bodies.
-    const response = new Response(
-      JSON.stringify({
-        error: {
-          message: "Quota exceeded for api_key=sk-secret1234567890abcd",
-          type: "rate_limit_error",
-          code: "insufficient_quota",
-        },
-      }),
-      {
-        status: 429,
-        headers: { "x-request-id": "req_456" },
-      },
-    );
-
-    const error = await createProviderHttpError(response, "Provider API error");
-    expect(error).toMatchObject({
-      name: "ProviderHttpError",
-      status: 429,
-      statusCode: 429,
+it("attaches structured provider error metadata", async () => {
+  const response = jsonError(
+    {
+      message: "Quota exceeded for api_key=sk-secret1234567890abcd",
+      type: "rate_limit_error",
       code: "insufficient_quota",
-      errorCode: "insufficient_quota",
-      errorType: "rate_limit_error",
-      requestId: "req_456",
-    } satisfies Partial<ProviderHttpError>);
-    const providerError = error as ProviderHttpError;
-    expect(providerError.message).toContain("Quota exceeded");
-    expect(providerError.errorBody).toContain("Quota exceeded");
-    expect(providerError.errorBody).not.toContain("sk-secret1234567890abcd");
+    },
+    429,
+    { "x-request-id": "req_456" },
+  );
+
+  const error = await createError(response, label);
+  expect(error).toMatchObject({
+    name: "ProviderHttpError",
+    status: 429,
+    statusCode: 429,
+    code: "insufficient_quota",
+    errorCode: "insufficient_quota",
+    errorType: "rate_limit_error",
+    requestId: "req_456",
+    message: expect.stringContaining("Quota exceeded"),
+    errorBody: expect.stringContaining("Quota exceeded"),
+  } satisfies Partial<ProviderHttpError>);
+  expect(error.errorBody).not.toContain("sk-secret1234567890abcd");
+});
+
+it.each([
+  ["delta seconds", "12", 12_000],
+  ["past HTTP date", "Fri, 01 May 2026 11:59:55 GMT", 0],
+])("preserves Retry-After $name as structured milliseconds", async (_name, value, expected) => {
+  vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 4, 1, 12, 0, 0));
+  const error = await createError(
+    new Response(null, { status: 429, headers: { "Retry-After": value } }),
+    label,
+  );
+
+  expect(error).toMatchObject({ retryAfterMs: expected });
+});
+
+it("redacts reflected request credentials before extracting provider error metadata", async () => {
+  const credential = 'opaque +17/GLASS~MOTH%"tail';
+  const encoded = encodeURIComponent(credential);
+  const response = jsonError(
+    {
+      message: `Proxy rejected ${"x".repeat(195)} ${credential}`,
+      code: encoded,
+      type: credential,
+    },
+    401,
+    { "x-request-id": encoded },
+  );
+
+  const error = await createError(response, "Provider request failed", {
+    requestHeaders: { "X-Proxy-Auth": credential },
   });
 
-  it.each([
-    ["delta seconds", "12", 12_000],
-    ["HTTP date", "Fri, 01 May 2026 12:00:05 GMT", 5_000],
-    ["past HTTP date", "Fri, 01 May 2026 11:59:55 GMT", 0],
-  ])("preserves Retry-After $name as structured milliseconds", async (_name, value, expected) => {
-    const now = Date.UTC(2026, 4, 1, 12, 0, 0);
-    // Shared-worker runs (--isolate=false): restore Date.now even on assertion failure.
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
-    try {
-      const error = await createProviderHttpError(
-        new Response(null, { status: 429, headers: { "Retry-After": value } }),
-        "Provider API error",
-      );
+  expect(error).toMatchObject({
+    status: 401,
+    code: "***",
+    errorCode: "***",
+    errorType: "***",
+    requestId: "***",
+  });
+  for (const representation of [credential, encoded, credential.slice(0, 6)]) {
+    expect(error.message).not.toContain(representation);
+    expect(error.errorBody).not.toContain(representation);
+  }
+});
 
-      expect(error).toMatchObject({ retryAfterMs: expected });
-    } finally {
-      nowSpy.mockRestore();
-    }
+it("redacts a reflected credential cut by the error body byte limit", async () => {
+  const credential = `opaque-prefix-${"q".repeat(16 * 1024)}-suffix`;
+  const response = new Response(`Proxy rejected ${credential}`, { status: 401 });
+
+  const error = await createError(response, "Provider request failed", {
+    requestHeaders: new Headers({ "X-Proxy-Auth": credential }),
   });
 
-  it.each([
-    ["negative header", { header: "-1" }],
-    ["unsafe header", { header: "9007199254741" }],
-  ])("ignores $name cooldown hints", async (_name, value) => {
-    const error = await createProviderHttpError(
-      new Response(null, {
-        status: 429,
-        headers: { "Retry-After": value.header },
-      }),
-      "Provider API error",
-    );
-
-    expect((error as ProviderHttpError).retryAfterMs).toBeUndefined();
+  expect(error).toMatchObject({
+    message: "Provider request failed (401): Proxy rejected ***",
+    errorBody: "Proxy rejected ***",
   });
+});
 
-  it("keeps legacy HTTP status formatting while sharing provider parsing", async () => {
-    const response = new Response(
-      JSON.stringify({
-        error: {
-          message: "Bad request",
-          code: "invalid_request",
-        },
-      }),
-      {
-        status: 400,
-        headers: { "x-request-id": "req_legacy" },
-      },
-    );
-
-    await expect(assertOkOrThrowHttpError(response, "Legacy provider error")).rejects.toThrow(
-      "Legacy provider error (HTTP 400): Bad request [code=invalid_request] [request_id=req_legacy]",
-    );
-  });
-
-  it("redacts reflected request credentials before extracting provider error metadata", async () => {
-    const credential = 'opaque +17/GLASS~MOTH%"tail';
-    const encoded = encodeURIComponent(credential);
-    const response = new Response(
-      JSON.stringify({
-        error: {
-          message: `Proxy rejected ${"x".repeat(195)} ${credential}`,
-          code: encoded,
-          type: credential,
-        },
-      }),
-      { status: 401, headers: { "x-request-id": encoded } },
-    );
-
-    const error = await createProviderHttpError(response, "Provider request failed", {
-      requestHeaders: { "X-Proxy-Auth": credential },
-    });
-
-    expect(error).toMatchObject({
-      status: 401,
-      code: "***",
-      errorCode: "***",
-      errorType: "***",
-      requestId: "***",
-    });
-    for (const representation of [credential, encoded, credential.slice(0, 6)]) {
-      expect(error.message).not.toContain(representation);
-      expect((error as ProviderHttpError).errorBody).not.toContain(representation);
-    }
-  });
-
-  it("redacts a reflected credential cut by the error body byte limit", async () => {
-    const credential = `opaque-prefix-${"q".repeat(16 * 1024)}-suffix`;
-    const response = new Response(`Proxy rejected ${credential}`, { status: 401 });
-
-    const error = await createProviderHttpError(response, "Provider request failed", {
-      requestHeaders: new Headers({ "X-Proxy-Auth": credential }),
-    });
-
-    expect(error).toMatchObject({
-      message: "Provider request failed (401): Proxy rejected ***",
-      errorBody: "Proxy rejected ***",
-    });
-  });
-
-  it("wraps malformed successful JSON responses with provider labels", async () => {
-    const response = new Response("{ nope", {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-
-    await expect(readProviderJsonResponse(response, "Provider catalog failed")).rejects.toThrow(
-      "Provider catalog failed: malformed JSON response",
-    );
-  });
-
-  it("does not retain reflected credentials in malformed JSON causes", async () => {
-    const credential = "opaque-credential";
-    const response = new Response(credential, { status: 200 });
-    const error = await readProviderJsonResponse(response, "Provider response failed", {
-      requestHeaders: { "X-Proxy-Auth": credential },
+it.each([
+  ["credential", "opaque-credential", { "X-Proxy-Auth": "opaque-credential" }, undefined],
+  ["invalid UTF-8", new Uint8Array([0xff]), undefined, expect.any(TypeError)],
+] as const)(
+  "rejects malformed JSON with %s",
+  async (_name, body, requestHeaders, expectedCause) => {
+    const error = await readJson(new Response(body), "Provider response failed", {
+      requestHeaders,
     }).catch((cause: unknown) => cause);
-
     expect(error).toBeInstanceOf(Error);
     expect(error).toMatchObject({ message: "Provider response failed: malformed JSON response" });
-    expect(String((error as Error).cause)).not.toContain(credential);
-  });
+    expect((error as Error).cause).toEqual(expectedCause);
+  },
+);
 
-  it("parses well-formed JSON responses under the byte cap", async () => {
-    const response = new Response(JSON.stringify({ models: ["a", "b"] }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-
-    await expect(
-      readProviderJsonResponse<{ models: string[] }>(response, "Provider catalog failed"),
-    ).resolves.toEqual({ models: ["a", "b"] });
-  });
-
-  it("caps successful JSON responses instead of buffering oversized bodies", async () => {
-    const streamed = createStreamingJsonResponse({
-      chunkCount: 20,
-      chunkSize: 1024,
-    });
-
-    await expect(
-      readProviderJsonResponse(streamed.response, "Provider catalog failed", {
-        maxBytes: 2048,
-      }),
-    ).rejects.toThrow("Provider catalog failed: JSON response exceeds 2048 bytes");
-
-    expect(streamed.getReadCount()).toBeLessThan(20);
-  });
-
-  it("honors custom JSON overflow errors and stops reading", async () => {
-    const streamed = createStreamingJsonResponse({
-      chunkCount: 20,
-      chunkSize: 1024,
-    });
-    const sentinel = new Error("custom overflow");
-    const onOverflow = vi.fn(() => sentinel);
-
-    const error = await readProviderJsonResponse(streamed.response, "Provider catalog failed", {
-      maxBytes: 2048,
-      onOverflow,
+it("preserves malformed JSON diagnostics when adapting the caller-facing message", async () => {
+  for (const requestHeaders of [undefined, { "X-Proxy-Auth": "synthetic-secret" }]) {
+    const error = await readJson(new Response("<html></html>"), "Video response", {
+      malformedResponseError: "Video response malformed",
+      requestHeaders,
     }).catch((cause: unknown) => cause);
-
-    expect(error).toBe(sentinel);
-    expect(onOverflow).toHaveBeenCalledOnce();
-    expect(onOverflow).toHaveBeenCalledWith({
-      size: 3072,
-      maxBytes: 2048,
-      res: streamed.response,
+    assert.ok(error instanceof Error);
+    expect(error).toMatchObject({
+      message: "Video response malformed",
+      cause: { message: "Video response: malformed JSON response" },
     });
-    expect(streamed.getReadCount()).toBeLessThan(20);
-  });
+    assert.ok(error.cause instanceof Error);
+    expect(error.cause.cause).toEqual(requestHeaders ? undefined : expect.any(SyntaxError));
+  }
+});
 
-  it("rejects provider JSON responses with invalid UTF-8 bytes instead of silently replacing them", async () => {
-    const invalidUtf8Bytes = new Uint8Array([0x7b, 0x22, 0x6b, 0x65, 0x79, 0x22, 0x3a, 0xff, 0x7d]);
-    const response = new Response(invalidUtf8Bytes.buffer, {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+it("adapts invalid JSON object shapes without rewriting body-read errors", async () => {
+  const options = { malformedResponseError: "Video response malformed", maxBytes: 4 };
+  const error = await readJsonObject(Response.json([]), "Video response", options).catch(
+    (cause: unknown) => cause,
+  );
+  expect(error).toMatchObject({ message: "Video response malformed" });
+  expect(error).not.toHaveProperty("cause");
+  await expect(
+    readJsonObject(new Response("oversized"), "Video response", options),
+  ).rejects.toThrow("Video response: JSON response exceeds 4 bytes");
+});
 
-    await expect(readProviderJsonResponse(response, "Provider JSON failed")).rejects.toMatchObject({
-      message: "Provider JSON failed: malformed JSON response",
-      cause: expect.any(TypeError) as unknown,
-    });
-  });
+it("caps successful text responses instead of buffering oversized bodies", async () => {
+  let reads = 0;
+  const response = streamResponse(
+    {
+      pull: (controller) =>
+        reads++ === 20 ? controller.close() : controller.enqueue(new Uint8Array(1024).fill(120)),
+    },
+    200,
+    { "content-type": "text/plain" },
+  );
+  await expect(readText(response, "Provider text failed", { maxBytes: 2048 })).rejects.toThrow(
+    "Provider text failed: text response exceeds 2048 bytes",
+  );
 
-  it("caps successful text responses instead of buffering oversized bodies", async () => {
-    const streamed = createStreamingTextResponse({
-      chunkCount: 20,
-      chunkSize: 1024,
-    });
+  expect(reads).toBeLessThan(20);
+});
 
-    await expect(
-      readProviderTextResponse(streamed.response, "Provider text failed", {
-        maxBytes: 2048,
-      }),
-    ).rejects.toThrow("Provider text failed: text response exceeds 2048 bytes");
+it("does not await clone-tee cancellation for rejected binary responses", async () => {
+  const cancel = vi.fn();
+  const response = streamResponse({ cancel }, 200, { "content-type": "application/json" });
+  const captureClone = response.clone();
 
-    expect(streamed.getReadCount()).toBeLessThan(20);
-  });
+  await expect(readBinary(response, "Provider TTS failed", "audio")).rejects.toThrow(
+    "Provider TTS failed: malformed audio response",
+  );
+  expect(cancel).not.toHaveBeenCalled();
+  await captureClone.body?.cancel();
+  expect(cancel).toHaveBeenCalledTimes(1);
+});
 
-  it("caps successful binary responses instead of buffering oversized bodies", async () => {
-    const streamed = createStreamingBinaryResponse({
-      chunkCount: 20,
-      chunkSize: 1024,
-      byte: 121,
-    });
+it.each([
+  ["video", undefined, true],
+  ["binary", "; text/html", true],
+  ["audio", "", false],
+  ["audio", "video/mp4", false],
+  ["audio", 'audio/ogg; codecs="opus\\", vorbis", text/html', false],
+] as const)("validates %s content type %s", async (kind, contentType, accepted) => {
+  const result = readBinary(byteResponse(contentType), "Provider failed", kind);
+  await (accepted
+    ? expect(result).resolves.toEqual(Buffer.from([1]))
+    : expect(result).rejects.toThrow(`Provider failed: malformed ${kind} response`));
+});
 
-    await expect(
-      readProviderBinaryResponse(streamed.response, "Provider TTS failed", "audio", {
-        maxBytes: 2048,
-      }),
-    ).rejects.toThrow("Provider TTS failed: audio response exceeds 2048 bytes");
-
-    expect(streamed.getReadCount()).toBeLessThan(20);
-  });
-
-  it("does not await clone-tee cancellation for rejected binary responses", async () => {
-    const cancel = vi.fn();
-    const response = new Response(new ReadableStream<Uint8Array>({ cancel }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-    const captureClone = response.clone();
-
-    await expect(
-      readProviderBinaryResponse(response, "Provider TTS failed", "audio"),
-    ).rejects.toThrow("Provider TTS failed: malformed audio response");
-    expect(cancel).not.toHaveBeenCalled();
-    await captureClone.body?.cancel();
-    expect(cancel).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    { kind: "audio", contentType: "audio/mpeg" },
-    { kind: "audio", contentType: "AUDIO/OGG; codecs=opus" },
-    { kind: "audio", contentType: 'audio/ogg; codecs="opus, vorbis"' },
-    { kind: "audio", contentType: 'audio/ogg; codecs="opus\\", vorbis"' },
-    { kind: "audio", contentType: 'audio/ogg; codecs="opus\\\\, vorbis"' },
-    { kind: "audio", contentType: "audio/opus" },
-    { kind: "audio", contentType: "application/ogg" },
-    { kind: "audio", contentType: 'application/ogg; codecs="opus"' },
-    { kind: "audio", contentType: "binary/octet-stream" },
-    { kind: "video", contentType: "binary/octet-stream" },
-    { kind: "audio", contentType: "audio/pcm" },
-    { kind: "audio", contentType: "audio/pcm;" },
-    { kind: "audio", contentType: "audio/pcm; ; " },
-    { kind: "video", contentType: 'video/mp4;; codecs="avc1"' },
-    { kind: "video", contentType: "application/octet-stream;" },
-    { kind: "audio", contentType: "audio/vnd.wave" },
-    { kind: "video", contentType: "video/mp4" },
-    { kind: "video", contentType: "VIDEO/WEBM; codecs=vp9" },
-    { kind: "video", contentType: 'video/mp4; codecs="avc1, mp4a.40.2"' },
-    { kind: "video", contentType: 'video/mp4; codecs="avc1, mp4a.40.2"; profile=main' },
-    { kind: "video", contentType: "video/x-matroska" },
-    { kind: "audio", contentType: "application/octet-stream" },
-    { kind: "video", contentType: "application/octet-stream" },
-    { kind: "audio", contentType: undefined },
-    { kind: "video", contentType: undefined },
-    { kind: "binary", contentType: "image/png" },
-    { kind: "binary", contentType: "image/png; charset=utf-8, text/html" },
-    { kind: "binary", contentType: "; text/html" },
-    { kind: "binary", contentType: "application/zip" },
-  ])("accepts $kind response content type $contentType", async ({ kind, contentType }) => {
-    const response = new Response(
-      new Uint8Array([1]),
-      contentType ? { headers: { "content-type": contentType } } : undefined,
-    );
-
-    await expect(readProviderBinaryResponse(response, "Provider failed", kind)).resolves.toEqual(
-      Buffer.from([1]),
-    );
-  });
-
-  it.each([
-    { kind: "audio", contentType: "image/png" },
-    { kind: "audio", contentType: "" },
-    { kind: "audio", contentType: "; text/html" },
-    { kind: "audio", contentType: "; audio/mpeg, text/html" },
-    { kind: "audio", contentType: "audio/" },
-    { kind: "audio", contentType: "audio/ogg;;, text/html" },
-    { kind: "audio", contentType: 'audio/ogg; codecs="opus"; ;, text/html' },
-    { kind: "audio", contentType: "audio/ogg; codecs" },
-    { kind: "audio", contentType: 'audio/ogg; codecs="opus"garbage' },
-    { kind: "audio", contentType: "audio/mpeg image/png" },
-    { kind: "audio", contentType: "video/mp4" },
-    { kind: "audio", contentType: "audio/mpeg, video/mp4" },
-    { kind: "audio", contentType: "audio/mpeg; charset=utf-8, text/html" },
-    { kind: "audio", contentType: "audio/mpeg; charset=utf-8; profile=voice, text/html" },
-    { kind: "audio", contentType: 'audio/ogg; codecs="opus, vorbis", text/html' },
-    { kind: "audio", contentType: 'audio/ogg; codecs="opus\\", vorbis", text/html' },
-    { kind: "audio", contentType: 'audio/ogg; codecs="opus, vorbis' },
-    { kind: "audio", contentType: 'audio/ogg; codecs="opus\\' },
-    { kind: "video", contentType: "audio/ogg" },
-    { kind: "video", contentType: "application/ogg" },
-    { kind: "audio", contentType: "application/ogg; codecs=opus, text/html" },
-    { kind: "video", contentType: "binary/octet-stream; charset=utf-8, text/html" },
-    { kind: "video", contentType: "" },
-    { kind: "video", contentType: "; video/mp4, application/json" },
-    { kind: "video", contentType: "video/" },
-    { kind: "video", contentType: "video/mp4 image/png" },
-    { kind: "video", contentType: "video/mp4, image/png" },
-    { kind: "video", contentType: "video/mp4; codecs=avc1, application/json" },
-    { kind: "video", contentType: 'video/mp4; codecs="avc1, mp4a"; profile=main, text/html' },
-    { kind: "video", contentType: "image/png" },
-    { kind: "video", contentType: "application/pdf" },
-    { kind: "audio", contentType: "application/json" },
-    { kind: "video", contentType: "application/problem+json" },
-    { kind: "binary", contentType: "text/html; charset=utf-8" },
-    { kind: "binary", contentType: "application/problem+json" },
-  ])("rejects $contentType for $kind responses", async ({ kind, contentType }) => {
-    const response = new Response(new Uint8Array([1]), {
-      headers: { "content-type": contentType },
-    });
-
-    await expect(readProviderBinaryResponse(response, "Provider failed", kind)).rejects.toThrow(
-      `Provider failed: malformed ${kind} response`,
-    );
-  });
-
-  it.each([
-    { kind: "audio", first: "audio/mpeg; charset=utf-8", second: "text/html" },
-    { kind: "video", first: "video/mp4; codecs=avc1", second: "application/json" },
-  ])("rejects repeated Fetch Content-Type headers for $kind", async ({ kind, first, second }) => {
-    const headers = new Headers();
-    headers.append("content-type", first);
-    headers.append("content-type", second);
-    const response = new Response(new Uint8Array([1]), { headers });
-
-    await expect(readProviderBinaryResponse(response, "Provider failed", kind)).rejects.toThrow(
-      `Provider failed: malformed ${kind} response`,
-    );
-  });
-
-  it("rejects stalled JSON response body after chunk idle timeout", async () => {
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array([1]));
-      },
-    });
-    const response = new Response(stream, {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-
-    await expect(
-      readProviderJsonResponse(response, "stalled-provider", { chunkTimeoutMs: 20 }),
-    ).rejects.toThrow("stalled-provider: response body stalled for 20ms");
-  });
-
-  it("bounds stalled binary provider responses with the shared default idle timeout", async () => {
+it.each(["binary", "error"])(
+  "bounds stalled %s bodies with the default idle timeout",
+  async (kind) => {
     vi.useFakeTimers();
-    try {
-      const response = new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new Uint8Array([1]));
-          },
-        }),
-        { headers: { "content-type": "audio/mpeg" } },
-      );
-      const assertion = expect(
-        readProviderBinaryResponse(response, "stalled-provider", "audio"),
-      ).rejects.toThrow("stalled-provider: response body stalled for 30000ms");
-
-      await vi.advanceTimersByTimeAsync(30_000);
-      await assertion;
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("rejects stalled non-2xx error body read after chunk idle timeout", async () => {
-    vi.useFakeTimers();
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      const stream = new ReadableStream<Uint8Array>({
+    const binary = kind === "binary";
+    const timeout = binary ? 30_000 : 10_000;
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const response = streamResponse(
+      {
         start(controller) {
           controller.enqueue(new TextEncoder().encode('{"error": {"message": "par'));
         },
-      });
-      const response = new Response(stream, {
-        status: 502,
-        headers: { "content-type": "application/json" },
-      });
-
-      const assertion = expect(
-        assertOkOrThrowProviderError(response, "stalled-error"),
-      ).rejects.toThrow("stalled-error (502)");
-      await vi.advanceTimersByTimeAsync(0);
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 10_000);
-      await vi.advanceTimersByTimeAsync(10_000);
-      await assertion;
-    } finally {
-      vi.useRealTimers();
+      },
+      binary ? 200 : 502,
+      { "content-type": binary ? "audio/mpeg" : "application/json" },
+    );
+    const assertion = expect(
+      binary
+        ? readBinary(response, "stalled-provider", "audio")
+        : assertProviderOk(response, "stalled-error"),
+    ).rejects.toThrow(
+      binary ? "stalled-provider: response body stalled for 30000ms" : "stalled-error (502)",
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    if (kind === "error") {
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), timeout);
     }
-  });
-
-  it("proves idle timeout with a real TCP server that stalls mid-JSON-body", async () => {
-    const { createServer } = await import("node:http");
-    const server = createServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.write('{"status": "par');
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, resolve);
-    });
-    const port = (server.address() as import("node:net").AddressInfo).port;
-
-    try {
-      const response = await fetch(`http://localhost:${port}/test`);
-      await expect(
-        readProviderJsonResponse(response, "tcp-stall", { chunkTimeoutMs: 100 }),
-      ).rejects.toThrow("tcp-stall: response body stalled for 100ms");
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
-  });
-});
+    await vi.advanceTimersByTimeAsync(timeout);
+    await assertion;
+  },
+);

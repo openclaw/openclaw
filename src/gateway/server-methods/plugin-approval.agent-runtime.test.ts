@@ -7,6 +7,7 @@ import {
   createPreparedTestApprovalManager,
   createTestApprovalFixture,
 } from "../exec-approval-manager.test-support.js";
+import * as workerRunOwner from "../worker-environments/worker-turn-run-owner.js";
 import { waitForApprovalRequested } from "./approval-request.test-support.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -54,7 +55,7 @@ function requestOptions(params: {
     respond: vi.fn(),
     context: {
       broadcast: vi.fn(),
-      getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
+      getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
       logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
       hasExecApprovalClients: () => true,
       validateAgentRuntimeApprovalAuthority: params.validateAuthority ?? (() => true),
@@ -77,6 +78,89 @@ afterEach(() => {
 });
 
 describe("plugin approval signed agent runtime", () => {
+  it.for(["withdrawal", "expiry"] as const)(
+    "closes the captured worker wait on plugin approval %s",
+    async (outcome, testContext) => {
+      const fixture = await createPreparedTestApprovalManager<PluginApprovalRequestPayload>(
+        testContext,
+        {
+          approvalKind: "plugin",
+          validateAgentRuntimeDelegatedAuthority: () => true,
+        },
+      );
+      const { manager } = fixture;
+      const runtimeIdentity = identityWithoutExecution();
+      const turnClaim = {
+        sessionId: "worker-session",
+        claimId: "worker-claim",
+        runId: "run-1",
+        placementGeneration: 1,
+        owner: { kind: "worker" as const, environmentId: "worker-env", ownerEpoch: 1 },
+      };
+      runtimeIdentity.delegatedAuthority = {
+        ...runtimeIdentity.delegatedAuthority,
+        kind: "worker",
+        turnClaim,
+      };
+      runtimeIdentity.approvalOwnerPluginId = "test-plugin";
+      const close = vi.fn();
+      const beginApprovalWait = vi.fn<workerRunOwner.WorkerTurnLiveEventOwner["beginApprovalWait"]>(
+        () => ({ close, updateDeadline: vi.fn() }),
+      );
+      vi.spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner").mockReturnValue({
+        beginApprovalWait,
+        record: vi.fn(),
+        isCancelled: () => false,
+        isCancelledFinishing: () => false,
+      });
+      await fixture.run(async () => {
+        const opts = requestOptions({
+          request: {
+            title: "Approve worker action",
+            description: "Test",
+            twoPhase: true,
+            timeoutMs: 60_000,
+          },
+          identity: runtimeIdentity,
+        });
+        const { pending } = await waitForApprovalRequested(
+          opts.context,
+          "plugin.approval.requested",
+          () => fixture.track(Promise.resolve(requestHandler(manager)(opts))),
+        );
+        const record = manager.listLocalPendingRecords()[0]!;
+        expect(beginApprovalWait).toHaveBeenCalledExactlyOnceWith(
+          record.expiresAtMs,
+          expect.any(Function),
+        );
+        const isPending = beginApprovalWait.mock.calls[0]![1];
+        expect(isPending()).toBe(true);
+        if (outcome === "withdrawal") {
+          const withdrawn = manager.forceDenyDetailed(
+            record.id,
+            "run-aborted",
+            { kind: "system", id: null },
+            "cancelled",
+          );
+          // Cancellation revokes the live predicate before durable settlement yields.
+          expect(isPending()).toBe(false);
+          await withdrawn;
+        } else {
+          const now = vi.spyOn(Date, "now").mockReturnValue(record.expiresAtMs);
+          try {
+            expect(isPending()).toBe(false);
+            await manager.expire(record.id);
+          } finally {
+            now.mockRestore();
+          }
+        }
+        await pending;
+        expect(isPending()).toBe(false);
+        expect(close).toHaveBeenCalledOnce();
+      });
+    },
+  );
+
   it("rejects closed authority before creating a plugin approval", async (testContext) => {
     const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
       approvalKind: "plugin",
@@ -179,6 +263,10 @@ describe("plugin approval signed agent runtime", () => {
           pluginId: "forged-plugin",
           title: "Sensitive action",
           description: "D",
+          policySubject: {
+            pluginKey: "calendar",
+            tool: "create_event.raw",
+          },
           agentId: "forged-agent",
           sessionKey: "forged-session",
           turnSourceChannel: "forged-channel",
@@ -217,6 +305,10 @@ describe("plugin approval signed agent runtime", () => {
       const approvalId = String(broadcastPayload?.id);
       expect((await manager.getSnapshot(approvalId))?.request).toMatchObject({
         pluginId: "codex",
+        policySubject: {
+          pluginKey: "calendar",
+          tool: "create_event.raw",
+        },
         agentId: "main",
         sessionKey: "agent:main:session-1",
         turnSourceChannel: "telegram",
@@ -237,6 +329,30 @@ describe("plugin approval signed agent runtime", () => {
       });
       await manager.resolve(approvalId, "deny");
       await pending;
+    });
+  });
+
+  it("rejects a plugin reviewer policy subject from an unsigned client", async (testContext) => {
+    const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
+    await fixture.run(async () => {
+      const opts = requestOptions({
+        request: {
+          title: "Sensitive action",
+          description: "D",
+          policySubject: { pluginKey: "calendar" },
+        },
+        identity: identityWithoutExecution(),
+      });
+      (opts.client as { internal?: unknown }).internal = undefined;
+
+      await requestHandler(fixture.manager)(opts);
+
+      expect(await fixture.manager.listPendingRecords()).toHaveLength(0);
+      expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
+        message: expect.stringContaining("requires agent runtime authority"),
+      });
     });
   });
 

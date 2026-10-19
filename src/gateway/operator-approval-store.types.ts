@@ -1,5 +1,9 @@
 import type { Selectable } from "kysely";
-import type { ApprovalPresentation } from "../../packages/gateway-protocol/src/schema/approvals.js";
+import type {
+  ApprovalPresentation,
+  ApprovalTerminalReason,
+  TerminalApprovalSnapshot,
+} from "../../packages/gateway-protocol/src/schema/approvals.js";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/schema/audit-run.js";
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type {
@@ -10,15 +14,10 @@ import type {
 export type OperatorApprovalKind = "exec" | "plugin" | "system-agent";
 export type OperatorApprovalStatus = "pending" | "allowed" | "denied" | "expired" | "cancelled";
 export type OperatorApprovalDecision = "allow-once" | "allow-always" | "deny";
-export type OperatorApprovalTerminalReason =
-  | "user"
-  | "timeout"
-  | "malformed-verdict"
-  | "no-route"
-  | "run-aborted"
-  | "gateway-restart"
-  | "storage-corrupt";
-export type OperatorApprovalResolverKind = "device" | "channel" | "runtime" | "system";
+export type OperatorApprovalTerminalReason = ApprovalTerminalReason;
+export type OperatorApprovalResolverKind = NonNullable<
+  TerminalApprovalSnapshot["resolver"]
+>["kind"];
 type OperatorApprovalRequester = {
   deviceId: string | null;
   clientId: string | null;
@@ -151,11 +150,10 @@ export type OperatorApprovalReceiptSnapshotRow = Omit<
   presentation_json: string | null;
   reviewer_device_ids_json: string | null;
   audience_session_keys_json: string | null;
-  receipt_rowid: number;
   payload_bytes: number;
 };
 export type OperatorApprovalReceiptSnapshotQueryRow = OperatorApprovalReceiptSnapshotRow & {
-  cursor_boundary_rowid: number | null;
+  cursor_boundary_id: number | null;
   page_present: 0 | 1;
 };
 type OperatorApprovalReceiptPageEntry = {
@@ -174,7 +172,7 @@ export type ListTerminalOperatorApprovalsInput = {
   kind?: OperatorApprovalKind;
   nowMs?: number;
 };
-/** Opaque v2026.9.4 SDK guards require a native commit boundary. */
+/** Legacy callback guards share the worker precommit boundary with host-owned guards. */
 export type OperatorApprovalStoreGuard = {
   family: "worker" | "native-compatibility";
   assertCurrent: () => void;

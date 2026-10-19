@@ -1,4 +1,3 @@
-// Nextcloud Talk plugin module implements channel behavior.
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createLoggedPairingApprovalNotifier } from "openclaw/plugin-sdk/channel-pairing";
@@ -15,13 +14,13 @@ import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking"
 import { isNextcloudTalkAccountConfigured, type ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
 import { probeNextcloudTalkBotResponseFeature } from "./bot-preflight.js";
-import { buildChannelConfigSchema, DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
+import { DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
 import {
   nextcloudTalkConfigAdapter,
   nextcloudTalkPairingTextAdapter,
   nextcloudTalkSecurityAdapter,
 } from "./channel.adapters.js";
-import { NextcloudTalkConfigSchema } from "./config-schema.js";
+import { NextcloudTalkChannelConfigSchema } from "./config-schema.js";
 import { nextcloudTalkDoctor } from "./doctor.js";
 import { nextcloudTalkGatewayAdapter } from "./gateway.js";
 import { nextcloudTalkMessageActions } from "./message-actions.js";
@@ -95,7 +94,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         blockStreaming: true,
       },
       reload: { configPrefixes: ["channels.nextcloud-talk"] },
-      configSchema: buildChannelConfigSchema(NextcloudTalkConfigSchema),
+      configSchema: NextcloudTalkChannelConfigSchema,
       config: {
         ...nextcloudTalkConfigAdapter,
         isConfigured: isNextcloudTalkAccountConfigured,
@@ -122,7 +121,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         normalizeTarget: normalizeNextcloudTalkMessagingTarget,
         inferTargetChatType: ({ to }) =>
           normalizeNextcloudTalkMessagingTarget(to) ? "group" : undefined,
-        resolveOutboundSessionRoute: (params) => resolveNextcloudTalkOutboundSessionRoute(params),
+        resolveOutboundSessionRoute: resolveNextcloudTalkOutboundSessionRoute,
         targetResolver: {
           looksLikeId: looksLikeNextcloudTalkTargetId,
           hint: "<roomToken>",
@@ -205,26 +204,12 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       },
       attachedResults: {
         channel: "nextcloud-talk",
-        sendText: async (ctx) =>
-          await nextcloudTalkMessageAdapter.send.text({
-            cfg: ctx.cfg,
-            to: ctx.to,
-            text: ctx.text,
-            accountId: ctx.accountId,
-            replyToId: ctx.replyToId,
-            onPlatformSendDispatch: ctx.onPlatformSendDispatch,
-            assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
-          }),
-        sendMedia: async (ctx) =>
-          await nextcloudTalkMessageAdapter.send.media({
-            cfg: ctx.cfg,
-            to: ctx.to,
-            text: ctx.text,
+        sendText: nextcloudTalkMessageAdapter.send.text,
+        sendMedia: (ctx) =>
+          nextcloudTalkMessageAdapter.send.media({
+            ...ctx,
             mediaUrl: ctx.mediaUrl ?? "",
-            accountId: ctx.accountId,
-            replyToId: ctx.replyToId,
-            onPlatformSendDispatch: ctx.onPlatformSendDispatch,
-            assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
+            onDeliveryResult: undefined,
           }),
       },
     },

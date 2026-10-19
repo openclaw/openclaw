@@ -3,6 +3,7 @@ import { sql } from "kysely";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { listRegistryWorktreesForMigration } from "../../agents/worktrees/registry.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { resolveProjectRegistry } from "../../projects/project-registry.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -70,14 +71,16 @@ function listLegacyWorktreeSessionEntries(params: {
   const resolved = resolveSqliteScope({ ...params, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
     const db = getSessionKysely(database.db);
+    const postgres = isPostgresSqlConnection(database.db);
     const rows = executeSqliteQuerySync(
       database.db,
       db
         .selectFrom("session_nodes")
         .selectAll()
-        .where(
-          /* kysely-allow-raw: Legacy worktree detection targets the retired JSON shape without materializing every session. */
-          sql<boolean>`session_nodes.entry_valid != 1 OR (
+        .$if(!postgres, (query) =>
+          query.where(
+            /* kysely-allow-raw: Legacy worktree detection targets the retired JSON shape without materializing every session. */
+            sql<boolean>`session_nodes.entry_valid != 1 OR (
             json_valid(session_nodes.entry_json)
             AND json_type(session_nodes.entry_json, '$.worktree') = 'object'
             AND (
@@ -85,12 +88,25 @@ function listLegacyWorktreeSessionEntries(params: {
               OR json_extract(session_nodes.entry_json, '$.worktree.canonicalWorkspaceDir') = ''
             )
           )`,
+          ),
         )
         .orderBy("session_key", "asc"),
     ).rows;
     return rows.flatMap((row) => {
       const entry = parseReadableSqliteSessionEntryRow(database, row);
-      return entry ? [{ databasePath: database.path, entry, sessionKey: row.session_key }] : [];
+      if (!entry) {
+        return [];
+      }
+      const worktree = entry.worktree;
+      // PostgreSQL leaves JSON parsing to the existing reader; missing and null differ.
+      const needsWorkspace =
+        worktree !== null &&
+        typeof worktree === "object" &&
+        !Array.isArray(worktree) &&
+        (worktree.canonicalWorkspaceDir === undefined || worktree.canonicalWorkspaceDir === "");
+      return !postgres || row.entry_valid !== 1 || needsWorkspace
+        ? [{ databasePath: database.path, entry, sessionKey: row.session_key }]
+        : [];
     });
   }, toDatabaseOptions(resolved));
   return result.found ? result.value : [];

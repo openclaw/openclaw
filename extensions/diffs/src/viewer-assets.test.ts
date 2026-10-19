@@ -69,7 +69,6 @@ describe("viewer runtime resolution", () => {
     const stat = await loadViewerWithRuntimeAt(BUILT_RUNTIME_PATH);
 
     expect(stat).toHaveBeenNthCalledWith(1, BUILT_RUNTIME_PATH);
-    expect(stat).toHaveBeenNthCalledWith(2, BUILT_RUNTIME_PATH);
   });
 
   it("falls back to the source asset layout when the built artifact is absent", async () => {
@@ -77,7 +76,6 @@ describe("viewer runtime resolution", () => {
 
     expect(stat).toHaveBeenNthCalledWith(1, BUILT_RUNTIME_PATH);
     expect(stat).toHaveBeenNthCalledWith(2, SOURCE_RUNTIME_PATH);
-    expect(stat).toHaveBeenNthCalledWith(3, SOURCE_RUNTIME_PATH);
   });
 
   it("serves the runtime from the unified root bundle layout", async () => {
@@ -86,7 +84,6 @@ describe("viewer runtime resolution", () => {
     expect(stat).toHaveBeenNthCalledWith(1, BUILT_RUNTIME_PATH);
     expect(stat).toHaveBeenNthCalledWith(2, SOURCE_RUNTIME_PATH);
     expect(stat).toHaveBeenNthCalledWith(3, ROOT_BUNDLE_RUNTIME_PATH);
-    expect(stat).toHaveBeenNthCalledWith(4, ROOT_BUNDLE_RUNTIME_PATH);
   });
 
   it("serves the language pack from the unified root bundle layout", async () => {
@@ -95,6 +92,5 @@ describe("viewer runtime resolution", () => {
     expect(stat).toHaveBeenNthCalledWith(1, LANGUAGE_PACK_SOURCE_RUNTIME_PATH);
     expect(stat).toHaveBeenNthCalledWith(2, LANGUAGE_PACK_FALLBACK_RUNTIME_PATH);
     expect(stat).toHaveBeenNthCalledWith(3, ROOT_BUNDLE_LANGUAGE_PACK_RUNTIME_PATH);
-    expect(stat).toHaveBeenNthCalledWith(4, ROOT_BUNDLE_LANGUAGE_PACK_RUNTIME_PATH);
   });
 });

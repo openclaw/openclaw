@@ -11,13 +11,14 @@ import {
   type ManagedSessionList,
 } from "./session-list-query.ts";
 import { publishManagedList } from "./session-managed-list-refresh.ts";
-import { normalizeManagedSessionListQuery } from "./session-requests.ts";
+import { sessionListQueryKey } from "./session-requests.ts";
 
 /** Manage presentation leases on the roster owner's existing managed-list entries. */
 export function createSessionPrimaryWindows(
   managedLists: Map<string, ManagedSessionList>,
   open: (scope: SessionListScope) => ManagedSessionList,
   onRetired: (agentIds: ReadonlySet<string>) => void,
+  readPrimary: () => SessionListSnapshot,
 ) {
   let invalidationRevision = 0;
   const retireWarmLists = (matches: (entry: ManagedSessionList) => boolean = () => true) => {
@@ -81,6 +82,20 @@ export function createSessionPrimaryWindows(
 
   return {
     subscribe,
+    snapshot(this: void, scope: SessionListScope): SessionListSnapshot {
+      if (isPrimarySessionListQuery(scope)) {
+        const { result, agentId, loading, error, startupPending } = readPrimary();
+        return { result, agentId, loading, error, startupPending };
+      }
+      return (
+        managedLists.get(sessionListQueryKey(scope))?.snapshot ?? {
+          result: null,
+          agentId: null,
+          loading: false,
+          error: null,
+        }
+      );
+    },
     /** Own an observed query subscription and fence explicit refresh against disposal. */
     observe(
       entry: ManagedSessionList,
@@ -130,22 +145,17 @@ export function createSessionPrimaryWindows(
     get revision() {
       return invalidationRevision;
     },
-    /** Fence active reads without invalidating the query supplying an accepted row. */
-    invalidate(
-      matches: (entry: ManagedSessionList) => boolean,
-      activeQuery: SessionListScope,
-      excludedKey?: string,
-    ) {
-      const key = JSON.stringify(normalizeManagedSessionListQuery(activeQuery));
-      const active = managedLists.get(key);
-      if (key !== excludedKey && (!active || matches(active))) {
+    /** Fence active reads and retire matching presentation leases. */
+    invalidate(matches: (entry: ManagedSessionList) => boolean, activeQuery: SessionListScope) {
+      const active = managedLists.get(sessionListQueryKey(activeQuery));
+      if (!active || matches(active)) {
         invalidationRevision += 1;
       }
-      retireWarmLists((entry) => entry.key !== excludedKey && matches(entry));
+      retireWarmLists(matches);
     },
     /** Capture one accepted primary window without changing an observed query's membership. */
     capture(scope: SessionListScope, result: SessionsListResult, epoch: number) {
-      const key = JSON.stringify(normalizeManagedSessionListQuery(scope));
+      const key = sessionListQueryKey(scope);
       retireWarmLists((entry) => entry.scope.agentId === scope.agentId && entry.key !== key);
       const entry = open(scope);
       if (entry.listeners.size > 0 || entry.pending) {

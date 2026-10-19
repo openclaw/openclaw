@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
 import type { PluginCandidate } from "./discovery.js";
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
@@ -19,9 +19,9 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 const PLUGIN_ID = "contract-provider";
 const tempDirs: string[] = [];
 
-afterEach(() => {
+afterEach(async () => {
   clearPluginMetadataLifecycleCaches();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -157,7 +157,7 @@ describe("bundled provider compatibility in installed plugin indexes", () => {
     const { candidate, env, stateDir } = createFixture();
     const config = { plugins: { allow: ["listed"] } };
     setMode(env, "compat");
-    const initial = refreshPersistedInstalledPluginIndex({
+    const initial = await refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [candidate],
@@ -167,7 +167,7 @@ describe("bundled provider compatibility in installed plugin indexes", () => {
     expect(initial.plugins[0]?.enabled).toBe(true);
 
     setMode(env, "allowlist");
-    const strict = refreshPersistedInstalledPluginIndex({
+    const strict = await refreshPersistedInstalledPluginIndex({
       reason: "policy-changed",
       stateDir,
       config,
@@ -177,7 +177,7 @@ describe("bundled provider compatibility in installed plugin indexes", () => {
     expect(strict.plugins[0]?.enabled).toBe(false);
 
     setMode(env, "compat");
-    const compatible = refreshPersistedInstalledPluginIndex({
+    const compatible = await refreshPersistedInstalledPluginIndex({
       reason: "policy-changed",
       stateDir,
       config,

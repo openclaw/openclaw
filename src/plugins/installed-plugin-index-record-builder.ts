@@ -3,14 +3,11 @@ import path from "node:path";
 import { normalizeOptionalString as normalizeStringField } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getPluginInstallRecordMapEntry } from "../config/plugin-install-record-map.js";
-import type { OpenClawConfig } from "../config/types.js";
 import {
   isPluginCandidateInstallOwnerAmbiguous,
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
 import type { PluginCompatCode } from "./compat/registry.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
-import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginCandidate } from "./discovery.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
@@ -74,33 +71,23 @@ function buildContributionInfo(record: PluginManifestRecord): InstalledPluginCon
   };
 }
 
+const ACTIVATION_COMPAT_CODES = [
+  ["onProviders", "activation-provider-hint"],
+  ["onAgentHarnesses", "activation-agent-harness-hint"],
+  ["onChannels", "activation-channel-hint"],
+  ["onCommands", "activation-command-hint"],
+  ["onRoutes", "activation-route-hint"],
+  ["onConfigPaths", "activation-config-path-hint"],
+  ["onCapabilities", "activation-capability-hint"],
+] as const;
+
 /** Collects compatibility codes implied by a manifest's legacy or activation surfaces. */
 export function collectPluginManifestCompatCodes(
   record: PluginManifestRecord,
 ): readonly PluginCompatCode[] {
-  const codes: PluginCompatCode[] = [];
-  if (record.activation?.onProviders?.length) {
-    codes.push("activation-provider-hint");
-  }
-  if (record.activation?.onAgentHarnesses?.length) {
-    codes.push("activation-agent-harness-hint");
-  }
-  if (record.activation?.onChannels?.length) {
-    codes.push("activation-channel-hint");
-  }
-  if (record.activation?.onCommands?.length) {
-    codes.push("activation-command-hint");
-  }
-  if (record.activation?.onRoutes?.length) {
-    codes.push("activation-route-hint");
-  }
-  if (record.activation?.onConfigPaths?.length) {
-    codes.push("activation-config-path-hint");
-  }
-  if (record.activation?.onCapabilities?.length) {
-    codes.push("activation-capability-hint");
-  }
-  return normalizeSortedUniqueStringEntries(codes) as readonly PluginCompatCode[];
+  return ACTIVATION_COMPAT_CODES.filter(([key]) => record.activation?.[key]?.length)
+    .map(([, code]) => code)
+    .toSorted();
 }
 
 function resolvePackageJsonRecord(params: {
@@ -207,28 +194,21 @@ function readRecordFile(params: {
   return undefined;
 }
 
-function buildCandidateLookup(
-  candidates: readonly PluginCandidate[],
-): Map<string, PluginCandidate> {
-  const bySource = new Map<string, PluginCandidate>();
-  for (const candidate of candidates) {
-    bySource.set(candidate.source, candidate);
-  }
-  return bySource;
-}
+/** Disk inventory facts only; activation is projected per config by the index owner. */
+export type InstalledPluginIndexInventoryRecord = Omit<InstalledPluginIndexRecord, "enabled">;
 
 export function buildInstalledPluginIndexRecords(params: {
   candidates: readonly PluginCandidate[];
   registry: PluginManifestRegistry;
-  config?: OpenClawConfig;
   diagnostics: PluginDiagnostic[];
   installRecords: Record<string, InstalledPluginInstallRecordInfo>;
   /** Index builds scoped to an explicit env stamp that env's compat decisions. */
   env?: NodeJS.ProcessEnv;
-}): InstalledPluginIndexRecord[] {
-  const candidateBySource = buildCandidateLookup(params.candidates);
-  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
-  return params.registry.plugins.map((record): InstalledPluginIndexRecord => {
+}): InstalledPluginIndexInventoryRecord[] {
+  const candidateBySource = new Map(
+    params.candidates.map((candidate) => [candidate.source, candidate]),
+  );
+  return params.registry.plugins.map((record): InstalledPluginIndexInventoryRecord => {
     const candidate = candidateBySource.get(record.source);
     const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
       origin: record.origin,
@@ -275,15 +255,7 @@ export function buildInstalledPluginIndexRecords(params: {
       candidate,
       rejectHardlinks,
     });
-    const enabled = resolveEffectiveEnableState({
-      id: record.id,
-      origin: record.origin,
-      channelIds: record.channels,
-      config: normalizedConfig,
-      rootConfig: params.config,
-      enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
-    }).enabled;
-    const indexRecord: InstalledPluginIndexRecord = {
+    const indexRecord: InstalledPluginIndexInventoryRecord = {
       pluginId: record.id,
       manifestPath: record.manifestPath,
       manifestHash,
@@ -297,7 +269,6 @@ export function buildInstalledPluginIndexRecords(params: {
       source: record.source,
       rootDir: record.rootDir,
       origin: record.origin,
-      enabled,
       startup: buildStartupInfo(record),
       contributions: buildContributionInfo(record),
       compat: collectPluginManifestCompatCodes(record),

@@ -1,8 +1,9 @@
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
-import { afterEach, beforeAll, describe, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { callInProcessGatewayTool } from "../../agents/tools/in-process-gateway.js";
 import type { CliDeps } from "../../cli/deps.types.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
@@ -38,9 +39,49 @@ import { cleanupFailedAcpSpawn } from "./spawn.js";
 const backendId = "provisional-cleanup-fixture";
 const agentId = "main";
 const sessionKey = "agent:main:acp:provisional-cleanup";
-type Initialized = Awaited<
-  ReturnType<ReturnType<typeof getAcpSessionManager>["initializeSession"]>
->;
+type Initialized = Awaited<ReturnType<AcpSessionManager["initializeSession"]>>;
+const session = { sessionKey, agentId };
+const readEntry = () => loadSessionEntry(session);
+const initializeSession = (manager: AcpSessionManager, cfg: OpenClawConfig) =>
+  manager.initializeSession({ cfg, ...session, agent: agentId, mode: "persistent" });
+function gatewayScope() {
+  const scope = getPluginRuntimeGatewayRequestScope();
+  if (!scope?.context) {
+    throw new Error("Expected local Gateway owner");
+  }
+  return { ...scope, context: scope.context };
+}
+function createGate() {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  return {
+    entered: entered.promise,
+    open: release.resolve,
+    wait: async () => {
+      entered.resolve();
+      await release.promise;
+    },
+  };
+}
+function lazyDeletion(prepare: () => Promise<void>) {
+  const deletion = vi.fn(sessionDeleteHandlers["sessions.delete"]!);
+  const lazy = createLazyCoreHandlers({
+    methods: ["sessions.delete"],
+    loadHandlers: async () => {
+      await prepare();
+      return { "sessions.delete": deletion };
+    },
+  });
+  const registry = createGatewayMethodRegistry([
+    {
+      name: "sessions.delete",
+      owner: { kind: "core", area: "sessions" },
+      scope: "operator.admin",
+      handler: lazy["sessions.delete"]!,
+    },
+  ]);
+  return { deletion, getGatewayMethodRegistry: () => registry };
+}
 
 // This fixture opens no browser; browser ownership has its own lifecycle tests.
 vi.mock("../../browser-lifecycle-cleanup.js", () => ({
@@ -60,20 +101,100 @@ beforeAll(async () => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+function createCleanupFixture(cfg: OpenClawConfig) {
+  const close = vi.fn<AcpRuntime["close"]>(async () => {});
+  const ensureSession = vi.fn<AcpRuntime["ensureSession"]>(async (input) => ({
+    agentId: input.agentId,
+    sessionKey: input.sessionKey,
+    backend: backendId,
+    runtimeSessionName: input.sessionKey,
+    backendSessionId: `runtime:${input.sessionKey}`,
+  }));
+  const prepareFreshSession = vi.fn<NonNullable<AcpRuntime["prepareFreshSession"]>>(async () => {});
+  const runtime: AcpRuntime = {
+    ownerAwareSessions: 1,
+    ensureSession,
+    close,
+    prepareFreshSession,
+    async cancel() {},
+    runTurn() {
+      throw new Error("No provider turn belongs in this cleanup fixture");
+    },
+  };
+  const bindings = new Map<string, SessionBindingRecord>();
+  const bind = vi.fn<NonNullable<SessionBindingAdapter["bind"]>>(async (input) => {
+    const binding: SessionBindingRecord = {
+      bindingId: `binding:${input.targetSessionKey}`,
+      targetSessionKey: input.targetSessionKey,
+      targetKind: input.targetKind,
+      conversation: input.conversation,
+      status: "active",
+      boundAt: Date.now(),
+      metadata: input.metadata,
+    };
+    bindings.set(input.targetSessionKey, binding);
+    return binding;
+  });
+  const adapter: SessionBindingAdapter = {
+    channel: "discord",
+    accountId: "default",
+    capabilities: {
+      placements: ["current", "child"],
+      bindSupported: true,
+      unbindSupported: true,
+    },
+    bind,
+    listBySession: (key) => (bindings.has(key) ? [bindings.get(key)!] : []),
+    resolveByConversation: () => null,
+    unbind: async (input) => {
+      const removed = [...bindings.values()].filter(
+        (record) => record.targetSessionKey === input.targetSessionKey,
+      );
+      for (const record of removed) {
+        bindings.delete(record.targetSessionKey);
+      }
+      return removed;
+    },
+  };
+  registerSessionBindingAdapter(adapter);
+  registerAcpRuntimeBackend({ id: backendId, runtime });
+  managerTesting.resetAcpSessionManagerForTests();
+  const manager = getAcpSessionManager();
+  const socket = vi
+    .spyOn(gatewayCall, "callGateway")
+    .mockRejectedValue(new Error("Raw WebSocket transport is unavailable"));
+  // Only deadline scenarios advance the RPC clock; filesystem work must not consume it.
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  return {
+    cfg,
+    manager,
+    close,
+    ensureSession,
+    prepareFreshSession,
+    bindings,
+    bind,
+    initialize: () => initializeSession(manager, cfg),
+    cleanup: (initialized: Initialized) =>
+      cleanupFailedAcpSpawn({
+        cfg,
+        ...session,
+        sessionEntry: initialized.sessionEntry,
+        deleteTranscript: true,
+        closeRuntimeOnFailure: initialized.closeRuntimeOnFailure,
+      }),
+    verify: () => expect(socket).not.toHaveBeenCalled(),
+    dispose: async () => {
+      vi.useRealTimers();
+      await disposeAcpSessionManagerInstance(manager, "fixture-cleanup");
+      managerTesting.resetAcpSessionManagerForTests();
+      unregisterAcpRuntimeBackend(backendId);
+      unregisterSessionBindingAdapter({ channel: "discord", accountId: "default", adapter });
+    },
+  };
+}
+
 async function withCleanupFixture(
-  run: (fixture: {
-    cfg: OpenClawConfig;
-    manager: ReturnType<typeof getAcpSessionManager>;
-    runtime: AcpRuntime;
-    initialize: () => Promise<Initialized>;
-    cleanup: (initialized: Initialized) => Promise<void>;
-    close: ReturnType<typeof vi.fn<AcpRuntime["close"]>>;
-    ensureSession: ReturnType<typeof vi.fn<AcpRuntime["ensureSession"]>>;
-    prepareFreshSession: ReturnType<typeof vi.fn<NonNullable<AcpRuntime["prepareFreshSession"]>>>;
-    socket: MockInstance<typeof gatewayCall.callGateway>;
-    bindings: Map<string, SessionBindingRecord>;
-    bind: ReturnType<typeof vi.fn<NonNullable<SessionBindingAdapter["bind"]>>>;
-  }) => Promise<void>,
+  run: (fixture: ReturnType<typeof createCleanupFixture>) => Promise<void>,
 ) {
   return await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
@@ -86,105 +207,15 @@ async function withCleanupFixture(
       channels: { discord: { threadBindings: { enabled: true } } },
     };
     await state.writeConfig(cfg);
-    const close = vi.fn<AcpRuntime["close"]>(async () => {});
-    const ensureSession = vi.fn<AcpRuntime["ensureSession"]>(async (input) => ({
-      agentId: input.agentId,
-      sessionKey: input.sessionKey,
-      backend: backendId,
-      runtimeSessionName: input.sessionKey,
-      backendSessionId: `runtime:${input.sessionKey}`,
-    }));
-    const prepareFreshSession = vi.fn<NonNullable<AcpRuntime["prepareFreshSession"]>>(
-      async () => {},
-    );
-    const runtime: AcpRuntime = {
-      ownerAwareSessions: 1,
-      ensureSession,
-      close,
-      prepareFreshSession,
-      async cancel() {},
-      runTurn() {
-        throw new Error("No provider turn belongs in this cleanup fixture");
-      },
-    };
-    const bindings = new Map<string, SessionBindingRecord>();
-    const bind = vi.fn<NonNullable<SessionBindingAdapter["bind"]>>(async (input) => {
-      const binding: SessionBindingRecord = {
-        bindingId: `binding:${input.targetSessionKey}`,
-        targetSessionKey: input.targetSessionKey,
-        targetKind: input.targetKind,
-        conversation: input.conversation,
-        status: "active",
-        boundAt: Date.now(),
-        metadata: input.metadata,
-      };
-      bindings.set(input.targetSessionKey, binding);
-      return binding;
-    });
-    const adapter: SessionBindingAdapter = {
-      channel: "discord",
-      accountId: "default",
-      capabilities: {
-        placements: ["current", "child"],
-        bindSupported: true,
-        unbindSupported: true,
-      },
-      bind,
-      listBySession: (key) => (bindings.has(key) ? [bindings.get(key)!] : []),
-      resolveByConversation: () => null,
-      unbind: async (input) => {
-        const removed = [...bindings.values()].filter(
-          (record) => record.targetSessionKey === input.targetSessionKey,
-        );
-        for (const record of removed) {
-          bindings.delete(record.targetSessionKey);
-        }
-        return removed;
-      },
-    };
-    registerSessionBindingAdapter(adapter);
-    registerAcpRuntimeBackend({ id: backendId, runtime });
-    managerTesting.resetAcpSessionManagerForTests();
-    const manager = getAcpSessionManager();
-    const socket = vi
-      .spyOn(gatewayCall, "callGateway")
-      .mockRejectedValue(new Error("Raw WebSocket transport is unavailable"));
+    setRuntimeConfigSnapshot(cfg);
+    const fixture = createCleanupFixture(cfg);
     try {
       await withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
-        run({
-          cfg,
-          manager,
-          runtime,
-          close,
-          ensureSession,
-          prepareFreshSession,
-          socket,
-          bindings,
-          bind,
-          initialize: () =>
-            manager.initializeSession({
-              cfg,
-              sessionKey,
-              agentId,
-              agent: agentId,
-              mode: "persistent",
-            }),
-          cleanup: (initialized) =>
-            cleanupFailedAcpSpawn({
-              cfg,
-              sessionKey,
-              agentId,
-              sessionEntry: initialized.sessionEntry,
-              deleteTranscript: true,
-              closeRuntimeOnFailure: initialized.closeRuntimeOnFailure,
-            }),
-        }),
+        run(fixture),
       );
+      fixture.verify();
     } finally {
-      await disposeAcpSessionManagerInstance(manager, "fixture-cleanup");
-      managerTesting.resetAcpSessionManagerForTests();
-      unregisterAcpRuntimeBackend(backendId);
-      unregisterSessionBindingAdapter({ channel: "discord", accountId: "default", adapter });
+      await fixture.dispose();
     }
   });
 }
@@ -193,99 +224,71 @@ describe("failed ACP provisional cleanup", () => {
   it.each(["live Gateway", "retired Gateway", "expired operator"] as const)(
     "retains local resource cleanup after %s ownership",
     async (owner) => {
-      await withCleanupFixture(
-        async ({ initialize, cleanup, close, ensureSession, socket, manager }) => {
-          const scope = getPluginRuntimeGatewayRequestScope();
-          if (!scope?.context) {
-            throw new Error("Expected the local Gateway owner");
-          }
-          const initialized = await initialize();
-          const before = loadSessionEntry({ sessionKey, agentId });
-          let current = true;
-          const resolveGatewayContext = () => (current ? scope.context : undefined);
-          await withPluginRuntimeGatewayRequestScope({ ...scope, resolveGatewayContext }, () =>
-            withGatewayToolCallerIdentity(
-              {
-                agentId,
-                sessionKey: "agent:main:main",
-                operationalRunInstance: { instanceId: "parent-instance", runId: "parent-run" },
-                receiptAuthority: () => false,
-                gatewayContextResolver: resolveGatewayContext,
-              },
-              async () => {
-                if (owner === "expired operator") {
-                  const profile = ensureGatewayOwnerProfile("Cleanup owner");
-                  const release = createDeferredCore();
-                  let late: Promise<void> | undefined;
-                  await withOperatorToolGatewayAuthority(
-                    {
-                      authenticatedUserProfile: {
-                        profileId: profile.id,
-                        displayName: profile.displayName,
-                        hasAvatar: false,
-                        updatedAt: profile.updatedAt,
-                      },
-                      scopes: ["operator.admin"],
+      await withCleanupFixture(async ({ initialize, cleanup, close, ensureSession, manager }) => {
+        const scope = gatewayScope();
+        const initialized = await initialize();
+        const before = readEntry();
+        let current = true;
+        const resolveGatewayContext = () => (current ? scope.context : undefined);
+        await withPluginRuntimeGatewayRequestScope({ ...scope, resolveGatewayContext }, () =>
+          withGatewayToolCallerIdentity(
+            {
+              agentId,
+              sessionKey: "agent:main:main",
+              operationalRunInstance: { instanceId: "parent-instance", runId: "parent-run" },
+              receiptAuthority: () => false,
+              gatewayContextResolver: resolveGatewayContext,
+            },
+            async () => {
+              if (owner === "expired operator") {
+                const profile = ensureGatewayOwnerProfile("Cleanup owner");
+                const release = createDeferredCore();
+                let late: Promise<void> | undefined;
+                await withOperatorToolGatewayAuthority(
+                  {
+                    authenticatedUserProfile: {
+                      profileId: profile.id,
+                      displayName: profile.displayName,
+                      hasAvatar: false,
+                      updatedAt: profile.updatedAt,
                     },
-                    async () => {
-                      late = release.promise.then(() => cleanup(initialized));
-                    },
-                  );
-                  release.resolve();
-                  await late;
-                } else {
-                  current = owner !== "retired Gateway";
-                  await cleanup(initialized);
-                }
-              },
-            ),
-          );
-          expect(loadSessionEntry({ sessionKey, agentId })).toEqual(
-            owner === "live Gateway" ? undefined : before,
-          );
-          expect(close).toHaveBeenCalledOnce();
-          expect(ensureSession).toHaveBeenCalledOnce();
-          expect(socket).not.toHaveBeenCalled();
-          await initialized.closeRuntimeOnFailure();
-          await disposeAcpSessionManagerInstance(manager, "repeat-disposal");
-          expect(close).toHaveBeenCalledOnce();
-        },
-      );
+                    scopes: ["operator.admin"],
+                  },
+                  async () => {
+                    late = release.promise.then(() => cleanup(initialized));
+                  },
+                );
+                release.resolve();
+                await late;
+              } else {
+                current = owner !== "retired Gateway";
+                await cleanup(initialized);
+              }
+            },
+          ),
+        );
+        expect(readEntry()).toEqual(owner === "live Gateway" ? undefined : before);
+        expect(close).toHaveBeenCalledOnce();
+        expect(ensureSession).toHaveBeenCalledOnce();
+        await initialized.closeRuntimeOnFailure();
+        await disposeAcpSessionManagerInstance(manager, "repeat-disposal");
+        expect(close).toHaveBeenCalledOnce();
+      });
     },
   );
 
   it("releases the original handle when Gateway retirement during lazy preparation prevents admission", async () => {
-    await withCleanupFixture(async ({ initialize, cleanup, close, ensureSession, socket }) => {
-      const scope = getPluginRuntimeGatewayRequestScope();
-      if (!scope?.context) {
-        throw new Error("Expected local Gateway owner");
-      }
+    await withCleanupFixture(async ({ initialize, cleanup, close, ensureSession }) => {
+      const scope = gatewayScope();
       const initialized = await initialize();
-      const before = loadSessionEntry({ sessionKey, agentId });
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const deletion = vi.fn(sessionDeleteHandlers["sessions.delete"]!);
-      const lazy = createLazyCoreHandlers({
-        methods: ["sessions.delete"],
-        loadHandlers: async () => {
-          entered.resolve();
-          await release.promise;
-          return { "sessions.delete": deletion };
-        },
-      });
-      const registry = createGatewayMethodRegistry([
-        {
-          name: "sessions.delete",
-          owner: { kind: "core", area: "sessions" },
-          scope: "operator.admin",
-          handler: lazy["sessions.delete"]!,
-        },
-      ]);
+      const before = readEntry();
+      const gate = createGate();
+      const { deletion, getGatewayMethodRegistry } = lazyDeletion(gate.wait);
       const lifetime = new GatewayRequestEntryLifetime();
       const context = {
         ...scope.context,
         requestEntryLifetime: lifetime,
-        getGatewayMethodRegistry: () => registry,
+        getGatewayMethodRegistry,
       };
       let current = true;
       await withPluginRuntimeGatewayRequestScope(
@@ -293,23 +296,21 @@ describe("failed ACP provisional cleanup", () => {
         async () => {
           const cleaning = cleanup(initialized);
           try {
-            await entered.promise;
+            await gate.entered;
             current = false;
             lifetime.beginClose();
           } finally {
-            release.resolve();
+            gate.open();
           }
           await cleaning;
           await lifetime.sealAndJoin();
           expect(deletion).not.toHaveBeenCalled();
-          expect(close).toHaveBeenCalledOnce();
-          expect(close).toHaveBeenCalledWith({
+          expect(close).toHaveBeenCalledExactlyOnceWith({
             handle: initialized.handle,
             reason: "spawn-failed",
           });
           expect(ensureSession).toHaveBeenCalledOnce();
-          expect(loadSessionEntry({ sessionKey, agentId })).toEqual(before);
-          expect(socket).not.toHaveBeenCalled();
+          expect(readEntry()).toEqual(before);
         },
       );
     });
@@ -318,44 +319,21 @@ describe("failed ACP provisional cleanup", () => {
   it.each(["before admission", "after admission"] as const)(
     "does not repeat resource cleanup after a deadline %s",
     async (boundary) => {
-      await withCleanupFixture(async ({ initialize, cleanup, close, ensureSession, socket }) => {
-        const scope = getPluginRuntimeGatewayRequestScope();
-        if (!scope?.context) {
-          throw new Error("Expected local Gateway owner");
-        }
+      await withCleanupFixture(async ({ initialize, cleanup, close, ensureSession }) => {
+        const scope = gatewayScope();
         const initialized = await initialize();
-        const before = loadSessionEntry({ sessionKey, agentId });
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
-        const deletion = vi.fn(sessionDeleteHandlers["sessions.delete"]!);
-        const lazy = createLazyCoreHandlers({
-          methods: ["sessions.delete"],
-          loadHandlers: async () => {
-            if (boundary === "before admission") {
-              entered.resolve();
-              await release.promise;
-            }
-            return { "sessions.delete": deletion };
-          },
-        });
+        const before = readEntry();
+        const gate = createGate();
+        const { deletion, getGatewayMethodRegistry } = lazyDeletion(
+          boundary === "before admission" ? gate.wait : async () => {},
+        );
         if (boundary === "after admission") {
-          close.mockImplementationOnce(async () => {
-            entered.resolve();
-            await release.promise;
-          });
+          close.mockImplementationOnce(gate.wait);
         }
-        const registry = createGatewayMethodRegistry([
-          {
-            name: "sessions.delete",
-            owner: { kind: "core", area: "sessions" },
-            scope: "operator.admin",
-            handler: lazy["sessions.delete"]!,
-          },
-        ]);
         const executions: Promise<unknown>[] = [];
         const context = {
           ...scope.context,
-          getGatewayMethodRegistry: () => registry,
+          getGatewayMethodRegistry,
           trackExecution: <T>(work: () => T | Promise<T>) => {
             const tracked = scope.context!.trackExecution(work);
             executions.push(tracked);
@@ -366,14 +344,13 @@ describe("failed ACP provisional cleanup", () => {
         await withPluginRuntimeGatewayRequestScope(
           { ...scope, context, resolveGatewayContext: () => context },
           async () => {
-            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
             const settled = vi.fn();
             const cleaning = cleanup({
               ...initialized,
               closeRuntimeOnFailure: retainedRelease,
             }).then(settled);
             try {
-              await entered.promise;
+              await gate.entered;
               await vi.advanceTimersByTimeAsync(10_001);
               if (boundary === "before admission") {
                 await cleaning;
@@ -387,21 +364,17 @@ describe("failed ACP provisional cleanup", () => {
                 boundary === "before admission" ? 1 : 0,
               );
               expect(close).toHaveBeenCalledOnce();
-              release.resolve();
+              gate.open();
               await cleaning;
-              expect(loadSessionEntry({ sessionKey, agentId })).toEqual(
-                boundary === "before admission" ? before : undefined,
-              );
+              expect(readEntry()).toEqual(boundary === "before admission" ? before : undefined);
             } finally {
-              vi.useRealTimers();
-              release.resolve();
+              gate.open();
               await cleaning;
               await Promise.allSettled(executions);
             }
             expect(deletion).toHaveBeenCalledTimes(boundary === "before admission" ? 0 : 1);
             expect(close).toHaveBeenCalledOnce();
             expect(ensureSession).toHaveBeenCalledOnce();
-            expect(socket).not.toHaveBeenCalled();
           },
         );
       });
@@ -409,11 +382,11 @@ describe("failed ACP provisional cleanup", () => {
   );
 
   it("deletes the provisional shell after the initializer owns metadata-failure release", async () => {
-    await withCleanupFixture(async ({ cfg, close, ensureSession, socket }) => {
-      const shell = await upsertSessionEntryCore(
-        { sessionKey, agentId },
-        { sessionId: "metadata-failure-shell", updatedAt: Date.now() },
-      );
+    await withCleanupFixture(async ({ cfg, close, ensureSession }) => {
+      const shell = await upsertSessionEntryCore(session, {
+        sessionId: "metadata-failure-shell",
+        updatedAt: Date.now(),
+      });
       if (!shell) {
         throw new Error("Expected provisional shell");
       }
@@ -424,30 +397,20 @@ describe("failed ACP provisional cleanup", () => {
         },
       });
       try {
-        await expect(
-          manager.initializeSession({
-            cfg,
-            sessionKey,
-            agentId,
-            agent: agentId,
-            mode: "persistent",
-          }),
-        ).rejects.toThrow("metadata write refused");
+        await expect(initializeSession(manager, cfg)).rejects.toThrow("metadata write refused");
         expect(close).toHaveBeenCalledExactlyOnceWith({
           handle: expect.objectContaining({ sessionKey }),
           reason: "init-meta-failed",
         });
         await cleanupFailedAcpSpawn({
           cfg,
-          sessionKey,
-          agentId,
+          ...session,
           sessionEntry: shell,
           deleteTranscript: true,
         });
-        expect(loadSessionEntry({ sessionKey, agentId })).toBeUndefined();
+        expect(readEntry()).toBeUndefined();
         expect(ensureSession).toHaveBeenCalledOnce();
         expect(close).toHaveBeenCalledOnce();
-        expect(socket).not.toHaveBeenCalled();
       } finally {
         await disposeAcpSessionManagerInstance(manager, "fixture-cleanup");
       }
@@ -465,7 +428,7 @@ describe("failed ACP provisional cleanup", () => {
         }));
         const initialized = await initialize();
         await cleanup(initialized);
-        expect(loadSessionEntry({ sessionKey, agentId })).toBeUndefined();
+        expect(readEntry()).toBeUndefined();
         expect(ensureSession).toHaveBeenCalledOnce();
         expect(close).not.toHaveBeenCalled();
         expect(prepareFreshSession).toHaveBeenCalledOnce();
@@ -479,84 +442,73 @@ describe("failed ACP provisional cleanup", () => {
   it.each(["replace", "reset"] as const)(
     "keeps a %s successor and its binding untouched by stale cleanup",
     async (mutation) => {
-      await withCleanupFixture(
-        async ({ initialize, cleanup, close, ensureSession, bindings, socket }) => {
-          const original = await initialize();
-          await callInProcessGatewayTool(
-            mutation === "replace" ? "sessions.delete" : "sessions.reset",
-            { key: sessionKey, agentId },
+      await withCleanupFixture(async ({ initialize, cleanup, close, ensureSession, bindings }) => {
+        const original = await initialize();
+        await callInProcessGatewayTool(
+          mutation === "replace" ? "sessions.delete" : "sessions.reset",
+          { key: sessionKey, agentId },
+        );
+        const successor = await initialize();
+        if (mutation === "replace") {
+          expect(successor.sessionEntry.sessionId).not.toBe(original.sessionEntry.sessionId);
+        } else {
+          expect(successor.sessionEntry.sessionId).toBe(original.sessionEntry.sessionId);
+          expect(successor.sessionEntry.lifecycleRevision).not.toBe(
+            original.sessionEntry.lifecycleRevision,
           );
-          const successor = await initialize();
-          if (mutation === "replace") {
-            expect(successor.sessionEntry.sessionId).not.toBe(original.sessionEntry.sessionId);
-          } else {
-            expect(successor.sessionEntry.sessionId).toBe(original.sessionEntry.sessionId);
-            expect(successor.sessionEntry.lifecycleRevision).not.toBe(
-              original.sessionEntry.lifecycleRevision,
-            );
-          }
-          const binding = await getSessionBindingService().bind({
-            targetSessionKey: sessionKey,
-            targetKind: "session",
-            placement: "current",
-            conversation: {
-              channel: "discord",
-              accountId: "default",
-              conversationId: "successor-thread",
-            },
-          });
-          const before = loadSessionEntry({ sessionKey, agentId });
-          close.mockClear();
-          ensureSession.mockClear();
-          await cleanup(original);
-          expect(loadSessionEntry({ sessionKey, agentId })).toEqual(before);
-          expect(bindings.get(sessionKey)).toEqual(binding);
-          expect(close).not.toHaveBeenCalled();
-          expect(ensureSession).not.toHaveBeenCalled();
-          expect(socket).not.toHaveBeenCalled();
-        },
-      );
+        }
+        const binding = await getSessionBindingService().bind({
+          targetSessionKey: sessionKey,
+          targetKind: "session",
+          placement: "current",
+          conversation: {
+            channel: "discord",
+            accountId: "default",
+            conversationId: "successor-thread",
+          },
+        });
+        const before = readEntry();
+        close.mockClear();
+        ensureSession.mockClear();
+        await cleanup(original);
+        expect(readEntry()).toEqual(before);
+        expect(bindings.get(sessionKey)).toEqual(binding);
+        expect(close).not.toHaveBeenCalled();
+        expect(ensureSession).not.toHaveBeenCalled();
+      });
     },
   );
 
   it("releases an initialization that finishes after its Gateway and manager retire", async () => {
-    await withCleanupFixture(
-      async ({ manager, initialize, cleanup, ensureSession, close, socket }) => {
-        const scope = getPluginRuntimeGatewayRequestScope();
-        if (!scope?.context) {
-          throw new Error("Expected local Gateway owner");
-        }
-        let current = true;
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
-        const originalEnsure = ensureSession.getMockImplementation()!;
-        ensureSession.mockImplementationOnce(async (input) => {
-          entered.resolve();
-          await release.promise;
-          return await originalEnsure(input);
-        });
-        await withPluginRuntimeGatewayRequestScope(
-          { ...scope, resolveGatewayContext: () => (current ? scope.context : undefined) },
-          async () => {
-            const initializing = initialize();
-            try {
-              await entered.promise;
-              current = false;
-              await disposeAcpSessionManagerInstance(manager, "gateway-shutdown");
-              expect(close).not.toHaveBeenCalled();
-            } finally {
-              release.resolve();
-            }
-            const initialized = await initializing;
-            await cleanup(initialized);
-            expect(close).toHaveBeenCalledOnce();
-            expect(ensureSession).toHaveBeenCalledOnce();
-            expect(socket).not.toHaveBeenCalled();
-            expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
-          },
-        );
-      },
-    );
+    await withCleanupFixture(async ({ manager, initialize, cleanup, ensureSession, close }) => {
+      const scope = gatewayScope();
+      let current = true;
+      const gate = createGate();
+      const originalEnsure = ensureSession.getMockImplementation()!;
+      ensureSession.mockImplementationOnce(async (input) => {
+        await gate.wait();
+        return await originalEnsure(input);
+      });
+      await withPluginRuntimeGatewayRequestScope(
+        { ...scope, resolveGatewayContext: () => (current ? scope.context : undefined) },
+        async () => {
+          const initializing = initialize();
+          try {
+            await gate.entered;
+            current = false;
+            await disposeAcpSessionManagerInstance(manager, "gateway-shutdown");
+            expect(close).not.toHaveBeenCalled();
+          } finally {
+            gate.open();
+          }
+          const initialized = await initializing;
+          await cleanup(initialized);
+          expect(close).toHaveBeenCalledOnce();
+          expect(ensureSession).toHaveBeenCalledOnce();
+          expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
+        },
+      );
+    });
   });
 
   it("does not release a newer handle through a retained initialization callback", async () => {
@@ -568,8 +520,10 @@ describe("failed ACP provisional cleanup", () => {
       expect(close).not.toHaveBeenCalled();
       await disposeAcpSessionManagerInstance(manager, "gateway-shutdown");
       await successor.closeRuntimeOnFailure();
-      expect(close).toHaveBeenCalledOnce();
-      expect(close).toHaveBeenCalledWith({ handle: successor.handle, reason: "gateway-shutdown" });
+      expect(close).toHaveBeenCalledExactlyOnceWith({
+        handle: successor.handle,
+        reason: "gateway-shutdown",
+      });
     });
   });
 
@@ -577,7 +531,7 @@ describe("failed ACP provisional cleanup", () => {
     const { handleAcpCommand } = await import("../../auto-reply/reply/commands-acp.js");
     const { buildCommandTestParams } =
       await import("../../auto-reply/reply/commands.test-harness.js");
-    await withCleanupFixture(async ({ cfg, bind, ensureSession, close, socket }) => {
+    await withCleanupFixture(async ({ cfg, bind, ensureSession, close }) => {
       bind.mockRejectedValueOnce(new Error("Conversation binding refused"));
       const params = buildCommandTestParams("/acp spawn main --bind here", cfg, {
         Provider: "discord",
@@ -595,7 +549,6 @@ describe("failed ACP provisional cleanup", () => {
       const childKey = ensureSession.mock.calls[0]![0].sessionKey;
       expect(loadSessionEntry({ sessionKey: childKey, agentId })).toBeUndefined();
       expect(close).toHaveBeenCalledOnce();
-      expect(socket).not.toHaveBeenCalled();
     });
   });
 });

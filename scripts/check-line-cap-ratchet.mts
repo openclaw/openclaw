@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import type { OxlintConfig } from "oxlint";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mts";
@@ -14,8 +15,6 @@ import {
   loadRatchetSnapshot,
   loadRatchetSources,
   parseRatchetArgs,
-  reportRatchetFailures,
-  reportRatchetSuccess,
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
 
@@ -27,7 +26,7 @@ type OxlintDiagnostic = {
   help?: string;
 };
 
-export function compareLineCapViolations(
+function compareLineCapViolations(
   head: ReadonlyMap<string, LineCapViolation>,
   base: ReadonlyMap<string, LineCapViolation>,
   renames: readonly { from: string; to: string }[] = [],
@@ -137,7 +136,7 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       "--name-only",
       "-z",
       "--diff-filter=ACMR",
-      "--find-renames",
+      "--no-renames",
       ...(args.staged ? ["--cached"] : []),
       base,
     ]);
@@ -145,14 +144,6 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       changes.push(...gitPaths(root, ["ls-files", "--others", "--exclude-standard", "-z"]));
     }
     const paths = [...new Set(changes)].filter((file) => /\.(?:ts|tsx|mts|mjs)$/u.test(file));
-    const renames = listRatchetRenames(root, base, args.staged, []);
-    const oldPaths = new Map(renames.map(({ from, to }) => [to, from]));
-    const basePaths = new Set(gitPaths(root, ["ls-tree", "-r", "--name-only", "-z", base]));
-    const baseSources = loadRatchetSources(
-      root,
-      paths.map((file) => oldPaths.get(file) ?? file).filter((file) => basePaths.has(file)),
-      base,
-    );
     const headSources = args.staged
       ? loadRatchetSources(root, paths)
       : new Map(paths.map((file) => [file, fs.readFileSync(path.join(root, file), "utf8")]));
@@ -184,33 +175,37 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     fs.mkdirSync(path.join(scratch, ".git"));
     const after = collectViolations(path.join(scratch, "head"), headSources, config);
     // Only over-cap head files need an inherited allowance. A broken base must
-    // not block a valid repair that already satisfies the current cap.
+    // not block a valid repair; partial clones must not fetch unused base blobs.
+    const renames = after.size > 0 ? listRatchetRenames(root, base, args.staged, []) : [];
+    const oldPaths = new Map(renames.map(({ from, to }) => [to, from]));
+    const basePaths = new Set(gitPaths(root, ["ls-tree", "-r", "--name-only", "-z", base]));
     const debtPaths = new Set([...after.keys()].map((file) => oldPaths.get(file) ?? file));
     const before = collectViolations(
       path.join(scratch, "base"),
-      new Map([...baseSources].filter(([file]) => debtPaths.has(file))),
+      loadRatchetSources(
+        root,
+        [...debtPaths].filter((file) => basePaths.has(file)),
+        base,
+      ),
       config,
     );
     const increased = compareLineCapViolations(after, before, renames);
     if (
-      reportRatchetFailures(
-        [
-          {
-            title: "Line-cap ratchet rejects new violations or growth:",
-            entries: increased.map(
-              ({ entry, allowed, current }) =>
-                `${entry}: ${allowed} -> ${current} counted lines (cap ${after.get(entry)!.cap})`,
-            ),
-          },
-        ],
-        "Extract a coherent sibling module; never trim coverage or disable max-lines.",
+      reportLimitViolations(
+        increased.map(({ entry, allowed, current }) => ({
+          file: entry,
+          title: "Line-cap ratchet rejects new violations or growth:",
+          message: `${allowed} -> ${current} counted lines (cap ${after.get(entry)!.cap}). Extract a coherent sibling module; never trim coverage or disable max-lines.`,
+        })),
       )
     ) {
       return 1;
     }
-    reportRatchetSuccess(
-      `Line-cap ratchet OK: ${paths.length} changed source files; no new violations or over-cap growth.`,
-    );
+    if (increased.length === 0) {
+      console.log(
+        `Line-cap ratchet OK: ${paths.length} changed source files; no new violations or over-cap growth.`,
+      );
+    }
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

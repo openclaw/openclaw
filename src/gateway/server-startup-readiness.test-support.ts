@@ -12,7 +12,7 @@ import type { ReadinessChecker } from "./server/readiness.js";
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
 
 export function registerGatewayStartupReadinessTests(params: {
-  start: typeof startGatewayPostAttachRuntime;
+  start: (params: PostAttachParams) => ReturnType<typeof startGatewayPostAttachRuntime>;
   createParams: (overrides?: Partial<PostAttachParams>) => PostAttachParams;
 }): void {
   it.each([false, true])(
@@ -47,7 +47,7 @@ export function registerGatewayStartupReadinessTests(params: {
     expect(trace.mark).toHaveBeenCalledWith("sidecars.ready");
     expect(trace.detail).toHaveBeenCalledWith("sidecars.ready", [
       ["loadedPluginCount", 2],
-      ["postReadySidecarCount", 4],
+      ["postReadySidecarCount", 3],
     ]);
   });
 }

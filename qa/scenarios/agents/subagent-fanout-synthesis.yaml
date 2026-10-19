@@ -28,25 +28,16 @@ scenario:
     summary: Verify the agent can delegate multiple bounded subagent tasks and fold both results back into one parent reply.
     config:
       prompt: |-
-        Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn, not ACP.
+        Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn with cleanup: delete, not ACP.
         First spawn exactly one child with label qa-fanout-alpha and task: verify that `AGENTS.md` exists and reply exactly `ok` if it does. Wait for that child to finish.
         Then spawn exactly one child with label qa-fanout-beta and task: verify that `repo/qa/scenarios/agents/subagent-fanout-synthesis.yaml` exists and reply exactly `ok` if it does. Wait for that child to finish.
         Do not spawn any more children after qa-fanout-beta finishes.
         Then reply with exactly these two lines and nothing else:
         subagent-1: ok
         subagent-2: ok
-      expectedReplyAny:
-        - "subagent-1: ok"
-        - "subagent-2: ok"
-      expectedReplyGroups:
-        - - alpha-ok
-          - subagent_one_ok
-          - subagent one ok
-          - "subagent-1: ok"
-        - - beta-ok
-          - subagent_two_ok
-          - subagent two ok
-          - "subagent-2: ok"
+      expectedReply: |-
+        subagent-1: ok
+        subagent-2: ok
       expectedChildLabels:
         - qa-fanout-alpha
         - qa-fanout-beta
@@ -86,7 +77,7 @@ flow:
                               expr: "env.providerMode === 'mock-openai' ? config.expectedChildLabels[1] : `${config.expectedChildLabels[1]}-${attempt}`"
                           - set: prompt
                             value:
-                              expr: "`Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn, not ACP.\nFirst spawn exactly one child with label ${alphaLabel} and task: verify that \\`AGENTS.md\\` exists and reply exactly \\`ok\\` if it does. Wait for that child to finish.\nThen spawn exactly one child with label ${betaLabel} and task: verify that \\`repo/qa/scenarios/agents/subagent-fanout-synthesis.yaml\\` exists and reply exactly \\`ok\\` if it does. Wait for that child to finish.\nDo not spawn any more children after ${betaLabel} finishes.\nThen reply with exactly these two lines and nothing else:\nsubagent-1: ok\nsubagent-2: ok`"
+                              expr: "`Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn with cleanup: delete, not ACP.\nFirst spawn exactly one child with label ${alphaLabel} and task: verify that \\`AGENTS.md\\` exists and reply exactly \\`ok\\` if it does. Wait for that child to finish.\nThen spawn exactly one child with label ${betaLabel} and task: verify that \\`repo/qa/scenarios/agents/subagent-fanout-synthesis.yaml\\` exists and reply exactly \\`ok\\` if it does. Wait for that child to finish.\nDo not spawn any more children after ${betaLabel} finishes.\nThen reply with exactly these two lines and nothing else:\nsubagent-1: ok\nsubagent-2: ok`"
                           - set: sessionKey
                             value:
                               expr: "`agent:qa:fanout:${attempt}:${randomUUID().slice(0, 8)}`"
@@ -99,7 +90,6 @@ flow:
                                   ref: sessionKey
                                 message:
                                   expr: "`${prompt}\nQA parent correlation: ${sessionKey}`"
-                                taskTracking: false
                                 timeoutMs:
                                   expr: liveTurnTimeoutMs(env, 30000)
                           - call: waitForAgentHistoryReply
@@ -109,55 +99,53 @@ flow:
                               - ref: sessionKey
                               - lambda:
                                   params: [text]
-                                  expr: "config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(text).includes(needle)))"
+                                  expr: "text.trim() === config.expectedReply"
                               - expr: liveTurnTimeoutMs(env, 90000)
                               - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
-                          # The synthesized parent reply is the public result boundary.
-                          # Durable task records prove both child results succeeded and were
-                          # delivered without depending on private child transcripts.
+                          # Spawn receipts bind child sessions to runs; agent.wait retains
+                          # terminal outcomes and replies after delete-cleanup retires child rows.
                           - call: waitForCondition
-                            saveAs: fanoutChildren
+                            saveAs: fanoutSpawns
                             args:
                               - lambda:
                                   async: true
-                                  expr: "(async () => { if (env.mock) { const requests = [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))]; const belongsToFanout = (request) => String(request.allInputText ?? '').includes(sessionKey); const alpha = requests.find((request) => belongsToFanout(request) && request.plannedToolName === 'sessions_spawn' && request.plannedToolArgs?.label === alphaLabel); const beta = requests.find((request) => belongsToFanout(request) && request.plannedToolName === 'sessions_spawn' && request.plannedToolArgs?.label === betaLabel); return alpha && beta ? { alpha, beta } : undefined; } const payload = await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }); const alpha = payload.tasks?.find((task) => task.label === alphaLabel && task.requesterSessionKey === sessionKey); const beta = payload.tasks?.find((task) => task.label === betaLabel && task.requesterSessionKey === sessionKey); const settled = (task) => task?.status === 'succeeded' && task.deliveryStatus === 'delivered'; return settled(alpha) && settled(beta) ? { alpha, beta } : undefined; })().catch(() => undefined)"
+                                  expr: |-
+                                    (async () => {
+                                      const activity = await readSessionToolActivity(env, sessionKey);
+                                      const spawns = [alphaLabel, betaLabel].map((label, index) => {
+                                        const call = activity.find((item) => item.toolName === 'sessions_spawn' && item.successful && item.input?.label === label);
+                                        const receipt = extractQaToolPayload(call?.result);
+                                        return call?.toolCallId && receipt?.status === 'accepted' && typeof receipt.childSessionKey === 'string' && receipt.childSessionKey.length > 0 && typeof receipt.runId === 'string' && receipt.runId.length > 0
+                                          ? { label, toolCallId: call.toolCallId, childSessionKey: receipt.childSessionKey, runId: receipt.runId, expectedReply: env.providerMode === 'mock-openai' ? ['ALPHA-OK', 'BETA-OK'][index] : 'ok' }
+                                          : undefined;
+                                      });
+                                      return spawns.every(Boolean) && new Set(spawns.map((spawn) => spawn.toolCallId)).size === 2 && new Set(spawns.map((spawn) => spawn.childSessionKey)).size === 2 && new Set(spawns.map((spawn) => spawn.runId)).size === 2 ? spawns : undefined;
+                                    })()
                               - expr: liveTurnTimeoutMs(env, 30000)
                               - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
-                          - if:
-                              expr: "!env.mock"
-                              then:
+                          - set: fanoutCompletions
+                            value: []
+                          - forEach:
+                              items:
+                                ref: fanoutSpawns
+                              item: child
+                              actions:
+                                - call: waitForAgentRun
+                                  saveAs: completion
+                                  args:
+                                    - ref: env
+                                    - expr: child.runId
+                                    - expr: liveTurnTimeoutMs(env, 30000)
                                 - assert:
-                                    expr: "fanoutChildren.alpha.requesterSessionKey === sessionKey && fanoutChildren.beta.requesterSessionKey === sessionKey"
+                                    expr: "completion.runId === child.runId && completion.status === 'ok' && completion.yielded !== true && typeof completion.endedAt === 'number' && completion.terminalReply?.disposition === 'visible' && completion.terminalReply.text.trim() === child.expectedReply"
                                     message:
-                                      expr: "`fanout completion must belong to parent ${sessionKey}`"
-                          - if:
-                              expr: "Boolean(env.mock)"
-                              then:
-                                # Tool-call assertion (criterion 2 of the
-                                # parity completion gate in #64227): the
-                                # scenario must have actually invoked
-                                # `sessions_spawn` at least twice with
-                                # distinct labels, not just ended up with
-                                # two rows in the session store through
-                                # prose trickery. The session store alone
-                                # can be populated by other flows or by a
-                                # model that fabricates "delegation"
-                                # narration. `plannedToolName` on the
-                                # mock's `/debug/requests` log is the
-                                # tool-call ground truth: two recorded
-                                # sessions_spawn requests with distinct
-                                # labels means the model really dispatched
-                                # both subagents.
-                                - set: fanoutSpawnRequests
+                                      expr: "`child completion missing for ${child.label}: ${JSON.stringify({ child, completion })}`"
+                                - set: fanoutCompletions
                                   value:
-                                    expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => request.plannedToolName === 'sessions_spawn' && String(request.allInputText ?? '').includes(sessionKey))"
-                                - assert:
-                                    expr: "fanoutSpawnRequests.some((request) => request.plannedToolArgs?.label === alphaLabel) && fanoutSpawnRequests.some((request) => request.plannedToolArgs?.label === betaLabel)"
-                                    message:
-                                      expr: "`expected labeled alpha and beta sessions_spawn tool calls during subagent fanout scenario, saw ${JSON.stringify(fanoutSpawnRequests.map((request) => request.plannedToolArgs?.label ?? null))}`"
+                                    expr: "[...fanoutCompletions, { ...child, completion }]"
                           - set: details
                             value:
-                              expr: "parentOutbound.text"
+                              expr: "JSON.stringify({ reply: parentOutbound.text, children: fanoutCompletions })"
                           - set: lastError
                             value: __done__
                         catchAs: attemptError

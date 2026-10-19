@@ -1,4 +1,3 @@
-// Default model and alias resolution for directive handling.
 import {
   buildModelAliasIndex,
   type ModelAliasIndex,
@@ -17,18 +16,9 @@ export function resolveDefaultModel(params: { cfg: OpenClawConfig; agentId?: str
     config: params.cfg,
     allowWorkspaceScopedSnapshot: true,
   });
-  const mainModel = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    manifestPlugins,
-  });
-  const defaultProvider = mainModel.provider;
-  const defaultModel = mainModel.model;
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg,
-    defaultProvider,
-    agentId: params.agentId,
-    manifestPlugins,
-  });
+  const modelContext = { cfg: params.cfg, agentId: params.agentId, manifestPlugins };
+  const { provider: defaultProvider, model: defaultModel } =
+    resolveDefaultModelForAgent(modelContext);
+  const aliasIndex = buildModelAliasIndex({ ...modelContext, defaultProvider });
   return { defaultProvider, defaultModel, aliasIndex };
 }

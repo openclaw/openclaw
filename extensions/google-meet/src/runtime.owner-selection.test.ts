@@ -9,7 +9,7 @@ describe("Google Meet runtime owner selection", () => {
       meetRuntime({ realtime: { agentId: "work" } }, logger, {
         agents: {
           ownership: "explicit",
-          list: [{ id: "main" }, { id: "work" }],
+          entries: { main: {}, work: {} },
         },
       }),
     ).not.toThrow();

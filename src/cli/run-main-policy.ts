@@ -1,30 +1,100 @@
-// Main CLI startup policy helpers for fast paths, proxy startup, aliases, and missing commands.
+import { existsSync } from "node:fs";
+import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
+import { getCommandPositionalsWithRootOptions } from "../infra/cli-root-options.js";
+import { isTruthyEnvValue } from "../infra/env.js";
+import { PROXY_ENV_KEYS as CLI_PROXY_ENV_KEYS } from "../infra/net/proxy-env.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type {
-  PluginManifestCommandAliasRecord,
-  PluginManifestToolOwnerRecord,
-} from "../plugins/manifest-command-aliases.js";
+  resolveManifestCommandAliasOwner,
+  resolveManifestCliCommandSurfaceOwner,
+  resolveManifestToolOwner,
+} from "../plugins/manifest-command-aliases.runtime.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { isSimpleCommandHelpInvocation } from "./argv.js";
+import { isSimpleCommandHelpInvocation, rewriteUpdateFlagArgv } from "./argv.js";
 import {
   resolveCliCommandPathPolicy,
   resolveCliNetworkProxyPolicy,
 } from "./command-path-policy.js";
 import { isReservedNonPluginCommandRoot } from "./command-registration-policy.js";
+import {
+  consumeGatewayFastPathRootOptionToken,
+  consumeGatewayRunOptionToken,
+} from "./gateway-run-argv.js";
 import { getCoreCliParentDefaultHelpCommands } from "./program/core-command-descriptors.js";
 import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors.js";
+import type { BareRootLaunchTarget } from "./run-main.gateway-types.js";
 
-const ROOT_HELP_ALIASES = new Set(["tools"]);
+export const TUI_REQUIRES_TTY =
+  "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.";
+const ROOT_HELP_ALIASES = new Set(["tools", "help"]);
 const SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS = new Set(["setup", "onboard", "configure"]);
 const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
   ...getCoreCliParentDefaultHelpCommands(),
   ...getSubCliParentDefaultHelpCommands(),
 ]);
+export function shouldLoadCliDotEnv(loadGlobalEnv: boolean): boolean {
+  const cwd = tryProcessCwd();
+  if (cwd && existsSync(path.join(cwd, ".env"))) {
+    return true;
+  }
+  return loadGlobalEnv && existsSync(path.join(resolveStateDir(), ".env"));
+}
+
+export function isGatewayRunFastPathArgv(argv: string[]): boolean {
+  const invocation = resolveCliArgvInvocation(argv);
+  if (invocation.hasHelpOrVersion) {
+    return false;
+  }
+  const args = argv.slice(2);
+  let sawGateway = false;
+  let sawRun = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === "--") {
+      return false;
+    }
+    const rootConsumed = consumeGatewayFastPathRootOptionToken(args, index);
+    if (rootConsumed > 0) {
+      index += rootConsumed - 1;
+      continue;
+    }
+    if (!sawGateway) {
+      if (arg !== "gateway") {
+        return false;
+      }
+      sawGateway = true;
+      continue;
+    }
+    const consumed = consumeGatewayRunOptionToken(args, index);
+    if (consumed > 0) {
+      index += consumed - 1;
+      continue;
+    }
+    if (!sawRun && arg === "run") {
+      sawRun = true;
+      continue;
+    }
+    return false;
+  }
+
+  return sawGateway;
+}
+
+export function isRemoteAgentDispatchInvocation(argv: string[], primary: string | null): boolean {
+  return primary === "agent" && !argv.includes("--local");
+}
+
+export function isAgentExecInvocation(commandPath: string[]): boolean {
+  return commandPath[0] === "agent" && commandPath[1] === "exec";
+}
 
 function isBareParentDefaultHelpArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
@@ -32,37 +102,6 @@ function isBareParentDefaultHelpArgv(argv: string[]): boolean {
   return !invocation.hasHelpOrVersion && primary !== undefined && extra === undefined
     ? BARE_PARENT_DEFAULT_HELP_COMMANDS.has(primary)
     : false;
-}
-
-export function rewriteUpdateFlagArgv(argv: string[]): string[] {
-  // Preserve the old root --update spelling by rewriting before Commander registration.
-  // Only rewrite --update while scanning the root-option prefix; once a command
-  // or `--` appears, later --update tokens belong to that command's arguments.
-  const updateIndex = argv.indexOf("--update");
-  if (updateIndex === -1) {
-    return argv;
-  }
-
-  for (let i = 2; i < argv.length; i++) {
-    const arg = argv[i];
-    if (!arg || arg === FLAG_TERMINATOR) {
-      return argv;
-    }
-    if (i === updateIndex) {
-      const next = [...argv];
-      next.splice(updateIndex, 1, "update");
-      return next;
-    }
-    const consumed = consumeRootOptionToken(argv, i);
-    if (consumed > 0) {
-      i += consumed - 1;
-      continue;
-    }
-    if (!arg.startsWith("-")) {
-      return argv;
-    }
-  }
-  return argv;
 }
 
 export function shouldEnsureCliPath(argv: string[]): boolean {
@@ -87,9 +126,6 @@ export function shouldUseRootHelpFastPath(
     (invocation.isRootHelpInvocation ||
       (invocation.commandPath.length === 1 &&
         ROOT_HELP_ALIASES.has(invocation.commandPath[0] ?? "") &&
-        invocation.hasHelpOrVersion) ||
-      (invocation.commandPath.length === 1 &&
-        invocation.commandPath[0] === "help" &&
         invocation.hasHelpOrVersion))
   );
 }
@@ -105,8 +141,13 @@ export function shouldUseSetupOnboardConfigureHelpFastPath(
 }
 
 export function shouldHandleBareRoot(argv: string[]): boolean {
-  const invocation = resolveCliArgvInvocation(argv);
-  return invocation.commandPath.length === 0 && !invocation.hasHelpOrVersion;
+  return (
+    getCommandPositionalsWithRootOptions(argv, {
+      commandPath: [],
+      maxPositionals: 1,
+      mode: "command-path",
+    })?.length === 0
+  );
 }
 
 export function shouldStartProxyForCli(argv: string[]): boolean {
@@ -122,22 +163,65 @@ export function shouldStartProxyForCli(argv: string[]): boolean {
   return resolveCliNetworkProxyPolicy(policyArgv) === "default";
 }
 
+/** Bare `openclaw` has no command path, so its launch target decides the TTY rule and proxy routing. */
+export function resolveBareRootLaunchPolicy(target: BareRootLaunchTarget): {
+  ttyMessage: string;
+  startProxy: boolean;
+} {
+  if (target.kind === "remote-gateway-inference") {
+    return {
+      ttyMessage:
+        "Remote Gateway inference setup needs an interactive TTY. Re-run `openclaw` in a terminal connected to this Gateway.",
+      startProxy: false,
+    };
+  }
+  if (target.kind === "onboarding") {
+    // Onboarding probes providers from this process, like `openclaw onboard`.
+    return {
+      ttyMessage: target.classic
+        ? "OpenClaw config is invalid. Run `openclaw doctor --fix` before onboarding."
+        : "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
+      startProxy: true,
+    };
+  }
+  // The local TUI runs the agent here, like `tui --local`; a Gateway-bound TUI keeps
+  // its direct control-plane connection.
+  return { ttyMessage: TUI_REQUIRES_TTY, startProxy: target.local };
+}
+
+export function isDebugProxyCaptureEnvEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (
+    isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_ENABLED) ||
+    isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_REQUIRE)
+  );
+}
+
+export function shouldBootstrapCliProxyBeforeFastPath(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (isDebugProxyCaptureEnvEnabled(env)) {
+    return true;
+  }
+  return CLI_PROXY_ENV_KEYS.some((key) => normalizeOptionalString(env[key]) !== undefined);
+}
+
+function formatExcludedPluginCommand(command: string, owner: string): string {
+  return owner === command
+    ? `The \`openclaw ${command}\` command is unavailable because ` +
+        `\`plugins.allow\` excludes "${command}". Add "${command}" to ` +
+        `\`plugins.allow\` if you want that bundled plugin CLI surface.`
+    : `"${command}" is not a plugin; it is a command provided by the ` +
+        `"${owner}" plugin. Add "${owner}" to \`plugins.allow\` ` +
+        `instead of "${command}".`;
+}
+
 export function resolveMissingPluginCommandMessage(
   pluginId: string,
   config?: OpenClawConfig,
   options?: {
-    resolveCommandAliasOwner?: (params: {
-      command: string | undefined;
-      config?: OpenClawConfig;
-    }) => PluginManifestCommandAliasRecord | undefined;
-    resolveToolOwner?: (params: {
-      toolName: string | undefined;
-      config?: OpenClawConfig;
-    }) => PluginManifestToolOwnerRecord | undefined;
-    resolveCliCommandSurfaceOwner?: (params: {
-      command: string | undefined;
-      config?: OpenClawConfig;
-    }) => string | undefined;
+    resolveCommandAliasOwner?: typeof resolveManifestCommandAliasOwner;
+    resolveToolOwner?: typeof resolveManifestToolOwner;
+    resolveCliCommandSurfaceOwner?: typeof resolveManifestCliCommandSurfaceOwner;
   },
 ): string | null {
   const normalizedPluginId = normalizeLowercaseStringOrEmpty(pluginId);
@@ -158,18 +242,7 @@ export function resolveMissingPluginCommandMessage(
   const parentPluginId = commandAlias?.pluginId;
   if (parentPluginId) {
     if (allow.length > 0 && !allow.includes(parentPluginId)) {
-      if (parentPluginId === normalizedPluginId) {
-        return (
-          `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
-          `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
-          `\`plugins.allow\` if you want that bundled plugin CLI surface.`
-        );
-      }
-      return (
-        `"${normalizedPluginId}" is not a plugin; it is a command provided by the ` +
-        `"${parentPluginId}" plugin. Add "${parentPluginId}" to \`plugins.allow\` ` +
-        `instead of "${normalizedPluginId}".`
-      );
+      return formatExcludedPluginCommand(normalizedPluginId, parentPluginId);
     }
     if (config?.plugins?.entries?.[parentPluginId]?.enabled === false) {
       return (
@@ -252,18 +325,7 @@ export function resolveMissingPluginCommandMessage(
     if (allow.includes(normalizedCliCommandSurfaceOwner)) {
       return null;
     }
-    if (normalizedCliCommandSurfaceOwner !== normalizedPluginId) {
-      return (
-        `"${normalizedPluginId}" is not a plugin; it is a command provided by the ` +
-        `"${normalizedCliCommandSurfaceOwner}" plugin. Add "${normalizedCliCommandSurfaceOwner}" to ` +
-        `\`plugins.allow\` instead of "${normalizedPluginId}".`
-      );
-    }
-    return (
-      `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
-      `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
-      `\`plugins.allow\` if you want that bundled plugin CLI surface.`
-    );
+    return formatExcludedPluginCommand(normalizedPluginId, normalizedCliCommandSurfaceOwner);
   }
   if (config?.plugins?.entries?.[normalizedPluginId]?.enabled === false) {
     return (

@@ -1,14 +1,20 @@
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
+import { createSubagentSessionListReadView } from "../agents/subagents/registry/subagent-registry-state.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { runSynchronousWork } from "../shared/synchronous-work.js";
 import { filterSessionEntries } from "./session-list-filters.js";
 import type { SessionEntryPair } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { createSessionRowProjectionContext } from "./session-row-projection-context.js";
+import { createSessionRowSelection } from "./session-row-selection.js";
 
 it("benchmarks warm identity filtering across viewers", () => {
-  const cfg = { agents: { list: [{ id: "main", default: true }] } };
-  const context = createSessionRowProjectionContext().current;
+  const cfg = { agents: { entries: { main: {} } } };
+  const owner = createSessionRowProjectionContext(
+    createSubagentSessionListReadView({ env: process.env }),
+  );
+  onTestFinished(owner.dispose);
+  const context = owner.current;
   const identities = context.userProfileIdentityById;
   for (let index = 0; index < 50; index++) {
     const id = `profile-${index}`;
@@ -32,13 +38,32 @@ it("benchmarks warm identity filtering across viewers", () => {
     };
     return [`agent:main:session-${index}`, entry];
   });
-  const targets = new Map(
-    entries.map(([key, entry]) => [
-      key,
-      { agentId: "main", selection: readSessionListSelectionFacts(key, entry) },
-    ]),
-  );
   const configuredAgentIds = new Set(["main"]);
+  const storePath = "/tmp/identity-selection-benchmark";
+  const selection = createSessionRowSelection(
+    cfg,
+    {
+      path: storePath,
+      paths: new Map([[storePath, 0]]),
+      agentId: "main",
+      configuredAgentIds,
+      ownerAgentIds: configuredAgentIds,
+    },
+    false,
+    () => context,
+  );
+  for (const [key, entry] of entries) {
+    selection.add({
+      key,
+      entry,
+      agentId: "main",
+      storeTarget: { agentId: "main", storePath },
+      selection: readSessionListSelectionFacts(key, entry),
+      generation: Symbol(key),
+      hasBoard: false,
+    });
+  }
+  const selected = selection.read();
   for (const involving of [false, true]) {
     const samples: number[] = [];
     for (let index = 0; index < 70; index++) {
@@ -46,8 +71,9 @@ it("benchmarks warm identity filtering across viewers", () => {
       const result = runSynchronousWork(
         filterSessionEntries({
           cfg,
-          entries,
-          getTarget: (key) => targets.get(key),
+          entries: selected.entries,
+          getTarget: selected.get,
+          involvementKeys: selected.involvementKeys,
           getRowContext: () => context,
           userProfileIdentityById: identities,
           configuredAgentIds,

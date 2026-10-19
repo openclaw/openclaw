@@ -18,7 +18,7 @@ vi.mock("../plugins/cli-backends.runtime.js", () => ({
 }));
 vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/auth-profiles/store-runtime.js")>()),
-  loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: {} }),
+  loadAuthProfileStoreForRuntimeAsync: async () => ({ version: 1, profiles: {} }),
 }));
 vi.mock("../agents/model-auth.js", () => ({
   hasAvailableAuthForProvider: async () => true,

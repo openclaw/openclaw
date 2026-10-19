@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { writeFile } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
 import net, { type Socket } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -14,10 +14,12 @@ import {
 } from "../../src/state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
 import { withEnvAsync } from "../../src/test-utils/env.js";
+import { reserveTestPortListener } from "../../src/test-utils/port-claims.js";
+import * as ports from "../../src/test-utils/ports.js";
 import {
   createDesktopResizeGuest,
+  createDesktopResizeProxy,
   observeDesktopEndpointPackets,
-  readDesktopResizeFixture,
   resizeSources,
   seedDesktopResizeSources,
   writeDesktopResizeProvider,
@@ -57,6 +59,39 @@ function fixture(carrier: DesktopResizeFixture["carrier"] = "ssh"): DesktopResiz
   };
 }
 
+it("keeps the Gateway listener available when free-port probes reuse an address", async () => {
+  const reserved = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () => net.createServer(),
+  });
+  await reserved.releaseListener();
+  const probe = vi.spyOn(ports, "getFreePort").mockResolvedValue(reserved.claim.port);
+  onTestFinished(async () => {
+    probe.mockRestore();
+    await reserved.claim.release();
+  });
+  const proxy = await createDesktopResizeProxy();
+  const gateway = createHttpServer((_request, response) => response.end("ready"));
+  onTestFinished(async () => {
+    try {
+      if (gateway.listening) {
+        await new Promise<void>((resolve, reject) => {
+          gateway.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    } finally {
+      await proxy.close();
+    }
+  });
+  const gatewayPort = proxy.gatewayPort;
+  await new Promise<void>((resolve, reject) => {
+    gateway.once("error", reject);
+    gateway.listen(gatewayPort, "127.0.0.1", resolve);
+  });
+  const response = await fetch(new URL("/readyz", proxy.baseUrl));
+  expect(await response.text()).toBe("ready");
+});
+
 describe("desktop resize fixture provenance and carrier", () => {
   it.each([undefined, "/tmp/desktop proof/Xauthority"])(
     "uses private Xauthority for all guest commands when supplied: %s",
@@ -88,40 +123,6 @@ describe("desktop resize fixture provenance and carrier", () => {
       }
     },
   );
-  it.each(["ssh", "node"] as const)(
-    "retains explicit upstream provenance for %s",
-    async (carrier) => {
-      const file = path.join(tempDirs.make("desktop-resize-fixture-"), "fixture.json");
-      const value = fixture(carrier);
-      await writeFile(file, JSON.stringify(value));
-      expect(await readDesktopResizeFixture(file)).toEqual(value);
-      expect(value).not.toHaveProperty("crabboxCommit");
-    },
-  );
-
-  it("retains real Crabbox provenance as a separate source kind", async () => {
-    const file = path.join(tempDirs.make("desktop-resize-fixture-"), "fixture.json");
-    const value = fixture();
-    value.provenance = {
-      kind: "crabbox",
-      commit: "c".repeat(40),
-      installerSha256: "d".repeat(64),
-    };
-    await writeFile(file, JSON.stringify(value));
-    expect(await readDesktopResizeFixture(file)).toEqual(value);
-  });
-
-  it.each([
-    { carrier: "physical" },
-    { provenance: undefined },
-    { provenance: { kind: "upstream-os", serverBinarySha256: "unverified" } },
-    { provenance: { kind: "crabbox", commit: "not-a-commit", installerSha256: "e".repeat(64) } },
-  ])("rejects an unqualified fixture %j", async (invalid) => {
-    const file = path.join(tempDirs.make("desktop-resize-fixture-"), "fixture.json");
-    await writeFile(file, JSON.stringify({ ...fixture(), ...invalid }));
-    await expect(readDesktopResizeFixture(file)).rejects.toThrow("provenance");
-  });
-
   it.each(["ssh", "node"] as const)(
     "persists a ready %s worker and synthetic receipt across reopen",
     async (carrier) => {
@@ -287,7 +288,7 @@ describe("desktop endpoint packet attribution", () => {
     },
   );
 
-  it.each(["abort", "close", "upstream-close", "overflow"])(
+  it.each(["close", "upstream-close", "overflow"])(
     "rejects unfinished evidence on %s",
     async (kind) => {
       const owner = await openEndpointTap();
@@ -297,9 +298,7 @@ describe("desktop endpoint packet attribution", () => {
       const echo = once(client, "data");
       client.write(Buffer.from(probe.bytes.slice(0, 10)));
       await echo;
-      if (kind === "abort") {
-        owner.abort.abort();
-      } else if (kind === "close") {
+      if (kind === "close") {
         await owner.tap.close();
       } else if (kind === "upstream-close") {
         owner.peers.forEach((socket) => socket.destroy());

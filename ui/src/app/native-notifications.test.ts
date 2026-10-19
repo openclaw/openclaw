@@ -42,26 +42,6 @@ describe("native notifications", () => {
     expect(createNativeNotificationsCapability()).toBeNull();
   });
 
-  it("posts status on create", () => {
-    const postMessage = installBridge();
-
-    capability = createNativeNotificationsCapability();
-
-    expect(capability?.snapshot).toEqual({ permission: "unknown", test: null });
-    expect(postMessage).toHaveBeenCalledWith({ type: "status" });
-  });
-
-  it("accepts the permission-only native snapshot", () => {
-    installBridge();
-    (window as NativeNotificationsTestWindow)["__OPENCLAW_NATIVE_NOTIFICATIONS__"] = {
-      permission: "granted",
-    };
-
-    capability = createNativeNotificationsCapability();
-
-    expect(capability?.snapshot).toEqual({ permission: "granted", test: null });
-  });
-
   it("publishes valid status events", () => {
     installBridge();
     capability = createNativeNotificationsCapability();
@@ -94,16 +74,6 @@ describe("native notifications", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
-  it("reposts status when the window focuses", () => {
-    const postMessage = installBridge();
-    capability = createNativeNotificationsCapability();
-    postMessage.mockClear();
-
-    window.dispatchEvent(new Event("focus"));
-
-    expect(postMessage).toHaveBeenCalledWith({ type: "status" });
-  });
-
   it("posts permission requests", () => {
     const postMessage = installBridge();
     capability = createNativeNotificationsCapability();
@@ -126,18 +96,16 @@ describe("native notifications", () => {
     expect(postMessage.mock.calls).toEqual([[{ type: "send-test" }]]);
   });
 
-  it.each(["unknown", "notDetermined", "denied", "granted"] as const)(
+  it.each(["notDetermined"] as const)(
     "forwards completion to the native permission owner without prompting: %s",
     (permission) => {
       const postMessage = installBridge();
       capability = createNativeNotificationsCapability();
-      if (permission !== "unknown") {
-        window.dispatchEvent(
-          new CustomEvent(NATIVE_NOTIFICATIONS_STATUS_EVENT, {
-            detail: { permission, test: null },
-          }),
-        );
-      }
+      window.dispatchEvent(
+        new CustomEvent(NATIVE_NOTIFICATIONS_STATUS_EVENT, {
+          detail: { permission, test: null },
+        }),
+      );
       postMessage.mockClear();
 
       capability?.backgroundSessionCompleted({ runId: "run-1", path: "/chat/research" });

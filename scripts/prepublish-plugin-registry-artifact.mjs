@@ -326,28 +326,38 @@ export function createPrepublishPluginRegistryArtifact(params) {
     if (packageJson.version !== params.candidateVersion) {
       throw new Error(`${packageName} version differs from the root package candidate`);
     }
-    runChecked(
-      process.execPath,
-      [path.join(repoRoot, "scripts/lib/plugin-npm-runtime-build.mjs"), packageDir],
-      repoRoot,
-    );
     const before = new Set(fs.readdirSync(outputDir));
-    runChecked(
-      process.execPath,
-      [
-        path.join(repoRoot, "scripts/lib/plugin-npm-package-manifest.mjs"),
-        "--run",
-        packageDir,
-        "--",
-        "npm",
-        "pack",
-        "--json",
-        "--ignore-scripts",
-        "--pack-destination",
-        outputDir,
-      ],
-      repoRoot,
-    );
+    const buildAndPack = path.join(repoRoot, "scripts/lib/plugin-npm-build-and-pack.mts");
+    if (fs.existsSync(buildAndPack)) {
+      runChecked(
+        process.execPath,
+        ["--import", "./scripts/tsx.mjs", buildAndPack, packageDir, outputDir],
+        repoRoot,
+      );
+    } else {
+      // Stable release harnesses predate the combined entry; their own builders own packaging.
+      runChecked(
+        process.execPath,
+        [path.join(repoRoot, "scripts/lib/plugin-npm-runtime-build.mjs"), packageDir],
+        repoRoot,
+      );
+      runChecked(
+        process.execPath,
+        [
+          path.join(repoRoot, "scripts/lib/plugin-npm-package-manifest.mjs"),
+          "--run",
+          packageDir,
+          "--",
+          "npm",
+          "pack",
+          "--json",
+          "--ignore-scripts",
+          "--pack-destination",
+          outputDir,
+        ],
+        repoRoot,
+      );
+    }
     const created = fs.readdirSync(outputDir).filter((name) => !before.has(name));
     if (created.length !== 1 || !TARBALL_PATTERN.test(created[0])) {
       throw new Error(`${packageName} pack must create exactly one .tgz`);

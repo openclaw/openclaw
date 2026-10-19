@@ -1,0 +1,601 @@
+// Nextcloud Talk tests cover inbound.behavior plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginRuntime } from "../runtime-api.js";
+import {
+  createAccount,
+  createAllowlistedAccount,
+  createAttachment,
+  createMessage,
+  createRuntimeEnv,
+  requireFirstMockArg,
+} from "./inbound-media.test-fixtures.js";
+import { handleNextcloudTalkInbound } from "./inbound.js";
+import { setNextcloudTalkRuntime } from "./runtime.js";
+import type { CoreConfig } from "./types.js";
+
+const {
+  createChannelPairingControllerMock,
+  resolveAllowlistProviderRuntimeGroupPolicyMock,
+  resolveDefaultGroupPolicyMock,
+  warnMissingProviderGroupPolicyFallbackOnceMock,
+} = vi.hoisted(() => {
+  return {
+    createChannelPairingControllerMock: vi.fn(),
+    resolveAllowlistProviderRuntimeGroupPolicyMock: vi.fn(),
+    resolveDefaultGroupPolicyMock: vi.fn(),
+    warnMissingProviderGroupPolicyFallbackOnceMock: vi.fn(),
+  };
+});
+
+const sendMessageNextcloudTalkMock = vi.hoisted(() => vi.fn());
+const resolveNextcloudTalkRoomKindMock = vi.hoisted(() => vi.fn());
+const resolveNextcloudTalkAuthenticatedMediaSourceMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("../runtime-api.js")>("../runtime-api.js");
+  return {
+    ...actual,
+    createChannelPairingController: createChannelPairingControllerMock,
+    resolveAllowlistProviderRuntimeGroupPolicy: resolveAllowlistProviderRuntimeGroupPolicyMock,
+    resolveDefaultGroupPolicy: resolveDefaultGroupPolicyMock,
+    warnMissingProviderGroupPolicyFallbackOnce: warnMissingProviderGroupPolicyFallbackOnceMock,
+  };
+});
+
+vi.mock("./send.js", async () => {
+  const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
+  return {
+    ...actual,
+    sendMessageNextcloudTalk: sendMessageNextcloudTalkMock,
+  };
+});
+
+vi.mock("./inbound-media.js", async () => {
+  const actual = await vi.importActual<typeof import("./inbound-media.js")>("./inbound-media.js");
+  return {
+    ...actual,
+    resolveNextcloudTalkAuthenticatedMediaSource: resolveNextcloudTalkAuthenticatedMediaSourceMock,
+  };
+});
+
+vi.mock("./room-info.js", async () => {
+  const actual = await vi.importActual<typeof import("./room-info.js")>("./room-info.js");
+  return {
+    ...actual,
+    resolveNextcloudTalkRoomKind: resolveNextcloudTalkRoomKindMock,
+  };
+});
+
+function installInboundRuntime(coreRuntime: ReturnType<typeof createPluginRuntimeMock>) {
+  setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+  createChannelPairingControllerMock.mockReturnValue({
+    readStoreForDmPolicy: vi.fn(async () => []),
+    issueChallenge: vi.fn(),
+  });
+}
+
+describe("nextcloud-talk inbound media behavior", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveNextcloudTalkRoomKindMock.mockResolvedValue("direct");
+    resolveDefaultGroupPolicyMock.mockReturnValue("allowlist");
+    resolveAllowlistProviderRuntimeGroupPolicyMock.mockReturnValue({
+      groupPolicy: "allowlist",
+      providerMissingFallbackApplied: false,
+    });
+    warnMissingProviderGroupPolicyFallbackOnceMock.mockReturnValue(undefined);
+    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockImplementation(
+      async (params: { reference: { fileName: string } }) => ({
+        ok: true,
+        url: `https://cloud.example.com/remote.php/dav/files/test-user/Talk/${encodeURIComponent(params.reference.fileName)}`,
+        origin: "https://cloud.example.com",
+        hostname: "cloud.example.com",
+        fileName: params.reference.fileName,
+        authorization: "Basic redacted-test-credential",
+      }),
+    );
+  });
+
+  it("admits and stages an attachment-only direct message", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    installInboundRuntime(coreRuntime);
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        text: "",
+        attachment: createAttachment("9006"),
+      }),
+      account: createAllowlistedAccount(),
+      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(coreRuntime.channel.media.saveRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({ bodyForAgent: "", rawBody: "" }),
+        media: [{ path: "/tmp/test-media.jpg", contentType: "image/jpeg" }],
+      }),
+    );
+  });
+
+  it("does not invent a mention for an attachment-only mention-required room", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    coreRuntime.channel.mentions.buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
+    coreRuntime.channel.mentions.matchesMentionPatterns = vi.fn(() => false);
+    installInboundRuntime(coreRuntime);
+    resolveNextcloudTalkRoomKindMock.mockResolvedValue("group");
+    const runtime = createRuntimeEnv();
+    const channelConfig = {
+      rooms: { "room-group": { requireMention: true } },
+    };
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        roomToken: "room-group",
+        roomName: "Ops",
+        isGroupChat: true,
+        text: "",
+        attachment: createAttachment("9007"),
+      }),
+      account: createAccount({
+        config: {
+          ...channelConfig,
+          dmPolicy: "pairing",
+          allowFrom: [],
+          mediaAllowFrom: ["user-1"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["user-1"],
+        },
+      }),
+      config: { channels: { "nextcloud-talk": channelConfig } } as CoreConfig,
+      runtime,
+    });
+
+    expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
+    expect(coreRuntime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("nextcloud-talk: drop room room-group (no mention)");
+  });
+
+  it("stages an attachment-only message in a mention-not-required room", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    coreRuntime.channel.mentions.buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
+    coreRuntime.channel.mentions.matchesMentionPatterns = vi.fn(() => false);
+    installInboundRuntime(coreRuntime);
+    resolveNextcloudTalkRoomKindMock.mockResolvedValue("group");
+    const channelConfig = {
+      rooms: { "room-group": { requireMention: false } },
+    };
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        roomToken: "room-group",
+        roomName: "Ops",
+        isGroupChat: true,
+        text: "",
+        attachment: createAttachment("9013"),
+      }),
+      account: createAccount({
+        config: {
+          ...channelConfig,
+          dmPolicy: "pairing",
+          allowFrom: [],
+          mediaAllowFrom: ["user-1"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["user-1"],
+        },
+      }),
+      config: { channels: { "nextcloud-talk": channelConfig } } as CoreConfig,
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(coreRuntime.channel.media.saveRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({ bodyForAgent: "", rawBody: "", commandBody: "" }),
+        media: [{ path: "/tmp/test-media.jpg", contentType: "image/jpeg" }],
+      }),
+    );
+    expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [
+      "passes a successful staged image path and type into inbound context",
+      {
+        fileName: "camera-shot.png",
+        path: "/tmp/camera-shot.png",
+        contentType: "image/png",
+        size: 4_096,
+        text: "inspect this image",
+        fileId: "9010",
+      },
+    ],
+    [
+      "passes a successful staged PDF path and type into inbound context",
+      {
+        fileName: "receipt.pdf",
+        path: "/tmp/receipt.pdf",
+        contentType: "application/pdf",
+        size: 8_192,
+        text: "inspect this PDF",
+        fileId: "9011",
+      },
+    ],
+  ] as const)("%s", async (_title, { fileName, path, contentType, size, text, fileId }) => {
+    const coreRuntime = createPluginRuntimeMock();
+    (
+      coreRuntime.channel.media.saveRemoteMedia as unknown as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce({
+      id: fileName,
+      path,
+      size,
+      contentType,
+    });
+    installInboundRuntime(coreRuntime);
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        text,
+        attachment: createAttachment(fileId, {
+          name: fileName,
+          mimeType: contentType,
+          declaredSizeBytes: size,
+        }),
+      }),
+      account: createAllowlistedAccount(),
+      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(coreRuntime.channel.media.saveRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePathHint: fileName,
+        fallbackContentType: contentType,
+        originalFilename: fileName,
+      }),
+    );
+    expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        media: [{ path, contentType }],
+      }),
+    );
+    expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { label: "omitted", mediaAllowFrom: undefined },
+    { label: "empty", mediaAllowFrom: [] },
+    { label: "explicit nonmatch", mediaAllowFrom: ["other-user"] },
+  ])(
+    "logs $label media allowlist denial after normal admission without fetching",
+    async ({ mediaAllowFrom }) => {
+      const coreRuntime = createPluginRuntimeMock();
+      installInboundRuntime(coreRuntime);
+      const runtime = createRuntimeEnv();
+
+      await handleNextcloudTalkInbound({
+        message: createMessage({
+          text: "please inspect this receipt",
+          attachment: createAttachment("9001", { declaredSizeBytes: 24_576 }),
+        }),
+        account: createAllowlistedAccount({ mediaAllowFrom }),
+        config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+        runtime,
+      });
+
+      expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
+      expect(runtime.log).toHaveBeenCalledWith(
+        "nextcloud-talk: inbound media non-outcome reason=media_sender_not_allowlisted account=default message=msg-1 sender=user-1",
+      );
+      expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            bodyForAgent: "please inspect this receipt",
+            rawBody: "please inspect this receipt",
+          }),
+        }),
+      );
+      expect(
+        requireFirstMockArg(
+          coreRuntime.channel.inbound.buildContext as ReturnType<typeof vi.fn>,
+          "Nextcloud Talk buildContext call",
+        ),
+      ).not.toHaveProperty("media");
+      expect(
+        JSON.stringify(
+          requireFirstMockArg(
+            coreRuntime.channel.inbound.buildContext as ReturnType<typeof vi.fn>,
+            "Nextcloud Talk media-denied context",
+          ),
+        ),
+      ).not.toContain("Nextcloud Talk attachment unavailable");
+      expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    { label: "omitted", mediaAllowFrom: undefined },
+    { label: "empty", mediaAllowFrom: [] },
+    { label: "explicit nonmatch", mediaAllowFrom: ["other-user"] },
+  ])(
+    "drops attachment-only media when the media allowlist is $label",
+    async ({ mediaAllowFrom }) => {
+      const coreRuntime = createPluginRuntimeMock();
+      installInboundRuntime(coreRuntime);
+      const runtime = createRuntimeEnv();
+
+      await handleNextcloudTalkInbound({
+        message: createMessage({
+          text: "",
+          attachment: createAttachment("9001", { declaredSizeBytes: 24_576 }),
+        }),
+        account: createAllowlistedAccount({ mediaAllowFrom }),
+        config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+        runtime,
+      });
+
+      expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
+      expect(runtime.log).toHaveBeenCalledWith(
+        "nextcloud-talk: inbound media non-outcome reason=media_sender_not_allowlisted account=default message=msg-1 sender=user-1",
+      );
+      expect(coreRuntime.channel.inbound.buildContext).not.toHaveBeenCalled();
+      expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
+      expect(coreRuntime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects hide-download media before fetching", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    installInboundRuntime(coreRuntime);
+    const runtime = createRuntimeEnv();
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        text: "private receipt",
+        attachment: createAttachment("9002", {
+          name: "private.pdf",
+          hideDownload: true,
+        }),
+      }),
+      account: createAllowlistedAccount(),
+      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      runtime,
+    });
+
+    expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "nextcloud-talk: inbound media non-outcome reason=media_hidden_download account=default message=msg-1 sender=user-1",
+    );
+    expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          body: expect.stringContaining("[Nextcloud Talk attachment unavailable]"),
+          bodyForAgent: "private receipt\n\n[Nextcloud Talk attachment unavailable]",
+          rawBody: "private receipt",
+          commandBody: "private receipt",
+        }),
+      }),
+    );
+    expect(
+      requireFirstMockArg(
+        coreRuntime.channel.inbound.buildContext as ReturnType<typeof vi.fn>,
+        "Nextcloud Talk hidden-media context",
+      ),
+    ).not.toHaveProperty("media");
+  });
+
+  it("bounds missing attachment metadata before fetching", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    installInboundRuntime(coreRuntime);
+    const runtime = createRuntimeEnv();
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        text: "caption survives",
+        attachmentIssue: "media_missing_metadata",
+      }),
+      account: createAllowlistedAccount(),
+      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      runtime,
+    });
+
+    expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "nextcloud-talk: inbound media non-outcome reason=media_missing_metadata account=default message=msg-1 sender=user-1",
+    );
+    expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          bodyForAgent: "caption survives\n\n[Nextcloud Talk attachment unavailable]",
+          rawBody: "caption survives",
+          commandBody: "caption survives",
+        }),
+      }),
+    );
+    expect(
+      requireFirstMockArg(
+        coreRuntime.channel.inbound.buildContext as ReturnType<typeof vi.fn>,
+        "Nextcloud Talk malformed-media context",
+      ),
+    ).not.toHaveProperty("media");
+  });
+
+  it("keeps structured commands decoded when authorized media is unavailable", async () => {
+    const hasControlCommand = vi.fn((body?: string) => body === "/status");
+    const coreRuntime = createPluginRuntimeMock({
+      channel: {
+        text: { hasControlCommand },
+        commands: { shouldHandleTextCommands: vi.fn(() => true) },
+      },
+    });
+    installInboundRuntime(coreRuntime);
+    const structuredCommand = '{"message":"/status","parameters":[]}';
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        text: structuredCommand,
+        attachmentIssue: "media_missing_metadata",
+      }),
+      account: createAllowlistedAccount(),
+      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(hasControlCommand).toHaveBeenCalledWith("/status", expect.anything());
+    expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          bodyForAgent: `${structuredCommand}\n\n[Nextcloud Talk attachment unavailable]`,
+          rawBody: structuredCommand,
+          commandBody: "/status",
+        }),
+      }),
+    );
+    expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects declared oversize media before fetching", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    installInboundRuntime(coreRuntime);
+    const runtime = createRuntimeEnv();
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        text: "large receipt",
+        attachment: createAttachment("9003", {
+          name: "large.pdf",
+          declaredSizeBytes: 2 * 1024 * 1024,
+        }),
+      }),
+      account: createAllowlistedAccount({ mediaMaxMb: 1 }),
+      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      runtime,
+    });
+
+    expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "nextcloud-talk: inbound media non-outcome reason=media_declared_oversize account=default message=msg-1 sender=user-1 sizeBytes=2097152 maxBytes=1048576",
+    );
+    expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          bodyForAgent: "large receipt\n\n[Nextcloud Talk attachment unavailable]",
+          rawBody: "large receipt",
+          commandBody: "large receipt",
+        }),
+      }),
+    );
+    expect(
+      requireFirstMockArg(
+        coreRuntime.channel.inbound.buildContext as ReturnType<typeof vi.fn>,
+        "Nextcloud Talk oversize-media context",
+      ),
+    ).not.toHaveProperty("media");
+  });
+
+  it("fails closed when the configured API account cannot resolve attachment access", async () => {
+    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockResolvedValueOnce({
+      ok: false,
+      reason: "media_auth_unavailable",
+    });
+    const coreRuntime = createPluginRuntimeMock();
+    installInboundRuntime(coreRuntime);
+    const runtime = createRuntimeEnv();
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        text: "inspect this",
+        attachment: createAttachment("9004"),
+      }),
+      account: createAllowlistedAccount(),
+      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      runtime,
+    });
+
+    expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "nextcloud-talk: inbound media non-outcome reason=media_auth_unavailable account=default message=msg-1 sender=user-1",
+    );
+    expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          bodyForAgent: "inspect this\n\n[Nextcloud Talk attachment unavailable]",
+          rawBody: "inspect this",
+          commandBody: "inspect this",
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    {
+      label: "HTTP unavailable",
+      error: new MediaFetchError(
+        "http_error",
+        "https://cloud.example.com/s/private-token returned secret-error-detail",
+        { status: 404 },
+      ),
+      expectedLog:
+        "nextcloud-talk: inbound media non-outcome reason=media_unavailable account=default message=msg-1 sender=user-1 status=404",
+    },
+    {
+      label: "fetch timeout",
+      error: new MediaFetchError(
+        "fetch_failed",
+        "timeout reading https://cloud.example.com/s/private-token secret-error-detail",
+      ),
+      expectedLog:
+        "nextcloud-talk: inbound media non-outcome reason=media_fetch_failed account=default message=msg-1 sender=user-1",
+    },
+    {
+      label: "staging failure",
+      error: new Error("stage failed for private-token with secret-error-detail"),
+      expectedLog:
+        "nextcloud-talk: inbound media non-outcome reason=media_stage_failed account=default message=msg-1 sender=user-1",
+    },
+  ])("preserves caption and bounded diagnostics for $label", async ({ error, expectedLog }) => {
+    const coreRuntime = createPluginRuntimeMock();
+    (
+      coreRuntime.channel.media.saveRemoteMedia as unknown as ReturnType<typeof vi.fn>
+    ).mockRejectedValueOnce(error);
+    installInboundRuntime(coreRuntime);
+    const runtime = createRuntimeEnv();
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        text: "inspect this sensitive receipt",
+        attachment: createAttachment("9009"),
+      }),
+      account: createAllowlistedAccount(),
+      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      runtime,
+    });
+
+    expect(runtime.log).toHaveBeenCalledWith(expectedLog);
+    const serializedLogs = JSON.stringify(
+      (runtime.log as unknown as ReturnType<typeof vi.fn>).mock.calls,
+    );
+    expect(serializedLogs).not.toContain("private-token");
+    expect(serializedLogs).not.toContain("secret-error-detail");
+    expect(serializedLogs).not.toContain("inspect this sensitive receipt");
+    expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          bodyForAgent: "inspect this sensitive receipt\n\n[Nextcloud Talk attachment unavailable]",
+          rawBody: "inspect this sensitive receipt",
+          commandBody: "inspect this sensitive receipt",
+        }),
+      }),
+    );
+    expect(
+      requireFirstMockArg(
+        coreRuntime.channel.inbound.buildContext as ReturnType<typeof vi.fn>,
+        "Nextcloud Talk failed-media context",
+      ),
+    ).not.toHaveProperty("media");
+    expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
+  });
+});

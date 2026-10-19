@@ -4,15 +4,12 @@ import { expectDefined } from "@openclaw/normalization-core";
  */
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 
-/** Minimal successful speech-provider response shape used by talk.speak tests. */
-export type TalkSpeakTestPayload = {
-  audioBase64?: string;
-  provider?: string;
-  outputFormat?: string;
-  mimeType?: string;
-  fileExtension?: string;
-};
+export const preparedTalkSessionProjection = createSessionRowProjectionFixture({
+  cfg: {},
+  store: {},
+});
 
 /** Calls talk.speak without a WebSocket server and captures the handler response. */
 export async function invokeTalkSpeakDirect(params: Record<string, unknown>) {

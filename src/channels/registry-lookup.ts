@@ -1,37 +1,23 @@
-// Cached lookup view for active channel plugin registry entries and aliases.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import type {
-  ActivePluginChannelRegistration,
-  ActivePluginChannelRegistry,
-} from "../plugins/channel-registry-state.types.js";
-import { getActivePluginChannelRegistrySnapshotFromState } from "../plugins/runtime-channel-state.js";
-
-type RegisteredChannelPluginEntry = ActivePluginChannelRegistration & {
-  plugin: ActivePluginChannelRegistration["plugin"] & {
-    id?: string | null;
-    meta?: {
-      aliases?: readonly string[];
-      markdownCapable?: boolean;
-    } | null;
-  };
-};
+import type { ActivePluginChannelRegistration } from "../plugins/channel-registry-state.types.js";
+import {
+  getActivePluginChannelRegistrySnapshotFromState,
+  type ActivePluginChannelRegistrySnapshot,
+} from "../plugins/runtime-channel-state.js";
 
 type RegisteredChannelPluginLookup = {
-  registry: ActivePluginChannelRegistry | null;
-  channels: ActivePluginChannelRegistration[] | undefined;
-  channelCount: number;
-  version: number;
-  entries: RegisteredChannelPluginEntry[];
-  byKey: Map<string, RegisteredChannelPluginEntry>;
-  byId: Map<string, RegisteredChannelPluginEntry>;
+  snapshot: ActivePluginChannelRegistrySnapshot;
+  entries: ActivePluginChannelRegistration[];
+  byKey: Map<string, ActivePluginChannelRegistration>;
+  byId: Map<string, ActivePluginChannelRegistration>;
 };
 
 let registeredChannelPluginLookup: RegisteredChannelPluginLookup | undefined;
 
 function setLookupEntry(
-  map: Map<string, RegisteredChannelPluginEntry>,
+  map: Map<string, ActivePluginChannelRegistration>,
   key: string | undefined,
-  entry: RegisteredChannelPluginEntry,
+  entry: ActivePluginChannelRegistration,
 ): void {
   if (key && !map.has(key)) {
     map.set(key, entry);
@@ -39,22 +25,14 @@ function setLookupEntry(
 }
 
 function buildRegisteredChannelPluginLookup(): RegisteredChannelPluginLookup {
-  const { registry, version } = getActivePluginChannelRegistrySnapshotFromState();
-  const channels = Array.isArray(registry?.channels) ? registry.channels : undefined;
-  const channelCount = channels?.length ?? 0;
+  const snapshot = getActivePluginChannelRegistrySnapshotFromState();
   const cached = registeredChannelPluginLookup;
-  if (
-    cached &&
-    cached.registry === registry &&
-    cached.channels === channels &&
-    cached.channelCount === channelCount &&
-    cached.version === version
-  ) {
+  if (cached?.snapshot === snapshot) {
     return cached;
   }
-  const entries = channelCount > 0 ? (channels as RegisteredChannelPluginEntry[]) : [];
-  const byKey = new Map<string, RegisteredChannelPluginEntry>();
-  const byId = new Map<string, RegisteredChannelPluginEntry>();
+  const entries = snapshot.registry?.channels ?? [];
+  const byKey = new Map<string, ActivePluginChannelRegistration>();
+  const byId = new Map<string, ActivePluginChannelRegistration>();
   for (const entry of entries) {
     const id = normalizeOptionalLowercaseString(entry.plugin.id ?? "");
     setLookupEntry(byKey, id, entry);
@@ -67,10 +45,7 @@ function buildRegisteredChannelPluginLookup(): RegisteredChannelPluginLookup {
     }
   }
   registeredChannelPluginLookup = {
-    registry,
-    channels,
-    channelCount,
-    version,
+    snapshot,
     entries,
     byKey,
     byId,
@@ -78,22 +53,19 @@ function buildRegisteredChannelPluginLookup(): RegisteredChannelPluginLookup {
   return registeredChannelPluginLookup;
 }
 
-/** Lists active channel plugin registrations from the current registry snapshot. */
-export function listRegisteredChannelPluginEntries(): RegisteredChannelPluginEntry[] {
+export function listRegisteredChannelPluginEntries(): ActivePluginChannelRegistration[] {
   return buildRegisteredChannelPluginLookup().entries;
 }
 
-/** Finds an active channel plugin registration by normalized id or alias. */
 export function findRegisteredChannelPluginEntry(
   normalizedKey: string,
-): RegisteredChannelPluginEntry | undefined {
+): ActivePluginChannelRegistration | undefined {
   return buildRegisteredChannelPluginLookup().byKey.get(normalizedKey);
 }
 
-/** Finds an active channel plugin registration by its canonical plugin id. */
 export function findRegisteredChannelPluginEntryById(
   id: string,
-): RegisteredChannelPluginEntry | undefined {
+): ActivePluginChannelRegistration | undefined {
   const normalizedId = normalizeOptionalLowercaseString(id);
   if (!normalizedId) {
     return undefined;

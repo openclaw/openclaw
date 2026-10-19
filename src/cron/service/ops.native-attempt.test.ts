@@ -16,28 +16,14 @@ import {
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import { wrapToolWithGatewayCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { callAgentToolGatewayRequest } from "../../agents/tools/in-process-gateway.js";
-import { setRuntimeConfigSnapshot } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { CronService, type CronEvent } from "../../cron/service.js";
-import { createNoopLogger } from "../../cron/service.test-harness.js";
-import { loadCronStore, saveCronStore } from "../../cron/store.js";
+import { getTotalQueueSize } from "../../process/command-queue.js";
 import {
-  createCoreGatewayMethodDescriptors,
-  createGatewayMethodRegistry,
-} from "../../gateway/methods/registry.js";
-import { cronHandlers } from "../../gateway/server-methods/cron.js";
-import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
-import {
-  clearCommandLane,
-  enqueueCommandInLane,
-  getTotalQueueSize,
-  setCommandLaneConcurrency,
-} from "../../process/command-queue.js";
-import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import { CommandLane } from "../../process/lanes.js";
+  getSessionControllerEntryForOperation,
+  getSessionControllerOperation,
+} from "../../sessions/session-controller.state.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { occupyWorkers, readJob, withCronGatewayState } from "./ops.gateway.test-support.js";
 
 const hoisted = getHoisted();
 const tempPaths: string[] = [];
@@ -57,63 +43,21 @@ describe("native attempt queued automation admission", () => {
     "abort before completion",
     "permission change",
     "revoke",
-    "clear queue",
+    "stop",
   ] as const)(
     "retains its real tool generation until activation, not payload completion: %s",
     async (outcome) => {
-      await withOpenClawTestState({ prefix: "native-cron-admission-" }, async (state) => {
-        resetCommandQueueStateForTest();
-        const cfg: OpenClawConfig = {
-          agents: { list: [{ id: "main" }], defaults: { workspace: state.workspaceDir } },
-          cron: { enabled: false },
-        };
-        await state.writeConfig(cfg);
-        setRuntimeConfigSnapshot(cfg);
-        const storePath = state.statePath("cron", "jobs.json");
+      await withCronGatewayState(async (fixture) => {
+        const { cfg, context, cron, finished } = fixture;
         const now = Date.now();
         const job = createDueIsolatedJob({ id: "native-queued-run", nowMs: now, nextRunAtMs: now });
-        await saveCronStore(storePath, { version: 1, jobs: [job] });
-        const finished = createDeferredCore<CronEvent>();
         const payloadStarted = createDeferredCore();
         const releasePayload = createDeferredCore();
         const generationReleased = createDeferredCore();
         const cleanup = vi.fn(async () => {
           generationReleased.resolve();
         });
-        const runIsolatedAgentJob = vi.fn(async () => {
-          payloadStarted.resolve();
-          await releasePayload.promise;
-          return { status: "ok" as const };
-        });
-        const cron = new CronService({
-          storePath,
-          cronEnabled: false,
-          defaultAgentId: "main",
-          log: createNoopLogger(),
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob,
-          onEvent: (event) => {
-            if (event.action === "finished") {
-              finished.resolve(event);
-            }
-          },
-        });
-        const registry = createGatewayMethodRegistry(
-          createCoreGatewayMethodDescriptors(cronHandlers),
-        );
-        const gatewayWork = new AsyncWorkScope();
         const requesterWork = new AsyncWorkScope();
-        const context = {
-          cron,
-          cronStorePath: storePath,
-          trackExecution: gatewayWork.track.bind(gatewayWork),
-          deps: {},
-          getRuntimeConfig: () => cfg,
-          getGatewayMethodRegistry: () => registry,
-          logGateway: createNoopLogger(),
-        } as unknown as GatewayRequestContext;
-        context.resolveGatewayContext = () => context;
         const controller = new AbortController();
         let current = true;
         let tool: AnyAgentTool;
@@ -135,8 +79,6 @@ describe("native attempt queued automation admission", () => {
           generations.push({ signal: options.abortSignal, cleanup: generationCleanup, released });
           options.registerRunCleanup?.(generationCleanup);
           toolSignal ??= options.abortSignal;
-          // Keep the native generation/attempt owners and the actual automation
-          // tool, signal wrapper, caller fence, router, handler and service real.
           tool = wrapToolWithAbortSignal(
             wrapToolWithGatewayCallerIdentity(
               createCronTool(
@@ -159,14 +101,15 @@ describe("native attempt queued automation admission", () => {
           );
           return [tool];
         });
-        setCommandLaneConcurrency(CommandLane.Cron, 1);
-        const blockerStarted = createDeferredCore();
-        const releaseBlocker = createDeferredCore();
-        const blocker = enqueueCommandInLane(CommandLane.Cron, async () => {
-          blockerStarted.resolve();
-          await releaseBlocker.promise;
-        });
-        await blockerStarted.promise;
+        const { blocker, releaseBlocker, targetCalls } = await occupyWorkers(
+          fixture,
+          job,
+          async () => {
+            payloadStarted.resolve();
+            await releasePayload.promise;
+            return { status: "ok" };
+          },
+        );
         try {
           const result = await requesterWork.run(() =>
             createContextEngineAttemptRunner({
@@ -183,14 +126,22 @@ describe("native attempt queued automation admission", () => {
                   createDefaultEmbeddedSession({
                     prompt: async () => {
                       const submittedTool = tool;
+                      const runArgs = { action: "run", jobId: job.id, runMode: "force" } as const;
                       const ack = await submittedTool.execute("queued-automation", {
-                        action: "run",
-                        jobId: job.id,
-                        runMode: "force",
+                        ...runArgs,
+                        timeoutMs: 1,
                       });
                       expect(ack.details).toMatchObject({ ok: true, enqueued: true });
                       if (outcome === "permission change") {
-                        const change = prepareEmbeddedRunPermissionChange("embedded-session");
+                        const operation = getSessionControllerOperation(
+                          "agent:main:native-cron-admission",
+                        );
+                        const target =
+                          operation && getSessionControllerEntryForOperation(operation).target;
+                        if (!target) {
+                          throw new Error("Native permission target missing");
+                        }
+                        const change = prepareEmbeddedRunPermissionChange(target);
                         expect(change.kind).toBe("active");
                         if (change.kind !== "active") {
                           throw new Error("Native permission owner missing");
@@ -201,18 +152,13 @@ describe("native attempt queued automation admission", () => {
                           }),
                         ).toBe(true);
                         await expect(
-                          submittedTool.execute("revoked-automation", {
-                            action: "run",
-                            jobId: job.id,
-                            runMode: "force",
-                          }),
+                          submittedTool.execute("revoked-automation", runArgs),
                         ).rejects.toThrow("Aborted");
                       }
                       if (outcome === "abort before completion") {
                         controller.abort(new Error("user cancelled before the final reply"));
                         expect(toolSignal?.aborted).toBe(true);
                       }
-                      // No artificial provider hold: return the final native reply now.
                     },
                   }),
                   { replaceCustomTools: vi.fn() },
@@ -234,7 +180,7 @@ describe("native attempt queued automation admission", () => {
             expect(replacement.signal?.aborted).toBe(false);
             expect(replacement.cleanup).not.toHaveBeenCalled();
           }
-          expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+          expect(targetCalls()).toHaveLength(0);
           if (outcome === "abort") {
             controller.abort(new Error("user cancelled"));
             expect(toolSignal?.aborted).toBe(true);
@@ -246,15 +192,15 @@ describe("native attempt queued automation admission", () => {
           if (outcome === "revoke") {
             current = false;
           }
-          if (outcome === "clear queue") {
-            clearCommandLane(CommandLane.Cron);
+          if (outcome === "stop") {
+            cron.stop();
           }
           releaseBlocker.resolve();
           await blocker;
           if (outcome === "execute") {
             await Promise.race([
               payloadStarted.promise,
-              finished.promise.then((event) => {
+              finished(job.id).then((event) => {
                 throw new Error(
                   "Automation terminated before payload: " + event.status + " " + event.error,
                 );
@@ -262,16 +208,16 @@ describe("native attempt queued automation admission", () => {
             ]);
             await generationReleased.promise;
             expect(cleanup).toHaveBeenCalledExactlyOnceWith("completion");
-            expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+            expect(targetCalls()).toHaveLength(1);
           }
           releasePayload.resolve();
-          const terminal = await finished.promise;
+          const terminal = await finished(job.id);
           await Promise.all(generations.map((generation) => generation.released.promise));
           if (replacement) {
             expect(replacement.signal?.aborted).toBe(true);
             expect(replacement.cleanup).toHaveBeenCalledExactlyOnceWith("completion");
           }
-          expect(terminal.status).toBe(outcome === "execute" ? "ok" : "error");
+          expect(terminal.status).toBe(outcome === "execute" ? "ok" : "skipped");
           const closedBeforeCompletion =
             outcome === "abort before completion" || outcome === "permission change";
           expect(abortedAtCompletion).toBe(closedBeforeCompletion);
@@ -283,22 +229,19 @@ describe("native attempt queued automation admission", () => {
               : "completion",
           );
           if (outcome !== "execute") {
-            expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+            expect(targetCalls()).toHaveLength(0);
           }
-          expect((await loadCronStore(storePath)).jobs[0]?.state.queuedAtMs).toBeUndefined();
+          expect((await readJob(fixture, job.id))?.state.queuedAtMs).toBeUndefined();
         } finally {
           releaseBlocker.resolve();
           releasePayload.resolve();
           await blocker;
-          // Join the independent Cron lane too, including assertion-failure cleanup.
-          await enqueueCommandInLane(CommandLane.Cron, async () => undefined);
-          await gatewayWork.runWhenIdle(() => undefined);
-          await requesterWork.runWhenIdle(() => undefined);
           cron.stop();
-          await gatewayWork.drain();
+          await cron.waitForIdle();
+          await fixture.settle();
+          await requesterWork.runWhenIdle(() => undefined);
           await requesterWork.drain();
           expect(getTotalQueueSize()).toBe(0);
-          resetCommandQueueStateForTest();
         }
       });
     },

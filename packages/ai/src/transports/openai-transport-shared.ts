@@ -7,20 +7,18 @@ import type {
   ToolCall,
   Usage,
 } from "@openclaw/llm-core";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { getAiTransportHost } from "../host.js";
 import { applyProviderReportedUsageCost, calculateCost } from "../model-utils.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
-/** Shared options, usage shape, cache identity, ordering, and stream scheduling for OpenAI APIs. */
 import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
 import { headersToRecord } from "../utils/headers.js";
-import { notifyProviderHttpResponse, transportAbortError } from "./transport-stream-shared.js";
+import { notifyProviderHttpResponse } from "./transport-stream-shared.js";
 
 export { sortPromptCacheToolsByName as sortTransportToolsByName } from "../utils/prompt-cache-stability.js";
 
-const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
-const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 const OPENAI_RESPONSE_MODEL_HEADER_NAMES = new Set(["openai-model", "x-openai-model"]);
 const OPENAI_RESPONSE_MODEL_EVENT_TYPES = new Set([
   "response.created",
@@ -46,8 +44,6 @@ export const log = {
 };
 
 export type { OpenAICompletionsOptions } from "../provider-options.js";
-
-const OPENAI_RESPONSE_MODEL_CONFLICT = "Conflicting OpenAI response model attestations";
 
 function splitOpenAIResponseModelHeader(value: string | null | undefined): string[] {
   return value
@@ -120,7 +116,7 @@ export function createResponseModelTracker(enabled = true) {
     for (const model of models) {
       const reconciled = reconcileOpenAIResponseModels(responseModel, model);
       if (!reconciled) {
-        throw new Error(OPENAI_RESPONSE_MODEL_CONFLICT);
+        throw new Error("Conflicting OpenAI response model attestations");
       }
       responseModel = reconciled;
     }
@@ -191,13 +187,6 @@ type OpenAICompletionsReasoningBatch = {
   readonly hasVisibleText: boolean;
 };
 
-type MutableOpenAICompletionsReasoningBatch = {
-  deltas: OpenAICompletionsContentDelta[];
-  mirroredThinking: string[];
-  hasThinking: boolean;
-  hasVisibleText: boolean;
-};
-
 const EMPTY_OPENAI_COMPLETIONS_REASONING_BATCH: OpenAICompletionsReasoningBatch = {
   deltas: [],
   mirroredThinking: [],
@@ -212,64 +201,48 @@ const OPENAI_COMPLETIONS_REASONING_FIELDS = [
 ] as const;
 
 function appendOpenAICompletionsReasoningDelta(
-  batch: MutableOpenAICompletionsReasoningBatch,
+  deltas: OpenAICompletionsContentDelta[],
+  mirroredThinking: string[],
   next: OpenAICompletionsContentDelta,
 ): void {
-  if (next.kind === "thinking") {
-    batch.hasThinking = true;
-  } else {
-    batch.hasVisibleText = true;
-  }
-  const previous = batch.deltas[batch.deltas.length - 1];
-  if (!previous || previous.kind !== next.kind) {
-    batch.deltas.push(next);
+  const previous = deltas[deltas.length - 1];
+  if (
+    !previous ||
+    previous.kind !== next.kind ||
+    (next.kind === "thinking" &&
+      previous.kind === "thinking" &&
+      previous.signature !== next.signature)
+  ) {
+    deltas.push(next);
     if (next.kind === "thinking") {
-      batch.mirroredThinking.push(next.text);
+      mirroredThinking.push(next.text);
     }
-    return;
-  }
-  if (next.kind === "thinking" && previous.kind === "thinking") {
-    if (previous.signature !== next.signature) {
-      batch.deltas.push(next);
-      batch.mirroredThinking.push(next.text);
-      return;
-    }
-    previous.text += next.text;
-    batch.mirroredThinking[batch.mirroredThinking.length - 1] += next.text;
     return;
   }
   previous.text += next.text;
-}
-
-function createOpenAICompletionsReasoningBatch(): MutableOpenAICompletionsReasoningBatch {
-  return {
-    deltas: [],
-    mirroredThinking: [],
-    hasThinking: false,
-    hasVisibleText: false,
-  };
+  if (next.kind === "thinking") {
+    mirroredThinking[mirroredThinking.length - 1] += next.text;
+  }
 }
 
 export function readOpenAICompletionsReasoningBatch(
   delta: Record<string, unknown>,
   visibleReasoningDetailTypes: ReadonlySet<string>,
 ): OpenAICompletionsReasoningBatch {
-  let batch: MutableOpenAICompletionsReasoningBatch | undefined;
+  let deltas: OpenAICompletionsContentDelta[] | undefined;
+  const mirroredThinking: string[] = [];
   const reasoningDetails = delta.reasoning_details;
-  let usedReasoningThinkingDetails = false;
   if (Array.isArray(reasoningDetails)) {
-    for (const item of reasoningDetails) {
-      if (!isRecord(item)) {
+    for (const detail of reasoningDetails) {
+      if (!isRecord(detail)) {
         continue;
       }
-      const detail = item;
       if (typeof detail.text !== "string" || !detail.text) {
         continue;
       }
       if (detail.type === "reasoning.text") {
-        usedReasoningThinkingDetails = true;
-        batch ??= createOpenAICompletionsReasoningBatch();
-        appendOpenAICompletionsReasoningDelta(batch, {
+        deltas ??= [];
+        appendOpenAICompletionsReasoningDelta(deltas, mirroredThinking, {
           kind: "thinking",
           signature: "reasoning_details",
           text: detail.text,
@@ -279,8 +252,8 @@ export function readOpenAICompletionsReasoningBatch(
       // Compat-classified visible details are explicit output items. Preserve
       // their order with adjacent structured thinking instead of inferring commentary.
       if (typeof detail.type === "string" && visibleReasoningDetailTypes.has(detail.type)) {
-        batch ??= createOpenAICompletionsReasoningBatch();
-        appendOpenAICompletionsReasoningDelta(batch, {
+        deltas ??= [];
+        appendOpenAICompletionsReasoningDelta(deltas, mirroredThinking, {
           kind: "text",
           text: detail.text,
           source: "reasoning_detail",
@@ -288,12 +261,12 @@ export function readOpenAICompletionsReasoningBatch(
       }
     }
   }
-  if (!usedReasoningThinkingDetails) {
+  if (mirroredThinking.length === 0) {
     for (const field of OPENAI_COMPLETIONS_REASONING_FIELDS) {
       const value = delta[field];
       if (typeof value === "string" && value.length > 0) {
-        batch ??= createOpenAICompletionsReasoningBatch();
-        appendOpenAICompletionsReasoningDelta(batch, {
+        deltas ??= [];
+        appendOpenAICompletionsReasoningDelta(deltas, mirroredThinking, {
           kind: "thinking",
           signature: field,
           text: value,
@@ -302,7 +275,15 @@ export function readOpenAICompletionsReasoningBatch(
       }
     }
   }
-  return batch ?? EMPTY_OPENAI_COMPLETIONS_REASONING_BATCH;
+  if (!deltas) {
+    return EMPTY_OPENAI_COMPLETIONS_REASONING_BATCH;
+  }
+  return {
+    deltas,
+    mirroredThinking,
+    hasThinking: mirroredThinking.length > 0,
+    hasVisibleText: mirroredThinking.length < deltas.length,
+  };
 }
 
 type OpenAIModeCompatInput = Omit<OpenAICompletionsCompat, "thinkingFormat"> & {
@@ -318,46 +299,105 @@ export type OpenAIModeModel = Omit<Model, "compat"> & {
   compat?: OpenAIModeCompatInput | null;
 };
 
-type MutableToolCall = ToolCall & { partialArgs?: string };
-
 export type MutableAssistantOutput = Omit<AssistantMessage, "content" | "usage"> & {
-  content: Array<TextContent | ThinkingContent | MutableToolCall>;
+  content: Array<TextContent | ThinkingContent | ToolCall>;
   usage: Usage & {
     reasoningTokens?: number;
   };
 };
 
+// Boundary events carry `partial` so consumers can replace their state
+// wholesale; text-delta events omit it (per-token snapshots would be
+// retained) and rely on append semantics instead. The partial must therefore
+// be detached from the transport's live AssistantMessage: both OpenAI
+// transports mutate blocks in place (e.g. appends happen before the delta
+// event is pushed), so an aliased snapshot lets a consumer double-apply the
+// very delta event that follows — text doubles until the next partial heals
+// it. Boundary events are not per-token, so copying here is bounded.
+// The event unions are heterogeneous (not every member carries `partial`),
+// so presence is checked at runtime instead of via a constrained signature.
+export function detachPartialSnapshot<TEvent>(event: TEvent): TEvent {
+  // SAFETY: event unions are heterogeneous; runtime presence check verifies `partial`.
+  const source = event as { partial?: AssistantMessage };
+  if (!source.partial) {
+    return event;
+  }
+  const partial = source.partial;
+  return {
+    ...event,
+    partial: {
+      ...partial,
+      // Copy text blocks only. The double-apply hazard is text_delta-specific
+      // (agent-core appends only text_delta; every other delta kind carries
+      // its own partial and is replaced wholesale). The other block kinds are
+      // identity-owned by their consumers and must stay referenced:
+      // thinking blocks record append facts in a WeakMap keyed by the
+      // original object (#123120 — copying would force quadratic prefix
+      // rescans), and tool blocks are normalized in place by consumers
+      // against the transport-owned output (#170751).
+      content: partial.content.map((block) =>
+        block.type === "text" ? Object.assign({}, block) : block,
+      ),
+    },
+  } as TEvent; // SAFETY: TEvent survives the spread; only `partial` is rebuilt.
+}
+
 export function parseOpenAICompletionsUsage(
   rawUsage: NonNullable<ChatCompletionChunk["usage"]> & {
     cost?: unknown;
     cache_creation_input_tokens?: number;
+    cached_tokens?: number;
     prompt_cache_hit_tokens?: number;
     prompt_tokens_details?: { cache_creation_input_tokens?: number };
   },
   model: Model,
   options?: { includeReasoningTokens?: boolean },
 ): MutableAssistantOutput["usage"] {
-  const cacheRead =
-    rawUsage.prompt_tokens_details?.cached_tokens ?? rawUsage.prompt_cache_hit_tokens ?? 0;
-  const cacheWrite =
+  const reportedCacheRead =
+    rawUsage.prompt_tokens_details?.cached_tokens ??
+    rawUsage.prompt_cache_hit_tokens ??
+    rawUsage.cached_tokens;
+  const reportedCacheWrite =
     rawUsage.prompt_tokens_details?.cache_write_tokens ??
     rawUsage.prompt_tokens_details?.cache_creation_input_tokens ??
-    rawUsage.cache_creation_input_tokens ??
-    0;
+    rawUsage.cache_creation_input_tokens;
+  const cacheRead = reportedCacheRead ?? 0;
+  const cacheWrite = reportedCacheWrite ?? 0;
   const input = Math.max(0, (rawUsage.prompt_tokens || 0) - cacheRead - cacheWrite);
   const output = rawUsage.completion_tokens || 0;
-  const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
+  const reasoningTokens = asFiniteNumber(rawUsage.completion_tokens_details?.reasoning_tokens);
+  const hasCoherentContext =
+    [
+      rawUsage.prompt_tokens,
+      rawUsage.completion_tokens,
+      rawUsage.total_tokens,
+      cacheRead,
+      cacheWrite,
+    ].every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0) &&
+    rawUsage.prompt_tokens >= cacheRead + cacheWrite &&
+    rawUsage.total_tokens >= rawUsage.prompt_tokens + rawUsage.completion_tokens;
   const usage: MutableAssistantOutput["usage"] = {
     input,
     output,
     cacheRead,
     cacheWrite,
+    cacheTelemetry: {
+      state:
+        reportedCacheRead !== undefined || reportedCacheWrite !== undefined
+          ? "available"
+          : "unavailable",
+    },
     // Managed transport exposes reasoning telemetry; the shipped package Usage shape does not.
-    ...(options?.includeReasoningTokens !== false &&
-    typeof reasoningTokens === "number" &&
-    Number.isFinite(reasoningTokens)
+    ...(options?.includeReasoningTokens !== false && reasoningTokens !== undefined
       ? { reasoningTokens }
       : {}),
+    contextUsage: hasCoherentContext
+      ? {
+          state: "available",
+          promptTokens: rawUsage.prompt_tokens,
+          totalTokens: Math.max(input + output + cacheRead + cacheWrite, rawUsage.total_tokens),
+        }
+      : { state: "unavailable" },
     totalTokens: input + output + cacheRead + cacheWrite,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
@@ -385,14 +425,24 @@ export function createOpenAIProviderAcceptanceHook(
   return () => notifyProviderHttpResponse({ options, response, model });
 }
 
-type ModelStreamCooperativeScheduler = {
-  afterEvent: () => Promise<void>;
-};
-
-export function throwIfModelStreamAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) {
-    throw transportAbortError(signal);
-  }
+export function withOpenAIErrorResponseHook(
+  fetch: typeof globalThis.fetch,
+  onResponse: BaseOpenAIStreamOptions["onResponse"],
+  model: Model,
+): typeof globalThis.fetch {
+  return async (input, init) => {
+    const response = await fetch(input, init);
+    // The SDK consumes rejected bodies before exposing its response promise.
+    if (!response.ok) {
+      await notifyProviderHttpResponse({
+        options: { onResponse },
+        response,
+        model,
+        signal: init?.signal ?? (input instanceof Request ? input.signal : undefined),
+      });
+    }
+    return response;
+  };
 }
 
 /** Measure one UTF-8 append without double-counting a surrogate pair split across chunks. */
@@ -410,33 +460,6 @@ export function measureUtf8AppendBytes(bufferEndsWithHighSurrogate: boolean, chu
   return {
     bytes,
     endsWithHighSurrogate: finalCodeUnit >= 0xd800 && finalCodeUnit <= 0xdbff,
-  };
-}
-
-export function createModelStreamCooperativeScheduler(
-  signal?: AbortSignal,
-): ModelStreamCooperativeScheduler {
-  let lastYieldedAt = Date.now();
-  let eventsSinceYield = 0;
-  return {
-    async afterEvent() {
-      throwIfModelStreamAborted(signal);
-      eventsSinceYield += 1;
-      const now = Date.now();
-      if (
-        eventsSinceYield < MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS &&
-        now - lastYieldedAt < MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS
-      ) {
-        return;
-      }
-      eventsSinceYield = 0;
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-      throwIfModelStreamAborted(signal);
-      // Time waiting for the yield does not consume the next work budget.
-      lastYieldedAt = Date.now();
-    },
   };
 }
 

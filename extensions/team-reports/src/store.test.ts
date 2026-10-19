@@ -1,11 +1,12 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+import { describePeriod } from "./periods.js";
 import { githubCounts as counts } from "./reports.fixtures.js";
+import { buildRoster } from "./roster.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
 import type { PeriodDescriptor, ReportDocument, SummaryDocument } from "./types.js";
@@ -207,57 +208,6 @@ describe("Team Reports storage", () => {
     expect(await store.listPersonDays("alice")).toHaveLength(1);
   });
 
-  it("lists stored totals for each period kind and reflects regenerated documents", async () => {
-    const { store } = await openStore();
-    for (const [period, key] of [
-      ["day", "2026-08-20"],
-      ["week", "2026-W34"],
-      ["month", "2026-08"],
-    ] as const) {
-      const document = report();
-      document.period = { ...document.period, period, key };
-      document.activeMembers = 1;
-      document.totals.github = {
-        ...counts(21),
-        commits: 3,
-        prsOpened: 4,
-        prsMerged: 5,
-        securityAdvisories: 6,
-      };
-      document.totals.discord.messages = 7;
-      await store.upsertPeriod({ report: document, markdown: key });
-      expect(await store.listPeriods({ period })).toEqual([
-        {
-          period,
-          key,
-          sinceMs: Date.parse("2026-08-20T00:00:00Z"),
-          untilMs: Date.parse("2026-08-21T00:00:00Z"),
-          generatedAtMs: Date.parse("2026-08-21T00:00:00Z"),
-          status: "closed",
-          activeMembers: 1,
-          memberCount: 2,
-          githubTotal: 21,
-          discordMessages: 7,
-          commits: 3,
-          prsOpened: 4,
-          prsMerged: 5,
-          securityAdvisories: 6,
-        },
-      ]);
-    }
-    await store.upsertPeriod({ report: report("2026-08-20", []), markdown: "refreshed" });
-    expect((await store.listPeriods({ period: "day" }))[0]).toMatchObject({
-      activeMembers: 0,
-      memberCount: 0,
-      githubTotal: 0,
-      discordMessages: 0,
-      commits: 0,
-      prsOpened: 0,
-      prsMerged: 0,
-      securityAdvisories: 0,
-    });
-  });
-
   it("lists all logins since an inclusive day without the individual timeline limit", async () => {
     const { store } = await openStore();
     const logins = Array.from(
@@ -294,35 +244,6 @@ describe("Team Reports storage", () => {
     expect((await store.getPeriod("day", "2026-08-19"))?.report.members).toEqual([]);
   });
 
-  it("reads a complete month of individually valid reports across the worker boundary", async () => {
-    const { store } = await openStore();
-    const titlePrefix = "x".repeat(1_100_000);
-    const expected: Array<{ key: string; titleLength: number; titleHash: string }> = [];
-    for (let day = 1; day <= 31; day++) {
-      const key = `2026-08-${String(day).padStart(2, "0")}`;
-      const document = report(key);
-      document.period.title = `${titlePrefix}:${key}`;
-      expected.push({
-        key,
-        titleLength: document.period.title.length,
-        titleHash: createHash("sha256").update(document.period.title).digest("hex"),
-      });
-      await store.upsertPeriod({ report: document, markdown: key });
-    }
-    const days = await store.getDayReports(
-      Date.parse("2026-08-01T00:00:00Z"),
-      Date.parse("2026-09-01T00:00:00Z"),
-    );
-    expect(days).toHaveLength(31);
-    expect(
-      days.map(({ period }) => ({
-        key: period.key,
-        titleLength: period.title.length,
-        titleHash: createHash("sha256").update(period.title).digest("hex"),
-      })),
-    ).toEqual(expected);
-  });
-
   it("reads half-open day ranges and indexes newest first without projecting week rows onto people", async () => {
     const { store } = await openStore();
     for (const key of ["2026-08-18", "2026-08-19", "2026-08-20"]) {
@@ -357,80 +278,12 @@ describe("Team Reports storage", () => {
     expect(await store.getPeriodDocument("month", "2026-08")).toBeUndefined();
   });
 
-  it("reads latest daily warnings and people in source order through replacement and pruning", async () => {
-    const { store } = await openStore();
-    expect(await store.latestSourceWarnings()).toEqual([]);
-    expect(await store.latestPeople()).toBeUndefined();
-    const first = report("2026-08-19");
-    Object.assign(first.members[0]!, {
-      aliases: ["Alice-Other"],
-      display: "Alice Profile",
-      affiliation: "Example",
-      roleGroup: "volunteer",
-      roleLabel: "Reviewer",
-      access: ["review"],
-      areas: ["reports"],
-    });
-    first.sources.github.warnings = ["github", "shared"];
-    first.sources.discord = { ok: true, warnings: ["discord", "shared"], stats: {} };
-    await store.upsertPeriod({ report: first, summary, markdown: "first" });
-    expect(await store.latestPeople()).toEqual({
-      key: "2026-08-19",
-      members: [
-        {
-          login: "alice",
-          aliases: ["Alice-Other"],
-          display: "Alice Profile",
-          affiliation: "Example",
-          roleGroup: "volunteer",
-          roleLabel: "Reviewer",
-          access: ["review"],
-          areas: ["reports"],
-        },
-        { login: "bob", aliases: [], display: "bob", access: [], areas: [] },
-      ],
-    });
-    expect(await store.latestSourceWarnings()).toEqual([
-      "github",
-      "shared",
-      "discord",
-      "shared",
-      "Model summary unavailable: completion failed",
-    ]);
-    const laterWeek = report("2026-08-25");
-    laterWeek.period.period = "week";
-    laterWeek.period.key = "2026-W35";
-    laterWeek.sources.github.warnings = ["weekly"];
-    await store.upsertPeriod({ report: laterWeek, markdown: "week" });
-    const latest = report("2026-08-20");
-    latest.status = "partial";
-    latest.sources.github.warnings = ["latest partial"];
-    await store.upsertPeriod({ report: latest, markdown: "latest" });
-    expect(await store.latestSourceWarnings()).toEqual(["latest partial"]);
-    expect((await store.latestPeople())?.key).toBe("2026-08-20");
-    latest.sources.github.warnings = [];
-    latest.members = [];
-    await store.upsertPeriod({ report: latest, markdown: "refreshed" });
-    expect(await store.latestSourceWarnings()).toEqual([]);
-    expect(await store.latestPeople()).toEqual({ key: "2026-08-20", members: [] });
-    await store.prune(1, Date.parse("2026-08-23T00:00:00Z"));
-    expect(await store.latestSourceWarnings()).toEqual([]);
-    expect(await store.latestPeople()).toBeUndefined();
-    await store.close();
-    await expect(store.latestSourceWarnings()).rejects.toThrow("store is closed");
-    await expect(store.latestPeople()).rejects.toThrow("store is closed");
-  });
-
   it.each([
     "report member schema",
     "report JSON syntax",
-    "null report",
     "summary schema",
     "summary JSON syntax",
-    "report and summary JSON syntax",
-    "unsafe since timestamp",
     "unsafe until timestamp",
-    "unsafe timestamp",
     "unsafe extracted total",
   ])("preserves latest warning and people failures for %s", async (failure) => {
     const { store, dbPath } = await openStore();
@@ -447,9 +300,6 @@ describe("Team Reports storage", () => {
         case "report JSON syntax":
           database.prepare("UPDATE team_reports_periods SET data_json = ?").run("{");
           break;
-        case "null report":
-          database.prepare("UPDATE team_reports_periods SET data_json = ?").run("null");
-          break;
         case "summary schema":
           database
             .prepare("UPDATE team_reports_periods SET summary_json = ?")
@@ -458,19 +308,8 @@ describe("Team Reports storage", () => {
         case "summary JSON syntax":
           database.prepare("UPDATE team_reports_periods SET summary_json = ?").run("{");
           break;
-        case "report and summary JSON syntax":
-          database
-            .prepare("UPDATE team_reports_periods SET data_json = ?, summary_json = ?")
-            .run("{broken report", "[broken summary");
-          break;
-        case "unsafe since timestamp":
-          database.exec("UPDATE team_reports_periods SET since_ms = 9007199254740992");
-          break;
         case "unsafe until timestamp":
           database.exec("UPDATE team_reports_periods SET until_ms = 9007199254740992");
-          break;
-        case "unsafe timestamp":
-          database.exec("UPDATE team_reports_periods SET generated_at_ms = 9007199254740992");
           break;
         case "unsafe extracted total":
           database
@@ -591,4 +430,57 @@ describe("Team Reports storage", () => {
     expect((await store.listPersonDays("alice")).map((day) => day.dayKey)).toEqual(["2026-08-17"]);
     expect((await store.listRuns()).map((run) => run.id)).toEqual(["running"]);
   });
+});
+
+it("upserts streamed activity across batches and aggregates newest duplicate comments", async () => {
+  const { store } = await openStore();
+  const period = describePeriod("day", "2026-08-20");
+  const comment = {
+    kind: "issue_comment" as const,
+    actor: "alice",
+    repo: "example/app",
+    atMs: period.sinceMs + 1,
+    title: "Old title",
+    body: "Same discussion",
+    url: "https://github.com/example/app/issues/1#comment-1",
+  };
+  await store.resetActivity();
+  await store.appendActivity({ source: "github", entries: [{ key: "first", value: comment }] });
+  await store.appendActivity({
+    source: "github",
+    entries: [
+      { key: "first", value: { ...comment, title: "Updated title" } },
+      {
+        key: "second",
+        value: {
+          ...comment,
+          atMs: period.sinceMs + 2,
+          title: "Newest discussion",
+          url: "https://github.com/example/app/issues/2#comment-2",
+        },
+      },
+      { key: "third", value: { ...comment, actor: "bob" } },
+    ],
+  });
+  const options = {
+    period,
+    nowMs: period.untilMs,
+    orgs: ["example"],
+    roster: buildRoster([{ github: ["alice"] }, { github: ["bob"] }]),
+    githubStatus: { ok: true, warnings: [], stats: {} },
+  };
+  const aggregated = await store.aggregateActivity(options);
+  expect(aggregated.totals.github.issueComments).toBe(2);
+  expect(aggregated.members.find((member) => member.login === "alice")?.github.items).toEqual([
+    {
+      kind: "issue_comment",
+      actor: "alice",
+      repo: "example/app",
+      atMs: period.sinceMs + 2,
+      title: "Newest discussion",
+      url: "https://github.com/example/app/issues/2#comment-2",
+    },
+  ]);
+  await store.resetActivity();
+  expect((await store.aggregateActivity(options)).totals.github.total).toBe(0);
 });

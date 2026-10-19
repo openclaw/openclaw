@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
-import { workspaceStatIdentity } from "../gateway/worker-environments/workspace-hash-memo.js";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { root, type Root } from "../infra/fs-safe.js";
-import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 type UploadSource = { path: string; size: number; sha256: string };
@@ -28,8 +27,6 @@ async function stageUploadSource(params: {
   const source = opened.handle;
   const destination = await fsp.open(params.destination, "wx", 0o600);
   try {
-    const before = await source.stat({ bigint: true });
-    const identity = workspaceStatIdentity("worker", before);
     const hash = createHash("sha256");
     const offset = await copyFileHandle(source, destination, {
       maxBytes: params.source.size,
@@ -38,12 +35,7 @@ async function stageUploadSource(params: {
         hash.update(chunk);
       },
     });
-    const after = await source.stat({ bigint: true });
-    if (
-      offset !== params.source.size ||
-      workspaceStatIdentity("worker", after) !== identity ||
-      hash.digest("hex") !== params.source.sha256
-    ) {
+    if (offset !== params.source.size || hash.digest("hex") !== params.source.sha256) {
       throw new Error("workspace changed while preparing its transfer snapshot");
     }
   } finally {
@@ -68,7 +60,6 @@ export async function withNodeWorkerUploadSnapshot<T>(
     async (workspace) => {
       const sourceRoot = await root(params.workspaceDir, {
         hardlinks: "allow",
-        nonBlockingRead: true,
         symlinks: "follow-parents-within-root",
       });
       const stagedRoot = await workspace.store.root();
@@ -88,6 +79,7 @@ export async function withNodeWorkerUploadSnapshot<T>(
         stream: async (file, write, signal) => {
           signal?.throwIfAborted();
           await using handle = (await stagedRoot.open(file.name)).handle;
+          signal?.throwIfAborted();
           for await (const value of handle.createReadStream({ autoClose: false, signal })) {
             await write(Buffer.isBuffer(value) ? value : Buffer.from(value));
           }

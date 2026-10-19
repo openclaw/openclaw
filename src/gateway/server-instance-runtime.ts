@@ -1,5 +1,7 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
+import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import {
   GATEWAY_NATIVE_APPROVAL_METHODS,
@@ -12,13 +14,20 @@ import type {
 } from "../infra/approval-gateway-runtime.types.js";
 import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 // HTTP agent ingress can finish before the lazy agent.wait handler loads its recorder.
 import "./agent-turn/agent-job.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
-import type { InternalAgentTurnPrincipalOptions } from "./agent-turn/internal-facade.types.js";
+import type {
+  AgentTurnStartOwner,
+  InternalAgentTurnPrincipalOptions,
+} from "./agent-turn/internal-facade.types.js";
+import { retainInternalApprovalCommitGuard } from "./internal-approval-authority.js";
 import {
   resolveLeastPrivilegeOperatorScopesForMethod,
+  ADMIN_SCOPE,
   APPROVALS_SCOPE,
   WRITE_SCOPE,
 } from "./method-scopes.js";
@@ -47,6 +56,7 @@ const loadRecoveryTypingAdapter = createLazyRuntimeModule(
 const loadOutboundMessageRuntime = createLazyRuntimeModule(
   () => import("../infra/outbound/message.js"),
 );
+const loadOperatorRecovery = createLazyRuntimeModule(() => import("./operator-run-recovery.js"));
 
 const RECOVERY_NOTICE_COMPLETION_RETENTION = {
   idPrefix: "main-session-restart-recovery:",
@@ -59,6 +69,7 @@ type GatewayInstanceRuntimeOptions = {
   getMethodRegistry: () => GatewayMethodRegistry;
   isDispatchAvailable: () => boolean;
   logError?: (message: string) => void;
+  prepareRestartRecovery?: GatewayRecoveryRuntime["prepareRestartRecovery"];
 };
 
 /** Creates closed internal principals bound to one concrete Gateway lifecycle. */
@@ -78,7 +89,7 @@ export function createGatewayInstanceRuntime(
 
   const assertDispatchAvailable = (method: string) => {
     if (closed || !options.isDispatchAvailable()) {
-      throw new Error(`Gateway instance dispatch unavailable for ${method}`);
+      throw new GatewayDispatchUnavailableError(method, !closed);
     }
   };
 
@@ -117,15 +128,18 @@ export function createGatewayInstanceRuntime(
       params.assertCurrent?.();
     };
     assertCurrent();
-    const result = await dispatchGatewayRequestInProcess<T>(params.method, params.payload, {
-      client: params.client,
-      context,
-      methodRegistry: options.getMethodRegistry(),
-      requestIdPrefix: "gateway-internal",
-      timeoutMs: params.timeoutMs,
-      signal: params.signal,
-      sessionMutationCommitGuard: assertCurrent,
-    });
+    // These closed principals own accepted lifecycle/approval work independently of a turn.
+    const result = await withoutGatewayToolCallerIdentity(() =>
+      dispatchGatewayRequestInProcess<T>(params.method, params.payload, {
+        client: params.client,
+        context,
+        methodRegistry: options.getMethodRegistry(),
+        requestIdPrefix: "gateway-internal",
+        timeoutMs: params.timeoutMs,
+        signal: params.signal,
+        sessionMutationCommitGuard: retainInternalApprovalCommitGuard(assertCurrent),
+      }),
+    );
     assertCurrent();
     return result;
   };
@@ -154,12 +168,25 @@ export function createGatewayInstanceRuntime(
     "sessions.delete",
   ]);
   const recovery: GatewayRecoveryRuntime = {
+    prepareRestartRecovery: (signal) => {
+      signal?.throwIfAborted();
+      assertDispatchAvailable("restart recovery");
+      return options.prepareRestartRecovery?.(signal)?.then((pausedUntilMs) => {
+        signal?.throwIfAborted();
+        assertDispatchAvailable("restart recovery");
+        return pausedUntilMs;
+      });
+    },
     dispatchSessionMethod: (method, payload, requestOptions = {}) =>
       dispatch({
         allowedMethods: recoverySessionMethods,
         client: createSyntheticPluginRuntimeClient({
           operatorRoleActor: { kind: "system" },
-          scopes: resolveLeastPrivilegeOperatorScopesForMethod(method, payload),
+          // Lifecycle cleanup can outlive the client that owns the accepted run.
+          scopes:
+            method === "chat.abort"
+              ? [ADMIN_SCOPE]
+              : resolveLeastPrivilegeOperatorScopesForMethod(method, payload),
         }),
         method,
         payload,
@@ -172,41 +199,159 @@ export function createGatewayInstanceRuntime(
       dispatchOptions: GatewayInstanceAgentDispatchOptions = {},
     ) => {
       assertDispatchAvailable("agent");
-      const delegatedToolPolicyHandoffId = dispatchOptions.delegatedToolPolicyHandoff
-        ? registerSubagentCompletionToolHandoff(dispatchOptions.delegatedToolPolicyHandoff)
+      const recoveryTarget = dispatchOptions.restartRecoveryOperatorTarget
+        ? { ...dispatchOptions.restartRecoveryOperatorTarget }
         : undefined;
-      const needsDedicatedPrincipal = Boolean(
-        dispatchOptions.allowModelOverride === true ||
-        dispatchOptions.allowSyntheticModelOverride === true ||
-        dispatchOptions.allowSyntheticCronRunContinuation === true ||
-        dispatchOptions.internalDeliveryMediaUrls ||
-        dispatchOptions.runtimeContextFragments ||
-        dispatchOptions.internalDeliverySuppressText === true ||
-        delegatedToolPolicyHandoffId ||
-        dispatchOptions.scopes ||
-        dispatchOptions.syntheticScopes,
-      );
-      const agentTurns = needsDedicatedPrincipal
-        ? createAgentTurnFacade({
-            client: createSyntheticPluginRuntimeClient({
-              operatorRoleActor: { kind: "system" },
-              allowModelOverride:
-                dispatchOptions.allowModelOverride === true ||
-                dispatchOptions.allowSyntheticModelOverride === true,
-              cronRunContinuation: dispatchOptions.allowSyntheticCronRunContinuation === true,
-              internalDeliveryMediaUrls: dispatchOptions.internalDeliveryMediaUrls,
-              runtimeContextFragments: dispatchOptions.runtimeContextFragments,
-              internalDeliverySuppressText: dispatchOptions.internalDeliverySuppressText,
-              delegatedToolPolicyHandoffId,
-              scopes: dispatchOptions.scopes ?? dispatchOptions.syntheticScopes,
-            }),
+      const requesterTarget = dispatchOptions.restartRecoveryRequesterTarget
+        ? { ...dispatchOptions.restartRecoveryRequesterTarget }
+        : undefined;
+      // The source claim authorizes only its exact replacement turn, not any
+      // payload dispatched by the same internal runtime.
+      const assertRecoveryTarget = () => {
+        for (const target of [recoveryTarget, requesterTarget]) {
+          if (
+            target &&
+            (payload.agentId !== target.agentId ||
+              payload.sessionKey !== target.sessionKey ||
+              payload.expectedExistingSessionId !== target.sessionId ||
+              payload.idempotencyKey !== target.recoveryRunId)
+          ) {
+            throw new Error("Restart recovery dispatch does not match its source claim.");
+          }
+        }
+        if (
+          recoveryTarget &&
+          requesterTarget &&
+          recoveryTarget.sourceRunId !== requesterTarget.sourceRunId
+        ) {
+          throw new Error("Restart recovery requester and operator sources differ.");
+        }
+      };
+      assertRecoveryTarget();
+      if (
+        (recoveryTarget || requesterTarget) &&
+        (dispatchOptions.operatorRunAuthority || dispatchOptions.agentToolCaller)
+      ) {
+        throw new Error("Recovery dispatch cannot combine different source owners.");
+      }
+      const context = options.getContext();
+      let startOwner: AgentTurnStartOwner | undefined;
+      let ownerLost = false;
+      const assertRecoveryCurrent = () => {
+        assertDispatchAvailable("agent");
+        assertRecoveryTarget();
+        dispatchOptions.signal?.throwIfAborted();
+        const observed = startOwner?.observe();
+        // Capture the actual registration, not its reusable run id. Once lost,
+        // retained tools cannot acquire a successor registration's authority.
+        ownerLost ||=
+          options.getContext() !== context || (startOwner !== undefined && observed === undefined);
+        if (ownerLost) {
+          throw new Error("Restart recovery operator run is no longer active.");
+        }
+        if (observed?.executionStarted !== true) {
+          dispatchOptions.assertAdmissionCurrent?.();
+        }
+      };
+      const target = recoveryTarget ?? requesterTarget;
+      const restored = target
+        ? await (
+            await loadOperatorRecovery()
+          ).restoreGatewayRunRecovery({
+            target,
+            context,
+            assertCurrent: assertRecoveryCurrent,
+            restoreOperator: recoveryTarget !== undefined,
+            restoreRequester: requesterTarget !== undefined,
           })
-        : recoveryAgentTurns;
+        : undefined;
+      let releaseOperatorAuthority: (() => void) | undefined;
+      let delegatedToolPolicyHandoffId: string | undefined;
       try {
+        const operatorAuthority =
+          restored?.operator?.authority ?? dispatchOptions.operatorRunAuthority;
+        if (operatorAuthority) {
+          assertAdmittedRunOperatorAuthority(operatorAuthority);
+          operatorAuthority.assertCurrent();
+          if (!restored?.operator) {
+            releaseOperatorAuthority = operatorAuthority.retain?.();
+          }
+        }
+        const requesterOrigin =
+          restored?.requesterOrigin ?? dispatchOptions.agentToolCaller?.requesterOrigin;
+        assertRecoveryCurrent();
+        if (requesterTarget && !requesterOrigin) {
+          throw new Error("Restart recovery requester source is unavailable; send a new request.");
+        }
+        if (
+          requesterOrigin?.operatorProfileId &&
+          requesterOrigin.operatorProfileId !== operatorAuthority?.profileId
+        ) {
+          throw new Error("Restart recovery requester has no matching operator authority.");
+        }
+        delegatedToolPolicyHandoffId = dispatchOptions.delegatedToolPolicyHandoff
+          ? registerSubagentCompletionToolHandoff(dispatchOptions.delegatedToolPolicyHandoff)
+          : undefined;
+        const needsDedicatedPrincipal = Boolean(
+          dispatchOptions.allowModelOverride === true ||
+          dispatchOptions.allowSyntheticModelOverride === true ||
+          dispatchOptions.allowSyntheticCronRunContinuation === true ||
+          dispatchOptions.runtimeContextFragments ||
+          dispatchOptions.internalDeliverySuppressErrors === true ||
+          delegatedToolPolicyHandoffId ||
+          operatorAuthority ||
+          dispatchOptions.agentToolCaller ||
+          requesterOrigin ||
+          dispatchOptions.scopes ||
+          dispatchOptions.syntheticScopes,
+        );
+        const agentTurns = needsDedicatedPrincipal
+          ? createAgentTurnFacade({
+              client: createSyntheticPluginRuntimeClient({
+                operatorRoleActor: operatorAuthority
+                  ? { kind: "operator", profileId: operatorAuthority.profileId }
+                  : { kind: "system" },
+                operatorRunAuthority: operatorAuthority,
+                agentToolCaller:
+                  dispatchOptions.agentToolCaller ??
+                  (requesterOrigin && requesterTarget
+                    ? {
+                        agentId: requesterTarget.agentId,
+                        sessionKey: requesterTarget.sessionKey,
+                        requesterOrigin,
+                      }
+                    : undefined),
+                allowModelOverride:
+                  dispatchOptions.allowModelOverride === true ||
+                  dispatchOptions.allowSyntheticModelOverride === true,
+                cronRunContinuation: dispatchOptions.allowSyntheticCronRunContinuation === true,
+                runtimeContextFragments: dispatchOptions.runtimeContextFragments,
+                internalDeliverySuppressErrors: dispatchOptions.internalDeliverySuppressErrors,
+                delegatedToolPolicyHandoffId,
+                scopes: operatorAuthority
+                  ? [...operatorAuthority.scopes]
+                  : (dispatchOptions.scopes ?? dispatchOptions.syntheticScopes),
+              }),
+              // The start owner's observe closure calls this assertion. Keep it
+              // independent of assertRecoveryCurrent to avoid a recursive owner check.
+              assertContextCurrent: () => {
+                if (options.getContext() !== context) {
+                  throw new Error("Gateway recovery context changed.");
+                }
+              },
+            })
+          : recoveryAgentTurns;
         return await agentTurns.dispatch<T>(payload, {
+          controllerInput: dispatchOptions.controllerInput,
+          replyExpectation: dispatchOptions.replyExpectation,
+          assertAdmissionCurrent: assertRecoveryCurrent,
+          prepareDispatchCurrent: dispatchOptions.prepareDispatchCurrent,
           expectFinal: dispatchOptions.expectFinal,
           onAccepted: dispatchOptions.onAccepted,
-          onStartOwner: dispatchOptions.onStartOwner,
+          onStartOwner: (owner) => {
+            startOwner ??= owner;
+            dispatchOptions.onStartOwner?.(owner);
+          },
           onExecutionStarted: dispatchOptions.onExecutionStarted,
           onSignalAbort: dispatchOptions.onSignalAbort,
           signal: dispatchOptions.signal,
@@ -214,6 +359,8 @@ export function createGatewayInstanceRuntime(
         });
       } finally {
         cancelSubagentCompletionToolHandoff(delegatedToolPolicyHandoffId);
+        releaseOperatorAuthority?.();
+        restored?.operator?.release();
       }
     },
     waitForAgent: async <T>(payload: AgentWaitParams, timeoutMs?: number, signal?: AbortSignal) => {
@@ -269,6 +416,50 @@ export function createGatewayInstanceRuntime(
   };
   const releaseRecoveryRuntime = registerGatewayRecoveryRuntime(recovery);
 
+  const pendingApprovalPublications = new Map<string, Set<symbol>>();
+  const publishRequestedAsync = async (
+    kind: ChannelApprovalKind,
+    request: GatewayApprovalRequest,
+  ): Promise<number> => {
+    if (closed) {
+      return 0;
+    }
+    const publication = Symbol("approval publication");
+    const publications = pendingApprovalPublications.get(request.id) ?? new Set<symbol>();
+    publications.add(publication);
+    pendingApprovalPublications.set(request.id, publications);
+    let delivered = 0;
+    try {
+      for (const subscriber of Array.from(approvalSubscribers)) {
+        if (!subscriber.eventKinds.has(kind)) {
+          continue;
+        }
+        try {
+          if (!(await subscriber.shouldHandle(request))) {
+            continue;
+          }
+          // Resolution, unsubscription, or Gateway close can retire delivery while eligibility waits.
+          if (closed || pendingApprovalPublications.get(request.id) !== publications) {
+            break;
+          }
+          if (!approvalSubscribers.has(subscriber)) {
+            continue;
+          }
+          subscriber.onRequested(request);
+          delivered += 1;
+        } catch (error) {
+          options.logError?.(`internal approval subscriber failed: ${String(error)}`);
+        }
+      }
+    } finally {
+      publications.delete(publication);
+      if (!publications.size && pendingApprovalPublications.get(request.id) === publications) {
+        pendingApprovalPublications.delete(request.id);
+      }
+    }
+    return delivered;
+  };
+
   const publish = (
     kind: ChannelApprovalKind,
     callback: (subscriber: GatewayApprovalEventSubscriber) => void,
@@ -298,13 +489,53 @@ export function createGatewayInstanceRuntime(
   return {
     createAgentTurnFacade,
     approvalEvents: {
-      publishRequested: (kind, request) =>
-        publish(
+      publishRequested: (kind, request) => {
+        warnPluginSdkDeprecation({
+          family: "approval-event-publication",
+          method: "approvalEvents.publishRequested",
+          replacement: "await approvalEvents.publishRequestedAsync",
+          compatibility: "Synchronous subscribers retain immediate delivery and numeric counts.",
+        });
+        if (closed) {
+          return 0;
+        }
+        // SAFETY: Gateway publishers pass the canonical normalized approval request union.
+        const approvalRequest = request as GatewayApprovalRequest;
+        const eligible = new Set<GatewayApprovalEventSubscriber>();
+        for (const subscriber of Array.from(approvalSubscribers)) {
+          if (!subscriber.eventKinds.has(kind)) {
+            continue;
+          }
+          let accepted: boolean | Promise<boolean>;
+          try {
+            accepted = subscriber.shouldHandle(approvalRequest);
+          } catch (error) {
+            options.logError?.(`internal approval subscriber failed: ${String(error)}`);
+            continue;
+          }
+          if (typeof accepted !== "boolean") {
+            // Observe started preparation even though this publication cannot await it.
+            void accepted.catch((error: unknown) => {
+              options.logError?.(`internal approval subscriber failed: ${String(error)}`);
+            });
+            throw new Error(
+              "Approval eligibility requires async preparation; use approvalEvents.publishRequestedAsync.",
+            );
+          }
+          if (accepted) {
+            eligible.add(subscriber);
+          }
+        }
+        return publish(
           kind,
-          (subscriber) => subscriber.onRequested(request as GatewayApprovalRequest),
-          (subscriber) => subscriber.shouldHandle(request as GatewayApprovalRequest),
-        ),
+          (subscriber) => subscriber.onRequested(approvalRequest),
+          (subscriber) => eligible.has(subscriber),
+        );
+      },
+      publishRequestedAsync: (kind, request) =>
+        publishRequestedAsync(kind, request as GatewayApprovalRequest),
       publishResolved: (kind, resolved) => {
+        pendingApprovalPublications.delete((resolved as GatewayApprovalResolved).id);
         publish(kind, (subscriber) => subscriber.onResolved(resolved as GatewayApprovalResolved));
       },
     },
@@ -363,6 +594,7 @@ export function createGatewayInstanceRuntime(
       recoveryTyping.close();
       releaseRecoveryRuntime();
       approvalSubscribers.clear();
+      pendingApprovalPublications.clear();
       routeCoordinator.close();
     },
   };

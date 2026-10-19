@@ -47,14 +47,8 @@ describe("registered core read on Windows", () => {
     const modelPath = `~\\${path.relative(homeDir, targetPath)}`;
     await fs.writeFile(targetPath, "home read", "utf8");
 
-    const tools = createOpenClawCodingTools({ workspaceDir });
-    const { readTool } = expectReadWriteEditTools(tools);
-    const result = await readTool?.execute("tool-home-read", { path: modelPath });
-    const text = result?.content
-      ?.filter((block) => block.type === "text")
-      .map((block) => block.text ?? "")
-      .join("\n");
-
-    expect(text).toContain("home read");
+    const { readTool } = expectReadWriteEditTools(createOpenClawCodingTools({ workspaceDir }));
+    const result = await readTool.execute("tool-home-read", { path: modelPath });
+    expect(getTextContent(result)).toContain("home read");
   });
 });
