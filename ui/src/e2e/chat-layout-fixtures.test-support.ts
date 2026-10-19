@@ -4,6 +4,10 @@ import type { SidebarLayout } from "../pages/chat/sidebar-layout-types.ts";
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 
+export function sessionResponseCase(match: Record<string, unknown>, response: unknown) {
+  return { cases: [{ match, response }] };
+}
+
 export async function seedChatSettings(page: Page, baseUrl: string, settings: object) {
   await page.addInitScript(
     ({ key, value }) => {

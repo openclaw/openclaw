@@ -11,6 +11,7 @@ import {
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
 import { buildSkillLibraryMock } from "../test-helpers/skill-library-fixtures.ts";
+import { sessionResponseCase } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Session skill library selections" });
@@ -40,15 +41,10 @@ function projection(
     defaultSelectionLimit: 64,
     session: {
       sessionKey: key,
-      selections: selected.map(({ entry }) => ({
-        skillId: entry.skillId,
-        revision: entry.revision,
-        name: entry.name,
-        ownerProfileId: entry.ownerProfileId,
-        ownerLabel: entry.ownerLabel,
-        slug: entry.slug,
-        description: entry.description,
-      })),
+      selections: selected.map(({ entry }) => {
+        const { skillId, revision, name, ownerProfileId, ownerLabel, slug, description } = entry;
+        return { skillId, revision, name, ownerProfileId, ownerLabel, slug, description };
+      }),
       attachable: [bobEntry, teamEntry].filter(
         (candidate) => !selected.some(({ entry }) => entry.skillId === candidate.skillId),
       ),
@@ -87,12 +83,10 @@ function activation(selected: SkillsLibraryReadResult[]) {
   return {
     sessionKey,
     sessionActivation: "next-turn",
-    selections: selected.map(({ entry: { skillId, name, revision, ownerProfileId } }) => ({
-      skillId,
-      name,
-      revision,
-      ownerProfileId,
-    })),
+    selections: selected.map(({ entry }) => {
+      const { skillId, name, revision, ownerProfileId } = entry;
+      return { skillId, name, revision, ownerProfileId };
+    }),
   };
 }
 
@@ -126,19 +120,15 @@ suite.define(() => {
         ],
         operatorScopes: ["operator.read", "operator.write"],
         methodResponses: {
-          "chat.startup": {
-            cases: [
-              {
-                match: { sessionKey },
-                response: {
-                  messages: [],
-                  sessionId: "synthetic-alice-session",
-                  thinkingLevel: null,
-                  metadata: { commands, models: [] },
-                },
-              },
-            ],
-          },
+          "chat.startup": sessionResponseCase(
+            { sessionKey },
+            {
+              messages: [],
+              sessionId: "synthetic-alice-session",
+              thinkingLevel: null,
+              metadata: { commands, models: [] },
+            },
+          ),
           "skills.library.list": projection([alice]),
           "skills.library.read": { ...alice, entry: { ...alice.entry, canEdit: false } },
           "skills.library.activate": { sessionKey, selections: [], sessionActivation: "next-turn" },

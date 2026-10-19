@@ -55,9 +55,7 @@ async function installStartupGateway(page: Page) {
       ...secondaryMethods,
     ],
     gatewayBootId: "startup-proof-boot",
-    presenceUsers: [
-      { self: true, id: "reader", name: "Reader", identity: { type: "profile", id: "reader" } },
-    ],
+    presenceUsers: [{ self: true, id: "reader", identity: { type: "profile", id: "reader" } }],
     sessionGroups: ["Client work"],
     sessionGroupDefaults: { "Client work": { cwd: "/workspace/client", worktree: true } },
     methodResponses: {
@@ -65,10 +63,7 @@ async function installStartupGateway(page: Page) {
         defaultId: "main",
         mainKey: "main",
         scope: "per-sender",
-        agents: [
-          { id: "main", name: "Main" },
-          { id: "research", name: "Research" },
-        ],
+        agents: [{ id: "main" }, { id: "research" }],
       },
       "sessions.catalog.list": { catalogs: [] },
       "taskSuggestions.list": { suggestions: [] },
@@ -168,11 +163,7 @@ suite.define(() => {
       await expectNoRequests(gateway, secondaryMethods, "before history");
       await expectBulkReadsHeld(gateway);
       const fixtureTime = Date.now();
-      const suggestion = task(
-        "startup-suggestion",
-        "Queued suggestion during startup",
-        fixtureTime,
-      );
+      const suggestion = task("startup-suggestion", "Queued suggestion", fixtureTime);
       await gateway.setMethodResponse("taskSuggestions.list", { suggestions: [suggestion] });
       await gateway.setMethodResponse("progressCard.get", {
         card: {
@@ -348,8 +339,6 @@ suite.define(() => {
       await expectBulkReadsHeld(gateway);
       await gateway.setSessionsListResponse({
         ts: 2,
-        path: "",
-        count: 1,
         defaults: { model: null, modelProvider: null, contextTokens: null },
         sessions: [
           {

@@ -8,6 +8,7 @@ import {
   installMockGateway,
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
+import { sessionResponseCase } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedChatRoute } from "./new-session-page.test-support.ts";
 import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
@@ -15,13 +16,9 @@ import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Saved split conversation owner" });
 const homeKey = "agent:main:main";
 const composerSelector = ".agent-chat__composer-combobox textarea";
-const globalHome = (agentId: string) => ({
-  ok: true,
-  key: "global",
-  agentId,
-  kind: "global",
-  boardFace: "chat",
-});
+function globalHome(agentId: string) {
+  return { ok: true, key: "global", agentId, kind: "global", boardFace: "chat" };
+}
 const savedLayout: ChatSplitLayout = {
   activePaneId: "confirmed",
   columnWeights: [0.4, 0.6],
@@ -47,15 +44,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         sessionScope: "global",
         assistantAgentId: "research",
-        sessions: [
-          {
-            key: "global",
-            kind: "global",
-            agentId: "research",
-            displayName: "Research Home",
-            updatedAt: 1,
-          },
-        ],
+        sessions: [{ key: "global", kind: "global", agentId: "research" }],
         methodResponses: {
           "agents.list": {
             defaultId: "main",
@@ -103,28 +92,17 @@ suite.define(() => {
           awaitInitialRoster: false,
           sessionKey: homeKey,
           sessionScope,
-          mainSessionKey: sessionScope === "global" ? "global" : homeKey,
           methodResponses:
             sessionScope === "global"
               ? {
-                  "sessions.resolve": {
-                    cases: [
-                      {
-                        match: { reference: { key: homeKey } },
-                        response: globalHome("main"),
-                      },
-                    ],
-                  },
+                  "sessions.resolve": sessionResponseCase(
+                    { reference: { key: homeKey } },
+                    globalHome("main"),
+                  ),
                 }
               : {},
           sessions: [{ key: homeKey, kind: "direct", displayName: "Confirmed Home", updatedAt: 1 }],
-          historyMessages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "Main conversation history" }],
-              timestamp: 1,
-            },
-          ],
+          historyMessages: [{ role: "assistant", content: "Main history", timestamp: 1 }],
         });
         await page.goto(
           `${suite.server.baseUrl}chat/main${sessionScope === "global" ? "?draft=Scoped%20Home%20draft" : ""}`,

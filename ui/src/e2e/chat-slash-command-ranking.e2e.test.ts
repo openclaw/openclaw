@@ -1,6 +1,6 @@
 import { text } from "node:stream/consumers";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import type { CommandEntry } from "../../../packages/gateway-protocol/src/index.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { polledAttribute, polledText } from "./chat-presentation.test-support.ts";
@@ -124,9 +124,7 @@ suite.define(() => {
 
       expect(download.suggestedFilename()).toMatch(/^chat-OpenClaw-.+\.md$/);
       const stream = await download.createReadStream();
-      if (!stream) {
-        throw new Error("chat export did not provide a readable download");
-      }
+      assert(stream, "chat export did not provide a readable download");
       const markdown = await text(stream);
       expect(markdown).toContain("# Chat with OpenClaw");
       expect(markdown).toContain("## Message");
