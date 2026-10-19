@@ -177,12 +177,22 @@ const mutations = [
   {
     name: "visibility",
     method: "session.visibility.set",
-    invoke: (pane: SharingPane, row: GatewaySessionRow) =>
-      pane.mutateSessionSharing(row, { visibility: "shared" }),
+    expectedOrder: [
+      "session.visibility.set",
+      "sessions.reconcileMutation",
+      "session.members.listEvidence",
+    ],
+    invoke: (pane: SharingPane, row: GatewaySessionRow) => pane.mutateSessionSharing(row, { visibility: "shared" }),
+
   },
   {
     name: "member",
     method: "session.members.add",
+    expectedOrder: [
+      "session.members.add",
+      "session.members.listEvidence",
+      "sessions.reconcileMutation",
+    ],
     invoke: (pane: SharingPane, row: GatewaySessionRow) =>
       pane.mutateSessionSharing(row, { identityId: "identity-alice", member: true }),
   },
@@ -1015,71 +1025,36 @@ describe("chat pane sharing mutation phase ownership", () => {
 });
 
 describe("chat pane current sharing mutation refresh order", () => {
-  it("refreshes sessions before sharing after a visibility change", async () => {
-    const row = sessionRow();
-    const calls: string[] = [];
-    const request = vi.fn(async (method: string) => {
-      calls.push(method);
-      if (method === "session.members.listEvidence") {
-        return sharingResult(row);
-      }
-      return {};
-    });
-    const sessions = createSessionCapabilityFixture({
-      reconcileMutation: vi.fn(async () => {
-        calls.push("sessions.reconcileMutation");
-        return { status: "refreshed" as const };
-      }),
-    });
-    const { pane } = createSharingTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions,
-    });
+  it.each(mutations)(
+    "refreshes in the required order after a $name change",
+    async ({ invoke, expectedOrder }) => {
+      const row = sessionRow();
+      const calls: string[] = [];
+      const request = vi.fn(async (method: string) => {
+        calls.push(method);
+        if (method === "session.members.listEvidence") {
+          return sharingResult(row);
+        }
+        return {};
+      });
+      const sessions = createSessionCapabilityFixture({
+        reconcileMutation: vi.fn(async () => {
+          calls.push("sessions.reconcileMutation");
+          return { status: "refreshed" as const };
+        }),
+      });
+      const { pane } = createSharingTestChatPane({
+        client: createGatewayBrowserClientFixture({ request }),
+        sessions,
+      });
 
-    expect(await pane.mutateSessionSharing(row, { visibility: "shared" })).toEqual({ status: "success" });
+      expect(await invoke(pane, row)).toEqual({ status: "success" });
 
+      expect(calls).toEqual(expectedOrder);
+      expect(
+        pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.result,
+      ).toEqual(sharingResult(row));
+    },
+  );
 
-    expect(calls).toEqual([
-      "session.visibility.set",
-      "sessions.reconcileMutation",
-      "session.members.listEvidence",
-    ]);
-    expect(
-      pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.result,
-    ).toEqual(sharingResult(row));
-  });
-
-  it("refreshes sharing before sessions after a member change", async () => {
-    const row = sessionRow();
-    const calls: string[] = [];
-    const request = vi.fn(async (method: string) => {
-      calls.push(method);
-      if (method === "session.members.listEvidence") {
-        return sharingResult(row);
-      }
-      return {};
-    });
-    const sessions = createSessionCapabilityFixture({
-      reconcileMutation: vi.fn(async () => {
-        calls.push("sessions.reconcileMutation");
-        return { status: "refreshed" as const };
-      }),
-    });
-    const { pane } = createSharingTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions,
-    });
-
-    expect(await pane.mutateSessionSharing(row, { identityId: "identity-alice", member: true })).toEqual({ status: "success" });
-
-
-    expect(calls).toEqual([
-      "session.members.add",
-      "session.members.listEvidence",
-      "sessions.reconcileMutation",
-    ]);
-    expect(
-      pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.result,
-    ).toEqual(sharingResult(row));
-  });
 });
