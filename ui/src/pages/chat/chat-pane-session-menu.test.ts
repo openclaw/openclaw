@@ -762,6 +762,7 @@ describe("chat pane session menu boundary", () => {
       sessions: createSessionCapabilityFixture({ patch }),
     });
     getPaneTestRuntime(pane).mergedChrome = true;
+    getPaneTestRuntime(pane).agentId = "research";
     state.sessionKey = row.key;
     state.assistantAgentId = "research";
     try {
