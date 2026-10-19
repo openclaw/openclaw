@@ -4,6 +4,7 @@ import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
 import { decodeHtmlEntities as decodeHtmlEntity } from "openclaw/plugin-sdk/html-entity-runtime";
 import { ProviderHttpError, readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import {
+  externalContentStamp,
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
   normalizeCacheKey,
@@ -189,12 +190,7 @@ export async function runDuckDuckGoSearch(params: {
     provider: "duckduckgo",
     count: results.length,
     tookMs: Date.now() - startedAt,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "duckduckgo",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("duckduckgo"),
     results: results.map((result) => ({
       title: wrapWebContent(result.title, "web_search"),
       url: result.url,

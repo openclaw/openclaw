@@ -39,9 +39,7 @@ export const cronWakeHandler: GatewayRequestHandler = async ({
   const sessionKey = p.sessionKey?.trim() || undefined;
   const agentId = p.agentId?.trim() || undefined;
   const callerScope = readCronCallerScope(client);
-  const sessionKeyAgentId = sessionKey
-    ? parseAgentSessionKey(sessionKey)?.agentId?.trim().toLowerCase()
-    : undefined;
+  const sessionKeyAgentId = sessionKey ? parseAgentSessionKey(sessionKey)?.agentId : undefined;
   if (callerScope && agentId && normalizeAgentId(agentId) !== callerScope.agentId) {
     respond(
       false,

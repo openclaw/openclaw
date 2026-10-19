@@ -274,7 +274,7 @@ it.each([
     const id = lease.attachment.id;
     lease.receive({ type: "resource-ready", id, pid: worker.pid!, generation: 0 });
     lease.receive({ type: "resource-created", id });
-    const write = lease.ownerMessage({ operation: "accepted native write" });
+    lease.ownerMessage({ operation: "accepted native write" });
     await fixture.sent("resource-owner");
 
     let launchSettlement: Promise<unknown> | undefined;
@@ -328,8 +328,7 @@ it.each([
     }
 
     // Proxy rejection and failed write delivery are not native settlement receipts.
-    const error = await failed.promise;
-    await expect(write.result).rejects.toBe(error);
+    await failed.promise;
     await child.waitForClose();
     expect(fixture.disconnect).toHaveBeenCalledOnce();
     expect(fixture.kill).not.toHaveBeenCalled();

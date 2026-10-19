@@ -1,6 +1,4 @@
 import type { TSchema } from "typebox";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import {
@@ -15,17 +13,11 @@ import {
 import type { AgentToolWithMeta } from "../tools/common.js";
 import type { AgentRuntimePlan } from "./types.js";
 
-type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {
+type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = Omit<
+  Parameters<typeof normalizeProviderToolSchemas<TSchemaType, TResult>>[0],
+  "allowRuntimePluginLoad"
+> & {
   runtimePlan?: AgentRuntimePlan;
-  tools: AgentTool<TSchemaType, TResult>[];
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  modelId?: string;
-  modelApi?: string | null;
-  model?: ProviderRuntimeModel;
-  runtimeHandle?: ProviderRuntimePluginHandle;
   allowProviderRuntimePluginLoad?: boolean;
   /**
    * Invoked on every normalization, including with an empty list, so

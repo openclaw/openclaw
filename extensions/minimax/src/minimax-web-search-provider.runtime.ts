@@ -4,6 +4,7 @@ import {
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  externalContentStamp,
   DEFAULT_SEARCH_COUNT,
   buildSearchCacheKey,
   formatCliCommand,
@@ -243,12 +244,7 @@ export async function executeMiniMaxWebSearchProviderTool(
     provider: "minimax",
     count: results.length,
     tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "minimax",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("minimax"),
     results,
   };
 

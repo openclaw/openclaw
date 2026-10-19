@@ -5,7 +5,6 @@
   "type": "module",
   "dependencies": {
     "@openclaw/fs-safe": "0.26.8",
-    "ws": "8.22.0",
     "zod": "4.6.5"
   },
   "devDependencies": {

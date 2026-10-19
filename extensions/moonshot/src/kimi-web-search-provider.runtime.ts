@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import {
+  externalContentStamp,
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
@@ -180,12 +181,7 @@ export async function executeKimiWebSearchProviderTool(
     provider: "kimi",
     count: results.length,
     tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "kimi",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("kimi"),
     results,
   };
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);

@@ -3,6 +3,7 @@ import {
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  externalContentStamp,
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   isoToPerplexityDate,
@@ -408,12 +409,7 @@ export async function executePerplexitySearch(
     provider: "perplexity",
     ...(Array.isArray(result) ? { count: result.length } : { model: runtime.model }),
     tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "perplexity",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("perplexity"),
     ...resultFields,
   };
 

@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onSettled, Show, untrack } from "solid-js";
+import { createEffect, createMemo, onSettled, Show, untrack } from "solid-js";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
@@ -8,6 +8,7 @@ import {
   lobsterPetSeed,
   resolveLobsterPetMode,
   resolveLobsterRunOutcome,
+  type LobsterComposerElements,
 } from "../../components/lobster-pet-contract.ts";
 import { createBackgroundLayoutRef } from "../../components/session-background-layout-context.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -57,6 +58,7 @@ import {
   NewSessionPlusMenu,
   NewSessionSelectionStatus,
 } from "./composer-capability-controls.tsx";
+import { createComposerPlaceholder } from "./composer-placeholder.ts";
 import type { NewSessionComposerTextarea } from "./composer-textarea.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
@@ -362,65 +364,10 @@ function StartControl(props: { options: NewSessionComposerOptions }) {
   );
 }
 
-/** Animation belongs to the mounted input; menu and draft updates do not restart it. */
-function createComposerPlaceholder(options: () => NewSessionComposerOptions) {
-  const target = createMemo(() =>
-    t(
-      options().nativeTerminal
-        ? "newSession.nativeTerminalPrompt"
-        : "newSession.messagePlaceholder",
-    ),
-  );
-  const hasMessage = createMemo(() => options().message.length > 0);
-  const reducedMotion =
-    !globalThis.requestAnimationFrame ||
-    (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
-  const [frame, setFrame] = createSignal({ target: "", text: "" });
-  let entered = false;
-  // Restart the browser animation only when its text changes; typing cancels pending frames.
-  createEffect(
-    () => [target(), hasMessage()] as const,
-    ([text, hasText]) => {
-      entered ||= hasText;
-      if (entered || reducedMotion) {
-        return undefined;
-      }
-      let startedAt: number | undefined;
-      let pending: number;
-      let length = 0;
-      const step = (timestamp: number) => {
-        if (!options().composerTextarea.getTextarea()?.isConnected) {
-          return;
-        }
-        startedAt ??= timestamp;
-        const nextLength = Math.min(
-          text.length,
-          Math.floor(Math.max(0, timestamp - startedAt - 180) / 26),
-        );
-        entered = nextLength === text.length;
-        if (length !== nextLength) {
-          length = nextLength;
-          setFrame({ target: text, text: text.slice(0, length) });
-        }
-        if (!entered) {
-          pending = requestAnimationFrame(step);
-        }
-      };
-      pending = requestAnimationFrame(step);
-      return () => cancelAnimationFrame(pending);
-    },
-  );
-  return () =>
-    options().dictationActive
-      ? ""
-      : entered || hasMessage() || reducedMotion
-        ? target()
-        : frame().target === target()
-          ? frame().text
-          : "";
-}
-
-export function NewSessionComposer(props: { options: NewSessionComposerOptions }) {
+export function NewSessionComposer(props: {
+  options: NewSessionComposerOptions;
+  surroundings?: () => Pick<LobsterComposerElements, "root" | "obstacles"> | undefined;
+}) {
   const footerControl = createFooterControlRef();
   const inputHandle = createChatAttachmentInputHandle();
   const backgroundLayoutRef = createBackgroundLayoutRef("composer");
@@ -458,7 +405,28 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
   );
   const visibleMessage = createMemo(() => frame().visibleMessage);
   const messageValue = createLiveValue(visibleMessage);
-  let input: HTMLTextAreaElement;
+  let input: HTMLTextAreaElement | undefined;
+  let composer: HTMLDivElement | undefined;
+  let footer: HTMLDivElement | undefined;
+  let lead: HTMLDivElement | undefined;
+  let model: HTMLDivElement | undefined;
+  let actions: HTMLDivElement | undefined;
+  const composerElements = (): LobsterComposerElements | null => {
+    if (!composer || !input || !footer) {
+      return null;
+    }
+    const surroundings = props.surroundings?.();
+    return {
+      root: surroundings?.root ?? composer,
+      composer,
+      editor: input,
+      footer,
+      controls: [lead, model, actions].filter(
+        (element): element is HTMLDivElement => element?.isConnected === true,
+      ),
+      obstacles: surroundings?.obstacles ?? [],
+    };
+  };
   // A replacement can render before the old branch retires; claim only the committed input.
   onSettled(() => {
     textarea.ref(input);
@@ -481,7 +449,10 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
       onDragOver={(event) => frame().attachmentDropHandlers.onDragover(event)}
     >
       <div
-        ref={backgroundLayoutRef}
+        ref={(element) => {
+          composer = element;
+          backgroundLayoutRef(element);
+        }}
         class={[
           "agent-chat__input agent-chat__input--mobile-toolbar",
           {
@@ -495,6 +466,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
         }}
       >
         <openclaw-lobster-pet
+          prop:composerElements={composerElements}
           prop:seed={lobsterPetSeed(`${textarea.critterVisit}:${options().draftOwnerKey}`)}
           prop:mode={resolveLobsterPetMode(
             !options().context?.gateway.snapshot.offlineStable,
@@ -661,8 +633,13 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
             </span>
           </div>
         </div>
-        <div class="agent-chat__composer-footer">
-          <div class="agent-chat__composer-lead">
+        <div class="agent-chat__composer-footer" ref={(element) => (footer = element)}>
+          <div
+            class="agent-chat__composer-lead"
+            ref={(element) => {
+              lead = element;
+            }}
+          >
             <Show when={!options().nativeTerminal}>
               <NewSessionPlusMenu
                 options={options()}
@@ -681,7 +658,12 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
           <div class="agent-chat__composer-trail">
             <div class="agent-chat__composer-controls">
               <Show when={!options().isCatalogTarget}>
-                <div class="chat-composer-model-control">
+                <div
+                  class="chat-composer-model-control"
+                  ref={(element) => {
+                    model = element;
+                  }}
+                >
                   <NewSessionModelControlView
                     control={options().modelControl}
                     options={{
@@ -694,7 +676,12 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
                 </div>
               </Show>
             </div>
-            <div class="agent-chat__composer-actions">
+            <div
+              class="agent-chat__composer-actions"
+              ref={(element) => {
+                actions = element;
+              }}
+            >
               {options().voiceControl}
               <Show when={!options().dictationActive}>
                 <StartControl options={options()} />

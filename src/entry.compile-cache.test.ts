@@ -232,9 +232,7 @@ describe("entry compile cache", () => {
     if (standalone) {
       expect(options?.env?.OPENCLAW_CLI_RESPAWN_PARENT).toBe(String(process.pid));
     }
-    expect(attachChildProcessBridge).toHaveBeenCalledWith(child, {
-      onSignal: expect.any(Function),
-    });
+    expect(attachChildProcessBridge).toHaveBeenCalledWith(child, expect.any(Function));
     child.emit("exit", 0, null);
     expect(process.exitCode).toBe(17);
     child.emit("close", 0, null);
@@ -287,8 +285,8 @@ describe("entry compile cache", () => {
       vi.useFakeTimers();
       await withMockedPlatform(platform, async () => {
         const { completion } = await startRespawn();
-        const [, options] = expectDefined(attachChildProcessBridge.mock.calls[0], "bridge call");
-        expectDefined(options?.onSignal, "signal handler")("SIGTERM");
+        const [, onSignal] = expectDefined(attachChildProcessBridge.mock.calls[0], "bridge call");
+        expectDefined(onSignal, "signal handler")("SIGTERM");
         vi.advanceTimersByTime(1_000);
         expect(kill).toHaveBeenCalledWith("SIGTERM");
         expect(process.exitCode).toBe(17);

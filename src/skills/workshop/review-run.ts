@@ -9,7 +9,7 @@ import {
   isSessionRunActive,
 } from "../../sessions/session-controller.queries.js";
 
-const reviews = createBackgroundWorkOwner({ owner: "core:skill-workshop", maxConcurrent: 1 });
+const reviews = createBackgroundWorkOwner({ owner: "core:skill-workshop" });
 
 /**
  * The background Workshop review run: the openclaw harness on a locked model, crediting

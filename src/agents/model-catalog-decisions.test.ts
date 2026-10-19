@@ -18,6 +18,7 @@ import {
   dualRoutes,
   platformRoute,
   routeResolverFactory,
+  mockRouteResolverFactory,
   subscriptionRoute,
 } from "./model-auth-availability.test-support.js";
 import { projectClaudeCliNativeCatalog } from "./model-catalog-cli-wildcard.js";
@@ -56,6 +57,7 @@ function harnessRegistry(id: string) {
 }
 
 function nativeOwner(complete: boolean, loggedIn: boolean, isCurrent = () => true, cfg = config) {
+  mockRouteResolverFactory(routeResolverFactory(dualRoutes));
   return createModelCatalogDecisions({
     cfg,
     agentId: "main",
@@ -68,7 +70,6 @@ function nativeOwner(complete: boolean, loggedIn: boolean, isCurrent = () => tru
     preparedSyntheticAuthComplete: complete,
     pluginRegistry: harnessRegistry("codex"),
     isCurrent,
-    routeResolverFactory: routeResolverFactory(dualRoutes),
   });
 }
 
@@ -162,6 +163,7 @@ describe("captured model decisions", () => {
       provider: { id: "openai", label: "OpenAI", auth: [], catalog: { run: catalog } },
     });
     const sharedSnapshot = { entries: [entry], routeVariants: [entry] };
+    mockRouteResolverFactory(routeResolverFactory(dualRoutes));
     const prepared = createModelCatalogDecisions({
       cfg: config,
       agentId: "main",
@@ -184,7 +186,6 @@ describe("captured model decisions", () => {
       },
       preferredProfileId: "openai:selected",
       pinnedProfileId: "openai:selected",
-      routeResolverFactory: routeResolverFactory(dualRoutes),
       isCurrent: () => true,
     });
     const assertCurrent = vi.fn();
@@ -355,6 +356,12 @@ describe("captured model decisions", () => {
   });
 
   it("rechecks physical route evidence after resolving an uncatalogued reference", async () => {
+    mockRouteResolverFactory(() => (ref) => ({
+      ...dualRoutes,
+      routes: ref.observedRoutes?.some((route) => route.api === subscriptionRoute.api)
+        ? [subscriptionRoute]
+        : [platformRoute],
+    }));
     const owner = createModelCatalogDecisions({
       cfg: {},
       agentId: "main",
@@ -367,12 +374,6 @@ describe("captured model decisions", () => {
           "openai:platform": { type: "api_key", provider: "openai", key: "synthetic-key" },
         },
       },
-      routeResolverFactory: () => (ref) => ({
-        ...dualRoutes,
-        routes: ref.observedRoutes?.some((route) => route.api === subscriptionRoute.api)
-          ? [subscriptionRoute]
-          : [platformRoute],
-      }),
     });
     expect(
       owner.evaluateEntry({ provider: entry.provider, id: entry.id }, undefined, "openclaw"),
@@ -407,8 +408,14 @@ describe("captured model decisions", () => {
       outcomes: readonly Outcome[],
       id: string,
       options: { profileIds?: readonly string[]; withApiKey?: boolean; pin?: string } = {},
-    ) =>
-      createModelCatalogDecisions({
+    ) => {
+      mockRouteResolverFactory(
+        routeResolverFactory({
+          ...dualRoutes,
+          preferredAuthRequirement: "subscription",
+        }),
+      );
+      return createModelCatalogDecisions({
         cfg: {},
         agentId: "main",
         workspaceDir: "/tmp/catalog-workspace",
@@ -428,11 +435,8 @@ describe("captured model decisions", () => {
             ...(options.withApiKey ? { "openai:platform": platformKey } : {}),
           },
         },
-        routeResolverFactory: routeResolverFactory({
-          ...dualRoutes,
-          preferredAuthRequirement: "subscription",
-        }),
       }).evaluateEntry({ provider: "openai", id }, undefined, "codex");
+    };
     // The listing returned gpt-5.5 as a hidden row and did not return gpt-5.4-pro.
     const ready = listing("openai:chatgpt", "gpt-6-sol", "gpt-5.5");
 
@@ -503,6 +507,7 @@ describe("captured model decisions", () => {
   });
 
   it("keeps a different provider's account pin out of the selected route", async () => {
+    mockRouteResolverFactory(routeResolverFactory({ ...dualRoutes, routes: [platformRoute] }));
     const owner = createModelCatalogDecisions({
       cfg: {},
       agentId: "main",
@@ -519,7 +524,6 @@ describe("captured model decisions", () => {
           "openai:chosen": { type: "api_key", provider: "openai", key: "synthetic-b" },
         },
       },
-      routeResolverFactory: routeResolverFactory({ ...dualRoutes, routes: [platformRoute] }),
     });
     expect(owner.evaluateEntry(entry, [entry], "openclaw")).toMatchObject({
       availability: true,

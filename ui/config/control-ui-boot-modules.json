@@ -1286,6 +1286,7 @@
   "ui/src/pages/new-session/composer-capability-controls.tsx",
   "ui/src/pages/new-session/composer-dictation-control.ts",
   "ui/src/pages/new-session/composer-dictation-view.tsx",
+  "ui/src/pages/new-session/composer-placeholder.ts",
   "ui/src/pages/new-session/composer-textarea.ts",
   "ui/src/pages/new-session/composer.tsx",
   "ui/src/pages/new-session/connect-machine-dialog-view.tsx",
