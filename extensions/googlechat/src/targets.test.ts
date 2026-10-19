@@ -32,13 +32,11 @@ const mocks = vi.hoisted(() => ({
   getGoogleChatAccessToken: vi.fn().mockResolvedValue("token"),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => {
-  return {
-    buildHostnameAllowlistPolicyFromSuffixAllowlist:
-      mocks.buildHostnameAllowlistPolicyFromSuffixAllowlist,
-    fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
-  };
-});
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  buildHostnameAllowlistPolicyFromSuffixAllowlist:
+    mocks.buildHostnameAllowlistPolicyFromSuffixAllowlist,
+  fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+}));
 
 vi.mock("google-auth-library", () => ({
   gaxios: {
@@ -60,9 +58,7 @@ vi.mock("google-auth-library", () => ({
       mocks.googleAuthCtor(options);
     }
 
-    getClient = vi.fn().mockResolvedValue({
-      getAccessToken: mocks.getAccessToken,
-    });
+    getClient = vi.fn().mockResolvedValue({ getAccessToken: mocks.getAccessToken });
   },
   OAuth2Client: class {
     constructor(options?: unknown) {
@@ -82,8 +78,8 @@ vi.mock("./auth.js", async () => {
   };
 });
 
-const authActual = await vi.importActual<typeof import("./auth.js")>("./auth.js");
-const { getGoogleChatAccessToken, verifyGoogleChatRequest } = authActual;
+const { getGoogleChatAccessToken, verifyGoogleChatRequest } =
+  await vi.importActual<typeof import("./auth.js")>("./auth.js");
 
 let googleChatCertFetchNowMs = Date.now();
 
@@ -185,38 +181,32 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
   return call[argIndex];
 }
 
-describe("target helpers", () => {
-  it("classifies current and legacy space metadata through the group boundary", () => {
-    expect(isGoogleChatGroupSpace({ spaceType: "DIRECT_MESSAGE", type: "ROOM" })).toBe(false);
-    expect(isGoogleChatGroupSpace({ spaceType: "SPACE", type: "DM" })).toBe(true);
-    expect(isGoogleChatGroupSpace({ singleUserBotDm: true })).toBe(false);
-    expect(isGoogleChatGroupSpace({ type: "ROOM" })).toBe(true);
-    expect(isGoogleChatGroupSpace({})).toBe(true);
-  });
+it("classifies current and legacy space metadata through the group boundary", () => {
+  expect(isGoogleChatGroupSpace({ spaceType: "DIRECT_MESSAGE", type: "ROOM" })).toBe(false);
+  expect(isGoogleChatGroupSpace({ spaceType: "SPACE", type: "DM" })).toBe(true);
+  expect(isGoogleChatGroupSpace({ singleUserBotDm: true })).toBe(false);
+  expect(isGoogleChatGroupSpace({ type: "ROOM" })).toBe(true);
+  expect(isGoogleChatGroupSpace({})).toBe(true);
 });
-
 describe("outbound session routing", () => {
-  it.each([{ spaceType: "SPACE", chatType: "group", peerKind: "group" }] as const)(
-    "classifies API space type $spaceType",
-    async ({ spaceType, chatType, peerKind }) => {
-      const fetchMock = stubResponse(jsonResponse({ name: "spaces/AAA", spaceType }));
-      const route = await sessionRoute("googlechat:spaces/AAA");
+  it("classifies API space type SPACE", async () => {
+    const fetchMock = stubResponse(jsonResponse({ name: "spaces/AAA", spaceType: "SPACE" }));
+    const route = await sessionRoute("googlechat:spaces/AAA");
 
-      expect(route).toMatchObject({
-        peer: { kind: peerKind, id: "spaces/AAA" },
-        chatType,
-        from: "googlechat:spaces/AAA",
-        to: "spaces/AAA",
-      });
-      expect(fetchMock).toHaveBeenCalledWith("https://chat.googleapis.com/v1/spaces/AAA", {
-        method: "GET",
-        headers: {
-          Authorization: "Bearer token",
-          "Content-Type": "application/json",
-        },
-      });
-    },
-  );
+    expect(route).toMatchObject({
+      peer: { kind: "group", id: "spaces/AAA" },
+      chatType: "group",
+      from: "googlechat:spaces/AAA",
+      to: "spaces/AAA",
+    });
+    expect(fetchMock).toHaveBeenCalledWith("https://chat.googleapis.com/v1/spaces/AAA", {
+      method: "GET",
+      headers: {
+        Authorization: "Bearer token",
+        "Content-Type": "application/json",
+      },
+    });
+  });
 
   it("rejects an unclassified space response", async () => {
     stubResponse(jsonResponse({ name: "spaces/AAA" }));
@@ -242,7 +232,6 @@ describe("downloadGoogleChatMedia", () => {
       status: 200,
       headers: new Headers({
         "content-length": "50",
-        "content-type": "application/octet-stream",
       }),
       arrayBuffer,
     } as unknown as Response;
@@ -294,10 +283,8 @@ describe("downloadGoogleChatMedia", () => {
   });
 
   it("bounds chunked endpoint media downloads even when callers omit maxBytes", async () => {
-    const ONE_MIB = 1024 * 1024;
-    const TOTAL_CHUNKS = 32;
-    const totalBytes = TOTAL_CHUNKS * ONE_MIB;
-    const chunk = Buffer.alloc(ONE_MIB);
+    const chunk = Buffer.alloc(1024 * 1024);
+    const totalBytes = 32 * chunk.length;
     let bytesSent = 0;
     let responseClosed = false;
     let resolveResponseClosed: () => void = () => {};
@@ -363,19 +350,16 @@ describe("downloadGoogleChatMedia", () => {
   });
 });
 
-describe("supported Google Chat request bounds", () => {
-  it("cancels a stalled JSON response body", async () => {
-    vi.useFakeTimers();
-    stubResponse(new Response(new ReadableStream({ start() {} })));
+it("cancels a stalled JSON response body", async () => {
+  vi.useFakeTimers();
+  stubResponse(new Response(new ReadableStream({ start() {} })));
 
-    const result = expect(send()).rejects.toThrow(
-      "Google Chat API request failed: response body stalled after 30000ms",
-    );
-    await vi.advanceTimersByTimeAsync(30_001);
-    await result;
-  });
+  const result = expect(send()).rejects.toThrow(
+    "Google Chat API request failed: response body stalled after 30000ms",
+  );
+  await vi.advanceTimersByTimeAsync(30_001);
+  await result;
 });
-
 describe("sendGoogleChatMessage", () => {
   it("adds messageReplyOption when sending to an existing thread", async () => {
     const fetchMock = stubSuccessfulSend("spaces/AAA/messages/123", "spaces/AAA/threads/xyz");
@@ -411,8 +395,7 @@ describe("sendGoogleChatMessage", () => {
       const result = await send({ thread: badThread });
 
       const url = mockCallArg(fetchMock);
-      // Invalid thread must not be forwarded, and the reply option must be omitted
-      // so the Chat API accepts the send instead of returning 400 INVALID_ARGUMENT.
+      // Omitting both fields avoids the Chat API's 400 INVALID_ARGUMENT.
       expect(String(url)).not.toContain("messageReplyOption=");
       expect(requestBody(fetchMock).thread).toBeUndefined();
       expect(result).toEqual({ messageName: "spaces/AAA/messages/126" });
@@ -436,44 +419,25 @@ describe("sendGoogleChatMessage", () => {
   });
 });
 
-describe("updateGoogleChatMessage", () => {
-  it("updates text and cardsV2 with a matching update mask", async () => {
-    const fetchMock = stubSuccessfulSend("spaces/AAA/messages/123");
-    const cardsV2 = [
-      {
-        cardId: "approval",
-        card: {
-          header: { title: "Resolved" },
-          sections: [{ widgets: [{ textParagraph: { text: "Done" } }] }],
-        },
-      },
-    ];
+it("updates text and cardsV2 with a matching update mask", async () => {
+  const fetchMock = stubSuccessfulSend("spaces/AAA/messages/123");
+  const cardsV2 = [{ cardId: "approval", card: { header: { title: "Resolved" } } }];
 
-    await updateGoogleChatMessage({
-      account,
-      messageName: "spaces/AAA/messages/123",
-      text: "Resolved",
-      cardsV2,
-    });
-
-    expect(String(mockCallArg(fetchMock))).toContain(
-      "spaces/AAA/messages/123?updateMask=text,cardsV2",
-    );
-    expect(requestBody(fetchMock)).toEqual({ text: "Resolved", cardsV2 });
+  await updateGoogleChatMessage({
+    account,
+    messageName: "spaces/AAA/messages/123",
+    text: "Resolved",
+    cardsV2,
   });
-});
 
+  expect(String(mockCallArg(fetchMock))).toContain(
+    "spaces/AAA/messages/123?updateMask=text,cardsV2",
+  );
+  expect(requestBody(fetchMock)).toEqual({ text: "Resolved", cardsV2 });
+});
 function mockTicket(payload: Record<string, unknown>) {
   mocks.verifyIdToken.mockReset().mockResolvedValue({
     getPayload: () => payload,
-  });
-}
-
-function mockAddOnTicket(sub = "principal-1") {
-  mockTicket({
-    email: "service-123@gcp-sa-gsuiteaddons.iam.gserviceaccount.com",
-    email_verified: true,
-    sub,
   });
 }
 
@@ -491,28 +455,21 @@ describe("verifyGoogleChatRequest", () => {
       getGoogleChatAccessToken({
         ...account,
         credentials: {
-          auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-          auth_uri: "https://accounts.google.com/o/oauth2/auth",
           client_email: "bot@example.iam.gserviceaccount.com",
           private_key: "key",
           token_uri: "https://oauth2.googleapis.com/token",
-          type: "service_account",
-          universe_domain: "googleapis.com",
         },
       }),
     ).resolves.toBe("access-token");
 
-    const googleAuthOptions = mockCallArg(mocks.googleAuthCtor) as {
-      clientOptions?: { transporter?: { defaults?: { fetchImplementation?: unknown } } };
-      credentials?: { client_email?: string; token_uri?: string };
-    };
-
     expect(mocks.gaxiosCtor).toHaveBeenCalledOnce();
-    expect(googleAuthOptions.credentials?.client_email).toBe("bot@example.iam.gserviceaccount.com");
-    expect(googleAuthOptions.credentials?.token_uri).toBe("https://oauth2.googleapis.com/token");
-    expect(typeof googleAuthOptions.clientOptions?.transporter?.defaults?.fetchImplementation).toBe(
-      "function",
-    );
+    expect(mockCallArg(mocks.googleAuthCtor)).toMatchObject({
+      credentials: {
+        client_email: "bot@example.iam.gserviceaccount.com",
+        token_uri: "https://oauth2.googleapis.com/token",
+      },
+      clientOptions: { transporter: { defaults: { fetchImplementation: expect.any(Function) } } },
+    });
     expect(mocks.getAccessToken).toHaveBeenCalledOnce();
     expect("window" in globalThis).toBe(false);
   });
@@ -525,31 +482,32 @@ describe("verifyGoogleChatRequest", () => {
 
     await expect(verifyAppToken()).resolves.toEqual({ ok: true });
 
-    const oauthOptions = mockCallArg(mocks.oauthCtor) as {
-      transporter?: { defaults?: { fetchImplementation?: unknown } };
-    };
-    expect(typeof oauthOptions.transporter?.defaults?.fetchImplementation).toBe("function");
-  });
-
-  it("rejects add-on tokens when no principal binding is configured", async () => {
-    mockAddOnTicket();
-    await expect(verifyAppToken()).resolves.toEqual({
-      ok: false,
-      reason: "missing add-on principal binding",
+    expect(mockCallArg(mocks.oauthCtor)).toMatchObject({
+      transporter: { defaults: { fetchImplementation: expect.any(Function) } },
     });
   });
 
-  it("accepts add-on tokens only when the bound principal matches", async () => {
-    mockAddOnTicket();
-    await expect(verifyAppToken("principal-1")).resolves.toEqual({ ok: true });
-  });
-
-  it("rejects add-on tokens when the bound principal does not match", async () => {
-    mockAddOnTicket("principal-2");
-    await expect(verifyAppToken("principal-1")).resolves.toEqual({
-      ok: false,
-      reason: "unexpected add-on principal: principal-2",
+  it.each([
+    [
+      "missing binding",
+      "principal-1",
+      undefined,
+      { ok: false, reason: "missing add-on principal binding" },
+    ],
+    ["matching binding", "principal-1", "principal-1", { ok: true }],
+    [
+      "mismatched binding",
+      "principal-2",
+      "principal-1",
+      { ok: false, reason: "unexpected add-on principal: principal-2" },
+    ],
+  ] as const)("verifies add-on tokens: %s", async (_name, sub, binding, expected) => {
+    mockTicket({
+      email: "service-123@gcp-sa-gsuiteaddons.iam.gserviceaccount.com",
+      email_verified: true,
+      sub,
     });
+    await expect(verifyAppToken(binding)).resolves.toEqual(expected);
   });
 
   it("fetches Chat certs through the guarded fetch for project-number tokens", async () => {
@@ -590,35 +548,33 @@ describe("verifyGoogleChatRequest", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  describe("bounded JSON read (readProviderJsonResponse delegation)", () => {
-    it("caps non-OK sendMessage error bodies before formatting the API error", async () => {
-      const chunk = new TextEncoder().encode("x".repeat(1024 * 1024));
-      const totalBytes = 32 * chunk.length;
-      const streamed = { bytesPulled: 0, canceled: false };
-      const release = guardedResponse(
-        new Response(
-          new ReadableStream<Uint8Array>({
-            pull(controller) {
-              if (streamed.bytesPulled >= totalBytes) {
-                controller.close();
-                return;
-              }
-              streamed.bytesPulled += chunk.length;
-              controller.enqueue(chunk);
-            },
-            cancel() {
-              streamed.canceled = true;
-            },
-          }),
-          { status: 500, statusText: "Internal Server Error" },
-        ),
-      );
+  it("caps non-OK sendMessage error bodies before formatting the API error", async () => {
+    const chunk = new TextEncoder().encode("x".repeat(1024 * 1024));
+    const totalBytes = 32 * chunk.length;
+    const streamed = { bytesPulled: 0, canceled: false };
+    const release = guardedResponse(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (streamed.bytesPulled >= totalBytes) {
+              controller.close();
+              return;
+            }
+            streamed.bytesPulled += chunk.length;
+            controller.enqueue(chunk);
+          },
+          cancel() {
+            streamed.canceled = true;
+          },
+        }),
+        { status: 500, statusText: "Internal Server Error" },
+      ),
+    );
 
-      await expect(send()).rejects.toThrow(/^Google Chat API 500: x+/);
+    await expect(send()).rejects.toThrow(/^Google Chat API 500: x+/);
 
-      expect(streamed.canceled).toBe(true);
-      expect(streamed.bytesPulled).toBeLessThan(totalBytes);
-      expect(release).toHaveBeenCalledOnce();
-    });
+    expect(streamed.canceled).toBe(true);
+    expect(streamed.bytesPulled).toBeLessThan(totalBytes);
+    expect(release).toHaveBeenCalledOnce();
   });
 });

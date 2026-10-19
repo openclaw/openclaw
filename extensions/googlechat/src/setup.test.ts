@@ -32,12 +32,9 @@ import { startGoogleChatGatewayAccount } from "./gateway.js";
 import { googlechatSetupAdapter } from "./setup-core.js";
 import { googlechatSetupWizard } from "./setup-surface.js";
 
-const hoisted = vi.hoisted(() => ({
-  startGoogleChatMonitor: vi.fn(),
-}));
+const hoisted = vi.hoisted(() => ({ startGoogleChatMonitor: vi.fn() }));
 
-// The path resolver stays real so the status assertions below cover the whole chain
-// from configured webhookUrl to published snapshot; only the monitor is stubbed.
+// Keep real webhook URL resolution; stub only the monitor.
 vi.mock("./channel.runtime.js", async () => {
   const monitor = await vi.importActual<typeof import("./monitor.js")>("./monitor.js");
   return {
@@ -50,9 +47,7 @@ vi.mock("./channel.runtime.js", async () => {
 
 const googlechatSetupPlugin = {
   id: "googlechat",
-  meta: {
-    label: "Google Chat",
-  },
+  meta: { label: "Google Chat" },
   config: {
     defaultAccountId: resolveDefaultGoogleChatAccountId,
     listAccountIds: listGoogleChatAccountIds,
@@ -76,18 +71,6 @@ function resolveAccount(googlechat: GoogleChatConfig = {}, accountId = DEFAULT_A
   return resolveGoogleChatAccount({ cfg: withGoogleChat(googlechat), accountId });
 }
 
-function resolveNamedAccount(defaults: NonNullable<GoogleChatConfig["accounts"]>[string]) {
-  return resolveAccount(
-    {
-      accounts: {
-        default: { ...audienceConfig, ...defaults },
-        andy: { serviceAccountFile: "/tmp/andy-sa.json" },
-      },
-    },
-    "andy",
-  );
-}
-
 function alertsConfig(
   account: NonNullable<GoogleChatConfig["accounts"]>[string],
   root: GoogleChatConfig = {},
@@ -95,29 +78,7 @@ function alertsConfig(
   return withGoogleChat({ ...root, defaultAccount: "alerts", accounts: { alerts: account } });
 }
 
-function applyConfig(
-  input: Parameters<NonNullable<typeof googlechatSetupAdapter.applyAccountConfig>>[0]["input"],
-) {
-  return googlechatSetupAdapter.applyAccountConfig!({
-    cfg: withGoogleChat({}),
-    accountId: DEFAULT_ACCOUNT_ID,
-    input,
-  });
-}
-
-async function prepare(accountId: string) {
-  const confirm = vi.fn(async () => true);
-  const select = vi.fn(async () => "file" as const) as unknown as WizardPrompter["select"];
-  const result = await googlechatSetupWizard.prepare!({
-    cfg: {},
-    accountId,
-    credentialValues: {},
-    prompter: createTestWizardPrompter({ confirm, select }),
-  } as never);
-  return { confirm, select, result };
-}
-
-function buildAccount(): ResolvedGoogleChatAccount {
+function buildAccount(config: ResolvedGoogleChatAccount["config"] = {}): ResolvedGoogleChatAccount {
   return {
     accountId: "default",
     enabled: true,
@@ -127,6 +88,7 @@ function buildAccount(): ResolvedGoogleChatAccount {
       webhookPath: "/googlechat",
       webhookUrl: "https://example.com/googlechat",
       ...audienceConfig,
+      ...config,
     },
   };
 }
@@ -168,74 +130,70 @@ describe("googlechat setup", () => {
     ).toBe("GOOGLE_CHAT_SERVICE_ACCOUNT env vars can only be used for the default account.");
   });
 
-  it("offers valid service-account env credentials for the default account", async () => {
+  it.each([
+    [DEFAULT_ACCOUNT_ID, "  ", 1, 0, "1"],
+    ["alerts", "/tmp/googlechat.json", 0, 1, "0"],
+  ] as const)("offers env credentials only to %s", async (id, file, confirms, selects, useEnv) => {
     vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '  {"client_email":"bot@example.com"}  ');
-    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", "  ");
-    const { confirm, select, result } = await prepare(DEFAULT_ACCOUNT_ID);
-
-    expect(confirm).toHaveBeenCalledOnce();
-    expect(select).not.toHaveBeenCalled();
-    expect(result?.credentialValues?.["__googlechatUseEnv"]).toBe("1");
+    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", file);
+    const confirm = vi.fn(async () => true);
+    const select = vi.fn(async () => "file" as const) as unknown as WizardPrompter["select"];
+    const result = await googlechatSetupWizard.prepare!({
+      cfg: {},
+      accountId: id,
+      credentialValues: {},
+      prompter: createTestWizardPrompter({ confirm, select }),
+    } as never);
+    expect(confirm).toHaveBeenCalledTimes(confirms);
+    expect(select).toHaveBeenCalledTimes(selects);
+    expect(result?.credentialValues?.["__googlechatUseEnv"]).toBe(useEnv);
   });
 
-  it("does not offer default-account env credentials to named accounts", async () => {
-    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '{"client_email":"bot@example.com"}');
-    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", "/tmp/googlechat.json");
-    const { confirm, select, result } = await prepare("alerts");
-
-    expect(confirm).not.toHaveBeenCalled();
-    expect(select).toHaveBeenCalledOnce();
-    expect(result?.credentialValues?.["__googlechatUseEnv"]).toBe("0");
-  });
-
-  it("builds a patch from token-file and trims optional webhook fields", () => {
-    expect(
-      applyConfig({
-        name: "Default",
+  it.each([
+    {
+      name: "token-file and trimmed webhook fields",
+      input: {
         tokenFile: "/tmp/googlechat.json",
         audienceType: " app-url ",
         audience: " https://example.com/googlechat ",
         webhookPath: " /googlechat ",
         webhookUrl: " https://example.com/googlechat/hook ",
-      } as never),
-    ).toEqual(
-      withGoogleChat({
-        enabled: true,
-        name: "Default",
+      },
+      patch: {
         serviceAccountFile: "/tmp/googlechat.json",
         audienceType: "app-url",
         audience: "https://example.com/googlechat",
         webhookPath: "/googlechat",
         webhookUrl: "https://example.com/googlechat/hook",
-      }),
-    );
-  });
-
-  it("prefers inline token patch when token-file is absent", () => {
+      },
+    },
+    {
+      name: "inline token without token-file",
+      input: { token: { client_email: "bot@example.com" } },
+      patch: { serviceAccount: { client_email: "bot@example.com" } },
+    },
+  ])("builds a patch from $name", ({ input, patch }) => {
     expect(
-      applyConfig({
-        name: "Default",
-        token: { client_email: "bot@example.com" },
+      googlechatSetupAdapter.applyAccountConfig!({
+        cfg: withGoogleChat({}),
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: { name: "Default", ...input },
       } as never),
-    ).toEqual(
-      withGoogleChat({
-        enabled: true,
-        name: "Default",
-        serviceAccount: { client_email: "bot@example.com" },
-      }),
-    );
+    ).toEqual(withGoogleChat({ enabled: true, name: "Default", ...patch }));
   });
 
   it("configures service-account auth and webhook audience", async () => {
+    const answers: Record<string, string> = {
+      "Service account JSON path": "/tmp/googlechat-service-account.json",
+      "App URL": "https://example.com/googlechat",
+    };
     const prompter = createTestWizardPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {
-        if (message === "Service account JSON path") {
-          return "/tmp/googlechat-service-account.json";
+        const answer = answers[message];
+        if (answer === undefined) {
+          throw new Error(`Unexpected prompt: ${message}`);
         }
-        if (message === "App URL") {
-          return "https://example.com/googlechat";
-        }
-        throw new Error(`Unexpected prompt: ${message}`);
+        return answer;
       }) as WizardPrompter["text"],
     });
 
@@ -250,28 +208,23 @@ describe("googlechat setup", () => {
     expect(result.cfg.channels?.googlechat).toMatchObject({
       enabled: true,
       serviceAccountFile: "/tmp/googlechat-service-account.json",
-      audienceType: "app-url",
-      audience: "https://example.com/googlechat",
+      ...audienceConfig,
     });
   });
 
   it("uses defaultAccount for DM policy reads and writes when accountId is omitted", () => {
-    const cfg = alertsConfig(
-      { serviceAccount: { client_email: "bot@example.com" }, dmPolicy: "allowlist" },
-      { dmPolicy: "disabled" },
-    );
+    const cfg = alertsConfig({ dmPolicy: "allowlist" }, { dmPolicy: "disabled" });
     const dmPolicy = googlechatSetupWizard.dmPolicy!;
     expect(dmPolicy.getCurrent(cfg)).toBe("allowlist");
     expect(dmPolicy.resolveConfigKeys?.(cfg)).toEqual({
       policyKey: "channels.googlechat.accounts.alerts.dmPolicy",
       allowFromKey: "channels.googlechat.accounts.alerts.allowFrom",
     });
-    const next = dmPolicy.setPolicy(cfg, "open");
-    expect(next.channels?.googlechat?.dmPolicy).toBe("disabled");
-    expect(next.channels?.googlechat?.allowFrom).toBeUndefined();
-    expect(next.channels?.googlechat?.accounts?.alerts).toMatchObject({
-      dmPolicy: "open",
-      allowFrom: ["*"],
+    const next = dmPolicy.setPolicy(cfg, "open").channels?.googlechat;
+    expect(next?.allowFrom).toBeUndefined();
+    expect(next).toMatchObject({
+      dmPolicy: "disabled",
+      accounts: { alerts: { dmPolicy: "open", allowFrom: ["*"] } },
     });
   });
 
@@ -280,9 +233,7 @@ describe("googlechat setup", () => {
       cfg: withGoogleChat({
         defaultAccount: "alerts",
         accounts: {
-          default: {
-            serviceAccount: { client_email: "default@example.com" },
-          },
+          default: { serviceAccount: { client_email: "default@example.com" } },
           alerts: {},
         },
       }),
@@ -294,97 +245,68 @@ describe("googlechat setup", () => {
   });
 
   it("uses configured defaultAccount for omitted allowFrom prompt context", async () => {
-    const prompter = createTestWizardPrompter({
-      note: vi.fn(async () => {}),
-      text: vi.fn(async () => "users/123456789"),
-    });
-
     const next = await googlechatSetupWizard.dmPolicy?.promptAllowFrom?.({
-      cfg: alertsConfig(
-        { serviceAccount: { client_email: "bot@example.com" }, allowFrom: ["users/alerts"] },
-        { allowFrom: ["users/root"] },
-      ),
-      prompter,
+      cfg: alertsConfig({ allowFrom: ["users/alerts"] }, { allowFrom: ["users/root"] }),
+      prompter: createTestWizardPrompter({ text: vi.fn(async () => "users/123456789") }),
     });
 
-    expect(next?.channels?.googlechat?.allowFrom).toEqual(["users/root"]);
-    expect(next?.channels?.googlechat?.accounts?.alerts?.allowFrom).toEqual(["users/123456789"]);
+    expect(next?.channels?.googlechat).toMatchObject({
+      allowFrom: ["users/root"],
+      accounts: { alerts: { allowFrom: ["users/123456789"] } },
+    });
   });
 
   it("keeps startAccount pending until abort, then unregisters", async () => {
     const unregister = vi.fn();
     const waitForStarted = prepareGoogleChatMonitorStart(unregister);
 
-    const { abort, patches, task, isSettled } = startAccountAndTrackLifecycle({
+    const lifecycle = startAccountAndTrackLifecycle({
       startAccount: startGoogleChatGatewayAccount,
       account: buildAccount(),
     });
     await expectPendingUntilAbort({
       waitForStarted,
-      isSettled,
-      abort,
-      task,
-      assertBeforeAbort: () => {
-        expect(unregister).not.toHaveBeenCalled();
-      },
-      assertAfterAbort: () => {
-        expect(unregister).toHaveBeenCalledOnce();
-      },
+      ...lifecycle,
+      assertBeforeAbort: () => expect(unregister).not.toHaveBeenCalled(),
+      assertAfterAbort: () => expect(unregister).toHaveBeenCalledOnce(),
     });
-    expectLifecyclePatch(patches, {
+    expectLifecyclePatch(lifecycle.patches, {
       running: true,
       webhookPath: "/googlechat",
       lifecycle: "starting",
     });
-    expectLifecyclePatch(patches, { running: false });
-    expect(patches.some((patch) => patch.lifecycle === "blocked")).toBe(false);
+    expectLifecyclePatch(lifecycle.patches, { running: false });
+    expect(lifecycle.patches.some((patch) => patch.lifecycle === "blocked")).toBe(false);
   });
 
   it("clears a previously published webhook path when a restart resolves none", async () => {
-    const waitForFirstStart = prepareGoogleChatMonitorStart();
-    const account = buildAccount();
-    const resolvable = {
-      ...account,
-      config: {
-        ...account.config,
-        webhookPath: undefined,
-        webhookUrl: "https://chat.example.com/gc-inbound",
-      },
-    };
-    // One context, so both starts write through the same status snapshot the way
-    // the gateway's runtime store patch-merges successive plugin patches.
+    const resolvable = buildAccount({
+      webhookPath: undefined,
+      webhookUrl: "https://chat.example.com/gc-inbound",
+    });
+    // Both starts share the gateway's patch-merged status snapshot.
     const ctx = createStartAccountContext({ account: resolvable });
     const startAccount = ({
       account: nextAccount,
       abortSignal,
     }: Parameters<typeof startGoogleChatGatewayAccount>[0]) =>
       startGoogleChatGatewayAccount({ ...ctx, account: nextAccount, abortSignal });
-    const first = startAccountAndTrackLifecycle({ startAccount, account: resolvable });
-    await expectPendingUntilAbort({
-      ...first,
-      waitForStarted: waitForFirstStart,
-      assertBeforeAbort: () => {
-        expect(ctx.getStatus().webhookPath).toBe("/gc-inbound");
-      },
-    });
-
-    hoisted.startGoogleChatMonitor.mockClear();
-    const waitForSecondStart = prepareGoogleChatMonitorStart();
-    const second = startAccountAndTrackLifecycle({
-      startAccount,
-      account: {
-        ...resolvable,
-        config: { ...resolvable.config, webhookUrl: "chat.example.com/gc-inbound" },
-      },
-    });
-    await expectPendingUntilAbort({
-      ...second,
-      waitForStarted: waitForSecondStart,
-      assertBeforeAbort: () => {
-        const restarted = ctx.getStatus();
-        expect(restarted.lifecycle).toBe("blocked");
-        expect(restarted.webhookPath).toBeUndefined();
-      },
+    async function run(
+      account: ResolvedGoogleChatAccount,
+      expected: { webhookPath?: string; lifecycle?: string },
+    ) {
+      hoisted.startGoogleChatMonitor.mockClear();
+      const waitForStarted = prepareGoogleChatMonitorStart();
+      await expectPendingUntilAbort({
+        ...startAccountAndTrackLifecycle({ startAccount, account }),
+        waitForStarted,
+        assertBeforeAbort: () => expect(ctx.getStatus()).toMatchObject(expected),
+      });
+    }
+    await run(resolvable, { webhookPath: "/gc-inbound" });
+    await run(buildAccount({ webhookPath: undefined, webhookUrl: "chat.example.com/gc-inbound" }), {
+      lifecycle: "blocked",
+      webhookPath: undefined,
     });
   });
 });
@@ -433,10 +355,12 @@ describe("resolveGoogleChatAccount", () => {
 
     const resolved = resolveAccount();
 
-    expect(resolved.credentialSource).toBe("env");
-    expect(resolved.credentials).toBeUndefined();
-    expect(resolved.credentialsFile).toBe(missingFile);
-    expect(resolved.tokenStatus).toBe("configured_unavailable");
+    expect(resolved).toMatchObject({
+      credentialSource: "env",
+      credentials: undefined,
+      credentialsFile: missingFile,
+      tokenStatus: "configured_unavailable",
+    });
     expect(resolved.credentialDiagnostics).toEqual([
       {
         code: "CREDENTIAL_FILE_UNAVAILABLE",
@@ -448,43 +372,31 @@ describe("resolveGoogleChatAccount", () => {
   });
 
   it("merges account bot loop protection over top-level defaults field-by-field", () => {
-    const resolved = resolveAccount(
-      {
-        botLoopProtection: {
-          maxEventsPerWindow: 8,
-          windowSeconds: 120,
-          cooldownSeconds: 240,
-        },
-        accounts: {
-          april: {
-            webhookPath: "/googlechat-april",
-            botLoopProtection: {
-              maxEventsPerWindow: 3,
-            },
-          },
-        },
+    const timing = { windowSeconds: 120, cooldownSeconds: 240 };
+    const cfg: GoogleChatConfig = {
+      botLoopProtection: { maxEventsPerWindow: 8, ...timing },
+      accounts: { april: { botLoopProtection: { maxEventsPerWindow: 3 } } },
+    };
+    const resolved = resolveAccount(cfg, "april");
+    expect(resolved.config.botLoopProtection).toEqual({ maxEventsPerWindow: 3, ...timing });
+  });
+
+  it.each([
+    { serviceAccount: { source: "env", provider: "test", id: "default-sa" } },
+    { dangerouslyAllowNameMatching: true },
+  ] as const)("does not inherit sensitive default-account settings: %j", (defaults) => {
+    const cfg: GoogleChatConfig = {
+      accounts: {
+        default: { ...audienceConfig, ...defaults },
+        andy: { serviceAccountFile: "/tmp/andy-sa.json" },
       },
-      "april",
-    );
-    expect(resolved.config.botLoopProtection).toEqual({
-      maxEventsPerWindow: 3,
-      windowSeconds: 120,
-      cooldownSeconds: 240,
-    });
-  });
-
-  it("does not inherit default-account credentials into named accounts", () => {
-    const resolved = resolveNamedAccount({
-      serviceAccount: { source: "env", provider: "test", id: "default-sa" },
-    });
-    expect(resolved.credentialSource).toBe("file");
-    expect(resolved.credentialsFile).toBe("/tmp/andy-sa.json");
-    expect(resolved.config.audienceType).toBe("app-url");
-  });
-
-  it("does not inherit dangerous name matching from accounts.default", () => {
-    const resolved = resolveNamedAccount({ dangerouslyAllowNameMatching: true });
+    };
+    const resolved = resolveAccount(cfg, "andy");
     expect(resolved.config.dangerouslyAllowNameMatching).toBeUndefined();
-    expect(resolved.config.audienceType).toBe("app-url");
+    expect(resolved).toMatchObject({
+      credentialSource: "file",
+      credentialsFile: "/tmp/andy-sa.json",
+      config: { audienceType: "app-url" },
+    });
   });
 });
