@@ -57,6 +57,9 @@ export function readSessionActorRewriteFacts(
   }
   const row = entryId ? state.transcript.identities.get(entryId) : undefined;
   const active = row && state.transcript.active.get(row.seq);
+  if (entryId && !state.transcript.complete && (!row || !active)) {
+    return undefined;
+  }
   return {
     entry: {
       sessionId: current.entry.sessionId,

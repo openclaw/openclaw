@@ -293,14 +293,26 @@ remain with the history owner. See
 [`session-actor.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor.worker.ts)
 and [`session-actor-replica.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor-replica.ts).
 
-Durable actor residency retains narrow navigation and exact byte accounting,
-not settled append bodies. Full bodies stay in SQLite and committed append
+Durable actor residency retains only tree links (`type`, `id`, `parentId`,
+`targetId`, `appendParentId`, and `appendMode`) and exact byte accounting.
+Cold hydration projects those fields in SQL; model-context navigation belongs
+to the history reader. Full bodies stay in SQLite and committed append
 receipts; retries read canonical storage when their payload is no longer in the
 current transaction. Actor append slow-hold warnings include `context.payloadBytes`,
 the UTF-8 size of the primary prepared event or message payload (summed message
 bodies for turn appends). This count excludes optional initialization headers.
 The reported `phases.sqlMs` includes synchronous JavaScript work inside the
 transaction; it is not a sum of SQLite statement timings.
+
+Bounded model-context reads retain only the selectable request suffix and current
+model, thinking, and context-boundary markers. Discarded requests contribute exact
+byte totals and compact per-page membership facts. Ordinary appends advance these
+facts; existing rewrite receipts refresh the affected page's costs. Tool-result
+ownership uses the canonical pairing rules with bounded unresolved-call evidence.
+Branch changes, old anchors, reset or compaction, prompt-series restarts, and ambiguous
+displaced results rebuild canonical navigation once and reseed the compact state. Unlimited context
+reads scan transiently and retain no full-history navigation cache. Payload-size
+projections remain in SQL, and the bounded reader's limits and output are unchanged.
 
 Cold input preparation uses the turn planner instead of fetching a full actor
 replica first. The planner carries its recovery expectation into the input
@@ -1803,12 +1815,17 @@ FIFO, refusal, timeout, stored data, and update behavior are unchanged.
 A cold actor read hydrates its entry, participants, membership, pending-input
 custody, and transcript metadata in one autocommit statement. A cold phase
 command uses that same statement inside its own write transaction, without a
-preceding read request. The versioned hot state
-includes exact anchors, idempotency identities, model-context membership, and
-the entry's lifecycle, recovery, and final-delivery fields. Anchor availability
-is explicit when the display projection is unready. When canonical facts
-cannot prove model context, it remains explicitly unavailable; an empty context
-is a different result. Payload history keeps its existing reader. Hydration and
+preceding read request. Transcript navigation, identities, and active rows are
+limited to a 512-row tail window, also retained after each commit. The append
+owner carries sequence, rewrite watermark, and index-state facts independently
+of that window. Identities and retry keys not retained in a partial window use
+their indexed readers; full-tree history and branch resolution stay with the
+history reader. Partial windows never publish complete context metadata or
+claim historical absence. The versioned hot state carries the entry's lifecycle,
+recovery, and final-delivery fields, transcript watermarks, and complete
+projection facts when available. Anchor and model-context availability remain
+explicit; unavailable context differs from an empty context. Payload history
+keeps its existing reader. Hydration and
 actor reads reuse process-wide schema and integrity admission without new format
 checks or foreign-commit probes.
 

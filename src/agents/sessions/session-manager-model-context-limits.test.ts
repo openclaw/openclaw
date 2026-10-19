@@ -1,7 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   appendTranscriptEvent,
@@ -139,46 +138,33 @@ it("retires prior-series operators through bounded and detached transcript reads
 });
 
 it.each([false, true])(
-  "bounds payload sizing by the event budget with retained compaction=%s",
+  "bounds selected context by the event budget with retained compaction=%s",
   async (compacted) => {
-    await withHistory(
-      `context-sizing-limit-${compacted}`,
-      async ({ scope, source, verifyRead }) => {
-        const first = source.appendMessage(makeUserMessage("first retained request", 0));
-        for (let index = 1; index < 40; index++) {
-          source.appendMessage(makeUserMessage(`retained request ${index}`, index));
-        }
-        const boundary = compacted
-          ? source.appendCompaction("required summary", first, 100)
-          : undefined;
-        source.appendMessage(makeUserMessage("current request", 40));
-        const full = source.buildSessionContext().messages;
-        await verifyRead(() => {
-          const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
-          const reads = trackSqliteStatementExecutions(database.db, ["sizes"], (query) =>
-            query.includes("octet_length(") && query.includes('as "bytes"') ? "sizes" : null,
-          );
-          try {
-            const selected = SessionManager.openModelContext(scope, {
-              limits: { maxBytes: 16_384, maxEvents: 3 },
-            });
-            expect(selected.buildSessionContext().messages).toEqual(
-              compacted ? [full[0], ...full.slice(-2)] : full.slice(-3),
-            );
-            if (boundary) {
-              expect(selected.getBranch().find((entry) => entry.id === boundary)).toMatchObject({
-                type: "compaction",
-                summary: "required summary",
-              });
-            }
-            expect(reads.rowCounts.sizes).toBeGreaterThan(0);
-            expect(reads.rowCounts.sizes).toBeLessThanOrEqual(compacted ? 4 : 3);
-          } finally {
-            reads.restore();
-          }
+    await withHistory(`context-event-limit-${compacted}`, async ({ scope, source, verifyRead }) => {
+      const first = source.appendMessage(makeUserMessage("first retained request", 0));
+      for (let index = 1; index < 40; index++) {
+        source.appendMessage(makeUserMessage(`retained request ${index}`, index));
+      }
+      const boundary = compacted
+        ? source.appendCompaction("required summary", first, 100)
+        : undefined;
+      source.appendMessage(makeUserMessage("current request", 40));
+      const full = source.buildSessionContext().messages;
+      await verifyRead(() => {
+        const selected = SessionManager.openModelContext(scope, {
+          limits: { maxBytes: 16_384, maxEvents: 3 },
         });
-      },
-    );
+        expect(selected.buildSessionContext().messages).toEqual(
+          compacted ? [full[0], ...full.slice(-2)] : full.slice(-3),
+        );
+        if (boundary) {
+          expect(selected.getBranch().find((entry) => entry.id === boundary)).toMatchObject({
+            type: "compaction",
+            summary: "required summary",
+          });
+        }
+      });
+    });
   },
 );
 

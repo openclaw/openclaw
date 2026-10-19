@@ -10,8 +10,23 @@ import {
   selectBoundedModelRequests,
   type ContextEntry,
   type ModelContextRequest,
+  type ModelContextPrefix,
 } from "./session-model-context-window.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
+
+/** Canonical request membership is shared by cold reads and committed append deltas. */
+export function collectSessionModelContextRequests(entries: ContextEntry[]): ModelContextRequest[] {
+  const requests: ModelContextRequest[] = [];
+  for (const { entry, context } of iterateSessionContextEntries(entries)) {
+    const omitCheckpoint =
+      context !== "current" &&
+      entry.type === "message" &&
+      entry.message.role === "assistant" &&
+      isCompactionReplayCheckpoint(entry.message.providerReplay);
+    requests.push({ entry, omitCheckpoint });
+  }
+  return requests;
+}
 
 /** Select before reading payloads; durable and memory backends share context projection. */
 export function projectSessionModelContext(
@@ -21,7 +36,9 @@ export function projectSessionModelContext(
     readModelEntries,
     readModelEntrySizes,
     version,
+    prepared,
   }: {
+    prepared?: { requests: ModelContextRequest[]; prefix: ModelContextPrefix };
     header: TranscriptEvent;
     entries: ContextEntry[];
     version: SessionTranscriptContextVersion;
@@ -32,17 +49,9 @@ export function projectSessionModelContext(
   },
   limits?: SessionModelContextLimits,
 ): SessionTranscriptModelContext {
-  const requests: ModelContextRequest[] = [];
-  for (const { entry, context } of iterateSessionContextEntries(entries)) {
-    const omitCheckpoint =
-      context !== "current" &&
-      entry.type === "message" &&
-      entry.message.role === "assistant" &&
-      isCompactionReplayCheckpoint(entry.message.providerReplay);
-    requests.push({ entry, omitCheckpoint });
-  }
+  const requests = prepared?.requests ?? collectSessionModelContextRequests(entries);
   const selected = limits
-    ? selectBoundedModelRequests(requests, readModelEntrySizes, limits)
+    ? selectBoundedModelRequests(requests, readModelEntrySizes, limits, prepared?.prefix)
     : requests;
   const payloads = readModelEntries(selected);
   let contextEntries: SessionTreeEntry[];
@@ -59,7 +68,7 @@ export function projectSessionModelContext(
         return [payload];
       }
       if (entry === thinking || (entry === model && entry.type === "model_change")) {
-        return [entry];
+        return [{ ...entry }];
       }
       if (entry === model && entry.type === "message" && entry.message.role === "assistant") {
         return [
@@ -95,7 +104,7 @@ export function projectSessionModelContext(
       return entry;
     });
   } else {
-    contextEntries = entries.map((entry) => payloads.get(entry) ?? entry);
+    contextEntries = entries.map((entry) => payloads.get(entry) ?? { ...entry });
   }
   return {
     events: [...(header ? [header] : []), ...contextEntries],

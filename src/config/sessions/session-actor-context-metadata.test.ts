@@ -209,7 +209,7 @@ it.each(["reset", "compaction", "leaf"] as const)(
   },
 );
 
-it("keeps exact accounting and bounded selection when eligible metadata exceeds its capacity", async () => {
+it("reads exact accounting and bounded history outside the actor's resident window", async () => {
   await withActor((f) => {
     const events = Array.from({ length: 4097 }, (_, index) => ({
       type: "message",
@@ -225,15 +225,26 @@ it("keeps exact accounting and bounded selection when eligible metadata exceeds 
     const context = reader(f);
     try {
       context.install();
-      expect(context.receipt().facts.contextMetadata).toBeUndefined();
-      expect(context.accounting()).toMatchObject({
+      expect(
+        readCurrentProjectionSnapshot(f.database, f.scope, (projection) =>
+          readSessionTranscriptAccountingFromProjection(projection, {
+            includeByteSize: true,
+            includeUsage: false,
+          }),
+        ),
+      ).toMatchObject({
         kind: "value",
         value: {
           eventCount: events.length,
           byteSize: events.reduce((total, event) => total + storedBytes(event), 0),
         },
       });
-      expect(context.bounded()).toMatchObject({ events: events.slice(-100), truncated: true });
+      expect(
+        readSessionTranscriptBoundedActiveContextCore(f.scope, {
+          maxBytes: 1024 * 1024,
+          maxEvents: 100,
+        }),
+      ).toMatchObject({ events: events.slice(-100), truncated: true });
     } finally {
       context.replica.close();
     }
