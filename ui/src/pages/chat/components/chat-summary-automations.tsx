@@ -141,7 +141,7 @@ export function createSessionAutomationInventory(
           if (!source) {
             return undefined;
           }
-          const lifecycle = createGatewayConnectionLifecycle(source.snapshot);
+          const connection = createGatewayConnectionLifecycle(source.snapshot);
           let identity = JSON.stringify(resolveUiConversationIdentity(source.snapshot, key));
           // Reject obsolete event delivery before queued binding cleanup runs.
           const current = () => props.gateway === source && props.sessionKey === key;
@@ -151,7 +151,7 @@ export function createSessionAutomationInventory(
               return;
             }
             const nextIdentity = JSON.stringify(resolveUiConversationIdentity(snapshot, key));
-            const changed = lifecycle.transition(snapshot);
+            const changed = connection.transition(snapshot);
             const nextReadAccess = canPresentGatewayMethod(snapshot, "cron.list", "operator.read", {
               requireAdvertisement: false,
             });
@@ -173,7 +173,7 @@ export function createSessionAutomationInventory(
           return () => {
             unsubscribe();
             unsubscribeEvents();
-            lifecycle.dispose();
+            connection.dispose();
             retireCronJobsRequest(cron);
           };
         });
