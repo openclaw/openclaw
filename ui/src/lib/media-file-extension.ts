@@ -5,13 +5,6 @@ const SAME_ORIGIN_MEDIA_ROUTE_MARKERS = [
   "/media/inbound/",
 ];
 
-function isSameOriginMediaRoute(value: string): boolean {
-  return (
-    value.startsWith("/") &&
-    SAME_ORIGIN_MEDIA_ROUTE_MARKERS.some((marker) => value.includes(marker))
-  );
-}
-
 /** Returns the final filename after decoding one URL path-segment layer. */
 function getMediaFileName(value: string): string | undefined {
   const trimmed = value.trim();
@@ -19,7 +12,9 @@ function getMediaFileName(value: string): string | undefined {
     return undefined;
   }
   const url =
-    /^https?:\/\//i.test(trimmed) || isSameOriginMediaRoute(trimmed)
+    /^https?:\/\//i.test(trimmed) ||
+    (trimmed.startsWith("/") &&
+      SAME_ORIGIN_MEDIA_ROUTE_MARKERS.some((marker) => trimmed.includes(marker)))
       ? URL.parse(trimmed, "https://openclaw.invalid")
       : null;
   if (!url) {

@@ -25,7 +25,6 @@ function createViewContext() {
     settings: loadSettings(),
     mode: "system",
     resolvedMode: "light",
-    serverSelection: null,
     appliedPalette: null,
     recordServerSelection: () => undefined,
     setMode: () => undefined,

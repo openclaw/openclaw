@@ -577,8 +577,8 @@ export function createSessionCapability(
     if (eventObservation.scope && !connection.isCurrent(eventObservation.scope)) {
       return;
     }
-    const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
-    const status = reconciled.status ?? eventInfo?.status;
+    const hasActiveRun = eventInfo?.hasActiveRun;
+    const status = eventInfo?.status;
     const runEnded =
       hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
     const isTerminalMessage = event.event === "session.message" && runEnded;

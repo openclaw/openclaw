@@ -111,24 +111,6 @@ export function postNativeExternalLink(url: string): boolean {
   }
 }
 
-function openBrowserPanel(url: URL): void {
-  window.dispatchEvent(
-    new CustomEvent<BrowserPanelToggleDetail>(BROWSER_PANEL_TOGGLE_EVENT, {
-      detail: { open: true, url: url.href, ...(hasNativeBrowserBridge() ? { native: true } : {}) },
-    }),
-  );
-}
-
-function shouldHandleControlUiBrowserActivation(event: MouseEvent): boolean {
-  return (
-    !event.defaultPrevented &&
-    !event.shiftKey &&
-    !event.altKey &&
-    ((event.type === "click" && event.button === 0) ||
-      (event.type === "auxclick" && event.button === 1))
-  );
-}
-
 export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): NativeLinkRouting {
   if (options.signal?.aborted || typeof window === "undefined" || typeof document === "undefined") {
     return { dispose() {} };
@@ -172,7 +154,15 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
         postNativeLink(postMessage, url);
       }
     } else {
-      openBrowserPanel(url);
+      window.dispatchEvent(
+        new CustomEvent<BrowserPanelToggleDetail>(BROWSER_PANEL_TOGGLE_EVENT, {
+          detail: {
+            open: true,
+            url: url.href,
+            ...(hasNativeBrowserBridge() ? { native: true } : {}),
+          },
+        }),
+      );
     }
   };
   const showMenu = async (event: MouseEvent, anchor: HTMLAnchorElement, url: URL) => {
@@ -216,7 +206,11 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
       webLink &&
       (hasNativeBrowserBridge()
         ? shouldHandleNavigationClick(event)
-        : shouldHandleControlUiBrowserActivation(event)) &&
+        : !event.defaultPrevented &&
+          !event.shiftKey &&
+          !event.altKey &&
+          ((event.type === "click" && event.button === 0) ||
+            (event.type === "auxclick" && event.button === 1))) &&
       (hasNativeBrowserBridge() || options.shouldOpenInControlUiBrowser?.())
     ) {
       openInline(webLink.url);

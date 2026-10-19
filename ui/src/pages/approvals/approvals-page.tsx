@@ -49,9 +49,6 @@ function grantStateLabel(grant: ExecApprovalStandingGrant, nowMs: number): strin
   return t("standingGrants.stateUntilRevoked");
 }
 
-function grantIsActive(grant: ExecApprovalStandingGrant, nowMs: number): boolean {
-  return grant.revokedAtMs === null && (grant.expiresAtMs === null || grant.expiresAtMs > nowMs);
-}
 const APPROVAL_HISTORY_REQUIRED_SCOPE = "operator.approvals";
 const APPROVALS_DOCS_URL = "https://docs.openclaw.ai/tools/exec-approvals";
 
@@ -413,7 +410,8 @@ export function ApprovalsPage() {
           {grantStateLabel(props.grant, Date.now())}
         </td>
         <td>
-          {grantIsActive(props.grant, Date.now()) ? (
+          {props.grant.revokedAtMs === null &&
+          (props.grant.expiresAtMs === null || props.grant.expiresAtMs > Date.now()) ? (
             <button
               class="btn btn--sm"
               aria-label={`${revokeLabel()}: ${props.grant.cronJobName ?? props.grant.cronJobId} — ${props.grant.command}`}

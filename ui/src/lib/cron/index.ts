@@ -184,10 +184,6 @@ function requireCronConfigRevision(revision: string | null | undefined): string 
   throw new Error("This automation is missing its configuration revision. Refresh and try again.");
 }
 
-function replaceLocalCronJob(state: CronState, updatedJob: CronJob) {
-  state.cronJobs = state.cronJobs.map((job) => (job.id === updatedJob.id ? updatedJob : job));
-}
-
 export function updateCronJobsFilter(
   state: CronState,
   patch: Partial<
@@ -466,7 +462,9 @@ async function updateCronJobDefinition(
     if (!isCurrent()) {
       return false;
     }
-    replaceLocalCronJob(state, updatedJob);
+    state.cronJobs = state.cronJobs.map((entry) =>
+      entry.id === updatedJob.id ? updatedJob : entry,
+    );
     if (ownsEditor()) {
       if (operation === "toggle") {
         setCronEditState(state, updatedJob, { ...form, enabled: updatedJob.enabled });

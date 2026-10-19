@@ -454,10 +454,6 @@ function Placeholder(props: { loading: boolean | undefined }) {
   );
 }
 
-function formatUsedPercent(fraction: number) {
-  return `${Math.round(Math.min(Math.max(fraction, 0), 1) * 100)}%`;
-}
-
 function resourceStat(
   kind: "memory" | "disk",
   totalBytes: number | undefined,
@@ -470,7 +466,7 @@ function resourceStat(
       : (totalBytes - freeBytes) / totalBytes;
   return {
     label: t(`quickSettings.system.${kind}`),
-    value: used == null ? "—" : formatUsedPercent(used),
+    value: used == null ? "—" : `${Math.round(Math.min(Math.max(used, 0), 1) * 100)}%`,
     unit: used == null ? undefined : t("quickSettings.system.used"),
     detail: t("quickSettings.system.freeOf", {
       free: formatBytes(freeBytes),

@@ -133,7 +133,7 @@ describe("ConfigPage navigation", () => {
         ensureSchemaLoaded: async () => undefined,
         subscribe,
       },
-      theme: { branding: resolveThemeBranding(undefined), serverSelection: null, subscribe },
+      theme: { branding: resolveThemeBranding(undefined), subscribe },
       overlays: { snapshot: {}, subscribe },
       webPush: { snapshot: undefined, subscribe },
     } as unknown as ApplicationContext;
@@ -576,7 +576,7 @@ describe("ConfigPage model catalog lifecycle", () => {
       agents: { state: { agentsList: null }, subscribe },
       agentIdentity: { ensure: async () => undefined, subscribe },
       runtimeConfig: { state: { configSnapshot: {}, configSchema: {} }, subscribe },
-      theme: { branding: resolveThemeBranding(undefined), serverSelection: null, subscribe },
+      theme: { branding: resolveThemeBranding(undefined), subscribe },
       overlays: { snapshot: {}, subscribe },
       config: { current: { assistantIdentity: { name: "OpenClaw" } }, subscribe },
       webPush: { subscribe },
