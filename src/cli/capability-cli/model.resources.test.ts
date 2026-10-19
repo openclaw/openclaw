@@ -1,13 +1,18 @@
 import fs from "node:fs";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { getAiTransportHost } from "@openclaw/ai";
 import { Command } from "commander";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared-model-runtime.test-support.js";
 import { ModelRegistry } from "../../agents/sessions/model-registry.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  completionChunk,
+  completionConfig,
+  completionModelDefinition,
+  startCompletionServer,
+} from "../../agents/simple-completion.test-support.js";
 import { resetPluginLoaderTestStateForTest } from "../../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import {
@@ -48,16 +53,9 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
       if (!response.headersSent) {
         response.writeHead(200, { "content-type": "text/event-stream" });
       }
-      response.end(
-        `data: ${JSON.stringify({
-          id: "cli-response",
-          object: "chat.completion.chunk",
-          model: "cli-model",
-          choices: [{ index: 0, delta: { content: `reply-${index}` }, finish_reason: "stop" }],
-        })}\n\ndata: [DONE]\n\n`,
-      );
+      response.end(completionChunk(`reply-${index}`, "cli-model"));
     };
-    const server = createServer((request, response) => {
+    const server = await startCompletionServer((request, response) => {
       request.resume();
       const index = requests.push(response) - 1;
       arrivals[index]?.resolve();
@@ -65,42 +63,24 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
         finish(response, index);
       }
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
     try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("CLI fixture has no TCP port");
-      }
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { workspace: root, model: `${fixture.providerId}/cli-model` } },
-        models: {
-          providers: {
-            [fixture.providerId]: {
-              api: "openai-completions",
-              apiKey: "synthetic-cli-key",
-              baseUrl: `http://127.0.0.1:${address.port}/v1`,
-              models: [
-                {
-                  id: "cli-model",
-                  name: "CLI model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 1024,
-                },
-              ],
-            },
+      const cfg = completionConfig(
+        fixture.providerId,
+        {
+          api: "openai-completions",
+          apiKey: "synthetic-cli-key",
+          baseUrl: server.baseUrl,
+          models: [completionModelDefinition({ id: "cli-model", name: "CLI model" })],
+        },
+        {
+          agents: { defaults: { workspace: root, model: `${fixture.providerId}/cli-model` } },
+          plugins: {
+            load: { paths: [fixture.rootDir] },
+            slots: { memory: "none" },
+            entries: { [fixture.pluginId]: { enabled: true } },
           },
         },
-        plugins: {
-          load: { paths: [fixture.rootDir] },
-          slots: { memory: "none" },
-          entries: { [fixture.pluginId]: { enabled: true } },
-        },
-      };
+      );
       await withEnvAsync(
         {
           ...createColdPluginHermeticEnv(root, { bundledPluginsDir: roots.makeTempDir() }),
@@ -116,8 +96,7 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
             throw new Error("CLI failed");
           });
           const finishCancel = createDeferred();
-          const callbackStarted = createDeferred();
-          const cancelStarted = createDeferred();
+          const drainStarted = createDeferred();
           const parent = new AsyncWorkScope();
           const pending: Promise<unknown>[] = [];
           let drained = false;
@@ -141,7 +120,7 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
                       if (mode === "cancel-drain") {
                         throw new Error("fixture response rejected");
                       }
-                      callbackStarted.resolve();
+                      drainStarted.resolve();
                       await finishCancel.promise;
                     }
                   },
@@ -153,35 +132,28 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
             let wrapped = false;
             vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
               const response = await fetch(...args);
-              if (wrapped || !response.url.startsWith(`http://127.0.0.1:${address.port}/`)) {
+              if (wrapped || !response.url.startsWith(`${server.origin}/`)) {
                 return response;
               }
               wrapped = true;
-              const reader = response.body?.getReader();
-              if (!reader) {
+              const body = response.body;
+              if (!body) {
                 throw new Error("Fixture response has no body");
               }
               return new Response(
                 new ReadableStream<Uint8Array>({
-                  async pull(controller) {
-                    const { value, done } = await reader.read();
-                    if (done) {
-                      controller.close();
-                    } else {
-                      controller.enqueue(value);
-                    }
-                  },
+                  // The rejecting response hook cancels before consuming the body.
                   async cancel(reason) {
-                    cancelStarted.resolve();
+                    drainStarted.resolve();
                     await finishCancel.promise;
-                    await reader.cancel(reason);
+                    await body.cancel(reason);
                   },
                 }),
                 { status: response.status, headers: response.headers },
               );
             });
           }
-          const start = (managed = false) => {
+          const start = async (managed = false) => {
             const command = new Command();
             registerModelCapabilityCommands(command);
             const execute = async () => {
@@ -190,19 +162,15 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
               });
             };
             const run = managed ? parent.track(execute) : execute();
-            pending.push(run);
-            return run;
+            await awaitGateBeforeSettlement(
+              arrivals[pending.push(run) - 1]!.promise,
+              run,
+              "CLI settled before provider request",
+            );
+            return { run };
           };
-          const arrive = (index: number, run: Promise<void>) =>
-            Promise.race([
-              arrivals[index]!.promise,
-              run.then(() => {
-                throw new Error("CLI settled before provider request");
-              }),
-            ]);
           try {
-            const first = start(true);
-            await arrive(0, first);
+            const { run: first } = await start(true);
             const firstBuilds = builds.mock.calls.length;
             expect(firstBuilds).toBeGreaterThan(0);
             if (mode === "provider-error") {
@@ -214,19 +182,18 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
               expect(errors.mock.calls.flat().join(" ")).toContain("fixture provider rejection");
             } else if (mode === "callback-drain") {
               finish(requests[0]!, 0);
-              await Promise.race([callbackStarted.promise, first]);
+              await Promise.race([drainStarted.promise, first]);
             } else if (mode === "cancel-drain") {
               // Keep the accepted body open so prefetch cannot settle it before cancellation.
               requests[0]!.writeHead(200, { "content-type": "text/event-stream" });
               requests[0]!.flushHeaders();
-              await Promise.race([cancelStarted.promise, first]);
+              await Promise.race([drainStarted.promise, first]);
               await expect(first).rejects.toThrow("CLI failed");
               drainage = parent.drain().then(() => {
                 drained = true;
               });
             }
-            const second = start();
-            await arrive(1, second);
+            const { run: second } = await start();
             expect
               .soft(builds.mock.calls.length)
               .toBe(firstBuilds + (mode === "provider-error" ? 1 : 0));
@@ -241,12 +208,10 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
             }
             await second;
             await drainage;
-            expect(
-              output.mock.calls.some(([value]) => JSON.stringify(value).includes("reply-1")),
-            ).toBe(true);
+            const emitted = output.mock.calls.map(([value]) => value);
+            expect(JSON.stringify(emitted)).toContain("reply-1");
             const buildsBeforeThird = builds.mock.calls.length;
-            const third = start();
-            await arrive(2, third);
+            const { run: third } = await start();
             expect(builds.mock.calls.length).toBe(buildsBeforeThird + 1);
             finish(requests[2]!, 2);
             await third;
@@ -264,10 +229,7 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
         },
       );
     } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await server[Symbol.asyncDispose]();
       roots.cleanup();
     }
   },

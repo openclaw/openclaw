@@ -1,10 +1,10 @@
 /** Local `model run` must preserve config SecretRef provenance through snapshot activation. */
 import { join } from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
-import { updateAuthProfileStoreWithLock } from "../../agents/auth-profiles/store-runtime.js";
 import { resolveProviderConfigSecretInput } from "../../agents/model-auth-provider-config.js";
+import { completionModelDefinition } from "../../agents/simple-completion.test-support.js";
 import {
   getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot,
@@ -58,13 +58,9 @@ vi.mock("../cli-utils.js", () => ({
 
 vi.mock("../../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../runtime.js")>()),
-  defaultRuntime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-    writeJson: vi.fn(),
-    writeStdout: vi.fn(),
-  },
+  defaultRuntime: (
+    await import("../../test-utils/plugin-runtime-env.js")
+  ).createNonExitingRuntimeEnv(),
 }));
 
 vi.mock("./output.js", () => ({
@@ -88,17 +84,7 @@ function buildRawCfg(agentDir: string): OpenClawConfig {
   const provider = {
     api: "openai-completions" as const,
     baseUrl: "http://127.0.0.1:1/v1",
-    models: [
-      {
-        id: "test-model",
-        name: "Test model",
-        reasoning: false,
-        input: ["text" as const],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 8192,
-        maxTokens: 128,
-      },
-    ],
+    models: [completionModelDefinition({ id: "test-model", name: "Test model", maxTokens: 128 })],
   };
   return {
     agents: {
@@ -118,37 +104,12 @@ function buildRawCfg(agentDir: string): OpenClawConfig {
   };
 }
 
-async function seedProfiles(
-  agentDir: string,
-  profiles: AuthProfileStore["profiles"],
-): Promise<void> {
-  const seededStore = await updateAuthProfileStoreWithLock({
-    agentDir,
-    updater: (store) => {
-      Object.assign(store.profiles, profiles);
-      return true;
-    },
-  });
-  expect(seededStore).not.toBeNull();
-}
-
 function accountProfile(provider = "customacct", id = ENV_ACCOUNT_KEY) {
   return {
     type: "api_key" as const,
     provider,
     keyRef: { source: "env" as const, provider: "default", id },
   };
-}
-
-function seedStandardProfiles(agentDir: string): Promise<void> {
-  return seedProfiles(agentDir, {
-    "customcfg:decoy": {
-      type: "api_key",
-      provider: "customcfg",
-      key: "synthetic-decoy-key", // pragma: allowlist secret
-    },
-    "customacct:healthy": accountProfile(),
-  });
 }
 
 async function runLocalModelRun(model: string): Promise<void> {
@@ -165,7 +126,6 @@ async function runLocalModelRun(model: string): Promise<void> {
   }
 }
 
-/** Checks the auth captured by the faked provider-egress boundary. */
 function expectCompletionAuth(source: string, value: string) {
   expect(completeMock).toHaveBeenCalledTimes(1);
   const auth = completeMock.mock.calls.at(-1)?.[0]?.auth;
@@ -174,70 +134,72 @@ function expectCompletionAuth(source: string, value: string) {
   expect(resolveSecretSentinel(auth?.apiKey ?? "")).toBe(value);
 }
 
-describe("local model run config SecretRef provenance", () => {
-  let agentDir = "";
-  let state: OpenClawTestState;
+let agentDir = "";
+let state: OpenClawTestState;
+const seedProfiles = (profiles: AuthProfileStore["profiles"]) =>
+  state.writeAuthProfiles({ version: 1, profiles }, "ops");
 
-  beforeEach(async () => {
-    state = await createOpenClawTestState({
-      prefix: "openclaw-model-run-prov-",
-      env: {
-        [ENV_CONFIG_KEY]: CONFIG_KEY_VALUE,
-        [ENV_ACCOUNT_KEY]: ACCOUNT_KEY_VALUE,
-        [ENV_MISSING_KEY]: undefined,
-      },
-    });
-    agentDir = state.agentDir("ops");
-    hoisted.rawCfg = buildRawCfg(agentDir);
-    // Replicate production CLI boot (config-guard pins the authored raw config
-    // as the runtime source before any command runs). Without this the helper
-    // would fall back to the resolved config, exactly like a bootless process.
-    setRuntimeConfigSnapshot(structuredClone(hoisted.rawCfg), structuredClone(hoisted.rawCfg));
-    completeMock.mockClear();
-    emitMock.mockClear();
+beforeEach(async () => {
+  state = await createOpenClawTestState({
+    prefix: "openclaw-model-run-prov-",
+    env: {
+      [ENV_CONFIG_KEY]: CONFIG_KEY_VALUE,
+      [ENV_ACCOUNT_KEY]: ACCOUNT_KEY_VALUE,
+      [ENV_MISSING_KEY]: undefined,
+    },
   });
+  agentDir = state.agentDir("ops");
+  hoisted.rawCfg = buildRawCfg(agentDir);
+  // Pin the authored source as CLI boot does; resolved bytes alone lose SecretRef provenance.
+  setRuntimeConfigSnapshot(structuredClone(hoisted.rawCfg), structuredClone(hoisted.rawCfg));
+  completeMock.mockClear();
+  emitMock.mockClear();
+});
 
-  afterEach(async () => {
-    clearSecretsRuntimeSnapshotState();
-    await state.cleanup();
-  });
+afterEach(async () => {
+  clearSecretsRuntimeSnapshotState();
+  await state.cleanup();
+});
 
-  it("preserves config SecretRef provenance and sentinelizes the intended credential", async () => {
-    await seedStandardProfiles(agentDir);
-    await runLocalModelRun("customcfg/test-model");
-
-    expect(emitMock).toHaveBeenCalledTimes(1);
-    const source = getRuntimeConfigSourceSnapshot();
-    const { ref } = resolveProviderConfigSecretInput(source ?? undefined, "customcfg");
-    expect(ref).toMatchObject({ source: "env", id: ENV_CONFIG_KEY });
-    expectCompletionAuth("models.providers.customcfg", CONFIG_KEY_VALUE);
-  });
-
-  it("materializes a persisted account SecretRef for the selected provider", async () => {
-    await seedStandardProfiles(agentDir);
-    await runLocalModelRun("customacct/test-model");
-
-    expectCompletionAuth("profile:customacct:healthy", ACCOUNT_KEY_VALUE);
-  });
-
-  it("keeps a healthy selected provider usable while an unrelated sibling is unavailable", async () => {
-    await seedProfiles(agentDir, {
-      "otherprovider:cold": accountProfile("otherprovider", ENV_MISSING_KEY),
+it.each(["config", "account", "unavailable sibling"] as const)(
+  "resolves %s credentials",
+  async (scenario) => {
+    const fromConfig = scenario === "config";
+    await seedProfiles({
       "customacct:healthy": accountProfile(),
+      ...(scenario === "unavailable sibling"
+        ? {
+            "otherprovider:cold": accountProfile("otherprovider", ENV_MISSING_KEY),
+          }
+        : {
+            "customcfg:decoy": {
+              type: "api_key",
+              provider: "customcfg",
+              key: "synthetic-decoy-key", // pragma: allowlist secret
+            },
+          }),
     });
-    await runLocalModelRun("customacct/test-model");
-
-    expectCompletionAuth("profile:customacct:healthy", ACCOUNT_KEY_VALUE);
-  });
-
-  it("fails closed when the selected account SecretRef is unavailable", async () => {
-    await seedProfiles(agentDir, {
-      "customacct:healthy": accountProfile("customacct", ENV_MISSING_KEY),
-    });
-
-    await expect(runLocalModelRun("customacct/test-model")).rejects.toThrow(
-      /Auth lookup failed for provider "customacct": .*customacct:healthy.*is configured but unavailable \(secret reference was not found\)/,
+    await runLocalModelRun(`${fromConfig ? "customcfg" : "customacct"}/test-model`);
+    if (fromConfig) {
+      expect(emitMock).toHaveBeenCalledTimes(1);
+      const source = getRuntimeConfigSourceSnapshot() ?? undefined;
+      const { ref } = resolveProviderConfigSecretInput(source, "customcfg");
+      expect(ref).toMatchObject({ source: "env", id: ENV_CONFIG_KEY });
+    }
+    expectCompletionAuth(
+      fromConfig ? "models.providers.customcfg" : "profile:customacct:healthy",
+      fromConfig ? CONFIG_KEY_VALUE : ACCOUNT_KEY_VALUE,
     );
-    expect(completeMock).not.toHaveBeenCalled();
+  },
+);
+
+it("fails closed when the selected account SecretRef is unavailable", async () => {
+  await seedProfiles({
+    "customacct:healthy": accountProfile("customacct", ENV_MISSING_KEY),
   });
+
+  await expect(runLocalModelRun("customacct/test-model")).rejects.toThrow(
+    /Auth lookup failed for provider "customacct": .*customacct:healthy.*is configured but unavailable \(secret reference was not found\)/,
+  );
+  expect(completeMock).not.toHaveBeenCalled();
 });
