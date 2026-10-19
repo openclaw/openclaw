@@ -45,7 +45,12 @@ function createManifestRegistry(
 const manifestRegistry = createManifestRegistry(acpxManifest);
 
 describe("auto-enabled plugin startup", () => {
-  it.each<{ name: string; acp?: OpenClawConfig["acp"]; expected: string[] }>([
+  it.each<{
+    name: string;
+    acp?: OpenClawConfig["acp"];
+    plugins?: OpenClawConfig["plugins"];
+    expected: string[];
+  }>([
     { name: "no ACP key", expected: ["acpx"] },
     { name: "explicitly enabled", acp: { enabled: true }, expected: ["acpx"] },
     {
@@ -61,8 +66,32 @@ describe("auto-enabled plugin startup", () => {
       expected: ["acpx"],
     },
     { name: "explicitly disabled", acp: { enabled: false }, expected: ["acpx"] },
-  ])("plans the expected plugin with $name", ({ acp, expected }) => {
-    const activationSourceConfig: OpenClawConfig = acp ? { acp } : {};
+    {
+      name: "ACP enabled but acpx excluded from the allowlist",
+      acp: { enabled: true },
+      plugins: { allow: ["other"] },
+      expected: [],
+    },
+    {
+      name: "ACP enabled and acpx included in the allowlist",
+      acp: { enabled: true },
+      plugins: { allow: ["other", "acpx"] },
+      expected: ["acpx"],
+    },
+    {
+      name: "ACP enabled but acpx denied",
+      acp: { enabled: true },
+      plugins: { deny: ["acpx"] },
+      expected: [],
+    },
+    {
+      name: "ACP enabled but acpx explicitly disabled",
+      acp: { enabled: true },
+      plugins: { entries: { acpx: { enabled: false } } },
+      expected: [],
+    },
+  ])("plans the expected plugin with $name", ({ acp, plugins, expected }) => {
+    const activationSourceConfig: OpenClawConfig = { ...(acp ? { acp } : {}), plugins };
     const { config } = materializePluginAutoEnableCandidates({
       config: activationSourceConfig,
       candidates:
