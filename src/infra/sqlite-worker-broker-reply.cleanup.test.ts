@@ -179,10 +179,10 @@ afterEach(() => {
 
 describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () => {
   it("does not canonicalize an ordinary backend error with a public outcome code", () => {
-    const { job, slot } = jobWithCleanup();
+    const { job } = jobWithCleanup();
     const finish = vi.fn();
     receiveSqliteWorkerReply(
-      { ...slot, worker: { postMessage: effects.forbidden } },
+      { current: job, actors: new Set(), worker: { postMessage: effects.forbidden } },
       {
         id: job.request.id,
         ok: false,
