@@ -4,6 +4,8 @@ import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { MemoryPluginStatus } from "../status/memory-plugin.js";
 import type { StatusSummary } from "../status/summary.js";
+import type { HealthSummary } from "./health.js";
+import { healthSummary } from "./health.test-fixtures.js";
 import { buildStatusOverviewSurfaceRows } from "./status-all/format.js";
 import type { buildStatusCommandOverviewRows } from "./status-overview-rows.ts";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
@@ -97,6 +99,24 @@ export function getStatusOverviewRowValue(
   }).find((row) => row.Item === item)?.Value;
 }
 
+export const baseStatusSession = {
+  key: "session-key",
+  kind: "direct" as const,
+  updatedAt: 1,
+  age: 5_000,
+  model: "gpt-5.5",
+  configuredModel: "openai/gpt-5.5",
+  selectedModel: "openai/gpt-5.5",
+  modelSelectionReason: null,
+  runtime: "OpenClaw Default",
+  totalTokens: 12_000,
+  totalTokensFresh: true,
+  remainingTokens: 4_000,
+  percentUsed: 75,
+  contextTokens: 16_000,
+  flags: [],
+};
+
 const baseStatusSummary = {
   heartbeat: {
     defaultAgentId: "main",
@@ -108,25 +128,7 @@ const baseStatusSummary = {
     count: 2,
     paths: ["store.json"],
     defaults: { model: "gpt-5.5", contextTokens: 12_000 },
-    recent: [
-      {
-        key: "session-key",
-        kind: "direct",
-        updatedAt: 1,
-        age: 5_000,
-        model: "gpt-5.5",
-        configuredModel: "openai/gpt-5.5",
-        selectedModel: "openai/gpt-5.5",
-        modelSelectionReason: null,
-        runtime: "OpenClaw Default",
-        totalTokens: 12_000,
-        totalTokensFresh: true,
-        remainingTokens: 4_000,
-        percentUsed: 75,
-        contextTokens: 16_000,
-        flags: [],
-      },
-    ],
+    recent: [baseStatusSession],
     byAgent: [],
   },
 } as unknown as StatusSummary;
@@ -198,23 +200,17 @@ function createStatusLastHeartbeat(): HeartbeatEventPayload {
   };
 }
 
-function createStatusHealth() {
-  return {
-    ok: true as const,
-    ts: Date.now(),
+export function createStatusHealth(overrides: Partial<HealthSummary> = {}): HealthSummary {
+  return healthSummary({
     durationMs: 42,
-    channels: {},
-    channelOrder: [],
-    channelLabels: {},
-    heartbeatSeconds: 60,
-    defaultAgentId: "main",
     agents: [],
     sessions: {
       path: "store.json",
       count: 2,
       recent: [{ key: "session-key", updatedAt: 1, age: 5_000 }],
     },
-  };
+    ...overrides,
+  });
 }
 
 function createStatusCommandFields() {

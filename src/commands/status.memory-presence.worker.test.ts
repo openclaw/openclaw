@@ -4,13 +4,13 @@ import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { buildMemoryIndexStrictSchema } from "../../packages/memory-host-sdk/src/host/memory-schema-base.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OutputRuntimeEnv } from "../runtime.js";
 import {
   applyStatusScanDefaults,
   createStatusMemorySearchManager,
   createStatusScanSharedMocks,
   loadStatusScanModuleForTest,
 } from "./status.scan.test-helpers.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -33,13 +33,7 @@ const mocks = {
   resolveMemorySearchConfig: vi.fn(),
 };
 const writeJson = vi.fn<(value: unknown, space?: number) => void>();
-const runtime: OutputRuntimeEnv = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-  writeStdout: vi.fn(),
-  writeJson,
-};
+const runtime = { ...createTestRuntime(), writeStdout: vi.fn(), writeJson };
 let statusJsonCommand: typeof import("./status-json.js").statusJsonCommand;
 let sqliteOwner: typeof import("../infra/node-sqlite.js");
 let poolRun: Awaited<ReturnType<typeof observeWorkerPools>>;
@@ -152,31 +146,26 @@ it.each(["populated", "empty", "unrelated", "missing", "unavailable"] as const)(
     const databasePath = resolveDefaultMemoryDatabasePath("main");
     if (kind !== "missing") {
       fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-      const database = new DatabaseSync(databasePath);
-      try {
+      using database = new DatabaseSync(databasePath);
+      database.exec(
+        kind === "unrelated"
+          ? "CREATE TABLE unrelated_feature (id INTEGER PRIMARY KEY) STRICT"
+          : buildMemoryIndexStrictSchema({
+              embeddingCacheTable: "memory_embedding_cache",
+              includeEmbeddingCache: false,
+            }),
+      );
+      if (kind === "populated" || kind === "unavailable") {
         database.exec(
-          kind === "unrelated"
-            ? "CREATE TABLE unrelated_feature (id INTEGER PRIMARY KEY) STRICT"
-            : buildMemoryIndexStrictSchema({
-                embeddingCacheTable: "memory_embedding_cache",
-                includeEmbeddingCache: false,
-              }),
+          "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES ('MEMORY.md', 'memory', 'synthetic', 1, 10)",
         );
-        if (kind === "populated" || kind === "unavailable") {
-          database.exec(
-            "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES ('MEMORY.md', 'memory', 'synthetic', 1, 10)",
-          );
-        }
-      } finally {
-        database.close();
       }
     }
     const before = kind === "missing" ? undefined : fs.readFileSync(databasePath);
     mocks.resolveMemorySearchConfig.mockReturnValue({ store: { databasePath } });
-    const observer = poolRun;
     if (kind === "unavailable") {
       // Exercise dispatch rejection without creating a failed native worker.
-      observer.rejectNextInspection(new Error("Synthetic inspection unavailable"));
+      poolRun.rejectNextInspection(new Error("Synthetic inspection unavailable"));
     }
     const nativeCalls = [
       vi.spyOn(sqliteOwner, "openNodeSqliteDatabase"),
@@ -191,16 +180,16 @@ it.each(["populated", "empty", "unrelated", "missing", "unavailable"] as const)(
       for (let attempt = 0; attempt < (kind === "populated" ? 4 : 1); attempt++) {
         writeJson.mockClear();
         mocks.getMemorySearchManager.mockClear();
-        observer.run.mockClear();
+        poolRun.run.mockClear();
         for (const call of nativeCalls) {
           call.mockClear();
         }
         await statusJsonCommand({ all: true }, runtime);
         if (kind === "missing") {
-          expect(observer.run).not.toHaveBeenCalled();
+          expect(poolRun.run).not.toHaveBeenCalled();
         } else {
-          expect(observer.run).toHaveBeenCalled();
-          expect(observer.pools.size).toBeGreaterThan(0);
+          expect(poolRun.run).toHaveBeenCalled();
+          expect(poolRun.pools.size).toBeGreaterThan(0);
         }
         expect(writeJson).toHaveBeenCalledOnce();
         expect(writeJson).toHaveBeenCalledWith(

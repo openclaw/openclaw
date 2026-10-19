@@ -66,12 +66,9 @@ beforeEach(() => {
     url: "ws://127.0.0.1:18789",
     connectLatencyMs: 1,
     error: null,
-    close: null,
     auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
     status: null,
-    health: null,
     presence: [],
-    configSnapshot: null,
   });
 });
 
@@ -128,14 +125,9 @@ it.each([
                 },
               }
             : {}),
-          heartbeat: { defaultAgentId: "alpha", agents: [] },
           channelSummary: withChannelSummary ? ["Telegram: configured"] : [],
-          queuedSystemEvents: [],
           sessions: {
-            paths: [],
             count: 7,
-            defaults: { model: null, contextTokens: null },
-            recent: [],
             byAgent: [
               { agentId: "alpha", path: "[redacted]", count: 3, recent: [] },
               { agentId: "beta", path: "[redacted]", count: 4, recent: [] },
@@ -161,11 +153,13 @@ it.each([
         expect(mocks.localAgents).not.toHaveBeenCalled();
         expect(mocks.localSummary).not.toHaveBeenCalled();
         expect(result.summary.sessions).toEqual(summary.sessions);
-        expect(result.agentStatus.totalSessions).toBe(7);
         expect(result.summary).not.toHaveProperty("cliProjection");
-        expect(result.agentStatus.bootstrapPendingCount).toBeNull();
-        expect(result.agentStatus.defaultId).toBeNull();
-        expect(result.agentStatus.ownership).toBe(withProjection ? "explicit" : null);
+        expect(result.agentStatus).toMatchObject({
+          totalSessions: 7,
+          bootstrapPendingCount: null,
+          defaultId: null,
+          ownership: withProjection ? "explicit" : null,
+        });
         expect(result.cfg.update?.channel).toBe(withProjection && !remote ? "beta" : undefined);
         expect(result.agentStatus.agents[0]?.name).toBe(withProjection ? "Alpha" : undefined);
         expect(

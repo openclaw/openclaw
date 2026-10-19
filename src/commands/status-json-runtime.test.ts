@@ -77,20 +77,15 @@ function createScan() {
     summary: { ok: true } as never,
     osSummary: { platform: "linux" } as never,
     memory: null,
-    memoryPlugin: { enabled: true, slot: "memory" },
     gatewayMode: "local" as const,
     gatewayConnection: {
       url: "ws://127.0.0.1:18789",
       urlSource: "config",
       message: "Gateway target: ws://127.0.0.1:18789",
     },
-    remoteUrlMissing: false,
-    gatewayReachable: true,
-    gatewayProbeAuth: { token: "tok" },
     gatewaySelf: { host: "gateway" },
     gatewayProbeAuthWarning: undefined,
     agentStatus: { agents: [{ id: "main" }], defaultId: "main" } as never,
-    secretDiagnostics: [],
     pluginCompatibility: [{ ...compatibilityWarning }],
   });
 }
