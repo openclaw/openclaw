@@ -39,6 +39,7 @@ import {
   loadSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as channelOutbound from "../plugin-sdk/channel-outbound.js";
 import * as ssrfRuntime from "../plugin-sdk/ssrf-runtime.js";
@@ -99,6 +100,24 @@ let networkCase: TransportCase | undefined;
 let rejectIngress: ((error: unknown) => void) | undefined;
 const appToken = "synthetic-x-composition-app-token";
 const userToken = "synthetic-x-composition-user-token";
+const proofModel: ModelDefinitionConfig = {
+  id: "proof-model",
+  name: "Composition model fixture",
+  reasoning: false,
+  input: ["text"],
+  contextWindow: 32000,
+  maxTokens: 2048,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+};
+function requireTool(
+  tools: Awaited<ReturnType<typeof createOpenClawCodingToolsAsync>>,
+  name: string,
+) {
+  return expectDefined(
+    tools.find((tool) => tool.name === name),
+    name,
+  );
+}
 const deniedWorkSessionReply =
   "[[x_failure]] Work session creation was denied; no public work session was created.";
 
@@ -277,17 +296,7 @@ describe("X publication production-owner composition", () => {
             api: "openai-completions",
             baseUrl: "https://model-proof.example.test/v1",
             apiKey: "synthetic-model-proof-key",
-            models: [
-              {
-                id: "proof-model",
-                name: "Composition model fixture",
-                reasoning: false,
-                input: ["text"],
-                contextWindow: 32000,
-                maxTokens: 2048,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              },
-            ],
+            models: [proofModel],
           },
         },
       },
@@ -302,15 +311,7 @@ describe("X publication production-owner composition", () => {
     const childStore = resolveSessionStorePathCore(cfg().session?.store, { agentId: "coder" });
     const gateway = createDirectChatContext({
       getRuntimeConfig: cfg,
-      loadGatewayModelCatalog: async () => [
-        {
-          id: "proof-model",
-          name: "Composition model fixture",
-          provider: "x-proof",
-          input: ["text"],
-          contextWindow: 32000,
-        },
-      ],
+      loadGatewayModelCatalog: async () => [{ ...proofModel, provider: "x-proof" }],
     });
     gateway.resolveGatewayContext = () => gateway;
     gateway.readPreparedGatewayModelCatalog = async () => {
@@ -471,8 +472,8 @@ describe("X publication production-owner composition", () => {
         }),
         "admitted model execution scope",
       );
-      const buildTools = () =>
-        createOpenClawCodingToolsAsync({
+      const buildTools = async () => {
+        const tools = await createOpenClawCodingToolsAsync({
           config: params.config,
           agentId: child ? "coder" : "main",
           sessionKey: key,
@@ -498,6 +499,14 @@ describe("X publication production-owner composition", () => {
             includePluginTools: false,
           },
         });
+        for (const name of ["exec", "write", "edit"]) {
+          expect(
+            tools.some((tool) => tool.name === name),
+            name,
+          ).toBe(child);
+        }
+        return tools;
+      };
       // The deterministic model replaces the runner, including its admitted caller
       // boundary. Child tools must not borrow the intake turn’s completed receipt.
       return withGatewayToolCallerIdentity(modelCaller, async () => {
@@ -531,16 +540,7 @@ describe("X publication production-owner composition", () => {
               // Production assembly derives restrictions from the monitor context;
               // this fixture never manufactures inheritedToolPolicySource.
               const tools = await buildTools();
-              for (const name of ["exec", "write", "edit"]) {
-                expect(
-                  tools.some((tool) => tool.name === name),
-                  name,
-                ).toBe(false);
-              }
-              const spawn = expectDefined(
-                tools.find((tool) => tool.name === "sessions_spawn"),
-                "real sessions_spawn tool",
-              );
+              const spawn = requireTool(tools, "sessions_spawn");
               const providerStream = providerInstance.run(() => Promise.resolve({}));
               return runPluginStreamConsumer(providerStream, () =>
                 spawn.execute("x-proof-" + activeCase, {
@@ -565,26 +565,14 @@ describe("X publication production-owner composition", () => {
           }
         } else {
           const tools = await buildTools();
-          for (const name of ["exec", "write", "edit"]) {
-            expect(
-              tools.some((tool) => tool.name === name),
-              name,
-            ).toBe(true);
-          }
-          const writer = expectDefined(
-            tools.find((tool) => tool.name === "write"),
-            "child writer",
-          );
+          const writer = requireTool(tools, "write");
           const proofPath = path.join(params.workspaceDir, "delegation-proof.txt");
           await writer.execute("delegated-write", {
             path: proofPath,
             content: "coding handoff works",
           });
           expect(await fs.readFile(proofPath, "utf8")).toBe("coding handoff works");
-          const executor = expectDefined(
-            tools.find((tool) => tool.name === "exec"),
-            "child executor",
-          );
+          const executor = requireTool(tools, "exec");
           const executed = await executor.execute(
             "delegated-exec",
             {

@@ -28,6 +28,42 @@ function setLogStyle(style: "optimized" | "compact" | "full") {
   setGatewayWsLogStyle(style === "optimized" ? "auto" : style);
 }
 
+function timedTraffic(style: Parameters<typeof setLogStyle>[0], consoleLevel: "debug" | "info") {
+  setLogStyle(style);
+  setLoggerOverride({ level: "silent", consoleLevel });
+  const output = captureConsole();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+  const frames: Array<{ connId: string; id: string; method: string }> = [];
+  return {
+    output,
+    clock,
+    request(frame: (typeof frames)[number]) {
+      frames.push(frame);
+      logWs("in", "req", frame);
+    },
+    respond(frame: (typeof frames)[number], expected: string | false | null, ok = true) {
+      output.mockClear();
+      logWs("out", "res", { ...frame, ok });
+      if (expected === null) {
+        expect(output).not.toHaveBeenCalled();
+      } else {
+        expect(output).toHaveBeenLastCalledWith(
+          expected === false
+            ? expect.not.stringMatching(/\d+ms/)
+            : expect.stringContaining(expected),
+        );
+      }
+    },
+    [Symbol.dispose]() {
+      setLogStyle(style);
+      clock.mockReturnValue(1_000);
+      for (const frame of frames) {
+        logWs("out", "res", { ...frame, ok: true });
+      }
+    },
+  };
+}
+
 function logPrivateEvent(payload: Parameters<typeof summarizeAgentEventForWsLog>[0]) {
   setLogStyle("full");
   setLoggerOverride({ level: "silent", consoleLevel: "info" });
@@ -121,79 +157,45 @@ describe("gateway ws log helpers", () => {
   test.each(["optimized", "compact", "full"] as const)(
     "preserves request identity across %s log changes",
     (style) => {
-      setLogStyle(style);
-      setLoggerOverride({ level: "silent", consoleLevel: "debug" });
-      const output = captureConsole();
-      const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      using traffic = timedTraffic(style, "debug");
+      const { clock, request, respond } = traffic;
       const first = { connId: `first-${style}`, id: "same", method: "health" };
       const second = { connId: `second-${style}`, id: "same", method: "health" };
-      try {
-        logWs("in", "req", first);
-        clock.mockReturnValue(1_050);
-        logWs("in", "req", second);
-        clock.mockReturnValue(1_100);
-        output.mockClear();
-        logWs("out", "res", { ...first, ok: true });
-        expect(output).toHaveBeenLastCalledWith(expect.stringContaining("100ms"));
-        logWs("out", "res", { ...second, ok: true });
-        expect(output).toHaveBeenLastCalledWith(expect.stringContaining("50ms"));
-        logWs("out", "res", { ...first, ok: false });
-        expect(output).toHaveBeenLastCalledWith(expect.not.stringMatching(/\d+ms/));
+      request(first);
+      clock.mockReturnValue(1_050);
+      request(second);
+      clock.mockReturnValue(1_100);
+      respond(first, "100ms");
+      respond(second, "50ms");
+      respond(first, false, false);
 
-        clock.mockReturnValue(2_100);
-        logWs("in", "req", second);
-        setVerbose(true);
-        setGatewayWsLogStyle(style === "full" ? "compact" : "full");
-        clock.mockReturnValue(2_200);
-        logWs("out", "res", { ...second, ok: true });
-        expect(output).toHaveBeenLastCalledWith(expect.stringContaining("100ms"));
-      } finally {
-        setLogStyle(style);
-        logWs("out", "res", { ...first, ok: true });
-        logWs("out", "res", { ...second, ok: true });
-      }
+      clock.mockReturnValue(2_100);
+      request(second);
+      setVerbose(true);
+      setGatewayWsLogStyle(style === "full" ? "compact" : "full");
+      clock.mockReturnValue(2_200);
+      respond(second, "100ms");
     },
   );
 
   test("evicts only the oldest unanswered request timings when the cap is exceeded", () => {
-    setVerbose(false);
-    setLoggerOverride({ level: "silent", consoleLevel: "info" });
-    const output = captureConsole();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    using traffic = timedTraffic("optimized", "info");
+    const { clock, request, respond } = traffic;
     const frame = (id: string) => ({ connId: "evict", id, method: "health" });
-    const answer = (id: string) => {
-      output.mockClear();
-      logWs("out", "res", { ...frame(id), ok: true });
-    };
     for (let index = 0; index < 1_500; index += 1) {
-      logWs("in", "req", frame(`stale-${index}`));
+      request(frame(`stale-${index}`));
     }
-    logWs("in", "req", frame("live"));
+    request(frame("live"));
     for (let index = 0; index < 600; index += 1) {
-      logWs("in", "req", frame(`newer-${index}`));
+      request(frame(`newer-${index}`));
     }
     clock.mockReturnValue(1_000 + 5_000);
-    try {
-      answer("live");
-      expect(output).toHaveBeenLastCalledWith(expect.stringContaining("5000ms"));
-      answer("newer-599");
-      expect(output).toHaveBeenLastCalledWith(expect.stringContaining("5000ms"));
-      // Exactly the 101 oldest entries were dropped to hold the 2000 bound.
-      answer("stale-0");
-      expect(output).not.toHaveBeenCalled();
-      answer("stale-100");
-      expect(output).not.toHaveBeenCalled();
-      answer("stale-101");
-      expect(output).toHaveBeenLastCalledWith(expect.stringContaining("5000ms"));
-    } finally {
-      clock.mockReturnValue(1_000);
-      for (let index = 0; index < 1_500; index += 1) {
-        logWs("out", "res", { ...frame(`stale-${index}`), ok: true });
-      }
-      for (let index = 0; index < 600; index += 1) {
-        logWs("out", "res", { ...frame(`newer-${index}`), ok: true });
-      }
-    }
+    respond(frame("live"), "5000ms");
+    respond(frame("newer-599"), "5000ms");
+    // Exactly the 101 oldest entries were dropped to hold the 2000 bound.
+    respond(frame("stale-0"), null);
+    respond(frame("stale-100"), null);
+    respond(frame("stale-101"), "5000ms");
   });
 
   test("admits only useful optimized-mode frames and honors console info enablement", () => {
@@ -315,54 +317,45 @@ describe("gateway ws log helpers", () => {
     });
   });
 
-  test.each(["assistant", "tool", "lifecycle", "compaction"])(
-    "keeps %s content out of verbose event logs",
-    (stream) => {
-      const marker = "synthetic-private-content";
-      const { summary, output } = logPrivateEvent({
-        runId: "12345678-1234-1234-1234-123456789abc",
-        sessionKey: "agent:main:thread-1",
-        stream,
-        seq: 2,
-        data: {
-          text: marker,
-          meta: marker,
-          error: marker,
-          reason: marker,
-          outcome: "failed",
-          aborted: true,
-          phase: stream === "lifecycle" ? "abort" : "start",
-          name: "fetch",
-          toolCallId: "12345678-1234-1234-1234-123456789abc",
-          mediaUrls: ["a", "b"],
-        },
-      });
-      expect(summary).toMatchObject({
-        run: "12345678…9abc",
-        agent: "main",
-        session: "thread-1",
-        stream,
-        aseq: 2,
-        ...(stream === "assistant"
-          ? { media: 2, textChars: 25 }
-          : stream === "tool"
-            ? { tool: "start:fetch", call: "12345678…9abc" }
-            : {
-                phase: stream === "lifecycle" ? "abort" : "start",
-                aborted: true,
-                err: true,
-                ...(stream === "compaction" ? { outcome: "failed" } : {}),
-              }),
-      });
-      expect(summary).not.toHaveProperty("text");
-      expect(summary).not.toHaveProperty("error");
-      if (stream === "assistant" || stream === "tool") {
-        expect(output).toHaveBeenLastCalledWith(
-          expect.stringContaining(`${stream === "assistant" ? "textChars" : "metaChars"}=25`),
-        );
-      }
-    },
-  );
+  test.each([
+    ["assistant", { media: 2, textChars: 25 }, "textChars"],
+    ["tool", { tool: "start:fetch", call: "12345678…9abc" }, "metaChars"],
+    ["lifecycle", { phase: "abort", aborted: true, err: true }, null],
+    ["compaction", { phase: "start", aborted: true, err: true, outcome: "failed" }, null],
+  ] as const)("keeps %s content out of verbose event logs", (stream, expected, countField) => {
+    const marker = "synthetic-private-content";
+    const { summary, output } = logPrivateEvent({
+      runId: "12345678-1234-1234-1234-123456789abc",
+      sessionKey: "agent:main:thread-1",
+      stream,
+      seq: 2,
+      data: {
+        text: marker,
+        meta: marker,
+        error: marker,
+        reason: marker,
+        outcome: "failed",
+        aborted: true,
+        phase: stream === "lifecycle" ? "abort" : "start",
+        name: "fetch",
+        toolCallId: "12345678-1234-1234-1234-123456789abc",
+        mediaUrls: ["a", "b"],
+      },
+    });
+    expect(summary).toMatchObject({
+      run: "12345678…9abc",
+      agent: "main",
+      session: "thread-1",
+      stream,
+      aseq: 2,
+      ...expected,
+    });
+    expect(summary).not.toHaveProperty("text");
+    expect(summary).not.toHaveProperty("error");
+    if (countField) {
+      expect(output).toHaveBeenLastCalledWith(expect.stringContaining(`${countField}=25`));
+    }
+  });
 
   test("summarizeAgentEventForWsLog preserves invalid session keys and unknown-stream reasons", () => {
     expect(
