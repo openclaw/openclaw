@@ -217,6 +217,7 @@ describe("Deepgram Flux audio", () => {
           query: {
             ...(queryLanguage === undefined ? {} : { language_hint: queryLanguage }),
             eot_threshold: 0.7,
+            keyterm: ["OpenClaw", "Deepgram"],
             numerals: true,
             profanity_filter: true,
             smart_format: true,
@@ -239,6 +240,7 @@ describe("Deepgram Flux audio", () => {
       expect(requestUrl?.searchParams.get("sample_rate")).toBe("16000");
       expect(requestUrl?.searchParams.get("language_hint")).toBe(expectedHint);
       expect(requestUrl?.searchParams.get("eot_threshold")).toBe("0.7");
+      expect(requestUrl?.searchParams.getAll("keyterm")).toEqual(["OpenClaw", "Deepgram"]);
       expect(requestUrl?.searchParams.get("numerals")).toBe("true");
       expect(requestUrl?.searchParams.get("profanity_filter")).toBe("true");
       expect(requestUrl?.searchParams.has("smart_format")).toBe(false);

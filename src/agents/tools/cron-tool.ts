@@ -203,14 +203,14 @@ function buildCronToolDescription(params: { triggersEnabled: boolean }): string 
     : "";
   return `Schedule reminders, delayed self-wakeups, recurring work${params.triggersEnabled ? ", event watchers" : ""}. Never exec sleep/poll as timer.
 
-ACTIONS: status | list (summaries; follow nextOffset) | get jobId (full details) | add job | update jobId job (partial; null clears) | remove jobId (operator removal requests active-run cancellation) | run jobId (runMode:"force"=now; waits up to timeoutMs, default 60s; unfinished runs return runId) | runs jobId runId? (history) | next_check in:"30m" (own paced run) | wake text (caller-owned session; mode defaults to next-heartbeat). Check unfinished runs later with runs, never a scheduled verification job. wake has no delay; for a later resume use an at job below.
+ACTIONS: status | list (summaries; follow nextOffset) | get jobId (full details) | add job | update jobId job (partial; null clears) | remove jobId (operator removal requests active-run cancellation) | run jobId (runMode:"force"=now; waits up to timeoutMs, default 60s; unfinished runs return runId) | runs jobId runId? (history) | next_check in:"30m" (own paced run or one-shot session continuation) | wake text (caller-owned session; mode defaults to next-heartbeat). Check unfinished runs later with runs, never a scheduled verification job. wake has no delay; for a later resume use an at job below.
 
 SCOPE: Authenticated configured channel owners and Control UI administrators can manage any Gateway automation. Other turns see caller-visible jobs and scoped counts only: an empty list or failed list/get/update/remove (including not-found) does not establish global absence, even for IDs from your history. Never recreate or replace a known automation for update/remove/reconciliation based on these results; report the visibility limit and ask an authorized administrator to check through a fresh authenticated owner/administrator turn or the Automations page. New requested automations may still be created.
 
 ADD: job requires schedule+payload.
 
 SCHEDULE:
-- {kind:"at",at:"ISO-8601"}: one-shot; missing timezone=UTC. Auto-deletes after successful completion; failed/unknown required delivery retains it disabled.
+- {kind:"at",at:"ISO-8601"}: one-shot; missing timezone=UTC. Auto-deletes after successful completion unless an explicit session continuation calls next_check; failed/unknown required delivery retains it disabled.
 - {kind:"every",everyMs}.
 - {kind:"cron",expr,tz?:"IANA"}: wall time in tz, never UTC-convert; omitted tz=Gateway host local.${streamScheduleLine}${eventScheduleLine}
 
@@ -218,7 +218,7 @@ TARGET+PAYLOAD:
 - "current" (agentTurn default) = this conversation's context: the run stays detached, reads bounded chat context, then delivers its final visible assistant result to the resolved destination (this conversation unless another destination is configured). Delayed work/loop = at|every + agentTurn + current. This is not a resumed parent turn: it uses the scheduled agent workspace with its own session identity, not the conversation worktree or cloud worker placement. In-flight turns sent through the job's stable cron key are canceled if that key is reassigned. Verify required checkout/tool access before delegating repository work; result delivery alone does not resume the original agent.
 - "isolated" = fresh detached session; standalone background work recorded in cron run history.
 - "main" = heartbeat lane; payload {kind:"systemEvent",text} (systemEvent default target).
-- "session:<key>" + agentTurn runs a turn inside that existing conversation (same history, saved workspace/worktree). To come back here later (wait for CI, recheck), add an at + agentTurn job with sessionTarget "session:<your session key from Runtime>" and message = instructions for your next turn.
+- "session:<key>" + agentTurn runs a turn inside that existing conversation (same history, saved workspace/worktree). To come back here later (wait for CI, recheck), add an at + agentTurn job with sessionTarget "session:<your session key from Runtime>" and message = instructions for your next turn. If that one-shot turn still needs to wait, call next_check in:"5m" to rearm this same job after successful run completion (minimum 2s); target, payload, and tool cap stay unchanged. Without a proposal it completes normally.
 - {kind:"agentTurn",message}; timeoutSeconds 0=none.
 - Inherited MCP authority covers model-callable tools, not interactive app-view-only capabilities.${scriptPayloadLine}
 
@@ -249,7 +249,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
     description: selfRemoveOnly
       ? managementAuthority?.managementOnly
         ? "Inspect or remove only the current automation. Actions: list [includeDisabled], get jobId, remove jobId. Use the current job ID; other jobs and management actions are unavailable."
-        : 'Inspect or remove only the current automation. Actions: status; list [includeDisabled]; get/runs/remove jobId; next_check in:"15m" for this paced run. Use the current job ID. To stop a finished job, remove it; creating/updating/running jobs and waking sessions are unavailable. Return the task result; the scheduler owns delivery.'
+        : 'Inspect or remove only the current automation. Actions: status; list [includeDisabled]; get/runs/remove jobId; next_check in:"15m" for this paced run or at + agentTurn + explicit session:<key> continuation. A successful one-shot proposal rearms the same job from run end (minimum 2s); without one it completes normally. Use the current job ID. To stop a finished job, remove it; creating/updating/running jobs and waking sessions are unavailable. Return the task result; the scheduler owns delivery.'
       : managementAuthority?.managementOnly
         ? 'Manage any existing automation on this Gateway with the admitted automation management authority. Actions: list [includeDisabled,limit,offset] (compact summaries with timing; follow nextOffset); get jobId (full schedule, payload, and delivery details); update jobId job (partial patch, null clears); run jobId (runMode:"force" runs now; waits up to timeoutMs, default 60s, and returns the finished run, or its runId if still running); remove jobId (operator removal requests cancellation of an active run; the result reports activeRunCancellationRequested:true). Creator attribution and scheduled execution policy stay intact. Use the Automations page for other actions.'
         : buildCronToolDescription({ triggersEnabled }),

@@ -505,6 +505,42 @@ it("fully rolls back a cloud draft when dispatch fails", async () => {
   await expectPending(taskId);
 });
 
+it("sends an idle session acceptance as a new turn and replays its source key", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
+      { sessionId: "source-session", updatedAt: 1 },
+    );
+    const taskId = await createSourceSuggestion();
+    const client = operatorClient();
+
+    const accepted = await call("taskSuggestions.accept", { taskId, mode: "session" }, vi.fn(), {
+      client,
+      context: {},
+    });
+    const replay = await call("taskSuggestions.accept", { taskId, mode: "session" });
+
+    expect(accepted.response?.[0]).toBe(true);
+    expect(accepted.response?.[1]).toEqual({ taskId, key: SOURCE_SESSION_KEY });
+    expect(replay.response?.[1]).toEqual({ taskId, key: SOURCE_SESSION_KEY });
+    expect(mocks.handleChatSend).toHaveBeenCalledTimes(1);
+    expect(mocks.handleChatSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        client,
+        params: {
+          sessionKey: SOURCE_SESSION_KEY,
+          agentId: "main",
+          sessionId: "source-session",
+          message: "Apply the focused fix in this session.",
+          queueMode: "steer",
+          idempotencyKey: `task-suggestion:${taskId}`,
+        },
+      }),
+    );
+  });
+});
+
 it.each([false, true])(
   "restores a source suggestion after failure (source exists: %s)",
   async (exists) => {
@@ -526,7 +562,7 @@ it.each([false, true])(
         { mode: "session" },
         {
           client: operatorClient(),
-          context: { chatAbortControllers: new Map() },
+          context: {},
         },
       );
       expectFailure(

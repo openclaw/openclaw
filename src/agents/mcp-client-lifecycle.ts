@@ -1,7 +1,10 @@
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import {
+  SdkError,
+  SdkErrorCode,
+  SdkHttpError,
+  type Client,
+  type Transport,
+} from "@modelcontextprotocol/client";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
@@ -39,8 +42,8 @@ export function isMcpHttpSessionExpired(
     session.transportType === "streamable-http" &&
     session.transport instanceof OpenClawStreamableHTTPClientTransport &&
     session.transport.sessionId !== undefined &&
-    error instanceof StreamableHTTPError &&
-    error.code === 404
+    error instanceof SdkHttpError &&
+    error.status === 404
   );
 }
 
@@ -180,7 +183,7 @@ export function createMcpRequestLifecycle(humanInputTimeoutMs: number) {
       } else {
         requestSignal?.addEventListener("abort", onParentAbort, { once: true });
       }
-      const timeoutError = new McpError(ErrorCode.RequestTimeout, "Request timed out", {
+      const timeoutError = new SdkError(SdkErrorCode.RequestTimeout, "Request timed out", {
         timeout: timeoutMs,
       });
       const onTimeout = () => {

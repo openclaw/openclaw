@@ -38,7 +38,6 @@ import {
   DEFAULT_WORKER_PENDING_TASKS,
 } from "./worker-task-capacity.js";
 import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
-import type { RetainedWorkerTask } from "./worker-task-pool.types.js";
 
 type SuccessfulReply = Exclude<SqliteSnapshotStagingReply, { type: "failed" }>;
 
@@ -223,24 +222,17 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
       },
     };
     preparations.set(preparationId, preparation);
-    let task: RetainedWorkerTask<SqliteSnapshotStagingReply>;
-    try {
-      task = pool.startTask(
-        () => {
-          if (unavailable !== undefined) {
-            throw unavailable.error;
-          }
-          signal?.throwIfAborted();
-          signal?.addEventListener("abort", abort, { once: true });
-          return input;
-        },
-        { inputBytes, transferList: () => (cancellation ? [cancellation.port2] : []) },
-      );
-    } catch (error) {
-      const refused = createRetainedOperation<SqliteSnapshotStagingReply>(() => {});
-      refused.reject(error);
-      task = { ...refused.operation, release: completed };
-    }
+    const task = pool.startTask(
+      () => {
+        if (unavailable !== undefined) {
+          throw unavailable.error;
+        }
+        signal?.throwIfAborted();
+        signal?.addEventListener("abort", abort, { once: true });
+        return input;
+      },
+      { inputBytes, transferList: () => (cancellation ? [cancellation.port2] : []) },
+    );
     let release: RetainedOperation<void> | undefined;
     const result = mapRetainedOperation(task, (reply) => {
       if (reply.type === "failed") {

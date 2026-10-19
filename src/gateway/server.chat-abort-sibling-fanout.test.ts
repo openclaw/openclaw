@@ -18,18 +18,31 @@ import { getSubagentRunRuntimeKey } from "../agents/subagents/registry/subagent-
 import * as swarm from "../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import * as sessions from "../config/sessions/session-accessor.js";
-import * as sessionWork from "../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionEffect,
+  getSessionMutationCount,
+  getSessionControllerWorkCount,
+  type SessionEffectRef,
+} from "../sessions/session-controller.lifecycle.js";
+import { observeGatewayConnectionWork } from "./server-held-work.test-support.js";
 import * as fixture from "./test-helpers.js";
 
 let gateway: Awaited<ReturnType<typeof fixture.createGatewaySuiteHarness>>;
+let connectionObserver: Awaited<ReturnType<typeof observeGatewayConnectionWork>>;
 fixture.installGatewayTestHooks({
   scope: "suite",
   setup: async () => {
-    gateway = await fixture.createGatewaySuiteHarness();
+    connectionObserver = await observeGatewayConnectionWork();
+    try {
+      gateway = await fixture.createGatewaySuiteHarness();
+    } finally {
+      connectionObserver.stopCapture();
+    }
   },
   cleanup: async () => {
     await runQaGatewayFixture(
       async () => gateway?.close(),
+      () => connectionObserver.restore(),
       async () => {
         await settleSubagentRegistryPersistenceWork();
         await resetSubagentRegistryForTests({ persist: false });
@@ -93,7 +106,8 @@ for (const [suffix, name] of [
     const socket = await gateway.openWs();
     const parentStarted = createDeferred<AgentCommandOpts>();
     const parentFinish = createDeferred();
-    const leases: sessionWork.SessionWorkAdmissionLease[] = [];
+    const leases: SessionEffectRef[] = [];
+    const releasedLeases = new Set<SessionEffectRef>();
     const interrupted: string[] = [];
     const firstInterrupted = createDeferred();
     const slotReleaseResults: boolean[] = [];
@@ -101,6 +115,7 @@ for (const [suffix, name] of [
     const reserve = (runId: string, maxConcurrent: number) =>
       swarm.reserveSwarmRun({ groupId, runId, maxConcurrent, activeRunIds: running });
     let parentRequestId: string | undefined;
+    let parentTerminal: Promise<PromiseSettledResult<unknown>> | undefined;
     let abortResponse: ReturnType<typeof fixture.rpcReq> | undefined;
     let abortOutcome:
       | Promise<PromiseSettledResult<Awaited<ReturnType<typeof fixture.rpcReq>>>>
@@ -153,6 +168,9 @@ for (const [suffix, name] of [
           const command = input as AgentCommandOpts;
           expect(command.abortSignal).toBeInstanceOf(AbortSignal);
           await command.onExecutionStarted?.();
+          command.abortSignal!.addEventListener("abort", () => parentFinish.resolve(), {
+            once: true,
+          });
           parentStarted.resolve(command);
           await parentFinish.promise;
           command.abortSignal!.throwIfAborted();
@@ -175,9 +193,13 @@ for (const [suffix, name] of [
           if (running.includes(runId)) {
             // Recovery must observe the live owner when the run is registered.
             leases.push(
-              await sessionWork.beginSessionWorkAdmission({
+              await beginSessionEffect({
                 scope: storePath,
                 identities: [sessionKey(runId), `${runId}-session`],
+                resolveGatewayContext: expectDefined(
+                  connectionObserver.context,
+                  "Gateway fixture context",
+                ).resolveGatewayContext,
                 run: {
                   runId,
                   sessionKey: sessionKey(runId),
@@ -230,10 +252,25 @@ for (const [suffix, name] of [
         for (const runId of queued) {
           expect(swarm.isSwarmRunWaitingForCapacity(runId, runtimeKey(runId))).toBe(true);
         }
-        const activeAdmissionCount = sessionWork.getActiveSessionWorkAdmissionCount();
+        expect(leases).toHaveLength(running.length);
+        for (const lease of leases) {
+          void lease.released.then(() => {
+            releasedLeases.add(lease);
+          });
+        }
+        const activeAdmissionCount = getSessionControllerWorkCount();
         expect(activeAdmissionCount).toBeGreaterThanOrEqual(running.length);
         expect(start).not.toHaveBeenCalled();
 
+        parentTerminal = Promise.allSettled([
+          fixture.onceMessage(
+            socket,
+            (frame) =>
+              frame.type === "res" &&
+              frame.id === parentRequestId &&
+              frame.payload?.status !== "accepted",
+          ),
+        ]).then(([result]) => result);
         if (replaceParent) {
           const history = await fixture.rpcReq<{
             sessionId: string;
@@ -271,8 +308,8 @@ for (const [suffix, name] of [
         await expect.poll(() => interrupted.toSorted(), { timeout: 2_000 }).toEqual(running);
         expect(parent.abortSignal!.aborted).toBe(true);
         expect(slotReleaseResults).toEqual(running.map(() => true));
-        expect(leases.every((lease) => lease.isActive())).toBe(true);
-        expect(sessionWork.getActiveSessionWorkAdmissionCount()).toBe(activeAdmissionCount);
+        expect(releasedLeases.size).toBe(0);
+        expect(getSessionControllerWorkCount()).toBeGreaterThanOrEqual(running.length);
         expect(responseSettled).toBe(false);
         expect(start).not.toHaveBeenCalled();
         if (replaceParent) {
@@ -310,11 +347,7 @@ for (const [suffix, name] of [
             ok: false,
             error: {
               code: "INVALID_REQUEST",
-              details: {
-                code: "SESSION_MUTATION_AUTHORIZATION_CHANGED",
-                method: "chat.send",
-                sessionKey: parentKey,
-              },
+              details: { reason: "active-leaf-changed" },
             },
           });
           expect(fixture.embeddedRunMock.abortCalls).not.toContain(`${firstRunId}-session`);
@@ -388,17 +421,11 @@ for (const [suffix, name] of [
         }
       },
       async () => {
-        const terminal = parentRequestId
-          ? fixture.onceMessage(
-              socket,
-              (frame) =>
-                frame.type === "res" &&
-                frame.id === parentRequestId &&
-                frame.payload?.status !== "accepted",
-            )
-          : undefined;
         parentFinish.resolve();
-        await terminal;
+        const terminal = await parentTerminal;
+        if (terminal?.status === "rejected") {
+          throw terminal.reason;
+        }
       },
       async () => {
         const reservationReleases: Promise<void>[] = [];
@@ -415,11 +442,12 @@ for (const [suffix, name] of [
             swarm.releaseSwarmRun(runId);
           }
           socket.close();
-          expect(sessionWork.getActiveSessionLifecycleMutationCount()).toBe(0);
-          expect(sessionWork.getActiveSessionWorkAdmissionCount()).toBe(0);
         } finally {
           await Promise.all(reservationReleases);
         }
+        socket.close();
+        expect(getSessionMutationCount()).toBe(0);
+        expect(getSessionControllerWorkCount()).toBe(0);
       },
     );
   });

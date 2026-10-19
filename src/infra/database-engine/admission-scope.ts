@@ -17,6 +17,11 @@ export function installDatabaseProcessRole(role: DatabaseProcessRole): void {
   processRole.role ??= role;
 }
 
+/** Undefined until an entry point installs one; embedders keep the shared defaults. */
+export function getDatabaseProcessRole(): DatabaseProcessRole | undefined {
+  return processRole.role;
+}
+
 let admissionDepth = 0;
 
 /** Temporarily admit synchronous boot and migration SQL on the Gateway main thread. */

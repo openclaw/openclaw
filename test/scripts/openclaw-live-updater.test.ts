@@ -37,17 +37,26 @@ import {
   runLiveUpdaterMain,
   verifyGatewayReadiness,
 } from "../../.agents/skills/openclaw-live-updater/scripts/update-main.mjs";
+import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../../gateway-shutdown-budget.mjs";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../scripts/lib/local-build-metadata.mts";
 import { writeUpdateCompatibilityChunks } from "../../scripts/lib/update-compat-chunks.mts";
 import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mts";
+import { buildLaunchAgentEnvironmentWrapper } from "../../src/daemon/launchd-env-wrapper.js";
+import { buildLaunchAgentPlist } from "../../src/daemon/launchd-plist.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   previousReleaseInventory,
   writeUpdateCompatibilityBuildFixture,
 } from "./update-compat-chunks.test-support.js";
+
+const maintenanceReadState = vi.hoisted(() => vi.fn());
+vi.mock("../../src/daemon/service-state.js", async (original) => ({
+  ...(await original<typeof import("../../src/daemon/service-state.js")>()),
+  readGatewayServiceState: maintenanceReadState,
+}));
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -78,7 +87,7 @@ const gatewayChecks = [
   "pnpm openclaw health --verbose --json",
 ];
 const rebuildMac =
-  "env SKIP_TSC=1 SKIP_UI_BUILD=1 bash scripts/restart-mac.sh --sign --wait --target-only";
+  "env OPENCLAW_MAC_REUSE_BUILD=1 SKIP_PNPM_INSTALL=1 bash scripts/restart-mac.sh --sign --wait --target-only";
 const uid = process.getuid?.() ?? 501;
 const bootout = `/bin/launchctl bootout gui/${uid}/ai.openclaw.gateway`;
 const traceOn = "/bin/launchctl setenv OPENCLAW_GATEWAY_STARTUP_TRACE 1";
@@ -416,7 +425,7 @@ function makeManagedFixture(options: Omit<FixtureOptions, "includeSeed"> = {}) {
 function pushFixtureChange(seed: string, file = "docs/index.md") {
   writeFixtureFile(path.join(seed, file), "// changed\n");
   git(seed, "add", file);
-  git(seed, "commit", "-m", "fixture update");
+  git(seed, "commit", "--quiet", "-m", "fixture update");
   git(seed, "push");
 }
 
@@ -507,6 +516,16 @@ if (Object.hasOwn(params, "terminalPolicy")) {
     deployment: { ...gatewayCliDeployment(root, checkout), invocationPrefix: [capturePath] },
   };
 }
+
+test("admits the installed Gateway shutdown budget while rejecting unbounded stops", () => {
+  expect(resolveLaunchAgentExitTimeoutSeconds(LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS)).toBe(
+    LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
+  );
+  expect(() => resolveLaunchAgentExitTimeoutSeconds(0)).toThrow("prevents bounded stopped proof");
+  expect(() => resolveLaunchAgentExitTimeoutSeconds(LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS + 1)).toThrow(
+    "prevents bounded stopped proof",
+  );
+});
 
 describe("openclaw live updater", () => {
   beforeAll(() => {
@@ -843,45 +862,64 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     }
   });
 
-  test("pins managed Gateway calls with a backward-compatible local overlay", () => {
-    const root = realpathSync(tempDirs.make("openclaw-gateway-call-"));
-    const checkout = path.join(root, "checkout");
-    const entrypoint = path.join(checkout, "dist/index.js");
-    const capture = path.join(root, "capture.mjs");
-    const configPath = path.join(root, "openclaw.json");
-    mkdirSync(path.dirname(entrypoint), { recursive: true });
-    writeFileSync(configPath, "{}\n");
-    writeFileSync(
-      capture,
-      'import fs from "node:fs"; console.log(JSON.stringify({ argv: process.argv.slice(2), config: JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8")), hasToken: Boolean(process.env.OPENCLAW_GATEWAY_TOKEN), url: process.env.OPENCLAW_GATEWAY_URL ?? null }));\n',
-    );
+  test.each(["direct", "shell", "executable"])(
+    "pins managed Gateway calls with a backward-compatible local overlay (%s)",
+    (layout) => {
+      const root = realpathSync(tempDirs.make("openclaw-gateway-call-"));
+      const checkout = path.join(root, "checkout");
+      const entrypoint = path.join(checkout, "dist/index.js");
+      const capture = path.join(root, "capture.mjs");
+      const configPath = path.join(root, "openclaw.json");
+      mkdirSync(path.dirname(entrypoint), { recursive: true });
+      writeFileSync(configPath, "{}\n");
+      writeFileSync(
+        capture,
+        'import fs from "node:fs"; console.log(JSON.stringify({ argv: process.argv.slice(2), execArgv: process.execArgv, config: JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8")), hasToken: Boolean(process.env.OPENCLAW_GATEWAY_TOKEN), url: process.env.OPENCLAW_GATEWAY_URL ?? null }));\n',
+      );
 
-    const result = JSON.parse(
-      runBuiltGatewayCall(
-        checkout,
-        "gateway.suspend.prepare",
-        { requestId: "request-1" },
-        {
-          ...gatewayCliDeployment(root, checkout),
-          invocationPrefix: [capture],
-          port: 19001,
-          serviceEnvironment: {
-            OPENCLAW_GATEWAY_TOKEN: ["fixture", "value"].join("-"),
-            OPENCLAW_GATEWAY_URL: "https://foreign.invalid",
+      const wrapper = path.join(root, "env-wrapper.sh");
+      const envFile = path.join(root, "gateway.env");
+      writeFileSync(wrapper, '#!/bin/sh\nshift\nexec "$@"\n', { mode: 0o700 });
+      writeFileSync(envFile, "");
+      const runtimePrefix = [process.execPath, "--max-old-space-size=128", capture];
+      const invocationPrefix =
+        layout === "direct"
+          ? runtimePrefix.slice(1)
+          : layout === "shell"
+            ? [wrapper, envFile, ...runtimePrefix]
+            : [envFile, ...runtimePrefix];
+      const result = JSON.parse(
+        runBuiltGatewayCall(
+          checkout,
+          "gateway.suspend.prepare",
+          { requestId: "request-1" },
+          {
+            ...gatewayCliDeployment(root, checkout),
+            invocationPrefix,
+            executable:
+              layout === "direct" ? process.execPath : layout === "shell" ? "/bin/sh" : wrapper,
+            ...(layout === "direct"
+              ? { envFilePath: null, wrapperPath: null }
+              : { envFilePath: envFile, wrapperPath: wrapper }),
+            port: 19001,
+            serviceEnvironment: {
+              OPENCLAW_GATEWAY_TOKEN: ["fixture", "value"].join("-"),
+              OPENCLAW_GATEWAY_URL: "https://foreign.invalid",
+            },
           },
-          wrapperPath: null,
-        },
-      ),
-    );
+        ),
+      );
 
-    expect(result).toMatchObject({
-      config: { gateway: { mode: "local", port: 19001 } },
-      hasToken: true,
-      url: null,
-    });
-    expect(result.argv).not.toContain("--port");
-    expect(result.argv).not.toContain("--url");
-  });
+      expect(result).toMatchObject({
+        execArgv: ["--max-old-space-size=128"],
+        config: { gateway: { mode: "local", port: 19001 } },
+        hasToken: true,
+        url: null,
+      });
+      expect(result.argv).not.toContain("--port");
+      expect(result.argv).not.toContain("--url");
+    },
+  );
 
   test.each<[string, string, (fixture: Omit<Fixture, "seed">) => void]>([
     [
@@ -997,6 +1035,203 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     expect(existsSync(snapshotExecutionMarker)).toBe(false);
   });
 
+  test.skipIf(process.platform !== "darwin")(
+    "inspects the generated wrapper before invoking the managed CLI",
+    () => {
+      const home = realpathSync(tempDirs.make("updater-generated-wrapper-"));
+      const checkout = path.join(home, "checkout");
+      const state = path.join(home, ".openclaw");
+      const entrypoint = path.join(checkout, "dist/index.js");
+      const wrapper = path.join(state, "service-env/ai.openclaw.gateway-env-wrapper.sh");
+      const envFile = path.join(state, "service-env/ai.openclaw.gateway.env");
+      const plist = path.join(home, "Library/LaunchAgents/ai.openclaw.gateway.plist");
+      for (const file of [entrypoint, wrapper, plist]) {
+        mkdirSync(path.dirname(file), { recursive: true });
+      }
+      writeFileSync(
+        entrypoint,
+        "console.log(JSON.stringify({execArgv: process.execArgv, port: process.env.OPENCLAW_GATEWAY_PORT}));\n",
+      );
+      writeFileSync(path.join(state, "openclaw.json"), "{}\n");
+      writeFileSync(wrapper, buildLaunchAgentEnvironmentWrapper(), { mode: 0o700 });
+      writeFileSync(
+        envFile,
+        "# Generated by OpenClaw. Do not edit while the gateway service is installed.\n",
+        { mode: 0o600 },
+      );
+      writeFileSync(
+        plist,
+        buildLaunchAgentPlist({
+          label: "ai.openclaw.gateway",
+          programArguments: [
+            "/bin/sh",
+            wrapper,
+            envFile,
+            process.execPath,
+            "--max-old-space-size=128",
+            entrypoint,
+            "gateway",
+            "--port",
+            "18789",
+          ],
+          workingDirectory: state,
+          stdoutPath: path.join(state, "gateway.log"),
+          stderrPath: path.join(state, "gateway.log"),
+        }),
+      );
+      vi.stubEnv("HOME", home);
+      try {
+        expect(JSON.parse(runBuiltGatewayCli(checkout, ["gateway", "status"], undefined))).toEqual({
+          execArgv: ["--max-old-space-size=128"],
+          port: "18789",
+        });
+        writeFileSync(wrapper, `${buildLaunchAgentEnvironmentWrapper()}# custom behavior\n`);
+        expect(() => runBuiltGatewayCli(checkout, ["gateway", "status"], undefined)).toThrow(
+          "LaunchAgent does not describe this checkout",
+        );
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  test.skipIf(process.platform !== "darwin").each([false, true])(
+    "bounds updater interruption behind the serving Gateway fence (write custody=%s)",
+    async (heldCustody) => {
+      const fixture = makeFixture({ dependencies: true, built: true });
+      const { root, mirror } = fixture;
+      const home = path.join(root, "home");
+      const stateDir = path.join(home, ".openclaw");
+      const entrypoint = path.join(mirror, "dist/index.js");
+      const plistPath = path.join(home, "Library/LaunchAgents/ai.openclaw.gateway.plist");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const calls = path.join(root, "resident-calls.jsonl");
+      const expiresAtMs = Date.now() + 45_000;
+      mkdirSync(path.dirname(plistPath), { recursive: true });
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(configPath, "{}\n");
+      const programArguments = [
+        process.execPath,
+        "--max-old-space-size=128",
+        entrypoint,
+        "gateway",
+        "--port",
+        "18789",
+      ];
+      writeFileSync(
+        plistPath,
+        buildLaunchAgentPlist({
+          label: "ai.openclaw.gateway",
+          programArguments,
+          workingDirectory: stateDir,
+          stdoutPath: path.join(stateDir, "gateway.log"),
+          stderrPath: path.join(stateDir, "gateway.log"),
+        }),
+      );
+      // Fixed replies from the old 5b29 serving Gateway's suspend protocol. The real
+      // maintenance owner must decide whether these facts permit native stop.
+      writeFileSync(
+        entrypoint,
+        `import fs from "node:fs";
+const args = process.argv.slice(2);
+const method = args[2];
+const params = JSON.parse(args[args.indexOf("--params") + 1]);
+fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({method,params}) + "\\n");
+let result;
+if (method === "status") result = {pid:42};
+else if (method === "system.info") result = {pid:42,processInstanceId:"resident-instance"};
+else if (method === "gateway.suspend.prepare") result = params.drain ? {
+  status:"draining",suspensionId:"resident-lease",expiresAtMs:${expiresAtMs},
+  retryAfterMs:30000,activeCount:1,blockers:[{kind:"agent-run",count:1,message:"resident turn"}],
+  writeCustody:${JSON.stringify(heldCustody ? [{ phase: "session-write", count: 1 }] : [])}
+} : ${JSON.stringify(busySuspension("agent-run", "resident turn"))};
+else if (method === "gateway.suspend.handoff") result = {status:"committed",suspensionId:"resident-lease",expiresAtMs:${expiresAtMs}};
+else if (method === "gateway.suspend.resume") result = {ok:true};
+else throw new Error("Unexpected resident method: " + method);
+console.log(JSON.stringify(result));
+`,
+      );
+      // The resident build is stale, making this the actual retry/update path.
+      writeJson(path.join(mirror, "dist/build-info.json"), { commit: "0".repeat(40) });
+      maintenanceReadState.mockResolvedValue({
+        installed: true,
+        loadState: { status: "loaded" },
+        running: true,
+        env: { HOME: home, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+        command: { programArguments, sourcePath: plistPath },
+        runtime: { status: "running", pid: 42 },
+      });
+      const actual =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      vi.mocked(spawnSync).mockImplementation((command, args, options) =>
+        command === "/bin/launchctl"
+          ? {
+              status: 0,
+              signal: null,
+              pid: 1,
+              output: [null, "pid = 42", ""],
+              stdout: "pid = 42",
+              stderr: "",
+            }
+          : actual.spawnSync(command, args, options),
+      );
+      const commands = fakeCommands(mirror);
+      await Promise.all([
+        import("../../src/cli/update-cli/update-command-service-drain.js"),
+        import("../../src/daemon/service-state.js"),
+        import("../../src/daemon/service.js"),
+      ]);
+      vi.stubEnv("HOME", home);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+      try {
+        const running = fixture.run({
+          inspectGatewayDeployment: undefined,
+          prepareGatewaySuspension: undefined,
+          runCommand: commands.runCommand,
+          verifyAndAuditGateway: passGatewayRestartVerification,
+        });
+        const outcome = running.then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        await vi.runAllTimersAsync();
+        const result = await outcome;
+        const requests = readJsonLines(calls) as Array<{
+          method: string;
+          params: Record<string, unknown>;
+        }>;
+        if (heldCustody) {
+          expect(result).toHaveProperty("error");
+          expect("error" in result && result.error).toMatchObject({
+            message: expect.stringContaining("data at risk in owner phase session-write (1)"),
+          });
+          expect(commands.calls).not.toContain(bootout);
+          expect(commands.calls).not.toContain("pnpm build");
+          expect(requests.some(({ method }) => method === "gateway.suspend.handoff")).toBe(false);
+          expect(requests.at(-1)?.method).toBe("gateway.suspend.resume");
+        } else {
+          expect(result).toHaveProperty("value.ok", true);
+          expect(commands.calls).toContain(bootout);
+          expect(commands.calls.indexOf(bootout)).toBeLessThan(
+            commands.calls.indexOf("pnpm build"),
+          );
+          expect(
+            requests.find(({ method }) => method === "gateway.suspend.handoff")?.params,
+          ).toEqual({
+            suspensionId: "resident-lease",
+            target: { pid: 42, processInstanceId: "resident-instance" },
+            commit: true,
+          });
+        }
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllEnvs();
+        vi.mocked(spawnSync).mockImplementation(actual.spawnSync);
+        maintenanceReadState.mockReset();
+      }
+    },
+  );
+
   test("accepts supported LaunchAgent layouts and rejects foreign commands", () => {
     const home = "/Users/test";
     const entrypoint = "/Users/test/.openclaw/runtime/gateway-1234567/dist/index.js";
@@ -1010,11 +1245,26 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     const customEnvFile = `${customState}/service-env/ai.openclaw.gateway.env`;
     const layouts: [string[], string | null][] = [
       [nodeCommand, entrypoint],
+      [[nodeCommand[0]!, "--max-old-space-size=131072", ...nodeCommand.slice(1)], entrypoint],
+      [
+        [
+          "/bin/sh",
+          wrapper,
+          envFile,
+          nodeCommand[0]!,
+          "--max-old-space-size",
+          "131072",
+          ...nodeCommand.slice(1),
+        ],
+        entrypoint,
+      ],
       [["/opt/homebrew/bin/bun", entrypoint, "gateway"], entrypoint],
       [["/bin/sh", wrapper, envFile, ...nodeCommand], entrypoint],
       [[wrapper, envFile, ...nodeCommand], entrypoint],
       [["/bin/sh", customWrapper, customEnvFile, ...nodeCommand], entrypoint],
       [["/usr/bin/python3", entrypoint, "gateway"], null],
+      [[nodeCommand[0]!, "--eval", "0", entrypoint, "gateway"], null],
+      [[nodeCommand[0]!, "--unknown-option", "value", entrypoint, "gateway"], null],
       [["/bin/sh", foreignWrapper, envFile, ...nodeCommand], null],
     ];
     for (const [args, expected] of layouts) {
@@ -1118,6 +1368,18 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     });
     writeFileSync(path.join(seed, "package.json"), '{"name":"openclaw"}\n');
     git(seed, "add", "package.json");
+    // A long catch-up can exceed execFileSync's 1 MiB default with paths alone.
+    const catchupPaths = Array.from(
+      { length: 6000 },
+      (_, index) => `docs/${"catchup-".repeat(27)}${index}.md`,
+    );
+    const emptyBlob = execFileSync("git", ["-C", seed, "hash-object", "-w", "--stdin"], {
+      input: "",
+      encoding: "utf8",
+    }).trim();
+    execFileSync("git", ["-C", seed, "update-index", "--index-info"], {
+      input: catchupPaths.map((file) => `100644 ${emptyBlob}\t${file}\n`).join(""),
+    });
     const changedPath = "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift";
     pushFixtureChange(seed, changedPath);
     const commands = fakeCommands(mirror);
@@ -1135,7 +1397,11 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       afterSha: git(seed, "rev-parse", "HEAD"),
       actions: { macAppRebuild: true, macUiVerification: true },
     });
-    expect(output.buildChangedPaths).toEqual([changedPath, "package.json"]);
+    expect(output.buildChangedPaths).toEqual([
+      changedPath,
+      ...catchupPaths.toSorted(),
+      "package.json",
+    ]);
     expect(commands.calls).toEqual([
       `${process.execPath} dist/index.js gateway stop`,
       "pnpm install --frozen-lockfile",
@@ -1462,7 +1728,10 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     });
     const deferred = await fixture.run({
       inspectGatewayDeployment,
-      prepareGatewaySuspension: () => busySuspension("agent-run", "busy"),
+      prepareGatewaySuspension: () => ({
+        ...busySuspension("agent-run", "busy"),
+        controlledDrainSupported: false,
+      }),
     });
     expect(deferred).toMatchObject({ deferred: true, reason: "gateway_active_work" });
     expect(commands.calls).toEqual([]);

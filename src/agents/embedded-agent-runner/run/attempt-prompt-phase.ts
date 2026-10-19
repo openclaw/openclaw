@@ -18,6 +18,7 @@ import { log } from "../logger.js";
 import {
   persistToolResultProjections,
   persistSessionSystemPrompt,
+  persistSessionToolSurface,
 } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { createAbortableError, isOpenClawAbortableWrapper } from "./abortable.js";
@@ -428,6 +429,7 @@ export async function runEmbeddedAttemptPromptPhase(
       await submitEmbeddedAttemptPrompt({
         ...(promptBuildAppendContext ? { appendContext: promptBuildAppendContext } : {}),
         attempt,
+        registration: preparedStreamRuntime.stream.registration,
         activeSession,
         contextTokenBudget: promptContext.contextTokenBudget,
         compactionRequestBudget,
@@ -502,7 +504,9 @@ export async function runEmbeddedAttemptPromptPhase(
         persistToolResultProjections: async () => {
           if (
             !isRawModelRun &&
-            (inHistorySystemUpdates || toolResultPromptProjectionState.frozen.size > 0)
+            (inHistorySystemUpdates ||
+              sessionPromptState.pendingToolSurface ||
+              toolResultPromptProjectionState.frozen.size > 0)
           ) {
             await withTranscriptWrite(async () => {
               runAbortController.signal.throwIfAborted();
@@ -510,11 +514,11 @@ export async function runEmbeddedAttemptPromptPhase(
                 toolResultPromptProjectionState,
                 (customType, data) => sessionManager.appendCustomEntryAsync(customType, data),
               );
-              if (sessionRuntime.prepareSystemPromptUpdate) {
-                await persistSessionSystemPrompt(sessionPromptState, (customType, data) =>
-                  sessionManager.appendCustomEntryAsync(customType, data),
-                );
-              }
+              const appendEntry = (customType: string, data: unknown) =>
+                sessionManager.appendCustomEntryAsync(customType, data);
+              await (sessionRuntime.prepareSystemPromptUpdate
+                ? persistSessionSystemPrompt(sessionPromptState, appendEntry)
+                : persistSessionToolSurface(sessionPromptState, appendEntry));
             });
           }
         },

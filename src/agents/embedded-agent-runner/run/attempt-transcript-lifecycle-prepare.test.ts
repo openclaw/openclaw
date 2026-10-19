@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { createAssistantMessageEventStream } from "@openclaw/llm-core";
 import { expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
@@ -22,9 +24,9 @@ import {
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { getAgentRunLifecycleGeneration } from "../../../infra/agent-run-registry.js";
 import {
-  isSessionWorkAdmissionActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../../../sessions/session-lifecycle-admission.js";
+  isSessionControllerWorkActive,
+  runSessionMutation,
+} from "../../../sessions/session-controller.lifecycle.js";
 import { onSessionIdentityMutation } from "../../../sessions/session-lifecycle-events.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -59,6 +61,45 @@ import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 const userMessage = { role: "user" as const, content: "First user turn", timestamp: 1 };
 const initialWriteKinds = ["message", "model", "thinking"] as const;
+
+it("retained transcript writers do not retain completed attempt continuations", async () => {
+  async function completeAttempt() {
+    const attempt = {
+      config: {},
+      runId: "retention",
+      sessionId: "retention",
+      sessionFile: "agent:main:retention",
+      sessionKey: "agent:main:retention",
+      sessionPersistence: "detached" as const,
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "retention",
+        sessionKey: "agent:main:retention",
+        storePath: "/tmp/retention-unused.sqlite",
+      },
+      continuation: { messages: [userMessage], prompt: "continue" },
+    };
+    const prepared = await prepareEmbeddedAttemptTranscriptLifecycle({
+      attempt,
+      runAbortController: new AbortController(),
+      externalAbortController: { arm() {}, async throwIfFiredAfterPrepCleanup() {} },
+    });
+    await prepared.withOwnedTranscriptWrite(async () => {});
+    await prepared.transcriptLifecycle.dispose();
+    return {
+      writer: prepared.withOwnedTranscriptWrite,
+      continuation: new WeakRef(attempt.continuation),
+    };
+  }
+  const completed = await Promise.all(Array.from({ length: 20 }, completeAttempt));
+  const control = new WeakRef({});
+  await nextTurn();
+  queryObjects(WeakRef);
+  expect(control.deref()).toBeUndefined();
+  expect(completed.filter(({ continuation }) => continuation.deref())).toHaveLength(0);
+  await expect(completed[0]!.writer(async () => {})).rejects.toThrow("attempt disposed");
+});
+
 function observeCreation(
   sessionId: string,
   listener: Parameters<typeof onSessionIdentityMutation>[0],
@@ -218,7 +259,7 @@ async function withInitialWriter(
     } finally {
       try {
         await prepared?.transcriptLifecycle.dispose();
-        expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(false);
+        expect(isSessionControllerWorkActive(target.storePath, [target.sessionKey])).toBe(false);
       } finally {
         for (const owner of admissions) {
           owner.close();
@@ -590,12 +631,12 @@ it("retains uncommitted custody beyond bounded teardown without aborting accepte
         });
         await Promise.resolve();
         expect(closed).toBe(false);
-        expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(true);
+        expect(isSessionControllerWorkActive(target.storePath, [target.sessionKey])).toBe(true);
         expect(loadSessionEntry(target)).toBeUndefined();
         gate.resolve();
         await write;
         await closing;
-        expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(false);
+        expect(isSessionControllerWorkActive(target.storePath, [target.sessionKey])).toBe(true);
         expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
       } finally {
         gate.resolve();
@@ -608,11 +649,11 @@ it("retains uncommitted custody beyond bounded teardown without aborting accepte
 
 it("keeps its uncommitted creator visible inside a same-key lifecycle mutation", () =>
   withInitialWriter(async ({ target }) => {
-    await runExclusiveSessionLifecycleMutation("create", {
+    await runSessionMutation({
       scope: target.storePath,
       identities: [target.sessionKey],
       prepare: async () => {
-        expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(true);
+        expect(isSessionControllerWorkActive(target.storePath, [target.sessionKey])).toBe(true);
       },
       run: async () => {
         expect(loadSessionEntry(target)).toBeUndefined();
@@ -623,7 +664,7 @@ it("keeps its uncommitted creator visible inside a same-key lifecycle mutation",
 it("rejects an existing row before reacquiring its enclosing lifecycle mutation", () =>
   withInitialWriter(async ({ manager, runParams, target }) => {
     manager.appendMessage(userMessage);
-    await runExclusiveSessionLifecycleMutation("create", {
+    await runSessionMutation({
       scope: target.storePath,
       identities: [target.sessionKey],
       run: async () => {
@@ -691,7 +732,9 @@ it.each([
     withInitialWriter(
       async ({ manager, promptState, runParams, target }) => {
         expect(Boolean(promptState.sessionWriterFence)).toBe(existing);
-        expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(!existing);
+        expect(isSessionControllerWorkActive(target.storePath, [target.sessionKey])).toBe(
+          !existing,
+        );
         await appendInitial(kind, manager);
         const entry = loadSessionEntry({ ...target, readConsistency: "latest" });
         expect(entry).toMatchObject({
@@ -703,7 +746,9 @@ it.each([
           expectedWriterRunId: runParams.runId,
         };
         expect(promptState.sessionWriterFence).toEqual(expectedFence);
-        expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(false);
+        expect(isSessionControllerWorkActive(target.storePath, [target.sessionKey])).toBe(
+          !existing,
+        );
         expect(manager.getSessionTarget()).toMatchObject(expectedFence);
         manager.appendMessage(userMessage);
         expect(readEvents(target)).toHaveLength(3);
@@ -761,7 +806,7 @@ it.each(["same-session", "copied-writer", "other-session"] as const)(
       const before = loadSessionEntry(target);
       await expect(appendInitial("message", manager)).rejects.toThrow(WriterReboundError);
       expect(promptState.sessionWriterFence).toBeUndefined();
-      expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(true);
+      expect(isSessionControllerWorkActive(target.storePath, [target.sessionKey])).toBe(true);
       expect(loadSessionEntry(target)).toEqual(before);
       expect(readEvents(target)).toEqual([]);
     }),
@@ -787,7 +832,7 @@ it("publishes no initial claim or identity for a rolled-back outer transaction",
       expect(loadSessionEntry(target)).toBeUndefined();
       expect(readEvents(target)).toEqual([]);
       expect(identities).toEqual([]);
-      expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(true);
+      expect(isSessionControllerWorkActive(target.storePath, [target.sessionKey])).toBe(true);
 
       (await openManager()).appendMessage(userMessage);
       expect(promptState.sessionWriterFence?.expectedWriterRunId).toBe(runParams.runId);

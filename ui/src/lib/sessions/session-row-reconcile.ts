@@ -4,7 +4,7 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as stringValue } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow, SessionRunStatus } from "../../api/types.ts";
-import { isSessionRunActive } from "../session-run-state.ts";
+import { isSessionRunStateActive } from "../session-run-state.ts";
 import { sessionMatchesArchivedFilter, type SessionArchivedFilter } from "./navigation.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -140,7 +140,7 @@ function isStaleForActiveSession(
   incoming: GatewaySessionRow,
   existing: GatewaySessionRow | undefined,
 ): boolean {
-  if (!existing || !isSessionRunActive(existing) || isSessionRunActive(incoming)) {
+  if (!existing || !isSessionRunStateActive(existing) || isSessionRunStateActive(incoming)) {
     return false;
   }
   if (

@@ -7,8 +7,7 @@ import {
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeQaRuntimeEnvParams } from "./gateway-child-command.test-support.js";
-import { buildQaRuntimeEnv } from "./gateway-child-env.js";
+import { createQaGatewaySetupHarness } from "./gateway-child-setup.test-support.js";
 import {
   assertQaLiveCodexAuthAvailable,
   stageQaLiveAnthropicSetupToken,
@@ -19,6 +18,7 @@ import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const tempDirs = createTempDirHarness();
+const setup = createQaGatewaySetupHarness();
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN", undefined);
@@ -26,6 +26,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  await setup.cleanup();
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
   await tempDirs.cleanup();
@@ -115,13 +116,14 @@ describe("QA Gateway auth profile staging", () => {
     for (const agentId of ["main", "qa"]) {
       expect((await readAuthProfileStore(stateDir, agentId)).profiles).toEqual({});
     }
-    const env = buildQaRuntimeEnv({
-      ...makeQaRuntimeEnvParams(baseEnv),
-      stateDir,
-      providerMode: "live-frontier",
-    });
+    const { env } = await setup.prepare(
+      {
+        providerMode: "live-frontier",
+      },
+      baseEnv,
+    );
     expect(env.CODEX_API_KEY).toBe("synthetic-qa-api-key");
-    expect(env).not.toHaveProperty("OPENCLAW_QA_CODEX_API_KEY_HANDOFF");
+    expect("OPENCLAW_QA_CODEX_API_KEY_HANDOFF" in env).toBe(false);
   });
 
   it.each([

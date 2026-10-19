@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
-import type { CodexThread, CodexThreadItem } from "./protocol.js";
+import type { CodexThread, CodexThreadItem, CodexTurn } from "./protocol.js";
 import {
   projectBoundedCodexThreadHistory,
   projectBoundedCodexVisibleSessionHistory,
@@ -41,13 +41,48 @@ function userItem(id: string, text: string): CodexThreadItem {
   return historyItem(id, "", { type: "userMessage", content: [{ type: "text", text }] });
 }
 
-function project(thread: CodexThread, throughTurnId: string | null, modelProvider?: string) {
+function turn(id: string, items: CodexThreadItem[], fields: Partial<CodexTurn> = {}): CodexTurn {
+  return { id, status: "completed", items, ...fields };
+}
+
+function exchange(id: string, label: string, phase?: string, fields: Partial<CodexTurn> = {}) {
+  const items = [
+    userItem(`user-${id}`, `${label} question`),
+    historyItem(`assistant-${id}`, `${label} answer`, { phase }),
+  ];
+  return turn(id, items, fields);
+}
+
+function responseMessage(role: "user" | "assistant", text: string, phase?: string) {
+  return {
+    type: "message",
+    role,
+    content: [{ type: role === "user" ? "input_text" : "output_text", text }],
+    ...(phase ? { phase } : {}),
+  };
+}
+
+function project(
+  thread: CodexThread | CodexTurn[],
+  throughTurnId = Array.isArray(thread) ? (thread.at(-1)?.id ?? null) : null,
+  modelProvider?: string,
+) {
   return projectBoundedCodexThreadHistory({
-    thread,
+    thread: Array.isArray(thread)
+      ? { id: "thread-prefix", projectId: null, turns: thread }
+      : thread,
     throughTurnId,
     modelProvider,
     importedAt: 1_800_000_000_000,
   });
+}
+
+function refusal(detailedExplanation: string, fields = {}) {
+  return {
+    message: "The provider paused this request.",
+    codexErrorInfo: "misalignmentPolicyViolation",
+    misalignment: { detailedExplanation, ...fields },
+  };
 }
 
 describe("projectBoundedCodexThreadHistory", () => {
@@ -56,36 +91,16 @@ describe("projectBoundedCodexThreadHistory", () => {
     projectId: null,
     createdAt: 1_700_000_000,
     turns: [
-      {
-        id: "turn-a",
-        status: "completed",
+      exchange("turn-a", "First", "commentary", {
         startedAt: 1_700_000_001,
         completedAt: 1_700_000_002,
-        items: [
-          userItem("user-a", "First question"),
-          historyItem("assistant-a", "First answer", { phase: "commentary" }),
-        ],
-      },
-      {
-        id: "turn-b",
-        status: "completed",
+      }),
+      exchange("turn-b", "Second", "final_answer", {
         startedAt: 1_700_000_003,
         completedAt: 1_700_000_004,
-        items: [
-          userItem("user-b", "Second question"),
-          historyItem("assistant-b", "Second answer", { phase: "final_answer" }),
-        ],
-      },
-      {
-        id: "turn-active",
-        status: "inProgress",
-        items: [historyItem("active-secret", "Do not import the active tail")],
-      },
-      {
-        id: "turn-failed",
-        status: "failed",
-        items: [historyItem("failed-secret", "Do not import the failed tail")],
-      },
+      }),
+      turn("turn-active", [historyItem("active-secret", "active tail")], { status: "inProgress" }),
+      turn("turn-failed", [historyItem("failed-secret", "failed tail")], { status: "failed" }),
     ],
   };
 
@@ -106,98 +121,53 @@ describe("projectBoundedCodexThreadHistory", () => {
       model: "native-history",
     });
     expect(projection.responseItems).toEqual([
-      {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: "First question" }],
-      },
-      {
-        type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text: "First answer" }],
-        phase: "commentary",
-      },
-      {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: "Second question" }],
-      },
-      {
-        type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text: "Second answer" }],
-        phase: "final_answer",
-      },
+      responseMessage("user", "First question"),
+      responseMessage("assistant", "First answer", "commentary"),
+      responseMessage("user", "Second question"),
+      responseMessage("assistant", "Second answer", "final_answer"),
     ]);
     expect(JSON.stringify(projection)).not.toContain("active tail");
     expect(JSON.stringify(projection)).not.toContain("failed tail");
   });
 
   it("preserves imported async and commentary ownership while keeping async messages out of model history", () => {
-    const importedThread: CodexThread = {
-      ...thread,
-      turns: [
-        {
-          id: "turn-async-history",
-          status: "completed",
-          items: [
-            userItem("user-async-history", "Investigate this"),
-            historyItem("commentary-history", "Checking the deployment.", { phase: "commentary" }),
-            historyItem("async-history", "Which environment should I use?", {
-              phase: "final_answer",
-              delivery: "async",
-              questions: [
-                { title: "Which environment should I use?", options: ["Staging", "Local"] },
-              ],
-            }),
-            historyItem("final-history", "Deployment complete.", { phase: "final_answer" }),
-          ],
-        },
-      ],
-    };
-
-    const projection = project(importedThread, "turn-async-history");
+    const question = "Which environment should I use?";
+    const questions = [{ title: question, options: ["Staging", "Local"] }];
+    const projection = project([
+      turn("turn-async-history", [
+        userItem("user-async-history", "Investigate this"),
+        historyItem("commentary-history", "Checking the deployment.", { phase: "commentary" }),
+        historyItem("async-history", question, {
+          phase: "final_answer",
+          delivery: "async",
+          questions,
+        }),
+        historyItem("final-history", "Deployment complete.", { phase: "final_answer" }),
+      ]),
+    ]);
 
     expect(projection.transcriptMessages).toHaveLength(4);
     expect(projection.transcriptMessages[1]).toMatchObject({ phase: "commentary" });
     expect(projection.transcriptMessages[2]).toMatchObject({
       phase: "final_answer",
-      openclawAsyncDelivery: {
-        itemId: "async-history",
-        questions: [{ title: "Which environment should I use?", options: ["Staging", "Local"] }],
-      },
+      openclawAsyncDelivery: { itemId: "async-history", questions },
     });
-    expect(JSON.stringify(projection.responseItems)).not.toContain(
-      "Which environment should I use?",
-    );
+    expect(JSON.stringify(projection.responseItems)).not.toContain(question);
     expect(projection.responseItems).toHaveLength(3);
-    const visibleSessionHistory = projectBoundedCodexVisibleSessionHistory(
-      projection.transcriptMessages.map((message, index) => ({
-        entryId: `entry-${index}`,
-        parentId: index === 0 ? null : `entry-${index - 1}`,
-        seq: index,
-        role: message.role,
-        message,
-      })),
-    );
-    expect(visibleSessionHistory).toEqual([
-      {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: "Investigate this" }],
-      },
-      {
-        type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text: "Checking the deployment." }],
-        phase: "commentary",
-      },
-      {
-        type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text: "Deployment complete." }],
-        phase: "final_answer",
-      },
+    expect(
+      projectBoundedCodexVisibleSessionHistory(
+        projection.transcriptMessages.map((message, index) => ({
+          entryId: `entry-${index}`,
+          parentId: index === 0 ? null : `entry-${index - 1}`,
+          seq: index,
+          role: message.role,
+          message,
+        })),
+      ),
+    ).toEqual([
+      responseMessage("user", "Investigate this"),
+      responseMessage("assistant", "Checking the deployment.", "commentary"),
+      responseMessage("assistant", "Deployment complete.", "final_answer"),
     ]);
   });
 
@@ -207,22 +177,13 @@ describe("projectBoundedCodexThreadHistory", () => {
       ["interrupted", "aborted"],
       ["failed", "error"],
     ] as const) {
-      const terminalThread: CodexThread = {
-        ...thread,
-        turns: [
-          ...(thread.turns?.slice(0, 2) ?? []),
-          {
-            id: `turn-${status}`,
-            status,
-            ...(status === "failed" ? { error: { message: "provider disconnected" } } : {}),
-            items: [
-              userItem(`user-${status}`, `${status} question`),
-              historyItem(`assistant-${status}`, `${status} answer`),
-            ],
-          },
-        ],
-      };
-      const projection = project(terminalThread, `turn-${status}`);
+      const projection = project([
+        ...(thread.turns?.slice(0, 2) ?? []),
+        exchange(`turn-${status}`, status, undefined, {
+          status,
+          ...(status === "failed" ? { error: { message: "provider disconnected" } } : {}),
+        }),
+      ]);
       expect(messageContent(projection.transcriptMessages.at(-2))).toBe(`${status} question`);
       const assistant = projection.transcriptMessages.at(-1);
       expect(messageContent(assistant)).toEqual([{ type: "text", text: `${status} answer` }]);
@@ -230,16 +191,8 @@ describe("projectBoundedCodexThreadHistory", () => {
       expect(projection.responseItems).toHaveLength(status === "completed" ? 6 : 5);
       expect(projection.responseItems.at(-1)).toEqual(
         status === "completed"
-          ? {
-              type: "message",
-              role: "assistant",
-              content: [{ type: "output_text", text: "completed answer" }],
-            }
-          : {
-              type: "message",
-              role: "user",
-              content: [{ type: "input_text", text: `${status} question` }],
-            },
+          ? responseMessage("assistant", "completed answer")
+          : responseMessage("user", `${status} question`),
       );
       if (status === "failed") {
         expect(assistant).toMatchObject({ errorMessage: "provider disconnected" });
@@ -249,30 +202,15 @@ describe("projectBoundedCodexThreadHistory", () => {
     }
   });
 
-  it.each([true])("retains refused history with an assistant item: %s", (withAssistant) => {
+  it("retains refused history with an assistant item", () => {
     const explanation = "The proposed action differed from the requested task.";
     const continuation = { message: "  Continue only the requested task.\n" };
-    const assistantItem = historyItem("assistant-refused", "The request was paused.");
-    const importedThread: CodexThread = {
-      ...thread,
-      turns: [
-        {
-          id: "turn-refused",
-          status: "failed",
-          error: {
-            message: "The provider paused this request.",
-            codexErrorInfo: "misalignmentPolicyViolation",
-            misalignment: {
-              errorType: "future_category",
-              detailedExplanation: explanation,
-              steer: continuation,
-            },
-          },
-          items: withAssistant ? [assistantItem] : [],
-        },
-      ],
-    };
-    const projection = project(importedThread, "turn-refused");
+    const projection = project([
+      turn("turn-refused", [historyItem("assistant-refused", "The request was paused.")], {
+        status: "failed",
+        error: refusal(explanation, { errorType: "future_category", steer: continuation }),
+      }),
+    ]);
     expect(projection.transcriptMessages).toHaveLength(1);
     expect(projection.transcriptMessages[0]).toMatchObject({
       role: "assistant",
@@ -283,7 +221,7 @@ describe("projectBoundedCodexThreadHistory", () => {
           details: {
             provider: "openai",
             category: "misalignment",
-            nativeThreadId: importedThread.id,
+            nativeThreadId: thread.id,
             nativeTurnId: "turn-refused",
             review: { explanation, continuation, errorType: "future_category" },
           },
@@ -295,17 +233,13 @@ describe("projectBoundedCodexThreadHistory", () => {
 
   it("includes review findings in the bounded history byte budget", () => {
     const explanation = "x".repeat(64 * 1024);
-    const turns = Array.from({ length: 10 }, (_, index) => ({
-      id: `turn-review-${index}`,
-      status: "failed",
-      items: [],
-      error: {
-        message: "The provider paused this request.",
-        codexErrorInfo: "misalignmentPolicyViolation",
-        misalignment: { detailedExplanation: explanation },
-      },
-    }));
-    const projection = project({ ...thread, turns }, "turn-review-9");
+    const turns = Array.from({ length: 10 }, (_, index) =>
+      turn(`turn-review-${index}`, [], {
+        status: "failed",
+        error: refusal(explanation),
+      }),
+    );
+    const projection = project(turns);
     expect(projection.importedMessages).toBeGreaterThan(0);
     expect(projection.omittedMessages).toBeGreaterThan(0);
     expect(Buffer.byteLength(JSON.stringify(projection.transcriptMessages), "utf8")).toBeLessThan(
@@ -318,17 +252,11 @@ describe("projectBoundedCodexThreadHistory", () => {
 
   it("enforces UTF-8 byte limits without splitting multibyte text", () => {
     const oversizedText = `prefix-${"🙂".repeat(20_000)}-suffix`;
-    const oversizedThread: CodexThread = {
-      id: "thread-byte-bounds",
-      projectId: null,
-      turns: Array.from({ length: 9 }, (_, index) => ({
-        id: `turn-${index}`,
-        status: "completed",
-        items: [userItem(`user-${index}`, `${index}:${oversizedText}`)],
-      })),
-    };
-
-    const projection = project(oversizedThread, "turn-8");
+    const projection = project(
+      Array.from({ length: 9 }, (_, index) =>
+        turn(`turn-${index}`, [userItem(`user-${index}`, `${index}:${oversizedText}`)]),
+      ),
+    );
     const texts = projection.transcriptMessages.map((message) => {
       const content = messageContent(message);
       return typeof content === "string" ? content : "";
@@ -336,14 +264,14 @@ describe("projectBoundedCodexThreadHistory", () => {
 
     expect(projection).toMatchObject({ importedMessages: 8, omittedMessages: 1 });
     expect(texts[0]).toMatch(/^1:prefix-/u);
-    expect(texts.every((text) => Buffer.byteLength(text, "utf8") <= 64 * 1024)).toBe(true);
+    for (const text of texts) {
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(64 * 1024);
+      expect(text).not.toContain("�");
+      expect(text.endsWith("[Message truncated during Codex history import.]")).toBe(true);
+    }
     expect(
       texts.reduce((bytes, text) => bytes + Buffer.byteLength(text, "utf8"), 0),
     ).toBeLessThanOrEqual(512 * 1024);
-    expect(texts.every((text) => !text.includes("�"))).toBe(true);
-    expect(
-      texts.every((text) => text.endsWith("[Message truncated during Codex history import.]")),
-    ).toBe(true);
   });
 
   it("rejects a non-terminal or missing boundary and projects no history without one", () => {

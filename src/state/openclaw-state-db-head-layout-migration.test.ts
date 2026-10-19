@@ -116,6 +116,9 @@ it.each(["runtime", "doctor"] as const)(
       [
         "schema_meta",
         "config_machine_state",
+        "github_publication_requests",
+        "github_personal_publication_requests",
+        "github_repository_publication_requests",
         "session_state_heads",
         "acp_replay_events",
         "skill_usage",

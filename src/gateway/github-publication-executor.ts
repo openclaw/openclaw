@@ -633,7 +633,8 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
               body: content.pullRequestBody(),
               head: `${pushOwner}:${branch}`,
               base: baseBranch,
-              draft: true,
+              // Requests accepted before the choice was introduced created drafts.
+              draft: row.draft !== 0,
             }),
         },
       );

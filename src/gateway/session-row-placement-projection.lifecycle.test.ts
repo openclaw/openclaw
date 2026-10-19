@@ -13,6 +13,7 @@ function placementReadView() {
     isCurrent(): boolean;
     getPolicyConfig(): SessionRowReadView["state"]["policyConfig"];
   } = {
+    physicalPaths: (locator) => [locator],
     state: {
       cfg: {},
       policyConfig: {},

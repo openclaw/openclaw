@@ -30,10 +30,10 @@ import {
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import {
-  beginSessionWorkAdmission,
-  isCompetingSessionWorkAdmissionActive,
-  isSessionWorkAdmissionActive,
-} from "../../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  isCompetingSessionControllerWorkActive,
+  isSessionControllerWorkActive,
+} from "../../sessions/session-controller.lifecycle.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import * as personalPublicationLifecycle from "../../state/github-personal-publication-lifecycle.js";
 import {
@@ -625,7 +625,7 @@ describe("session deletion and native owner state", () => {
     const owner = nativeOwner({ prepare });
     const identities = [lowerKey, "lower-session"];
     const onInterrupt = vi.fn();
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities,
       assertAllowed: () => {},
@@ -646,10 +646,10 @@ describe("session deletion and native owner state", () => {
       expect(bindings).toEqual(bindingsBefore);
       expect(prepare).not.toHaveBeenCalled();
       expect(onInterrupt).not.toHaveBeenCalled();
-      expect(isSessionWorkAdmissionActive(storePath, identities)).toBe(true);
-      expect(isCompetingSessionWorkAdmissionActive(storePath, identities)).toBe(true);
+      expect(isSessionControllerWorkActive(storePath, identities)).toBe(true);
+      expect(isCompetingSessionControllerWorkActive(storePath, identities)).toBe(true);
       await admission.run(async () => {
-        expect(isCompetingSessionWorkAdmissionActive(storePath, identities)).toBe(false);
+        expect(isCompetingSessionControllerWorkActive(storePath, identities)).toBe(false);
       });
     } finally {
       admission.release();

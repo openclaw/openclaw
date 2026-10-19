@@ -10,6 +10,10 @@ import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { captureUserProfileAuthorityRead } from "../../state/user-profile-events.js";
+import {
+  hasMultipleResidentSessionSharingIdentities,
+  readResidentUserProfileIdentity,
+} from "../../state/user-profile-list.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import type {
   SkillLibraryReadInput,
@@ -76,6 +80,7 @@ export function captureSkillLibraryAccess(
         kind,
         params,
         authority: input,
+        ...(kind === "session" ? { sessionFacts: captureSessionFacts() } : {}),
       } as SkillLibraryReadInput; // SAFETY: K binds the captured kind and parameters in SkillLibraryReadQueries.
       // Upload progress changes independently of published library entries.
       const cacheKey = kind === "upload" ? undefined : JSON.stringify(commandInput);
@@ -206,4 +211,22 @@ export function captureSkillLibraryAccess(
       }
     },
   };
+
+  function captureSessionFacts() {
+    const profile = input.profileId
+      ? readResidentUserProfileIdentity(input.profileId, pinned)
+      : undefined;
+    if (input.profileId && !profile) {
+      throw new SkillLibraryError(
+        "AUTHORITY_EXPIRED",
+        "Your Gateway profile is no longer available. Sign in again before accessing the library.",
+      );
+    }
+    return {
+      profile: profile
+        ? { id: profile.profileId, role: profile.role, githubLogin: profile.githubLogin ?? null }
+        : undefined,
+      multipleProfiles: hasMultipleResidentSessionSharingIdentities(pinned),
+    };
+  }
 }

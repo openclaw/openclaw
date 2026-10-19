@@ -36,6 +36,7 @@ import {
 } from "./session-list-filters.js";
 import { sortAndLimitSessionEntries, type SessionEntryPair } from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
+import type { SessionRowGeneration } from "./session-row-identity.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import {
   prepareSessionRowPublication,
@@ -168,7 +169,7 @@ export function* selectSessionEntries(
 function buildSessionsListResult(
   params: Pick<SessionListFilterParams, "cfg" | "opts" | "modelCatalog">,
   list: SessionEntrySelection & { now: number; storePath: string },
-  { sessions, rowHistory }: { sessions: GatewaySessionRow[]; rowHistory?: GatewaySessionRow[][] },
+  { sessions, rowHistory }: { sessions: GatewaySessionRow[]; rowHistory?: SessionRowGeneration[] },
   policyConfig: OpenClawConfig,
   client?: GatewayClient | null,
 ): SessionsListResult {
@@ -201,7 +202,7 @@ function buildSessionsListResult(
           metadataSnapshot,
         })?.forAgent(defaultsAgentId, defaultsCatalog);
   const sharedRows =
-    opts.rowMode === "sidebar"
+    opts.rowMode === "sidebar" || opts.ifRowsRevision !== undefined
       ? shareSidebarSessionRows(sessions, opts.ifRowsRevision, rowHistory)
       : { sessions };
   const result = {
@@ -430,8 +431,10 @@ export function prepareProjectedSessionList(params: {
   }
   const projectRun = context
     ? createVisibleActiveSessionRunProjector(
-        context,
         projection.state.rowContext.projectedAgentRuns,
+        undefined,
+        context.resolveGatewayContext,
+        projection.physicalPaths,
       )
     : undefined;
   const presentation = prepareSessionRowPublication(projection, now)(client, projectRun);
@@ -455,9 +458,7 @@ export function prepareProjectedSessionList(params: {
     involvingActorId: opts.involvingMe ? identity : undefined,
     ownerFirstActorId: opts.ownerFirst ? identity : undefined,
     restrictProfileReferences: client !== undefined,
-    projectActiveRun: context
-      ? (key, entry, agentId) => active(getTarget(key)?.key ?? key, entry, agentId)!
-      : undefined,
+    projectActiveRun: context ? (key) => active(getTarget(key)!)! : undefined,
     entryFilter: (key, entry, row) => {
       const storeKey = row.storeKey ?? key;
       let visible = params.visibility?.get(entry);
@@ -469,7 +470,7 @@ export function prepareProjectedSessionList(params: {
       return (
         visible &&
         (opts.hasBoard === undefined || row.hasBoard === opts.hasBoard) &&
-        (!opts.activeOnly || Boolean(active(storeKey, entry, row.agentId)?.active))
+        (!opts.activeOnly || Boolean(active(getTarget(key)!)?.active))
       );
     },
   };
@@ -477,7 +478,9 @@ export function prepareProjectedSessionList(params: {
     prepared.candidateKeys(
       new Set([
         ...(projectRun?.candidateSessionIdsOrKeys() ?? []),
-        ...presentation.rowContext.subagentRuns.requesterSessionKeys(),
+        ...[...presentation.rowContext.subagentRuns.requesterSessionKeys()].filter(
+          (key) => presentation.rowContext.subagentRuns.countActiveDescendantRuns(key) > 0,
+        ),
         ...(presentation.rowContext.projectedSubagentActivity ?? []),
       ]),
     );

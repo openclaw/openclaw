@@ -1,4 +1,4 @@
-import { createEffect, createMemo, onCleanup } from "solid-js";
+import { Show, createEffect, createMemo, onCleanup } from "solid-js";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
   linkReaderPrefetchRef as createLinkReaderPrefetchRef,
@@ -56,12 +56,20 @@ function navigateCronRunLink(event: Event, props: ChatThreadProps): boolean {
   return true;
 }
 
-export function ChatThread(input: { props: ChatThreadProps; transcript: ChatTranscript }) {
+export function ChatThread(input: {
+  props: ChatThreadProps;
+  transcript: ChatTranscript;
+  bindViewport?: (element: HTMLDivElement) => () => void;
+}) {
   let root: HTMLDivElement | undefined;
   const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
   let stopHistory: (() => void)[] = [];
+  let releaseViewport: (() => void) | undefined;
   // Retained transcript roots can settle before refs; bind native input at the ref.
-  onCleanup(() => stopHistory.forEach((stop) => stop()));
+  onCleanup(() => {
+    stopHistory.forEach((stop) => stop());
+    releaseViewport?.();
+  });
   const paneId = createMemo(() => input.props.paneId);
   const search = createMemo(() =>
     projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
@@ -178,6 +186,7 @@ export function ChatThread(input: { props: ChatThreadProps; transcript: ChatTran
       <div
         ref={(element) => {
           root = element;
+          releaseViewport = input.bindViewport?.(element);
           markdownRef(element);
           prefetchRef(element);
           stopHistory = ["wheel", "touchstart", "touchmove"].map((type) =>
@@ -259,13 +268,16 @@ export function ChatThread(input: { props: ChatThreadProps; transcript: ChatTran
           }}
         />
         {contents()}
-        {commentPins() ? (
-          <ChatCommentPins
-            attachments={input.props.commentAttachments}
-            sessionKey={input.props.sessionKey}
-            disabled={input.props.commentsDisabled ?? false}
-          />
-        ) : undefined}
+        <Show when={commentPins() ? getTranscriptState(paneId()) : undefined} keyed>
+          {(threadState) => (
+            <ChatCommentPins
+              threadState={threadState}
+              attachments={input.props.commentAttachments}
+              sessionKey={input.props.sessionKey}
+              disabled={input.props.commentsDisabled ?? false}
+            />
+          )}
+        </Show>
       </div>
     </div>
   );

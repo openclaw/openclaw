@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import { serializeSidebarEntry, type SidebarZoneEntry } from "../app-navigation.ts";
 import { isRouteId, pluginTabLocation } from "../app-route-paths.ts";
@@ -159,6 +159,13 @@ export function readSidebarBrandPresentation(host: AppSidebarRenderHost) {
 }
 
 function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
+  let button: HTMLButtonElement | undefined;
+  const focusHeader = () => button?.focus();
+  onCleanup(() => {
+    if (host.sidebarMenus.focusAgentRoster === focusHeader) {
+      host.sidebarMenus.focusAgentRoster = undefined;
+    }
+  });
   const currentBranding = () => host.sessionDataContext?.theme.branding ?? currentThemeBranding();
   const cached = () => (host.sidebarSnapshot?.brand.agentId ? null : host.sidebarSnapshot?.brand);
   const brand = () => cached() ?? readSidebarBrandPresentation(host);
@@ -184,6 +191,10 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
         <button
           type="button"
           class="sidebar-workspace-header__main"
+          ref={(element) => {
+            button = element;
+            host.sidebarMenus.focusAgentRoster = focusHeader;
+          }}
           aria-haspopup="menu"
           aria-expanded={menuOpen() ? "true" : "false"}
           aria-label={`${name()} · ${t("agentChip.workspaceMenuLabel")}`}
@@ -294,6 +305,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
       transition: host.connectionFlagVisible,
       hover: hovered(),
       focus: focused(),
+      footerControlsOverlap: host.footerControlsOverlap,
     }),
     (request, previous) => {
       if (!request.kind || !(request.transition || request.hover || request.focus)) {
@@ -313,24 +325,11 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
       const anchor = identityAnchor.getBoundingClientRect();
       const { width, height } = flag.getBoundingClientRect();
       // The hidden flag has a box; anchor its resting rect without the slide transform.
-      const surfaces = identityAnchor
-        .closest(".shell")
-        ?.querySelectorAll<HTMLElement>(
-          "main.content :is(.chat-footer .agent-chat__composer-shell, .new-session-page__composer, .creation-composer, .cron-editor-actions)",
-        );
-      const overlaps = Array.from(surfaces ?? []).some((surface) => {
-        if (!surface.checkVisibility({ checkOpacity: true, visibilityProperty: true })) {
-          return false;
-        }
-        const rect = surface.getBoundingClientRect();
-        return (
-          rect.width > 0 &&
-          rect.height > 0 &&
-          rect.left < anchor.right + width &&
-          rect.right > anchor.right &&
-          rect.top < anchor.bottom &&
-          rect.bottom > anchor.bottom - height
-        );
+      const overlaps = request.footerControlsOverlap?.({
+        left: anchor.right,
+        right: anchor.right + width,
+        top: anchor.bottom - height,
+        bottom: anchor.bottom,
       });
       setFlagOpen(!overlaps);
     },
@@ -514,6 +513,7 @@ export function renderAppSidebarPageEntry(
 export function renderAppSidebarPluginTab(
   host: AppSidebarRenderHost,
   tab: () => GatewayControlUiPluginTab,
+  triggerRef?: (element: HTMLAnchorElement) => void,
 ): JSX.Element {
   const ref = () => ({ pluginId: tab().pluginId, id: tab().id });
   const key = () => pluginTabKey(ref());
@@ -534,6 +534,7 @@ export function renderAppSidebarPluginTab(
   });
   const link = (
     <SidebarNavLink
+      ref={triggerRef}
       href={`${location().pathname}${location().search}`}
       icon={<Icon name={iconName()} />}
       label={tab().label}

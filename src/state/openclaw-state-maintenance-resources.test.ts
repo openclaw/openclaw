@@ -72,13 +72,13 @@ function withExternalResources(run: Parameters<typeof withResources>[0]) {
 }
 
 // Plugin state keeps cause text out of its public message; the maintenance refusal is the cause.
-async function expectOfflineMaintenance(operation: Promise<unknown>) {
+async function expectMissingMaintenanceScope(operation: Promise<unknown>) {
   const error = await operation.then(() => undefined).catch((caught: unknown) => caught);
   const messages: string[] = [];
   for (let current: unknown = error; current instanceof Error; current = current.cause) {
     messages.push(current.message);
   }
-  expect(messages.join("\n")).toContain("offline maintenance");
+  expect(messages.join("\n")).toContain("without an active schema lease or maintenance scope");
 }
 
 function createSharedWorkerClient(env: NodeJS.ProcessEnv) {
@@ -168,7 +168,7 @@ it.each(["new", "existing", "borrowed"] as const)(
         await store.register("owned", { value: "owned" });
         return database && reference ? { database, reference } : undefined;
       });
-      await expectOfflineMaintenance(store.register("later", { value: "later" }));
+      await expectMissingMaintenanceScope(store.register("later", { value: "later" }));
       if (borrowed) {
         borrowed.reference.release();
         expect(borrowed.database.db.isOpen).toBe(false);

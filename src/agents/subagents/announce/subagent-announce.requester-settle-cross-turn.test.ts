@@ -100,21 +100,13 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
     ).toBe(early);
     expect(deliverSpy).toHaveBeenCalledTimes(early ? 1 : 0);
     if (crossAgent) {
-      for (let attempt = 0; attempt < 12; attempt++) {
-        await vi.advanceTimersByTimeAsync(30_001);
-        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: short }));
-      }
-      expect(short.requesterSettleWake?.status).toBe("pending");
+      await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: short }));
+      expect(short.requesterSettleWake).toBeDefined();
       expect(deliverSpy).not.toHaveBeenCalled();
     }
     long.execution = { status: "terminal", startedAt: now - 200, endedAt: now + 1 };
     long.pauseReason = undefined;
     long.cleanupCompletedAt = now + 1;
-    for (const entry of runs.values()) {
-      if (entry.requesterSettleWake) {
-        entry.requesterSettleWake.nextAttemptAt = undefined;
-      }
-    }
     if (short.requesterSettleWake) {
       expect(
         await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: short })),

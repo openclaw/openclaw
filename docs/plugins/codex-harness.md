@@ -559,6 +559,11 @@ Native Codex subagents use Codex's execution and collaboration controls, not
 OpenClaw's retired Tasks view. Their current execution, assignment result, and
 result delivery remain separate facts.
 
+Once every native child has finished and its result has been captured, pending
+result delivery no longer prevents the parent from resuming. OpenClaw retains
+those results for delivery and retry. Running or interrupted children that can
+resume still protect the parent subscription.
+
 Retirement revokes captured requester authority immediately, then joins accepted
 native submission and assignment writes before releasing child subscriptions.
 Client disposal joins those writes before releasing retained owners.

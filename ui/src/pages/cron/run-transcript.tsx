@@ -116,6 +116,15 @@ export function createCronRunTranscript(notify: () => void, capture: () => Scope
     close,
     open,
     load,
+    reconnect() {
+      const interrupted = state.loading;
+      attempt += 1;
+      scope = capture();
+      state.loading = false;
+      if (state.entry && scope && (interrupted || state.messages.length === 0)) {
+        void load(state.failedCursor);
+      }
+    },
     ref: (element: HTMLElement) => {
       region = element;
     },

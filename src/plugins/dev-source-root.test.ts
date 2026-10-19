@@ -64,6 +64,7 @@ describe("packaged development official plugins", () => {
       const request = resolveManagedPluginInstallRequest(
         { source: "official", pluginId: "codex" },
         [],
+        "https://clawhub.ai",
       );
       expect(request.source).toBe(expected);
       expect(isBundledPluginInsideDevSourceRoot({ rootDir: pluginRoot, env: process.env })).toBe(
@@ -84,6 +85,7 @@ describe("packaged development official plugins", () => {
           resolveManagedPluginInstallRequest(
             { source: "official", pluginId: "codex", ...choice },
             [],
+            "https://clawhub.ai",
           ).source,
         ).toBe("official");
       }

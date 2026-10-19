@@ -231,7 +231,8 @@ async function startProvider(signal: AbortSignal, holdFirstResume: boolean) {
                     ? "Permission change"
                     : !tools.includes("exec") && !tools.includes("dispatch_action")
                       ? "Tool exec not found"
-                      : expect.stringContaining("exec denied"),
+                      : // The session tool pin keeps exec offered and refuses it at call time.
+                        expect.stringMatching(/exec denied|exec is not available in this turn/),
               });
               text(final(name));
             }

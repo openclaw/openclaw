@@ -41,6 +41,8 @@ describe("vLLM provider registration", () => {
     expect(prepared.thinkingLevelMap?.[level]).toBe(effort);
   });
 
+  // Proves that the plugin registers the hook. The direct policy tests in
+  // provider-policy-api.test.ts do not prove registration.
   it("exposes the binary thinking profile hook", async () => {
     const provider = await registerSingleProviderPlugin(vllmPlugin);
 

@@ -550,15 +550,29 @@ describe("web monitor inbox socket lifecycle", () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    let presenceTimeoutIndex = -1;
     try {
       sock.sendPresenceUpdate.mockClear();
-      sock.sendPresenceUpdate.mockImplementationOnce(() => new Promise(() => {}));
+      sock.sendPresenceUpdate.mockImplementationOnce(() => {
+        // The adapter schedules this operation's timeout immediately after the socket call.
+        presenceTimeoutIndex = setTimeoutSpy.mock.calls.length;
+        return new Promise(() => {});
+      });
 
       const presencePromise = listener.sendComposingTo("+1555");
       await expectSocketOperationTimeout("sendPresenceUpdate", presencePromise);
       expect(sock.sendPresenceUpdate).toHaveBeenCalledTimes(1);
-      expect(vi.getTimerCount()).toBe(0);
+      expect(setTimeoutSpy.mock.calls[presenceTimeoutIndex]?.[1]).toBe(
+        DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+      );
+      const presenceTimeout = setTimeoutSpy.mock.results[presenceTimeoutIndex];
+      expect(presenceTimeout?.type).toBe("return");
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(presenceTimeout?.value);
     } finally {
+      clearTimeoutSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
       vi.useRealTimers();
       await listener.close();
     }

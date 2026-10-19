@@ -213,6 +213,18 @@ describe("session GitHub publication protocol", () => {
       expect(Value.Check(schema, { token: "synthetic-PAT" })).toBe(false);
     }
   });
+  it.each([undefined, false, true, "true", 1, null])(
+    "validates publication draft choice %s",
+    (draft) => {
+      expect(
+        Value.Check(SessionGitHubPublishParamsSchema, {
+          idempotencyKey: "draft-choice",
+          ...(draft !== undefined ? { draft } : {}),
+        }),
+      ).toBe(draft === undefined || typeof draft === "boolean");
+    },
+  );
+
   it("accepts bounded intent without caller-owned repository authority", () => {
     expect(
       Value.Check(SessionGitHubPublishParamsSchema, {

@@ -3,7 +3,7 @@ import { addAbortListener } from "node:events";
 import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
+import { resolveAgentDatabaseIdleHandleTtlMs } from "../../infra/sqlite-handle-lifecycle.js";
 import { publishSqliteWalCheckpointObservation } from "../../infra/sqlite-wal-checkpoint.js";
 import { recordWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -186,7 +186,8 @@ export class SqliteReclamationWorker {
       this.active = undefined;
       if (!this.revoked) {
         this.transport?.channel.unref();
-        this.idle = setTimeout(this.onIdle, SQLITE_IDLE_HANDLE_TTL_MS);
+        // The Worker pins its agent database and lease until it retires.
+        this.idle = setTimeout(this.onIdle, resolveAgentDatabaseIdleHandleTtlMs());
         this.idle.unref();
         if (this.onRetired) {
           const drainSignal = getGatewayRestartDrainSignal();

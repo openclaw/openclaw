@@ -3,6 +3,7 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle-context.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
+import { getSubagentActivationRuns } from "./subagent-registry-memory.js";
 import { SubagentRegistryMutationRejectedError } from "./subagent-registry-persistence.js";
 import { selectRequesterTurnChildren } from "./subagent-registry-requester-yield.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -26,7 +27,7 @@ export async function settleRestoredRequesterTurns({
   const requesterTurns = new Map<string, SubagentRunRecord>();
   const resolveRequesterAgentId = (entry: SubagentRunRecord) =>
     resolveSubagentRequesterAgentId(cfg, entry);
-  for (const entry of runs.values()) {
+  for (const entry of getSubagentActivationRuns(runs)) {
     const requesterTurnRunId = entry.requesterTurnRunId?.trim();
     if (!requesterTurnRunId || entry.expectsCompletionMessage !== true) {
       continue;

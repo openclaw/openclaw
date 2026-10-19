@@ -41,8 +41,8 @@ function createFixture(stateDir: string) {
     queue,
     monitor: (options: Parameters<MakeMonitor>[0]) =>
       createTelegramIngressMonitor({ queue, ...monitorDefaults, ...options }),
-    enqueue: async (updateId: number) => {
-      const payload = updatePayload(updateId);
+    enqueue: async (updateId: number, callback = false) => {
+      const payload = callback ? callbackPayload(updateId) : updatePayload(updateId);
       const eventId = String(updateId).padStart(16, "0");
       const laneKey = telegramSpooledUpdateLaneKey(payload.update);
       await queue.enqueue(eventId, payload, { laneKey });
@@ -70,6 +70,22 @@ function updatePayload(updateId: number) {
     update: {
       update_id: updateId,
       message: { text: "hello", from: { id: 111 }, chat: { id: 111, type: "private" } },
+    },
+  } satisfies TelegramSpooledUpdatePayload;
+}
+
+function callbackPayload(updateId: number) {
+  const payload = updatePayload(updateId);
+  return {
+    ...payload,
+    update: {
+      update_id: updateId,
+      callback_query: {
+        id: `callback-${updateId}`,
+        data: "choice",
+        from: { id: 111 },
+        message: payload.update.message,
+      },
     },
   } satisfies TelegramSpooledUpdatePayload;
 }
@@ -140,6 +156,40 @@ async function waitPending(queue: Queue, rows: Array<Record<string, unknown>>) {
 describe("createTelegramIngressMonitor", () => {
   it.each([
     {
+      name: "wrapped callback authority rejection",
+      callback: true,
+      error: new Error("spooled callback failed", {
+        cause: new Error("Gateway requester authority changed"),
+      }),
+      reason: "callback-authority-changed",
+      message: "Gateway requester authority changed",
+    },
+    {
+      name: "deferred callback authority rejection",
+      callback: true,
+      deferred: true,
+      error: new Error("Gateway requester authority changed"),
+      reason: "callback-authority-changed",
+      message: "Gateway requester authority changed",
+    },
+    {
+      name: "expired callback query",
+      callback: true,
+      error: new GrammyError(
+        "Call to 'answerCallbackQuery' failed",
+        {
+          ok: false,
+          error_code: 400,
+          description:
+            "Bad Request: query is too old and response timeout expired or query ID is invalid",
+        },
+        "answerCallbackQuery",
+        { callback_query_id: "expired-callback" },
+      ),
+      reason: "callback-query-expired",
+      message: "query is too old",
+    },
+    {
       name: "blocked Telegram recipient",
       error: telegramSendError(403, "Forbidden: bot was blocked by the user"),
       reason: "recipient-unreachable",
@@ -165,18 +215,38 @@ describe("createTelegramIngressMonitor", () => {
       reason: "session-archived",
       message: "Restore the archived session before starting work.",
     },
-  ])("dead-letters a $name without retrying it", async ({ error, reason, message }) => {
+  ])("dead-letters a $name and releases the next same-chat update", async (testCase) => {
+    const { error, reason, message } = testCase;
+    const callback = "callback" in testCase && testCase.callback;
     await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
-      const { eventId } = await enqueue(3);
-      const dispatch = vi.fn(async () => ({ kind: "failed-retryable" as const, error }));
+      const { eventId } = await enqueue(3, callback);
+      await enqueue(4);
+      const dispatch = vi
+        .fn<MonitorOptions["dispatch"]>()
+        .mockImplementationOnce(async () => {
+          if ("deferred" in testCase && testCase.deferred) {
+            const participant = createTelegramSpooledReplayDeferredParticipant("callback");
+            participant?.settle({ kind: "failed-retryable", error });
+            return undefined;
+          }
+          return { kind: "failed-retryable", error };
+        })
+        .mockResolvedValue({ kind: "completed" });
       const monitor = makeMonitor({ dispatch });
 
       monitor.start();
       await monitor.waitForIdle();
 
-      expect(dispatch).toHaveBeenCalledOnce();
+      expect(dispatch.mock.calls.map(([update]) => update)).toEqual([
+        (callback ? callbackPayload(3) : updatePayload(3)).update,
+        updatePayload(4).update,
+      ]);
       expect(await queue.listFailed?.({ limit: "all" })).toEqual([
-        expect.objectContaining({ id: eventId, reason, message: expect.stringContaining(message) }),
+        expect.objectContaining({
+          id: eventId,
+          reason,
+          message: expect.stringContaining(message),
+        }),
       ]);
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
       await monitor.stop();
@@ -382,6 +452,7 @@ describe("createTelegramIngressMonitor", () => {
 
   it.each([
     new Error("late provider blip"),
+    new Error("Gateway requester authority changed"),
     Object.assign(new Error("workspace is not ready"), {
       name: "SessionWorkStartError",
       reason: "workspace_pending",

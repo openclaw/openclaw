@@ -413,10 +413,18 @@ export async function installScheduledTask(
       });
     }
     if (!args.definitionTransaction) {
-      restoreTask = await backupScheduledTaskDefinition(
-        activationEnv,
-        resolveTaskScriptPath(resolveScheduledTaskRenderEnv(args.env, args.environment)),
+      const scriptPath = resolveTaskScriptPath(
+        resolveScheduledTaskRenderEnv(args.env, args.environment),
       );
+      restoreTask = await backupScheduledTaskDefinition(activationEnv, scriptPath);
+      if (restoreTask.registered) {
+        writeFormattedLines(args.stdout, [
+          {
+            label: "Recovery backups",
+            value: `${scriptPath}.task.xml.bak and launcher .bak files beside it are retained for recovery`,
+          },
+        ]);
+      }
     }
     staged = await writeScheduledTaskScript(args, async (files) => {
       recovery = files;

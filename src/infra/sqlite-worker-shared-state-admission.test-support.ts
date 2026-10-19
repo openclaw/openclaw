@@ -127,14 +127,18 @@ export function registerSharedStateWorkerAdmissionTests(
         grant();
       });
     try {
-      expect(() => openOpenClawStateDatabase(options)).toThrow("offline maintenance");
+      expect(() => openOpenClawStateDatabase(options)).toThrow(
+        "without an active schema lease or maintenance scope",
+      );
       expect(() =>
         runOpenClawStateWriteTransaction(
           ({ db }) => storeDeviceAuthTokenInDatabase(db, deviceToken("sync", "must-not-commit")),
           options,
         ),
-      ).toThrow("offline maintenance");
-      await expect(write("unrelated")).rejects.toThrow("offline maintenance");
+      ).toThrow("without an active schema lease or maintenance scope");
+      await expect(write("unrelated")).rejects.toThrow(
+        "without an active schema lease or maintenance scope",
+      );
       await expect(wrongOwner.run(() => write("wrong"))).rejects.toThrow("does not own");
       await expect(unbound.run(() => write("unbound"))).rejects.toThrow("does not own");
       expect(stages).toEqual([]);
@@ -148,7 +152,7 @@ export function registerSharedStateWorkerAdmissionTests(
         write("late", () => {
           lateOwner = acquireGatewayStateOwner({ databasePath: database.path });
         }),
-      ).rejects.toThrow("offline maintenance");
+      ).rejects.toThrow("without an active schema lease or maintenance scope");
       lateOwner?.release();
       expect(stages).toEqual(
         ["accepted", "revoked", "late"].flatMap((id) => [`${id}:transaction`, `${id}:commit`]),
@@ -166,45 +170,54 @@ export function registerSharedStateWorkerAdmissionTests(
     }
   });
 
-  it("services direct broker commit admission while a native writer waits for its SQLite transaction", async () => {
-    const captured = createContext();
-    const { store, run } = await preparedStore(captured);
-    const stages: string[] = [];
-    let nativeFailure: unknown;
-    const workerInput = deviceToken("synthetic-broker-worker", "synthetic-worker-token");
-    const nativeInput = { ...workerInput, deviceId: "synthetic-broker-native" };
-    try {
-      await run({ type: "deviceAuth.store", input: workerInput }, (request, grant) => {
-        stages.push(request.stage);
-        expect(grant()).toBe(true);
-        if (request.stage === "transaction") {
-          // The worker holds BEGIN IMMEDIATE and next needs its commit grant.
-          try {
-            runOpenClawStateWriteTransaction(
-              ({ db }) => storeDeviceAuthTokenInDatabase(db, nativeInput),
-              { path: captured.admission.databasePath, env: captured.environment },
-            );
-          } catch (error) {
-            nativeFailure = error;
+  it.each([false, true])(
+    "services direct broker commit admission while a native writer waits, single statement=%s",
+    async (singleStatement) => {
+      const captured = createContext();
+      const { store, run } = await preparedStore(captured);
+      const stages: string[] = [];
+      let nativeFailure: unknown;
+      let nativeWrites = 0;
+      const workerInput = deviceToken("synthetic-broker-worker", "synthetic-worker-token");
+      const nativeInput = { ...workerInput, deviceId: "synthetic-broker-native" };
+      try {
+        await run({ type: "deviceAuth.store", input: workerInput }, (request, grant) => {
+          stages.push(request.stage);
+          expect(grant()).toBe(true);
+          if (request.stage === "transaction") {
+            // The worker holds BEGIN IMMEDIATE and next needs its commit grant.
+            try {
+              runOpenClawStateWriteTransaction(
+                ({ db }) => {
+                  nativeWrites += 1;
+                  return storeDeviceAuthTokenInDatabase(db, nativeInput);
+                },
+                { path: captured.admission.databasePath, env: captured.environment },
+                singleStatement ? { singleStatement: true } : {},
+              );
+            } catch (error) {
+              nativeFailure = error;
+            }
           }
-        }
-      });
-      expect(nativeFailure).toBeUndefined();
-      expect(stages).toEqual(["transaction", "commit"]);
-      for (const input of [workerInput, nativeInput]) {
-        expect(
-          await store.execute({
-            type: "deviceAuth.read",
-            input: { deviceId: input.deviceId, role: input.role, readOnly: true },
-          }),
-        ).toMatchObject({
-          entry: { token: input.token, role: input.role },
         });
+        expect(nativeFailure).toBeUndefined();
+        expect(nativeWrites).toBe(1);
+        expect(stages).toEqual(["transaction", "commit"]);
+        for (const input of [workerInput, nativeInput]) {
+          expect(
+            await store.execute({
+              type: "deviceAuth.read",
+              input: { deviceId: input.deviceId, role: input.role, readOnly: true },
+            }),
+          ).toMatchObject({
+            entry: { token: input.token, role: input.role },
+          });
+        }
+      } finally {
+        await store.close();
       }
-    } finally {
-      await store.close();
-    }
-  });
+    },
+  );
 
   it.each(["abort", "revoke", "exit"] as const)(
     "settles a queued %s without mutating its rows behind a native writer",

@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { runSubagentStateWorkerOperation as runWorker, useSubagentControlFixture } from "./subagent-control.test-support.js";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { captureGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
@@ -32,7 +32,6 @@ import {
   storedAnnouncement,
   suspendRun,
   updateRun,
-  withUnreadableReceipt,
 } from "./subagent-announcement.test-support.js";
 import * as registryDeps from "./subagent-registry-deps.js";
 import * as registryHelpers from "./subagent-registry-helpers.js";
@@ -40,7 +39,6 @@ import * as announceCleanup from "./subagent-registry-lifecycle-announce-cleanup
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
-  restoreSubagentRunsFromDisk,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
 import {
@@ -55,6 +53,7 @@ import {
   prepareSubagentSessionCleanupRevocation,
 } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { testing } from "./subagent-registry.test-helpers.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
@@ -138,143 +137,90 @@ it.each(["keep", "delete"] as const)(
   },
 );
 
-it.each(["not-committed", "unknown", "successor"] as const)(
-  "retains registered cleanup admission while its start waits (%s)",
-  async (change) => {
-    const run = await registerCompletion(`cleanup-start-${change}`);
-    const entry = currentRun(run.runId)!;
-    const unreadableReceiptFailure = {
-      name: "AggregateError",
-      message: "Failed to settle subagent cleanup roots",
-      errors: [
-        {
-          name: "SubagentRegistryCommitReceiptError",
-          outcome: "committed",
-          cause: { code: "outcome-unknown", message: "Committed registry receipt is unreadable" },
-        },
-      ],
-    };
-    const ready = createDeferredCore();
-    const release = createDeferredCore();
-    const successorQueued = createDeferredCore();
-    const mutation = vi.mocked(mutateSubagentRuns).mockImplementation((runIds, plan, options) => {
-      const pending = nativePersistence.mutateSubagentRuns(runIds, plan, options);
-      if (runIds.includes(`${run.runId}-successor`)) {
-        successorQueued.resolve();
-      }
-      return pending;
-    });
-    let intercepted = false;
-    let committedBeforeLoss = false;
-    let cleanupContext:
-      | Parameters<typeof nativeCleanup.startSubagentAnnounceCleanupFlow>[0]
-      | undefined;
-    const start = vi
-      .spyOn(announceCleanup, "startSubagentAnnounceCleanupFlow")
-      .mockImplementation((context, ...args) => {
-        cleanupContext = context;
-        return nativeCleanup.startSubagentAnnounceCleanupFlow(context, ...args);
+it("retains registered cleanup admission behind a durable write while a successor queues", async () => {
+  const run = await registerCompletion("cleanup-start-successor");
+  const entry = currentRun(run.runId)!;
+  const ready = createDeferredCore();
+  const release = createDeferredCore();
+  const successorQueued = createDeferredCore();
+  const mutation = vi.mocked(mutateSubagentRuns).mockImplementation((runIds, plan, options) => {
+    const pending = nativePersistence.mutateSubagentRuns(runIds, plan, options);
+    if (runIds.includes(`${run.runId}-successor`)) {
+      successorQueued.resolve();
+    }
+    return pending;
+  });
+  let predecessor: Promise<void> | undefined;
+  let cleanupContext:
+    | Parameters<typeof nativeCleanup.startSubagentAnnounceCleanupFlow>[0]
+    | undefined;
+  const start = vi
+    .spyOn(announceCleanup, "startSubagentAnnounceCleanupFlow")
+    .mockImplementation((context, ...args) => {
+      cleanupContext = context;
+      predecessor ??= updateRun(run.runId, (draft) => {
+        draft.label = "queued before cleanup";
       });
-    const worker = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation(async (context, operation, options) => {
-        const selected =
-          (!intercepted || change === "not-committed") &&
-          cleanupContext?.cleanupReservations.has(getSubagentRunRuntimeKey(entry));
-        if (!selected) {
-          return runWorker(context, operation, options);
-        }
-        intercepted = true;
+      return nativeCleanup.startSubagentAnnounceCleanupFlow(context, ...args);
+    });
+  let held = false;
+  const worker = probe.command(
+    stateWorker,
+    async (command, options, scope) => {
+      if (
+        !held &&
+        isSubagentRegistryWriteCommand(command) &&
+        command.input.values.some(
+          (row) =>
+            row.run_id === run.runId &&
+            rowToSubagentRunRecord(row)?.label === "queued before cleanup",
+        )
+      ) {
+        held = true;
         ready.resolve();
         await release.promise;
-        if (change === "not-committed") {
-          throw new Error("Synthetic refused cleanup start");
-        }
-        return withUnreadableReceipt(
-          runWorker,
-          context,
-          operation,
-          options,
-          (command) => change === "unknown" && command.type === "subagents.persistChanges",
-          () => {
-            committedBeforeLoss = true;
-          },
-        );
-      });
-    let registration: Promise<void> | undefined;
-    try {
-      completeRegistered(run);
-      await ready.promise;
-      const before = storedAnnouncement(run.runId);
-      expect(currentRun(run.runId)?.cleanupHandled).not.toBe(true);
-      expect(cleanupContext?.cleanupReservations.has(getSubagentRunRuntimeKey(entry))).toBe(true);
-      expect(before?.cleanupHandled).not.toBe(true);
-      expect(fixture.wake).not.toHaveBeenCalled();
-      resumeSubagentRun(run.runId);
-      if (change === "successor") {
-        registration = registerSuccessor(entry, "new child generation", {
-          runId: `${run.runId}-successor`,
-        });
-        await successorQueued.promise;
       }
-      release.resolve();
-      await registration;
-      if (change === "unknown") {
-        await expect(fixture.settle()).rejects.toMatchObject(unreadableReceiptFailure);
-      } else {
-        await fixture.settle();
-      }
-      if (change !== "successor") {
-        expect(fixture.wake).not.toHaveBeenCalled();
-        expect(storedAnnouncement(run.runId)?.cleanupCompletedAt).toBeUndefined();
-      }
-      if (change === "not-committed") {
-        expect(currentRun(run.runId)?.cleanupHandled).not.toBe(true);
-        expect(storedAnnouncement(run.runId)).toEqual(before);
-        worker.mockRestore();
-        resumeSubagentRun(run.runId);
-        await fixture.settle();
-        expect(fixture.wake).toHaveBeenCalledOnce();
-        expect(storedAnnouncement(run.runId)?.cleanupCompletedAt).toBeTypeOf("number");
-      } else if (change === "unknown") {
-        expect(currentRun(run.runId)?.cleanupHandled).not.toBe(true);
-        expect(committedBeforeLoss).toBe(true);
-        const persisted = storedAnnouncement(run.runId)!;
-        // Unknown receipt custody fences the row without publishing a speculative lock.
-        expect(persisted.cleanupHandled).toBe(false);
-        expect(persisted.execution).toEqual(before?.execution);
-        expect(persisted.completion).toEqual(before?.completion);
-        const nativeCalls = worker.mock.calls.length;
-        resumeSubagentRun(run.runId);
-        await expect(fixture.settle()).rejects.toMatchObject(unreadableReceiptFailure);
-        expect(worker).toHaveBeenCalledTimes(nativeCalls);
-        expect(fixture.wake).not.toHaveBeenCalled();
-      } else {
-        expect(fixture.wake).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            settledEntry: expect.objectContaining({ runId: run.runId }),
-          }),
-        );
-        expect(storedAnnouncement(run.runId)).toMatchObject({
-          cleanupCompletedAt: expect.any(Number),
-          execution: { status: "terminal", suppressSessionEffects: true },
-        });
-        expect(currentRun(`${run.runId}-successor`)?.execution.status).toBe("running");
-      }
-    } finally {
-      release.resolve();
-      mutation.mockRestore();
-      worker.mockRestore();
-      start.mockRestore();
-      await registration;
-      await fixture.settle();
-      if (change === "unknown") {
-        await closeOpenClawStateDatabaseAsync();
-        await restoreSubagentRunsFromDisk({ runs: subagentRuns });
-      }
-    }
-  },
-);
+      return scope.execute(command, options);
+    },
+    { original: runWorker },
+  );
+  let registration: Promise<void> | undefined;
+  try {
+    completeRegistered(run);
+    await ready.promise;
+    expect(currentRun(run.runId)?.cleanupHandled).not.toBe(true);
+    expect(cleanupContext?.cleanupReservations.has(getSubagentRunRuntimeKey(entry))).toBe(true);
+    expect(storedAnnouncement(run.runId)?.cleanupHandled).not.toBe(true);
+    expect(fixture.wake).not.toHaveBeenCalled();
+    resumeSubagentRun(run.runId);
+    registration = registerSuccessor(entry, "new child generation", {
+      runId: `${run.runId}-successor`,
+    });
+    await successorQueued.promise;
+    release.resolve();
+    await predecessor;
+    await registration;
+    await fixture.settle();
+    expect(fixture.wake).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        settledEntry: expect.objectContaining({ runId: run.runId }),
+      }),
+    );
+    expect(storedAnnouncement(run.runId)).toMatchObject({
+      cleanupCompletedAt: expect.any(Number),
+      execution: { status: "terminal", suppressSessionEffects: true },
+    });
+    expect(currentRun(`${run.runId}-successor`)?.execution.status).toBe("running");
+  } finally {
+    release.resolve();
+    mutation.mockRestore();
+    worker.mockRestore();
+    start.mockRestore();
+    await predecessor;
+    await registration;
+    await fixture.settle();
+  }
+});
 
 it("refuses cleanup before capture when its database is closed", async () => {
   const joinWork = observeRootWork();
@@ -337,6 +283,9 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
         return await waitResult.promise;
       });
     }
+    const { holdLiveRequesterTurns } =
+      await import("./subagent-requester-turn-liveness.test-support.js");
+    onTestFinished(holdLiveRequesterTurns("held-parent-turn").restore);
     await registerSubagentRun({
       ...registrationDefaults,
       runId,

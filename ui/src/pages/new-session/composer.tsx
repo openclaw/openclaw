@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, onSettled, Show, untrack } from "solid-js";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import {
   lobsterPetSeed,
@@ -30,7 +31,12 @@ import {
   handleChatAttachmentPaste,
 } from "../chat/components/chat-attachments.ts";
 import { AttachmentPreview, AttachmentReadStatus } from "../chat/components/chat-attachments.tsx";
-import { adjustTextareaHeight, paneDomId } from "../chat/components/chat-composer-dom.ts";
+import {
+  adjustTextareaHeight,
+  handleTextareaOverflowInteraction,
+  handleTextareaOverflowScroll,
+  paneDomId,
+} from "../chat/components/chat-composer-dom.ts";
 import "../../components/tooltip.ts";
 import { EmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
 import {
@@ -413,6 +419,7 @@ function createComposerPlaceholder(options: () => NewSessionComposerOptions) {
 }
 
 export function NewSessionComposer(props: { options: NewSessionComposerOptions }) {
+  const footerControl = createFooterControlRef();
   const draft = createMemo(() => {
     const source = props.options.draftSource;
     return source ? projectOwner(source, (owner) => owner.read()) : undefined;
@@ -455,6 +462,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
   });
   return (
     <div
+      ref={footerControl}
       class="agent-chat__composer-shell new-session-page__composer"
       onDrop={(event) => {
         if (options().nativeTerminal && event.dataTransfer?.files.length) {
@@ -555,6 +563,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
               aria-activedescendant={frame().activeMenuOptionId ?? undefined}
               aria-describedby={frame().menuAnnouncementId}
               onInput={(event) => {
+                handleTextareaOverflowInteraction(event);
                 if (options().dictationActive) {
                   return;
                 }
@@ -576,6 +585,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
                 frame().updateMenus(target, event);
               }}
               onBeforeInput={(event) => {
+                handleTextareaOverflowInteraction(event);
                 const target = event.currentTarget;
                 textarea.mentionInput = {
                   value: target.value,
@@ -588,6 +598,9 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
                   !frame().composerLocked && !options().nativeTerminal && !textarea.composing,
                 );
               }}
+              onScroll={handleTextareaOverflowScroll}
+              onWheel={handleTextareaOverflowInteraction}
+              onPointerDown={handleTextareaOverflowInteraction}
               onSelect={(event) => frame().handleSelect(event)}
               onFocus={(event) => frame().handleSelect(event)}
               onPointerUp={(event) => frame().handleSelect(event)}
@@ -599,6 +612,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
                 }
               }}
               onBlur={(event) => {
+                handleTextareaOverflowInteraction(event);
                 clearCompositionEnd(event);
                 textarea.composing = false;
                 textarea.emojiMenu.close();
@@ -608,8 +622,12 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
                 textarea.composing = false;
                 frame().updateMenus(event.currentTarget);
               }}
-              onKeyDown={(event) => frame().handleComposerKeydown(event)}
-              onCompositionStart={() => {
+              onKeyDown={(event) => {
+                handleTextareaOverflowInteraction(event);
+                frame().handleComposerKeydown(event);
+              }}
+              onCompositionStart={(event) => {
+                handleTextareaOverflowInteraction(event);
                 textarea.composing = true;
                 textarea.emojiMenu.close();
                 textarea.mentionMenu.close();

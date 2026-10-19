@@ -8,7 +8,6 @@ import type { QaTransportAdapter } from "./qa-transport.js";
 import { artifactPaths, createTestLab } from "./suite-runtime-parity.test-support.js";
 import {
   buildQaGatewayHeapCheckpointRuntimeEnvPatch,
-  buildQaIsolatedScenarioWorkerParams,
   mergeQaRuntimeEnvPatches,
 } from "./suite-support.js";
 import { makeQaSuiteTestScenario, recordQaSuiteTestResults } from "./suite-test-helpers.js";
@@ -73,23 +72,6 @@ function cleanupErrorForTest(params: Parameters<typeof throwQaSuiteCleanupErrors
     throw error;
   }
   throw new Error("Expected cleanup to fail");
-}
-
-function isolatedWorkerParams(
-  overrides: Partial<Parameters<typeof buildQaIsolatedScenarioWorkerParams>[0]>,
-) {
-  return buildQaIsolatedScenarioWorkerParams({
-    repoRoot: "/repo",
-    outputDir: "/repo/.artifacts/qa-e2e/scenarios/patched-control-ui",
-    providerMode: "mock-openai",
-    transportId: "qa-channel",
-    primaryModel: "mock-openai/gpt-5.6-luna",
-    alternateModel: "mock-openai/gpt-5.6-luna-alt",
-    fastMode: true,
-    scenario: makeQaSuiteTestScenario("isolated-control-ui-ownership", { surface: "control-ui" }),
-    startLab: vi.fn(),
-    ...overrides,
-  });
 }
 
 function readiness(stop: QaLabServerHandle["stop"], ownsLab: boolean, timeoutMs?: number) {
@@ -414,48 +396,6 @@ describe("qa suite", () => {
       OPENAI_API_KEY: "mock",
       NODE_OPTIONS: option,
     });
-  });
-
-  it("forwards run options into isolated scenario worker params", () => {
-    const startLab = vi.fn();
-    const adapterFactory = {
-      id: "telegram",
-      matches: vi.fn(() => true),
-      create: vi.fn(),
-    };
-    const scenario = makeQaSuiteTestScenario("patched-control-ui", {
-      surface: "control-ui",
-      gatewayConfigPatch: messageToolConfig(),
-    });
-    const makeInput = () => ({
-      adapterFactories: [adapterFactory],
-      channelId: "telegram",
-      adapterOptions: { repoRoot: "/repo" },
-      sutOpenClawCommand: {
-        executablePath: "/usr/local/bin/openclaw-telegram-sut-launcher",
-        usePackagedPlugins: true,
-      },
-      thinkingDefault: "minimal" as const,
-      claudeCliAuthMode: "subscription" as const,
-      enabledPluginIds: ["acpx"],
-      transportReadyTimeoutMs: 180_000,
-      forcedRuntime: "codex" as const,
-      writeEvidenceFile: false,
-    });
-
-    const params = isolatedWorkerParams({ scenario, startLab, input: makeInput() });
-    expect(params).toMatchObject({
-      scenarioIds: ["patched-control-ui"],
-      ...makeInput(),
-      concurrency: 1,
-      startLab,
-      controlUiEnabled: true,
-    });
-  });
-
-  it("preserves an explicit Control UI override for isolated scenarios", () => {
-    const params = isolatedWorkerParams({ input: { controlUiEnabled: false } });
-    expect(params.controlUiEnabled).toBe(false);
   });
 
   it("keeps caller-owned serial labs on shared workers without a launcher", () => {

@@ -113,7 +113,6 @@ type SidebarPresentationHost = Pick<
   otherAgentsHaveUnread(): boolean;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
   isSessionChildrenFullyShown(key: string): boolean;
-  querySelectorAll: HTMLElement["querySelectorAll"];
 };
 type SidebarPresentationReaders = {
   snapshot: boolean;
@@ -140,6 +139,15 @@ export class SidebarSessionProjection {
   // Record frame admission only; owner.updated can precede child DOM bindings.
   private publishedSessionPresentation = "";
   private admittedPresencePresentation = "";
+  private readonly mountedCatalogRows = new Set<{ key: string }>();
+
+  mountCatalogRow(key: string): () => void {
+    const row = { key };
+    this.mountedCatalogRows.add(row);
+    return () => {
+      this.mountedCatalogRows.delete(row);
+    };
+  }
 
   shouldPublishSessionData(
     host: SidebarPresentationHost,
@@ -218,13 +226,10 @@ export class SidebarSessionProjection {
                 (row) => host.sessionDataContext?.sessions.isRunVisuallyActive(row) ?? false,
               ),
             ),
-            Array.from(
-              host.querySelectorAll<HTMLElement>("[data-catalog-session-key][data-session-key]"),
-              (element) => {
-                const row = catalogRowsByKey.get(element.dataset.sessionKey ?? "");
-                return row ? navigation.toSidebarSession(row) : null;
-              },
-            ),
+            Array.from(this.mountedCatalogRows, ({ key }) => {
+              const row = catalogRowsByKey.get(key);
+              return row ? navigation.toSidebarSession(row) : null;
+            }),
             areSessionCatalogsSettled(data),
             [...data.visibleSessionLimits],
           ]

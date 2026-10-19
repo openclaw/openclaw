@@ -63,9 +63,11 @@ workspace owner before container allocation, while the skill mounts remain
 read-only. This also keeps normal retention cleanup independent of container
 user-namespace ownership.
 
-At the checkout root, `.cache/vitest/`, `.cache/openclaw/bun/`,
+At the checkout root, `.cache/vitest/`, `.cache/bun-transpiler/`, `.cache/openclaw/bun/`,
 `.cache/ms-playwright/`, and `.local/share/pnpm/store/` caches stay with the runtime
-that produced them, along with `.artifacts/vitest-workers/` compiler outputs and
+that produced them, along with `.artifacts/vitest-workers/` compiler outputs,
+`.artifacts/vitest-worker-cache/` retained compiler outputs,
+`.artifacts/vitest-shard-timings.json` scheduling samples, and
 `.artifacts/dist-artifacts.lock/` ownership files.
 Synchronization and recovery of older pending results exclude these exact paths,
 so dependency and test-tool downloads do not count as authored workspace results.
@@ -78,7 +80,7 @@ If you are a guest, you can ask the agent:
 
 > Bring this workspace up to date with the latest project changes, keeping my
 > edits. Resolve any conflicts, rerun the relevant checks and Auto Review, and
-> update the same draft PR. Do not merge it.
+> update the same PR. Do not merge it.
 
 Use `github_publish` with `action: "refresh_base"` to explicitly integrate the
 current selected repository base into this session's existing local managed
@@ -102,7 +104,8 @@ available objects from host-selected snapshots when possible, then stages its
 current source. Guest HEAD, branches, and commit history remain unchanged.
 The result includes `review: { mode: "local", base: "<commit>" }`. Run tests and
 normal Auto Review with that exact target after refresh or conflict resolution,
-then publish to update the same draft. Reviewing against the old guest HEAD would
+then publish to update the same PR, preserving its current draft or open state.
+Reviewing against the old guest HEAD would
 also include upstream-only changes. The operation requires the prepared sandbox
 of the current agent; a direct RPC cannot supply another runtime. Publication
 refuses a pending integration and never silently merges new base changes into

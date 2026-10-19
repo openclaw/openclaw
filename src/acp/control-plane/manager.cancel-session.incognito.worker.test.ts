@@ -15,6 +15,7 @@ import {
   writeAcpSessionMetaForMigration,
 } from "../runtime/session-meta.js";
 import { withAcpCancellationFixture } from "./manager.cancel-session.worker.test-support.js";
+import { stopAcpControllerTurns } from "./manager.controller-test-support.js";
 
 it.each([
   ["incognito", "clear", "snapshot"],
@@ -94,11 +95,8 @@ it.each([
               events.push(event);
             },
           });
-          const cancellation = f.manager.cancelSession({
+          const cancellation = stopAcpControllerTurns({
             ...f.target,
-            expectedRunId: "incognito-parity",
-            expectedInstanceId: admittedRunContext.operationalRunInstance.instanceId,
-            expectedOwnerKey: "agent:main:main",
           });
           return Promise.allSettled([cancellation, turn]);
         };

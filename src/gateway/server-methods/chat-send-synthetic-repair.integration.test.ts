@@ -12,6 +12,7 @@ import {
   LEGACY_MISSING_TOOL_RESULT_TEXT,
   makeMissingToolResult,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
@@ -54,11 +55,13 @@ it("chat.send replays synthetic repairs through session history and the register
   const modelRef = `${provider}/${model}`;
   const requests: MessageCreateParamsStreaming[] = [];
   const providerWork: Promise<void>[] = [];
+  let nextRequestReceived: ReturnType<typeof createDeferred<void>> | undefined;
   const endpoint = createServer((request, response) => {
     const work = (async () => {
       expect(request.method).toBe("POST");
       expect(request.url).toBe("/v1/messages");
       requests.push(JSON.parse(await readText(request)));
+      nextRequestReceived?.resolve();
       const events = [
         {
           type: "message_start",
@@ -234,6 +237,8 @@ it("chat.send replays synthetic repairs through session history and the register
           manager.flushPendingPersistence();
           const original = readStoredRows(target.storePath, sessionId);
           const requestCount = requests.length;
+          const requestReceived = createDeferred();
+          nextRequestReceived = requestReceived;
           const started = await client.request<{ runId: string; status: string }>("chat.send", {
             sessionKey,
             message: "Summarize the health check.",
@@ -241,6 +246,7 @@ it("chat.send replays synthetic repairs through session history and the register
             deliver: false,
           });
           expect(started.status).toBe("started");
+          await requestReceived.promise;
           await expect(
             client.request("agent.wait", { runId: started.runId, timeoutMs: 30000 }),
           ).resolves.toMatchObject({ status: "ok" });

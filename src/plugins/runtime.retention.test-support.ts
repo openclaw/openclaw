@@ -27,6 +27,65 @@ import { createPluginRecord } from "./status.test-helpers.js";
 
 const emptyResult = { cleanupCount: 0, failures: [] };
 
+function assertCollected(reference: WeakRef<object>, message: string) {
+  assert.equal(reference.deref(), undefined, message);
+}
+
+function withFixtureEnvironment<T>(root: string, run: () => Promise<T>) {
+  return withEnvAsync(
+    {
+      OPENCLAW_HOME: root,
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+    },
+    run,
+  );
+}
+
+function writeManifest(root: string, additionalProperties?: false) {
+  fs.writeFileSync(
+    path.join(root, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "retention-fixture",
+      configSchema: {
+        type: "object",
+        ...(additionalProperties === false ? { additionalProperties } : {}),
+      },
+      contracts: { tools: ["retention_fixture"] },
+    }),
+  );
+}
+
+function loadFixture(
+  loadOpenClawPlugins: (typeof import("./loader.js"))["loadOpenClawPlugins"],
+  entry: string,
+  previousRegistry?: ReturnType<typeof createEmptyPluginRegistry>,
+) {
+  const cache = createPluginCache();
+  const registry = withPluginCache(cache, () =>
+    loadOpenClawPlugins({
+      config: {
+        plugins: {
+          allow: ["retention-fixture"],
+          load: { paths: [entry] },
+          slots: { memory: "none" },
+        },
+      },
+      pluginSdkResolution: "src",
+      activate: false,
+      cache: false,
+      previousRegistry,
+    }),
+  );
+  assert.deepEqual(
+    registry.plugins.map((record) => record.status),
+    ["loaded"],
+    JSON.stringify(registry.diagnostics),
+  );
+  return { registry, cache };
+}
+
 async function collect(...released: WeakRef<object>[]) {
   const gc = globalThis.gc;
   assert.ok(gc, "The retention child requires --expose-gc");
@@ -133,25 +192,10 @@ async function loadReplacement(root: string) {
   const { loadOpenClawPlugins } = await import("./loader.js");
   const previous = createEmptyPluginRegistry();
   const reference = new WeakRef(previous);
-  const cache = createPluginCache();
-  const registry = withPluginCache(cache, () =>
-    loadOpenClawPlugins({
-      config: {
-        plugins: {
-          allow: ["retention-fixture"],
-          load: { paths: [path.join(root, "index.cjs")] },
-          slots: { memory: "none" },
-        },
-      },
-      pluginSdkResolution: "src",
-      activate: false,
-      cache: false,
-      previousRegistry: previous,
-    }),
-  );
-  assert.deepEqual(
-    registry.plugins.map((record) => record.status),
-    ["loaded"],
+  const { registry, cache } = loadFixture(
+    loadOpenClawPlugins,
+    path.join(root, "index.cjs"),
+    previous,
   );
   assert.deepEqual(
     await disposePluginRegistryInstances(previous, registry, { cfg: {} }),
@@ -166,26 +210,7 @@ async function reloadDiagnosticSubscribers(root: string) {
   const retired: WeakRef<object>[] = [];
   let current: Awaited<ReturnType<typeof load>> | undefined;
   async function load() {
-    const cache = createPluginCache();
-    const registry = withPluginCache(cache, () =>
-      loadOpenClawPlugins({
-        config: {
-          plugins: {
-            allow: ["retention-fixture"],
-            load: { paths: [root] },
-            slots: { memory: "none" },
-          },
-        },
-        pluginSdkResolution: "src",
-        activate: false,
-        cache: false,
-      }),
-    );
-    assert.deepEqual(
-      registry.plugins.map((record) => record.status),
-      ["loaded"],
-      JSON.stringify(registry.diagnostics),
-    );
+    const { registry, cache } = loadFixture(loadOpenClawPlugins, root);
     const tool = registry.tools[0]?.factory({ config: {} });
     assert.ok(tool && !Array.isArray(tool));
     const result = await tool.execute("inspect", {});
@@ -256,14 +281,7 @@ switch (process.argv[2]) {
     // The compiled GC child supplies its real SDK exports without resolving source .ts modules.
     Reflect.set(globalThis, sdkKey, { onDiagnosticEvent, onInternalDiagnosticEvent });
     try {
-      fs.writeFileSync(
-        path.join(root, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: "retention-fixture",
-          configSchema: { type: "object" },
-          contracts: { tools: ["retention_fixture"] },
-        }),
-      );
+      writeManifest(root);
       fs.writeFileSync(
         path.join(root, "index.cjs"),
         `
@@ -278,33 +296,26 @@ switch (process.argv[2]) {
         } };
       `,
       );
-      await withEnvAsync(
-        {
-          OPENCLAW_HOME: root,
-          OPENCLAW_STATE_DIR: path.join(root, "state"),
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        },
-        () =>
-          inspectAfterFrameRelease(
-            () => reloadDiagnosticSubscribers(root),
-            async ({ current, retired }) => {
-              try {
-                await collect();
-                assert.equal(
-                  retired.filter((reference) => reference.deref() !== undefined).length,
-                  0,
-                  "Old evidence and plugin instances must collect",
-                );
-                emitDiagnosticEvent({ type: "message.queued", source: "retention-fixture" });
-                assert.deepEqual(current.evidence, { events: 4 });
-              } finally {
-                await disposePluginRegistryInstances(current.registry, undefined, { cfg: {} });
-                await retirePluginCache(current.cache);
-              }
-              assert.equal(hasInternalDiagnosticEventListeners(), false);
-            },
-          ),
+      await withFixtureEnvironment(root, () =>
+        inspectAfterFrameRelease(
+          () => reloadDiagnosticSubscribers(root),
+          async ({ current, retired }) => {
+            try {
+              await collect();
+              assert.equal(
+                retired.filter((reference) => reference.deref() !== undefined).length,
+                0,
+                "Old evidence and plugin instances must collect",
+              );
+              emitDiagnosticEvent({ type: "message.queued", source: "retention-fixture" });
+              assert.deepEqual(current.evidence, { events: 4 });
+            } finally {
+              await disposePluginRegistryInstances(current.registry, undefined, { cfg: {} });
+              await retirePluginCache(current.cache);
+            }
+            assert.equal(hasInternalDiagnosticEventListeners(), false);
+          },
+        ),
       );
     } finally {
       Reflect.deleteProperty(globalThis, sdkKey);
@@ -324,16 +335,8 @@ switch (process.argv[2]) {
       async (result) => {
         try {
           await collect(result.owner, result.registry);
-          assert.equal(
-            result.owner.deref(),
-            undefined,
-            "Live recovery retained its retired instance",
-          );
-          assert.equal(
-            result.registry.deref(),
-            undefined,
-            "Live recovery retained its retired registry",
-          );
+          assertCollected(result.owner, "Live recovery retained its retired instance");
+          assertCollected(result.registry, "Live recovery retained its retired registry");
           assert.equal(
             (result.current.loadModule(result.source) as { read(): string }).read(),
             "recovered source",
@@ -352,14 +355,7 @@ switch (process.argv[2]) {
   case "loader": {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "plugin-retention-")));
     try {
-      fs.writeFileSync(
-        path.join(root, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: "retention-fixture",
-          configSchema: { type: "object", additionalProperties: false },
-          contracts: { tools: ["retention_fixture"] },
-        }),
-      );
+      writeManifest(root, false);
       fs.writeFileSync(
         path.join(root, "index.cjs"),
         `module.exports = {
@@ -371,33 +367,21 @@ switch (process.argv[2]) {
         }
       };`,
       );
-      await withEnvAsync(
-        {
-          OPENCLAW_HOME: root,
-          OPENCLAW_STATE_DIR: path.join(root, "state"),
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        },
-        async () => {
-          const { registry, cache, reference } = await loadReplacement(root);
-          try {
-            await collect();
-            assert.equal(
-              reference.deref(),
-              undefined,
-              "Live replacement retained its predecessor registry",
-            );
-            const tool = registry.tools[0]?.factory({ config: {} });
-            assert.ok(tool && !Array.isArray(tool));
-            assert.deepEqual(await tool.execute("retention-call", {}), {
-              content: [{ type: "text", text: "current generation" }],
-            });
-          } finally {
-            await disposePluginRegistryInstances(registry, undefined, { cfg: {} });
-            await retirePluginCache(cache);
-          }
-        },
-      );
+      await withFixtureEnvironment(root, async () => {
+        const { registry, cache, reference } = await loadReplacement(root);
+        try {
+          await collect();
+          assertCollected(reference, "Live replacement retained its predecessor registry");
+          const tool = registry.tools[0]?.factory({ config: {} });
+          assert.ok(tool && !Array.isArray(tool));
+          assert.deepEqual(await tool.execute("retention-call", {}), {
+            content: [{ type: "text", text: "current generation" }],
+          });
+        } finally {
+          await disposePluginRegistryInstances(registry, undefined, { cfg: {} });
+          await retirePluginCache(cache);
+        }
+      });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -427,7 +411,7 @@ switch (process.argv[2]) {
   case "instance": {
     const { instance, reference } = await retireCapturedSource();
     await collect();
-    assert.equal(reference.deref(), undefined, "Disposed instance retained its source lookup");
+    assertCollected(reference, "Disposed instance retained its source lookup");
     assert.equal(instance.hasModuleSource("captured-source"), false);
     assert.throws(() => instance.loadModule("captured-source"), /reloaded or disabled/);
     const neverBound = new PluginInstance("never-bound");
@@ -454,7 +438,7 @@ switch (process.argv[2]) {
   case "cache": {
     await inspectAfterFrameRelease(retireCapturedCallback, async ({ cache, signal, reference }) => {
       await collect();
-      assert.equal(reference.deref(), undefined, "Retired cache retained its callback capture");
+      assertCollected(reference, "Retired cache retained its callback capture");
       assert.equal(getPluginCacheRetirementSignal(cache), signal);
       assert.equal(signal.aborted, true);
       const reason: unknown = signal.reason;

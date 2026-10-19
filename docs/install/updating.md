@@ -48,6 +48,15 @@ also blocks package replacement, even if the process title no longer contains
 its installation path. The refusal leaves the installation unchanged and names
 the service inspection and stop commands to use before retrying.
 
+Before stopping a managed Gateway, the updater waits up to 30 seconds for foreign
+SQLite maintenance to finish. If it remains busy, activation is deferred and the
+Gateway stays running. Recovery checks after shutdown use the same bounded wait;
+if maintenance still does not finish, the existing rollback path restores the
+previous build. The refusal names the maintenance process and tells you to let
+it finish before retrying `openclaw update`. An explicit update timeout and
+cancellation still bound these waits; live ownership and recovery checks remain
+required before activation.
+
 `openclaw update status` reports confirmed driver loss without changing the
 recorded run, and names `openclaw update repair` as the next action. Repair or the
 next update's admission can record the failed outcome without waiting for the
@@ -637,6 +646,19 @@ a visible timeout. Stored state and recovery backups retain their existing
 durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
 
+The complete validating phase, including snapshot progress recording, has a
+30-minute default deadline even when `--timeout` is omitted. This uses the normal
+update-step allowance so slow storage has time to finish; an explicit `--timeout`
+sets the phase's allowance instead. Progress does not extend that deadline.
+Cancellation may use up to the same allowance to settle accepted work before
+releasing its ownership.
+Update-history writes retry a timed-out commit admission at most three times,
+releasing the SQLite writer between attempts. Ordinary progress that still cannot
+be recorded produces a warning and validation continues. Required recovery and
+terminal records report a failure instead of retrying forever. These limits apply
+when the newer installed updater runs; staging it cannot change an older driver's
+already-running progress writer.
+
 Runtime retention looks for hoisted dependencies within the package manager's
 owning installation. Missing optional peers do not cause it to copy unrelated
 ancestor installations. Explicitly linked dependencies retain their own resolution.
@@ -980,6 +1002,8 @@ switch to the supported checkout and build flow. Other explicit package specs
 keep their package-manager behavior. Dev target inspection fetches only the selected
 upstream source, respecting the repository's ref mappings and exclusions. It does
 not download unrelated branches or change the repository's shallow boundary.
+Stable and beta target inspection fetches release tags only, without refreshing
+remote branches.
 
 On source installs, Doctor and plugin updates keep plugins built with the host.
 A registry plugin with the same version string can target a different SDK, so
@@ -1285,6 +1309,11 @@ openclaw doctor
 ```
 
 Migrates config, audits DM policies, and checks gateway health. Doctor also compares active official plugins with the OpenClaw package the managed service will load after restart. Resolve any plugin restart-readiness warning before continuing. Details: [Doctor](/gateway/doctor)
+
+On Windows, `openclaw doctor --fix` can also retry abandoned backup scratch
+cleanup after an older release reported `EPERM` while renaming to an
+`openclaw-backup-retired-*` directory. Active backup scratch and published
+archives remain protected. See [Backup scratch cleanup](/cli/backup).
 
 If you use the unpacked Chrome extension, also run `openclaw browser doctor --browser-profile chrome`.
 For a version-mismatch warning, reload the extension from `chrome://extensions`;

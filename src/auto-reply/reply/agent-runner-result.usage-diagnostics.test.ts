@@ -3,9 +3,10 @@ import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
-import { createReplyOperation } from "./reply-run-registry.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
@@ -30,6 +31,12 @@ it("emits usage diagnostics for a deliberate silent reply", async () => {
     sessionKey,
     sessionId,
     resetTriggered: false,
+    target: captureSessionTarget({
+      storeScope: "/synthetic/usage-diagnostics",
+      sessionKey,
+      incarnation: sessionId,
+      agentId: "main",
+    }),
   });
   replyOperation.setPhase("running");
   const diagnostics: DiagnosticEventPayload[] = [];

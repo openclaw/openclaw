@@ -1,3 +1,4 @@
+import "./external-auth.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,7 +14,6 @@ import {
   oauthRefreshFailureFallbackCases,
 } from "./credential-fixtures.test-support.js";
 import { inlineAuthProfileCredentialSchema } from "./credential-schema.js";
-import { testing as externalAuthTesting } from "./external-auth.test-support.js";
 import { createOAuthManager } from "./oauth-manager.js";
 import { withOAuthProfileLock } from "./oauth-profile-lock.js";
 import { OAuthManagerRefreshError } from "./oauth-refresh-failure.js";
@@ -28,6 +28,8 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import * as authProfileStoreRuntime from "./store-runtime.js";
 import type { OAuthCredential } from "./types.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
+
+const { testing: externalAuthTesting } = await import("./external-auth.test-support.js");
 
 const { ensureAuthProfileStoreWithoutExternalProfiles, saveAuthProfileStore } =
   authProfileStoreRuntime;

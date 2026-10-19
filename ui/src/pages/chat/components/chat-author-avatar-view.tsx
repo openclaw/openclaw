@@ -2,7 +2,7 @@ import { createMemo, Show } from "solid-js";
 import { ChannelAvatar } from "../../../components/solid/channel-avatar.tsx";
 import {
   IdentityAvatarImage,
-  identityAvatarState,
+  createIdentityAvatarPresentation,
 } from "../../../components/solid/identity-avatar-image.tsx";
 import { useAvatarGatewayContext } from "../../../components/solid/identity-avatar-view.ts";
 import { AgentIdentityAvatar, IdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
@@ -97,10 +97,11 @@ function ProfileAuthorAvatar(props: {
   const channelPhoto = createMemo(() =>
     resolveChannelSenderAvatarUrl(props.sender, props.channelAvatar, gateway().resourceBasePath),
   );
+  const presentation = createIdentityAvatarPresentation(() => props.view);
   return (
     <span
-      ref={identityAvatarState(() => props.view)}
-      class="chat-author-avatar"
+      data-avatar-state={channelPhoto() ? undefined : presentation.state()}
+      class={["chat-author-avatar", channelPhoto() ? undefined : presentation.classes()]}
       role="img"
       aria-label={props.label}
       title={props.label}
@@ -112,7 +113,7 @@ function ProfileAuthorAvatar(props: {
             <Show when={Boolean(props.view.imageUrl)}>
               <IdentityAvatarImage
                 view={props.view}
-                fallbackSelector=".chat-author-avatar"
+                onStateChange={presentation.onStateChange}
                 class="chat-author-avatar__image"
                 ariaHidden
               />
@@ -135,12 +136,16 @@ function ProfileAuthorAvatar(props: {
 
 /** Image failure reveals the same initials without replacing the avatar frame. */
 export function UserAvatarSlot(props: { view: IdentityAvatarView; label: string }) {
+  const presentation = createIdentityAvatarPresentation(() => props.view);
   return (
     <Show when={Boolean(props.view.imageUrl)} fallback={<UserInitials {...props} />}>
-      <span ref={identityAvatarState(() => props.view)} class="chat-avatar-slot">
+      <span
+        data-avatar-state={presentation.state()}
+        class={["chat-avatar-slot", presentation.classes()]}
+      >
         <IdentityAvatarImage
           view={props.view}
-          fallbackSelector=".chat-avatar-slot"
+          onStateChange={presentation.onStateChange}
           class="chat-avatar user"
           alt={props.label}
         />

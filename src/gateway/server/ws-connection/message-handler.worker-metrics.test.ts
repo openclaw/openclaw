@@ -123,20 +123,18 @@ describe("dedicated worker RPC", () => {
       release.resolve();
       await settled(events, 2);
       const inference = events.filter((event) => event.method === "worker.inference.start");
-      expect(inference.map((event) => event.phase)).toEqual([
-        "received",
-        "response",
-        "handler",
-        "dispatch",
+      expect(inference).toMatchObject([
+        { phase: "received" },
+        { phase: "response", outcome: "ok", durationMs: 40 },
+        { phase: "handler", admissionMs: 40, durationMs: 30, outcome: "returned" },
+        {
+          phase: "dispatch",
+          queueWaitMs: 40,
+          durationMs: 70,
+          outcome: "returned",
+          response: "sent",
+        },
       ]);
-      expect(inference[1]).toMatchObject({ outcome: "ok", durationMs: 40 });
-      expect(inference[2]).toMatchObject({ admissionMs: 40, durationMs: 30, outcome: "returned" });
-      expect(inference[3]).toMatchObject({
-        queueWaitMs: 40,
-        durationMs: 70,
-        outcome: "returned",
-        response: "sent",
-      });
       expect(harness.responses.at(-1)).toEqual(INFERENCE_EVENT);
       expect(harness.close).not.toHaveBeenCalled();
       for (const value of [
@@ -253,16 +251,11 @@ describe("dedicated worker RPC", () => {
     harness.service.commitTranscript.mockRejectedValueOnce(new Error("synthetic service fault"));
     harness.sendRequest("worker.transcript.commit", TRANSCRIPT_COMMIT);
     await settled(events);
-    expect(events.map((event) => event.phase)).toEqual([
-      "received",
-      "handler",
-      "response",
-      "dispatch",
-    ]);
-    expect(events.slice(1)).toMatchObject([
-      { outcome: "threw" },
-      { outcome: "error" },
-      { outcome: "threw", response: "sent" },
+    expect(events).toMatchObject([
+      { phase: "received" },
+      { phase: "handler", outcome: "threw" },
+      { phase: "response", outcome: "error" },
+      { phase: "dispatch", outcome: "threw", response: "sent" },
     ]);
     expect(harness.close).not.toHaveBeenCalled();
     expect(JSON.stringify(events)).not.toContain("synthetic service fault");

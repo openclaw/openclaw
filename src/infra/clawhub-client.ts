@@ -74,10 +74,13 @@ export class ClawHubRequestError extends Error {
 }
 
 /** Resolves the configured ClawHub base URL, falling back to the default public host. */
-export function resolveClawHubBaseUrl(baseUrl?: string): string {
+export function resolveClawHubBaseUrl(
+  baseUrl?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const envValue =
-    normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_URL) ||
-    normalizeOptionalString(process.env.CLAWHUB_URL) ||
+    normalizeOptionalString(env.OPENCLAW_CLAWHUB_URL) ||
+    normalizeOptionalString(env.CLAWHUB_URL) ||
     DEFAULT_CLAWHUB_URL;
   const value = (normalizeOptionalString(baseUrl) || envValue).replace(/\/+$/, "");
   return value || DEFAULT_CLAWHUB_URL;

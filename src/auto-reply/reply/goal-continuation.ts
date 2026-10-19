@@ -5,16 +5,27 @@ import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getInProcessGatewayRequestContext } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  runAfterReplyOperationClear,
+  type ReplyOperation,
+} from "../../sessions/session-controller.js";
+import {
+  reserveSessionControllerSource,
+  retireSessionControllerInput,
+  bindSessionControllerSource,
+  type SessionControllerInput,
+} from "../../sessions/session-controller.mailbox.js";
+import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
+import { createGoalContinuationReturnScope } from "./goal-continuation-return.js";
+import type { GoalContinuation } from "./goal-continuation.types.js";
+import { refreshActiveGoalContext } from "./inbound-meta.js";
+import { scheduleFollowupDrain } from "./queue/drain.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
 import { isFollowupRunAborted, type FollowupRun, type QueueSettings } from "./queue/types.js";
-import { runAfterReplyOperationClear, type ReplyOperation } from "./reply-run-registry.js";
 
-export type GoalContinuation = Pick<SessionEntry, "sessionId" | "lifecycleRevision"> & {
-  goalId: string;
-  workerGoal?: true;
-};
+export type { GoalContinuation } from "./goal-continuation.types.js";
 
 /** Selects supported placement facts; execution still acquires a fresh turn claim. */
 export async function isSupportedWorkerGoalPlacement(params: {
@@ -83,7 +94,7 @@ function isGoalContinuationOutcome(result: EmbeddedAgentRunResult): boolean {
 }
 
 /** Queue custody, not a second scheduler, owns every automatic Goal turn. */
-export async function enqueueGoalContinuation(params: {
+type GoalContinuationParams = {
   base: FollowupRun;
   result: EmbeddedAgentRunResult;
   initialGoalId?: string;
@@ -95,9 +106,15 @@ export async function enqueueGoalContinuation(params: {
   settings: QueueSettings;
   sourceRunId: string;
   operation: ReplyOperation;
+  isCurrent?: () => boolean;
+  controllerInput?: SessionControllerInput;
   runFollowup: (run: FollowupRun) => Promise<void>;
-}): Promise<boolean> {
+};
+
+export async function enqueueGoalContinuation(params: GoalContinuationParams): Promise<boolean> {
   const eligible = () =>
+    params.isCurrent?.() !== false &&
+    !params.controllerInput?.abortSignal.aborted &&
     !params.operation.abortSignal.aborted &&
     params.operation.result?.kind !== "failed" &&
     params.operation.result?.kind !== "aborted" &&
@@ -173,7 +190,8 @@ export async function enqueueGoalContinuation(params: {
     turnAdoptionLifecycle: undefined,
     replyOperationRunStates: undefined,
     onQueueDisposition: undefined,
-    steerPending: undefined,
+    controllerInput: params.controllerInput,
+    controllerClaim: undefined,
     strandedReplyRetry: undefined,
     stalledTurnRecovery: undefined,
     queuedFollowupReplyDisposition:
@@ -198,6 +216,9 @@ export async function enqueueGoalContinuation(params: {
       },
     },
   };
+  if (params.controllerInput) {
+    bindSessionControllerSource(params.controllerInput, nudge);
+  }
   const enqueued = enqueueFollowupRun(
     params.queueKey,
     nudge,
@@ -205,6 +226,7 @@ export async function enqueueGoalContinuation(params: {
     "message-id",
     params.runFollowup,
     false,
+    { storePath: params.storePath },
   );
   if (enqueued) {
     // Model completion precedes source delivery. A later terminal handling failure
@@ -216,4 +238,66 @@ export async function enqueueGoalContinuation(params: {
     });
   }
   return enqueued;
+}
+
+/** The queue owner retains only the return from an admitted built-in chat Goal. */
+export function createGoalContinuationReturn(
+  params: Omit<GoalContinuationParams, "result" | "sourceRunId"> | undefined,
+): <T>(run: () => T) => T {
+  if (!params?.initialGoalId) {
+    return (run) => run();
+  }
+  const continuation: GoalContinuation = {
+    sessionId: params.expectedSession.sessionId,
+    lifecycleRevision: params.expectedSession.lifecycleRevision,
+    goalId: params.initialGoalId,
+  };
+  return createGoalContinuationReturnScope({
+    base: params.base,
+    sessionKey: params.sessionKey,
+    continuation,
+    operation: params.operation,
+    context: (entry, existing) =>
+      isGoalContinuationCurrent(continuation, entry)
+        ? refreshActiveGoalContext(existing, entry)
+        : undefined,
+    async resume({ base, runId, result, isCurrent }) {
+      // The controller sees this pending input before admission reads yield to Stop.
+      const input = reserveSessionControllerSource(params.queueKey, {
+        policy: params.settings,
+        target: captureSessionTarget({
+          storeScope: params.storePath,
+          sessionKey: params.sessionKey,
+          agentId: base.run.agentId,
+          incarnation: continuation.sessionId,
+        }),
+        adapter: {
+          scope: params.storePath,
+          authority: base.operatorAuthority,
+          signal: base.abortSignal,
+        },
+      });
+      let enqueued = false;
+      try {
+        enqueued = await enqueueGoalContinuation({
+          ...params,
+          base,
+          result,
+          sourceRunId: runId,
+          expectedSession: continuation,
+          initialGoalId: continuation.goalId,
+          reader: undefined,
+          controllerInput: input,
+          isCurrent,
+        });
+        if (enqueued) {
+          scheduleFollowupDrain(params.queueKey, params.runFollowup);
+        }
+      } finally {
+        if (!enqueued) {
+          retireSessionControllerInput(input);
+        }
+      }
+    },
+  });
 }

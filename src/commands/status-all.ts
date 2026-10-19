@@ -19,7 +19,7 @@ import {
   buildStatusChannelsTableRows,
   statusChannelsTableColumns,
 } from "./status-all/channels-table.js";
-import { appendStatusAllDiagnosis } from "./status-all/diagnosis.js";
+import { appendStatusAllDiagnosis, readStatusAllLogTails } from "./status-all/diagnosis.js";
 import {
   buildStatusAgentTableRows,
   buildStatusChannelDetailSections,
@@ -46,7 +46,7 @@ import {
 import { resolveNodeOnlyGatewayInfo, type NodeOnlyGatewayInfo } from "./status.node-mode.js";
 import {
   collectStatusScanOverview,
-  resolveStatusSummaryFromOverview,
+  prepareStatusSummaryFromOverview,
   type StatusScanOverviewResult,
 } from "./status.scan-overview.ts";
 
@@ -149,7 +149,6 @@ async function resolveStatusAllLocalDiagnosis(params: {
       pluginCompatibility,
       channelsStatus: overview.channelsStatus,
       channelIssues: overview.channelIssues,
-      agentStatus: overview.agentStatus,
       gatewayReachable,
       gatewayStartupPhase: gatewayProbe?.startupPhase,
       localGatewayHealthy:
@@ -202,7 +201,8 @@ export async function statusAllCommand(
     });
     progress.tick();
     const gatewaySnapshot = overview.gatewaySnapshot;
-    const [{ configPath, diagnosis }, summary] = await Promise.all([
+    const runtimeDegradation = overview.runtimeDegradation;
+    const [{ configPath, diagnosis }, prepared] = await Promise.all([
       resolveStatusAllLocalDiagnosis({
         overview,
         progress,
@@ -210,16 +210,42 @@ export async function statusAllCommand(
         timeoutMs: opts.timeoutMs,
         gatewayProbeDeadlineMs: opts.gatewayProbeDeadlineMs,
       }),
-      overview.runtimeDegradation ?? resolveStatusSummaryFromOverview({ overview }),
+      runtimeDegradation
+        ? { publish: () => ({ summary: runtimeDegradation, sessionStores: undefined }) }
+        : prepareStatusSummaryFromOverview({ overview }),
     ]);
 
+    const databaseEngines = await resolveStatusDatabaseEngines(
+      overview.cfg,
+      runtimeDegradation?.databaseStores,
+    );
+    const updateRows = await buildStatusUpdateRows(diagnosis.sentinel?.payload, {
+      localGatewayHealthy: diagnosis.localGatewayHealthy,
+      gatewayServer: diagnosis.gatewayServer,
+    });
+    const usage = opts.usage
+      ? await resolveStatusUsageSummary({
+          config: overview.cfg,
+          timeoutMs: resolveStatusGatewayProbeTimeoutMs(opts),
+          gatewayProbeDeadlineMs: opts.gatewayProbeDeadlineMs,
+          ...(opts.agent ? { agentId: opts.agent } : {}),
+        })
+      : undefined;
+    progress.setLabel("Reading logs…");
+    const logTails = await readStatusAllLogTails();
+    const { summary, sessionStores } = prepared.publish();
+    const agentStatus =
+      "publish" in overview.agentStatus
+        ? overview.agentStatus.publish(sessionStores)
+        : overview.agentStatus;
     const overviewSurface = {
       ...overview,
+      agentStatus,
       ...gatewaySnapshot,
       gatewayService: daemon,
       nodeService,
       nodeOnlyGateway,
-      databaseEngines: await resolveStatusDatabaseEngines(overview.cfg, summary.databaseStores),
+      databaseEngines,
     };
     const overviewRows = buildStatusAllOverviewRows({
       surface: overviewSurface,
@@ -227,11 +253,8 @@ export async function statusAllCommand(
       configPath,
       summary,
       secretDiagnosticsCount: overview.secretDiagnostics.length,
-      updateRows: await buildStatusUpdateRows(diagnosis.sentinel?.payload, {
-        localGatewayHealthy: diagnosis.localGatewayHealthy,
-        gatewayServer: diagnosis.gatewayServer,
-      }),
-      agentStatus: overview.agentStatus,
+      updateRows,
+      agentStatus,
     });
     const connectionDetailsForReport = resolveStatusAllConnectionDetails({
       nodeOnlyGateway,
@@ -279,7 +302,7 @@ export async function statusAllCommand(
       warn,
     });
     const agentColumns = [...statusAgentsTableColumns];
-    const agentRows = buildStatusAgentTableRows({ agentStatus: overview.agentStatus, ok, warn });
+    const agentRows = buildStatusAgentTableRows({ agentStatus, ok, warn });
 
     appendStatusReportTable(report, "Overview", overviewColumns, overviewRows);
     appendStatusReportTable(report, "Channels", channelColumns, channelRows);
@@ -289,7 +312,9 @@ export async function statusAllCommand(
     appendStatusReportTable(report, "Agents", agentColumns, agentRows);
     appendStatusReportHeading(report, "Diagnosis (read-only)");
 
-    await appendStatusAllDiagnosis({
+    appendStatusAllDiagnosis({
+      logTails,
+      agentStatus,
       lines,
       progress,
       muted,
@@ -300,13 +325,7 @@ export async function statusAllCommand(
       ...diagnosis,
     });
 
-    if (opts.usage) {
-      const usage = await resolveStatusUsageSummary({
-        config: overview.cfg,
-        timeoutMs: resolveStatusGatewayProbeTimeoutMs(opts),
-        gatewayProbeDeadlineMs: opts.gatewayProbeDeadlineMs,
-        ...(opts.agent ? { agentId: opts.agent } : {}),
-      });
+    if (usage) {
       lines.push("", ...formatUsageReportLines(usage));
     }
 

@@ -912,7 +912,9 @@ it("follows agent owner replacement and publications without remounting", async 
   const selector = container.querySelector<AgentSelectElement>("openclaw-agent-select")!;
   await selector.updateComplete;
   const { settingsAgentSelection, selectionListeners, identityListeners } = original;
-  const subscriptions = [[...selectionListeners], [...identityListeners]];
+  const selectionSubscriptions = [...selectionListeners];
+  const identitySubscriptions = [...identityListeners];
+  const subscriptions = [selectionSubscriptions, identitySubscriptions];
   render({ ...props, gatewayVersion: "test" }, container);
   expect([[...selectionListeners], [...identityListeners]]).toEqual(subscriptions);
   settingsAgentSelection.state.selectedId = "research";
@@ -943,6 +945,23 @@ it("follows agent owner replacement and publications without remounting", async 
   expect(selectionListeners.size).toBe(0);
   expect(identityListeners.size).toBe(0);
   expect(replacement.agentIdentity.ensure).toHaveBeenCalledWith(["main"]);
+  const originalRequests = original.agentIdentity.ensure.mock.calls.length;
+  const replacementRequests = replacement.agentIdentity.ensure.mock.calls.length;
+  settingsAgentSelection.state.selectedId = "main";
+  settingsAgentSelection.state.scopeId = "main";
+  for (const notify of selectionSubscriptions) {
+    notify(settingsAgentSelection.state);
+  }
+  for (const notify of identitySubscriptions) {
+    notify();
+  }
+  await waitForSolid(() => {
+    expect(original.agentIdentity.ensure).toHaveBeenCalledTimes(originalRequests);
+    expect(replacement.agentIdentity.ensure).toHaveBeenCalledTimes(replacementRequests);
+    expect(selector.querySelector(".agent-select__trigger")?.getAttribute("aria-label")).toContain(
+      "Main",
+    );
+  });
   replacement.settingsAgentSelection.state.selectedId = "research";
   for (const notify of replacement.selectionListeners) {
     notify(replacement.settingsAgentSelection.state);

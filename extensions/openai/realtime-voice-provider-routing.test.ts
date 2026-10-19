@@ -61,8 +61,8 @@ const {
   mockRealtimeClientSecretResponse,
   createQuicksilverBrowserBrokerFixture,
 } = createOpenAIRealtimeTestSupport({ ...mocks, buildOpenAIRealtimeVoiceProvider });
-function browserFixture(options?: Parameters<typeof createQuicksilverBrowserBrokerFixture>[0]) {
-  const fixture = createQuicksilverBrowserBrokerFixture(options);
+function browserFixture(clientSecret?: string) {
+  const fixture = createQuicksilverBrowserBrokerFixture(clientSecret);
   const provider = buildOpenAIRealtimeVoiceProvider({
     quicksilverBrowserSessionBroker: fixture.broker,
   });
@@ -389,9 +389,7 @@ describe("OpenAI realtime voice provider routing", () => {
     const oauthToken = accountToken("account-123");
     mockOAuth(oauthToken);
     mockAuthTypes("oauth");
-    const { provider, createBrowserSession } = browserFixture({
-      session: { clientSecret: "broker-token" },
-    });
+    const { provider, createBrowserSession } = browserFixture("broker-token");
     const cfg = { agents: { defaults: {} } } as never;
     const request = {
       cfg,
@@ -467,42 +465,42 @@ describe("OpenAI realtime voice provider routing", () => {
     expect(createBrowserSession).toHaveBeenCalledTimes(1);
   });
 
-  it.each([{ model: SUBSCRIPTION_MODEL, voice: "cove" }])(
-    "passes $model voice and channel instructions to the native broker",
-    async ({ model, voice }) => {
-      const { provider, createBrowserSession } = browserFixture();
-      await provider.createBrowserSession?.({
-        providerConfig: await provider.resolveConfigAsync?.({
-          cfg: {} as never,
-          rawConfig: { apiKey: PLATFORM_KEY, model, speakerVoice: voice },
-        }),
-        instructions: "Always address the caller as Captain.",
-        ...browserRequest,
-        agentId: "voice-agent",
-        runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-      } as never);
-      expect(createBrowserSession).toHaveBeenCalledWith(expect.objectContaining({ model, voice }), {
-        type: "api-key",
-        token: PLATFORM_KEY,
-      });
-      const quicksilverRequest = requireRecord(
-        createBrowserSession.mock.calls[0]?.[0],
-        "quicksilver request",
-      );
-      expect(quicksilverRequest.instructions).toMatch(/^You are OpenClaw's realtime voice layer\./);
-      for (const instruction of [
-        "Delegate each user request once and wait for its result.",
-        "New user follow-ups, corrections, and explicit retries are new requests.",
-        "Context on the commentary channel is silent background",
-        "Context on the speakable channel is your answer",
-      ]) {
-        expect(quicksilverRequest.instructions).toContain(instruction);
-      }
-      expect(quicksilverRequest.instructions).toMatch(/Always address the caller as Captain\.$/);
-    },
-  );
+  it("passes subscription voice and channel instructions to the native broker", async () => {
+    const model = SUBSCRIPTION_MODEL;
+    const voice = "cove";
+    const { provider, createBrowserSession } = browserFixture();
+    await provider.createBrowserSession?.({
+      providerConfig: await provider.resolveConfigAsync?.({
+        cfg: {} as never,
+        rawConfig: { apiKey: PLATFORM_KEY, model, speakerVoice: voice },
+      }),
+      instructions: "Always address the caller as Captain.",
+      ...browserRequest,
+      agentId: "voice-agent",
+      runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+    } as never);
+    expect(createBrowserSession).toHaveBeenCalledWith(expect.objectContaining({ model, voice }), {
+      type: "api-key",
+      token: PLATFORM_KEY,
+    });
+    const quicksilverRequest = requireRecord(
+      createBrowserSession.mock.calls[0]?.[0],
+      "quicksilver request",
+    );
+    expect(quicksilverRequest.instructions).toMatch(/^You are OpenClaw's realtime voice layer\./);
+    for (const instruction of [
+      "Delegate each user request once and wait for its result.",
+      "New user follow-ups, corrections, and explicit retries are new requests.",
+      "Context on the commentary channel is silent background",
+      "Context on the speakable channel is your answer",
+    ]) {
+      expect(quicksilverRequest.instructions).toContain(instruction);
+    }
+    expect(quicksilverRequest.instructions).toMatch(/Always address the caller as Captain\.$/);
+  });
 
-  it.each(["gpt-live-1"])("rejects OAuth-only %s before broker session creation", async (model) => {
+  it("rejects OAuth-only gpt-live-1 before broker session creation", async () => {
+    const model = "gpt-live-1";
     mockOAuth();
     const { provider, createBrowserSession } = browserFixture();
     await expect(

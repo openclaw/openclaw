@@ -1,18 +1,12 @@
-import { randomUUID } from "node:crypto";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
-import {
-  SESSION_DASHBOARD_ROW_FIELDS,
-  SESSION_ROW_DETAIL_FIELDS,
-  SESSION_ROWS_DELTA_PREFIX,
-  SESSION_SIDEBAR_ROW_FIELDS,
-} from "../../packages/gateway-protocol/src/session-row-fields.js";
+import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
-import { registerSerializedJsonArray } from "./serialized-json.js";
+import { registerSerializedJsonArray, serializedJsonArrayBytes } from "./serialized-json.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import type { VisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayClient } from "./server-methods/types.js";
@@ -25,6 +19,11 @@ import { retainSessionListBaseMiss } from "./session-list-diagnostics.js";
 import type { SessionEntrySelection, SessionListFilteredEntries } from "./session-list-filters.js";
 import type { SessionListView } from "./session-list-view-cache.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import {
+  sessionRowId,
+  sessionRowsRevision,
+  type SessionRowGeneration,
+} from "./session-row-identity.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import type * as records from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -32,7 +31,11 @@ import {
   prepareSessionRowPublicationView,
   type PublicationView,
 } from "./session-row-publication.js";
-import { registerSessionRowEncoding, serializeSessionRow } from "./session-row-serialization.js";
+import {
+  registerSessionRowEncoding,
+  serializeSessionRow,
+  sessionRowEncodingBytes,
+} from "./session-row-serialization.js";
 import {
   authorizeIncognitoSessionTarget,
   authorizeSessionAgentRun,
@@ -42,6 +45,7 @@ import {
 import { prepareProjectedSessionSharing } from "./session-sharing.js";
 import { matchesSessionArchiveFilter, resolveSessionChildOwners } from "./session-utils-core.js";
 import {
+  applyGatewaySessionRowMode,
   projectGatewaySessionActiveRun,
   projectGatewaySessionRunState,
 } from "./session-utils-display.js";
@@ -70,17 +74,18 @@ function toProjectedSessionSharingTarget(record: records.MaterializedRow): Sessi
 
 /** Immutable row identities own field preparation; fact indexes stay response-local. */
 function createSessionRowFactSharing<T extends GatewaySessionRow>() {
-  const prepared = new WeakMap<T, [string, Partial<T>][]>();
-  return (sessions: T[]) => {
+  const prepared = new WeakMap<T, { facts: [string, Partial<T>][]; bytes: number }>();
+  const share = (sessions: T[]) => {
     type SharedFact = { fact: Partial<T>; rows: number[] };
     const candidates = new Map<string, SharedFact>();
     const rows: GatewaySessionRow[] = [];
     sessions.forEach((row, index) => {
       const { key, kind, updatedAt, sessionId, rowMode } = row;
       rows.push({ key, kind, updatedAt, sessionId, rowMode });
-      let facts = prepared.get(row);
+      let facts = prepared.get(row)?.facts;
       if (!facts) {
         facts = [];
+        let bytes = 0;
         for (const field in row) {
           const value = row[field];
           // Keep required fields and the projection marker readable without expanding the table.
@@ -92,9 +97,11 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
           }
           const fact: Partial<T> = {};
           fact[field] = value;
-          facts.push([JSON.stringify(fact), fact]);
+          const encoded = JSON.stringify(fact);
+          facts.push([encoded, fact]);
+          bytes += encoded.length * 2;
         }
-        prepared.set(row, facts);
+        prepared.set(row, { facts, bytes });
       }
       for (const [encoded, fact] of facts) {
         const candidate = candidates.get(encoded);
@@ -129,9 +136,14 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
     }
     return { sessions: rows, sharedFacts };
   };
+  return {
+    share,
+    encodingBytes: (row: T) => prepared.get(row)?.bytes ?? 0,
+  };
 }
 
-const shareSessionRowFacts = createSessionRowFactSharing<GatewaySessionRow>();
+const { share: shareSessionRowFacts, encodingBytes: sessionRowFactEncodingBytes } =
+  createSessionRowFactSharing<GatewaySessionRow>();
 const sharedLists = new WeakMap<
   GatewaySessionRow[],
   ReturnType<typeof shareSessionRowFacts> & { rowsRevision: string }
@@ -140,14 +152,14 @@ const sharedLists = new WeakMap<
 export function shareSidebarSessionRows(
   rows: GatewaySessionRow[],
   ifRowsRevision?: string,
-  rowHistory?: GatewaySessionRow[][],
+  rowHistory?: SessionRowGeneration[],
 ): Pick<
   SessionsListResult,
   "sessions" | "sharedFacts" | "rowsRevision" | "rowsUnchanged" | "rowsDelta"
 > {
   let shared = sharedLists.get(rows);
   if (!shared) {
-    shared = { ...shareSessionRowFacts(rows), rowsRevision: randomUUID() };
+    shared = { ...shareSessionRowFacts(rows), rowsRevision: sessionRowsRevision(rows) };
     registerSerializedJsonArray(shared.sessions, shared.sessions.map(serializeSessionRow));
     sharedLists.set(rows, shared);
   }
@@ -158,15 +170,16 @@ export function shareSidebarSessionRows(
   if (revision === shared.rowsRevision) {
     return { sessions: [], rowsRevision: shared.rowsRevision, rowsUnchanged: true };
   }
-  const previousRows =
+  const previousGeneration =
     baseRevision === undefined
       ? undefined
-      : rowHistory?.find((previous) => sharedLists.get(previous)?.rowsRevision === baseRevision);
-  if (baseRevision !== undefined && previousRows) {
-    const previous = new Map(previousRows.map((row, index) => [row, index]));
+      : rowHistory?.find((previous) => previous.revision === baseRevision);
+  if (baseRevision !== undefined && previousGeneration) {
+    const previous = new Map(Array.from(previousGeneration.ids, (id, index) => [id, index]));
     const changed: GatewaySessionRow[] = [];
     const order = rows.map(
-      (row) => previous.get(row) ?? previousRows.length + changed.push(row) - 1,
+      (row) =>
+        previous.get(sessionRowId(row)) ?? previousGeneration.ids.length + changed.push(row) - 1,
     );
     if (changed.length < rows.length) {
       const delta = shareSessionRowFacts(changed);
@@ -181,7 +194,7 @@ export function shareSidebarSessionRows(
   if (ifRowsRevision !== undefined) {
     // The cached full result is shared by requests with different bases.
     const result = { ...shared };
-    retainSessionListBaseMiss(result, previousRows ? "all-rows-changed" : "unknown-base");
+    retainSessionListBaseMiss(result, previousGeneration ? "all-rows-changed" : "unknown-base");
     return result;
   }
   return shared;
@@ -224,13 +237,16 @@ export function prepareProjectedSessionPresentation(
     }: Pick<records.MaterializedRow["materialized"]["source"], "entry" | "parsedKey">,
   ) =>
     projectGatewaySessionRunState({ key, entry, parsedKey, now, rowContext: preparedRowContext });
-  const active = (key: string, entry: records.MaterializedRow["entry"], agentId: string) =>
+  const active = (
+    record: Pick<records.MaterializedRow, "key" | "entry" | "agentId" | "storeTarget">,
+  ) =>
     projectRun?.({
-      requestedKey: key,
-      canonicalKey: key,
-      sessionId: entry.sessionId,
-      agentId,
-      defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, key),
+      storePath: record.storeTarget.storePath,
+      requestedKey: record.key,
+      canonicalKey: record.key,
+      sessionId: record.entry.sessionId,
+      agentId: record.agentId,
+      defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, record.key),
     });
   const target = (query: records.Lookup) => {
     const record = projection.describe(query);
@@ -323,7 +339,7 @@ export function prepareProjectedSessionPresentation(
     record: records.MaterializedRow,
     options: PresentationOptions = {},
   ): GatewaySessionRow | null => {
-    const run = active(record.key, record.entry, record.agentId);
+    const run = active(record);
     const preparedFacts = record.facts?.present();
     const childOwnerSessionKeys = resolveSessionChildOwners({
       key: record.key,
@@ -498,21 +514,7 @@ export function prepareProjectedSessionPresentation(
         row.activitySummary = { ...row.activitySummary, canEnsure: canEnsure === true };
       }
     }
-    if (options.rowMode === "dashboard" || options.rowMode === "sidebar") {
-      const fields =
-        options.rowMode === "sidebar" ? SESSION_SIDEBAR_ROW_FIELDS : SESSION_DASHBOARD_ROW_FIELDS;
-      for (const field of Object.keys(row)) {
-        if (!fields.has(field)) {
-          Reflect.deleteProperty(row, field);
-        }
-      }
-      row.rowMode = options.rowMode;
-    } else if (options.rowMode === "compact") {
-      for (const field of SESSION_ROW_DETAIL_FIELDS) {
-        delete row[field];
-      }
-      row.rowMode = "compact";
-    }
+    applyGatewaySessionRowMode(row, options.rowMode);
     if (options.omitSentinelChildren) {
       row.childSessions = undefined;
       row.hasActiveSubagentRun = undefined;
@@ -598,17 +600,39 @@ export function prepareProjectedSessionPresentation(
       // Current authorization and temporal presentation precede reuse. The retained vector
       // owns bytes only; it never retains a connection or grants permission to a later read.
       const view = listView(opts);
+      const conditional =
+        view.conditional === true ||
+        opts.rowMode === "sidebar" ||
+        opts.ifRowsRevision !== undefined;
       const previous = view.rows;
-      if (previous?.length === rows.length && rows.every((row, index) => row === previous[index])) {
-        return { sessions: previous, rowHistory: view.rowHistory };
+      const unchanged =
+        previous?.length === rows.length && rows.every((row, index) => row === previous[index])
+          ? previous
+          : undefined;
+      if (unchanged && (!conditional || view.conditional)) {
+        return { sessions: unchanged, rowHistory: view.rowHistory };
       }
-      Object.freeze(rows);
-      // Sidebar replies encode the fact-packed rows in shareSidebarSessionRows.
-      if (opts.rowMode !== "sidebar") {
-        registerSerializedJsonArray(rows, rows.map(serializeSessionRow));
+      // Promotion reuses the vector without adding a history generation.
+      const current = unchanged ?? rows;
+      Object.freeze(current);
+      let sharedBytes = 0;
+      if (conditional) {
+        // Prepare before admission so the byte limit includes everything this vector pins.
+        const shared = shareSidebarSessionRows(current);
+        sharedBytes =
+          shared.sessions.reduce((bytes, row) => bytes + sessionRowEncodingBytes(row), 0) +
+          serializedJsonArrayBytes(shared.sessions);
+      } else {
+        registerSerializedJsonArray(current, current.map(serializeSessionRow));
       }
-      publicationState?.lists.setRows(view, rows, opts.rowMode === "sidebar");
-      return { sessions: rows, rowHistory: view.rowHistory };
+      publicationState?.lists.setRows(
+        view,
+        current,
+        conditional,
+        sharedBytes,
+        sessionRowFactEncodingBytes,
+      );
+      return { sessions: current, rowHistory: view.rowHistory };
     },
     snapshot(query: records.Lookup, options: PresentationOptions = {}) {
       const record = projection.describe(query);

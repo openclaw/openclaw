@@ -1,6 +1,7 @@
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PreparedCodexNativeExecutionPolicy } from "./native-execution-policy.js";
 import type { CodexTurn, CodexUserInput } from "./protocol.js";
 import { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 
@@ -169,6 +170,17 @@ async function prepare(native = createNativeThread(), usesSupervisionConnection 
         workspaceBootstrapContext: { promptContext: "workspace reference" },
         attemptTools: { tools: [], toolBridge: { availableTools: [], availableSpecs: [] } },
         runtime: {
+          nativeExecutionPolicy: {
+            policy: {
+              nativeToolSurfaceAllowed: true,
+              sandboxed: false,
+              requestedExecHost: "auto",
+              effectiveExecHost: "gateway",
+            },
+            async assertCurrent() {},
+            retain: () => () => {},
+            release() {},
+          } satisfies PreparedCodexNativeExecutionPolicy,
           runtimeParams: { model: { api: "openai-chatgpt-responses" } },
           connection: {
             params: {

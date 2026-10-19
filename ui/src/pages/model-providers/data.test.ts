@@ -1,7 +1,8 @@
 // @vitest-environment node
-import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import type {
+  ModelAuthStatusProvider,
   ModelAuthStatusResult,
   ModelCatalogEntry,
   ModelCatalogProviderOutcome,
@@ -15,496 +16,405 @@ import {
   resolveDefaultModelPresentation,
 } from "./data.ts";
 
-function catalogEntry(overrides: Partial<ModelCatalogEntry> & { provider: string }) {
+function model(id: string, overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
+  return { provider: "openai", id, name: "Model", available: false, ...overrides };
+}
+function provider(
+  id: string,
+  overrides: Partial<ModelAuthStatusProvider> = {},
+): ModelAuthStatusProvider {
+  return { provider: id, displayName: id, status: "ok", profiles: [], ...overrides };
+}
+function keyProvider(id: string, envVar: string, extra: Partial<ModelAuthStatusProvider> = {}) {
+  return provider(id, { status: "static", apiKey: { source: "env", envVar }, ...extra });
+}
+function capability(id: string, quickApiKeySetup = true) {
+  return { provider: id, apiKeySupported: true, quickApiKeySetup };
+}
+function usage(providerId: string, usedPercent?: number, plan?: string) {
   return {
-    id: `${overrides.provider}/model`,
-    name: "Model",
-    available: false,
-    ...overrides,
-  } satisfies ModelCatalogEntry;
+    providerId,
+    windows: usedPercent === undefined ? [] : [{ label: "5h", usedPercent }],
+    plan,
+  };
 }
-
-function authStatus(
-  providers: ModelAuthStatusResult["providers"],
+function profile(
+  profileId: string,
+  status: "ok" | "expired" | "expiring" = "ok",
+  logoutSupported?: boolean,
+) {
+  return { profileId, type: "oauth" as const, status, logoutSupported };
+}
+type CardsInput = Parameters<typeof buildModelProviderCards>[0];
+function input(
+  providers: ModelAuthStatusProvider[],
+  extra: Partial<CardsInput> = {},
   providerCapabilities?: ModelAuthStatusResult["providerCapabilities"],
-): ModelAuthStatusResult {
-  return { ts: 1, providers, ...(providerCapabilities ? { providerCapabilities } : {}) };
+): CardsInput {
+  return {
+    authStatus: { ts: 1, providers, providerCapabilities },
+    models: null,
+    providerUsage: null,
+    costByProvider: null,
+    ...extra,
+  };
 }
-
-function firstCard(cards: ReturnType<typeof buildModelProviderCards>) {
-  return expectDefined(cards[0], "first model provider card");
+function build(...args: Parameters<typeof input>) {
+  return buildModelProviderCards(input(...args));
 }
-
-function providerConfig(value: string): { apiKey: string } {
-  return Object.fromEntries([["apiKey", value]]) as { apiKey: string };
+function modelSelection(
+  primary: string,
+  fallbacks: string[] = [],
+  utilityModel: DefaultModelSelection["utilityModel"] = null,
+) {
+  return { primary, fallbacks, utilityModel };
 }
-
-function defaultModelChoices(models: ModelCatalogEntry[] | null, selection: DefaultModelSelection) {
+function defaults(selection: DefaultModelSelection) {
+  return {
+    ...selection,
+    thinkingLevel: undefined,
+    thinkingOverridden: false,
+    fastMode: undefined,
+    fastModeOverridden: false,
+  };
+}
+function choices(models: ModelCatalogEntry[] | null, selection: DefaultModelSelection) {
   return resolveDefaultModelPresentation(
     { models: models ?? [], hasSnapshot: models !== null, retired: false },
-    {
-      ...selection,
-      thinkingLevel: undefined,
-      thinkingOverridden: false,
-      fastMode: undefined,
-      fastModeOverridden: false,
-    },
+    defaults(selection),
     null,
   ).configuredModels;
 }
+const outcome = (
+  status: ModelCatalogProviderOutcome["status"],
+  profileId?: string,
+): ModelCatalogProviderOutcome => ({
+  provider: "openai",
+  status,
+  ...(profileId ? { profileId } : {}),
+});
 
-const EMPTY_INPUT = {
-  authStatus: null,
-  models: null,
-  providerUsage: null,
-  costByProvider: null,
-};
-const redactedConfigValue = "[redacted]";
-
-describe("buildModelProviderCards", () => {
-  it.each([true])(
-    "keeps environment-only model auth independently of API-key setup support (%s)",
-    (apiKeySupported) => {
-      const cards = buildModelProviderCards({
-        ...EMPTY_INPUT,
-        authStatus: authStatus(
-          [
-            {
-              provider: "model-service",
-              displayName: "Model Service",
-              status: "static",
-              profiles: [],
-              apiKey: { source: "env", envVar: "MODEL_SERVICE_API_KEY" },
-            },
-            {
-              provider: "web-search",
-              displayName: "Web Search",
-              status: "static",
-              profiles: [{ profileId: "search", type: "api_key", status: "static" }],
-              apiKey: { source: "env", envVar: "WEB_SEARCH_API_KEY" },
-            },
-          ],
-          [
-            { provider: "model-service", apiKeySupported, quickApiKeySetup: false },
-            { provider: "unconfigured-model", apiKeySupported: true, quickApiKeySetup: true },
-          ],
-        ),
-      });
-      expect(cards).toHaveLength(1);
-      expect(firstCard(cards)).toMatchObject({
-        id: "model-service",
-        modelCount: 0,
-        apiKeySupported,
-        apiKey: { source: "env", envVar: "MODEL_SERVICE_API_KEY" },
-        credentialProviderIds: ["model-service"],
-      });
-    },
+it("retains model-service environment auth but excludes tool-only credentials", () => {
+  const cards = build(
+    [
+      keyProvider("model-service", "MODEL_SERVICE_API_KEY"),
+      keyProvider("web-search", "WEB_SEARCH_API_KEY", {
+        profiles: [{ profileId: "search", type: "api_key", status: "static" }],
+      }),
+    ],
+    {},
+    [capability("model-service", false), capability("unconfigured-model")],
   );
+  expect(cards).toMatchObject([
+    {
+      id: "model-service",
+      modelCount: 0,
+      apiKeySupported: true,
+      apiKey: { source: "env", envVar: "MODEL_SERVICE_API_KEY" },
+      credentialProviderIds: ["model-service"],
+    },
+  ]);
+});
 
-  it.each<{
-    name: string;
-    outcomes: ModelCatalogProviderOutcome[];
-    expected: ModelCatalogProviderOutcome["status"];
-  }>([
-    {
-      name: "keeps a ready profile above a rejected sibling",
-      outcomes: [
-        { provider: "openai", profileId: "rejected", status: "auth-rejected" },
-        { provider: "openai", profileId: "ready", status: "ready" },
-      ],
-      expected: "ready",
-    },
-    {
-      name: "keeps an unscoped rejection above a ready profile",
-      outcomes: [
-        { provider: "openai", status: "auth-rejected" },
-        { provider: "openai", profileId: "ready", status: "ready" },
-      ],
-      expected: "auth-rejected",
-    },
-    {
-      name: "keeps unscoped readiness above a rejected profile",
-      outcomes: [
-        { provider: "openai", status: "ready" },
-        { provider: "openai", profileId: "rejected", status: "auth-rejected" },
-      ],
-      expected: "ready",
-    },
-    {
-      name: "reports the worst unscoped diagnostic",
-      outcomes: [
-        { provider: "openai", status: "ready" },
-        { provider: "openai", status: "unavailable" },
-      ],
-      expected: "unavailable",
-    },
-  ])("$name in either input order", ({ outcomes, expected }) => {
-    for (const ordered of [outcomes, outcomes.toReversed()]) {
-      const cards = buildModelProviderCards({ ...EMPTY_INPUT, providerOutcomes: ordered });
-      expect(cards).toHaveLength(1);
-      expect(firstCard(cards).catalogStatus).toBe(expected);
-    }
-  });
-
-  it("merges CLI alias auth rows into the canonical provider card", () => {
-    const cards = buildModelProviderCards({
-      ...EMPTY_INPUT,
-      models: [catalogEntry({ provider: "anthropic", available: true })],
-      authStatus: authStatus([
-        {
-          provider: "claude-cli",
-          displayName: "Claude",
-          status: "ok",
-          profiles: [{ profileId: "p1", type: "oauth", status: "ok" }],
-          usage: {
-            providerId: "anthropic",
-            windows: [{ label: "5h", usedPercent: 40 }],
-            plan: "Max",
-          },
-        },
-      ]),
-    });
-    expect(cards).toHaveLength(1);
-    expect(firstCard(cards)).toMatchObject({
-      id: "anthropic",
-      credentialProviderIds: ["claude-cli"],
-      displayName: "Claude",
-      auth: { kind: "ok" },
-    });
-    expect(firstCard(cards).usage).toMatchObject({
-      provider: "anthropic",
-      plan: "Max",
-      windows: [{ label: "5h", usedPercent: 40 }],
-    });
-  });
-
-  it("keeps the most urgent auth state when alias rows share a card", () => {
-    const cards = buildModelProviderCards({
-      ...EMPTY_INPUT,
-      authStatus: authStatus([
-        {
-          provider: "anthropic",
-          displayName: "Claude",
-          status: "ok",
-          profiles: [{ profileId: "p1", type: "oauth", status: "ok", logoutSupported: true }],
-          usage: { providerId: "anthropic", windows: [] },
-        },
-        {
-          provider: "claude-cli",
-          displayName: "Claude",
-          status: "expired",
-          expiry: { at: 1, remainingMs: -1, label: "-1m" },
-          profiles: [{ profileId: "p2", type: "oauth", status: "expired", logoutSupported: true }],
-          usage: { providerId: "anthropic", windows: [] },
-        },
-      ]),
-    });
-    expect(cards).toHaveLength(1);
-    expect(firstCard(cards).auth).toMatchObject({
-      kind: "expired",
-      expiryLabel: "-1m",
-    });
-    expect(firstCard(cards).credentialProviderIds).toEqual(["anthropic", "claude-cli"]);
-    expect(firstCard(cards).logoutTargets).toEqual([
-      { provider: "anthropic", profileIds: ["p1"] },
-      { provider: "claude-cli", profileIds: ["p2"] },
+it.each<[string, ModelCatalogProviderOutcome[], ModelCatalogProviderOutcome["status"]]>([
+  [
+    "ready profile beats rejected sibling",
+    [outcome("auth-rejected", "rejected"), outcome("ready", "ready")],
+    "ready",
+  ],
+  [
+    "unscoped rejection beats ready profile",
+    [outcome("auth-rejected"), outcome("ready", "ready")],
+    "auth-rejected",
+  ],
+  [
+    "unscoped readiness beats rejected profile",
+    [outcome("ready"), outcome("auth-rejected", "rejected")],
+    "ready",
+  ],
+  ["worst unscoped diagnostic wins", [outcome("ready"), outcome("unavailable")], "unavailable"],
+])("%s in either input order", (_name, outcomes, expected) => {
+  for (const ordered of [outcomes, outcomes.toReversed()]) {
+    expect(build([], { authStatus: null, providerOutcomes: ordered })).toMatchObject([
+      { catalogStatus: expected },
     ]);
-  });
+  }
+});
 
-  it("groups alias profile priority under the shared auth owner", () => {
-    const cards = buildModelProviderCards({
-      ...EMPTY_INPUT,
-      authStatus: authStatus([
-        {
+it.each<[string, CardsInput, unknown[]]>([
+  [
+    "merges CLI aliases with canonical models and usage",
+    input(
+      [
+        provider("claude-cli", {
+          displayName: "Claude",
+          profiles: [profile("p1")],
+          usage: usage("anthropic", 40, "Max"),
+        }),
+      ],
+      { models: [model("anthropic/model", { provider: "anthropic", available: true })] },
+    ),
+    [
+      {
+        id: "anthropic",
+        credentialProviderIds: ["claude-cli"],
+        displayName: "Claude",
+        auth: { kind: "ok" },
+        usage: {
           provider: "anthropic",
-          authProvider: "anthropic",
-          displayName: "Claude",
-          status: "ok",
-          profiles: [{ profileId: "p1", type: "oauth", status: "ok" }],
-          profileOrder: ["p2", "p1"],
-          profileOrderStored: true,
-          profileOrderLocked: "provider-config",
+          plan: "Max",
+          windows: [{ label: "5h", usedPercent: 40 }],
         },
-        {
-          provider: "claude-cli",
-          authProvider: "anthropic",
-          displayName: "Claude",
-          status: "ok",
-          profiles: [{ profileId: "p2", type: "oauth", status: "ok" }],
-          profileOrder: ["p2", "p1"],
-          profileOrderStored: true,
-        },
-      ]),
-    });
-
-    expect(firstCard(cards)).toMatchObject({
-      profileProviderIds: { p1: "anthropic", p2: "anthropic" },
-      profileOrders: { anthropic: ["p2", "p1"] },
-      profileOrderExplicitProviders: ["anthropic"],
-      profileOrderStoredProviders: ["anthropic"],
-      profileOrderLocks: { anthropic: "provider-config" },
-    });
-  });
-
-  it("keeps a credential-less missing route visible beside CLI OAuth", () => {
-    const cards = buildModelProviderCards({
-      ...EMPTY_INPUT,
-      authStatus: authStatus([
-        {
-          provider: "anthropic",
-          displayName: "Claude",
-          status: "missing",
-          profiles: [],
-        },
-        {
-          provider: "claude-cli",
-          displayName: "Claude",
-          status: "expiring",
-          profiles: [{ profileId: "anthropic:claude-cli", type: "oauth", status: "expiring" }],
-        },
-      ]),
-    });
-
-    expect(firstCard(cards).auth).toMatchObject({ kind: "missing" });
-  });
-
-  it("prefers usage.status snapshots over the auth-status embed", () => {
-    const cards = buildModelProviderCards({
-      ...EMPTY_INPUT,
-      authStatus: authStatus([
-        {
-          provider: "openai",
-          displayName: "OpenAI",
-          status: "ok",
-          profiles: [{ profileId: "p1", type: "oauth", status: "ok" }],
-          usage: { providerId: "openai", windows: [{ label: "5h", usedPercent: 10 }] },
-        },
-      ]),
-      providerUsage: {
-        updatedAt: 2,
-        providers: [
-          {
-            provider: "openai",
-            displayName: "OpenAI",
-            windows: [{ label: "5h", usedPercent: 55 }],
-            costHistory: {
-              unit: "USD",
-              periodDays: 30,
-              daily: [
-                {
-                  date: "2026-07-09",
-                  amount: 1.5,
-                  inputTokens: 10,
-                  cacheReadTokens: 0,
-                  cacheWriteTokens: 0,
-                  outputTokens: 5,
-                  totalTokens: 15,
-                },
-              ],
-              models: [],
-              categories: [],
-            },
-          },
+      },
+    ],
+  ],
+  [
+    "keeps urgent alias auth and each logout owner",
+    input([
+      provider("anthropic", {
+        profiles: [profile("p1", "ok", true)],
+      }),
+      provider("claude-cli", {
+        status: "expired",
+        expiry: { at: 1, remainingMs: -1, label: "-1m" },
+        profiles: [profile("p2", "expired", true)],
+      }),
+    ]),
+    [
+      {
+        auth: { kind: "expired", expiryLabel: "-1m" },
+        credentialProviderIds: ["anthropic", "claude-cli"],
+        logoutTargets: [
+          { provider: "anthropic", profileIds: ["p1"] },
+          { provider: "claude-cli", profileIds: ["p2"] },
         ],
       },
-    });
-    expect(cards).toHaveLength(1);
-    expect(firstCard(cards).usage?.windows).toEqual([{ label: "5h", usedPercent: 55 }]);
-    expect(firstCard(cards).usage?.costHistory?.periodDays).toBe(30);
-  });
-
-  it("attaches local session spend via alias ids and includes cost-only providers", () => {
-    const totals = {
-      input: 100,
-      output: 50,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 150,
-      totalCost: 0.42,
-      inputCost: 0.3,
-      outputCost: 0.12,
-      cacheReadCost: 0,
-      cacheWriteCost: 0,
-      missingCostEntries: 0,
-    };
-    const cards = buildModelProviderCards({
-      ...EMPTY_INPUT,
-      authStatus: authStatus([
-        {
-          provider: "claude-cli",
-          displayName: "Claude",
-          status: "ok",
-          profiles: [],
-          usage: { providerId: "anthropic", windows: [] },
-        },
-      ]),
-      costByProvider: [
-        { provider: "anthropic", count: 3, totals },
-        { provider: "openrouter", count: 1, totals },
-      ],
-    });
-    expect(cards.map((card) => card.id)).toEqual(["anthropic", "openrouter"]);
-    expect(firstCard(cards).localCost).toEqual({
-      totalCost: 0.42,
-      totalTokens: 150,
-      messageCount: 3,
-    });
-  });
-
-  it("keeps API key provenance and config-only providers", () => {
-    const cards = buildModelProviderCards({
-      ...EMPTY_INPUT,
+    ],
+  ],
+  [
+    "groups alias priority under the shared auth owner",
+    input(
+      ["anthropic", "claude-cli"].map((id, index) =>
+        provider(id, {
+          authProvider: "anthropic",
+          profiles: [profile(`p${index + 1}`)],
+          profileOrder: ["p2", "p1"],
+          profileOrderStored: true,
+          ...(index === 0 ? { profileOrderLocked: "provider-config" as const } : {}),
+        }),
+      ),
+    ),
+    [
+      {
+        profileProviderIds: { p1: "anthropic", p2: "anthropic" },
+        profileOrders: { anthropic: ["p2", "p1"] },
+        profileOrderExplicitProviders: ["anthropic"],
+        profileOrderStoredProviders: ["anthropic"],
+        profileOrderLocks: { anthropic: "provider-config" },
+      },
+    ],
+  ],
+  [
+    "keeps a credential-less missing route beside CLI OAuth",
+    input([
+      provider("anthropic", { status: "missing" }),
+      provider("claude-cli", {
+        status: "expiring",
+        profiles: [profile("anthropic:claude-cli", "expiring")],
+      }),
+    ]),
+    [{ auth: { kind: "missing" } }],
+  ],
+  [
+    "keeps API-key provenance and config-only providers",
+    input([keyProvider("openai", "OPENAI_API_KEY")], {
       configProviders: [
         { key: "mistral", hasApiKey: false },
         { key: "OpenAI", hasApiKey: true, authMode: "api-key" },
       ],
-      authStatus: authStatus([
+    }),
+    [
+      { id: "mistral" },
+      {
+        id: "openai",
+        apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
+        configKey: "OpenAI",
+        configAuthMode: "api-key",
+        credentialProviderIds: ["OpenAI"],
+        hasConfigApiKey: true,
+        profiles: [],
+      },
+    ],
+  ],
+])("%s", (_name, data, expected) => {
+  expect(buildModelProviderCards(data)).toMatchObject(expected);
+});
+
+it("prefers usage.status snapshots over the auth-status embed", () => {
+  const cards = build([provider("openai", { usage: usage("openai", 10) })], {
+    providerUsage: {
+      updatedAt: 2,
+      providers: [
         {
           provider: "openai",
           displayName: "OpenAI",
-          status: "static",
-          profiles: [],
-          apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
+          windows: [{ label: "5h", usedPercent: 55 }],
+          costHistory: { unit: "USD", periodDays: 30, daily: [], models: [], categories: [] },
         },
-      ]),
-    });
-    expect(cards.map((card) => card.id)).toEqual(["mistral", "openai"]);
-    expect(cards[1]).toMatchObject({
-      apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
-      configKey: "OpenAI",
-      configAuthMode: "api-key",
-      credentialProviderIds: ["OpenAI"],
-      hasConfigApiKey: true,
-      profiles: [],
-    });
+      ],
+    },
   });
+  expect(cards).toMatchObject([
+    {
+      usage: {
+        windows: [{ label: "5h", usedPercent: 55 }],
+        costHistory: { periodDays: 30 },
+      },
+    },
+  ]);
 });
 
-describe("model provider configuration data", () => {
-  it("keeps a fresh restricted catalog's default authoritative over a draft", () => {
-    const configured = {
-      primary: "openai/configured-model",
-      fallbacks: [],
-      utilityModel: null,
-      thinkingLevel: undefined,
-      thinkingOverridden: false,
-      fastMode: undefined,
-      fastModeOverridden: false,
-    };
-    const presentation = resolveDefaultModelPresentation(
-      {
-        models: [
-          catalogEntry({ provider: "openai", id: "allowed-model", available: true }),
-          catalogEntry({
-            provider: "openai",
-            id: "hidden-model",
-            manualSelectionAllowed: false,
-          }),
-        ],
-        hasSnapshot: true,
-        retired: false,
-        modelSelectionPolicy: { restricted: true, defaultModel: "openai/allowed-model" },
-      },
-      configured,
-      { ...configured, primary: "openai/draft-model", fallbacks: ["openai/draft-fallback"] },
-    );
-
-    expect(presentation.defaults).toEqual({
-      ...configured,
-      primary: "openai/allowed-model",
-      decisionModel: null,
-    });
-    expect(presentation.configuredModels.map(modelCatalogRef)).toEqual(["openai/allowed-model"]);
+it("attaches local spend through aliases and includes cost-only providers", () => {
+  const totals = { ...createEmptyCostUsageTotals(), totalTokens: 150, totalCost: 0.42 };
+  const cards = build([provider("claude-cli")], {
+    costByProvider: [
+      { provider: "anthropic", count: 3, totals },
+      { provider: "openrouter", count: 1, totals },
+    ],
   });
-
-  it("offers usable defaults while preserving saved unavailable refs", () => {
-    const models = [
-      catalogEntry({ provider: "openai", id: "gpt-ready", available: true }),
-      catalogEntry({ provider: "openai", id: "gpt-disabled", available: false }),
-    ];
-    const selectable = defaultModelChoices(models, {
-      primary: "openai/gpt-saved",
-      fallbacks: ["openai/gpt-disabled"],
-      utilityModel: { primary: "openai/utility", fallbacks: ["openai/utility-backup"] },
-    });
-    expect(selectable.map((model) => `${model.provider}/${model.id}`)).toEqual([
-      "openai/gpt-ready",
-      "openai/gpt-disabled",
-      "openai/gpt-saved",
-      "openai/utility",
-      "openai/utility-backup",
-    ]);
-  });
-
-  it.each(["saved-model"])(
-    "keeps saved %s available when the catalog is unknown, but not when it is empty",
-    (primary) => {
-      const selection = { primary, fallbacks: [], utilityModel: null };
-
-      expect(defaultModelChoices(null, selection)[0]).not.toHaveProperty("available");
-      expect(defaultModelChoices([], selection)[0]).toMatchObject({ available: false });
+  expect(cards).toMatchObject([
+    { id: "anthropic", localCost: { totalCost: 0.42, totalTokens: 150, messageCount: 3 } },
+    { id: "openrouter" },
+  ]);
+});
+it("keeps a fresh restricted catalog authoritative over a draft", () => {
+  const configured = defaults(modelSelection("openai/configured-model"));
+  const presentation = resolveDefaultModelPresentation(
+    {
+      models: [
+        model("allowed-model", { available: true }),
+        model("hidden-model", { manualSelectionAllowed: false }),
+      ],
+      hasSnapshot: true,
+      retired: false,
+      modelSelectionPolicy: { restricted: true, defaultModel: "openai/allowed-model" },
     },
+    configured,
+    { ...configured, primary: "openai/draft-model", fallbacks: ["openai/draft-fallback"] },
   );
-
-  it("preserves alias-valued and bare model defaults as picker options", () => {
-    const selectable = defaultModelChoices(
-      [catalogEntry({ provider: "anthropic", id: "claude-opus", alias: "Opus", available: true })],
-      { primary: "opus", fallbacks: ["unknown-model"], utilityModel: null },
-    );
-    expect(selectable.map(modelCatalogRef)).toEqual([
-      "anthropic/claude-opus",
-      "opus",
-      "unknown-model",
-    ]);
+  expect(presentation.defaults).toEqual({
+    ...configured,
+    primary: "openai/allowed-model",
+    decisionModel: null,
   });
+  expect(presentation.configuredModels.map(modelCatalogRef)).toEqual(["openai/allowed-model"]);
+});
 
-  it("reads string and object model defaults", () => {
-    expect(
-      readModelProviderConfig({
-        models: {
-          providers: {
-            openai: providerConfig(redactedConfigValue),
-            anthropic: { auth: "oauth" },
-          },
-        },
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-5",
-              fallbacks: ["anthropic/claude-sonnet-4-5", 42],
-            },
-            utilityModel: "openai/gpt-5-mini",
-          },
-        },
-      }),
-    ).toEqual({
-      providers: [
-        { key: "openai", hasApiKey: true },
-        { key: "anthropic", hasApiKey: false, authMode: "oauth" },
+it.each([
+  {
+    name: "preserves saved unavailable refs and utility chains",
+    models: [model("ready", { available: true }), model("disabled")],
+    selection: modelSelection("openai/saved", ["openai/disabled"], {
+      primary: "openai/utility",
+      fallbacks: ["openai/backup"],
+    }),
+    expected: [
+      "openai/ready",
+      "openai/disabled",
+      "openai/saved",
+      "openai/utility",
+      "openai/backup",
+    ],
+  },
+  {
+    name: "preserves alias-valued and bare model defaults",
+    models: [model("claude-opus", { provider: "anthropic", alias: "Opus", available: true })],
+    selection: modelSelection("opus", ["unknown-model"]),
+    expected: ["anthropic/claude-opus", "opus", "unknown-model"],
+  },
+])("$name", ({ models, selection, expected }) => {
+  expect(choices(models, selection).map(modelCatalogRef)).toEqual(expected);
+});
+
+it("distinguishes unknown and empty catalogs for saved models", () => {
+  const saved = modelSelection("saved-model");
+  expect(choices(null, saved)[0]).not.toHaveProperty("available");
+  expect(choices([], saved)[0]).toMatchObject({ available: false });
+});
+
+it.each([
+  { authProfile: "openai:account-a", tiers: ["priority", "ultrafast"] },
+  { authProfile: "openai:account-b", tiers: [] },
+])(
+  "does not lend account-scoped speed evidence to saved $authProfile",
+  ({ authProfile, tiers }) => {
+    const entry = model("gpt-5", {
+      provider: "openai",
+      available: true,
+      supportsFastMode: true,
+      serviceTiers: tiers,
+      supportsServiceTierRecovery: true,
+      serviceTierObservation: { requestedTier: "ultrafast", responseTier: "priority" },
+      thinkingLevels: [{ id: "max", label: "Maximum" }],
+      runtimeChoices: [
+        { agentRuntime: { id: "codex", source: "model" }, available: true, serviceTiers: tiers },
       ],
-      defaults: {
-        primary: "openai/gpt-5",
-        fallbacks: ["anthropic/claude-sonnet-4-5"],
-        utilityModel: "openai/gpt-5-mini",
-      },
     });
-    expect(
-      readModelProviderConfig({ agents: { defaults: { model: "openai/gpt-5" } } }).defaults,
-    ).toEqual({ primary: "openai/gpt-5", fallbacks: [], utilityModel: null });
-    expect(
-      readModelProviderConfig({ agents: { defaults: { utilityModel: "" } } }).defaults.utilityModel,
-    ).toBe("");
-  });
+    const primary = `openai/gpt-5@${authProfile}`;
+    const entries = choices([entry], modelSelection(primary));
+    const pinned = entries.find((candidate) => modelCatalogRef(candidate) === primary);
+    expect(entries[0]).toBe(entry);
+    expect(entry.serviceTiers).toEqual(tiers);
+    expect(pinned).toMatchObject({
+      provider: "openai",
+      id: "gpt-5",
+      name: entry.name,
+      thinkingLevels: entry.thinkingLevels,
+    });
+    for (const field of [
+      "available",
+      "supportsFastMode",
+      "supportsServiceTierRecovery",
+      "serviceTiers",
+      "serviceTierObservation",
+      "runtimeChoices",
+    ]) {
+      expect(pinned).not.toHaveProperty(field);
+    }
+  },
+);
 
-  it("lists known providers that are not configured", () => {
-    const options = buildUnconfiguredProviderOptions(
-      [
-        { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
-        { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
-        { provider: "github-copilot", apiKeySupported: true, quickApiKeySetup: false },
-      ],
-      ["openai"],
-    );
-    expect(options).toEqual([{ id: "anthropic", displayName: "Anthropic" }]);
+it("reads string and object defaults and preserves disabled utility", () => {
+  const read = (values: Record<string, unknown>, providers = {}) =>
+    readModelProviderConfig({ models: { providers }, agents: { defaults: values } });
+  expect(
+    read(
+      {
+        model: { primary: "openai/main", fallbacks: ["anthropic/fallback", 42] },
+        utilityModel: "openai/utility",
+      },
+      { openai: { apiKey: "[redacted]" }, anthropic: { auth: "oauth" } },
+    ),
+  ).toEqual({
+    providers: [
+      { key: "openai", hasApiKey: true },
+      { key: "anthropic", hasApiKey: false, authMode: "oauth" },
+    ],
+    defaults: {
+      primary: "openai/main",
+      fallbacks: ["anthropic/fallback"],
+      utilityModel: "openai/utility",
+    },
   });
+  expect(read({ model: "openai/main" }).defaults).toEqual(modelSelection("openai/main"));
+  expect(read({ utilityModel: "" }).defaults.utilityModel).toBe("");
+});
+
+it("offers only unconfigured providers with quick API-key setup", () => {
+  expect(
+    buildUnconfiguredProviderOptions(
+      [capability("openai"), capability("anthropic"), capability("github-copilot", false)],
+      ["openai"],
+    ),
+  ).toEqual([{ id: "anthropic", displayName: "Anthropic" }]);
 });

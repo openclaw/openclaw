@@ -7,6 +7,7 @@ import type {
 } from "@openclaw/gateway-protocol";
 import { onCleanup } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
@@ -83,6 +84,8 @@ export function createPortals(
   let publish = () => {};
   const portalProbeCache = new Map<string, PortalReachability>();
   const lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
+  let client = context.gateway.snapshot.client;
+  let presentationScope = gatewayPresentationScope(context.gateway);
   const projection = projectSource(state, {
     read: (value) => value,
     subscribe: (_value, listener) => {
@@ -95,11 +98,24 @@ export function createPortals(
   });
   // Connection receipts retire portal requests, probes, and presentation acknowledgements before reconnect.
   const stopGateway = context.gateway.subscribe((value) => {
-    if (lifecycle.transition(value)) {
-      resetGatewayState();
-      if (value.phase === "connected") {
-        void loadPresentation();
+    const nextPresentationScope = gatewayPresentationScope(context.gateway);
+    const identityChanged = client !== value.client || presentationScope !== nextPresentationScope;
+    client = value.client;
+    presentationScope = nextPresentationScope;
+    const changed = lifecycle.transition(value);
+    if (
+      identityChanged ||
+      (value.phase === "connected" && (!state.canReadPortalState || !state.portalListSupported))
+    ) {
+      if (!changed) {
+        lifecycle.invalidate();
       }
+      resetGatewayState();
+    } else if (changed) {
+      retireGatewayRequests();
+    }
+    if ((changed || identityChanged) && value.phase === "connected") {
+      void loadPresentation();
     }
     notify();
   });
@@ -248,16 +264,25 @@ export function createPortals(
   }
 
   function resetGatewayState() {
-    presentationRequest = null;
+    retireGatewayRequests();
     resetPendingEnvironment();
     state.portals = [];
     state.selectedPortalId = null;
-    state.loading = false;
     state.loaded = false;
     state.error = null;
-    state.closingPortalId = null;
     portalProbeCache.clear();
     state.portalProbeState = null;
+  }
+
+  function retireGatewayRequests() {
+    presentationRequest = null;
+    environmentLoading = false;
+    pollEnvironment(false);
+    state.loading = false;
+    state.closingPortalId = null;
+    if (state.portalProbeState?.status === "probing") {
+      state.portalProbeState = null;
+    }
   }
 
   function applyPortalSet(portals: readonly PortalSummary[]) {
@@ -311,10 +336,13 @@ export function createPortals(
     }
 
     const scope = lifecycle.capture();
+    if (!scope) {
+      return;
+    }
     state.portalProbeState = { key, status: "probing" };
     notify();
     void probePortalReachable(url).then((reachability) => {
-      if (scope && lifecycle.isCurrent(scope) && state.portalProbeState?.key === key) {
+      if (lifecycle.isCurrent(scope) && state.portalProbeState?.key === key) {
         portalProbeCache.set(key, reachability);
         state.portalProbeState = { key, status: reachability };
         notify();

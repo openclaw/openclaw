@@ -517,7 +517,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     });
   });
 
-  it("rejects staged bytes changed after validation", async () => {
+  it("rejects a same-size user_version change after validation", async () => {
     let stagedReadCount = 0;
     interceptOpen(
       (file, flags) =>
@@ -526,7 +526,9 @@ describe("createVerifiedSqliteSnapshot", () => {
         path.basename(path.dirname(file)).startsWith(".sqlite-snapshot-"),
       async (file) => {
         if (++stagedReadCount === 2) {
-          await fs.appendFile(file, "changed-after-validation");
+          const bytes = await fs.readFile(file);
+          bytes.writeUInt32BE(8, 60);
+          await fs.writeFile(file, bytes);
         }
       },
     );

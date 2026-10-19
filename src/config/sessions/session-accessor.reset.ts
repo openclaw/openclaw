@@ -1,5 +1,5 @@
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
@@ -94,7 +94,7 @@ function loadReplySessionInitializationEntriesForMaintenance(
   assertSessionInitializationAgentScope(params.agentId, params.sessionKey);
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
-      runSqliteDeferredTransactionSync(database.db, () => {
+      runSqliteReadSnapshotSync(database.db, () => {
         assertCanonicalSqliteSessionKeysCurrent(database);
         const entries: Record<string, SessionEntry> = {};
         const currentKey = normalizeStoreSessionKey(params.sessionKey);

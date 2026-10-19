@@ -15,11 +15,7 @@ import {
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { prepareOpenAIFunctionTool } from "../providers/openai-function-tool.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
-import {
-  isOpenAIGpt54MiniModel,
-  isOpenAIGpt55Model,
-  isOpenAIGpt56Model,
-} from "../providers/openai-reasoning-effort.js";
+import { applyOpenAICompletionsToolReasoning } from "../providers/openai-reasoning-effort.js";
 import {
   resolveOpenAIRequestReasoning,
   resolveOpenAISimpleReasoningEffort,
@@ -578,13 +574,7 @@ export function buildOpenAICompletionsRequest(
     );
   }
   if (params.tools?.length && isKnownOpenAICompletionsEndpoint(model)) {
-    // Native Chat Completions rejects tools with enabled GPT-5.6 reasoning,
-    // and rejects the effort field entirely for GPT-5.4 Mini and GPT-5.5 tools.
-    if (isOpenAIGpt56Model(model)) {
-      params.reasoning_effort = "none";
-    } else if (isOpenAIGpt54MiniModel(model) || isOpenAIGpt55Model(model)) {
-      delete params.reasoning_effort;
-    }
+    applyOpenAICompletionsToolReasoning(params, model);
   }
   if (contextOutputCap !== undefined) {
     contextOutputBudgets.set(params, {

@@ -18,10 +18,15 @@ import {
 } from "../test-helpers/app-sidebar.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 
+const dailyKey = "plugin:briefing/daily";
+const fleetKey = "plugin:fleet/overview";
+
+function pageRow(sidebar: SidebarLifecycleState, key: string) {
+  return sidebar.querySelector<HTMLElement>(`.sidebar-pages [data-sidebar-entry="${key}"]`);
+}
+
 function pageEntry(sidebar: SidebarLifecycleState, key: string) {
-  const row = sidebar.querySelector<HTMLElement>(
-    '.sidebar-pages [data-sidebar-entry="' + key + '"]',
-  );
+  const row = pageRow(sidebar, key);
   if (!row) {
     throw new Error("Missing sidebar page: " + key);
   }
@@ -114,9 +119,7 @@ describe("Pages navigation identity", () => {
         ),
         (row) => row.dataset.sidebarEntry!,
       );
-      expect(keys).toContain("route:usage");
-      expect(keys).toContain("plugin:briefing/daily");
-      expect(keys).toContain("plugin:fleet/overview");
+      expect(keys).toEqual(expect.arrayContaining(["route:usage", dailyKey, fleetKey]));
       const before = keys.map((key) => ({ key, entry: pageEntry(sidebar, key) }));
       const usage = pageEntry(sidebar, "route:usage");
       usage.link.focus();
@@ -147,9 +150,7 @@ describe("Pages navigation identity", () => {
         expect(next.label, key).toBe(previous.label);
       }
       expect(document.activeElement).toBe(usage.link);
-      expect(pageEntry(sidebar, "plugin:briefing/daily").link.getAttribute("aria-current")).toBe(
-        "page",
-      );
+      expect(pageEntry(sidebar, dailyKey).link.getAttribute("aria-current")).toBe("page");
     },
   );
 
@@ -161,9 +162,7 @@ describe("Pages navigation identity", () => {
     expect(pageEntry(sidebar, "route:usage").link).toBe(usage.link);
     expect(usage.link.getAttribute("aria-current")).toBe("page");
     expect(usage.link.classList.contains("nav-item--active")).toBe(true);
-    expect(pageEntry(sidebar, "plugin:briefing/daily").link.hasAttribute("aria-current")).toBe(
-      false,
-    );
+    expect(pageEntry(sidebar, dailyKey).link.hasAttribute("aria-current")).toBe(false);
     const navigate = vi.fn();
     sidebar.onNavigate = navigate;
     usage.link.click();
@@ -184,7 +183,7 @@ describe("Pages navigation identity", () => {
     sidebar.enabledRouteIds = ["agents-home"];
     await settleLitElement(sidebar);
     expect(usage.row.isConnected).toBe(false);
-    expect(sidebar.querySelector('.sidebar-pages [data-sidebar-entry="route:usage"]')).toBeNull();
+    expect(pageRow(sidebar, "route:usage")).toBeNull();
     const agents = pageEntry(sidebar, "route:agents-home");
     sidebar.enabledRouteIds = ["agents-home", "usage"];
     await settleLitElement(sidebar);
@@ -193,48 +192,38 @@ describe("Pages navigation identity", () => {
   });
 
   it("updates plugin artwork and labels, handles registry removal and releases subscriptions", async () => {
-    const {
-      sidebar,
-      provider,
-      publishTab,
-      registrations,
-      fleet,
-      notifyPlugins,
-      listeners,
-      openPage,
-    } = await fixture();
-    const daily = pageEntry(sidebar, "plugin:briefing/daily");
-    publishTab({ label: "Weekly work briefing", icon: "circle" });
+    const state = await fixture();
+    const { sidebar } = state;
+    const daily = pageEntry(sidebar, dailyKey);
+    state.publishTab({ label: "Weekly work briefing", icon: "circle" });
     await settleLitElement(sidebar);
-    const changed = pageEntry(sidebar, "plugin:briefing/daily");
+    const changed = pageEntry(sidebar, dailyKey);
     expect(changed.link).toBe(daily.link);
     expect(changed.icon).toBe(daily.icon);
     expect(changed.label).toBe(daily.label);
     expect(changed.label.textContent).toBe("Weekly work briefing");
     expect(changed.icon.querySelector("circle")?.getAttribute("r")).toBe("10");
     expect(changed.icon.querySelector("path")).toBeNull();
-    publishTab({ icon: "square" });
+    state.publishTab({ icon: "square" });
     await settleLitElement(sidebar);
-    expect(pageEntry(sidebar, "plugin:briefing/daily").icon).toBe(daily.icon);
+    expect(pageEntry(sidebar, dailyKey).icon).toBe(daily.icon);
     expect(daily.icon.querySelector("circle")).toBeNull();
     expect(daily.icon.querySelector("rect")?.getAttribute("width")).toBe("18");
-    const runtime = pageEntry(sidebar, "plugin:fleet/overview");
+    const runtime = pageEntry(sidebar, fleetKey);
     runtime.link.click();
-    expect(openPage).toHaveBeenCalledExactlyOnceWith({ id: "overview" });
-    registrations.navigation = [];
-    notifyPlugins();
+    expect(state.openPage).toHaveBeenCalledExactlyOnceWith({ id: "overview" });
+    state.registrations.navigation = [];
+    state.notifyPlugins();
     await settleLitElement(sidebar);
     expect(runtime.row.isConnected).toBe(false);
-    expect(
-      sidebar.querySelector('.sidebar-pages [data-sidebar-entry="plugin:fleet/overview"]'),
-    ).toBeNull();
-    registrations.navigation = [fleet];
-    notifyPlugins();
+    expect(pageRow(sidebar, fleetKey)).toBeNull();
+    state.registrations.navigation = [state.fleet];
+    state.notifyPlugins();
     await settleLitElement(sidebar);
-    expect(pageEntry(sidebar, "plugin:fleet/overview").label.textContent).toBe("OpenClaw Fleet");
-    provider.remove();
+    expect(pageEntry(sidebar, fleetKey).label.textContent).toBe("OpenClaw Fleet");
+    state.provider.remove();
     await settleLitElement(sidebar);
-    expect(listeners.size).toBe(0);
+    expect(state.listeners.size).toBe(0);
     expect(daily.row.isConnected).toBe(false);
   });
 });

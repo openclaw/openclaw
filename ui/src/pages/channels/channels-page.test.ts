@@ -1,4 +1,4 @@
-import { createComponent, createSignal } from "solid-js";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ControlUiChannelSettingsContext,
@@ -9,6 +9,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import type { ControlUiPluginDistribution } from "../../plugins/control-ui-distribution.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
@@ -21,38 +22,30 @@ vi.mock("../../plugins/control-ui-distribution.ts", async (importOriginal) => ({
   controlUiPluginDistributions: packaged,
 }));
 
-const mountedPages = new Map<
-  HTMLElement,
-  { dispose: () => void; replace: (context: ApplicationContext) => void }
->();
+const mountedPages = new Map<HTMLElement, () => void>();
 
 function mountPage(context: ApplicationContext): HTMLElement {
   const page = document.createElement("div");
   document.body.append(page);
-  const [current, setCurrent] = createSignal(context);
   const mounted = mountSolid(
     () =>
-      createComponent(ChannelsPage, {
-        get context() {
-          return current();
+      createComponent(ApplicationProvider, {
+        value: context,
+        get children() {
+          return createComponent(ChannelsPage, {});
         },
       }),
     { container: page },
   );
-  mountedPages.set(page, { dispose: mounted.unmount, replace: setCurrent });
+  mountedPages.set(page, mounted.unmount);
   flush();
   return page;
 }
 
 function disposePage(page: HTMLElement) {
-  mountedPages.get(page)?.dispose();
+  mountedPages.get(page)?.();
   mountedPages.delete(page);
   page.remove();
-}
-
-function replacePageContext(page: HTMLElement, context: ApplicationContext) {
-  mountedPages.get(page)!.replace(context);
-  flush();
 }
 
 async function settle() {
@@ -794,8 +787,8 @@ describe("ChannelsPage lifecycle", () => {
   });
 });
 
-async function mountPackagedChannel() {
-  const placement = { section: "channels", panel: "detail", channelId: "custom-profile" } as const;
+async function mountPackagedChannel(channelId = "custom-profile", scopes = ["operator.admin"]) {
+  const placement = { section: "channels", panel: "detail", channelId } as const;
   packaged.push({
     pluginId: "profile-fixture",
     revision: "fixture-revision",
@@ -811,15 +804,15 @@ async function mountPackagedChannel() {
   gateway.snapshot.hello = {
     type: "hello-ok",
     protocol: 3,
-    auth: { role: "operator", scopes: ["operator.admin"], deviceToken: "device-token" },
+    auth: { role: "operator", scopes, deviceToken: "device-token" },
   };
   const source = createContext(gateway);
   const refresh = vi.spyOn(source.channels, "refresh").mockResolvedValue();
   source.channels.state.channelsSnapshot = {
     ts: 0,
-    channelOrder: ["custom-profile", "other"],
-    channelLabels: { "custom-profile": "Custom profile", other: "Other" },
-    channels: { "custom-profile": { configured: true }, other: { configured: true } },
+    channelOrder: [channelId, "other"],
+    channelLabels: { [channelId]: "Custom profile", other: "Other" },
+    channels: { [channelId]: { configured: true, linked: true }, other: { configured: true } },
     channelAccounts: {},
     channelDefaultAccountId: {},
   };
@@ -938,7 +931,7 @@ it("retains the editor across same-client reconnects and synchronously publishes
   f.source.channels.dispose();
 });
 
-it.each(["disconnect", "client", "admin", "source", "unmount", "caller"] as const)(
+it.each(["disconnect", "client", "admin", "unmount", "caller"] as const)(
   "rejects retained HTTP callbacks and pending responses after %s retirement before another credential dispatch",
   async (retirement) => {
     const pending = createDeferred<Response>();
@@ -949,7 +942,6 @@ it.each(["disconnect", "client", "admin", "source", "unmount", "caller"] as cons
     const request = f.context.request(profileRequest(caller.signal));
     const rejection = expect(request).rejects.toThrow();
     const signal = fetchMock.mock.calls[0]![1]!.signal!;
-    let second: ReturnType<typeof createContext> | undefined;
     if (retirement === "disconnect") {
       f.gateway.emit({ phase: "stopped" });
     } else if (retirement === "client") {
@@ -957,10 +949,6 @@ it.each(["disconnect", "client", "admin", "source", "unmount", "caller"] as cons
       f.gateway.emit({ client: createGateway().snapshot.client });
     } else if (retirement === "admin") {
       setGatewayScopes(f.gateway, ["operator.read"]);
-    } else if (retirement === "source") {
-      second = createContext(f.gateway);
-      Object.assign(second.context, { plugins: f.source.context.plugins });
-      replacePageContext(f.page, second.context);
     } else if (retirement === "unmount") {
       disposePage(f.page);
     } else {
@@ -978,8 +966,6 @@ it.each(["disconnect", "client", "admin", "source", "unmount", "caller"] as cons
     }
     f.source.runtimeConfig.dispose();
     f.source.channels.dispose();
-    second?.runtimeConfig.dispose();
-    second?.channels.dispose();
   },
 );
 
@@ -1112,3 +1098,105 @@ it("keeps a caller deadline across credential retry and response-body consumptio
   f.source.runtimeConfig.dispose();
   f.source.channels.dispose();
 });
+
+it("binds plugin login actions to the existing owner and omits the default start/wait account", async () => {
+  const f = await mountPackagedChannel("whatsapp");
+  const client = f.gateway.snapshot.client!;
+  const request = vi.spyOn(client, "request");
+  request.mockClear();
+  await f.context.login!.start(false);
+  await f.context.login!.wait();
+  expect(request.mock.calls.filter(([method]) => method.startsWith("web.login."))).toEqual([
+    ["web.login.start", { channel: "whatsapp", force: false, timeoutMs: 30000 }],
+    ["web.login.wait", { channel: "whatsapp", timeoutMs: 120000, currentQrDataUrl: undefined }],
+  ]);
+  const account = f.context.login!.captureLogout()!;
+  expect(account.accountId).toBe("default");
+  await account.logout();
+  expect(request).toHaveBeenCalledWith("channels.logout", {
+    channel: "whatsapp",
+    accountId: "default",
+  });
+  f.source.runtimeConfig.dispose();
+  f.source.channels.dispose();
+});
+
+it("denies login and confirmation capabilities to an initially read-only operator", async () => {
+  const f = await mountPackagedChannel("whatsapp", ["operator.read"]);
+  const request = vi.spyOn(f.gateway.snapshot.client!, "request");
+  request.mockClear();
+  await expect(f.context.login!.start(false)).rejects.toThrow();
+  await expect(f.context.login!.wait()).rejects.toThrow();
+  expect(() => f.context.login!.captureLogout()).toThrow();
+  await expect(
+    f.context.confirm!({
+      title: "Log out",
+      message: "Confirm account logout",
+      confirmLabel: "Logout",
+    }),
+  ).rejects.toThrow();
+  expect(request).not.toHaveBeenCalled();
+  expect(document.body.textContent).not.toContain("Confirm account logout");
+  f.source.runtimeConfig.dispose();
+  f.source.channels.dispose();
+});
+
+it.each(["account", "linked"] as const)(
+  "rejects a captured plugin logout after its %s changes",
+  async (change) => {
+    const f = await mountPackagedChannel("whatsapp");
+    const status = f.source.channels.state.channelsSnapshot!;
+    status.channelDefaultAccountId.whatsapp = "work/account";
+    status.channelAccounts.whatsapp = [{ accountId: "work/account", linked: true }];
+    const account = f.context.login!.captureLogout()!;
+    expect(account.accountId).toBe("work/account");
+    if (change === "account") {
+      status.channelDefaultAccountId.whatsapp = "replacement";
+    } else {
+      status.channelAccounts.whatsapp[0]!.linked = false;
+    }
+    const request = vi.spyOn(f.gateway.snapshot.client!, "request");
+    request.mockClear();
+    await account.logout();
+    expect(request).not.toHaveBeenCalled();
+    f.source.runtimeConfig.dispose();
+    f.source.channels.dispose();
+  },
+);
+
+it.each(["disconnect", "client", "admin", "unmount"] as const)(
+  "cancels confirmation and denies retained login actions synchronously after %s",
+  async (retirement) => {
+    const f = await mountPackagedChannel("whatsapp");
+    const request = vi.spyOn(f.gateway.snapshot.client!, "request");
+    const account = f.context.login!.captureLogout()!;
+    const confirmation = f.context.confirm!({
+      title: "Log out",
+      message: "Confirm account logout",
+      confirmLabel: "Logout",
+      danger: true,
+    });
+    const rejection = expect(confirmation).rejects.toThrow();
+    await waitForSolid(() => expect(document.body.textContent).toContain("Confirm account logout"));
+    if (retirement === "disconnect") {
+      f.gateway.emit({ phase: "stopped" });
+    } else if (retirement === "client") {
+      f.gateway.emit({ client: createGateway().snapshot.client });
+    } else if (retirement === "admin") {
+      setGatewayScopes(f.gateway, ["operator.read"]);
+    } else {
+      disposePage(f.page);
+    }
+    request.mockClear();
+    await expect(f.context.login!.start(true)).rejects.toThrow();
+    await expect(f.context.login!.wait()).rejects.toThrow();
+    await expect(account.logout()).rejects.toThrow();
+    await rejection;
+    expect(request).not.toHaveBeenCalled();
+    await waitForSolid(() =>
+      expect(document.body.textContent).not.toContain("Confirm account logout"),
+    );
+    f.source.runtimeConfig.dispose();
+    f.source.channels.dispose();
+  },
+);

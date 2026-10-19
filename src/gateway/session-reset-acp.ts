@@ -81,6 +81,7 @@ export async function closeAcpRuntimeForSession(params: {
       sessionKey: acpSessionKey,
       agentId: params.agentId,
       reason: params.reason,
+      assertActive: params.assertCurrent,
     };
     for (const step of ["cancel", "runtime close"] as const) {
       params.assertCurrent?.();

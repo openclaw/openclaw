@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { availableParallelism } from "node:os";
+import { writeHeapSnapshot } from "node:v8";
 import { isMainThread } from "node:worker_threads";
 import { getWorkerMessageMetrics } from "../../src/infra/worker-message-metrics.ts";
 import { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
@@ -68,18 +69,42 @@ if (isMainThread) {
     GatewayProfileCommand["kind"],
     ReturnType<typeof getWorkerMessageMetrics>
   >();
+  let stopDiagnostics: ReturnType<typeof startGatewayBenchDiagnostics> | undefined;
   let busy = false;
   process.on("message", (message: GatewayBenchCommand) => {
     if (message?.channel !== GATEWAY_PROFILE_CHANNEL) {
       return;
     }
     if (message.kind === "resource-usage" && message.action === "sample") {
-      process.send?.({
-        channel: GATEWAY_PROFILE_CHANNEL,
-        kind: message.kind,
-        action: message.action,
-        resources: message.initial ? initialResources : sampleResources(),
-      });
+      void (async () => {
+        if (message.collectGarbage) {
+          if (!inspectorConnected) {
+            inspector.connect();
+            inspectorConnected = true;
+          }
+          await inspector.post("HeapProfiler.collectGarbage");
+        }
+        const resources = message.initial ? initialResources : sampleResources();
+        if (message.snapshotPath) {
+          writeHeapSnapshot(message.snapshotPath);
+        }
+        return resources;
+      })().then(
+        (resources) =>
+          process.send?.({
+            channel: GATEWAY_PROFILE_CHANNEL,
+            kind: message.kind,
+            action: message.action,
+            resources,
+          }),
+        (error: unknown) =>
+          process.send?.({
+            channel: GATEWAY_PROFILE_CHANNEL,
+            kind: message.kind,
+            action: message.action,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+      );
       return;
     }
     if (message.kind === "cpu-usage" && message.action === "sample") {
@@ -99,6 +124,30 @@ if (isMainThread) {
         error,
       });
     };
+    if (message.kind === "diagnostics") {
+      if (message.action === "start") {
+        if (stopDiagnostics) {
+          reply("Gateway diagnostics already started");
+          return;
+        }
+        stopDiagnostics = startGatewayBenchDiagnostics();
+        reply();
+      } else {
+        if (!stopDiagnostics) {
+          reply("Gateway diagnostics have not started");
+          return;
+        }
+        const diagnostics = stopDiagnostics();
+        stopDiagnostics = undefined;
+        process.send?.({
+          channel: GATEWAY_PROFILE_CHANNEL,
+          kind: message.kind,
+          action: message.action,
+          diagnostics,
+        });
+      }
+      return;
+    }
     if (busy) {
       reply("Gateway profile command already in progress");
       return;
@@ -195,6 +244,7 @@ if (isMainThread) {
     );
   });
   process.once("disconnect", () => {
+    stopDiagnostics?.();
     for (const finish of diagnosticCaptures.values()) {
       finish();
     }

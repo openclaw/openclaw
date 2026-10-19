@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { performance } from "node:perf_hooks";
+import { stripVTControlCharacters } from "node:util";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  setDiagnosticsEnabledForProcess,
+} from "../../infra/diagnostic-events.js";
 import { setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -24,12 +30,12 @@ const notice =
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
-let resetReplyRunRegistry: () => void;
+let resetSessionControllerForTest: () => void;
 beforeAll(async () => {
   ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
-  const { testing } = await import("./reply-run-registry.test-support.js");
-  resetReplyRunRegistry = () => testing.resetReplyRunRegistry();
+  const { testing } = await import("../../sessions/session-controller.test-support.js");
+  resetSessionControllerForTest = () => testing.resetSessionControllerForTest();
 });
 
 describe("restart tombstone channel feedback", () => {
@@ -41,7 +47,7 @@ describe("restart tombstone channel feedback", () => {
 
   beforeEach(() => {
     clearAgentHarnesses();
-    resetReplyRunRegistry();
+    resetSessionControllerForTest();
     resetInboundDedupe();
     resetPluginTtsAndThreadMocks();
     setActivePluginRegistry(
@@ -124,7 +130,23 @@ describe("restart tombstone channel feedback", () => {
   it.each(["message_tool"] as const)(
     "delivers one room notice under %s and warns for every rejected inbound",
     async (visibleReplies) => {
+      let elapsedMs = 0;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+      const diagnosticsWereEnabled = areDiagnosticsEnabledForProcess();
+      setDiagnosticsEnabledForProcess(true);
+      onTestFinished(() => {
+        clock.mockRestore();
+        setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
+      });
+      sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
+        elapsedMs += 1_500;
+        return sessionStoreMocks.currentEntry;
+      });
+      // Slow lifecycle diagnostics must not count as duplicate rejection warnings.
+      const rejectionWarnings = () =>
+        warn.mock.calls.filter(([line]) => line.includes("[auto-reply/reply-turn-admission]"));
       await rejectInbound({ visibleReplies });
+      expect(rejectionWarnings()).toHaveLength(1);
       expect(deliver).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ text: notice }),
         expect.objectContaining({ kind: "final" }),
@@ -132,12 +154,15 @@ describe("restart tombstone channel feedback", () => {
       await rejectInbound({ visibleReplies });
       expect(deliver).toHaveBeenCalledOnce();
       expect(replyResolver).not.toHaveBeenCalled();
-      expect(warn).toHaveBeenCalledTimes(2);
-      for (const [line] of warn.mock.calls) {
+      expect(rejectionWarnings()).toHaveLength(2);
+      for (const [line] of rejectionWarnings()) {
         expect(line).toContain(sessionKey);
         expect(line).toContain("automatic recovery exhausted");
         expect(line).toContain("/reset");
       }
+      expect(warn.mock.calls.map(([line]) => stripVTControlCharacters(line))).toContainEqual(
+        expect.stringContaining("[sessions/lifecycle] slow session lifecycle operation"),
+      );
       expect(sessionStoreMocks.currentEntry).toMatchObject({
         sessionId: "failed-session",
         mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
