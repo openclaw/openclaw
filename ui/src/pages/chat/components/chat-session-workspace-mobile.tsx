@@ -42,6 +42,7 @@ export type SessionWorkspaceMobileStatus =
   | { kind: "error" | "unavailable"; message: string; onRetry?: () => void };
 
 export type SessionWorkspaceMobileProps = {
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
   /** Native transcript source, supplied by the workspace adapter. */
   attachmentContent?: JSX.Element;
   groups: readonly SessionWorkspaceMobileGroup[];
@@ -290,12 +291,14 @@ export function SessionWorkspaceMobile(props: SessionWorkspaceMobileProps) {
   };
   onSettled(() => {
     props.onScrollElement(scroll);
+    const releaseScrollPort = props.onScrollPortRef?.(scroll);
     const observer = new ResizeObserver(updateFades);
     observer.observe(scroll);
     observer.observe(content);
     updateFades();
     return () => {
       observer.disconnect();
+      releaseScrollPort?.();
       props.onScrollElement(null);
     };
   });

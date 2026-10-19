@@ -295,6 +295,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
               <Match when={props.content?.kind === "session-diff" ? props.content : undefined}>
                 {(content) => (
                   <SessionDiffPanel
+                    onScrollPortRef={props.fileView?.onScrollPortRef}
                     mobile={
                       props.presentation === undefined
                         ? (content().presentation?.mobile ?? null)

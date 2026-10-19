@@ -102,6 +102,7 @@ type SessionDiffMobilePageRequest = {
 };
 
 export type SessionDiffProps = {
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
   /** Native host presentation, not the width of the panel. Unknown retains the native UI. */
   mobile?: boolean | null;
   active?: boolean;

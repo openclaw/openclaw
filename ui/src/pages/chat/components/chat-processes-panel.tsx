@@ -2,6 +2,7 @@ import { Show, createMemo, createSignal } from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
 import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { ProcessesPanelData } from "../processes-panel-data.ts";
@@ -14,11 +15,14 @@ import {
 import "./chat-session-panels.css";
 import "./chat-processes-panel.css";
 
-export type ChatProcessesPanel = SolidBridgeElement<SessionPanelProps>;
+export type ChatProcessesPanelProps = SessionPanelProps & {
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
+};
+export type ChatProcessesPanel = SolidBridgeElement<ChatProcessesPanelProps>;
 
-export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps>(
+export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
   "openclaw-chat-processes-panel",
-  (_props, host) => {
+  (props, host) => {
     const [finishedOpen, setFinishedOpen] = createSignal(false);
     const panel = useSessionPanel(
       host,
@@ -81,7 +85,11 @@ export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps>(
       <Show
         when={selected()}
         fallback={
-          <div class="chat-processes__list" aria-busy={data().loading ? "true" : "false"}>
+          <div
+            class="chat-processes__list"
+            ref={[elementRef(props.onScrollPortRef)]}
+            aria-busy={data().loading ? "true" : "false"}
+          >
             {error()}
             <Show
               when={data().rows.length}
@@ -173,7 +181,7 @@ export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps>(
             }
           >
             {(row) => (
-              <div class="chat-processes__output">
+              <div class="chat-processes__output" ref={[elementRef(props.onScrollPortRef)]}>
                 <div class="chat-processes__metadata">
                   <span>{status(row())}</span>
                   <span>{elapsed(row())}</span>
@@ -203,6 +211,7 @@ export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps>(
       sessionKey: { default: "", attribute: false },
       agentId: { default: "main", attribute: false },
       presented: { default: true, type: Boolean },
+      onScrollPortRef: { default: undefined, attribute: false },
     },
   },
 );

@@ -22,6 +22,7 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     | "subagentSessionsRead"
     | "onOpenSubagent"
     | "onOpenSubagents"
+    | "onScrollPortRef"
   > & {
     onSessionSelect?: (sessionKey: string) => void;
     detailsWorkspace?: ChatDetailsWorkspace;

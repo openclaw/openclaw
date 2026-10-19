@@ -56,6 +56,7 @@ export type ChatSubagentsMobileListProps = {
   loading: boolean;
   /** The navigation owner retains/restores list scroll across child navigation. */
   listRef?: (element: HTMLDivElement, firstButton: () => HTMLButtonElement | undefined) => void;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
 };
 
 export type ChatSubagentMobileHeaderProps = {
@@ -176,7 +177,7 @@ export function ChatSubagentsMobileList(props: ChatSubagentsMobileListProps) {
   return (
     <div
       class="chat-subagents-mobile"
-      ref={(element) => props.listRef?.(element, firstButton)}
+      ref={[(element) => props.listRef?.(element, firstButton), elementRef(props.onScrollPortRef)]}
       aria-busy={props.loading ? "true" : "false"}
     >
       {props.notice}

@@ -48,6 +48,13 @@ describe("Plugin link reader panel", () => {
       return ({ overview, checks, discussion, files }[section] ?? overview).promise;
     });
     const panel = await mount(request);
+    const scrollPorts = new Set<HTMLElement>();
+    panel.onScrollPortRef = (element) => {
+      scrollPorts.add(element);
+      return () => {
+        scrollPorts.delete(element);
+      };
+    };
     panel.readers = [{ ...reader, linkReader: { ...reader.linkReader, progressive: true } }];
     await panel.updateComplete;
     open(panel);
@@ -84,6 +91,8 @@ describe("Plugin link reader panel", () => {
       expect(panel.querySelector(".lr-file")?.textContent).toContain("index.ts"),
     );
     const loadedFiles = panel.querySelector(".lr-files");
+    expect(scrollPorts.has(panel.querySelector(".lr-content")!)).toBe(true);
+    expect(scrollPorts.has(panel.querySelector(".lr-diff")!)).toBe(true);
     expect(deferredFiles?.isConnected).toBe(false);
     filesButton.click();
     expect(document.activeElement).toBe(loadedFiles);
@@ -99,6 +108,8 @@ describe("Plugin link reader panel", () => {
     });
     await waitForFast(() => expect(panel.textContent).toContain("This item changed"));
     expect(panel.textContent).not.toContain("Wrong head passed");
+    panel.remove();
+    await waitForFast(() => expect(scrollPorts.size).toBe(0));
   });
 
   it.each(["checks", "files", "discussion"] as const)(

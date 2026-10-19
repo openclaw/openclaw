@@ -11,6 +11,7 @@ import {
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
@@ -46,7 +47,7 @@ import type {
 
 const regionOperations = new WeakMap<
   RegionElement,
-  Pick<RegionMethods, "readPanelHost" | "focusActiveSideTab"> & {
+  Pick<RegionMethods, "readPanelHost" | "focusActiveSideTab" | "readMobileChromeHeight"> & {
     inputsChanged(key: keyof RegionProps): void;
   }
 >();
@@ -55,9 +56,14 @@ function Region(props: RegionProps, host: RegionElement) {
   const panelHosts = new Map<SidebarSlotId, SidebarPanelHost>();
   const panelElements = new Map<string, HTMLDivElement>();
   let sideHeader: HTMLElement | null = null;
+  let localBack: HTMLElement | undefined;
   const tabFocus = createTabFocus();
   const focusActiveSideTab = tabFocus.focusActive;
   const operations = {
+    readMobileChromeHeight: () =>
+      (props.mobileHost?.destination.area === "panels"
+        ? (sideHeader?.getBoundingClientRect().height ?? 0)
+        : 0) + (localBack?.getBoundingClientRect().height ?? 0),
     readPanelHost: (slot: SidebarSlotId) =>
       panelHosts.get(slot) ??
       props.panelDefinitions.find((definition) => definition.slot === slot)?.panelHost ??
@@ -378,6 +384,7 @@ function Region(props: RegionProps, host: RegionElement) {
                 <MobilePanelLauncher
                   definitions={props.panelDefinitions}
                   onOpen={openPanelFromLauncher}
+                  onScrollPortRef={props.onScrollPortRef}
                 />
               </Show>
             }
@@ -537,7 +544,17 @@ function Region(props: RegionProps, host: RegionElement) {
                   props.mobileHost.destination.slot !== "dashboard"
                 }
               >
-                <div class="chat-mobile-host__local-back">
+                <div
+                  class="chat-mobile-host__local-back"
+                  ref={[
+                    elementRef((element) => {
+                      localBack = element;
+                      return () => {
+                        localBack = undefined;
+                      };
+                    }),
+                  ]}
+                >
                   <button type="button" onClick={() => props.mobileHost?.back()}>
                     <Icon name="chevronLeft" />
                     {t("common.back")}
@@ -556,7 +573,11 @@ function Region(props: RegionProps, host: RegionElement) {
                 }
               >
                 {(page) => (
-                  <div class="chat-mobile-host__page" data-region="side">
+                  <div
+                    class="chat-mobile-host__page"
+                    data-region="side"
+                    ref={[elementRef(props.onScrollPortRef)]}
+                  >
                     {page().content}
                   </div>
                 )}
@@ -659,6 +680,7 @@ export const ChatSidebarRegion = defineSolidBridge<RegionProps, RegionMethods>(
     properties: {
       elements: { default: null, attribute: false },
       mobileHost: { default: undefined, attribute: false },
+      onScrollPortRef: { default: undefined, attribute: false },
       presentation: { default: undefined, attribute: false },
       panelIdPrefix: { default: "", attribute: false },
       conversationTab: { default: undefined, attribute: false },
@@ -673,6 +695,7 @@ export const ChatSidebarRegion = defineSolidBridge<RegionProps, RegionMethods>(
       availableWidth: { default: 0 },
     },
     methods: {
+      readMobileChromeHeight: (host) => regionOperations.get(host)?.readMobileChromeHeight() ?? 0,
       readPanelHost: (host, slot) => regionOperations.get(host)?.readPanelHost(slot) ?? null,
       awaitPanelCommit: async (host, slot) => {
         await host.updateComplete;

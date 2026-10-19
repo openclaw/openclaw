@@ -46,6 +46,7 @@ export async function createFileEditorView(params: {
   wrap?: boolean;
   highlight?: boolean;
   scrollFades?: boolean;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
   onSelectContent?: () => void;
   onSave: () => void;
 }) {
@@ -120,6 +121,7 @@ export async function createFileEditorView(params: {
     state: initialState,
   });
 
+  const releaseScrollPort = params.onScrollPortRef?.(view.scrollDOM);
   const scrollFades = observeFileScroll(
     view.scrollDOM,
     view.contentDOM,
@@ -136,6 +138,7 @@ export async function createFileEditorView(params: {
       if (!destroyed) {
         destroyed = true;
         scrollFades.destroy();
+        releaseScrollPort?.();
         view.destroy();
       }
     },

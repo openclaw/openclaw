@@ -29,6 +29,7 @@ type Props = SessionPanelProps & {
   inputRegion: ChatInputRegion;
   /** Resolved by the native chrome owner, never inferred from the panel width. */
   mobile?: boolean;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
   /** Optional persisted UI preference supplied by the session layout owner. */
   doneExpanded?: boolean;
   onDoneExpandedChange?: (expanded: boolean) => void;
@@ -234,6 +235,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
               finishedOpen={finishedOpen()}
               onToggleFinished={() => setFinishedOpen((value) => !value)}
               loading={data().loading}
+              onScrollPortRef={props.onScrollPortRef}
               listRef={(element, firstButton) => {
                 mobileList = element;
                 mobileFirstButton = firstButton;
@@ -462,6 +464,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
       presentationId: { default: "single", attribute: false },
       inputRegion: { default: "page", attribute: false },
       mobile: { default: undefined, attribute: false },
+      onScrollPortRef: { default: undefined, attribute: false },
       doneExpanded: { default: undefined, attribute: false },
       onDoneExpandedChange: { default: undefined, attribute: false },
       showRequest: { default: undefined, attribute: false },

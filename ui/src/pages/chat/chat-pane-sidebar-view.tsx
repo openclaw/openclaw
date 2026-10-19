@@ -1,4 +1,4 @@
-import { dynamic, type JSX as SolidJSX } from "@solidjs/web";
+import { dynamic } from "@solidjs/web";
 import { For, Show, createEffect, onCleanup, onSettled } from "solid-js";
 import { shellViewport } from "../../app/shell-viewport.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -7,59 +7,24 @@ import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skele
 import "../../styles/chat/mobile-host.css";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
 import type { ChatMobileHost } from "./chat-mobile-host.ts";
-import { observeMobileSheetScrollFades } from "./chat-mobile-scroll-fades.ts";
 import type {
   RegionProps,
-  SidebarPanelDefinition,
-  SidebarRegionCallbacks,
+  SidebarRegionViewProps,
 } from "./components/chat-sidebar-region-types.ts";
-import type { LinkFaviconFetcher } from "./link-favicon-cache.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   isSidebarSlotVisible,
   sidebarDock,
   sidebarMainPanel,
-  type SidebarLayout,
 } from "./sidebar-layout.ts";
-
-export type SidebarRegionParams = {
-  onRegionElementRef?: (element: HTMLElement) => void | (() => void);
-  onHeaderElementRef?: (element: HTMLElement) => void | (() => void);
-  onRegionViewRef?: (
-    element: HTMLElementTagNameMap["openclaw-chat-sidebar-region"],
-  ) => void | (() => void);
-  presentationId: string;
-  presentation?: "desktop" | "mobile";
-  /** The composition owner moves the header toggle into the outer desktop row. */
-  externalPanelsToggle?: boolean;
-  conversationTab?: RegionProps["conversationTab"];
-  fetchFavicon?: LinkFaviconFetcher;
-  availableWidth: number;
-  callbacks: SidebarRegionCallbacks;
-  layout: SidebarLayout;
-  narrow: boolean;
-  mobileHost?: ChatMobileHost;
-  /** A narrow pane's presentation can differ from the saved layout. */
-  sideFocusLocked?: boolean;
-  sideFocusManaged?: boolean;
-  sideFocusOrigin?: () => HTMLElement | null;
-  panelDefinitions?: SidebarPanelDefinition[];
-  header?: SolidJSX.Element;
-  background?: SolidJSX.Element;
-  primary?: SolidJSX.Element;
-};
-
-export type SidebarRegionViewProps = SidebarRegionParams & {
-  panelIdPrefix: string;
-  panelDefinitions: SidebarPanelDefinition[];
-  regionError: Parameters<typeof LazyViewError>[0] | null | undefined;
-};
 
 export function SidebarRegionView(props: SidebarRegionViewProps) {
   let shell!: HTMLElement;
+  let regionView: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | undefined;
   let detailsMount!: HTMLDivElement;
   let releaseDetailsMount: ChatMobileHost["setDetailsMount"] | undefined;
   let region!: HTMLDivElement;
@@ -131,12 +96,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
     suppressGrabberClick = false;
     const bounds = region.getBoundingClientRect();
     const viewport = window.visualViewport;
-    const minimum =
-      152 +
-      (panelsVisible()
-        ? (shell.querySelector("[data-region-header]")?.getBoundingClientRect().height ?? 0)
-        : 0) +
-      (shell.querySelector(".chat-mobile-host__local-back")?.getBoundingClientRect().height ?? 0);
+    const minimum = 152 + (regionView?.readMobileChromeHeight?.() ?? 0);
     const safeTop =
       Number.parseFloat(getComputedStyle(region).getPropertyValue("--mobile-safe-top")) || 0;
     const maximum = Math.max(
@@ -216,9 +176,11 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
         dragFrame = requestAnimationFrame(paintResize);
       }
     };
-    window.visualViewport?.addEventListener("resize", viewportChanged);
+    const stopViewport = window.visualViewport
+      ? listen(window.visualViewport, "resize", viewportChanged)
+      : undefined;
     return () => {
-      window.visualViewport?.removeEventListener("resize", viewportChanged);
+      stopViewport?.();
       drag = undefined;
       clearResize();
     };
@@ -234,6 +196,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
   );
   onSettled(() => {
     // One capture pair covers native nested scrollers without reactive work per frame.
+    const scrolling = new Set<HTMLElement>();
     const start = (event: Event) => {
       if (
         props.mobileHost &&
@@ -241,29 +204,30 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
         !event.target.hasAttribute("data-mobile-scrolling")
       ) {
         event.target.setAttribute("data-mobile-scrolling", "");
+        scrolling.add(event.target);
       }
     };
     const end = (event: Event) => {
       if (event.target instanceof HTMLElement) {
         event.target.removeAttribute("data-mobile-scrolling");
+        scrolling.delete(event.target);
       }
     };
-    shell.addEventListener("scroll", start, { capture: true, passive: true });
-    shell.addEventListener("scrollend", end, { capture: true, passive: true });
+    const stopScroll = listen(shell, "scroll", start, { capture: true, passive: true });
+    const stopScrollEnd = listen(shell, "scrollend", end, { capture: true, passive: true });
     return () => {
-      shell.removeEventListener("scroll", start, true);
-      shell.removeEventListener("scrollend", end, true);
-      shell
-        .querySelectorAll("[data-mobile-scrolling]")
-        .forEach((element) => element.removeAttribute("data-mobile-scrolling"));
+      stopScroll();
+      stopScrollEnd();
+      for (const element of scrolling) {
+        element.removeAttribute("data-mobile-scrolling");
+      }
+      scrolling.clear();
     };
   });
-  onSettled(() => {
-    if (!props.mobileHost) {
-      return undefined;
-    }
-    return observeMobileSheetScrollFades(shell);
-  });
+  const ScrollFades = () => {
+    onSettled(() => props.mobileScrollFades?.connect(shell));
+    return undefined;
+  };
   onSettled(() =>
     shellViewport.subscribe(() => props.mobileHost?.onViewportChange(shellViewport.snapshot)),
   );
@@ -369,10 +333,19 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
       </Show>
       <Show when={props.regionError === undefined}>
         <openclaw-chat-sidebar-region
-          ref={[elementRef(props.onRegionViewRef)]}
+          ref={[
+            elementRef(props.onRegionViewRef),
+            elementRef((element) => {
+              regionView = element;
+              return () => {
+                regionView = undefined;
+              };
+            }),
+          ]}
           prop:elements={elements}
           prop:panelIdPrefix={props.panelIdPrefix}
           prop:mobileHost={props.mobileHost}
+          prop:onScrollPortRef={props.mobileScrollFades?.register}
           prop:presentation={props.presentation}
           prop:conversationTab={props.conversationTab}
           prop:layout={props.layout}
@@ -465,6 +438,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
         }}
       >
         <Show when={props.mobileHost}>
+          <ScrollFades />
           <Show when={resizable()}>
             <button
               class="chat-mobile-host__grabber"
@@ -619,7 +593,10 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
                 <div
                   class="chat-mobile-host__page"
                   data-mobile-page={page().key}
-                  ref={(element) => (scrollport = element)}
+                  ref={[
+                    (element) => (scrollport = element),
+                    elementRef(props.mobileScrollFades?.register),
+                  ]}
                 >
                   <Page />
                 </div>

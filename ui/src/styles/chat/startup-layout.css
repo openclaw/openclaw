@@ -1505,8 +1505,8 @@ html:not(.openclaw-native-macos, .openclaw-native-desktop, .openclaw-native-web-
   --chat-pane-leading-inset: 12px;
 }
 
-/* Only the physical top-left header needs window-control clearance. A left
-   dock puts the side tabs there; mobile has a separate topbar row. */
+/* Only the physical top-left header needs window-control clearance. Left docks
+   and expanded desktop side panels put side tabs there; mobile has its own row. */
 .shell:not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
@@ -1520,8 +1520,11 @@ html:not(.openclaw-native-macos, .openclaw-native-desktop, .openclaw-native-web-
 .shell:not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
-  .sidebar-region--left.sidebar-region--open:not(.sidebar-region--expanded):not(
-    .sidebar-region--narrow
+  .sidebar-region:is(
+    .sidebar-region--left.sidebar-region--open:not(.sidebar-region--expanded):not(
+        .sidebar-region--narrow
+      ),
+    .sidebar-region--desktop.sidebar-region--expanded-side.sidebar-region--open
   )
   [data-region-header="side"] {
   --chat-pane-header-inset-start: var(--chat-pane-leading-inset, var(--shell-titlebar-inset));
@@ -1560,7 +1563,7 @@ html.openclaw-native-desktop
   &:not(
       .sidebar-region--open:not(.sidebar-region--expanded):not(.sidebar-region--left):not(
           .sidebar-region--bottom
-        ):not(.sidebar-region--narrow)
+        ):is(.sidebar-region--desktop, :not(.sidebar-region--narrow))
     )
     > .sidebar-region__header
     .chat-pane__header,
@@ -1568,7 +1571,7 @@ html.openclaw-native-desktop
       .sidebar-region--expanded-side,
       .sidebar-region--open:not(.sidebar-region--expanded):not(.sidebar-region--left):not(
           .sidebar-region--bottom
-        ):not(.sidebar-region--narrow)
+        ):is(.sidebar-region--desktop, :not(.sidebar-region--narrow))
     )
     [data-region-header="side"] {
     --chat-pane-header-inset-end: calc(

@@ -234,12 +234,10 @@ function tabGeometry(tab: Locator) {
   }));
 }
 
-function tabMatchesCloseBackground(tab: Locator) {
+function tabCloseHasTransparentBackground(tab: Locator) {
   return tab.evaluate((element) => {
     const close = element.nextElementSibling;
-    return close
-      ? getComputedStyle(element).backgroundColor === getComputedStyle(close).backgroundColor
-      : false;
+    return close ? getComputedStyle(close).backgroundColor === "rgba(0, 0, 0, 0)" : false;
   });
 }
 
@@ -405,9 +403,9 @@ async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
   const filesGeometry = await tabGeometry(filesTab);
   await filesTab.hover();
   await expect.poll(() => computedStyle(filesClose, "opacity")).toBe("1");
-  await expect.poll(() => tabMatchesCloseBackground(filesTab)).toBe(true);
+  await expect.poll(() => tabCloseHasTransparentBackground(filesTab)).toBe(true);
   await filesClose.hover();
-  await expect.poll(() => tabMatchesCloseBackground(filesTab)).toBe(true);
+  await expect.poll(() => tabCloseHasTransparentBackground(filesTab)).toBe(true);
   expect(await tabGeometry(filesTab)).toEqual(filesGeometry);
   const railLabels = rail.locator(sidePanelTabLabelSelector);
   let overflowingLabelIndex = -1;

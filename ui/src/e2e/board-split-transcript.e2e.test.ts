@@ -67,6 +67,10 @@ async function visibleTranscriptState(page: Page) {
     if (!inner || !scroller) {
       return { present: false, intersectingRows: 0 };
     }
+    // Expanded desktop panels retain the hidden transcript's geometry.
+    if (!scroller.checkVisibility({ visibilityProperty: true })) {
+      return { present: true, intersectingRows: 0 };
+    }
     const rect = scroller.getBoundingClientRect();
     const intersectingRows = [...inner.querySelectorAll<HTMLElement>(".chat-virtual-row")].filter(
       (row) => {

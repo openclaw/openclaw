@@ -101,6 +101,35 @@ export async function closeChatLayoutMenu(
   }
 }
 
+function nativePanelControl(scope: Page | Locator, name: string | RegExp): Locator | null {
+  if (name !== "Focus" && name !== "Restore split") {
+    return null;
+  }
+  const pane =
+    "mainFrame" in scope
+      ? scope
+          .locator(
+            ".chat-pane-cache__pane--active, .chat-split-view__cell--active openclaw-chat-pane.chat-split-view__pane",
+          )
+          .filter({ visible: true })
+          .first()
+      : scope
+          .locator("xpath=ancestor-or-self::openclaw-chat-pane[1]")
+          .or(scope.locator("openclaw-chat-pane").filter({ visible: true }))
+          .first();
+  const restore = name === "Restore split";
+  return pane
+    .locator('.sidebar-region--desktop [data-region-header="side"]')
+    .getByRole("button", { name: restore ? "Restore split" : "Expand Side panel", exact: true })
+    .or(
+      pane
+        .locator(".chat-mobile-host__header")
+        .getByRole("button", { name: restore ? "Restore" : "Expand Side panel", exact: true }),
+    )
+    .filter({ visible: true })
+    .first();
+}
+
 export async function selectChatLayoutAction(
   scope: Page | Locator | DomChatLayoutScope,
   name: string | RegExp,
@@ -116,6 +145,20 @@ export async function selectChatLayoutAction(
     }
     await scope.click(action);
     await waitForMenuClose(menu);
+    return;
+  }
+  const nativeControl = nativePanelControl(scope, name);
+  if (
+    nativeControl &&
+    // Layout Focus targets the main pane; keep that action while its entry is available.
+    (name !== "Focus" ||
+      !(await scope
+        .locator("button.chat-pane__layout-trigger:not([inert] *)")
+        .first()
+        .isVisible())) &&
+    (await nativeControl.isVisible())
+  ) {
+    await nativeControl.click();
     return;
   }
   const menu = await openChatLayoutMenu(scope);

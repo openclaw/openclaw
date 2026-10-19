@@ -71,7 +71,7 @@ suite.define(() => {
         const draft = pane.locator(".agent-chat__composer-combobox textarea");
         await draft.fill("Keep my next instruction");
         await selectChatLayoutAction(pane, "Side panel");
-        const choices = pane.locator(".side-panel-empty__type");
+        const choices = pane.locator(".side-panel-launcher").getByRole("button");
         await choices.first().waitFor();
         if (capture) {
           await page.screenshot({

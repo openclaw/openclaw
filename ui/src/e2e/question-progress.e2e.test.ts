@@ -81,7 +81,7 @@ suite.define(() => {
         // The question owns the composer; it must not take over or auto-open Details.
         expect(await progressCard.isVisible()).toBe(progress !== "absent");
         expect(await composer.count()).toBe(0);
-        expect(await page.locator(".chat-details:popover-open").count()).toBe(
+        expect(await page.locator(".chat-details:visible").count()).toBe(
           progress === "absent" ? 0 : 1,
         );
         expect(await panel.evaluate((element) => document.activeElement === element)).toBe(true);
@@ -117,7 +117,8 @@ suite.define(() => {
         await waitForChatScrollIdle(page);
         await requestQuestion("question-progress-reader");
         await panel.waitFor();
-        await thread.hover({ position: { x: 4, y: 80 } });
+        // The question leaves a short viewport; its edge clears the floating end control.
+        await thread.hover({ position: { x: 4, y: 20 } });
         await page.mouse.wheel(0, -200);
         await page.waitForTimeout(201); // Separate gestures exceed the disclosure burst boundary.
         await page.mouse.wheel(0, -200);

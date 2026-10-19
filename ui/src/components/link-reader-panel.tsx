@@ -1,6 +1,7 @@
 import { insert } from "@solidjs/web";
 import { createMemo, For, Repeat, onCleanup, onSettled } from "solid-js";
 import { projectCallbackOwner } from "../lib/reactive/callback-owner.ts";
+import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
@@ -8,7 +9,7 @@ import { nativeListener } from "../lib/solid-native-listener.ts";
 import { createTabFocus } from "../lib/tabs.ts";
 import { DockResizer } from "./dock-layout-solid.tsx";
 import { LinkReaderContent } from "./link-reader-content.tsx";
-import type { LinkReaderPanelProps } from "./link-reader-panel-lifecycle.ts";
+import type { LinkReaderPanelProps as LinkReaderOwnerProps } from "./link-reader-panel-lifecycle.ts";
 import {
   LINK_READER_TAB_LIMIT,
   createLinkReaderPanel,
@@ -79,6 +80,7 @@ function PanelContent(props: {
   available: boolean;
   refresh: () => void;
   loadSection: (section: ReaderSection) => void;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
 }) {
   const target = () => tabTarget(props.tab);
   return (
@@ -137,6 +139,7 @@ function PanelContent(props: {
             loadImage={props.tab.view.images?.load}
             sections={props.tab.view.sections}
             onLoadSection={(section) => props.loadSection(section)}
+            onScrollPortRef={props.onScrollPortRef}
           />
         </>
       )}
@@ -151,6 +154,10 @@ type Methods = {
 };
 type PanelElement = SolidBridgeElement<LinkReaderPanelProps, Methods> & PanelHostedTabsElement;
 const owners = new WeakMap<HTMLElement, LinkReaderPanelOwner>();
+
+export type LinkReaderPanelProps = LinkReaderOwnerProps & {
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
+};
 
 function PanelView(
   props: LinkReaderPanelProps,
@@ -399,10 +406,13 @@ function PanelView(
                 onCleanup(() => content.delete(id));
                 return (
                   <div
-                    ref={(element) => {
-                      id = item().id;
-                      content.set(id, element);
-                    }}
+                    ref={[
+                      (element) => {
+                        id = item().id;
+                        content.set(id, element);
+                      },
+                      elementRef(props.onScrollPortRef),
+                    ]}
                     class="lr-content"
                     tabindex={-1}
                     hidden={item().id !== view().state.activeId}
@@ -413,6 +423,7 @@ function PanelView(
                       available={props.available && Boolean(props.client)}
                       refresh={() => owner.refresh()}
                       loadSection={(section) => owner.requestSection(section)}
+                      onScrollPortRef={props.onScrollPortRef}
                     />
                   </div>
                 );
@@ -441,6 +452,7 @@ export const LinkReaderPanel = defineSolidBridge<LinkReaderPanelProps, Methods>(
       tabsInHeader: { default: false },
       sessionKey: { default: "", attribute: false },
       onClose: { default: undefined, attribute: false },
+      onScrollPortRef: { default: undefined, attribute: false },
     },
     methods: {
       handleToggleRequest: (host, event) => owners.get(host)?.handleToggleRequest(event),
