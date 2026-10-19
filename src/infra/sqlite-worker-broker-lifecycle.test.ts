@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
+import { serialize } from "node:v8";
 import { expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureSqliteWorkerOpen } from "./sqlite-worker-broker-admission.js";
 import { createSqliteWorkerLifecycle } from "./sqlite-worker-broker-lifecycle.js";
+import { receiveSqliteWorkerReply, settleSqliteWorkerJob } from "./sqlite-worker-broker-reply.js";
 import type { Actor, Job, Slot } from "./sqlite-worker-broker.types.js";
 import { createSqliteWorkerClientActor } from "./sqlite-worker-client.test-support.js";
 import {
@@ -95,7 +97,9 @@ it("cancels slot waiters while retaining the worker until exit", async ({ signal
   expect(slots.size).toBe(0);
 });
 
-it("waits for the first free carrier without canceling its accepted work", async ({ signal }) => {
+it("joins the first completing carrier's FIFO without canceling accepted work", async ({
+  signal,
+}) => {
   const { lifecycle, workers, options, replyOwner, createSlot } = runtimeFixture();
   const busy = [createSlot(), createSlot()].map((slot) => {
     slot.pendingOpens = 0;
@@ -121,6 +125,18 @@ it("waits for the first free carrier without canceling its accepted work", async
   });
   const slow = busy[0]!;
   const fast = busy[1]!;
+  const nextCompletion = createDeferredCore<unknown>();
+  const nextCustody = fast.slot.custody.createRequest();
+  nextCustody.activate();
+  nextCustody.accept();
+  const nextJob: Job = {
+    ...fast.job,
+    custody: nextCustody,
+    request: { ...fast.job.request, id: 2 },
+    result: nextCompletion.promise,
+    resolve: nextCompletion.resolve,
+    reject: nextCompletion.reject,
+  };
   const limits = { maxWorkers: 2, maxStores: 2 };
   const opening = lifecycle.acquireSlot(options, limits, replyOwner);
   const cancel = new AbortController();
@@ -138,14 +154,28 @@ it("waits for the first free carrier without canceling its accepted work", async
       expect(slot.current).toBe(job);
       expect(readSqliteWorkerRequestCustody(job.custody.descriptor)).toBe(true);
     }
-    fast.slot.current = undefined;
-    fast.completion.resolve(undefined);
+    receiveSqliteWorkerReply(
+      fast.slot,
+      { id: fast.job.request.id, ok: true, value: serialize(undefined) },
+      {
+        finish: settleSqliteWorkerJob,
+        fail: (error) => {
+          throw error;
+        },
+        dispatch: () => {
+          fast.slot.current = nextJob;
+        },
+      },
+    );
     expect(await withinTest(opening, signal)).toBe(fast.slot);
+    expect(fast.slot.current).toBe(nextJob);
+    expect(readSqliteWorkerRequestCustody(nextJob.custody.descriptor)).toBe(true);
     expect(slow.slot.current).toBe(slow.job);
     expect(readSqliteWorkerRequestCustody(slow.job.custody.descriptor)).toBe(true);
     expect(workers).toHaveLength(2);
     expect(workers.every((worker) => worker.terminate.mock.calls.length === 0)).toBe(true);
   } finally {
+    nextCompletion.resolve(undefined);
     for (const { slot, completion } of busy) {
       slot.current = undefined;
       completion.resolve(undefined);

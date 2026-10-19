@@ -117,7 +117,6 @@ export function createRestoredRequesterActivator(config: {
   settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
   retireSupersededRun: SubagentLifecycleOptions["retireSupersededRun"];
   resumeRuns: (
-    cfg: OpenClawConfig,
     entries: readonly SubagentRunRecord[],
     assertCurrent: () => void,
     startupTrace?: GatewayStartupTrace,
@@ -208,7 +207,7 @@ export function createRestoredRequesterActivator(config: {
         assertCurrent();
         if (!group.resumed) {
           await measureStartup(startupTrace, "sidecars.subagent-resume", () =>
-            config.resumeRuns(cfg, currentEntries(), assertCurrent, startupTrace),
+            config.resumeRuns(currentEntries(), assertCurrent, startupTrace),
           );
           assertCurrent();
           await measureStartup(startupTrace, "sidecars.subagent-interrupted", () =>

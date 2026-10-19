@@ -176,7 +176,6 @@ export function createSubagentRegistryRestorer(config: {
   }
 
   async function resumeRestoredRuns(
-    cfg: ReturnType<typeof getRuntimeConfig>,
     capturedRuns: readonly SubagentRunRecord[],
     assertCurrent: () => void,
     startupTrace?: GatewayStartupTrace,
@@ -268,7 +267,8 @@ export function createSubagentRegistryRestorer(config: {
             // Global session keys repeat across agent stores, including restored queues.
             groupId: JSON.stringify([entry.requesterAgentId, requesterSessionKey, groupId]),
             runId,
-            maxConcurrent: resolveSwarmConfig(cfg, entry.requesterAgentId).maxConcurrent,
+            maxConcurrent: resolveSwarmConfig(getRuntimeConfig(), entry.requesterAgentId)
+              .maxConcurrent,
             activeRunIds: listSwarmRunsForGroup(
               groupId,
               requesterSessionKey,

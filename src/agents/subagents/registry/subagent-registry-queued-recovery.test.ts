@@ -5,6 +5,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../../test/helpers/promise.js";
+import { getRuntimeConfig } from "../../../config/config.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { callGateway } from "../../../gateway/call.js";
 import type { GatewayInstanceAgentDispatchOptions } from "../../../gateway/server-instance-runtime.types.js";
@@ -21,7 +22,7 @@ import {
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
-import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { isSwarmRunActive, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
@@ -41,7 +42,7 @@ const fixture = vi.hoisted(() => ({
   sessionId: "retained-collector-session",
   lifecycleRevision: "retained-collector-lifecycle",
 }));
-vi.mock("../../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
+vi.mock("../../../config/config.js", () => ({ getRuntimeConfig: vi.fn(() => ({})) }));
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
   findTranscriptEvent: () => {
     throw new Error("Unexpected transcript lookup in queued registration recovery");
@@ -89,6 +90,7 @@ afterAll(async () => {
   await state.cleanup();
 });
 beforeEach(() => {
+  vi.mocked(getRuntimeConfig).mockReturnValue({});
   vi.mocked(applySessionEntryExactReplacements).mockClear();
   subagentRuns.clear();
 });
@@ -499,6 +501,7 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
 
 it.each([
   "accepted",
+  "accepted after limit reload",
   "captured system",
   "requester unavailable",
   "operator unavailable",
@@ -508,8 +511,19 @@ it.each([
 ] as const)("restores queued requester custody with an explicit %s outcome", async (outcome) => {
   const { refusal, manager } = createRegistrationFixture();
   refusal.descriptor = false;
+  const reloadLimit = outcome === "accepted after limit reload";
+  const configureLimit = (maxConcurrent: number) =>
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      tools: { swarm: { maxConcurrent: 3 } },
+      agents: { entries: { main: { tools: { swarm: { maxConcurrent } } } } },
+    });
+  if (reloadLimit) {
+    configureLimit(2);
+  }
   const runId = "queued-requester-custody";
-  const childSessionKey = "agent:main:subagent:queued-requester-custody";
+  const runningSiblingId = "queued-requester-running-sibling";
+  const childAgentId = reloadLimit ? "worker" : "main";
+  const childSessionKey = `agent:${childAgentId}:subagent:queued-requester-custody`;
   const requesterFacts = {
     sessionKey: "agent:main:slack:channel:human",
     messageProvider: "slack",
@@ -518,7 +532,7 @@ it.each([
   await manager.registerSubagentRun({
     runId,
     childSessionKey,
-    childAgentId: "main",
+    childAgentId,
     sessionEntry: fixture,
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
@@ -548,6 +562,21 @@ it.each([
       maxConcurrent: 1,
     },
   });
+  if (reloadLimit) {
+    await manager.registerSubagentRun({
+      runId: runningSiblingId,
+      childSessionKey: `agent:${childAgentId}:subagent:${runningSiblingId}`,
+      childAgentId,
+      sessionEntry: fixture,
+      requesterSessionKey: "agent:main:main",
+      requesterAgentId: "main",
+      requesterDisplayKey: "main",
+      task: "Keep one requester slot occupied during recovery",
+      cleanup: "keep",
+      collect: true,
+      groupId: runId,
+    });
+  }
   if (outcome === "malformed capture" || outcome === "malformed operator") {
     await mutateSubagentRuns([runId], (rows) => {
       const draft = structuredClone(expectDefined(rows.get(runId), "persisted queued run"));
@@ -578,6 +607,7 @@ it.each([
   const started = vi.fn(manager.startQueuedSubagentRun);
   const restorer = createRestorer({
     getGatewayContextResolver: () => resolver,
+    listSwarmRunsForGroup: () => [...subagentRuns.values()],
     startQueuedSubagentRun: started,
     settleFailedQueuedSubagentLaunch: async (id, error) => {
       const recorded = await manager.settleFailedQueuedSubagentLaunch(id, error);
@@ -587,9 +617,41 @@ it.each([
   });
   try {
     await restorer.restoreOnce();
-    await restorer.activate();
+    if (reloadLimit) {
+      const preparationStarted = createDeferred();
+      const databaseReady = createDeferred();
+      const activation = withAgentDatabasePreparationContext(
+        () => ({
+          waitForAgentPreparation: (agentId) => {
+            if (agentId !== childAgentId) {
+              return undefined;
+            }
+            preparationStarted.resolve();
+            return databaseReady.promise;
+          },
+        }),
+        () => restorer.activate(),
+      );
+      try {
+        await awaitGateBeforeSettlement(
+          preparationStarted.promise,
+          activation,
+          "Recovery did not wait for the child's database",
+        );
+        configureLimit(1);
+      } finally {
+        databaseReady.resolve();
+        await activation;
+      }
+      await settleRootWork(true);
+      expect(isSwarmRunActive(runId)).toBe(false);
+      expect(recovery.dispatchAgent).not.toHaveBeenCalled();
+      expect(releaseSwarmRun(runningSiblingId)).toBe(true);
+    } else {
+      await restorer.activate();
+    }
     const result = await settled.promise;
-    if (outcome === "accepted" || outcome === "captured system") {
+    if (outcome === "accepted" || reloadLimit || outcome === "captured system") {
       expect(result).toBe("accepted");
       await settleRootWork(true);
       expect(started).toHaveBeenCalledOnce();
@@ -627,6 +689,9 @@ it.each([
     expect((await readStored()).get(runId)?.queuedLaunch).toBeUndefined();
   } finally {
     restorer.reset();
+    if (releaseSwarmRun(runningSiblingId)) {
+      await settleRootWork(true);
+    }
     releaseSwarmRun(runId);
     await settleRootWork();
   }
