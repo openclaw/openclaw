@@ -303,18 +303,16 @@ describe("RealtimeTalkSession", () => {
       if (method === "talk.client.create") {
         throw new Error("browser session unavailable");
       }
+      if (method === "talk.config") {
+        return { config: { talk: { realtime: { transport: "gateway-relay" } } } };
+      }
       if (method === "talk.session.create") {
         return createRelaySession("openai");
       }
       throw new Error(`Unexpected request: ${method}`);
     });
     const onVideoCapability = vi.fn();
-    const session = new RealtimeTalkSession(
-      { request } as never,
-      "main",
-      { onVideoCapability },
-      { provider: "openai", transport: "gateway-relay" },
-    );
+    const session = new RealtimeTalkSession({ request } as never, "main", { onVideoCapability });
 
     await session.start();
 
@@ -323,18 +321,15 @@ describe("RealtimeTalkSession", () => {
       "talk.client.create",
       {
         sessionKey: "main",
-        provider: "openai",
-        transport: "gateway-relay",
         capabilities: ["voice-transcript", "voice-selection", "camera-frame"],
       },
       requestTimeoutOptions,
     );
     expect(request).toHaveBeenNthCalledWith(
-      3,
+      4,
       "talk.session.create",
       {
         sessionKey: "main",
-        provider: "openai",
         transport: "gateway-relay",
         mode: "realtime",
         brain: "agent-consult",
@@ -347,21 +342,16 @@ describe("RealtimeTalkSession", () => {
     expect(relayInstances).toHaveLength(1);
   });
 
-  it("passes launch options to client-owned realtime session creation", async () => {
+  it("passes voice-change options and camera choice to client-owned realtime session creation", async () => {
     const request = vi.fn(async () => createWebRtcSession());
     const session = new RealtimeTalkSession(
       { request } as never,
       "main",
       {},
       {
-        provider: "openai",
-        model: "gpt-realtime-2",
         voice: "marin",
+        voiceChangeId: "voice-change-1",
         transport: "webrtc",
-        vadThreshold: 0.45,
-        silenceDurationMs: 650,
-        prefixPaddingMs: 250,
-        reasoningEffort: "low",
       },
       { inputDeviceId: "usb-mic", videoDeviceId: "desk-camera" },
     );
@@ -372,14 +362,9 @@ describe("RealtimeTalkSession", () => {
       "talk.client.create",
       {
         sessionKey: "main",
-        provider: "openai",
-        model: "gpt-realtime-2",
         voice: "marin",
+        voiceChangeId: "voice-change-1",
         transport: "webrtc",
-        vadThreshold: 0.45,
-        silenceDurationMs: 650,
-        prefixPaddingMs: 250,
-        reasoningEffort: "low",
         capabilities: ["voice-transcript", "voice-selection"],
       },
       requestTimeoutOptions,
@@ -590,12 +575,7 @@ describe("RealtimeTalkSession", () => {
         }
         return { ok: true };
       });
-      const session = new RealtimeTalkSession(
-        { request } as never,
-        "main",
-        {},
-        pendingMethod === "talk.client.create" ? { transport: "gateway-relay" } : {},
-      );
+      const session = new RealtimeTalkSession({ request } as never, "main");
       const starting = session.start().then(
         () => undefined,
         (error: unknown) => error,
