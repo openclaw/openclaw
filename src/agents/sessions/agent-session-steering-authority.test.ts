@@ -4,9 +4,12 @@ import {
   bindMessageInjectionAdmission,
   MessageInjectionAcceptedUnconfirmedError,
 } from "../../auto-reply/reply/message-injection-authority.js";
-import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
+import {
+  createQueueTestRun,
+  toolAuthorityOverlay,
+} from "../../auto-reply/reply/reply-tool-authority.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -17,10 +20,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type {
-  ReplyBackendMessageInjectionV2,
-  ReplyToolAuthorityOverlay,
-} from "../../sessions/session-controller.contracts.js";
+import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.contracts.js";
 import { beginReplyMessageInjectionTarget } from "../../sessions/session-controller.js";
 import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
@@ -272,11 +272,7 @@ it.each([
           }
           return result;
         });
-      const overlay: ReplyToolAuthorityOverlay = {
-        senderIsOwner: true,
-        disableTools: false,
-        traceAuthorized: false,
-      };
+      const overlay = toolAuthorityOverlay(run);
       try {
         const accepted =
           surface === "registry"
@@ -350,13 +346,7 @@ it.each([
         provider: run.run.provider,
         model: run.run.model,
       });
-      const overlay: ReplyToolAuthorityOverlay = {
-        ...run.run,
-        originatingChannel: run.originatingChannel,
-        senderIsOwner: true,
-        disableTools: false,
-        traceAuthorized: false,
-      };
+      const overlay = toolAuthorityOverlay(run);
       const { session } = await createTestSession();
       const enqueue = vi.spyOn(session.agent, "admitSteeringMessage");
       const recorderEntered = createDeferredCore();

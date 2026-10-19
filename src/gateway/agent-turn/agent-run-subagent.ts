@@ -13,8 +13,10 @@ import type {
 import { resolveSubagentChildAuthority } from "../../agents/subagents/registry/subagent-child-owner-match.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
@@ -33,6 +35,22 @@ import { prepareParentSubagentResume } from "../session-subagent-resume.js";
 import { formatForLog } from "../ws-log.js";
 import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
 import type { AgentTurnContext, AgentTurnPrincipal } from "./types.js";
+
+export function resolveGatewayPluginSubagentToolPolicy(client: AgentTurnPrincipal | null) {
+  // Plugin-owned additive grants stay internal to the authenticated in-process run.
+  // Public agent params cannot supply them, and normal tool policy still filters them.
+  const runtimePluginToolGrant =
+    client?.internal?.agentRunTracking === "plugin_subagent" &&
+    client.internal.pluginRuntimeOwnerId === client.internal.runtimePluginToolGrant?.pluginId
+      ? client.internal.runtimePluginToolGrant
+      : undefined;
+  const pluginSubagentToolsAllow =
+    client?.internal?.agentRunTracking === "plugin_subagent" &&
+    Array.isArray(client.internal.pluginSubagentToolsAllow)
+      ? [...client.internal.pluginSubagentToolsAllow]
+      : undefined;
+  return { runtimePluginToolGrant, pluginSubagentToolsAllow };
+}
 
 export async function prepareGatewaySubagentRun(params: {
   cfg: OpenClawConfig;
@@ -152,6 +170,38 @@ export async function prepareGatewaySubagentRun(params: {
     !isAcpSessionKey(sessionKey),
   );
   return { pluginSubagent, reactivateSubagent };
+}
+
+export function settleUnstartedGatewayParentResume(
+  adopted: SubagentRunRecord,
+  failure?: string,
+): Promise<void> {
+  return runWithGatewayDetachedWorkContinuation(async () => {
+    const runtime = await import("../../agents/subagents/registry/subagent-registry.js");
+    const ownsAdoption = () =>
+      isSameSubagentRunOwner(
+        getLatestLiveSubagentRunByChildSessionKey(
+          adopted.childSessionKey,
+          undefined,
+          adopted.childAgentId,
+        ),
+        adopted,
+      );
+    if (!ownsAdoption()) {
+      return;
+    }
+    const settled = await runtime.finalizeInterruptedSubagentRun({
+      runId: adopted.runId,
+      expectedEntry: adopted,
+      error: failure ?? "Parent resume admission ended before acceptance.",
+      suppressSessionEffects: true,
+    });
+    if (!settled && ownsAdoption()) {
+      throw new Error(
+        "Adopted parent resume could not be durably settled after admission rejection",
+      );
+    }
+  }, "subagents:unstarted-resume");
 }
 
 /** Rejection may settle only the exact physical execution already adopted by this admission. */

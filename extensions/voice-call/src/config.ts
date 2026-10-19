@@ -282,7 +282,6 @@ const VoiceCallConfigSchema = z
     callbacks: CallCallbacksConfigSchema,
     voicemail: CallVoicemailConfigSchema,
 
-    /** Maximum call duration in seconds */
     maxDurationSeconds: z.number().int().positive().default(300),
 
     /**

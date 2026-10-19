@@ -77,6 +77,31 @@ it("records table absence only for reconstructed inventory and revokes quarantin
   expect(readAgentDeletionMissingJournalHolds(database)).toEqual([]);
 });
 
+it.each(["reconstruction", "quarantine"])(
+  "%s never creates reserved holds and preserves legacy holds for verified Doctor recovery",
+  (source) => {
+    const { database, target } = fixture();
+    using db = database.db;
+    const main = target("main");
+    const reserved = [target("openclaw"), target("crestodian")];
+    if (source === "reconstruction") {
+      db.exec("DROP TABLE agent_deletion_journal");
+      transaction(database, () => reconstructAgentDeletionJournal(database, [main, ...reserved]));
+    } else {
+      transaction(database, () => recordAgentDeletionRecoveryHolds(database, [main, ...reserved]));
+    }
+    expect(readAgentDeletionRecoveryHolds(database)).toEqual([main]);
+    expect(readAgentDeletionMissingJournalHolds(database)).toEqual(
+      source === "reconstruction" ? [main] : [],
+    );
+    // Legacy persisted format predates reserved-agent exclusion.
+    const report = readReport(database)!;
+    replaceReport(database, { ...report, held: [...report.held, ...reserved] });
+    transaction(database, () => recordAgentDeletionRecoveryHolds(database, reserved));
+    expect(readAgentDeletionRecoveryHolds(database)).toEqual([main, ...reserved]);
+  },
+);
+
 it("does not reclassify an existing quarantine hold when the journal is later lost", () => {
   const { database, target } = fixture();
   using db = database.db;

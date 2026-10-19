@@ -38,6 +38,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { ensureGatewayOwnerProfile } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
+import { createRestartRecoveryRequesterSource } from "../../requester-run-recovery-source.js";
 import * as delivery from "../announce/subagent-announce-delivery.js";
 import * as deliveryRuntime from "../announce/subagent-announce-delivery.runtime.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -80,6 +81,7 @@ export function registerRequesterCompletionCustodyTests({
     "unavailable policy then current",
     "revoked after restore",
     "missing source",
+    "missing source with unrelated requester claim",
     "missing parent source",
     "mismatched source",
     "revoked grant",
@@ -102,8 +104,9 @@ export function registerRequesterCompletionCustodyTests({
       const overloaded = recovery.startsWith("overloaded");
       const unavailablePolicy = recovery === "unavailable policy then current";
       const deferred = overloaded || unavailablePolicy;
+      const missingSource = recovery.startsWith("missing source");
       const terminalRecovery =
-        recovery === "missing source" ||
+        missingSource ||
         recovery === "missing parent source" ||
         recovery === "mismatched source" ||
         recovery === "revoked grant";
@@ -132,7 +135,33 @@ export function registerRequesterCompletionCustodyTests({
           expectDefined(subagentRuns.get(runId), "restored child");
         await upsertSessionEntryCore(
           { storePath: cfg.session.store, sessionKey: requesterSessionKey, agentId: "main" },
-          { sessionId, lifecycleRevision, updatedAt: 1, ...(nestedOwner ? { spawnDepth: 1 } : {}) },
+          {
+            sessionId,
+            lifecycleRevision,
+            updatedAt: 1,
+            ...(nestedOwner ? { spawnDepth: 1 } : {}),
+            ...(recovery === "missing source with unrelated requester claim"
+              ? {
+                  abortedLastRun: true,
+                  restartRecoveryDeliveryRunId: "unrelated-recovery",
+                  restartRecoveryDeliverySourceRunId: "unrelated-requester-turn",
+                  restartRecoveryRequesterSource: expectDefined(
+                    createRestartRecoveryRequesterSource({
+                      agentId: "main",
+                      sessionKey: requesterSessionKey,
+                      entry: { sessionId, lifecycleRevision, updatedAt: 1 },
+                      sourceRunId: "unrelated-requester-turn",
+                      requesterOrigin: {
+                        sessionKey: requesterSessionKey,
+                        messageProvider: "telegram",
+                        senderId: "another-channel-requester",
+                      },
+                    }),
+                    "authenticated channel requester source",
+                  ),
+                }
+              : {}),
+          },
         );
         const context = createContext([], () => cfg);
         context.resolveGatewayContext = () => context;
@@ -285,7 +314,10 @@ export function registerRequesterCompletionCustodyTests({
                     requesterSessionKey,
                     requesterAgentId: "main",
                     requesterTurnRunId,
-                    completionTarget: "parent",
+                    completionTarget:
+                      recovery === "missing source with unrelated requester claim"
+                        ? undefined
+                        : "parent",
                     completionRequesterSessionId: sessionId,
                     completionRequesterLifecycleRevision: lifecycleRevision,
                     gatewayContextResolver: () => context,
@@ -337,7 +369,7 @@ export function registerRequesterCompletionCustodyTests({
                 batchRunIds: runIds,
                 nextAttemptAt: Date.now() + 60_000,
               };
-              if (recovery === "missing source") {
+              if (missingSource) {
                 delete draft.operatorRecoverySource;
               } else if (recovery === "mismatched source") {
                 expectDefined(draft.operatorRecoverySource, "admitted source").sessionId =
@@ -417,7 +449,7 @@ export function registerRequesterCompletionCustodyTests({
           await activateSubagentRegistry(() => replacement);
           await replay?.();
           if (terminalRecovery) {
-            if (recovery === "missing source") {
+            if (missingSource) {
               // Registry binding already settled the unavailable continuation.
               await expect(prepareRecovery()).resolves.toBeUndefined();
             } else {

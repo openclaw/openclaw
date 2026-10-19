@@ -152,7 +152,6 @@ extensions/codex/src/session-catalog.ts	2
 extensions/codex/src/session-cli.ts	1
 extensions/codex/src/session-upstream-activity.ts	1
 extensions/codex/src/web-search-provider.runtime.ts	1
-extensions/cohere/stream.ts	2
 extensions/comfy/workflow-runtime.ts	2
 extensions/copilot-proxy/index.ts	1
 extensions/copilot/harness.ts	8
@@ -1477,7 +1476,6 @@ src/channels/direct-dm.ts	1
 src/channels/draft-stream-loop.ts	1
 src/channels/draft-streaming-chunking.ts	1
 src/channels/feedback-reflection.ts	1
-src/channels/ids.ts	1
 src/channels/inbound-event/context.ts	5
 src/channels/location.ts	1
 src/channels/message-access/admission-evidence.ts	1
@@ -2384,7 +2382,6 @@ src/shared/deferred.ts	1
 src/shared/frontmatter.ts	1
 src/shared/global-singleton.ts	4
 src/shared/json-schema-defaults.ts	17
-src/shared/message-content-blocks.ts	2
 src/shared/node-list-parse.ts	3
 src/shared/node-presence.ts	1
 src/shared/node-resolve.ts	1
@@ -2443,7 +2440,7 @@ src/tts/tts-settings.ts	2
 src/tts/tts-telephony.ts	1
 src/tts/voice-models.ts	3
 src/tui/components/chat-log.ts	1
-src/tui/embedded-backend.ts	2
+src/tui/embedded-backend.ts	1
 src/tui/gateway-chat.ts	2
 src/tui/tui-autocomplete.ts	1
 src/tui/tui-command-handlers.ts	5

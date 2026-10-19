@@ -4,21 +4,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerGatewayCli } from "./register.js";
 
 const mocks = vi.hoisted(() => ({
-  callGatewayCli: vi.fn(async (method: string, _opts: unknown, _params?: unknown) => {
-    if (method === "gateway.suspend.prepare") {
-      return {
-        status: "ready",
-        suspensionId: "suspension-1",
-        expiresAtMs: 1_800_000_000_000,
-        activeCount: 0,
-        blockers: [],
-      };
-    }
-    if (method === "gateway.suspend.resume") {
-      return { ok: true, status: "running", resumed: true };
-    }
-    return { ok: true };
-  }),
+  callGatewayCli: vi.fn(
+    async (method: string, _opts: unknown, _params?: unknown): Promise<unknown> => {
+      if (method === "gateway.suspend.prepare") {
+        return {
+          status: "ready",
+          suspensionId: "suspension-1",
+          expiresAtMs: 1_800_000_000_000,
+          activeCount: 0,
+          blockers: [],
+        };
+      }
+      if (method === "gateway.suspend.resume") {
+        return { ok: true, status: "running", resumed: true };
+      }
+      return { ok: true };
+    },
+  ),
   emitReachableGatewayAuthDiagnostic: vi.fn(async (_params: unknown) => false),
   formatHealthChannelLines: vi.fn(() => []),
   gatewayStatusCommand: vi.fn(async (_opts: unknown, _runtime: unknown) => {}),
@@ -224,6 +226,33 @@ describe("gateway register option collisions", () => {
     });
     expect(gatewayStatusCommand).toHaveBeenCalledOnce();
     expect(gatewayStatusCommand.mock.calls[0]?.[0]).toMatchObject({ port: "19082" });
+  });
+
+  it("preserves one busy JSON result when suspend exits nonzero", async () => {
+    const busy = {
+      status: "busy",
+      reason: "active-work",
+      retryAfterMs: 200,
+      activeCount: 1,
+      blockers: [{ kind: "root-request", count: 1, message: "1 active request" }],
+    };
+    callGatewayCli.mockResolvedValueOnce(busy);
+    const runtime = await vi.importActual<typeof import("../../runtime.js")>("../../runtime.js");
+
+    await defaultRuntime.exit.withImplementation(runtime.defaultRuntime.exit, async () => {
+      await expect(
+        sharedProgram.parseAsync(
+          ["gateway", "suspend", "--request-id", "host-operation", "--json"],
+          { from: "user" },
+        ),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+    });
+
+    const stdout = defaultRuntime.writeJson.mock.calls
+      .map(([value]) => JSON.stringify(value))
+      .join("\n");
+    expect(JSON.parse(stdout)).toEqual({ ...busy, requestId: "host-operation" });
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
   });
 
   it("rejects non-decimal usage-cost --days values instead of silently defaulting", async () => {

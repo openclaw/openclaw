@@ -362,10 +362,18 @@ describe("cold restart recovery of native operator input", () => {
           gatewayRuntime: runtime.recovery,
         });
         if (sourceMissing) {
-          expect(result).toEqual({ started: 0, settled: 0, failed: 0, skipped: 1 });
+          expect(result).toEqual({ started: 0, settled: 1, failed: 0, skipped: 0 });
           expect(startTurn).not.toHaveBeenCalled();
           const entry = await readSessionEntryReadOnlyInWorker(fixture.target);
-          expect(entry?.mainRestartRecovery?.tombstone).toBeDefined();
+          expect(entry).toMatchObject({
+            sessionId: fixture.entry.sessionId,
+            status: "interrupted",
+            abortedLastRun: false,
+          });
+          expect(entry?.mainRestartRecovery).toBeUndefined();
+          expect(entry?.lastRunId).toBeDefined();
+          expect(entry?.restartRecoveryTerminalRunIds).toContain(entry?.lastRunId);
+          expect(entry?.restartRecoveryTerminalDeliveryEvidence).toBeUndefined();
         } else if (sourceMismatch) {
           // Current Gateway restoration owns exact-claim validation, not the
           // transcript classifier. Refusal must precede turn/tool execution.

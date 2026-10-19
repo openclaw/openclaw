@@ -28,6 +28,7 @@ export const attempt = {
   sandboxSessionKey: sessionKey,
   senderIsOwner: true,
   messageProvider: "webchat",
+  senderId: "authority-requester",
   traceAuthorized: false,
 };
 

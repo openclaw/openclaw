@@ -25,7 +25,6 @@ const MANTLE_ANTHROPIC_BETA = "fine-grained-tool-streaming-2025-05-14";
 type AnthropicOptions = ConstructorParameters<typeof Anthropic>[0];
 type MantleAnthropicStream = typeof stream;
 
-/** Resolve the Anthropic-compatible Mantle base URL from a provider base URL. */
 function resolveMantleAnthropicBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, "");
   if (trimmed.endsWith("/anthropic")) {
@@ -115,7 +114,6 @@ function buildMantleAnthropicBaseOptions(
   });
 }
 
-/** Create the Mantle Anthropic Messages stream function. */
 export function createMantleAnthropicStreamFn(deps?: {
   createClient?: (options: AnthropicOptions) => Anthropic;
   stream?: MantleAnthropicStream;

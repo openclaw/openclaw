@@ -4,12 +4,19 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  hasSqliteDatabaseSchemaAdmissionForPath,
+} from "./sqlite-database-admission.js";
 import {
   adoptPreparedLocation,
   removeTempDirectory,
+  removeTempDirectoryAsync,
+  retainSnapshotTempDirectory,
   SqliteSnapshotCleanupError,
 } from "./sqlite-readonly-location-cleanup.js";
+import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import {
   prepareSqliteReadOnlyLocation,
   startSqliteReadOnlyLocationAsync,
@@ -49,16 +56,36 @@ it("keeps synchronous and asynchronous token cleanup in separate snapshot flight
     expect(syncSnapshot.cleanupRoot).toBeDefined();
     expect(asyncSnapshot.cleanupRoot).toBeDefined();
     expect(syncSnapshot.cleanupRoot).not.toBe(asyncSnapshot.cleanupRoot);
+    const nestedLocation = path.join(
+      asyncSnapshot.cleanupRoot!,
+      "openclaw-state/state/openclaw.sqlite",
+    );
+    fs.mkdirSync(path.dirname(nestedLocation), { recursive: true });
+    createDatabase(nestedLocation, "CREATE TABLE probe(value TEXT)");
+    {
+      using nested = openNodeSqliteDatabase(nestedLocation, { readOnly: true });
+      admitSqliteSchema(nested);
+    }
     for (const snapshot of [syncSnapshot, asyncSnapshot]) {
-      const reader = new (requireNodeSqlite().DatabaseSync)(snapshot.location, { readOnly: true });
+      const reader = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
       try {
+        admitSqliteSchema(reader);
         expect(reader.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
       } finally {
         reader.close();
       }
     }
+    for (const location of [syncSnapshot.location, asyncSnapshot.location, nestedLocation]) {
+      expect(hasSqliteDatabaseSchemaAdmissionForPath(location)).toBe(true);
+    }
+    const admittedPaths = () => captureSqliteDatabaseAdmissions().map((entry) => entry.location);
+    expect(admittedPaths()).toEqual(
+      expect.arrayContaining([syncSnapshot.location, asyncSnapshot.location, nestedLocation]),
+    );
     expect(syncSnapshot.cleanup()).toBe(true);
     expect(fs.existsSync(syncSnapshot.location)).toBe(false);
+    expect(admittedPaths()).not.toContain(syncSnapshot.location);
+    expect(admittedPaths()).toContain(asyncSnapshot.location);
     expect(fs.existsSync(asyncSnapshot.location)).toBe(true);
     const failures: unknown[] = [];
     expect(removeTempDirectory(asyncSnapshot.cleanupRoot!, (error) => failures.push(error))).toBe(
@@ -67,8 +94,18 @@ it("keeps synchronous and asynchronous token cleanup in separate snapshot flight
     expect(failures).toHaveLength(1);
     expect(failures[0]).toBeInstanceOf(SqliteSnapshotCleanupError);
     expect(fs.existsSync(asyncSnapshot.location)).toBe(true);
+    const releaseReader = retainSnapshotTempDirectory(path.dirname(asyncSnapshot.location));
+    try {
+      expect(await removeTempDirectoryAsync(asyncSnapshot.cleanupRoot!)).toBe(false);
+      expect(admittedPaths()).toContain(asyncSnapshot.location);
+      expect(admittedPaths()).toContain(nestedLocation);
+    } finally {
+      releaseReader();
+    }
     expect(await asyncSnapshot.cleanupAsync()).toBe(true);
     expect(fs.existsSync(asyncSnapshot.cleanupRoot!)).toBe(false);
+    expect(admittedPaths()).not.toContain(asyncSnapshot.location);
+    expect(admittedPaths()).not.toContain(nestedLocation);
     expect(fs.readFileSync(source)).toEqual(original);
   } finally {
     try {

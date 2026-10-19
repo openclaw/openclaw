@@ -1,3 +1,5 @@
+export type FollowupQueueDisposition = "queue-cap" | "queue-cap-old" | "queue-cap-new";
+
 /** Queue decisions for messages that arrive while an agent run is active. */
 export type ActiveRunQueueAction = "run-now" | "enqueue-followup" | "drop";
 

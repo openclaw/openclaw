@@ -1,16 +1,30 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
+import { resolvePreparedSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { bindIngressLifecycleToReplyOptions } from "../../channels/message/ingress-drain-lifecycle.js";
 import { createChannelIngressDrain } from "../../channels/message/ingress-drain.js";
 import {
   createTestIngressQueue,
   withTempState,
 } from "../../channels/message/ingress-drain.test-helpers.js";
+import {
+  createRuntimeConfigReader,
+  setRuntimeConfigSnapshot,
+  clearRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { releaseSessionControllerClaim } from "../../sessions/session-controller.mailbox.js";
-import type { FollowupRun } from "./queue.js";
+import * as configuredOwners from "../../state/user-channel-identity-operations.js";
+import {
+  bindCommandOwnerAuthority,
+  captureCommandOwnerAssertion,
+} from "../command-owner-authority.js";
+import type { FollowupRun } from "./queue/types.js";
+import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
+import { resolveReplyToolAuthorityContext } from "./reply-tool-authority.js";
 
 const state = vi.hoisted(() => ({
   admitReply: vi.fn(),
@@ -92,6 +106,35 @@ vi.mock("./agent-runner-failure-reply.js", async (importOriginal) => ({
 
 const { prepareReplyAgentTurn } = await import("./reply-agent-turn-preparation.js");
 
+beforeEach(() => {
+  vi.clearAllMocks();
+  state.admitReply.mockResolvedValue({ status: "owned", operation: createOperation() });
+  state.queueDepth.mockReturnValue(0);
+  state.sendPolicy = "allow";
+  state.shouldNotifyCompaction = false;
+  state.resolveSendPolicy.mockImplementation(() => state.sendPolicy);
+  state.resolveConfig.mockImplementation(async (config) => config);
+  state.buildPreflightFailureText.mockReturnValue("preflight failed");
+  state.preflight.mockImplementation(async ({ sessionEntry }) => sessionEntry);
+  state.recheckFallbackProbe.mockImplementation(({ run }) => run);
+  state.refreshGoal.mockImplementation((context) => context);
+});
+
+function resolveAdmittedToolAuthority(turn: AdmittedFollowupTurn) {
+  const { run } = turn.queued;
+  return resolveReplyToolAuthorityContext(
+    turn.queued,
+    undefined,
+    resolvePreparedSandboxRuntimeStatus({
+      cfg: run.config,
+      agentId: run.agentId,
+      sessionKey: run.sessionKey,
+      preparedSessionEntry: turn.session.current() ?? null,
+    }),
+    {}, // These admission fixtures have no persisted parent capability lineage.
+  );
+}
+
 function createRun(overrides: Partial<FollowupRun> = {}): FollowupRun {
   return {
     prompt: "queued prompt",
@@ -135,20 +178,6 @@ function createDefaults(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  state.admitReply.mockResolvedValue({ status: "owned", operation: createOperation() });
-  state.queueDepth.mockReturnValue(0);
-  state.sendPolicy = "allow";
-  state.shouldNotifyCompaction = false;
-  state.resolveSendPolicy.mockImplementation(() => state.sendPolicy);
-  state.resolveConfig.mockImplementation(async (config) => config);
-  state.buildPreflightFailureText.mockReturnValue("preflight failed");
-  state.preflight.mockImplementation(async ({ sessionEntry }) => sessionEntry);
-  state.recheckFallbackProbe.mockImplementation(({ run }) => run);
-  state.refreshGoal.mockImplementation((context) => context);
-});
 
 function createActiveGoalEntry(): SessionEntry {
   return {
@@ -213,6 +242,144 @@ describe("prepareReplyAgentTurn", () => {
     expect(state.preflight).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { match: "sender-id", enqueuedOwner: false },
+    { match: "sender-id", enqueuedOwner: true },
+    { match: "sender-e164", enqueuedOwner: false },
+    { match: "sender-e164", enqueuedOwner: true },
+  ] as const)(
+    "resolves $match owner privileges at the admission fence after enqueue owner=$enqueuedOwner",
+    async ({ match, enqueuedOwner }) => {
+      const queued = createRun();
+      const channel = match === "sender-e164" ? "whatsapp" : "telegram";
+      const senderId = match === "sender-e164" ? "123456789@lid" : "alice";
+      const senderE164 = match === "sender-e164" ? "+15555550123" : undefined;
+      const configuredOwner = `${channel}:${senderE164 ?? senderId}`;
+      const otherOwner = `${channel}:other`;
+      const originalConfig = {
+        commands: { ownerAllowFrom: [enqueuedOwner ? configuredOwner : otherOwner] },
+      };
+      const admittedOwner = !enqueuedOwner;
+      const admittedConfig = {
+        commands: { ownerAllowFrom: [admittedOwner ? configuredOwner : otherOwner] },
+      };
+      const laterConfig = { ...admittedConfig, tools: { deny: ["message"] } };
+      const operation = createOperation();
+      const durableOwnerRead = vi
+        .spyOn(configuredOwners, "prepareConfiguredCommandOwnerAuthority")
+        .mockResolvedValue(undefined);
+      setRuntimeConfigSnapshot(originalConfig, originalConfig);
+      queued.run.config = originalConfig;
+      queued.readAdmissionConfig = createRuntimeConfigReader(originalConfig);
+      queued.run.requesterOrigin = {
+        sessionKey: `agent:original:${channel}:direct:${senderId}`,
+        messageProvider: channel,
+        accountId: "work",
+        senderId,
+        senderE164,
+      };
+      queued.run.senderId = "receiver";
+      queued.run.senderIsOwner = enqueuedOwner;
+      queued.run.traceAuthorized = enqueuedOwner;
+      bindCommandOwnerAuthority(queued.run, { isCurrent: () => enqueuedOwner });
+      state.admitReply.mockImplementation(async ({ captureRunSelection }) => {
+        // The actual admission owner invokes this fence again after waiting for a direct command.
+        setRuntimeConfigSnapshot(admittedConfig, admittedConfig);
+        captureRunSelection();
+        setRuntimeConfigSnapshot(laterConfig, laterConfig);
+        return { status: "owned", operation };
+      });
+      try {
+        const result = await prepareReplyAgentTurn({ queued, defaults: createDefaults() });
+        assert(
+          result.kind === "admitted",
+          "Expected the original input to receive a new execution",
+        );
+        const execution = result.turn.queued;
+        expect(execution.run.config).toEqual(admittedConfig);
+        expect(execution.run.requesterOrigin?.senderId).toBe(senderId);
+        expect(execution.run.requesterOrigin?.senderE164).toBe(senderE164);
+        expect(execution.run.senderIsOwner).toBe(admittedOwner);
+        expect(execution.run.traceAuthorized).toBe(admittedOwner);
+        expect(resolveAdmittedToolAuthority(result.turn).capabilityProfile.sender.isOwner).toBe(
+          admittedOwner,
+        );
+        const assertOwner = captureCommandOwnerAssertion(execution.run);
+        if (admittedOwner) {
+          expect(assertOwner).toBeDefined();
+          expect(assertOwner).not.toThrow();
+          setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: [] } });
+        }
+        expect(assertOwner).toThrow("Channel operator authority changed");
+        expect(queued.run.requesterOrigin?.senderId).toBe(senderId);
+        expect(queued.run.requesterOrigin?.senderE164).toBe(senderE164);
+        expect(queued.run.senderIsOwner).toBe(enqueuedOwner);
+        expect(queued.run.config).toBe(originalConfig);
+      } finally {
+        durableOwnerRead.mockRestore();
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
+
+  it("does not refresh queued owner policy past revoked operator custody", async () => {
+    const queued = createRun();
+    const controller = new AbortController();
+    queued.operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "alice",
+      scopes: ["operator.admin"],
+      assertCurrent: () => controller.signal.throwIfAborted(),
+      signal: controller.signal,
+    });
+    queued.run.requesterOrigin = {
+      sessionKey: "main",
+      messageProvider: "telegram",
+      senderId: "alice",
+    };
+    queued.run.senderIsOwner = true;
+    const operation = createOperation();
+    state.admitReply.mockResolvedValue({ status: "owned", operation });
+    state.resolveConfig.mockImplementation(async (config) => {
+      controller.abort(new Error("operator source retired"));
+      return config;
+    });
+    await expect(prepareReplyAgentTurn({ queued, defaults: createDefaults() })).rejects.toThrow(
+      "operator source retired",
+    );
+    expect(state.admitReply).toHaveBeenCalledOnce();
+    expect(operation.complete).toHaveBeenCalledOnce();
+    expect(state.preflight).not.toHaveBeenCalled();
+  });
+
+  it("retains live operator admin precedence over external channel owner policy", async () => {
+    const queued = createRun();
+    const assertCurrent = vi.fn();
+    queued.operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "alice-profile",
+      scopes: ["operator.admin"],
+      assertCurrent,
+    });
+    queued.run.requesterOrigin = {
+      sessionKey: "agent:original:telegram:direct:alice",
+      messageProvider: "telegram",
+      senderId: "alice",
+      operatorProfileId: "alice-profile",
+    };
+    queued.run.config = { commands: { ownerAllowFrom: ["telegram:other"] } };
+    queued.run.senderIsOwner = true;
+    queued.run.traceAuthorized = true;
+    state.admitReply.mockResolvedValue({ status: "owned", operation: createOperation() });
+    using durableOwnerRead = vi
+      .spyOn(configuredOwners, "prepareConfiguredCommandOwnerAuthority")
+      .mockResolvedValue(undefined);
+    const result = await prepareReplyAgentTurn({ queued, defaults: createDefaults() });
+    assert(result.kind === "admitted", "Expected operator input admission");
+    expect(result.turn.queued.run.senderIsOwner).toBe(true);
+    expect(result.turn.queued.run.traceAuthorized).toBe(true);
+    expect(resolveAdmittedToolAuthority(result.turn).capabilityProfile.sender.isOwner).toBe(true);
+    expect(assertCurrent).toHaveBeenCalled();
+    expect(durableOwnerRead).not.toHaveBeenCalled();
+  });
   it.each([
     "paused",
     "blocked",
@@ -754,6 +921,7 @@ describe("prepareReplyAgentTurn", () => {
   });
 
   it("retains the preflight owner's public recovery guidance for a queued turn", async () => {
+    state.admitReply.mockResolvedValue({ status: "owned", operation: createOperation() });
     const userMessage = "The saved history exceeds its limit. Use /new, then resend your message.";
     state.preflight.mockRejectedValue(
       new AgentHarnessPreflightError(

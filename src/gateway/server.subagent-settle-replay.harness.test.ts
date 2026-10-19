@@ -209,7 +209,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
           }
         },
       });
-      onCommitted?.();
+      await onCommitted?.();
     });
     return {
       completeBatch,
@@ -736,6 +736,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
 
   it.for([
     "visible final",
+    "channel visible final",
     "progress only",
     "missing original authority",
     "unconsumed revoked cohort",
