@@ -1929,6 +1929,7 @@ NODE
   # Installed official plugins, not just the runtime, follow the synthetic host
   # cohort. Keep the sealed candidate bytes and deliberately absent packages intact.
   OPENCLAW_NPM_REGISTRY_UPSTREAM="$NPM_CONFIG_REGISTRY" \
+    OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$restart_fixture_version,latest=$restart_fixture_version" \
     openclaw_prepublish_plugin_registry_start \
       "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR" \
       "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" "$candidate_version" \
