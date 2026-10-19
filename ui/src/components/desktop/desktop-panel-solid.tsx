@@ -338,6 +338,24 @@ function DesktopPresentation(props: {
         />
       ),
   };
+  const connection = merge(() => props.view, {
+    get rail() {
+      return platform() ? rail : undefined;
+    },
+    get showApps() {
+      const target = props.view.focusTarget();
+      return (
+        target.source !== null &&
+        desktopSourceForEnvironment({ id: target.source }).kind === "environment"
+      );
+    },
+    get pictureInPictureControl() {
+      return pictureInPictureControl();
+    },
+    get audioControl() {
+      return audioControl();
+    },
+  });
   return (
     <>
       {props.view.documentMode ? (
@@ -379,24 +397,7 @@ function DesktopPresentation(props: {
           onOpenWindow={openWindow}
           onClose={props.view.onClose}
           content={content}
-          connection={merge(() => props.view, {
-            get rail() {
-              return platform() ? rail : undefined;
-            },
-            get showApps() {
-              const target = props.view.focusTarget();
-              return (
-                target.source !== null &&
-                desktopSourceForEnvironment({ id: target.source }).kind === "environment"
-              );
-            },
-            get pictureInPictureControl() {
-              return pictureInPictureControl();
-            },
-            get audioControl() {
-              return audioControl();
-            },
-          })}
+          connection={connection}
         />
       )}
     </>
