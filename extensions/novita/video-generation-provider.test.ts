@@ -1,44 +1,40 @@
+import assert from "node:assert/strict";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
-import {
-  getProviderHttpMocks,
-  installProviderHttpMockCleanup,
-} from "openclaw/plugin-sdk/provider-http-test-mocks";
-import type {
-  VideoGenerationProvider,
-  VideoGenerationRequest,
-} from "openclaw/plugin-sdk/video-generation";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import * as providerHttp from "openclaw/plugin-sdk/provider-http-test-mocks";
+import type * as Video from "openclaw/plugin-sdk/video-generation";
+import { beforeAll, expect, it, vi } from "vitest";
 
-const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
+const { postJsonRequestMock, fetchWithTimeoutMock } = providerHttp.getProviderHttpMocks();
 const prompt = "A lobster waves hello";
 const hailuoModel = "minimax-hailuo-2.3-t2v";
+const hailuoBody = { prompt, duration: 6, resolution: "768P" };
+const hailuoOptions = { enable_prompt_expansion: false, fast_pretreatment: true };
+const novitaBaseUrl = "https://api.novita.ai/openai/v1";
 const remote = (name: string) => ({ url: `https://example.com/${name}` });
-let provider: VideoGenerationProvider;
+let provider: Video.VideoGenerationProvider;
 
 beforeAll(async () => {
   const { default: plugin } = await import("./index.js");
   const registered = capturePluginRegistration(plugin).videoGenerationProviders[0];
-  if (!registered) {
-    throw new Error("Novita video generation provider was not registered");
-  }
+  assert(registered, "Novita video generation provider was not registered");
   provider = registered;
 });
-installProviderHttpMockCleanup();
+providerHttp.installProviderHttpMockCleanup();
 
-function generateVideo(overrides: Partial<VideoGenerationRequest> = {}) {
+function generateVideo(req: Partial<Video.VideoGenerationRequest> = {}) {
   return provider.generateVideo({
     provider: "novita",
     model: "wan2.6-t2v",
     prompt,
     cfg: {},
-    ...overrides,
+    ...req,
   });
 }
 
 function mockTask(
   payload: unknown = {
     task: { status: "TASK_STATUS_SUCCEED" },
-    videos: [{ video_url: "https://example.com/out.mp4", video_type: "mp4", duration: 5 }],
+    videos: [{ video_url: "https://example.com/out.mp4" }],
   },
 ) {
   postJsonRequestMock.mockResolvedValueOnce({
@@ -51,24 +47,11 @@ function mockTask(
   );
 }
 
-function expectSubmission(route: string | undefined, body: unknown) {
-  expect(postJsonRequestMock).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      ...(route ? { url: `https://api.novita.ai/v3/async/${route}` } : {}),
-      body,
-    }),
-  );
-}
-
-describe("Novita video generation provider", () => {
-  it("submits silent Wan video using the native route, polls, and downloads the result", async () => {
-    mockTask();
-    const result = await generateVideo({
-      cfg: {
-        models: {
-          providers: { novita: { baseUrl: "https://api.novita.ai/openai/v1", models: [] } },
-        },
-      },
+it.each<[string, Partial<Video.VideoGenerationRequest>, unknown]>([
+  [
+    "wan2.6-t2v",
+    {
+      cfg: { models: { providers: { novita: { baseUrl: novitaBaseUrl, models: [] } } } },
       durationSeconds: 10,
       aspectRatio: "9:16",
       resolution: "1080P",
@@ -78,9 +61,8 @@ describe("Novita video generation provider", () => {
         shot_type: "single",
         seed: 42,
       },
-    });
-
-    expectSubmission("wan2.6-t2v", {
+    },
+    {
       input: { prompt, negative_prompt: "blur" },
       parameters: {
         size: "1080*1920",
@@ -91,39 +73,19 @@ describe("Novita video generation provider", () => {
         watermark: false,
         seed: 42,
       },
-    });
-    expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
-      1,
-      "https://api.novita.ai/v3/async/task-result?task_id=task-1",
-      expect.objectContaining({ method: "GET", headers: expect.any(Headers) }),
-      expect.any(Number),
-      fetch,
-    );
-    expect(result).toMatchObject({
-      model: "wan2.6-t2v",
-      videos: [{ buffer: Buffer.from("video-bytes"), mimeType: "video/mp4" }],
-      metadata: { taskId: "task-1" },
-    });
-  });
-
-  it("sends local image data on the Hailuo i2v route", async () => {
-    mockTask();
-    const result = await generateVideo({
+    },
+  ],
+  [
+    "minimax-hailuo-2.3-i2v",
+    {
       model: hailuoModel,
       inputImages: [{ buffer: Buffer.from("png"), mimeType: "image/png" }],
-    });
-    expectSubmission("minimax-hailuo-2.3-i2v", {
-      prompt,
-      image: "data:image/png;base64,cG5n",
-      duration: 6,
-      resolution: "768P",
-    });
-    expect(result.model).toBe("minimax-hailuo-2.3-i2v");
-  });
-
-  it("forwards Wan remote image/audio references and explicit audio on the i2v route", async () => {
-    mockTask();
-    await generateVideo({
+    },
+    { ...hailuoBody, image: "data:image/png;base64,cG5n" },
+  ],
+  [
+    "wan2.6-i2v",
+    {
       model: "wan2.6-i2v",
       durationSeconds: 15,
       resolution: "1080P",
@@ -131,8 +93,8 @@ describe("Novita video generation provider", () => {
       watermark: true,
       inputImages: [remote("frame.png")],
       inputAudios: [remote("track.mp3")],
-    });
-    expectSubmission(undefined, {
+    },
+    {
       input: {
         prompt,
         img_url: "https://example.com/frame.png",
@@ -146,60 +108,71 @@ describe("Novita video generation provider", () => {
         shot_type: "multi",
         watermark: true,
       },
-    });
-  });
-
-  it("uses flat Hailuo text-to-video parameters", async () => {
-    mockTask();
-    await generateVideo({
+    },
+  ],
+  [
+    hailuoModel,
+    {
       model: hailuoModel,
       durationSeconds: 6,
       resolution: "1080P",
-      providerOptions: { enable_prompt_expansion: false, fast_pretreatment: true },
-    });
-    expectSubmission(hailuoModel, {
-      prompt,
-      duration: 6,
-      resolution: "1080P",
-      enable_prompt_expansion: false,
-      fast_pretreatment: true,
-    });
+      providerOptions: hailuoOptions,
+    },
+    { ...hailuoBody, resolution: "1080P", ...hailuoOptions },
+  ],
+])("submits %s, polls, and downloads the result", async (route, request, body) => {
+  mockTask();
+  const result = await generateVideo(request);
+  expect(postJsonRequestMock).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ url: `https://api.novita.ai/v3/async/${route}`, body }),
+  );
+  expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
+    1,
+    "https://api.novita.ai/v3/async/task-result?task_id=task-1",
+    expect.objectContaining({ method: "GET", headers: expect.any(Headers) }),
+    expect.any(Number),
+    fetch,
+  );
+  expect(result).toMatchObject({
+    model: route,
+    videos: [{ buffer: Buffer.from("video-bytes"), mimeType: "video/mp4" }],
+    metadata: { taskId: "task-1" },
   });
+});
 
-  it.each<[Partial<VideoGenerationRequest>, string]>([
-    [{ model: "wan2.6-i2v" }, "requires one input image"],
-    [
-      { model: hailuoModel, durationSeconds: 10, resolution: "1080P" },
-      "1080P requires a 6-second duration",
-    ],
-    [{ inputImages: [remote("one.png"), remote("two.png")] }, "at most one input image"],
-    [{ inputVideos: [remote("clip.mp4")] }, "does not support video reference inputs"],
-    [{ inputAudios: [{ buffer: Buffer.from("audio") }] }, "requires a remote http(s) URL"],
-    [{ providerOptions: { shot_type: "many" } }, "shot_type must be single or multi"],
-    [{ providerOptions: { seed: -1 } }, "seed must be an integer"],
-    [
-      {
-        model: "minimax-hailuo-2.3-fast-i2v",
-        inputImages: [remote("frame.png")],
-        providerOptions: { fast_pretreatment: true },
-      },
-      "does not support provider option fast_pretreatment",
-    ],
-  ])("rejects unsupported input before submission: %j (%s)", async (request, error) => {
-    await expect(generateVideo(request)).rejects.toThrow(error);
-    expect(postJsonRequestMock).not.toHaveBeenCalled();
-  });
+it.each<[Partial<Video.VideoGenerationRequest>, string]>([
+  [{ model: "wan2.6-i2v" }, "requires one input image"],
+  [
+    { model: hailuoModel, durationSeconds: 10, resolution: "1080P" },
+    "1080P requires a 6-second duration",
+  ],
+  [{ inputImages: [remote("one.png"), remote("two.png")] }, "at most one input image"],
+  [{ inputVideos: [remote("clip.mp4")] }, "does not support video reference inputs"],
+  [{ inputAudios: [{ buffer: Buffer.from("audio") }] }, "requires a remote http(s) URL"],
+  [{ providerOptions: { shot_type: "many" } }, "shot_type must be single or multi"],
+  [{ providerOptions: { seed: -1 } }, "seed must be an integer"],
+  [
+    {
+      model: "minimax-hailuo-2.3-fast-i2v",
+      inputImages: [remote("frame.png")],
+      providerOptions: { fast_pretreatment: true },
+    },
+    "does not support provider option fast_pretreatment",
+  ],
+])("rejects unsupported input before submission: %j (%s)", async (request, error) => {
+  await expect(generateVideo(request)).rejects.toThrow(error);
+  expect(postJsonRequestMock).not.toHaveBeenCalled();
+});
 
-  it.each<[unknown, string]>([
-    [
-      { task: { status: "TASK_STATUS_FAILED", reason: "content rejected" } },
-      "Novita video generation failed: content rejected",
-    ],
-    [{ task: { status: "TASK_STATUS_SUCCEED" }, videos: [] }, "completed without a video URL"],
-    [{ task: { status: "unknown" } }, "unknown task status"],
-  ])("reports unsuccessful task responses: %j (%s)", async (payload, error) => {
-    mockTask(payload);
-    await expect(generateVideo()).rejects.toThrow(error);
-    expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);
-  });
+it.each<[unknown, string]>([
+  [
+    { task: { status: "TASK_STATUS_FAILED", reason: "content rejected" } },
+    "Novita video generation failed: content rejected",
+  ],
+  [{ task: { status: "TASK_STATUS_SUCCEED" }, videos: [] }, "completed without a video URL"],
+  [{ task: { status: "unknown" } }, "unknown task status"],
+])("reports unsuccessful task responses: %j (%s)", async (payload, error) => {
+  mockTask(payload);
+  await expect(generateVideo()).rejects.toThrow(error);
+  expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);
 });
