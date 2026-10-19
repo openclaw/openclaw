@@ -7,7 +7,6 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { createInterval } from "../../../lib/reactive/timers.ts";
 import { sessionRowAttention } from "../../../lib/session-attention.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { isSubagentsPanelSession } from "../chat-spawned-subagent.ts";
 
 type Props = {
@@ -16,7 +15,6 @@ type Props = {
   onOpenSubagent: ((key: string) => void) | undefined;
   onOpenSession: ((key: string) => void) | undefined;
 };
-export type ChatChildAttention = SolidBridgeElement<Props>;
 const attentionIcons = {
   hand: "hand",
   key: "key",
@@ -27,31 +25,29 @@ const attentionIcons = {
 } as const;
 
 /** Child status is a recorded outcome, even when its parent has no new reply. */
-export const ChatChildAttention = defineSolidBridge<Props>(
-  "openclaw-chat-child-attention",
-  (props, host) => {
-    host.style.display = "contents";
-    const [clock, setClock] = createSignal(0);
-    const rows = createMemo(() => {
-      clock();
-      const now = Date.now();
-      return collectSessionDescendantRows(props.sessions, props.sessionKey).flatMap((row) => {
-        const attention = sessionRowAttention(row, now);
-        return attention.kind === "none" ? [] : [{ row, attention }];
-      });
+export function ChatChildAttention(props: Props) {
+  const [clock, setClock] = createSignal(0);
+  const rows = createMemo(() => {
+    clock();
+    const now = Date.now();
+    return collectSessionDescendantRows(props.sessions, props.sessionKey).flatMap((row) => {
+      const attention = sessionRowAttention(row, now);
+      return attention.kind === "none" ? [] : [{ row, attention }];
     });
-    createInterval(
-      () => setClock((value) => value + 1),
-      () => {
-        const expiry = Math.min(
-          ...rows().flatMap(({ row, attention }) =>
-            attention.kind === "agent" && row.agentStatus ? [row.agentStatus.expiresAt] : [],
-          ),
-        );
-        return Number.isFinite(expiry) ? Math.max(0, expiry - Date.now() + 1) : undefined;
-      },
-    );
-    return (
+  });
+  createInterval(
+    () => setClock((value) => value + 1),
+    () => {
+      const expiry = Math.min(
+        ...rows().flatMap(({ row, attention }) =>
+          attention.kind === "agent" && row.agentStatus ? [row.agentStatus.expiresAt] : [],
+        ),
+      );
+      return Number.isFinite(expiry) ? Math.max(0, expiry - Date.now() + 1) : undefined;
+    },
+  );
+  return (
+    <openclaw-chat-child-attention style={{ display: "contents" }}>
       <For each={rows()} keyed={(item) => item.row.key}>
         {(item) => {
           const open = () =>
@@ -95,14 +91,6 @@ export const ChatChildAttention = defineSolidBridge<Props>(
           );
         }}
       </For>
-    );
-  },
-  {
-    properties: {
-      sessions: { default: [], attribute: false },
-      sessionKey: { default: "" },
-      onOpenSubagent: { default: undefined, attribute: false },
-      onOpenSession: { default: undefined, attribute: false },
-    },
-  },
-);
+    </openclaw-chat-child-attention>
+  );
+}

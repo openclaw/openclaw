@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData } from "node:worker_threads";
 import {
   getDatabaseEngineInput,
@@ -100,6 +101,7 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
   }
   if (fresh) {
     const now = Date.now();
+    // sqlite-allow-raw: PostgreSQL bootstrap publishes the matching state schema metadata.
     db.prepare(
       `INSERT INTO schema_meta
         (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
@@ -107,10 +109,10 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
     ).run(OPENCLAW_STATE_SCHEMA_VERSION, VERSION, now, now);
     writeStateSchemaContentVersion(db);
   }
-  const meta = db
+  const meta = db // sqlite-allow-raw: Schema admission verifies identity fields before ordinary store queries.
     .prepare("SELECT schema_version, role, agent_id FROM schema_meta WHERE meta_key = 'primary'")
     .get();
-  const content = db
+  const content = db // sqlite-allow-raw: Schema admission compares physical and content schema versions.
     .prepare(
       "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
     )
@@ -147,15 +149,21 @@ const statePostgresSchema = {
     };
   }),
 };
+// v28 owns the current publication columns and pre-cutover credential tables.
+const statePostgresSchemaV28 = {
+  ...statePostgresSchema,
+  postgres: `${runtime.eagerSql}\n${runtime.clientCredentialSource.sql}`,
+};
 const statePostgresSchemaV27 = {
-  postgres: withLegacyPublicationDraft(statePostgresSchema.postgres),
-  postgresFragments: statePostgresSchema.postgresFragments.map((fragment) => ({
+  postgres: withLegacyPublicationDraft(statePostgresSchemaV28.postgres),
+  postgresFragments: statePostgresSchemaV28.postgresFragments.map((fragment) => ({
     ...fragment,
     sql: withLegacyPublicationDraft(fragment.sql),
   })),
 };
 // v24-v26 share a PostgreSQL catalog; preserve their exact index definitions for admission.
 const statePostgresSchemaV26 = {
+  ...statePostgresSchemaV27,
   postgres:
     statePostgresSchemaV27.postgres.replace(
       /CREATE INDEX "idx_state_leases_owner"[^;]*;/u,
@@ -213,7 +221,7 @@ export const stateEngineSchema: StoreSchema = {
     {
       version: 28,
       fromSchema: statePostgresSchemaV27,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV28,
       sql: `ALTER TABLE IF EXISTS github_publication_requests ADD COLUMN draft bigint;
         ALTER TABLE IF EXISTS github_personal_publication_requests ADD COLUMN draft bigint;
         ALTER TABLE IF EXISTS github_repository_publication_requests ADD COLUMN draft bigint;
@@ -227,6 +235,12 @@ export const stateEngineSchema: StoreSchema = {
           CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
         ON CONFLICT (state_key) DO UPDATE
           SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+    },
+    {
+      version: 29,
+      fromSchema: statePostgresSchemaV28,
+      schema: statePostgresSchema,
+      sql: runtime.clientCredentialV29Sql,
     },
   ],
 };
@@ -271,6 +285,7 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
     throw new Error("PostgreSQL state fragments require the owner's transaction");
   }
   invalidateLocalSqliteSchemaAdmissions(db);
+  // sqlite-allow-raw: The schema owner installs a verified fragment under its transaction.
   db.exec(fragment.sql);
   admitPostgresPhysicalFacts({
     anchor: db.anchor,
@@ -286,13 +301,24 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
 }
 
 export function openExistingStatePostgresConnection(pathname: string, expectedIdentity?: string) {
-  const input = stateEngineInput();
-  if (!input) {
+  if (!stateEngineInput()) {
     return undefined;
   }
   const anchor = openTrackedStateDatabase(pathname, { existingOnly: true, expectedIdentity });
+  return openExistingStatePostgresConnectionFromAnchor(anchor, pathname);
+}
+
+/** Consumes an anchor whose caller owns path admission, including updater read-only custody. */
+export function openExistingStatePostgresConnectionFromAnchor(
+  anchor: DatabaseSync,
+  pathname: string,
+) {
   let db: PostgresSqlConnection | undefined;
   try {
+    const input = stateEngineInput();
+    if (!input) {
+      throw new Error("PostgreSQL state inspection requires the configured state connection.");
+    }
     admitStateSchemaFacts(anchor, pathname);
     const selected = openEngineStore({
       anchor,

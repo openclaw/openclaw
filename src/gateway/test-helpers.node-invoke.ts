@@ -8,18 +8,18 @@ export function acknowledgeNodeInvokeRequestForTest(params: {
   client: GatewayClient;
   event: { event?: string; payload?: unknown };
   onInvoke: (payload: unknown) => void;
-}): void {
+}): Promise<unknown> | undefined {
   if (params.event.event !== "node.invoke.request") {
-    return;
+    return undefined;
   }
   params.onInvoke(params.event.payload);
   const payload = params.event.payload as { id?: unknown; nodeId?: unknown };
   const id = typeof payload.id === "string" ? payload.id : "";
   const nodeId = typeof payload.nodeId === "string" ? payload.nodeId : "";
   if (!id || !nodeId) {
-    return;
+    return undefined;
   }
-  void params.client.request("node.invoke.result", {
+  return params.client.request("node.invoke.result", {
     id,
     nodeId,
     ok: true,

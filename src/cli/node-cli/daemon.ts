@@ -37,7 +37,7 @@ import {
   readSystemdUserLingerStatus,
   resolveSystemdUserServiceAccount,
 } from "../../daemon/systemd.js";
-import { loadDeviceIdentityIfPresent } from "../../infra/device-identity.js";
+import { loadDeviceIdentityIfPresentAsync } from "../../infra/device-identity-async.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { canReuseNodeHostDeviceToken } from "../../node-host/gateway-auth.js";
@@ -299,7 +299,9 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   });
   if (!opts.authFromEnv) {
     const savedGateway = (await loadNodeHostConfig(installEnv))?.gateway;
-    const identity = savedGateway ? loadDeviceIdentityIfPresent({ env: installEnv }) : null;
+    const identity = savedGateway
+      ? await loadDeviceIdentityIfPresentAsync({ env: installEnv })
+      : null;
     if (
       identity &&
       (await canReuseNodeHostDeviceToken({

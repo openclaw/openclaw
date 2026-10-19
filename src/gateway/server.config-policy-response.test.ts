@@ -77,7 +77,9 @@ describe("config writer policy-close ordering", () => {
       const port = await getFreePort();
       server = await startGatewayServerCore(port, { controlUiEnabled: false });
       await server.startupSettled;
-      const identity = loadOrCreateDeviceIdentity({ path: state.path("writer-identity.sqlite") });
+      const identity = loadOrCreateDeviceIdentity({
+        path: state.path("writer-identity", "client", "credentials.sqlite"),
+      });
       const scopes = ["operator.admin", "operator.read", "operator.write"];
       const pairing = await requestDevicePairing({
         deviceId: identity.deviceId,
@@ -263,7 +265,7 @@ describe("config writer policy-close ordering", () => {
           ...(browser ? { origin: browserOrigin } : {}),
           deviceIdentity: browser
             ? loadOrCreateDeviceIdentity({
-                path: state.path("browser-identity.sqlite"),
+                path: state.path("browser-identity", "client", "credentials.sqlite"),
               })
             : null,
           scopes: ["operator.admin", "operator.read", "operator.write"],

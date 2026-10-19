@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  collectNestedErrorCandidates,
+  extractErrorCode,
+} from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -467,7 +471,18 @@ it.each(["dispose", "physical replacement"] as const)(
         fs.renameSync(replacementPath, f.databasePath);
       }
       gate.release.resolve();
-      await expect(operation).rejects.toThrow(/closed|revoked|replaced|changed/);
+      // Native retirement can wrap the typed admission refusal before returning its result.
+      await expect(operation).rejects.toSatisfy(
+        (error: unknown) =>
+          error instanceof Error &&
+          (/closed|revoked|replaced|changed/.test(error.message) ||
+            collectNestedErrorCandidates(error).some(
+              (cause) =>
+                cause instanceof Error &&
+                cause.name === "SqliteWorkerError" &&
+                extractErrorCode(cause) === "closed",
+            )),
+      );
       expect(update).not.toHaveBeenCalled();
       expect(committed).not.toHaveBeenCalled();
       expect(loadSessionEntry(f.scope)).not.toHaveProperty("label");

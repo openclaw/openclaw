@@ -75,7 +75,10 @@ it("delivers a generated request to a distinct reviewer and resolves one termina
     options: Pick<Parameters<typeof connectGatewayClient>[0], "caps" | "onEvent"> = {},
   ) => {
     const identity = loadOrCreateDeviceIdentity({
-      path: path.join(stateDir, "test-device-identities", `plugin-approval-${name}.sqlite`),
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: path.join(stateDir, "test-device-identities", name),
+      },
     });
     const client = await connectGatewayClient({
       url,

@@ -28,7 +28,6 @@ import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import "../../../components/solid/person-reference.tsx";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
 import { ChatClawHubCard } from "./chat-clawhub-card.tsx";
-import { ChatPermissionCard } from "./chat-divider.tsx";
 import { ActivityOperation } from "./chat-message-activity-operation.tsx";
 import { OmittedMedia } from "./chat-message-attachment-status-solid.tsx";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
@@ -52,6 +51,7 @@ import {
   releaseChatMediaResourceOwner,
 } from "./chat-message-media.ts";
 import { MarkdownText, MessageJson, MessageMarkdown } from "./chat-message-text-view.tsx";
+import { ChatPermissionCard } from "./chat-permission-card.tsx";
 import { ReplyLineView } from "./chat-reply-attribution.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {

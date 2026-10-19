@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-// Execute the native owner's literal DDL, not the full Node schema: package
-// acceptance must reproduce the app-before-worker initialization order.
+// Retain the shipped native-v0 input so package acceptance proves its upgrade
+// into the local credential owner before node startup.
 export function seedMacNodeWorkerProofState(databasePath) {
   const source = fs.readFileSync(
     new URL(
@@ -21,16 +22,19 @@ export function seedMacNodeWorkerProofState(databasePath) {
     for (const [, sql] of statements) {
       db.exec(sql);
     }
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const publicDer = publicKey.export({ type: "spki", format: "der" });
+    const deviceId = createHash("sha256").update(publicDer.subarray(-32)).digest("hex");
     db.prepare("INSERT INTO device_identities VALUES (?, ?, ?, ?, ?, ?)").run(
       "node",
-      "synthetic-native-device",
-      "synthetic-public",
-      "synthetic-private",
+      deviceId,
+      publicKey.export({ type: "spki", format: "pem" }),
+      privateKey.export({ type: "pkcs8", format: "pem" }),
       1,
       1,
     );
     db.prepare("INSERT INTO device_auth_tokens VALUES (?, ?, ?, ?, ?)").run(
-      "synthetic-native-device",
+      deviceId,
       "node",
       "synthetic-native-token",
       "[]",
@@ -56,8 +60,19 @@ export function seedMacNodeWorkerProofState(databasePath) {
   }
 }
 
-export function readMacNodeWorkerProofRows(db) {
-  return ["device_identities", "device_auth_tokens", "exec_approvals_config"].map((table) =>
-    db.prepare(`SELECT * FROM ${table}`).all(),
-  );
+export function readMacNodeWorkerProofRows(db, credentialDatabasePath) {
+  const credentials = credentialDatabasePath
+    ? new DatabaseSync(credentialDatabasePath, { readOnly: true })
+    : db;
+  try {
+    return [
+      credentials.prepare("SELECT * FROM device_identities").all(),
+      credentials.prepare("SELECT * FROM device_auth_tokens").all(),
+      db.prepare("SELECT * FROM exec_approvals_config").all(),
+    ];
+  } finally {
+    if (credentials !== db) {
+      credentials.close();
+    }
+  }
 }

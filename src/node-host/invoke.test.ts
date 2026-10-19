@@ -477,8 +477,7 @@ describe("node host invoke", () => {
     expect(execApprovalsStoreMock.readCalls).toBe(1);
     expect(execApprovalsStoreMock.updateCalls).toBe(1);
     expect(execApprovalsStoreMock.updateParams?.baseHash).toBe(missingSnapshot.hash);
-    expect(prepared?.socket?.path).toBeTruthy();
-    expect(prepared?.socket?.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(prepared?.socket).toBeUndefined();
     expect(JSON.parse(result.payloadJSON ?? "{}")).toMatchObject({
       hash: "sha256:created",
       file: { socket: { path: "/tmp/exec-approvals.sock" } },

@@ -1259,6 +1259,8 @@
     {"path":"apps/ios/Sources/Settings/DashboardPageScreen.swift","kind":"ui-call","surface":"apple","id":"native.apple.d800fa5d7ab06b98","source":"Done"},
     {"path":"apps/ios/Sources/Settings/DashboardPageScreen.swift","kind":"ui-call","surface":"apple","id":"native.apple.6a3c641cfd1e257e","source":"Open Gateway settings"},
     {"path":"apps/ios/Sources/Settings/DashboardPageScreen.swift","kind":"ui-call","surface":"apple","id":"native.apple.b63397a349b9705f","source":"This Dashboard needs a browser session. Native chat and Gateway settings remain available."},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawNativeState/ClientCredentialOperations.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.4a97273e8df7e686","source":"AND gateway_scope=? "},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawNativeState/ClientCredentialOperations.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.1242e4d836d51319","source":"gateway_scope,"},
     {"path":"apps/ios/Sources/Gateway/GatewayProblemPrimaryAction.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.962b793df2b348ce","source":"Trust certificate"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageReactions.swift","kind":"ui-call","surface":"apple","id":"native.apple.72cde7eee4d34d19","source":"Add Reaction"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageReactions.swift","kind":"ui-call","surface":"apple","id":"native.apple.addaba7d7374d016","source":"Cancel"},

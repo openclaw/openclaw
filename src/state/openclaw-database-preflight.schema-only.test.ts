@@ -23,6 +23,10 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "./openclaw-state-db.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -87,7 +91,7 @@ it("keeps retry and restore guidance with their affected agent databases", async
   );
 });
 
-it("upgrades the subagent authority format without rewriting rows and refuses schema-24 targets", async () => {
+it("upgrades captured subagent authority state without rewriting rows and refuses schema-24 targets", async () => {
   const fixture = databaseFixture(tempDirs.make("subagent-authority-format-"));
   const pathname = fixture.state().path;
   await closeOpenClawStateDatabaseAsync();
@@ -102,6 +106,8 @@ it("upgrades the subagent authority format without rewriting rows and refuses sc
   let catalog;
   {
     using writer = openRawDatabase(pathname);
+    catalog = writer.prepare(catalogSql).all();
+    addPreCutoverClientCredentialTablesForTest(writer);
     writer.exec(`PRAGMA user_version = 24;
       UPDATE schema_meta SET schema_version = 24 WHERE meta_key = 'primary';
       UPDATE config_machine_state SET value_json = '24'
@@ -111,11 +117,11 @@ it("upgrades the subagent authority format without rewriting rows and refuses sc
       (run_id, child_session_key, requester_session_key, created_at, payload_json)
       VALUES ('interrupted-child', 'agent:main:subagent:child', 'agent:main:main', 1, ?)`)
       .run(payload);
-    catalog = writer.prepare(catalogSql).all();
   }
   // A prior process's file must acquire fresh physical admission, not cached version facts.
   fs.renameSync(pathname, `${pathname}.v24`);
   fs.copyFileSync(`${pathname}.v24`, pathname);
+  await withStateMigrationBackupForTest({ env: fixture.env }, () => fixture.state());
   const { db } = fixture.state();
   expect(db.prepare("PRAGMA user_version").get()).toEqual({
     user_version: supportedVersions.state,

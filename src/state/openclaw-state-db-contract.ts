@@ -6,6 +6,7 @@ import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
 
 export const MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION = 23;
+export const CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION = 29;
 export { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Absence records lost history; only Doctor may reconstruct these on existing state.
@@ -153,6 +154,7 @@ export const STATE_SCHEMA_MIGRATION_DESCRIPTIONS = {
   "session-state-head-layout-v26": "session state heads → composite primary-key storage",
   "state-write-indexes-v27": "replay, skill usage, and lease writes → smaller index maintenance",
   "github-publication-draft-v28": "GitHub publication requests → durable draft choice",
+  "local-client-credentials-v29": "client credentials and native socket material → local owner",
   "predicate-columns-v21": "meeting transcripts and delivery retention → derived predicate columns",
   "operator-approvals-system-agent": "operator approvals → OpenClaw system changes",
   "session-watch-cursor-provenance-v4": "session watch cursors → provenance column",

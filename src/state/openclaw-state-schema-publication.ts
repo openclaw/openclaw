@@ -121,3 +121,18 @@ export function writeStateSchemaContentVersion(db: EngineConnection): void {
       ),
   );
 }
+
+/** Advance an existing migration marker without changing its original timestamp. */
+export function advanceStateSchemaContentVersion(
+  db: EngineConnection,
+  versions: { fromVersion: number; toVersion: number },
+): void {
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<PublicationDatabase>(db)
+      .updateTable("config_machine_state")
+      .set({ value_json: String(versions.toVersion) })
+      .where("state_key", "=", CONTENT_VERSION_KEY)
+      .where("value_json", "=", String(versions.fromVersion)),
+  );
+}

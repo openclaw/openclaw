@@ -3,12 +3,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
+import { createDreamingViewState, type DreamingViewState } from "./dreaming.ts";
 import {
   renderDreamingView,
   fullDreamingViewAccess,
   installDreamingViewTestTranslations,
 } from "./view.test-helpers.ts";
-import { createDreamingViewState, renderDreaming, type DreamingViewState } from "./view.tsx";
+import { renderDreaming } from "./view.tsx";
 
 type DreamingProps = Parameters<typeof renderDreaming>[0];
 

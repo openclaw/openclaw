@@ -69,7 +69,7 @@ const nativePlatform = process.platform;
 beforeEach(() => {
   mockSystemAccountHome();
   mocks.enabled = true;
-  const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  const platform = vi.spyOn(process, "platform", "get").mockReturnValue(nativePlatform);
   // The service is Windows-shaped; SQLite still opens files on the real host.
   for (const name of ["resolveExistingSqliteFileUri", "resolveImmutableSqliteFileUri"] as const) {
     const resolveUri = nodeSqlite[name];
@@ -128,6 +128,7 @@ it.each([
       });
       const root = process.cwd();
       const runId = createUpdateRun({ trigger: "cli" }).runId;
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const activationTimeoutMs = 3_600_000;
       const run = { runId, env: { ...process.env }, activationTimeoutMs };
       const { recordPhase } = createUpdateCommandExecutionGuards({ run }, root);

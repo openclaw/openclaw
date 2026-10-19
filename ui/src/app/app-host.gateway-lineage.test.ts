@@ -149,10 +149,12 @@ async function createGatewaySurface(
   return { runtime, container, draw: settleRootContent };
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const dispose of mountedSurfaces.splice(0)) {
     dispose();
   }
+  // Standalone startup views load their panel registration while the splash is visible.
+  await vi.dynamicImportSettled();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });

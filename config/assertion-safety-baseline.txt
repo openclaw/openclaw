@@ -2530,7 +2530,7 @@ ui/src/pages/chat/session-cache.ts	2
 ui/src/pages/chat/stream-reconciliation.ts	1
 ui/src/pages/chat/talk/gateway-relay.ts	1
 ui/src/pages/chat/talk/google-live.ts	1
-ui/src/pages/chat/talk/shared.ts	3
+ui/src/pages/chat/talk/shared.ts	1
 ui/src/pages/chat/talk/webrtc.ts	1
 ui/src/pages/chat/workspace-conflict.ts	2
 ui/src/pages/config/settings-search.ts	1
