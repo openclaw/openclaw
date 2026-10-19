@@ -121,13 +121,16 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
           `INSERT INTO operator_approvals (cursor_id, approval_id, resolution_ref, kind, status, presentation_json, reviewer_device_ids_json, audience_session_keys_json, runtime_epoch, created_at_ms, expires_at_ms, updated_at_ms, decision, terminal_reason, resolved_at_ms, resolver_kind) VALUES (1, 'legacy-approval', ?, 'exec', 'allowed', '{}', '[]', '[]', 'synthetic-epoch', 1, 3, 2, 'allow-always', 'user', 2, 'device')`,
         )
         .run("a".repeat(43));
+      const approvedOperation = {
+        agentId: "main",
+        cronJobId: "pinned",
+        operationBinding: "synthetic-approved-operation",
+      };
       runOpenClawStateWriteTransaction((db) =>
         mintCronStandingGrantLocked(db, {
+          ...approvedOperation,
           approvalId: "legacy-approval",
-          agentId: "main",
-          cronJobId: "pinned",
           jobConfigRevision: resolveCronJobConfigRevision(jobs[0]!),
-          operationBinding: "synthetic-approved-operation",
           nowMs: 2,
           expiresAtMs: null,
         }),
@@ -139,7 +142,6 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
       const grantBefore = query(grantSql)!;
       const generationBefore = query(generationSql);
 
-      // The ordinary cron contribution also runs in repairing update Doctor.
       await repair(state.configPath);
       const repaired = (await loadCronJobsStore(storePath)).jobs;
       for (const [index, job] of repaired.entries()) {
@@ -177,13 +179,7 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
       const handle = runOpenClawStateWriteTransaction(({ db }) =>
         claimCronRunReceiptInDatabaseForTest({ database: db, prepared }),
       );
-      const lookup = {
-        agentId: "main",
-        cronJobId: "pinned",
-        jobConfigRevision: revision,
-        operationBinding: "synthetic-approved-operation",
-        handle,
-      };
+      const lookup = { ...approvedOperation, jobConfigRevision: revision, handle };
       expect(await validateCronStandingGrant(lookup)).toMatchObject({ outcome: "consumed" });
       const grantId = String(grantAfter.grant_id);
       await revokeCronStandingGrant({ grantId, revokedBy: "synthetic-operator" });

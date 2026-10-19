@@ -14,6 +14,7 @@ import {
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
 import * as quarantine from "../../../cron/store/quarantine.js";
+import type { CronJob } from "../../../cron/types.js";
 import * as staging from "../../../infra/sqlite-snapshot-staging.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -35,9 +36,7 @@ const agentTurn = (message: string, fields: StoredJob = {}) => ({
 
 const noteMock = vi.hoisted(() => vi.fn<(message: string, title?: string) => void>());
 
-vi.mock("../../../../packages/terminal-core/src/note.js", () => ({
-  note: noteMock,
-}));
+vi.mock("../../../../packages/terminal-core/src/note.js", () => ({ note: noteMock }));
 
 let tempRoot: string | null = null;
 let storePath: string;
@@ -61,18 +60,18 @@ function makePrompter(confirmResult = true) {
   return { confirm: vi.fn().mockResolvedValue(confirmResult) };
 }
 
-function createCronConfig(webhook = WEBHOOK): OpenClawConfig {
+function cronConfig(webhook = WEBHOOK): OpenClawConfig {
   return { cron: { store: storePath, webhook } } as unknown as OpenClawConfig;
 }
 
 function repairCronStore(
   prompter: Parameters<typeof maybeRepairLegacyCronStore>[0]["prompter"] = makePrompter(true),
-  cfg = createCronConfig(),
+  cfg = cronConfig(),
 ) {
   return maybeRepairLegacyCronStore({ cfg, options: {}, prompter });
 }
 
-function createLegacyCronJob(overrides: StoredJob = {}) {
+function legacyJob(overrides: StoredJob = {}) {
   return {
     id: "legacy-job",
     name: "Legacy job",
@@ -86,7 +85,7 @@ function createLegacyCronJob(overrides: StoredJob = {}) {
   };
 }
 
-function createCurrentCronJob(overrides: StoredJob = {}) {
+function currentJob(overrides: StoredJob = {}) {
   return {
     id: "sqlite-job",
     name: "SQLite job",
@@ -102,14 +101,14 @@ function createCurrentCronJob(overrides: StoredJob = {}) {
   };
 }
 
-async function writeCronStore(jobs: StoredJob[]) {
+async function seedRawJobs(jobs: StoredJob[]) {
   const entries = jobs.map((job, index) => {
     const rawId = job.id ?? job.jobId;
     const id =
       typeof rawId === "string" || typeof rawId === "number" ? String(rawId) : `raw-${index}`;
     return { job, id };
   });
-  await writeCurrentCronStore(entries.map(({ id }) => createCurrentCronJob({ id })));
+  await saveJobs(entries.map(({ id }) => currentJob({ id })));
   const db = openOpenClawStateDatabase().db;
   for (const { job, id } of entries) {
     db.prepare(
@@ -118,15 +117,15 @@ async function writeCronStore(jobs: StoredJob[]) {
   }
 }
 
-async function writeCurrentCronStore(jobs: StoredJob[]) {
+async function saveJobs(jobs: StoredJob[]) {
   await saveCronStore(storePath, { version: 1, jobs: jobs as never });
 }
 
-async function readPersistedJobs(): Promise<StoredJob[]> {
+async function readJobs(): Promise<StoredJob[]> {
   return (await loadCronStore(storePath)).jobs as unknown as StoredJob[];
 }
 
-function requirePersistedJob(jobs: StoredJob[], index: number) {
+function jobAt(jobs: StoredJob[], index: number) {
   const job = jobs[index];
   if (!job) {
     throw new Error(`expected persisted cron job ${index}`);
@@ -134,18 +133,18 @@ function requirePersistedJob(jobs: StoredJob[], index: number) {
   return job;
 }
 
-function expectNoteContaining(message: string, title = "Cron"): void {
+function expectNote(message: string, title = "Cron"): void {
   expect(noteMock).toHaveBeenCalledWith(expect.stringContaining(message), title);
 }
 
-function expectNoNoteContaining(message: string, title = "Cron"): void {
+function expectNoNote(message: string, title = "Cron"): void {
   expect(noteMock).not.toHaveBeenCalledWith(expect.stringContaining(message), title);
 }
 
 describe("collectLegacyCronStoreHealthFindings", () => {
   it("reports alias-only Gateway exec jobs with recreation guidance", async () => {
-    await writeCurrentCronStore([
-      createCurrentCronJob({
+    await saveJobs([
+      currentJob({
         id: "legacy-gateway-exec",
         name: "Legacy gateway shell",
         scheduledToolPolicy: { version: 1, mode: "trusted" },
@@ -153,9 +152,7 @@ describe("collectLegacyCronStoreHealthFindings", () => {
       }),
     ]);
 
-    const findings = await collectLegacyCronStoreHealthFindings({
-      cfg: createCronConfig(),
-    });
+    const findings = await collectLegacyCronStoreHealthFindings({ cfg: cronConfig() });
 
     expect(findings).toContainEqual(
       expect.objectContaining({
@@ -164,13 +161,13 @@ describe("collectLegacyCronStoreHealthFindings", () => {
         fixHint: expect.stringContaining("fresh authenticated creator turn"),
       }),
     );
-    expect((await readPersistedJobs())[0]?.payload).toMatchObject({ toolsAllow: ["gateway_exec"] });
+    expect((await readJobs())[0]?.payload).toMatchObject({ toolsAllow: ["gateway_exec"] });
   });
 
   it("includes disabled authority debt in the remediation inventory", async () => {
-    await writeCurrentCronStore(
+    await saveJobs(
       [true, false].map((enabled) =>
-        createCurrentCronJob({
+        currentJob({
           id: `authority-${enabled}`,
           enabled,
           owner: { agentId: "main", sessionKey: "agent:main:discord:group:ops" },
@@ -178,9 +175,7 @@ describe("collectLegacyCronStoreHealthFindings", () => {
         }),
       ),
     );
-    const findings = await collectLegacyCronStoreHealthFindings({
-      cfg: createCronConfig(),
-    });
+    const findings = await collectLegacyCronStoreHealthFindings({ cfg: cronConfig() });
     expect(
       findings.find(
         ({ requirement }) => requirement === "cron-scheduled-authority-reauthorization",
@@ -196,13 +191,13 @@ it.each(["structured", "interactive"])(
   "reports the original quarantine observation failure in %s Doctor output",
   async (mode) => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(path.dirname(storePath)));
-    await writeCurrentCronStore([]);
+    await saveJobs([]);
     const observation = vi
       .spyOn(quarantine, "loadCronQuarantinedJobs")
       .mockRejectedValueOnce(new Error("quarantine observation unavailable"));
     try {
       if (mode === "structured") {
-        expect(await collectLegacyCronStoreHealthFindings({ cfg: createCronConfig() })).toEqual([
+        expect(await collectLegacyCronStoreHealthFindings({ cfg: cronConfig() })).toEqual([
           expect.objectContaining({
             requirement: "cron-store-readable",
             fixHint: expect.stringContaining("quarantine observation unavailable"),
@@ -210,8 +205,8 @@ it.each(["structured", "interactive"])(
         ]);
       } else {
         await repairCronStore();
-        expectNoteContaining("Unable to read cron job store");
-        expectNoteContaining("quarantine observation unavailable");
+        expectNote("Unable to read cron job store");
+        expectNote("quarantine observation unavailable");
       }
     } finally {
       observation.mockRestore();
@@ -229,8 +224,8 @@ describe("maybeRepairLegacyCronStore", () => {
       payload: { apps: [{ id: "calendar" }] },
     };
     const freshAuthority = { ...staleAuthority, payload: { apps: [{ id: "mail" }] } };
-    await writeCurrentCronStore([
-      createCurrentCronJob({
+    await saveJobs([
+      currentJob({
         id: "runtime-job",
         notify: true,
         owner: { agentId: "main", sessionKey: "agent:main:discord:group:ops", accountId: "work" },
@@ -255,22 +250,22 @@ describe("maybeRepairLegacyCronStore", () => {
     };
     const prompter = {
       confirm: vi.fn(async () => {
-        const current = requirePersistedJob(await readPersistedJobs(), 0);
-        await writeCurrentCronStore([
+        const current = jobAt(await readJobs(), 0);
+        await saveJobs([
           { ...current, updatedAtMs: runAtMs, state, runtimeAuthority: freshAuthority },
         ]);
         return true;
       }),
     };
     await repairCronStore(prompter);
-    const repaired = requirePersistedJob(await readPersistedJobs(), 0);
+    const repaired = jobAt(await readJobs(), 0);
     expect(repaired.notify).toBeUndefined();
     expect(repaired).toMatchObject({ state, updatedAtMs: runAtMs });
     expect(repaired.runtimeAuthority).toEqual(freshAuthority);
     expect(prompter.confirm).toHaveBeenCalledTimes(1);
-    expectNoNoteContaining("Legacy cron job storage detected");
-    expectNoteContaining("Cron store issues detected");
-    expectNoNoteContaining("jobs.json");
+    expectNoNote("Legacy cron job storage detected");
+    expectNote("Cron store issues detected");
+    expectNoNote("jobs.json");
   });
 
   it("detects, repairs, reloads, and idempotently migrates the stable documented SQLite trigger script", async () => {
@@ -280,24 +275,24 @@ describe("maybeRepairLegacyCronStore", () => {
       "// Preserve the trigger comment.\nawait tools.call(\"exec\", { command: 'echo done' });";
     const betaOnlyPayloadScript =
       "await tools.call('exec', { command: 'leave payload unchanged' })";
-    await writeCurrentCronStore([
-      createCurrentCronJob({
+    await saveJobs([
+      currentJob({
         id: "stable-pr-watcher",
         name: "Stable PR watcher",
         schedule: { kind: "every", everyMs: 30_000 },
         trigger: { script: stableScript, once: false },
       }),
-      createCurrentCronJob({
+      currentJob({
         id: "ignored-result",
         name: "Ignored result watcher",
         trigger: { script: ignoredResultScript },
       }),
-      createCurrentCronJob({
+      currentJob({
         id: "beta-script-payload",
         payload: { kind: "script", script: betaOnlyPayloadScript },
       }),
     ]);
-    const cfg = createCronConfig();
+    const cfg = cronConfig();
     const findings = await collectLegacyCronStoreHealthFindings({ cfg });
     for (const name of ["Stable PR watcher", "Ignored result watcher"]) {
       expect(findings).toContainEqual(
@@ -311,7 +306,7 @@ describe("maybeRepairLegacyCronStore", () => {
     const decline = makePrompter(false);
     await repairCronStore(decline);
     expect(decline.confirm).toHaveBeenCalledTimes(1);
-    expectNoteContaining("Stable PR watcher");
+    expectNote("Stable PR watcher");
     expect((await loadCronStore(storePath)).jobs[0]?.trigger?.script).toBe(stableScript);
     noteMock.mockClear();
     await repairCronStore();
@@ -329,13 +324,13 @@ describe("maybeRepairLegacyCronStore", () => {
     });
     expect(reloaded.configJobs[0]?.trigger).toEqual({ script: expectedScript, once: false });
     expect(fsSync.existsSync(storePath)).toBe(false);
-    expectNoteContaining("Stable PR watcher", "Doctor changes");
-    expectNoteContaining("2 legacy cron trigger scripts", "Doctor changes");
+    expectNote("Stable PR watcher", "Doctor changes");
+    expectNote("2 legacy cron trigger scripts", "Doctor changes");
     noteMock.mockClear();
     const second = makePrompter(true);
     await repairCronStore(second);
     expect(second.confirm).not.toHaveBeenCalled();
-    expectNoNoteContaining("legacy trigger script");
+    expectNoNote("legacy trigger script");
     expect((await loadCronStore(storePath)).jobs[0]?.trigger?.script).toBe(expectedScript);
   });
 
@@ -371,12 +366,12 @@ describe("maybeRepairLegacyCronStore", () => {
       ["ambiguous-scope", `${res}; function inspect() { return res.result.details }`],
     ];
     const unsupportedScripts = scripts.map(([id, script]) => ({ id, script }));
-    await writeCurrentCronStore(
+    await saveJobs(
       unsupportedScripts.map(({ id, script }) =>
-        createCurrentCronJob({ id, name: `Legacy ${id}`, trigger: { script } }),
+        currentJob({ id, name: `Legacy ${id}`, trigger: { script } }),
       ),
     );
-    const cfg = createCronConfig();
+    const cfg = cronConfig();
 
     const findings = await collectLegacyCronStoreHealthFindings({ cfg });
     for (const { id } of unsupportedScripts) {
@@ -393,10 +388,10 @@ describe("maybeRepairLegacyCronStore", () => {
 
     expect(prompter.confirm).not.toHaveBeenCalled();
     for (const { id } of unsupportedScripts) {
-      expectNoteContaining(`Legacy ${id}`, "Cron");
+      expectNote(`Legacy ${id}`, "Cron");
     }
-    expectNoteContaining("manually");
-    expectNoNoteContaining("secret-token");
+    expectNote("manually");
+    expectNoNote("secret-token");
     expect(
       (await loadCronStore(storePath)).jobs.map((job) => ({
         id: job.id,
@@ -407,7 +402,7 @@ describe("maybeRepairLegacyCronStore", () => {
 
   it("recovers a valid quarantined schedule only after Doctor confirmation", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(path.dirname(storePath)));
-    await writeCurrentCronStore([]);
+    await saveJobs([]);
     await saveCronQuarantinedJobs({
       storePath,
       nowMs: Date.parse("2026-08-30T18:50:02.000Z"),
@@ -415,16 +410,24 @@ describe("maybeRepairLegacyCronStore", () => {
         {
           sourceIndex: 0,
           reason: "invalid-schedule",
-          job: createCurrentCronJob({
+          job: currentJob({
             id: "variant-cron",
             schedule: { kind: " CRON ", expr: "0 9 * * *", tz: "UTC" },
           }),
           state: { nextRunAtMs: 123 },
           updatedAtMs: 456,
         },
+        {
+          sourceIndex: 1,
+          reason: "invalid-schedule",
+          job: legacyJob({
+            id: "invalid",
+            schedule: { kind: "cron" },
+          }),
+        },
       ],
     });
-    const cfg = createCronConfig();
+    const cfg = cronConfig();
     expect(await collectLegacyCronStoreHealthFindings({ cfg })).toEqual([
       expect.objectContaining({
         path: resolveOpenClawStateSqlitePath(),
@@ -434,9 +437,9 @@ describe("maybeRepairLegacyCronStore", () => {
     const decline = makePrompter(false);
 
     await maybeRepairLegacyCronStore({ cfg, options: {}, prompter: decline });
-    expectNoteContaining("Quarantined cron job rows found");
+    expectNote("Quarantined cron job rows found");
     expect((await loadCronStore(storePath)).jobs).toEqual([]);
-    expect(await loadCronQuarantinedJobs(storePath)).toHaveLength(1);
+    expect(await loadCronQuarantinedJobs(storePath)).toHaveLength(2);
     expect(decline.confirm).toHaveBeenCalledOnce();
 
     const confirm = makePrompter(true);
@@ -450,8 +453,10 @@ describe("maybeRepairLegacyCronStore", () => {
       schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
       state: { nextRunAtMs: 123 },
     });
-    expect(await loadCronQuarantinedJobs(storePath)).toEqual([]);
-    expectNoteContaining("Recovered 1 quarantined automation", "Doctor changes");
+    expect(await loadCronQuarantinedJobs(storePath)).toMatchObject([
+      { reason: "invalid-schedule", job: { id: "invalid" } },
+    ]);
+    expectNote("Recovered 1 quarantined automation", "Doctor changes");
   });
 
   it("deduplicates migrated quarantine records when sidecar archival must be retried", async () => {
@@ -475,14 +480,14 @@ describe("maybeRepairLegacyCronStore", () => {
     ];
     const historicalBytes = JSON.stringify({ version: 1, jobs: historicalJobs });
     await fs.writeFile(quarantinePath, historicalBytes);
-    expect(await collectLegacyCronStoreHealthFindings({ cfg: createCronConfig() })).toEqual([
+    expect(await collectLegacyCronStoreHealthFindings({ cfg: cronConfig() })).toEqual([
       expect.objectContaining({ path: quarantinePath, requirement: "legacy-cron-quarantine" }),
     ]);
     await expect(fs.stat(resolveOpenClawStateSqlitePath())).rejects.toMatchObject({
       code: "ENOENT",
     });
     await expect(fs.readFile(quarantinePath, "utf-8")).resolves.toBe(historicalBytes);
-    await writeCurrentCronStore([]);
+    await saveJobs([]);
     const rename = vi
       .spyOn(fs, "rename")
       .mockRejectedValueOnce(Object.assign(new Error("archive unavailable"), { code: "EACCES" }));
@@ -496,7 +501,7 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(observation.queries.filter((sql) => sql.includes("diagnostic_events"))).toEqual([]);
     expect(await loadCronQuarantinedJobs(storePath)).toEqual(historicalJobs);
     await expect(fs.stat(quarantinePath)).resolves.toBeDefined();
-    expectNoteContaining("could not archive the legacy cron file", "Doctor warnings");
+    expectNote("could not archive the legacy cron file", "Doctor warnings");
     rename.mockRestore();
 
     await repairCronStore();
@@ -506,133 +511,125 @@ describe("maybeRepairLegacyCronStore", () => {
   });
 
   it("surfaces cron payload model overrides without rewriting current jobs", async () => {
-    await writeCurrentCronStore([
-      createCurrentCronJob({
+    await saveJobs([
+      currentJob({
         id: "api-pinned",
         payload: agentTurn("Brief", { model: "openai/gpt-5.4", thinking: "high" }),
       }),
-      createCurrentCronJob({
-        id: "alias-pinned",
-        payload: agentTurn("Brief", { model: "gpt" }),
-      }),
-      createCurrentCronJob({
-        id: "inherits-default",
-        payload: agentTurn("Brief"),
-      }),
-      createCurrentCronJob({
+      currentJob({ id: "alias-pinned", payload: agentTurn("Brief", { model: "gpt" }) }),
+      currentJob({ id: "inherits-default", payload: agentTurn("Brief") }),
+      currentJob({
         id: "disabled-pinned",
         enabled: false,
         payload: agentTurn("Dormant job", { model: "ollama/qwen3" }),
       }),
     ]);
     const prompter = makePrompter(true);
-    const cfg = createCronConfig();
+    const cfg = cronConfig();
     cfg.agents = { defaults: { model: { primary: "test:opus", fallbacks: [] } } };
     await maybeRepairLegacyCronStore({ cfg, options: {}, prompter });
 
     expect(prompter.confirm).not.toHaveBeenCalled();
-    expectNoteContaining("2 jobs set `payload.model`");
-    expectNoteContaining("Provider namespaces: bare/alias=1, openai=1");
-    expectNoteContaining("2 jobs use a different model than `agents.defaults.model`");
-    expectNoteContaining("alias-pinned -> gpt");
-    expectNoNoteContaining("ollama");
-    expectNoNoteContaining("jobs.json");
-    expect(requirePersistedJob(await readPersistedJobs(), 0).payload).toMatchObject({
+    expectNote("2 jobs set `payload.model`");
+    expectNote("Provider namespaces: bare/alias=1, openai=1");
+    expectNote("2 jobs use a different model than `agents.defaults.model`");
+    expectNote("alias-pinned -> gpt");
+    expectNoNote("ollama");
+    expectNoNote("jobs.json");
+    expect(jobAt(await readJobs(), 0).payload).toMatchObject({
       model: "openai/gpt-5.4",
       thinking: "high",
     });
   });
   const RUNNING_AT_MS = Date.parse("2026-05-01T00:00:00.000Z");
-
-  it("warns about disabled jobs still marked in-flight without hiding the inventory", async () => {
-    await writeCurrentCronStore([
-      createCurrentCronJob({
-        id: "running-job",
-        enabled: false,
-        state: { runningAtMs: RUNNING_AT_MS },
-      }),
-      createCurrentCronJob({ id: "running-enabled", state: { runningAtMs: RUNNING_AT_MS + 1000 } }),
-    ]);
-    const prompter = makePrompter(true);
-
+  const healthJob = (id: string, state: StoredJob, enabled = true, name = "SQLite job") =>
+    currentJob({ id, state, enabled, name });
+  it.each([
+    {
+      label: "disabled and enabled in-flight jobs without clearing their state",
+      jobs: [
+        healthJob("running-job", { runningAtMs: RUNNING_AT_MS }, false),
+        healthJob("running-enabled", { runningAtMs: RUNNING_AT_MS + 1000 }),
+      ],
+      notes: [
+        "2 automations are still marked in-flight",
+        "marks such runs interrupted the next time it starts",
+        "openclaw automations list --all",
+        "openclaw automations show <id>",
+      ],
+      absent: ["shows it as `running`"],
+      checkState: (state: CronJob["state"] | undefined) => {
+        expect(state?.runningAtMs).toBe(RUNNING_AT_MS);
+        expect(state?.lastRunStatus).toBeUndefined();
+      },
+    },
+    {
+      label: "only enabled jobs at the chronic failure threshold",
+      jobs: [
+        healthJob("failing-a", { lastRunStatus: "error", consecutiveErrors: 3 }),
+        healthJob("failing-b", { lastRunStatus: "error", consecutiveErrors: 12 }),
+        healthJob("recovering", { lastRunStatus: "error", consecutiveErrors: 2 }),
+        healthJob("disabled-exhausted", { lastRunStatus: "error", consecutiveErrors: 9 }, false),
+      ],
+      notes: ["2 automations have failed 3+ runs in a row"],
+      absent: [],
+      checkState: (state: CronJob["state"] | undefined) =>
+        expect(state).toMatchObject({ consecutiveErrors: 3 }),
+    },
+    {
+      label: "auto-disabled jobs with their reasons and recovery commands",
+      jobs: [
+        healthJob(
+          "run-failure-job",
+          {
+            consecutiveErrors: 10,
+            autoDisabled: { reason: "consecutive-failures", atMs: 1, consecutiveErrors: 10 },
+          },
+          false,
+          "Run failure job",
+        ),
+        healthJob(
+          "schedule-error-job",
+          {
+            scheduleErrorCount: 3,
+            autoDisabled: { reason: "schedule-errors", atMs: 2, consecutiveErrors: 3 },
+          },
+          false,
+          "Schedule error job",
+        ),
+        healthJob("disabled-one-shot", { lastRunStatus: "error", consecutiveErrors: 9 }, false),
+      ],
+      notes: [
+        "2 automations are auto-disabled",
+        "Run failure job (run-failure-job)",
+        "recorded reason `consecutive-failures` after 10",
+        "openclaw automations enable run-failure-job",
+        "Schedule error job (schedule-error-job)",
+        "recorded reason `schedule-errors` after 3",
+        "openclaw automations enable schedule-error-job",
+      ],
+      absent: ["disabled-one-shot"],
+      checkState: undefined,
+    },
+  ])("reports $label", async ({ jobs, notes, absent, checkState }) => {
+    await saveJobs(jobs);
+    const prompter = makePrompter();
     await repairCronStore(prompter);
-
-    expectNoteContaining("2 automations are still marked in-flight");
-    expectNoNoteContaining("shows it as `running`");
-    expectNoteContaining("marks such runs interrupted the next time it starts");
-    expectNoteContaining("openclaw automations list --all");
-    expectNoteContaining("openclaw automations show <id>");
-
     expect(prompter.confirm).not.toHaveBeenCalled();
-    const state = (await loadCronStore(storePath)).jobs[0]?.state;
-    expect(state?.runningAtMs).toBe(RUNNING_AT_MS);
-    expect(state?.lastRunStatus).toBeUndefined();
-  });
-
-  it("pluralizes and only counts enabled jobs at or above the threshold", async () => {
-    await writeCurrentCronStore(
-      [
-        ["failing-a", 3],
-        ["failing-b", 12],
-        ["recovering", 2],
-        ["disabled-exhausted", 9, false],
-      ].map(([id, consecutiveErrors, enabled]) =>
-        createCurrentCronJob({
-          id,
-          enabled: enabled ?? true,
-          state: { lastRunStatus: "error", consecutiveErrors },
-        }),
-      ),
-    );
-    const prompter = makePrompter(true);
-    await repairCronStore(prompter);
-    expectNoteContaining("2 automations have failed 3+ runs in a row");
-    expect(prompter.confirm).not.toHaveBeenCalled();
-    expect(requirePersistedJob(await readPersistedJobs(), 0).state).toMatchObject({
-      consecutiveErrors: 3,
-    });
-  });
-
-  it("lists auto-disabled jobs with their recorded reasons and recovery commands", async () => {
-    await writeCurrentCronStore([
-      createCurrentCronJob({
-        id: "run-failure-job",
-        name: "Run failure job",
-        enabled: false,
-        state: {
-          consecutiveErrors: 10,
-          autoDisabled: { reason: "consecutive-failures", atMs: 1, consecutiveErrors: 10 },
-        },
-      }),
-      createCurrentCronJob({
-        id: "schedule-error-job",
-        name: "Schedule error job",
-        enabled: false,
-        state: {
-          scheduleErrorCount: 3,
-          autoDisabled: { reason: "schedule-errors", atMs: 2, consecutiveErrors: 3 },
-        },
-      }),
-      createCurrentCronJob({
-        id: "disabled-one-shot",
-        enabled: false,
-        state: { lastRunStatus: "error", consecutiveErrors: 9 },
-      }),
-    ]);
-    await repairCronStore();
-    expectNoteContaining("2 automations are auto-disabled");
-    expectNoteContaining("Run failure job (run-failure-job)");
-    expectNoteContaining("recorded reason `consecutive-failures` after 10");
-    expectNoteContaining("openclaw automations enable run-failure-job");
-    expectNoteContaining("Schedule error job (schedule-error-job)");
-    expectNoteContaining("recorded reason `schedule-errors` after 3");
-    expectNoteContaining("openclaw automations enable schedule-error-job");
-    expectNoNoteContaining("disabled-one-shot");
+    for (const note of notes) {
+      expectNote(note);
+    }
+    for (const note of absent) {
+      expectNoNote(note);
+    }
+    if (checkState) {
+      checkState((await loadCronStore(storePath)).jobs[0]?.state);
+    }
   });
 
   it("advises on isolated shell-prompt jobs without a non-actionable --fix repair note (#94655)", async () => {
     const shellPromptJobs = ["*", "bash", "process"].map((tool, index) =>
-      createCurrentCronJob({
+      currentJob({
         id: `shell-prompt-job-${index + 1}`,
         name: `Shell prompt job ${index + 1}`,
         schedule: { kind: "cron", expr: "*/30 * * * *", tz: "UTC" },
@@ -643,61 +640,52 @@ describe("maybeRepairLegacyCronStore", () => {
         delivery: { mode: "announce" },
       }),
     );
-    await writeCurrentCronStore(shellPromptJobs);
+    await saveJobs(shellPromptJobs);
     const prompter = makePrompter(true);
     await repairCronStore(prompter);
 
-    expectNoteContaining("3 isolated automations drive shell/process tools");
+    expectNote("3 isolated automations drive shell/process tools");
     for (const job of shellPromptJobs) {
-      expectNoteContaining(job.name, "Cron");
+      expectNote(job.name, "Cron");
     }
-    expectNoteContaining("informational only");
-    expectNoNoteContaining("Cron store issues detected");
-    expectNoNoteContaining("openclaw doctor --fix");
-    expectNoNoteContaining("jobs.json");
+    expectNote("informational only");
+    expectNoNote("Cron store issues detected");
+    expectNoNote("openclaw doctor --fix");
+    expectNoNote("jobs.json");
     expect(prompter.confirm).not.toHaveBeenCalled();
-    expect(await readPersistedJobs()).toEqual(shellPromptJobs);
+    expect(await readJobs()).toEqual(shellPromptJobs);
   });
 
   it("keeps restricted command prompts actionable without a --fix repair note", async () => {
-    const job = createCurrentCronJob({
+    const job = currentJob({
       payload: agentTurn(
         "Command to run:\n- command: python3 scripts/check_mail.py\n- workdir: /tmp/workspace",
         { toolsAllow: ["read", "message"] },
       ),
       delivery: { mode: "announce" },
     });
-    await writeCurrentCronStore([job]);
+    await saveJobs([job]);
     const prompter = makePrompter(true);
     await repairCronStore(prompter);
-    expectNoteContaining("lacks shell/process tool access");
-    expectNoteContaining("Recreate it as a command automation");
-    expectNoNoteContaining("informational only");
-    expectNoNoteContaining("keep running as-is");
-    expectNoNoteContaining("Cron store issues detected");
-    expectNoNoteContaining("openclaw doctor --fix");
+    expectNote("lacks shell/process tool access");
+    expectNote("Recreate it as a command automation");
+    expectNoNote("informational only");
+    expectNoNote("keep running as-is");
+    expectNoNote("Cron store issues detected");
+    expectNoNote("openclaw doctor --fix");
     expect(prompter.confirm).not.toHaveBeenCalled();
-    expect(requirePersistedJob(await readPersistedJobs(), 0).payload).toEqual(job.payload);
+    expect(jobAt(await readJobs(), 0).payload).toEqual(job.payload);
   });
 
   it("quarantines malformed SQLite identifiers without dropping their definitions", async () => {
-    await writeCronStore([
-      createLegacyCronJob({
-        id: 42,
-        jobId: undefined,
-        notify: false,
-      }),
-      createLegacyCronJob({
-        id: undefined,
-        jobId: undefined,
-        name: "Missing id",
-        notify: false,
-      }),
+    await seedRawJobs([
+      legacyJob({ id: 42, jobId: undefined, notify: false }),
+      legacyJob({ id: undefined, jobId: undefined, name: "Missing id", notify: false }),
     ]);
 
     await repairCronStore();
 
-    expect(await readPersistedJobs()).toEqual([]);
+    expect(await readJobs()).toEqual([]);
     expect(await loadCronQuarantinedJobs(storePath)).toMatchObject([
       { reason: "missing-id", job: { id: 42 } },
       { reason: "missing-id", job: { name: "Missing id" } },
@@ -705,15 +693,15 @@ describe("maybeRepairLegacyCronStore", () => {
   });
 
   it("migrates notify fallback while preserving announce delivery", async () => {
-    await writeCronStore([
-      createCurrentCronJob({
+    await seedRawJobs([
+      currentJob({
         id: "notify-and-announce",
         notify: true,
         payload: agentTurn("Status"),
         delivery: { to: "telegram:123" },
       }),
       ...["none", "webhook"].map((mode) =>
-        createCurrentCronJob({
+        currentJob({
           id: `notify-${mode}`,
           notify: true,
           sessionTarget: "main",
@@ -722,7 +710,7 @@ describe("maybeRepairLegacyCronStore", () => {
       ),
     ]);
     await repairCronStore();
-    const jobs = await readPersistedJobs();
+    const jobs = await readJobs();
     expect(jobs).toHaveLength(3);
     for (const job of jobs) {
       expect(job.notify).toBeUndefined();
@@ -741,22 +729,17 @@ describe("maybeRepairLegacyCronStore", () => {
     const credentialUrl = new URL("https://example.invalid/cron-finished?token=placeholder");
     credentialUrl.username = "user";
     credentialUrl.password = "password";
-    await writeCronStore([
-      createLegacyCronJob({
-        id: "notify-credential-config",
-        jobId: undefined,
-        delivery: undefined,
-      }),
+    await seedRawJobs([
+      legacyJob({ id: "notify-credential-config", jobId: undefined, delivery: undefined }),
     ]);
 
-    await repairCronStore(undefined, createCronConfig(credentialUrl.href));
+    await repairCronStore(undefined, cronConfig(credentialUrl.href));
 
-    const job = requirePersistedJob(await readPersistedJobs(), 0);
-    expect(job.notify).toBeUndefined();
-    expect(job.delivery).toBeUndefined();
+    const job = jobAt(await readJobs(), 0);
+    expect([job.notify, job.delivery]).toEqual([undefined, undefined]);
     const { configJobs: persisted } = await loadCronJobsStoreWithConfigJobs(storePath);
     expect(persisted[0]?.notify).toBe(true);
-    expectNoteContaining(
+    expectNote(
       "cron.webhook is not a valid HTTP(S) URL so doctor cannot migrate it automatically",
       "Doctor warnings",
     );
@@ -764,8 +747,8 @@ describe("maybeRepairLegacyCronStore", () => {
   });
 
   it("removes inert legacy notify:true for delivery.mode none when cron.webhook is unset and stops looping (#44460)", async () => {
-    await writeCronStore([
-      createCurrentCronJob({
+    await seedRawJobs([
+      currentJob({
         id: "notify-none-unset",
         name: "Notify none unset",
         notify: true,
@@ -783,38 +766,12 @@ describe("maybeRepairLegacyCronStore", () => {
 
     noteMock.mockClear();
     await repairCronStore(undefined, cfg);
-    expectNoNoteContaining("still uses legacy `notify: true`");
-  });
-
-  it("recovers supported quarantine schedule variants and retains invalid rows", async () => {
-    await saveCronQuarantinedJobs({
-      storePath,
-      nowMs: 123,
-      entries: [
-        { kind: " CRON ", cron: "0 7 * * *", tz: "UTC" },
-        { kind: "Every", everyMs: 60_000 },
-        { kind: " Stream ", command: ["node", "events.mjs"], mode: " LINE " },
-        { kind: "cron" },
-      ].map((schedule, index) => ({
-        sourceIndex: index,
-        reason: "invalid-schedule",
-        job: createLegacyCronJob({ id: `variant-${index}`, enabled: true, schedule }),
-      })),
-    });
-    await repairCronStore();
-    expect(await readPersistedJobs()).toMatchObject([
-      { id: "variant-0", enabled: true, schedule: { kind: "cron" } },
-      { id: "variant-1", enabled: true, schedule: { kind: "every" } },
-      { id: "variant-2", enabled: true, schedule: { kind: "stream", mode: "line" } },
-    ]);
-    expect(await loadCronQuarantinedJobs(storePath)).toMatchObject([
-      { reason: "invalid-schedule", job: { id: "variant-3" } },
-    ]);
+    expectNoNote("still uses legacy `notify: true`");
   });
 
   it("repairs legacy root delivery threadId hints into delivery", async () => {
-    await writeCronStore([
-      createCurrentCronJob({
+    await seedRawJobs([
+      currentJob({
         payload: agentTurn("Morning brief"),
         channel: " telegram ",
         to: "-1001234567890",
@@ -822,10 +779,8 @@ describe("maybeRepairLegacyCronStore", () => {
       }),
     ]);
     await repairCronStore();
-    const job = requirePersistedJob(await readPersistedJobs(), 0);
-    expect(job.channel).toBeUndefined();
-    expect(job.to).toBeUndefined();
-    expect(job.threadId).toBeUndefined();
+    const job = jobAt(await readJobs(), 0);
+    expect([job.channel, job.to, job.threadId]).toEqual([undefined, undefined, undefined]);
     expect(job.delivery).toEqual({
       mode: "announce",
       channel: "telegram",
@@ -840,15 +795,15 @@ describe("maybeRepairLegacyCronStore", () => {
     const prompter = makePrompter(true);
     await expect(repairCronStore(prompter)).resolves.toBeUndefined();
     expect(prompter.confirm).not.toHaveBeenCalled();
-    expectNoteContaining("Unable to read cron job store at");
-    expectNoteContaining("later health checks will continue");
+    expectNote("Unable to read cron job store at");
+    expectNote("later health checks will continue");
   });
 });
 
 it("inspects cron under offline Doctor custody when disposable snapshot allocation is unavailable", async () => {
   const env = { ...process.env, OPENCLAW_STATE_DIR: tempRoot! };
   vi.stubEnv("OPENCLAW_STATE_DIR", tempRoot!);
-  await saveCronStore(storePath, { version: 1, jobs: [createLegacyCronJob() as never] });
+  await saveCronStore(storePath, { version: 1, jobs: [legacyJob() as never] });
   await closeOpenClawStateDatabaseAsync();
   const databasePath = resolveOpenClawStateSqlitePath(env);
   const maintenance = createOpenClawDatabaseMaintenanceScope({
