@@ -1,7 +1,7 @@
 import { once } from "node:events";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
@@ -25,7 +25,6 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withSqliteWorkerLifecycleCoordination } from "./session-accessor.sqlite-worker-coordination.js";
-import { row } from "./session-transcript-reconcile.fixtures.test-support.js";
 import { observeReconcileHostSqlite } from "./session-transcript-reconcile.sql-observer.test-support.js";
 import type {
   SessionTranscriptReconcileWorkerTask,
@@ -38,14 +37,16 @@ function createPool(failNativeCloseAt?: string): Pool {
     workerUrl: failNativeCloseAt
       ? new URL("./session-transcript-reconcile.close-failure.test-support.mjs", import.meta.url)
       : resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptReconcile),
-    workerOptions: failNativeCloseAt
+    ...(failNativeCloseAt
       ? {
-          workerData: {
-            sourceLoaderUrl: import.meta.resolve("tsx/esm/api"),
-            databasePath: failNativeCloseAt,
+          workerOptions: {
+            workerData: {
+              sourceLoaderUrl: import.meta.resolve("tsx/esm/api"),
+              databasePath: failNativeCloseAt,
+            },
           },
         }
-      : undefined,
+      : {}),
     maxWorkers: 1,
     maxPendingTasks: 4,
   });
@@ -93,9 +94,11 @@ async function releaseInRealWorker(
           {
             inputBytes: 512,
             signal: controller.signal,
-            transferList: ({ port, coordination: taskCoordination }) => [
-              port,
-              ...(taskCoordination?.databaseAdmission ? [taskCoordination.databaseAdmission] : []),
+            transferList: (task) => [
+              task.port,
+              ...(task.coordination?.databaseAdmission
+                ? [task.coordination.databaseAdmission]
+                : []),
             ],
           },
         );
@@ -117,14 +120,10 @@ async function releaseInRealWorker(
   }
 }
 
-function expectLeaseReleased(leaseId: string) {
-  expect(
-    row(
-      openOpenClawStateDatabase().db,
-      "SELECT lease_id FROM agent_database_leases WHERE lease_id = ?",
-      leaseId,
-    ),
-  ).toBeUndefined();
+function observe(context: OpenClawStateWorkerContext) {
+  return observeReconcileHostSqlite({
+    data: [context.admission.databasePath],
+  });
 }
 
 it("counts all eight boundaries, including pre-attached cached statements and unknown databases", () => {
@@ -220,7 +219,7 @@ it("joins native exit when shared-state close fails after lease deletion", async
       closeOpenClawStateDatabaseForTest();
       const context = captureOpenClawStateWorkerContext();
       const pool = createPool(context.admission.databasePath);
-      const observation = observeReconcileHostSqlite({ data: [context.admission.databasePath] });
+      const observation = observe(context);
       try {
         await expect(
           releaseInRealWorker(pool, context, lease, state.path("main", "agent.sqlite")),
@@ -232,7 +231,11 @@ it("joins native exit when shared-state close fails after lease deletion", async
         await pool.close();
         observation.restore();
       }
-      expectLeaseReleased(lease);
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare("SELECT lease_id FROM agent_database_leases WHERE lease_id = ?")
+          .get(lease),
+      ).toBeUndefined();
     },
   );
 });
@@ -279,17 +282,22 @@ it.each([false, true])(
         void task.catch(() => {});
         let releasePort: MessagePort | undefined;
         try {
-          releasePort = await awaitGateBeforeSettlement(
+          releasePort = await Promise.race([
             ready.promise,
-            task,
-            "Reconciliation settled before the interphase drainage witness",
-          );
+            task.then(() => {
+              throw new Error("Reconciliation settled before the interphase drainage witness");
+            }),
+          ]);
           await closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
           expect(readDatabasePathIdentitySync(context.admission.databasePath).key).toBe(identity);
           expect(() => context.admission.assertCurrent()).toThrow();
           releasePort.postMessage({ type: "release" }, []);
           await expect(task).resolves.toContainEqual({ type: "lease-released" });
-          expectLeaseReleased(leaseId);
+          expect(
+            openOpenClawStateDatabase()
+              .db.prepare("SELECT lease_id FROM agent_database_leases WHERE lease_id = ?")
+              .get(leaseId),
+          ).toBeUndefined();
         } finally {
           releasePort?.postMessage({ type: "release" }, []);
           await task.catch(() => {});

@@ -64,7 +64,7 @@ function startProbe(
 
 function planFor(
   overrides: Partial<FreshNodePairingEligibilityParams> = {},
-  config: Parameters<typeof planNodePairingSshVerify>[0]["config"] = undefined,
+  config?: Parameters<typeof planNodePairingSshVerify>[0]["config"],
 ) {
   return planNodePairingSshVerify({ config, eligibility: makeEligibility(overrides) });
 }

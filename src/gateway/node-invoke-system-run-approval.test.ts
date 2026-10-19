@@ -1,5 +1,7 @@
+/**
+ * Node invoke system-run approval tests.
+ */
 import { describe, expect, test, vi } from "vitest";
-import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import {
   buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
@@ -13,8 +15,8 @@ import { sanitizeSystemRunParamsForForwarding } from "./node-invoke-system-run-a
 
 describe("sanitizeSystemRunParamsForForwarding", () => {
   const now = Date.now();
-  const safeArgv = ["echo", "SAFE"];
-  const safeCommand = "echo SAFE";
+  const echoSafeArgv = ["echo", "SAFE"];
+  const echoSafeCommand = "echo SAFE";
   const defaultChatContext = {
     agentId: "main",
     sessionKey: "agent:main:telegram:direct:12345",
@@ -57,14 +59,23 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   };
 
   function approvedRunParams(overrides: ApprovedRunParamOverrides): Record<string, unknown> {
-    return { runId: "approval-1", approved: true, approvalDecision: "allow-once", ...overrides };
+    return {
+      runId: "approval-1",
+      approved: true,
+      approvalDecision: "allow-once",
+      ...overrides,
+    };
   }
 
   function fallbackRunParams(overrides: ApprovedRunParamOverrides): Record<string, unknown> {
-    return { runId: "approval-1", approvalSource: "ask-fallback", ...overrides };
+    return {
+      runId: "approval-1",
+      approvalSource: "ask-fallback",
+      ...overrides,
+    };
   }
 
-  function bindRun(
+  function systemRunApprovalBinding(
     argv: string[],
     overrides: { cwd?: string | null; agentId?: string | null; sessionKey?: string | null } = {},
   ) {
@@ -76,30 +87,30 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     }).binding;
   }
 
-  const safeParams = { command: safeArgv, rawCommand: safeCommand };
-
-  async function forward(opts: {
-    rawParams?: ApprovedRunParamOverrides;
+  async function sanitizeApprovedRun(opts: {
+    rawParams: ApprovedRunParamOverrides;
     record?: ExecApprovalRecord;
     execApprovalManager?: SanitizerOptions["execApprovalManager"];
     client?: SanitizerOptions["client"];
     nodeId?: string;
   }) {
     return await sanitizeSystemRunParamsForForwarding({
-      rawParams: approvedRunParams(opts.rawParams ?? safeParams),
+      rawParams: approvedRunParams(opts.rawParams),
       nodeId: opts.nodeId ?? "node-1",
       client: opts.client ?? client,
-      execApprovalManager: opts.execApprovalManager ?? manager(opts.record ?? makeRecord()),
+      execApprovalManager:
+        opts.execApprovalManager ??
+        manager(opts.record ?? makeRecord(echoSafeCommand, echoSafeArgv)),
     });
   }
 
-  async function forwardFallback(opts: {
-    rawParams?: ApprovedRunParamOverrides;
+  async function sanitizeFallbackRun(opts: {
+    rawParams: ApprovedRunParamOverrides;
     record?: ExecApprovalRecord;
     client?: SanitizerOptions["client"];
   }) {
     return await sanitizeSystemRunParamsForForwarding({
-      rawParams: fallbackRunParams(opts.rawParams ?? safeParams),
+      rawParams: fallbackRunParams(opts.rawParams),
       nodeId: "node-1",
       client: opts.client ?? client,
       execApprovalManager: manager(opts.record ?? makeTimedOutRecord()),
@@ -107,12 +118,11 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   }
 
   function makeRecord(
-    input: Pick<ExecApprovalRecord["request"], "command" | "commandArgv"> = {
-      command: safeCommand,
-      commandArgv: safeArgv,
-    },
+    command: string,
+    commandArgv?: string[],
+    bindingArgv?: string[],
   ): ExecApprovalRecord {
-    const { command, commandArgv } = input;
+    const effectiveBindingArgv = bindingArgv ?? commandArgv ?? [command];
     return {
       id: "approval-1",
       request: {
@@ -120,7 +130,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
         nodeId: "node-1",
         command,
         commandArgv,
-        systemRunBinding: bindRun(commandArgv ?? [command]),
+        systemRunBinding: systemRunApprovalBinding(effectiveBindingArgv),
         cwd: null,
         agentId: null,
         sessionKey: null,
@@ -166,32 +176,34 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     };
   }
 
-  function runPlan(
-    argv = safeArgv,
-    commandText = safeCommand,
-    overrides: Partial<SystemRunApprovalPlan> = {},
-  ): SystemRunApprovalPlan {
-    return { argv, commandText, cwd: null, agentId: null, sessionKey: null, ...overrides };
-  }
-
-  function makeTimedOutRecord() {
-    const record = makeRecord();
+  function makeTimedOutRecord(command = echoSafeCommand, commandArgv = echoSafeArgv) {
+    const record = makeRecord(command, commandArgv);
     record.decision = undefined;
     record.resolvedBy = null;
-    record.request.systemRunPlan = runPlan();
+    record.request.systemRunPlan = {
+      argv: commandArgv,
+      cwd: null,
+      commandText: command,
+      agentId: null,
+      sessionKey: null,
+    };
     return record;
   }
 
-  function expectAllowed(result: Awaited<ReturnType<typeof sanitizeSystemRunParamsForForwarding>>) {
+  function expectAllowOnceForwardingResult(
+    result: Awaited<ReturnType<typeof sanitizeSystemRunParamsForForwarding>>,
+  ) {
     expect(result.ok).toBe(true);
     if (!result.ok) {
       throw new Error("unreachable");
     }
-    expect(result.params).toMatchObject({ approved: true, approvalDecision: "allow-once" });
-    return result.params as Record<string, unknown>;
+    const params = result.params as Record<string, unknown>;
+    expect(params.approved).toBe(true);
+    expect(params.approvalDecision).toBe("allow-once");
+    return params;
   }
 
-  function expectRejected(
+  function expectRejectedForwardingResult(
     result: Awaited<ReturnType<typeof sanitizeSystemRunParamsForForwarding>>,
     code: string,
     messageSubstring?: string,
@@ -206,14 +218,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expect(result.details?.code).toBe(code);
   }
 
-  async function reject({
-    code,
-    message,
-    ...opts
-  }: Parameters<typeof forward>[0] & { code: string; message?: string }) {
-    expectRejected(await forward(opts), code, message);
-  }
-
   function makeChatRecord(overrides: Partial<ExecApprovalRecord["request"]> = {}) {
     const agentId =
       typeof overrides.agentId === "string" ? overrides.agentId : defaultChatContext.agentId;
@@ -221,7 +225,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       typeof overrides.sessionKey === "string"
         ? overrides.sessionKey
         : defaultChatContext.sessionKey;
-    const record = makeRecord();
+    const record = makeRecord(echoSafeCommand, echoSafeArgv);
     record.requestedByConnId = "chat-agent-conn";
     record.requestedByDeviceId = null;
     record.requestedByClientId = "gateway-client";
@@ -231,24 +235,50 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       ...defaultChatContext,
       agentId,
       sessionKey,
-      systemRunPlan: runPlan(safeArgv, safeCommand, { agentId, sessionKey }),
-      systemRunBinding: bindRun(safeArgv, { agentId, sessionKey }),
+      systemRunPlan: {
+        argv: echoSafeArgv,
+        cwd: null,
+        commandText: echoSafeCommand,
+        agentId,
+        sessionKey,
+      },
+      systemRunBinding: systemRunApprovalBinding(echoSafeArgv, { agentId, sessionKey }),
       ...overrides,
     };
     return record;
   }
 
-  function makeNoDeviceUiRecord(requestedByDeviceTokenAuth = false) {
-    return {
-      ...makeRecord(),
-      requestedByConnId: "control-ui-conn",
-      requestedByDeviceId: null,
-      requestedByClientId: "openclaw-control-ui",
-      requestedByDeviceTokenAuth,
-    };
+  function makeNoDeviceUiRecord(
+    overrides: Partial<
+      Pick<
+        ExecApprovalRecord,
+        | "requestedByConnId"
+        | "requestedByDeviceId"
+        | "requestedByClientId"
+        | "requestedByDeviceTokenAuth"
+      >
+    > = {},
+  ) {
+    const record = makeRecord(echoSafeCommand, echoSafeArgv);
+    record.requestedByConnId = overrides.requestedByConnId ?? "control-ui-conn";
+    record.requestedByDeviceId = overrides.requestedByDeviceId ?? null;
+    record.requestedByClientId = overrides.requestedByClientId ?? "openclaw-control-ui";
+    record.requestedByDeviceTokenAuth = overrides.requestedByDeviceTokenAuth ?? false;
+    return record;
   }
 
-  async function replayChat(
+  function approvedChatReplayParams(
+    overrides: Omit<Partial<ApprovedRunParamOverrides>, "command" | "rawCommand"> = {},
+  ) {
+    return approvedRunParams({
+      command: echoSafeArgv,
+      rawCommand: echoSafeCommand,
+      ...defaultChatContext,
+      ...overrides,
+    });
+  }
+
+  async function sanitizeApprovedChatReplay(
     opts: {
       rawParams?: Omit<Partial<ApprovedRunParamOverrides>, "command" | "rawCommand">;
       record?: ExecApprovalRecord;
@@ -256,7 +286,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     } = {},
   ) {
     return await sanitizeSystemRunParamsForForwarding({
-      rawParams: approvedRunParams({ ...safeParams, ...defaultChatContext, ...opts.rawParams }),
+      rawParams: approvedChatReplayParams(opts.rawParams),
       nodeId: "node-1",
       client: opts.client ?? trustedBackendClient,
       execApprovalManager: manager(opts.record ?? makeChatRecord()),
@@ -264,11 +294,20 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   }
 
   test("derives marker-only auto-review provenance from the consumed Gateway record", async () => {
-    const record = makeRecord();
+    const record = makeRecord(echoSafeCommand, echoSafeArgv);
     record.resolutionSource = "auto-review";
-    record.request.systemRunPlan = runPlan();
+    record.request.systemRunPlan = {
+      argv: echoSafeArgv,
+      cwd: null,
+      commandText: echoSafeCommand,
+      agentId: null,
+      sessionKey: null,
+    };
     const approvalManager = manager(record);
-    const rawParams = approvedRunParams(safeParams);
+    const rawParams = approvedRunParams({
+      command: echoSafeArgv,
+      rawCommand: echoSafeCommand,
+    });
     const sanitize = async () =>
       await sanitizeSystemRunParamsForForwarding({
         rawParams,
@@ -285,43 +324,60 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expect(first.params).toMatchObject({ approvalSource: "auto-review" });
     expect(first.params).not.toHaveProperty("approved");
     expect(first.params).not.toHaveProperty("approvalDecision");
-    expectRejected(await sanitize(), "APPROVAL_REQUIRED");
+    expectRejectedForwardingResult(await sanitize(), "APPROVAL_REQUIRED");
   });
 
   test("rejects auto-review provenance when the stored decision is not allow-once", async () => {
-    const record = makeRecord();
+    const record = makeRecord(echoSafeCommand, echoSafeArgv);
     record.decision = "allow-always";
     record.resolutionSource = "auto-review";
-    await reject({ code: "APPROVAL_SOURCE_MISMATCH", record });
+    const result = await sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
+      record,
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_SOURCE_MISMATCH");
   });
 
   test("rejects allow-always when delegated authority closes before forwarding", async () => {
-    const record = makeRecord();
+    const record = makeRecord(echoSafeCommand, echoSafeArgv);
     record.decision = "allow-always";
-    await reject({
-      code: "APPROVAL_REQUIRED",
+    const result = await sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
       record,
       execApprovalManager: {
         getSnapshot: async () => record,
         projectDecisionIfActive: () => null,
       },
     });
+
+    expectRejectedForwardingResult(result, "APPROVAL_REQUIRED");
   });
 
   test("rejects stored auto-review provenance without a canonical execution plan", async () => {
-    const record = makeRecord();
+    const record = makeRecord(echoSafeCommand, echoSafeArgv);
     record.resolutionSource = "auto-review";
-    await reject({ code: "APPROVAL_PLAN_REQUIRED", record });
+    const result = await sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
+      record,
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_PLAN_REQUIRED");
     expect(record.decision).toBe("allow-once");
   });
 
   test("rejects caller-forged auto-review provenance before consuming a record", async () => {
-    const record = makeRecord();
-    await reject({
-      code: "INVALID_APPROVAL_SOURCE",
-      rawParams: { command: safeArgv, rawCommand: safeCommand, approvalSource: "auto-review" },
+    const record = makeRecord(echoSafeCommand, echoSafeArgv);
+    const result = await sanitizeApprovedRun({
+      rawParams: {
+        command: echoSafeArgv,
+        rawCommand: echoSafeCommand,
+        approvalSource: "auto-review",
+      },
       record,
     });
+
+    expectRejectedForwardingResult(result, "INVALID_APPROVAL_SOURCE");
     expect(record.decision).toBe("allow-once");
   });
 
@@ -336,7 +392,10 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       const approvalManager = createTestApprovalManager(testContext, {
         scheduler: createApprovalScheduler().scheduler,
       });
-      const record = approvalManager.create(makeRecord().request, 1_000);
+      const record = approvalManager.create(
+        makeRecord(echoSafeCommand, echoSafeArgv).request,
+        1_000,
+      );
       record.requestedByDeviceId = "dev-1";
       let release: (() => void) | null = null;
       try {
@@ -352,24 +411,24 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
           release?.();
           clock.mockReturnValue(now + 21_000);
         }
-        const replay = () =>
+        const forward = () =>
           sanitizeSystemRunParamsForForwarding({
             nodeId: "node-1",
-            rawParams: approvedRunParams({ command: safeArgv, runId: record.id }),
+            rawParams: approvedRunParams({ command: echoSafeArgv, runId: record.id }),
             client,
             execApprovalManager: approvalManager,
           });
 
-        expect(await replay()).toMatchObject({
+        expect(await forward()).toMatchObject({
           ok: true,
-          params: { command: safeArgv, approved: true, approvalDecision: decision },
+          params: { command: echoSafeArgv, approved: true, approvalDecision: decision },
         });
         if (decision === "allow-once") {
-          expectRejected(await replay(), "APPROVAL_REQUIRED");
+          expectRejectedForwardingResult(await forward(), "APPROVAL_REQUIRED");
         }
         release?.();
         clock.mockReturnValue(Date.now() + 15_000);
-        expectRejected(await replay(), "UNKNOWN_APPROVAL_ID");
+        expectRejectedForwardingResult(await forward(), "UNKNOWN_APPROVAL_ID");
       } finally {
         release?.();
         clock.mockRestore();
@@ -380,9 +439,12 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   test("rejects ask fallback without a canonical execution plan", async () => {
     const record = makeTimedOutRecord();
     delete record.request.systemRunPlan;
-    const result = await forwardFallback({ record });
+    const result = await sanitizeFallbackRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
+      record,
+    });
 
-    expectRejected(result, "APPROVAL_PLAN_REQUIRED");
+    expectRejectedForwardingResult(result, "APPROVAL_PLAN_REQUIRED");
   });
 
   test.for(["timeout", "no-approval-route"] as const)(
@@ -402,21 +464,21 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
         } else {
           expect(await approvalManager.expire(record.id, reason)).toBe(true);
         }
-        const replay = () =>
+        const forward = () =>
           sanitizeSystemRunParamsForForwarding({
             nodeId: "node-1",
-            rawParams: fallbackRunParams({ command: safeArgv, runId: record.id }),
+            rawParams: fallbackRunParams({ command: echoSafeArgv, runId: record.id }),
             client,
             execApprovalManager: approvalManager,
           });
 
-        expect(await replay()).toMatchObject({
+        expect(await forward()).toMatchObject({
           ok: true,
-          params: { command: safeArgv, approvalSource: "ask-fallback" },
+          params: { command: echoSafeArgv, approvalSource: "ask-fallback" },
         });
-        expectRejected(await replay(), "APPROVAL_REQUIRED");
+        expectRejectedForwardingResult(await forward(), "APPROVAL_REQUIRED");
         clock.mockReturnValue(Date.now() + 15_000);
-        expectRejected(await replay(), "UNKNOWN_APPROVAL_ID");
+        expectRejectedForwardingResult(await forward(), "UNKNOWN_APPROVAL_ID");
       } finally {
         clock.mockRestore();
       }
@@ -424,18 +486,32 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   );
 
   test("rejects timed-out fallback without authenticated provenance", async () => {
-    await reject({ code: "APPROVAL_REQUIRED", record: makeTimedOutRecord() });
+    const result = await sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
+      record: makeTimedOutRecord(),
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_REQUIRED");
   });
 
   test("rejects ask-fallback provenance for a human approval", async () => {
-    await reject({
-      code: "APPROVAL_SOURCE_MISMATCH",
-      rawParams: { command: safeArgv, rawCommand: safeCommand, approvalSource: "ask-fallback" },
+    const result = await sanitizeApprovedRun({
+      rawParams: {
+        command: echoSafeArgv,
+        rawCommand: echoSafeCommand,
+        approvalSource: "ask-fallback",
+      },
     });
+
+    expectRejectedForwardingResult(result, "APPROVAL_SOURCE_MISMATCH");
   });
 
   test("rejects timed-out fallback from a client without approval scope", async () => {
-    const result = await forwardFallback({
+    const result = await sanitizeFallbackRun({
+      rawParams: {
+        command: echoSafeArgv,
+        rawCommand: echoSafeCommand,
+      },
       client: {
         ...client,
         connect: { ...client.connect, scopes: ["operator.write"] },
@@ -443,52 +519,68 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       record: makeTimedOutRecord(),
     });
 
-    expectRejected(result, "APPROVAL_REQUIRED");
+    expectRejectedForwardingResult(result, "APPROVAL_REQUIRED");
   });
 
   test("rejects cmd.exe /c trailing-arg mismatch against rawCommand", async () => {
-    await reject({
-      code: "RAW_COMMAND_MISMATCH",
-      message: "rawCommand does not match command",
+    const result = await sanitizeApprovedRun({
       rawParams: {
         command: ["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"],
         rawCommand: "echo",
       },
-      record: makeRecord({ command: "echo" }),
+      record: makeRecord("echo"),
     });
+    expectRejectedForwardingResult(
+      result,
+      "RAW_COMMAND_MISMATCH",
+      "rawCommand does not match command",
+    );
   });
 
   test("rejects env-assignment shell wrapper when approval command omits env prelude", async () => {
-    await reject({
-      code: "APPROVAL_REQUEST_MISMATCH",
-      message: "approval id does not match request",
+    const result = await sanitizeApprovedRun({
       rawParams: {
         command: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo SAFE"],
       },
-      record: makeRecord({ command: safeCommand }),
+      record: makeRecord(echoSafeCommand),
     });
+    expectRejectedForwardingResult(
+      result,
+      "APPROVAL_REQUEST_MISMATCH",
+      "approval id does not match request",
+    );
   });
 
   test("rejects trailing-space argv mismatch against legacy command-only approval", async () => {
-    await reject({
-      code: "APPROVAL_REQUEST_MISMATCH",
-      message: "approval id does not match request",
-      rawParams: { command: ["runner "] },
-      record: makeRecord({ command: "runner" }),
+    const result = await sanitizeApprovedRun({
+      rawParams: {
+        command: ["runner "],
+      },
+      record: makeRecord("runner"),
     });
+    expectRejectedForwardingResult(
+      result,
+      "APPROVAL_REQUEST_MISMATCH",
+      "approval id does not match request",
+    );
   });
 
   test("enforces commandArgv identity when approval includes argv binding", async () => {
-    await reject({
-      code: "APPROVAL_REQUEST_MISMATCH",
-      message: "approval id does not match request",
-      rawParams: { command: safeArgv },
-      record: makeRecord({ command: safeCommand, commandArgv: [safeCommand] }),
+    const result = await sanitizeApprovedRun({
+      rawParams: {
+        command: echoSafeArgv,
+      },
+      record: makeRecord(echoSafeCommand, [echoSafeCommand]),
     });
+    expectRejectedForwardingResult(
+      result,
+      "APPROVAL_REQUEST_MISMATCH",
+      "approval id does not match request",
+    );
   });
 
   test("uses systemRunPlan when approval ownership differs and ignores caller tampering", async () => {
-    const record = makeRecord();
+    const record = makeRecord(echoSafeCommand, echoSafeArgv);
     record.request.agentId = "worker";
     record.request.sessionKey = "agent:worker:subagent:run-1";
     record.request.systemRunPlan = {
@@ -511,7 +603,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       agentId: "main",
       sessionKey: "agent:main:main",
     }).binding;
-    const result = await forward({
+    const result = await sanitizeApprovedRun({
       rawParams: {
         command: ["echo", "PWNED"],
         rawCommand: "echo PWNED",
@@ -535,33 +627,39 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       },
       record,
     });
-    const forwarded = expectAllowed(result);
-    expect(forwarded).toMatchObject({
-      command: ["/usr/bin/echo", "SAFE"],
-      rawCommand: "/usr/bin/echo SAFE",
-      cwd: "/real/cwd",
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      systemRunPlan: {
-        argv: ["/usr/bin/echo", "SAFE"],
-        cwd: "/real/cwd",
-        commandText: "/usr/bin/echo SAFE",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-      },
-    });
-    expect((forwarded.systemRunPlan as Record<string, unknown>).policySnapshot).toEqual({
+    const forwarded = expectAllowOnceForwardingResult(result);
+    expect(forwarded.command).toEqual(["/usr/bin/echo", "SAFE"]);
+    expect(forwarded.rawCommand).toBe("/usr/bin/echo SAFE");
+    const systemRunPlan = forwarded.systemRunPlan as
+      | {
+          argv?: string[];
+          cwd?: string;
+          commandText?: string;
+          agentId?: string;
+          sessionKey?: string;
+          policySnapshot?: unknown;
+        }
+      | undefined;
+    expect(systemRunPlan?.argv).toEqual(["/usr/bin/echo", "SAFE"]);
+    expect(systemRunPlan?.cwd).toBe("/real/cwd");
+    expect(systemRunPlan?.commandText).toBe("/usr/bin/echo SAFE");
+    expect(systemRunPlan?.agentId).toBe("main");
+    expect(systemRunPlan?.sessionKey).toBe("agent:main:main");
+    expect(systemRunPlan?.policySnapshot).toEqual({
       security: "allowlist",
       ask: "on-miss",
       askFallback: "deny",
       autoAllowSkills: false,
       allowlistRules: [{ pattern: "/usr/bin/echo" }],
     });
+    expect(forwarded.cwd).toBe("/real/cwd");
+    expect(forwarded.agentId).toBe("main");
+    expect(forwarded.sessionKey).toBe("agent:main:main");
   });
 
   test("forwards a validated shell preview for legacy node allowlist matching", async () => {
     const argv = ["/bin/sh", "-lc", "/bin/hostname"];
-    const record = makeRecord({ command: '/bin/sh -lc "/bin/hostname"', commandArgv: argv });
+    const record = makeRecord('/bin/sh -lc "/bin/hostname"', argv);
     record.request.systemRunPlan = {
       argv,
       cwd: null,
@@ -570,12 +668,12 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       agentId: "main",
       sessionKey: "agent:main:main",
     };
-    record.request.systemRunBinding = bindRun(argv, {
+    record.request.systemRunBinding = systemRunApprovalBinding(argv, {
       agentId: "main",
       sessionKey: "agent:main:main",
     });
 
-    const result = await forward({
+    const result = await sanitizeApprovedRun({
       rawParams: {
         command: argv,
         rawCommand: "/bin/hostname",
@@ -585,7 +683,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       record,
     });
 
-    const forwarded = expectAllowed(result);
+    const forwarded = expectAllowOnceForwardingResult(result);
     expect(forwarded.command).toEqual(argv);
     expect(forwarded.rawCommand).toBe("/bin/hostname");
   });
@@ -593,35 +691,40 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   test("keeps canonical wrapper text when the plan preview does not match argv", async () => {
     const argv = ["/bin/sh", "-lc", "/bin/hostname"];
     const commandText = '/bin/sh -lc "/bin/hostname"';
-    const record = makeRecord({ command: commandText, commandArgv: argv });
-    record.request.systemRunPlan = runPlan(argv, commandText, {
+    const record = makeRecord(commandText, argv);
+    record.request.systemRunPlan = {
+      argv,
+      cwd: null,
+      commandText,
       commandPreview: "/usr/bin/whoami",
-    });
-    record.request.systemRunBinding = bindRun(argv);
+      agentId: null,
+      sessionKey: null,
+    };
+    record.request.systemRunBinding = systemRunApprovalBinding(argv);
 
-    const result = await forward({
+    const result = await sanitizeApprovedRun({
       rawParams: { command: argv, rawCommand: commandText },
       record,
     });
 
-    const forwarded = expectAllowed(result);
+    const forwarded = expectAllowOnceForwardingResult(result);
     expect(forwarded.rawCommand).toBe(commandText);
   });
 
   test("rejects env overrides when approval record lacks env binding", async () => {
-    await reject({
-      code: "APPROVAL_ENV_BINDING_MISSING",
+    const result = await sanitizeApprovedRun({
       rawParams: {
         command: ["git", "diff"],
         rawCommand: "git diff",
         env: { GIT_EXTERNAL_DIFF: "/tmp/pwn.sh" },
       },
-      record: makeRecord({ command: "git diff", commandArgv: ["git", "diff"] }),
+      record: makeRecord("git diff", ["git", "diff"]),
     });
+    expectRejectedForwardingResult(result, "APPROVAL_ENV_BINDING_MISSING");
   });
 
   test("rejects env hash mismatch", async () => {
-    const record = makeRecord({ command: "git diff", commandArgv: ["git", "diff"] });
+    const record = makeRecord("git diff", ["git", "diff"]);
     record.request.systemRunBinding = {
       argv: ["git", "diff"],
       cwd: null,
@@ -629,8 +732,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       sessionKey: null,
       envHash: buildSystemRunApprovalEnvBinding({ SAFE: "1" }).envHash,
     };
-    await reject({
-      code: "APPROVAL_ENV_MISMATCH",
+    const result = await sanitizeApprovedRun({
       rawParams: {
         command: ["git", "diff"],
         rawCommand: "git diff",
@@ -638,6 +740,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       },
       record,
     });
+    expectRejectedForwardingResult(result, "APPROVAL_ENV_MISMATCH");
   });
 
   test("consumes allow-once approvals and blocks same runId replay", async (testContext) => {
@@ -690,31 +793,27 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   });
 
   test("rejects approval ids that do not bind a nodeId", async () => {
-    const record = makeRecord({ command: safeCommand });
+    const record = makeRecord(echoSafeCommand);
     record.request.nodeId = null;
-    await reject({
-      code: "APPROVAL_NODE_BINDING_MISSING",
-      message: "missing node binding",
-      rawParams: { command: safeArgv },
+    const result = await sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv },
       record,
     });
+    expectRejectedForwardingResult(result, "APPROVAL_NODE_BINDING_MISSING", "missing node binding");
   });
 
   test("rejects approval ids replayed against a different nodeId", async () => {
-    await reject({
-      code: "APPROVAL_NODE_MISMATCH",
-      message: "not valid for this node",
-      rawParams: { command: safeArgv },
+    const result = await sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv },
       nodeId: "node-2",
-      record: makeRecord({ command: safeCommand }),
+      record: makeRecord(echoSafeCommand),
     });
+    expectRejectedForwardingResult(result, "APPROVAL_NODE_MISMATCH", "not valid for this node");
   });
 
   test("rejects approval ids replayed from a different device token binding", async () => {
-    await reject({
-      code: "APPROVAL_DEVICE_MISMATCH",
-      message: "not valid for this device",
-      rawParams: { command: safeArgv },
+    const result = await sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv },
       client: {
         ...client,
         connect: {
@@ -722,35 +821,41 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
           device: { id: "dev-2" },
         },
       },
-      record: makeRecord({ command: safeCommand }),
+      record: makeRecord(echoSafeCommand),
     });
+
+    expectRejectedForwardingResult(result, "APPROVAL_DEVICE_MISMATCH", "not valid for this device");
   });
 
   test("accepts trusted backend replay for no-device approval after the request connection changes", async () => {
-    const result = await forward({
+    const result = await sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
       client: trustedBackendClient,
       record: makeNoDeviceUiRecord(),
     });
 
-    expectAllowed(result);
+    expectAllowOnceForwardingResult(result);
   });
 
   test("rejects no-device approval replay from a backend client without approval scope", async () => {
-    await reject({
-      code: "APPROVAL_CLIENT_MISMATCH",
-      message: "not valid for this client",
+    const result = await sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
       client: {
         ...trustedBackendClient,
-        connect: { ...trustedBackendClient.connect, scopes: ["operator.write"] },
+        connect: {
+          ...trustedBackendClient.connect,
+          scopes: ["operator.write"],
+        },
       },
       record: makeNoDeviceUiRecord(),
     });
+
+    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
   });
 
   test("rejects no-device approval replay from a non-backend client on a different connection", async () => {
-    await reject({
-      code: "APPROVAL_CLIENT_MISMATCH",
-      message: "not valid for this client",
+    const result = await sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
       client: {
         connId: "other-control-ui-conn",
         connect: {
@@ -761,13 +866,15 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       },
       record: makeNoDeviceUiRecord(),
     });
+
+    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
   });
 
   test("accepts trusted backend chat replay from a non-bridgeable agent client when stable requester metadata matches", async () => {
     const record = makeChatRecord();
     record.requestedByClientId = "chat-agent";
 
-    const forwarded = expectAllowed(await replayChat({ record }));
+    const forwarded = expectAllowOnceForwardingResult(await sanitizeApprovedChatReplay({ record }));
     expect(forwarded).not.toHaveProperty("turnSourceChannel");
     expect(forwarded).not.toHaveProperty("turnSourceTo");
     expect(forwarded).not.toHaveProperty("turnSourceAccountId");
@@ -782,12 +889,12 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       turnSourceAccountId: null,
       turnSourceThreadId: null,
     } satisfies Omit<Partial<ApprovedRunParamOverrides>, "command" | "rawCommand">;
-    const result = await replayChat({
+    const result = await sanitizeApprovedChatReplay({
       record: makeChatRecord(webchatContext),
       rawParams: webchatContext,
     });
 
-    expectAllowed(result);
+    expectAllowOnceForwardingResult(result);
   });
 
   test.each([
@@ -797,17 +904,22 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   ] satisfies Array<[string, Omit<Partial<ApprovedRunParamOverrides>, "command" | "rawCommand">]>)(
     "rejects trusted backend chat replay when %s",
     async (_label, rawParams) => {
-      const result = await replayChat({ rawParams });
-      expectRejected(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
+      const result = await sanitizeApprovedChatReplay({ rawParams });
+      expectRejectedForwardingResult(
+        result,
+        "APPROVAL_CLIENT_MISMATCH",
+        "not valid for this client",
+      );
     },
   );
 
   test("rejects no-device approval replay when the original request used device-token auth", async () => {
-    await reject({
-      code: "APPROVAL_CLIENT_MISMATCH",
-      message: "not valid for this client",
+    const result = await sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
       client: trustedBackendClient,
-      record: makeNoDeviceUiRecord(true),
+      record: makeNoDeviceUiRecord({ requestedByDeviceTokenAuth: true }),
     });
+
+    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
   });
 });

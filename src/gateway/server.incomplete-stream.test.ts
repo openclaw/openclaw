@@ -3,11 +3,6 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
-  closeHttpServer,
-  listenLoopback,
-  readRequestText,
-} from "../../test/helpers/gateway-integration-fixtures.js";
-import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
@@ -28,6 +23,7 @@ const cases = [
 type Scenario = (typeof cases)[number];
 type ChatMessage = {
   role: string;
+  stopReason?: string;
   content: unknown;
   openclawRunError?: { runId: string; summary: string };
 };
@@ -40,52 +36,62 @@ it(
     let scenario: Scenario = "started-text";
     let requests: unknown[] = [];
     const events: unknown[] = [];
-    const provider = createServer(async (request, response) => {
-      const payload: unknown = JSON.parse(await readRequestText(request));
-      requests.push({ method: request.method, url: request.url, payload });
-      const tool =
-        scenario.endsWith("tool") && (scenario !== "compatible-tool" || requests.length === 1);
-      const complete = scenario.startsWith("complete") || scenario.startsWith("compatible");
-      const frames: unknown[] = [];
-      const frame = (type: string, fields: Record<string, unknown> = {}) =>
-        frames.push({ type, ...fields });
-      frame("message_start", {
-        message: {
-          id: `msg_${requests.length}`,
-          type: "message",
-          role: "assistant",
-          model: "stream-fixture",
-          content: [],
-          stop_reason: null,
-          usage: { input_tokens: 10, output_tokens: 0 },
-        },
+    const provider = createServer((request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => {
+        body += chunk;
       });
-      frame("content_block_start", {
-        index: 0,
-        content_block: tool
-          ? { type: "tool_use", id: "call_read_fixture", name: "read", input: {} }
-          : { type: "text", text: "" },
-      });
-      frame("content_block_delta", {
-        index: 0,
-        delta: tool
-          ? { type: "input_json_delta", partial_json: JSON.stringify({ path: fixture }) }
-          : { type: "text_delta", text: complete ? "COMPLETE_REPLY_MARKER" : "Partial answer" },
-      });
-      if (!scenario.startsWith("started")) {
-        frame("content_block_stop", { index: 0 });
-      }
-      if (complete) {
-        frame("message_delta", {
-          delta: { stop_reason: tool ? "tool_use" : "end_turn" },
-          usage: { output_tokens: 4 },
+      request.on("end", () => {
+        const payload: unknown = JSON.parse(body);
+        requests.push({ method: request.method, url: request.url, payload });
+        const tool =
+          scenario.endsWith("tool") && (scenario !== "compatible-tool" || requests.length === 1);
+        const complete = scenario.startsWith("complete") || scenario.startsWith("compatible");
+        const frames: unknown[] = [
+          {
+            type: "message_start",
+            message: {
+              id: `msg_${requests.length}`,
+              type: "message",
+              role: "assistant",
+              model: "stream-fixture",
+              content: [],
+              stop_reason: null,
+              usage: { input_tokens: 10, output_tokens: 0 },
+            },
+          },
+        ];
+        frames.push({
+          type: "content_block_start",
+          index: 0,
+          content_block: tool
+            ? { type: "tool_use", id: "call_read_fixture", name: "read", input: {} }
+            : { type: "text", text: "" },
         });
-      }
-      if (scenario === "complete-text") {
-        frame("message_stop");
-      }
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end(frames.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
+        frames.push({
+          type: "content_block_delta",
+          index: 0,
+          delta: tool
+            ? { type: "input_json_delta", partial_json: JSON.stringify({ path: fixture }) }
+            : { type: "text_delta", text: complete ? "COMPLETE_REPLY_MARKER" : "Partial answer" },
+        });
+        if (!scenario.startsWith("started")) {
+          frames.push({ type: "content_block_stop", index: 0 });
+        }
+        if (complete) {
+          frames.push({
+            type: "message_delta",
+            delta: { stop_reason: tool ? "tool_use" : "end_turn" },
+            usage: { output_tokens: 4 },
+          });
+        }
+        if (scenario === "complete-text") {
+          frames.push({ type: "message_stop" });
+        }
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(""));
+      });
     });
     let gateway: OpenClawTestInstance | undefined;
     let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
@@ -120,7 +126,13 @@ it(
         );
         fixture = path.join(workspace, "fixture.txt");
         await fs.writeFile(fixture, "COMPLETE_TOOL_READ_MARKER");
-        const baseUrl = await listenLoopback(provider);
+        await new Promise<void>((resolve) => {
+          provider.listen(0, "127.0.0.1", resolve);
+        });
+        const address = provider.address();
+        if (!address || typeof address === "string") {
+          throw new Error("loopback provider did not bind");
+        }
         await gateway.state.writeConfig({
           agents: {
             defaults: {
@@ -134,13 +146,17 @@ it(
             mode: "replace",
             providers: {
               "stream-fixture": {
-                baseUrl,
+                baseUrl: `http://127.0.0.1:${address.port}`,
                 apiKey: "local-fixture-key",
                 api: "anthropic-messages",
                 models: [
                   {
                     id: "stream-fixture",
                     name: "Stream fixture",
+                    api: "anthropic-messages",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                     contextWindow: 200_000,
                     maxTokens: 4096,
                   },
@@ -151,7 +167,7 @@ it(
           gateway: { auth: { mode: "token", token: gateway.gatewayToken } },
         });
         await gateway.startGateway();
-        const connected = await connectGatewayClient({
+        client = await connectGatewayClient({
           url: gateway.url,
           token: gateway.gatewayToken,
           signal,
@@ -160,66 +176,87 @@ it(
             events.push(event);
           },
         });
-        client = connected;
-        const rpc = <T>(
-          method: string,
-          params: Record<string, unknown>,
-          options: { timeoutMs?: number } = {},
-        ) => connected.request<T>(method, params, { signal, ...options });
         for (scenario of cases) {
           requests = [];
           events.length = 0;
           const sessionKey = `agent:main:stream-${scenario}`;
-          const started = await rpc<{ runId: string; status: string }>("chat.send", {
-            sessionKey,
-            message: "Read fixture.txt and report the result.",
-            deliver: false,
-            idempotencyKey: `stream-${scenario}`,
-          });
+          const started = await client.request<{ runId: string; status: string }>(
+            "chat.send",
+            {
+              sessionKey,
+              message: "Read fixture.txt and report the result.",
+              deliver: false,
+              idempotencyKey: `stream-${scenario}`,
+            },
+            { signal },
+          );
           expect(started.status).toBe("started");
-          const waited = await rpc<{ status: string }>(
+          const waited = await client.request<{ status: string }>(
             "agent.wait",
             { runId: started.runId, timeoutMs: 60_000 },
-            { timeoutMs: 65_000 },
+            { timeoutMs: 65_000, signal },
           );
           expect(waited.status, scenario).not.toBe("timeout");
-          const history = await rpc<{ messages: ChatMessage[] }>("chat.history", {
-            sessionKey,
-            limit: 30,
-          });
+          const history = await client.request<{ messages: ChatMessage[] }>(
+            "chat.history",
+            { sessionKey, limit: 30 },
+            { signal },
+          );
           const assistant = history.messages.findLast((message) => message.role === "assistant");
           const toolResults = history.messages.filter((message) => message.role === "toolResult");
-          const check = <T>(value: T) => expect.soft(value, scenario);
-          const chatEvent = (state: string) =>
-            expect.objectContaining({
-              event: "chat",
-              payload: expect.objectContaining({ runId: started.runId, state }),
-            });
+          console.log(
+            JSON.stringify({
+              scenario,
+              status: waited.status,
+              stopReason: assistant?.stopReason,
+              requests: requests.length,
+              toolResults: toolResults.length,
+              content: assistant?.content,
+            }),
+          );
           if (scenario.startsWith("started") || scenario.startsWith("sealed")) {
-            check(waited.status).toBe("error");
-            check(
-              history.messages.filter(
-                (message) => message.openclawRunError?.runId === started.runId,
-              ),
-            ).toEqual([
-              expect.objectContaining({
-                role: "custom",
-                openclawRunError: { runId: started.runId, summary: expect.stringMatching(/\S/) },
-              }),
-            ]);
+            expect.soft(waited.status, scenario).toBe("error");
+            expect
+              .soft(
+                history.messages.filter(
+                  (message) => message.openclawRunError?.runId === started.runId,
+                ),
+                scenario,
+              )
+              .toEqual([
+                expect.objectContaining({
+                  role: "custom",
+                  openclawRunError: {
+                    runId: started.runId,
+                    summary: expect.stringMatching(/\S/),
+                  },
+                }),
+              ]);
             if (scenario.endsWith("text")) {
-              check(JSON.stringify(assistant?.content)).toContain("Partial answer");
+              expect.soft(JSON.stringify(assistant?.content), scenario).toContain("Partial answer");
             }
-            check(toolResults).toHaveLength(0);
-            check(events).toContainEqual(chatEvent("error"));
-            check(events).not.toContainEqual(chatEvent("final"));
+            expect.soft(toolResults, scenario).toHaveLength(0);
+            expect.soft(events, scenario).toContainEqual(
+              expect.objectContaining({
+                event: "chat",
+                payload: expect.objectContaining({ runId: started.runId, state: "error" }),
+              }),
+            );
+            expect.soft(events, scenario).not.toContainEqual(
+              expect.objectContaining({
+                event: "chat",
+                payload: expect.objectContaining({ runId: started.runId, state: "final" }),
+              }),
+            );
           } else {
-            check(waited.status).toBe("ok");
-            check(JSON.stringify(assistant?.content)).toContain("COMPLETE_REPLY_MARKER");
-            check(requests).toHaveLength(scenario === "compatible-tool" ? 2 : 1);
-            check(toolResults).toHaveLength(scenario === "compatible-tool" ? 1 : 0);
+            expect.soft(waited.status, scenario).toBe("ok");
+            expect
+              .soft(JSON.stringify(assistant?.content), scenario)
+              .toContain("COMPLETE_REPLY_MARKER");
+            expect.soft(requests, scenario).toHaveLength(scenario === "compatible-tool" ? 2 : 1);
+            expect.soft(toolResults, scenario).toHaveLength(scenario === "compatible-tool" ? 1 : 0);
             if (scenario === "compatible-tool") {
-              check(JSON.stringify(requests[1])).toContain("COMPLETE_TOOL_READ_MARKER");
+              expect.soft(JSON.stringify(requests[1])).toContain("COMPLETE_TOOL_READ_MARKER");
             }
           }
         }
@@ -236,7 +273,10 @@ it(
         if (!provider.listening) {
           return;
         }
-        await closeHttpServer(provider);
+        provider.closeAllConnections();
+        await new Promise<void>((resolve, reject) => {
+          provider.close((error) => (error ? reject(error) : resolve()));
+        });
       },
     );
   },

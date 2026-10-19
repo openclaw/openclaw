@@ -16,16 +16,18 @@ vi.mock("./shared.js", async (original) => ({
   resolveUpdateRoot: mocks.root,
   tryWriteCompletionCache: async () => "skipped",
 }));
+// mock-isolation: repair fixtures must not run real plugin updates.
 vi.mock("./update-command-plugins.js", () => ({ updatePluginsAfterCoreUpdate: mocks.plugins }));
 vi.mock("./update-command-fresh-doctor.js", async (original) => ({
   ...(await original<typeof import("./update-command-fresh-doctor.js")>()),
   runUpdateFinalizationDoctorInFreshProcess: mocks.doctor,
   completePostCorePluginUpdate: mocks.convergence,
 }));
-// Keep public selection, finalization, SQLite and leases real; process proofs live elsewhere.
+// mock-isolation: keep selection, finalization and SQLite real without live Doctor maintenance.
 vi.mock("../../commands/doctor-maintenance.js", () => ({
   beginDoctorMaintenance: async () => undefined,
 }));
+// mock-isolation: synthetic triage completion avoids external diagnostic collection.
 vi.mock("../../infra/update-triage.js", () => ({
   prepareUpdateFailureTriage: async () => async () => ({ status: "completed", hint: "" }),
 }));

@@ -28,6 +28,7 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
   resolveExecApprovalsLocked: async () => createExecApprovals(),
 }));
 
+// mock-isolation: emulate command output without launching real supervised processes.
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
     spawn: async (input: {

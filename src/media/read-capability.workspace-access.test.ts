@@ -39,12 +39,14 @@ async function workspaceFixture() {
   await fs.writeFile(file, "stale Gateway copy");
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "gateway-state"));
   const cfg = { agents: { entries: { writer: { workspace } } } };
-  const reader = vi.fn(async (_file: string, maxBytes: number) => {
-    if (harnessBytes.length > maxBytes) {
-      throw new Error("Remote media exceeds maxBytes");
-    }
-    return Buffer.from(harnessBytes);
-  });
+  const reader = vi.fn<NonNullable<AgentWorkspaceAccess["outboundMedia"]>["readFile"]>(
+    async (_file, maxBytes) => {
+      if (harnessBytes.length > maxBytes) {
+        throw new Error("Remote media exceeds maxBytes");
+      }
+      return Buffer.from(harnessBytes);
+    },
+  );
   const host: AgentWorkspaceAccess = {
     bridge: {
       readFile: vi

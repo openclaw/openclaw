@@ -14,6 +14,7 @@ import type { SecurityAuditFinding } from "./audit.types.js";
 
 const skillHeader = "---\nname: evil-skill\ndescription: test skill\n---\n\n";
 
+// mock-isolation: expose only the synthetic skill under audit, not host skill discovery.
 vi.mock("../skills/loading/workspace-skill-loader.js", () => {
   const loadWorkspaceSkills = (workspaceDir: string) => {
     const sep = workspaceDir.includes("\\") ? "\\" : "/";
