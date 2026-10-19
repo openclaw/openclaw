@@ -1,6 +1,5 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-// Mattermost tests cover the action-to-REST send path over loopback.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
@@ -23,12 +22,24 @@ vi.mock("./mattermost/runtime-api.js", async () => ({
   loadOutboundMediaFromUrl,
 }));
 
-async function sendPreparedMattermostLoopback(params: {
-  cfg: OpenClawConfig;
-  actionParams: Record<string, unknown>;
-}) {
-  const to = typeof params.actionParams.to === "string" ? params.actionParams.to.trim() : "";
-  const text = typeof params.actionParams.message === "string" ? params.actionParams.message : "";
+function loopbackConfig(baseUrl: string, botToken = "loopback-fixture"): OpenClawConfig {
+  return {
+    channels: {
+      mattermost: {
+        baseUrl,
+        botToken,
+        network: { dangerouslyAllowPrivateNetwork: true },
+      },
+    },
+  };
+}
+
+async function sendPreparedMattermostLoopback(
+  cfg: OpenClawConfig,
+  actionParams: Record<string, unknown>,
+) {
+  const to = typeof actionParams.to === "string" ? actionParams.to.trim() : "";
+  const text = typeof actionParams.message === "string" ? actionParams.message : "";
   const prepareSendPayload = mattermostPlugin.actions?.prepareSendPayload;
   const sendPayload = mattermostPlugin.outbound?.sendPayload;
   if (!to || !prepareSendPayload || !sendPayload) {
@@ -38,8 +49,8 @@ async function sendPreparedMattermostLoopback(params: {
     ctx: {
       channel: "mattermost",
       action: "send",
-      params: params.actionParams,
-      cfg: params.cfg,
+      params: actionParams,
+      cfg,
       accountId: "default",
     },
     to,
@@ -49,7 +60,7 @@ async function sendPreparedMattermostLoopback(params: {
     throw new Error("Mattermost send preparation declined");
   }
   return await sendPayload({
-    cfg: params.cfg,
+    cfg,
     to,
     text,
     payload,
@@ -58,6 +69,15 @@ async function sendPreparedMattermostLoopback(params: {
 }
 
 type LoopbackRequest = { path: string; body: string };
+
+function expectPost(requests: LoopbackRequest[], message: string) {
+  expect(requests).toEqual([
+    {
+      path: "/api/v4/posts",
+      body: JSON.stringify({ channel_id: CHANNEL_ID, message }),
+    },
+  ]);
+}
 
 async function withMattermostServer(
   run: (cfg: OpenClawConfig, requests: LoopbackRequest[]) => Promise<void>,
@@ -85,18 +105,7 @@ async function withMattermostServer(
     },
     async (baseUrl) => {
       setMattermostRuntime(createPluginRuntimeMock());
-      await run(
-        {
-          channels: {
-            mattermost: {
-              botToken: "loopback-fixture",
-              baseUrl,
-              network: { dangerouslyAllowPrivateNetwork: true },
-            },
-          },
-        },
-        requests,
-      );
+      await run(loopbackConfig(baseUrl), requests);
     },
   );
 }
@@ -121,45 +130,29 @@ describe("Mattermost send action loopback", () => {
         messageIds: ["post-loopback"],
         visibleReplySent: true,
       });
-      expect(requests).toEqual([
-        {
-          path: "/api/v4/posts",
-          body: JSON.stringify({ channel_id: CHANNEL_ID, message: "prepared direct reply" }),
-        },
-      ]);
+      expectPost(requests, "prepared direct reply");
     });
   });
 
   it("sends text with blank attachment placeholders and rejects nonblank payloads", async () => {
     await withMattermostServer(async (cfg, requests) => {
-      const result = await sendPreparedMattermostLoopback({
-        cfg,
-        actionParams: {
-          to: "channel:" + CHANNEL_ID,
-          message: "loopback proof",
-          buffer: "",
-          base64: "  ",
-        },
+      const result = await sendPreparedMattermostLoopback(cfg, {
+        to: "channel:" + CHANNEL_ID,
+        message: "loopback proof",
+        buffer: "",
+        base64: "  ",
       });
       expect(result).toMatchObject({
         channel: "mattermost",
         messageId: "post-loopback",
         target: { kind: "channel", id: CHANNEL_ID },
       });
-      expect(requests).toEqual([
-        {
-          path: "/api/v4/posts",
-          body: JSON.stringify({ channel_id: CHANNEL_ID, message: "loopback proof" }),
-        },
-      ]);
+      expectPost(requests, "loopback proof");
       await expect(
-        sendPreparedMattermostLoopback({
-          cfg,
-          actionParams: {
-            to: "channel:" + CHANNEL_ID,
-            message: "must not send",
-            base64: "cmVwb3J0",
-          },
+        sendPreparedMattermostLoopback(cfg, {
+          to: "channel:" + CHANNEL_ID,
+          message: "must not send",
+          base64: "cmVwb3J0",
         }),
       ).rejects.toThrow("buffer/base64 payloads are not supported");
       expect(requests).toHaveLength(1);
@@ -174,13 +167,10 @@ describe("Mattermost send action loopback", () => {
         contentType: "image/png",
         kind: "image",
       });
-      await sendPreparedMattermostLoopback({
-        cfg,
-        actionParams: {
-          to: "channel:" + CHANNEL_ID,
-          message: "loopback media proof",
-          mediaUrl: "https://media.example.test/unnamed",
-        },
+      await sendPreparedMattermostLoopback(cfg, {
+        to: "channel:" + CHANNEL_ID,
+        message: "loopback media proof",
+        mediaUrl: "https://media.example.test/unnamed",
       });
       const uploads = requests.filter(({ path }) => path === "/api/v4/files");
       expect(uploads).toHaveLength(1);
@@ -277,15 +267,7 @@ describe("Mattermost sender authority over HTTP", () => {
             sequence.push("dispatch");
           });
           const ctx: MattermostSendContext = {
-            cfg: {
-              channels: {
-                mattermost: {
-                  baseUrl,
-                  botToken: token,
-                  network: { dangerouslyAllowPrivateNetwork: true },
-                },
-              },
-            },
+            cfg: loopbackConfig(baseUrl, token),
             to: mode === "text" ? "@alice" : `channel:${CHANNEL_ID}`,
             text: "authority proof",
             threadId: "thread-root",
