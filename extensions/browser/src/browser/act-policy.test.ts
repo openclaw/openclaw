@@ -3,6 +3,20 @@ import { describe, expect, it } from "vitest";
 import { resolveBrowserActRequestTimeoutMs } from "./act-policy.js";
 import type { BrowserActRequest } from "./client-actions.types.js";
 
+const wait = {
+  kind: "wait",
+  text: "ready",
+  textGone: "loading",
+  selector: "#result",
+  url: "**/done",
+  loadState: "networkidle",
+  fn: "() => true",
+} as const;
+function expectTimeout(request: BrowserActRequest, expected: number) {
+  expect(resolveBrowserActRequestTimeoutMs(request)).toBe(expected);
+}
+const batch = (actions: BrowserActRequest[]): BrowserActRequest => ({ kind: "batch", actions });
+
 describe("browser action request deadlines", () => {
   it("sums the delay and every sequential wait condition", () => {
     expect(
@@ -21,27 +35,12 @@ describe("browser action request deadlines", () => {
   });
 
   it("normalizes each condition timeout before multiplication", () => {
-    const wait = {
-      kind: "wait",
-      text: "ready",
-      textGone: "loading",
-      selector: "#result",
-      url: "**/done",
-      loadState: "networkidle",
-      fn: "() => true",
-    } as const;
-
-    expect(resolveBrowserActRequestTimeoutMs({ ...wait, timeoutMs: 1 })).toBe(8_000);
-    expect(
-      resolveBrowserActRequestTimeoutMs({
-        kind: "batch",
-        actions: [{ ...wait, timeoutMs: Number.MAX_VALUE }],
-      }),
-    ).toBe(725_000);
+    expectTimeout({ ...wait, timeoutMs: 1 }, 8_000);
+    expectTimeout(batch([{ ...wait, timeoutMs: Number.MAX_VALUE }]), 725_000);
   });
 
   it("keeps Playwright text whitespace in sequential batch budgets", () => {
-    const wait = {
+    const whitespaceWait = {
       kind: "wait",
       timeMs: 0,
       text: " ",
@@ -50,12 +49,7 @@ describe("browser action request deadlines", () => {
       url: " ",
       fn: " ",
     } as const;
-    expect(
-      resolveBrowserActRequestTimeoutMs({
-        kind: "batch",
-        actions: [wait, wait],
-      }),
-    ).toBe(85_000);
+    expectTimeout(batch([whitespaceWait, whitespaceWait]), 85_000);
   });
 
   it("recursively sums nested batch children in execution order", () => {
@@ -85,49 +79,42 @@ describe("browser action request deadlines", () => {
   });
 
   it("budgets sequential leaf phases and bounded delays", () => {
-    expect(
-      resolveBrowserActRequestTimeoutMs({
-        kind: "batch",
-        actions: [
-          {
-            kind: "fill",
-            fields: [
-              { ref: "first", type: "text" },
-              { ref: "second", type: "text" },
-            ],
-            timeoutMs: 40_000,
-          },
-        ],
-      }),
-    ).toBe(85_500);
-    expect(
-      resolveBrowserActRequestTimeoutMs({
+    expectTimeout(
+      batch([
+        {
+          kind: "fill",
+          fields: [
+            { ref: "first", type: "text" },
+            { ref: "second", type: "text" },
+          ],
+          timeoutMs: 40_000,
+        },
+      ]),
+      85_500,
+    );
+    expectTimeout(
+      {
         kind: "type",
         ref: "field",
         text: "value",
         slowly: true,
         submit: true,
         timeoutMs: 60_000,
-      }),
-    ).toBe(185_250);
-    expect(
-      resolveBrowserActRequestTimeoutMs({
-        kind: "click",
-        ref: "button",
-        delayMs: 5_000,
-        timeoutMs: 20_000,
-      }),
-    ).toBe(50_250);
-    expect(
-      resolveBrowserActRequestTimeoutMs({
+      },
+      185_250,
+    );
+    expectTimeout({ kind: "click", ref: "button", delayMs: 5_000, timeoutMs: 20_000 }, 50_250);
+    expectTimeout(
+      {
         kind: "clickCoords",
         x: 10,
         y: 20,
         doubleClick: true,
         delayMs: 5_000,
         timeoutMs: 1_000,
-      }),
-    ).toBe(21_250);
+      },
+      21_250,
+    );
   });
 
   it.each([
@@ -165,46 +152,35 @@ describe("browser action request deadlines", () => {
   });
 
   it("budgets the wider scrollIntoView locator timeout", () => {
-    expect(
-      resolveBrowserActRequestTimeoutMs({
-        kind: "batch",
-        actions: Array.from({ length: 4 }, () => ({
+    expectTimeout(
+      batch(
+        Array.from({ length: 4 }, () => ({
           kind: "scrollIntoView" as const,
           ref: "result",
         })),
-      }),
-    ).toBe(86_000);
-    expect(
-      resolveBrowserActRequestTimeoutMs({
-        kind: "batch",
-        actions: [{ kind: "scrollIntoView", ref: "result", timeoutMs: 120_000 }],
-      }),
-    ).toBe(125_250);
+      ),
+      86_000,
+    );
+    expectTimeout(batch([{ kind: "scrollIntoView", ref: "result", timeoutMs: 120_000 }]), 125_250);
   });
 
   it("leaves malformed model batch validation to the browser route", () => {
-    expect(
-      resolveBrowserActRequestTimeoutMs({
+    expectTimeout(
+      {
         kind: "batch",
         requests: [],
         actions: [{ kind: "wait", selector: 1 }, { kind: "unknown" }, null],
-      } as unknown as BrowserActRequest),
-    ).toBe(65_000);
+      } as unknown as BrowserActRequest,
+      65_000,
+    );
   });
 
   it("saturates aggregate and slack arithmetic at the timer limit", () => {
     const actions: BrowserActRequest[] = Array.from({ length: 3_000 }, () => ({
-      kind: "wait",
-      text: "ready",
-      textGone: "loading",
-      selector: "#result",
-      url: "**/done",
+      ...wait,
       loadState: "load",
-      fn: "() => true",
       timeoutMs: 120_000,
     }));
-    const batch = { kind: "batch", actions } as const;
-
-    expect(resolveBrowserActRequestTimeoutMs(batch)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expectTimeout(batch(actions), MAX_TIMER_TIMEOUT_MS);
   });
 });

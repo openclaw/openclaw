@@ -19,6 +19,7 @@ import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 
 type Message = { id?: number; method?: string; params?: Record<string, unknown> };
 type Reply = { result: Record<string, unknown> } | { error: { message: string } };
+type Handler = (message: Message, path: string) => Reply | undefined;
 const servers: Array<{ close: (callback: () => void) => void }> = [];
 const enabledMethods = new Set([
   "Target.detachFromTarget",
@@ -30,9 +31,17 @@ const enabledMethods = new Set([
   "Runtime.runIfWaitingForDebugger",
 ]);
 const strictPolicy = { dangerouslyAllowPrivateNetwork: false, allowedHostnames: ["127.0.0.1"] };
+const result = (value: Record<string, unknown>): Reply => ({ result: value });
+const frameTree = (frame: Record<string, unknown>) => result({ frameTree: { frame } });
+function createTarget(
+  { cdpUrl }: { cdpUrl: string },
+  options: Partial<Parameters<typeof createTargetViaCdp>[0]> = {},
+) {
+  return createTargetViaCdp({ cdpUrl, url: "https://example.com", ...options });
+}
 
 async function startBrowser(
-  handle: (message: Message, path: string) => Reply | undefined,
+  handle: Handler | Record<string, Reply>,
   options: {
     advertisedUrl?: string;
     versionBody?: Record<string, unknown>;
@@ -63,7 +72,9 @@ async function startBrowser(
       const message = JSON.parse(rawDataToString(raw)) as Message;
       messages.push(message);
       const reply =
-        handle(message, request.url ?? "") ??
+        (typeof handle === "function"
+          ? handle(message, request.url ?? "")
+          : handle[message.method ?? ""]) ??
         (message.method === "Target.attachToTarget"
           ? { result: { sessionId: "S1" } }
           : enabledMethods.has(message.method ?? "")
@@ -109,12 +120,9 @@ afterEach(async () => {
 
 describe("CDP target creation", () => {
   it("opens an explicitly allowed private target in the background and prepares its page", async () => {
-    const browser = await startBrowser((message) =>
-      message.method === "Target.createTarget" ? { result: { targetId: "TARGET" } } : undefined,
-    );
+    const browser = await startBrowser({ "Target.createTarget": result({ targetId: "TARGET" }) });
     await expect(
-      createTargetViaCdp({
-        cdpUrl: browser.cdpUrl,
+      createTarget(browser, {
         url: "http://127.0.0.1:8080",
         ssrfPolicy: { allowPrivateNetwork: true },
       }),
@@ -137,30 +145,24 @@ describe("CDP target creation", () => {
     let frameReads = 0;
     const browser = await startBrowser((message) => {
       if (message.method === "Target.createTarget") {
-        return { result: { targetId: "TARGET" } };
+        return result({ targetId: "TARGET" });
       }
       if (message.method === "Page.getFrameTree") {
         frameReads++;
-        return {
-          result: {
-            frameTree: {
-              frame:
-                frameReads === 1
-                  ? { loaderId: "BLANK", url: "about:blank" }
-                  : {
-                      loaderId: "FINAL",
-                      url: "http://127.0.0.1:61501/blocked",
-                      urlFragment: "#fragment",
-                    },
-            },
-          },
-        };
+        return frameTree(
+          frameReads === 1
+            ? { loaderId: "BLANK", url: "about:blank" }
+            : {
+                loaderId: "FINAL",
+                url: "http://127.0.0.1:61501/blocked",
+                urlFragment: "#fragment",
+              },
+        );
       }
       return undefined;
     });
     await expect(
-      createTargetViaCdp({
-        cdpUrl: browser.cdpUrl,
+      createTarget(browser, {
         url: "https://redirect.example/start",
         waitForNavigationResult: true,
       }),
@@ -182,25 +184,19 @@ describe("CDP target creation", () => {
           if (abortAt === "creation") {
             controller.abort(reason);
           }
-          return { result: { targetId: "TARGET" } };
+          return result({ targetId: "TARGET" });
         }
         if (message.method === "Target.closeTarget") {
-          return closeFails
-            ? { error: { message: "close failed" } }
-            : { result: { success: true } };
+          return closeFails ? { error: { message: "close failed" } } : result({ success: true });
         }
         if (message.method === "Page.getFrameTree") {
           controller.abort(reason);
-          return {
-            result: { frameTree: { frame: { loaderId: "CANCEL", url: "https://example.com" } } },
-          };
+          return frameTree({ loaderId: "CANCEL", url: "https://example.com" });
         }
         return undefined;
       });
       await expect(
-        createTargetViaCdp({
-          cdpUrl: browser.cdpUrl,
-          url: "https://example.com",
+        createTarget(browser, {
           signal: controller.signal,
           waitForNavigationResult: true,
         }),
@@ -218,17 +214,16 @@ describe("CDP target creation", () => {
     const reason = new Error("cancel during endpoint discovery");
     const discovery = Promise.withResolvers<void>();
     let heldResponse: ServerResponse | undefined;
-    const browser = await startBrowser(() => undefined, {
-      discover: (_request, response) => {
-        heldResponse = response;
-        discovery.resolve();
+    const browser = await startBrowser(
+      {},
+      {
+        discover: (_request, response) => {
+          heldResponse = response;
+          discovery.resolve();
+        },
       },
-    });
-    const pending = createTargetViaCdp({
-      cdpUrl: browser.cdpUrl,
-      url: "https://example.com",
-      signal: controller.signal,
-    });
+    );
+    const pending = createTarget(browser, { signal: controller.signal });
     await discovery.promise;
     controller.abort(reason);
     let deadline: ReturnType<typeof setTimeout> | undefined;
@@ -254,8 +249,7 @@ describe("CDP target creation", () => {
 
   it("honors configured HTTP discovery timeouts", async () => {
     const browser = await startBrowser(
-      (message) =>
-        message.method === "Target.createTarget" ? { result: { targetId: "SLOW" } } : undefined,
+      { "Target.createTarget": result({ targetId: "SLOW" }) },
       {
         discover: (_request, response) => {
           setTimeout(() => {
@@ -264,13 +258,9 @@ describe("CDP target creation", () => {
         },
       },
     );
-    await expect(
-      createTargetViaCdp({
-        cdpUrl: browser.cdpUrl,
-        url: "https://example.com",
-        timeouts: { httpTimeoutMs: 20 },
-      }),
-    ).rejects.toThrow(/abort|timeout|timed out/i);
+    await expect(createTarget(browser, { timeouts: { httpTimeoutMs: 20 } })).rejects.toThrow(
+      /abort|timeout|timed out/i,
+    );
   });
 
   it("honors configured WebSocket handshake timeouts", async () => {
@@ -285,11 +275,14 @@ describe("CDP target creation", () => {
     });
     try {
       await expect(
-        createTargetViaCdp({
-          cdpUrl: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/devtools/browser/SLOW`,
-          url: "https://example.com",
-          timeouts: { handshakeTimeoutMs: 20 },
-        }),
+        createTarget(
+          {
+            cdpUrl: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/devtools/browser/SLOW`,
+          },
+          {
+            timeouts: { handshakeTimeoutMs: 20 },
+          },
+        ),
       ).rejects.toThrow(/handshake|timeout|timed out/i);
     } finally {
       for (const socket of heldSockets) {
@@ -318,12 +311,14 @@ describe("CDP target creation", () => {
   );
 
   it("blocks a cross-host websocket pivot returned by discovery", async () => {
-    const browser = await startBrowser(() => undefined, {
-      advertisedUrl: "ws://169.254.169.254:9222/devtools/browser/PIVOT",
-    });
+    const browser = await startBrowser(
+      {},
+      {
+        advertisedUrl: "ws://169.254.169.254:9222/devtools/browser/PIVOT",
+      },
+    );
     await expect(
-      createTargetViaCdp({
-        cdpUrl: browser.cdpUrl,
+      createTarget(browser, {
         url: "https://93.184.216.34",
         ssrfPolicy: strictPolicy,
       }),
@@ -342,10 +337,10 @@ describe("CDP target creation", () => {
   });
 
   it("rejects HTTP discovery without a browser websocket URL", async () => {
-    const browser = await startBrowser(() => undefined, { versionBody: {} });
-    await expect(
-      createTargetViaCdp({ cdpUrl: browser.cdpUrl, url: "https://example.com" }),
-    ).rejects.toThrow("CDP /json/version missing webSocketDebuggerUrl");
+    const browser = await startBrowser({}, { versionBody: {} });
+    await expect(createTarget(browser)).rejects.toThrow(
+      "CDP /json/version missing webSocketDebuggerUrl",
+    );
   });
 
   it.each(["unavailable", "rejected"] as const)(
@@ -357,7 +352,7 @@ describe("CDP target creation", () => {
             return { error: { message: "Browserless endpoint rejected command" } };
           }
           if (message.method === "Target.createTarget") {
-            return { result: { targetId: "FALLBACK" } };
+            return result({ targetId: "FALLBACK" });
           }
           return undefined;
         },
@@ -374,9 +369,8 @@ describe("CDP target creation", () => {
         },
       );
       await expect(
-        createTargetViaCdp({
+        createTarget({
           cdpUrl: browser.cdpUrl.replace("http:", "ws:"),
-          url: "https://example.com",
         }),
       ).resolves.toEqual({ targetId: "FALLBACK" });
     },
@@ -385,21 +379,13 @@ describe("CDP target creation", () => {
 
 describe("CDP committed navigation", () => {
   it("reads the browser frame URL with its fragment", async () => {
-    const browser = await startBrowser((message) =>
-      message.method === "Page.getFrameTree"
-        ? {
-            result: {
-              frameTree: {
-                frame: {
-                  loaderId: "FINAL",
-                  url: "https://example.com/final",
-                  urlFragment: "#section",
-                },
-              },
-            },
-          }
-        : undefined,
-    );
+    const browser = await startBrowser({
+      "Page.getFrameTree": frameTree({
+        loaderId: "FINAL",
+        url: "https://example.com/final",
+        urlFragment: "#section",
+      }),
+    });
     await expect(
       waitForCdpCommittedNavigationUrl({
         wsUrl: browser.wsUrl,
@@ -428,14 +414,12 @@ describe("tracked CDP target closure", () => {
       const browser = await startBrowser(
         (message) => {
           if (message.method === "Target.getTargets") {
-            return {
-              result: {
-                targetInfos: [{ targetId: outcome === "missing" ? "USER" : "OWNED", type: "page" }],
-              },
-            };
+            return result({
+              targetInfos: [{ targetId: outcome === "missing" ? "USER" : "OWNED", type: "page" }],
+            });
           }
           if (message.method === "Target.closeTarget") {
-            return { result: { success: outcome !== "declined" } };
+            return result({ success: outcome !== "declined" });
           }
           return undefined;
         },
@@ -471,7 +455,7 @@ describe("tracked CDP target closure", () => {
   );
 
   it("does not inspect or close targets after browser ownership changes", async () => {
-    const browser = await startBrowser(() => undefined);
+    const browser = await startBrowser({});
     await expect(
       closeTrackedCdpTarget({
         profileName: "remote",

@@ -191,31 +191,11 @@ describe("CDP discovery and ownership", () => {
 });
 
 describe("resolveCdpReachabilityTimeouts", () => {
-  function expectTimeouts(
-    params: Partial<Parameters<typeof resolveCdpReachabilityTimeouts>[0]>,
-    httpTimeoutMs: number,
-    wsTimeoutMs: number,
-  ) {
-    expect(
-      resolveCdpReachabilityTimeouts({
-        profileIsLoopback: false,
-        remoteHttpTimeoutMs: 1500,
-        remoteHandshakeTimeoutMs: 3000,
-        ...params,
-      }),
-    ).toEqual({ httpTimeoutMs, wsTimeoutMs });
-  }
-
-  it("uses loopback defaults when timeout is omitted", () => {
-    expectTimeouts({ profileIsLoopback: true }, 300, 600);
-  });
-
-  it("uses remote defaults when timeout is omitted", () => {
-    expectTimeouts({ remoteHttpTimeoutMs: 1750, remoteHandshakeTimeoutMs: 3250 }, 1750, 3250);
-  });
-
-  it("caps remote reachability timeouts to timer-safe values", () => {
-    expectTimeouts(
+  type Overrides = Partial<Parameters<typeof resolveCdpReachabilityTimeouts>[0]>;
+  it.each([
+    [{ profileIsLoopback: true }, 300, 600],
+    [{ remoteHttpTimeoutMs: 1750, remoteHandshakeTimeoutMs: 3250 }, 1750, 3250],
+    [
       {
         timeoutMs: Number.MAX_SAFE_INTEGER,
         remoteHttpTimeoutMs: Number.MAX_SAFE_INTEGER,
@@ -223,8 +203,20 @@ describe("resolveCdpReachabilityTimeouts", () => {
       },
       MAX_TIMER_TIMEOUT_MS,
       MAX_TIMER_TIMEOUT_MS,
-    );
-  });
+    ],
+  ] satisfies [Overrides, number, number][])(
+    "resolves %j",
+    (params, httpTimeoutMs, wsTimeoutMs) => {
+      expect(
+        resolveCdpReachabilityTimeouts({
+          profileIsLoopback: false,
+          remoteHttpTimeoutMs: 1500,
+          remoteHandshakeTimeoutMs: 3000,
+          ...params,
+        }),
+      ).toEqual({ httpTimeoutMs, wsTimeoutMs });
+    },
+  );
 });
 
 function createProfile(overrides: Partial<ResolvedBrowserProfile> = {}): ResolvedBrowserProfile {
@@ -464,8 +456,7 @@ describe("guarded CDP fetch", () => {
     const cancel = vi
       .spyOn(response.body, "cancel")
       .mockRejectedValueOnce(new Error("cancellation failed"));
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, release });
+    const release = mockResponse(response);
     const checked = await fetchCdpChecked("http://127.0.0.1:9222/json/version");
     await expect(checked.release()).resolves.toBeUndefined();
     await checked.release();
@@ -477,10 +468,7 @@ describe("guarded CDP fetch", () => {
   it("registers a managed-proxy bypass for the exact sanitized fetch URL", async () => {
     const release = vi.fn();
     registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(),
-      release: vi.fn(async () => {}),
-    });
+    mockResponse(new Response());
     const checked = await fetchCdpChecked(
       "http://openclaw:secret@127.0.0.1:9222/json/version",
       undefined,

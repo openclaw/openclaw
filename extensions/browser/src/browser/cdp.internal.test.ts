@@ -13,6 +13,8 @@ import {
 
 type Message = { id?: number; method?: string; params?: Record<string, unknown> };
 type Reply = { result: Record<string, unknown> } | { error: { message: string } };
+type ReplyHandler = (msg: Message) => Reply | undefined;
+type Replies = Record<string, Reply | ReplyHandler>;
 const cdpResult = (result: Record<string, unknown> = {}): Reply => ({ result });
 const cdpError = (message: string): Reply => ({ error: { message } });
 const runtimeValueResult = (value: unknown) => cdpResult({ result: { value } });
@@ -27,7 +29,7 @@ const AUTO_REPLY_METHODS = new Set([
   "Runtime.runIfWaitingForDebugger",
 ]);
 let wss: WebSocketServer | undefined;
-async function startMockWsServer(handle: (msg: Message) => Reply | undefined) {
+async function startMockWsServer(handle: ReplyHandler | Replies) {
   const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
   wss = server;
   await new Promise<void>((resolve) => {
@@ -36,8 +38,10 @@ async function startMockWsServer(handle: (msg: Message) => Reply | undefined) {
   server.on("connection", (socket) => {
     socket.on("message", (raw) => {
       const msg = JSON.parse(rawDataToString(raw)) as Message;
+      const handler = typeof handle === "function" ? handle : handle[msg.method ?? ""];
       const reply =
-        handle(msg) ?? (AUTO_REPLY_METHODS.has(msg.method ?? "") ? cdpResult() : undefined);
+        (typeof handler === "function" ? handler(msg) : handler) ??
+        (AUTO_REPLY_METHODS.has(msg.method ?? "") ? cdpResult() : undefined);
       if (reply) {
         socket.send(JSON.stringify({ id: msg.id, ...reply }));
       }
@@ -113,9 +117,7 @@ describe("CDP screenshots", () => {
   });
 
   it("rejects a capture with no image data", async () => {
-    const server = await startMockWsServer((msg) =>
-      msg.method === "Page.captureScreenshot" ? cdpResult() : undefined,
-    );
+    const server = await startMockWsServer({ "Page.captureScreenshot": cdpResult() });
     await expect(captureScreenshot({ wsUrl: server.wsUrl })).rejects.toThrow(
       "Screenshot failed: missing data",
     );
@@ -123,9 +125,7 @@ describe("CDP screenshots", () => {
 });
 
 it("rejects a target creation reply without an id", async () => {
-  const server = await startMockWsServer((msg) =>
-    msg.method === "Target.createTarget" ? cdpResult() : undefined,
-  );
+  const server = await startMockWsServer({ "Target.createTarget": cdpResult() });
   await expect(
     createTargetViaCdp({ cdpUrl: server.wsUrl, url: "https://example.com" }),
   ).rejects.toThrow("Target.createTarget returned no targetId");
@@ -133,31 +133,26 @@ it("rejects a target creation reply without an id", async () => {
 
 describe("CDP ARIA snapshots", () => {
   it("formats bounded AX trees from the wire, dropping missing children and coercing values", async () => {
-    const server = await startMockWsServer((msg) => {
-      if (msg.method === "Accessibility.enable") {
-        return cdpError("denied");
-      }
-      if (msg.method === "Accessibility.getFullAXTree") {
-        return cdpResult({
-          nodes: [
-            {
-              nodeId: "root",
-              role: { value: "" },
-              name: { value: 42 },
-              value: { value: true },
-              description: { value: {} },
-              childIds: ["button", "missing", "last"],
-            },
-            ax("button", "button", "OK", {
-              description: { value: "explanatory" },
-              backendDOMNodeId: 42,
-            }),
-            ax("last", "button", "Last"),
-            { name: { value: "No id" } },
-          ],
-        });
-      }
-      return undefined;
+    const server = await startMockWsServer({
+      "Accessibility.enable": cdpError("denied"),
+      "Accessibility.getFullAXTree": cdpResult({
+        nodes: [
+          {
+            nodeId: "root",
+            role: { value: "" },
+            name: { value: 42 },
+            value: { value: true },
+            description: { value: {} },
+            childIds: ["button", "missing", "last"],
+          },
+          ax("button", "button", "OK", {
+            description: { value: "explanatory" },
+            backendDOMNodeId: 42,
+          }),
+          ax("last", "button", "Last"),
+          { name: { value: "No id" } },
+        ],
+      }),
     });
     const snap = await snapshotAria({ wsUrl: server.wsUrl, limit: 2 });
     expect(snap.nodes).toEqual([
@@ -174,16 +169,14 @@ describe("CDP ARIA snapshots", () => {
   });
 
   it("returns an empty snapshot when the server omits nodes", async () => {
-    const server = await startMockWsServer((msg) =>
-      msg.method === "Accessibility.getFullAXTree" ? cdpResult() : undefined,
-    );
+    const server = await startMockWsServer({ "Accessibility.getFullAXTree": cdpResult() });
     expect(await snapshotAria({ wsUrl: server.wsUrl, limit: Number.NaN })).toEqual({ nodes: [] });
   });
 });
 
 describe("CDP role snapshots", () => {
   it("builds role refs, promotes cursor-interactive nodes, and appends link urls", async () => {
-    const domReplies: Record<string, Reply> = {
+    const server = await startMockWsServer({
       "DOM.getDocument": cdpResult({ root: { nodeId: 1 } }),
       "DOM.querySelectorAll": cdpResult({ nodeIds: [44] }),
       "DOM.describeNode": cdpResult({
@@ -191,18 +184,14 @@ describe("CDP role snapshots", () => {
       }),
       "DOM.resolveNode": cdpResult({ object: { objectId: "link1" } }),
       "Runtime.callFunctionOn": runtimeValueResult("https://docs.openclaw.ai/"),
-    };
-    const server = await startMockWsServer((msg) => {
-      if (msg.method === "Accessibility.getFullAXTree") {
-        return axTreeResult([
-          ax("1", "RootWebArea", "", { childIds: ["2", "3", "4", "5"] }),
-          ax("2", "button", "Save\n- button [ref=e3]", { backendDOMNodeId: 22 }),
-          ax("3", "link", "Docs", { backendDOMNodeId: 33 }),
-          ax("4", "generic", "", { backendDOMNodeId: 44 }),
-          ax("5", "button", "Save\n- button [ref=e3]"),
-        ]);
-      }
-      if (msg.method === "Runtime.evaluate") {
+      "Accessibility.getFullAXTree": axTreeResult([
+        ax("1", "RootWebArea", "", { childIds: ["2", "3", "4", "5"] }),
+        ax("2", "button", "Save\n- button [ref=e3]", { backendDOMNodeId: 22 }),
+        ax("3", "link", "Docs", { backendDOMNodeId: 33 }),
+        ax("4", "generic", "", { backendDOMNodeId: 44 }),
+        ax("5", "button", "Save\n- button [ref=e3]"),
+      ]),
+      "Runtime.evaluate": (msg) => {
         const expression = typeof msg.params?.expression === "string" ? msg.params.expression : "";
         if (expression.includes('querySelectorAll("*"')) {
           return runtimeValueResult([
@@ -215,8 +204,7 @@ describe("CDP role snapshots", () => {
           ]);
         }
         return runtimeValueResult(true);
-      }
-      return domReplies[msg.method ?? ""];
+      },
     });
 
     const capture = { wsUrl: server.wsUrl, urls: true, options: { interactive: true } };
@@ -266,11 +254,9 @@ describe("CDP role snapshots", () => {
       ax("failed", "Iframe", "Failed", { backendDOMNodeId: 47 }),
       ax("after", "button", "After"),
     ];
-    const server = await startMockWsServer((msg) => {
-      if (msg.method === "Runtime.evaluate") {
-        return runtimeValueResult([]);
-      }
-      if (msg.method === "Accessibility.getFullAXTree") {
+    const server = await startMockWsServer({
+      "Runtime.evaluate": runtimeValueResult([]),
+      "Accessibility.getFullAXTree": (msg) => {
         const frameId = msg.params?.frameId;
         if (!frameId) {
           return axTreeResult(mainNodes);
@@ -287,18 +273,16 @@ describe("CDP role snapshots", () => {
         }
         return axTreeResult([
           { nodeId: "child-root", role: { value: "RootWebArea" }, childIds: ["child", "nested"] },
-          { nodeId: "child", role: { value: "button" }, name: { value: `${frameId} child` } },
+          ax("child", "button", `${frameId} child`),
           ...(frameId === "SECOND"
             ? [{ nodeId: "nested", role: { value: "Iframe" }, backendDOMNodeId: 48 }]
             : []),
         ]);
-      }
-      if (msg.method === "DOM.describeNode") {
-        return cdpResult({
+      },
+      "DOM.describeNode": (msg) =>
+        cdpResult({
           node: { contentDocument: { frameId: frameIds.get(Number(msg.params?.backendNodeId)) } },
-        });
-      }
-      return undefined;
+        }),
     });
 
     const capture = { wsUrl: server.wsUrl, options: { interactive: true } };
@@ -339,14 +323,9 @@ it("hard-bounds CDP role rendering above a requested depth", async () => {
       childIds: index + 1 < 1_000 ? [String(index + 1)] : [],
     }),
   );
-  const server = await startMockWsServer((msg) => {
-    if (msg.method === "Accessibility.getFullAXTree") {
-      return axTreeResult(nodes);
-    }
-    if (msg.method === "Runtime.evaluate") {
-      return cdpError("unavailable");
-    }
-    return undefined;
+  const server = await startMockWsServer({
+    "Accessibility.getFullAXTree": axTreeResult(nodes),
+    "Runtime.evaluate": cdpError("unavailable"),
   });
   const snap = await snapshotRoleViaCdp({ wsUrl: server.wsUrl, options: { maxDepth: 50_000 } });
   expect(snap.snapshot).toContain("[...TRUNCATED - accessibility tree too deep]");
@@ -358,9 +337,9 @@ it("hard-bounds CDP role rendering above a requested depth", async () => {
 
 it("places child frame content after the real iframe ref, not ref-looking page text", async () => {
   const name = "Literal [ref=e2]\t\b";
-  const server = await startMockWsServer((msg) => {
-    if (msg.method === "Accessibility.getFullAXTree") {
-      return axTreeResult(
+  const server = await startMockWsServer({
+    "Accessibility.getFullAXTree": (msg) =>
+      axTreeResult(
         msg.params?.frameId
           ? [ax("child", "button", "Frame button")]
           : [
@@ -368,15 +347,9 @@ it("places child frame content after the real iframe ref, not ref-looking page t
               ax("button", "button", name),
               ax("frame", "Iframe", "", { backendDOMNodeId: 42 }),
             ],
-      );
-    }
-    if (msg.method === "Runtime.evaluate") {
-      return runtimeValueResult([]);
-    }
-    if (msg.method === "DOM.describeNode") {
-      return cdpResult({ node: { frameId: "child-frame" } });
-    }
-    return undefined;
+      ),
+    "Runtime.evaluate": runtimeValueResult([]),
+    "DOM.describeNode": cdpResult({ node: { frameId: "child-frame" } }),
   });
   const result = await snapshotRoleViaCdp({ wsUrl: server.wsUrl });
   const lines = result.snapshot.split("\n");
