@@ -193,6 +193,5 @@ export function registerSessionsSpawnVisibleThinkingTests(deps: SessionsSpawnVis
         "thinkingLevel",
       );
     });
-
   });
 }
