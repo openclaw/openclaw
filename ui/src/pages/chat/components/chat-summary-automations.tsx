@@ -10,6 +10,7 @@ import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connectio
 import { canCallGatewayMethod, canPresentGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { resolveUiConversationIdentity } from "../../../lib/sessions/session-key.ts";
@@ -227,17 +228,24 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
   let host!: HTMLElement;
   const context = useOptionalApplication();
   const jobLinks = new Map<string, HTMLAnchorElement>();
+  const registerJobLink = (key: string) => (element: HTMLAnchorElement) => {
+    jobLinks.set(key, element);
+    return () => {
+      if (jobLinks.get(key) === element) {
+        jobLinks.delete(key);
+      }
+    };
+  };
   const inventory =
     untrack(() => props.inventory) ?? createSessionAutomationInventory(props, () => host);
-  const [shown, setShown] = createSignal(10);
   const presented = createMemo(() => props.presented);
   const sessionKey = createMemo(() => props.sessionKey);
-  createEffect(
-    () => [presented(), sessionKey()] as const,
-    () => {
-      setShown(10);
-    },
-  );
+  // Reopening or replacing the session resets only the local reveal count.
+  const [shown, setShown] = createSignal(() => {
+    presented();
+    sessionKey();
+    return 10;
+  });
   const jobs = () => inventory.jobs().slice(0, shown());
   const hasCachedRows = () => inventory.jobs().length > shown();
   const more = () => hasCachedRows() || (inventory.hasMore() && !inventory.error());
@@ -339,13 +347,6 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       <For each={jobs()} keyed={(job) => job.id}>
         {(job) => {
           let row: HTMLAnchorElement | undefined;
-          // Retry and reveal focus run before row onSettled; register the keyed ref immediately.
-          const initialJobId = untrack(() => job().id);
-          onSettled(() => () => {
-            if (jobLinks.get(initialJobId) === row) {
-              jobLinks.delete(initialJobId);
-            }
-          });
           const search = () => `?${new URLSearchParams({ job: job().id })}`;
           const running = () =>
             inventory.connected() &&
@@ -360,10 +361,12 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
           };
           return (
             <a
-              ref={(element) => {
-                row = element;
-                jobLinks.set(initialJobId, element);
-              }}
+              ref={[
+                (element) => {
+                  row = element;
+                },
+                elementRef(registerJobLink(job().id)),
+              ]}
               class="chat-summary__automation"
               href={`${pathForRoute("cron", context?.basePath ?? "")}${search()}`}
               title={props.desktop ? undefined : job().name.trim() || job().id}

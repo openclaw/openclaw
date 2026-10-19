@@ -12,6 +12,7 @@ import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { formatUiExternalText } from "../../../lib/format-error.ts";
 import { createMsFormatter } from "../../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { CronRunTranscriptView, type createCronRunTranscript } from "../../cron/run-transcript.tsx";
 import { DisabledNote } from "../../cron/view-job-status.tsx";
@@ -54,6 +55,7 @@ export type SessionAutomationMobileBodyProps = {
   heartbeatScratch: string;
   basePath: string;
   onOpenEditor: (jobId: string) => void;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
 };
 
 /** The mobile host owns Back, title and scrollport. This body owns no route or query. */
@@ -176,9 +178,13 @@ function AutomationOverview(props: SessionAutomationMobileBodyProps) {
         )}
       >
         {payload().kind === "script" || payload().kind === "command" ? (
-          <pre class="session-automation-mobile__task">{task()}</pre>
+          <pre class="session-automation-mobile__task" ref={[elementRef(props.onScrollPortRef)]}>
+            {task()}
+          </pre>
         ) : (
-          <p class="session-automation-mobile__task">{task() || t("common.na")}</p>
+          <p class="session-automation-mobile__task" ref={[elementRef(props.onScrollPortRef)]}>
+            {task() || t("common.na")}
+          </p>
         )}
       </Group>
       <Group title={t("cron.detail.scheduleSection")}>
@@ -241,7 +247,9 @@ function AutomationOverview(props: SessionAutomationMobileBodyProps) {
       </Group>
       {props.job.description && (
         <Group title={t("cron.form.description")}>
-          <p class="session-automation-mobile__task">{props.job.description}</p>
+          <p class="session-automation-mobile__task" ref={[elementRef(props.onScrollPortRef)]}>
+            {props.job.description}
+          </p>
         </Group>
       )}
       <Group>
