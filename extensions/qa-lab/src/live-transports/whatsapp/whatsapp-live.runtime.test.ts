@@ -1,8 +1,6 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   resolveWhatsAppAccount,
@@ -18,6 +16,13 @@ import {
   collectQaSuiteGatewayConfigPatches,
 } from "../../suite-planning.js";
 import { resolveLiveTransportQaScenarioIds } from "../shared/scenario-selection.js";
+import {
+  createArchive,
+  createDriver,
+  observedMessage,
+  phones,
+  groupJid,
+} from "./runtime.test-support.js";
 import { whatsappScenarioImplementations } from "./scenario-implementations.js";
 import { runWhatsAppApprovalScenario } from "./whatsapp-live.approvals.js";
 import { buildWhatsAppQaConfig, parseWhatsAppQaCredentialPayload } from "./whatsapp-live.config.js";
@@ -37,81 +42,14 @@ import { runWhatsAppStructuredInboundChecks } from "./whatsapp-live.media.js";
 import { waitForScenarioObservedMessage } from "./whatsapp-live.observations.js";
 import { unpackWhatsAppAuthArchive } from "./whatsapp-live.setup.js";
 
-const execFileAsync = promisify(execFile);
-
-async function createTgz(params: { entries: Record<string, string>; root: string }) {
-  const sourceDir = path.join(params.root, "src");
-  await fs.mkdir(sourceDir, { recursive: true });
-  for (const [relativePath, content] of Object.entries(params.entries)) {
-    const filePath = path.join(sourceDir, relativePath);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, content);
-  }
-  const archivePath = path.join(params.root, "archive.tgz");
-  await execFileAsync("tar", ["-czf", archivePath, "-C", sourceDir, "."]);
-  return await fs.readFile(archivePath, "base64");
-}
-
-function createGatewayTargetContext(gatewayTarget: string) {
-  const calls: Array<{ method: string; payload: Record<string, unknown> }> = [];
-  const context = {
-    gateway: {
-      call: async (method: string, payload: Record<string, unknown>) => {
-        calls.push({ method, payload });
-        return {};
-      },
-    },
-    gatewayTarget,
-    scenarioId: "whatsapp-reply-context-isolation",
-    sutAccountId: "sut",
-  } satisfies Parameters<typeof callWhatsAppGatewaySend>[0];
-  return { calls, context };
-}
-
-function createDriver(overrides: Partial<WhatsAppQaDriverSession> = {}): WhatsAppQaDriverSession {
-  return {
-    close: async () => {},
-    getObservedMessages: () => [],
-    sendContact: async () => ({}),
-    sendLocation: async () => ({}),
-    sendMedia: async () => ({}),
-    sendPoll: async () => ({}),
-    sendReaction: async () => ({}),
-    sendSticker: async () => ({}),
-    sendText: async () => ({}),
-    waitForMessage: async () => ({
-      kind: "text",
-      observedAt: new Date().toISOString(),
-      text: "ok",
-    }),
-    ...overrides,
-  };
-}
-
-type WhatsAppScenarioDefinition = WhatsAppQaScenarioMetadata & WhatsAppQaScenarioImplementation;
-type WhatsAppMessageScenarioRun = Exclude<WhatsAppQaScenarioRun, { kind: "approval" }>;
-type WhatsAppScenarioContext = Parameters<NonNullable<WhatsAppMessageScenarioRun["afterSend"]>>[0];
+type Scenario = WhatsAppQaScenarioMetadata & WhatsAppQaScenarioImplementation;
+type MessageRun = Exclude<WhatsAppQaScenarioRun, { kind: "approval" }>;
+type Context = Parameters<NonNullable<MessageRun["afterSend"]>>[0];
 type WhatsAppQaConfigBase = Parameters<typeof buildWhatsAppQaConfig>[0];
 type WhatsAppQaConfigParams = Parameters<typeof buildWhatsAppQaConfig>[1];
-type WhatsAppMessageScenarioHook = "afterReply" | "afterSend" | "verify";
+type Hook = "afterReply" | "afterSend" | "verify";
 
-function observedMessage<const TOverrides extends Partial<WhatsAppQaDriverObservedMessage>>(
-  messageId: string,
-  overrides: TOverrides,
-): WhatsAppQaDriverObservedMessage & TOverrides {
-  return {
-    fromPhoneE164: "+15550000002",
-    kind: "text",
-    messageId,
-    observedAt: "2026-06-21T12:00:01.000Z",
-    text: "ok",
-    ...overrides,
-  } as WhatsAppQaDriverObservedMessage & TOverrides;
-}
-
-function createGateway(
-  overrides: Partial<WhatsAppScenarioContext["gateway"]> = {},
-): WhatsAppScenarioContext["gateway"] {
+function createGateway(overrides: Partial<Context["gateway"]> = {}): Context["gateway"] {
   return {
     call: async () => ({}),
     restart: async () => {},
@@ -121,16 +59,16 @@ function createGateway(
 }
 
 function createContext(
-  overrides: Partial<WhatsAppScenarioContext> & {
+  overrides: Partial<Context> & {
     recordedMessages?: unknown[];
-    scenario?: WhatsAppScenarioDefinition;
+    scenario?: Scenario;
   } = {},
-): WhatsAppScenarioContext {
+): Context {
   const { recordedMessages, scenario, ...contextOverrides } = overrides;
   const workspaceDir = contextOverrides.gatewayWorkspaceDir ?? "/tmp/openclaw-whatsapp-qa";
   return {
     driver: createDriver(),
-    driverPhoneE164: "+15550000001",
+    ...phones,
     gateway: {
       call: async () => {
         throw new Error("WhatsApp scenario test did not expect a Gateway call");
@@ -148,7 +86,6 @@ function createContext(
     scenarioTitle: scenario?.title ?? "WhatsApp QA scenario",
     sent: { messageId: "driver-message-1" },
     sutAccountId: "sut",
-    sutPhoneE164: "+15550000002",
     target: "+15550000002",
     targetKind: "dm",
     ...contextOverrides,
@@ -169,7 +106,7 @@ function buildConfig(
   });
 }
 
-function getWhatsAppScenario(id: string): WhatsAppScenarioDefinition {
+function getWhatsAppScenario(id: string): Scenario {
   const scenario = requireFlowScenario(readQaScenarioById(id));
   const name = scenario.execution.config?.whatsappScenario;
   const implementation =
@@ -196,82 +133,31 @@ function updateObservedMessage(
     ...patch,
   };
 }
-function messageScenario<const THooks extends readonly WhatsAppMessageScenarioHook[] = []>(
-  source: string | WhatsAppScenarioDefinition,
-  options: { hooks?: THooks } = {},
+function messageScenario<THook extends Hook = never>(
+  source: string | Scenario,
+  hooks: THook[] = [],
 ): {
-  scenario: WhatsAppScenarioDefinition;
-  run: WhatsAppMessageScenarioRun & Required<Pick<WhatsAppMessageScenarioRun, THooks[number]>>;
+  scenario: Scenario;
+  run: MessageRun & Required<Pick<MessageRun, THook>>;
 } {
   const scenario = typeof source === "string" ? getWhatsAppScenario(source) : source;
   const run = scenario.buildRun();
   if (run.kind === "approval") {
     throw new Error(`${scenario.id} unexpectedly built an approval run`);
   }
-  for (const hook of options.hooks ?? []) {
+  for (const hook of hooks) {
     if (!run[hook]) {
       throw new Error(`${scenario.id} missing ${hook}`);
     }
   }
   return {
     scenario,
-    run: run as WhatsAppMessageScenarioRun &
-      Required<Pick<WhatsAppMessageScenarioRun, THooks[number]>>,
+    run: run as MessageRun & Required<Pick<MessageRun, THook>>,
   };
 }
 
-function agentReactionFixture(params: {
-  groupJid?: string;
-  triggerMessageId: string;
-  waitForMessage: WhatsAppQaDriverSession["waitForMessage"];
-}) {
-  const scenarioId = params.groupJid
-    ? "whatsapp-group-agent-message-action-react"
-    : "whatsapp-agent-message-action-react";
-  const { scenario, run } = messageScenario(scenarioId, {
-    hooks: ["afterSend"],
-  });
-  const expectedReaction = observedMessage("reaction-event-1", {
-    ...(params.groupJid ? { fromJid: params.groupJid } : {}),
-    kind: "reaction",
-    observedAt: "2026-06-21T12:00:02.000Z",
-    reaction: {
-      emoji: "👍",
-      messageId: params.triggerMessageId,
-      ...(params.groupJid ? { participant: "15550000001@s.whatsapp.net" } : {}),
-    },
-    text: "👍",
-  });
-  const rejectedCandidates = [
-    {
-      ...expectedReaction,
-      ...(params.groupJid
-        ? { fromJid: "120363999999999999@g.us" }
-        : { fromPhoneE164: "+15550000003" }),
-    },
-    { ...expectedReaction, reaction: { ...expectedReaction.reaction, emoji: "👎" } },
-    { ...expectedReaction, reaction: { ...expectedReaction.reaction, messageId: "other-message" } },
-  ];
-  const recordedMessages: unknown[] = [];
-  const context = createContext({
-    driver: createDriver({ waitForMessage: params.waitForMessage }),
-    ...(params.groupJid
-      ? { gatewayTarget: params.groupJid, target: params.groupJid, targetKind: "group" as const }
-      : { gatewayWorkspaceDir: "/tmp/openclaw-whatsapp-qa-gateway" }),
-    recordedMessages,
-    scenarioId,
-    scenarioTitle: params.groupJid
-      ? scenario.title
-      : "WhatsApp agent message action reacts to the current message",
-    sent: { messageId: params.triggerMessageId },
-  });
-  return { context, expectedReaction, recordedMessages, rejectedCandidates, run };
-}
-
 function statusReactionFixture(...emojis: Array<"👀" | "✅">) {
-  const { scenario, run } = messageScenario("whatsapp-status-reaction-lifecycle", {
-    hooks: ["afterReply"],
-  });
+  const { scenario, run } = messageScenario("whatsapp-status-reaction-lifecycle", ["afterReply"]);
   const reactions = emojis.map((emoji, index) =>
     observedMessage(emoji === "👀" ? "reaction-queued" : "reaction-done", {
       kind: "reaction",
@@ -290,98 +176,29 @@ function statusReactionFixture(...emojis: Array<"👀" | "✅">) {
   return { context, reactions, recorded, run };
 }
 
-async function approvalReactionFixture(params: {
-  fromJid: string;
-  participantJid?: string;
-  scenarioId: string;
-  turnSourceTo: string;
-}) {
-  const scenario = getWhatsAppScenario(params.scenarioId);
-  const run = scenario.buildRun();
-  if (run.kind !== "approval") {
-    throw new Error("expected approval scenario run");
-  }
-  const sendReaction = vi.fn(async () => ({ messageId: "reaction-1" }));
-  let approvalId = "";
-  let waitCount = 0;
-  const driver = createDriver({
-    sendReaction,
-    waitForMessage: async ({ match }) => {
-      waitCount += 1;
-      const isPending = waitCount === 1;
-      const message = observedMessage(isPending ? "approval-message-1" : "approval-resolved-1", {
-        fromJid: params.fromJid,
-        observedAt: isPending ? "2026-06-28T02:00:00.000Z" : "2026-06-28T02:00:01.000Z",
-        ...(params.participantJid ? { participantJid: params.participantJid } : {}),
-        text: isPending
-          ? `Exec approval required\nID: ${approvalId}\n` +
-            `Pending command:\nprintf '%s\\n' '${run.token}'\n\n` +
-            "React with:\n\n👍 Allow Once\n👎 Deny"
-          : `✅ Exec approval allow-once. ID: ${approvalId}`,
-      });
-      if (!match(message)) {
-        throw new Error(`approval test message ${waitCount} did not match`);
-      }
-      return message;
-    },
-  });
-  const gateway = {
-    call: async (method: string, payload: { id?: string }) => {
-      if (method === "exec.approval.request") {
-        approvalId = payload.id ?? "";
-        return { id: approvalId, status: "accepted" };
-      }
-      if (method === "exec.approval.waitDecision") {
-        return { decision: "allow-once" };
-      }
-      throw new Error(`unexpected gateway call ${method}`);
-    },
-  } as Parameters<typeof runWhatsAppApprovalScenario>[0]["gateway"];
-
-  await runWhatsAppApprovalScenario({
-    driver,
-    gateway,
-    observedMessages: [],
-    run,
-    scenario,
-    sutAccountId: "work",
-    sutPhoneE164: "+15550000002",
-    turnSourceTo: params.turnSourceTo,
-  });
-
-  return sendReaction;
-}
-
 describe("WhatsApp QA live runtime", () => {
   it("can remove copied Signal sessions while preserving other auth archive state", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-qa-test-"));
     try {
-      const archiveBase64 = await createTgz({
-        root: tempRoot,
-        entries: {
-          "creds.json": "{}\n",
-          "device-list-15550000001.json": "{}\n",
-          "lid-mapping-123_reverse.json": "{}\n",
-          "sender-key-120363000@g.us--123_1--5.json": "{}\n",
-          "session-123_1.0.json": "{}\n",
-          "session-123_1.5.json": "{}\n",
-        },
-      });
+      const preserved = [
+        "creds.json",
+        "device-list-15550000001.json",
+        "lid-mapping-123_reverse.json",
+        "sender-key-120363000@g.us--123_1--5.json",
+      ];
+      const sessions = ["session-123_1.0.json", "session-123_1.5.json"];
+      const entries = Object.fromEntries([...preserved, ...sessions].map((file) => [file, "{}\n"]));
+      const archiveBase64 = await createArchive(tempRoot, entries);
       const authDir = await unpackWhatsAppAuthArchive({
         archiveBase64,
         clearSignalSessions: true,
         label: "driver",
         parentDir: tempRoot,
       });
-      for (const file of [
-        "creds.json",
-        "device-list-15550000001.json",
-        "lid-mapping-123_reverse.json",
-        "sender-key-120363000@g.us--123_1--5.json",
-      ]) {
+      for (const file of preserved) {
         await expect(fs.readFile(path.join(authDir, file), "utf8")).resolves.toBe("{}\n");
       }
-      for (const file of ["session-123_1.0.json", "session-123_1.5.json"]) {
+      for (const file of sessions) {
         await expect(fs.stat(path.join(authDir, file))).rejects.toMatchObject({ code: "ENOENT" });
       }
     } finally {
@@ -404,8 +221,7 @@ describe("WhatsApp QA live runtime", () => {
         return;
       }
       expect(parse()).toEqual({
-        driverPhoneE164: "+15550000001",
-        sutPhoneE164: "+15550000002",
+        ...phones,
         driverAuthArchiveBase64: "driver",
         sutAuthArchiveBase64: "sut",
       });
@@ -417,42 +233,59 @@ describe("WhatsApp QA live runtime", () => {
     expect(fingerprintQaCredentialId(undefined)).toBeUndefined();
   });
 
-  it.each([
-    {
-      groupJid: undefined,
-      triggerMessageId: "driver-trigger-message-1",
-      expectedDetails: /\breaction\b/i,
-    },
-    {
-      groupJid: "120363000000000000@g.us",
-      triggerMessageId: "group-trigger-message-1",
-      expectedDetails: /group agent message reaction/i,
-    },
-  ])(
-    "observes native WhatsApp reactions with group=$groupJid",
-    async ({ groupJid, triggerMessageId, expectedDetails }) => {
-      const { context, expectedReaction, recordedMessages, rejectedCandidates, run } =
-        agentReactionFixture({
-          groupJid,
-          triggerMessageId,
-          waitForMessage: async (params) => {
-            for (const candidate of rejectedCandidates) {
-              expect(params.match(candidate)).toBe(false);
+  it.each([undefined, groupJid])(
+    "observes native WhatsApp reactions with group=%s",
+    async (group) => {
+      const { scenario, run } = messageScenario(
+        group ? "whatsapp-group-agent-message-action-react" : "whatsapp-agent-message-action-react",
+        ["afterSend"],
+      );
+      const triggerId = group ? "group-trigger-message-1" : "driver-trigger-message-1";
+      const reaction = observedMessage("reaction-event-1", {
+        ...(group ? { fromJid: group } : {}),
+        kind: "reaction",
+        text: "👍",
+        observedAt: "2026-06-21T12:00:02.000Z",
+        reaction: {
+          emoji: "👍",
+          messageId: triggerId,
+          ...(group ? { participant: "15550000001@s.whatsapp.net" } : {}),
+        },
+      });
+      const rejected = [
+        {
+          ...reaction,
+          ...(group ? { fromJid: "120363999999999999@g.us" } : { fromPhoneE164: "+15550000003" }),
+        },
+        { ...reaction, reaction: { ...reaction.reaction, emoji: "👎" } },
+        { ...reaction, reaction: { ...reaction.reaction, messageId: "other-message" } },
+      ];
+      const recorded: unknown[] = [];
+      const context = createContext({
+        scenario,
+        sent: { messageId: triggerId },
+        recordedMessages: recorded,
+        ...(group
+          ? { gatewayTarget: group, target: group, targetKind: "group" as const }
+          : { gatewayWorkspaceDir: "/tmp/openclaw-whatsapp-qa-gateway" }),
+        driver: createDriver({
+          waitForMessage: async ({ match }) => {
+            for (const candidate of rejected) {
+              expect(match(candidate)).toBe(false);
             }
-            expect(params.match(expectedReaction)).toBe(true);
-            return expectedReaction;
+            expect(match(reaction)).toBe(true);
+            return reaction;
           },
-        });
-
-      const details = await run.afterSend(context);
-
-      expect(details).toMatch(expectedDetails);
-      expect(recordedMessages).toEqual([expectedReaction]);
+        }),
+      });
+      expect(await run.afterSend(context)).toMatch(
+        group ? /group agent message reaction/i : /\breaction\b/i,
+      );
+      expect(recorded).toEqual([reaction]);
     },
   );
 
   it("runs WhatsApp group direct Gateway media, audio, and poll probes against the group target", async () => {
-    const groupJid = "120363000000000000@g.us";
     const gatewayCalls: Array<{ method: string; payload: Record<string, unknown> }> = [];
     const observations: Array<[string, Partial<WhatsAppQaDriverObservedMessage>]> = [
       ["image", { hasMedia: true, kind: "media", mediaType: "image/png" }],
@@ -521,9 +354,7 @@ describe("WhatsApp QA live runtime", () => {
     });
 
     for (const [index, kind] of ["media", "audio", "poll"].entries()) {
-      const { scenario, run } = messageScenario(`whatsapp-group-outbound-${kind}`, {
-        hooks: ["afterReply"],
-      });
+      const { scenario, run } = messageScenario(`whatsapp-group-outbound-${kind}`, ["afterReply"]);
       await run.afterReply(
         observedMessage(`reply-${index + 1}`, { fromJid: groupJid, text: String(run.matchText) }),
         { ...context, scenarioId: scenario.id, scenarioTitle: scenario.title },
@@ -535,9 +366,7 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("requires the reply-context isolation quoted send to carry quote metadata", async () => {
-    const { scenario, run } = messageScenario("whatsapp-reply-context-isolation", {
-      hooks: ["afterReply"],
-    });
+    const { scenario, run } = messageScenario("whatsapp-reply-context-isolation", ["afterReply"]);
 
     const gatewayCalls: Array<{ method: string; payload: Record<string, unknown> }> = [];
     let waitCount = 0;
@@ -572,7 +401,6 @@ describe("WhatsApp QA live runtime", () => {
       }),
       gatewayWorkspaceDir: "/tmp/openclaw-whatsapp-qa-gateway",
       scenario,
-      sent: { messageId: "driver-message-1" },
     });
 
     await run.afterReply(
@@ -588,9 +416,10 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("asserts batched reply-to mode quotes the second queued message", async () => {
-    const { scenario, run } = messageScenario("whatsapp-reply-to-mode-batched", {
-      hooks: ["afterSend", "verify"],
-    });
+    const { scenario, run } = messageScenario("whatsapp-reply-to-mode-batched", [
+      "afterSend",
+      "verify",
+    ]);
 
     const sentTexts: string[] = [];
     const context = createContext({
@@ -620,9 +449,9 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("waits for media from the user-path WhatsApp upload-file scenario", async () => {
-    const { scenario, run } = messageScenario("whatsapp-agent-message-action-upload-file", {
-      hooks: ["afterSend"],
-    });
+    const { scenario, run } = messageScenario("whatsapp-agent-message-action-upload-file", [
+      "afterSend",
+    ]);
 
     const token = /\bWHATSAPP_QA_AGENT_UPLOAD_[A-Z0-9]+\b/u.exec(run.input)?.[0];
     if (!token) {
@@ -682,9 +511,8 @@ describe("WhatsApp QA live runtime", () => {
   it("uses opposite DM peers for driver sends and Gateway sends", () => {
     expect(
       resolveWhatsAppQaMessageTargets({
-        driverPhoneE164: "+15550000001",
+        ...phones,
         scenarioTarget: "dm",
-        sutPhoneE164: "+15550000002",
       }),
     ).toEqual({
       driverTarget: "+15550000002",
@@ -692,10 +520,9 @@ describe("WhatsApp QA live runtime", () => {
     });
     expect(
       resolveWhatsAppQaMessageTargets({
-        driverPhoneE164: "+15550000001",
+        ...phones,
         groupJid: "120363000000000000@g.us",
         scenarioTarget: "group",
-        sutPhoneE164: "+15550000002",
       }),
     ).toEqual({
       driverTarget: "120363000000000000@g.us",
@@ -704,7 +531,16 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("routes WhatsApp Gateway DM helper calls to the driver peer", async () => {
-    const { calls, context } = createGatewayTargetContext("+15550000001");
+    const calls: Array<{ method: string; payload: Record<string, unknown> }> = [];
+    const context = createContext({
+      scenarioId: "whatsapp-reply-context-isolation",
+      gateway: createGateway({
+        call: async (method, payload) => {
+          calls.push({ method, payload: payload as Record<string, unknown> });
+          return {};
+        },
+      }),
+    });
 
     await callWhatsAppGatewaySend(context, {
       label: "quoted",
@@ -749,50 +585,34 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("patches the effective WhatsApp policy for default and named SUT accounts", async () => {
-    const policy = (
-      id: string,
-      policyKey: "dmPolicy" | "groupPolicy",
-      policyValue: "disabled" | "open" | "pairing",
-      staleValue: "allowlist" | "disabled" | "open",
-    ) => ({ id, policyKey, policyValue, staleValue });
-    const policyScenarios = [
-      policy("whatsapp-access-control-dm-disabled", "dmPolicy", "disabled", "allowlist"),
-      policy("whatsapp-access-control-dm-open", "dmPolicy", "open", "allowlist"),
-      policy("whatsapp-access-control-group-disabled", "groupPolicy", "disabled", "open"),
-      policy("whatsapp-access-control-group-open", "groupPolicy", "open", "disabled"),
-      policy("whatsapp-pairing-block", "dmPolicy", "pairing", "allowlist"),
-    ];
-
+    const policies = [
+      ["access-control-dm-disabled", "dmPolicy", "disabled", "allowlist"],
+      ["access-control-dm-open", "dmPolicy", "open", "allowlist"],
+      ["access-control-group-disabled", "groupPolicy", "disabled", "open"],
+      ["access-control-group-open", "groupPolicy", "open", "disabled"],
+      ["pairing-block", "dmPolicy", "pairing", "allowlist"],
+    ] as const;
     for (const accountId of ["default", "work"]) {
-      for (const policyScenario of policyScenarios) {
-        const staleAccount = {
-          [policyScenario.policyKey]: policyScenario.staleValue,
-        };
+      for (const [name, key, value, stale] of policies) {
+        const id = "whatsapp-" + name;
+        const accounts = { [accountId]: { [key]: stale } };
         const initialConfig = buildConfig(
           { sutAccountId: accountId },
           {
-            channels: {
-              whatsapp: {
-                accounts: { [accountId]: staleAccount },
-              },
-            },
+            channels: { whatsapp: { accounts } },
           },
         );
-        const scenario = readQaScenarioById(policyScenario.id);
+        const scenario = readQaScenarioById(id);
         const flow = scenario.execution.kind === "flow" ? scenario.execution.flow : undefined;
-        expect(JSON.stringify(flow), policyScenario.id).not.toContain('"patchConfig"');
-        const startupPatches = collectQaSuiteGatewayConfigPatches([scenario], accountId);
-        const patchedConfig = applyQaSuiteGatewayConfigPatches(
+        expect(JSON.stringify(flow), id).not.toContain('"patchConfig"');
+        const patches = collectQaSuiteGatewayConfigPatches([scenario], accountId);
+        const cfg = applyQaSuiteGatewayConfigPatches(
           initialConfig,
-          startupPatches,
+          patches,
         ) as WhatsAppQaConfigBase;
-        const effective = resolveWhatsAppAccount({ cfg: patchedConfig, accountId });
-        expect(
-          effective[policyScenario.policyKey],
-          `${policyScenario.id}:${accountId}:effective`,
-        ).toBe(policyScenario.policyValue);
-
-        if (policyScenario.id === "whatsapp-pairing-block") {
+        const effective = resolveWhatsAppAccount({ cfg, accountId });
+        expect(effective[key], id + ":" + accountId + ":effective").toBe(value);
+        if (value === "pairing") {
           expect(effective.allowFrom).toEqual(["+15550000000"]);
         }
       }
@@ -810,189 +630,122 @@ describe("WhatsApp QA live runtime", () => {
     expect(cfg.commands?.ownerAllowFrom).toEqual(["telegram:existing-owner", "+15550000001"]);
   });
 
-  it("models activation always through visible group behavior and restores mention gating", async () => {
-    const { scenario, run } = messageScenario("whatsapp-group-activation-always");
-
-    expect(run.target).toBe("group");
-    expect(run.input).toBe("/activation always");
-
-    const sentTextCalls: Array<{ text: string; to: string }> = [];
-    let alwaysModeReplyMatched = false;
-    let restoredQuietObservationReads = 0;
-    const groupJid = "120363000000000000@g.us";
-    const driver = createDriver({
-      getObservedMessages: () => {
-        if (
-          sentTextCalls.some(({ text }) => /\bWHATSAPP_QA_ACTIVATION_QUIET_[A-Z0-9]+\b/u.test(text))
-        ) {
-          restoredQuietObservationReads += 1;
-        }
-        return [];
-      },
-      sendText: async (to, text) => {
-        sentTextCalls.push({ text, to });
-        return { messageId: `driver-message-${sentTextCalls.length}` };
-      },
-      waitForMessage: async (params) => {
-        const matches = params.match;
-        const latestProbe = sentTextCalls.findLast(
-          ({ text }) =>
-            /\bWHATSAPP_QA_ACTIVATION_ALWAYS_[A-Z0-9]+\b/u.test(text) &&
-            !/\bopenclawqa\b/iu.test(text),
-        );
-        if (latestProbe) {
-          expect(
-            matches(
-              observedMessage("sut-activation-wrong-marker", {
-                fromJid: groupJid,
-                observedAt: new Date().toISOString(),
-                text: latestProbe.text.replace(
-                  /\bWHATSAPP_QA_ACTIVATION_ALWAYS_[A-Z0-9]+\b/u,
-                  "WHATSAPP_QA_ACTIVATION_ALWAYS_WRONG",
-                ),
-              }),
-            ),
-          ).toBe(false);
-        }
-        const candidates = [
-          latestProbe?.text,
-          "Activation: always",
-          "Activation: mention",
-          "Status: activation always",
-          "Status: activation mention",
-        ].map((text, index) =>
-          observedMessage(`sut-activation-observation-${index}`, {
-            fromJid: groupJid,
-            observedAt: new Date().toISOString(),
-            text: text ?? "",
-          }),
-        );
-        for (const candidate of candidates) {
-          if (matches(candidate)) {
-            if (candidate.text === latestProbe?.text) {
-              alwaysModeReplyMatched = true;
-            }
-            return candidate;
+  it.each([false, true])(
+    "restores mention gating after activation probe (failure=%s)",
+    async (failProbe) => {
+      const { scenario, run } = messageScenario("whatsapp-group-activation-always", ["afterReply"]);
+      expect(run).toMatchObject({ target: "group", input: "/activation always" });
+      const sent: Array<{ text: string; to: string }> = [];
+      const alwaysMarker = /\bWHATSAPP_QA_ACTIVATION_ALWAYS_[A-Z0-9]+\b/u;
+      const quietMarker = /\bWHATSAPP_QA_ACTIVATION_QUIET_[A-Z0-9]+\b/u;
+      let alwaysMatched = false;
+      let quietReads = 0;
+      const driver = createDriver({
+        sendText: async (to, text) => {
+          sent.push({ text, to });
+          return { messageId: "driver-message-" + sent.length };
+        },
+        getObservedMessages: () => {
+          if (sent.some(({ text }) => quietMarker.test(text))) {
+            quietReads++;
           }
-        }
-        throw new Error(
-          `activation scenario waited for an unexpected message after ${latestProbe?.text}`,
+          return [];
+        },
+        waitForMessage: async ({ match }) => {
+          const restoring = sent.some(
+            ({ text, to }) => to === groupJid && text.trim() === "/activation mention",
+          );
+          if (failProbe && !restoring) {
+            throw new Error("forced always-mode probe failure");
+          }
+          const probe = sent.findLast(
+            ({ text }) => alwaysMarker.test(text) && !/\bopenclawqa\b/iu.test(text),
+          );
+          const reply = observedMessage(
+            restoring ? "sut-activation-restore" : "sut-activation-observation-0",
+            {
+              fromJid: groupJid,
+              observedAt: new Date().toISOString(),
+              text: restoring
+                ? "Activation: mention"
+                : expectDefined(probe, "unmentioned always probe").text,
+            },
+          );
+          if (!restoring) {
+            expect(
+              match({
+                ...reply,
+                messageId: "sut-activation-wrong-marker",
+                text: reply.text.replace(alwaysMarker, "WHATSAPP_QA_ACTIVATION_ALWAYS_WRONG"),
+              }),
+            ).toBe(false);
+          }
+          if (!match(reply)) {
+            throw new Error("activation scenario waited for an unexpected message");
+          }
+          if (!restoring) {
+            alwaysMatched = true;
+          }
+          return reply;
+        },
+      });
+      const context = createContext({
+        driver,
+        scenario,
+        gatewayTarget: groupJid,
+        target: groupJid,
+        gatewayWorkspaceDir: "/tmp/openclaw-whatsapp-qa-workspace",
+        sent: { messageId: "activation-command-message" },
+      });
+      vi.useFakeTimers({ now: new Date("2026-06-21T12:00:02.000Z") });
+      try {
+        const result = run.afterReply(
+          observedMessage("sut-activation-command-reply", {
+            fromJid: groupJid,
+            text: "Activation: always",
+          }),
+          context,
         );
-      },
-    });
-    const context = createContext({
-      driver,
-      gatewayTarget: groupJid,
-      gatewayWorkspaceDir: "/tmp/openclaw-whatsapp-qa-workspace",
-      scenario,
-      sent: { messageId: "activation-command-message" },
-      target: groupJid,
-    });
-    const activationCommandReply = observedMessage("sut-activation-command-reply", {
-      fromJid: groupJid,
-      text: "Activation: always",
-    });
-
-    const followUp = run.afterReply ?? run.afterSend;
-    expect(followUp).toEqual(expect.any(Function));
-    vi.useFakeTimers({ now: new Date("2026-06-21T12:00:02.000Z") });
-    try {
-      const followUpResult =
-        run.afterReply !== undefined
-          ? run.afterReply(activationCommandReply, context as never)
-          : run.afterSend?.(context as never);
-      await vi.runAllTimersAsync();
-      await followUpResult;
-    } finally {
-      vi.useRealTimers();
-    }
-
-    const alwaysProbe = sentTextCalls.find(({ text }) =>
-      /\bWHATSAPP_QA_ACTIVATION_ALWAYS_[A-Z0-9]+\b/u.test(text),
-    );
-    expect(alwaysProbe?.to).toBe(groupJid);
-    expect(alwaysProbe?.text).not.toMatch(/\bopenclawqa\b/i);
-    expect(alwaysModeReplyMatched).toBe(true);
-    const restoreIndex = sentTextCalls.findIndex(
-      ({ text, to }) => to === groupJid && text.trim() === "/activation mention",
-    );
-    expect(restoreIndex).toBeGreaterThanOrEqual(0);
-    const restoredQuietProbe = sentTextCalls
-      .slice(restoreIndex + 1)
-      .find(({ text }) => /\bWHATSAPP_QA_ACTIVATION_QUIET_[A-Z0-9]+\b/u.test(text));
-    expect(restoredQuietProbe?.to).toBe(groupJid);
-    expect(restoredQuietProbe?.text).not.toMatch(/\bopenclawqa\b/i);
-    expect(restoredQuietObservationReads).toBeGreaterThan(0);
-  });
-
-  it("restores mention gating when activation always validation fails", async () => {
-    const { scenario, run } = messageScenario("whatsapp-group-activation-always", {
-      hooks: ["afterReply"],
-    });
-
-    const sentTextCalls: Array<{ text: string; to: string }> = [];
-    const groupJid = "120363000000000000@g.us";
-    const driver = createDriver({
-      sendText: async (to, text) => {
-        sentTextCalls.push({ text, to });
-        return { messageId: `driver-message-${sentTextCalls.length}` };
-      },
-      waitForMessage: async (params) => {
-        const matches = params.match;
-        const restoreSent = sentTextCalls.some(
-          ({ text, to }) => to === groupJid && text.trim() === "/activation mention",
-        );
-        if (!restoreSent) {
-          throw new Error("forced always-mode probe failure");
-        }
-        const restoreReply = observedMessage("sut-activation-restore", {
-          fromJid: groupJid,
-          observedAt: new Date().toISOString(),
-          text: "Activation: mention",
-        });
-        if (matches(restoreReply)) {
-          return restoreReply;
-        }
-        throw new Error("activation restore wait used an unexpected matcher");
-      },
-    });
-
-    await expect(
-      run.afterReply(
-        observedMessage("sut-activation-command-reply", {
-          fromJid: groupJid,
-          text: "Activation: always",
-        }),
-        createContext({
-          driver,
-          gatewayTarget: groupJid,
-          gatewayWorkspaceDir: "/tmp/openclaw-whatsapp-qa-workspace",
-          scenario,
-          sent: { messageId: "activation-command-message" },
-          target: groupJid,
-        }),
-      ),
-    ).rejects.toThrow("forced always-mode probe failure");
-
-    expect(sentTextCalls.some(({ text }) => text.trim() === "/activation mention")).toBe(true);
-  });
+        const outcome = failProbe
+          ? expect(result).rejects.toThrow("forced always-mode probe failure")
+          : result;
+        await vi.runAllTimersAsync();
+        await outcome;
+      } finally {
+        vi.useRealTimers();
+      }
+      const restoreIndex = sent.findIndex(
+        ({ text, to }) => to === groupJid && text.trim() === "/activation mention",
+      );
+      expect(restoreIndex).toBeGreaterThanOrEqual(0);
+      if (!failProbe) {
+        const probe = sent.find(({ text }) => alwaysMarker.test(text));
+        expect(probe?.to).toBe(groupJid);
+        expect(probe?.text).not.toMatch(/\bopenclawqa\b/i);
+        expect(alwaysMatched).toBe(true);
+        const quiet = sent.slice(restoreIndex + 1).find(({ text }) => quietMarker.test(text));
+        expect(quiet?.to).toBe(groupJid);
+        expect(quiet?.text).not.toMatch(/\bopenclawqa\b/i);
+        expect(quietReads).toBeGreaterThan(0);
+      }
+    },
+  );
 
   it("quotes the observed SUT reply without an explicit mention for reply-to-bot activation", async () => {
-    const { scenario, run } = messageScenario("whatsapp-group-reply-to-bot-triggers");
+    const { scenario, run } = messageScenario("whatsapp-group-reply-to-bot-triggers", [
+      "afterReply",
+    ]);
 
     expect(run.target).toBe("group");
     expect(run.input).toMatch(/\bopenclawqa\b/iu);
     expect(run.input).toMatch(/\bWHATSAPP_QA_REPLY_TO_BOT_SEED_[A-Z0-9]+\b/u);
-    expect(run.afterReply).toEqual(expect.any(Function));
 
-    const groupJid = "120363000000000000@g.us";
     const participantJid = "15550000002@s.whatsapp.net";
     const sendTextCalls: Array<{
       options: Parameters<WhatsAppQaDriverSession["sendText"]>[2];
       text: string;
       to: string;
     }> = [];
-    let replyWaits = 0;
     let finalReplyMatched = false;
     const driver = createDriver({
       sendText: async (to, text, options) => {
@@ -1001,7 +754,6 @@ describe("WhatsApp QA live runtime", () => {
       },
       waitForMessage: async (params) => {
         const matches = params.match;
-        replyWaits += 1;
         const quotedTrigger = sendTextCalls.find((call) => call.options?.quotedMessageKey);
         const marker = quotedTrigger
           ? /\bWHATSAPP_QA_REPLY_TO_BOT_TRIGGER_[A-Z0-9]+\b/u.exec(quotedTrigger.text)?.[0]
@@ -1039,7 +791,7 @@ describe("WhatsApp QA live runtime", () => {
       text: "WHATSAPP_QA_REPLY_TO_BOT_SEED_TEST",
     });
 
-    await run.afterReply?.(
+    await run.afterReply(
       seedReply,
       createContext({
         driver,
@@ -1063,7 +815,6 @@ describe("WhatsApp QA live runtime", () => {
       participant: participantJid,
       remoteJid: groupJid,
     });
-    expect(replyWaits).toBeGreaterThan(0);
     expect(finalReplyMatched).toBe(true);
   });
 
@@ -1071,25 +822,11 @@ describe("WhatsApp QA live runtime", () => {
     const scenarios = ["whatsapp-reply-to-message", "whatsapp-group-reply-to-message"].map(
       getWhatsAppScenario,
     );
-    const runs = scenarios.map((scenario) => messageScenario(scenario, { hooks: ["verify"] }));
+    const runs = scenarios.map((scenario) => messageScenario(scenario, ["verify"]));
 
-    expect(
-      runs.map(({ scenario, run }) => ({
-        id: scenario.id,
-        requiresGroupJid: scenario.requiresGroupJid,
-        target: run.target,
-      })),
-    ).toEqual([
-      {
-        id: "whatsapp-reply-to-message",
-        requiresGroupJid: undefined,
-        target: "dm",
-      },
-      {
-        id: "whatsapp-group-reply-to-message",
-        requiresGroupJid: true,
-        target: "group",
-      },
+    expect(runs.map(({ scenario, run }) => [scenario.requiresGroupJid, run.target])).toEqual([
+      [undefined, "dm"],
+      [true, "group"],
     ]);
     expect(runs[0]?.run.input).not.toContain("openclawqa");
     expect(runs[1]?.run.input).toMatch(/^openclawqa\b/u);
@@ -1132,7 +869,7 @@ describe("WhatsApp QA live runtime", () => {
       contactToken: "CONTACT_TOKEN",
       documentToken: "DOCUMENT_TOKEN",
       driver,
-      driverPhoneE164: "+15550000001",
+      ...phones,
       locationToken: "LOCATION_TOKEN",
       stickerToken: "STICKER_TOKEN",
       target: "+15550000002",
@@ -1149,7 +886,6 @@ describe("WhatsApp QA live runtime", () => {
 
   it("adds safe diagnostics when a WhatsApp scenario reply wait observes nothing", async () => {
     const driver = createDriver({
-      getObservedMessages: () => [],
       waitForMessage: async () => {
         throw new Error("timed out waiting for WhatsApp QA driver message");
       },
@@ -1160,7 +896,6 @@ describe("WhatsApp QA live runtime", () => {
       gatewayWorkspaceDir: "/tmp/openclaw-whatsapp-qa-gateway",
       recordedMessages: recorded,
       requestStartedAt: new Date("2026-06-05T01:00:00.000Z"),
-      scenarioId: "whatsapp-canary",
       scenarioTitle: "WhatsApp DM canary",
     });
 
@@ -1186,38 +921,27 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("requires the long-reply delivery-shape tail marker in the second chunk", async () => {
-    const { run } = messageScenario("whatsapp-reply-delivery-shape", {
-      hooks: ["afterReply"],
-    });
+    const { run } = messageScenario("whatsapp-reply-delivery-shape", ["afterReply"]);
     const token = String(run.matchText);
     let waitCallCount = 0;
+    const chunk = (id: string, text: string, quoted = true) =>
+      observedMessage(id, {
+        observedAt: new Date().toISOString(),
+        text,
+        ...(quoted ? { quoted: { messageId: "driver-message-1" } } : {}),
+      });
     const driver = createDriver({
       waitForMessage: async (params) => {
         waitCallCount += 1;
         if (waitCallCount === 1) {
-          const firstChunk = observedMessage("chunk-1", {
-            observedAt: new Date().toISOString(),
-            quoted: { messageId: "driver-message-1" },
-            text: `${token}_LONG_BEGIN`,
-          });
+          const firstChunk = chunk("chunk-1", `${token}_LONG_BEGIN`);
           expect(params.match(firstChunk)).toBe(true);
           return firstChunk;
         }
 
-        const missingTailMarker = observedMessage("chunk-2", {
-          observedAt: new Date().toISOString(),
-          quoted: { messageId: "driver-message-1" },
-          text: "second chunk without the tail marker",
-        });
-        const missingQuoteChunk = observedMessage("chunk-3", {
-          observedAt: new Date().toISOString(),
-          text: `${token}_LONG_END`,
-        });
-        const tailChunk = observedMessage("chunk-4", {
-          observedAt: new Date().toISOString(),
-          quoted: { messageId: "driver-message-1" },
-          text: `${token}_LONG_END`,
-        });
+        const missingTailMarker = chunk("chunk-2", "second chunk without the tail marker");
+        const missingQuoteChunk = chunk("chunk-3", `${token}_LONG_END`, false);
+        const tailChunk = chunk("chunk-4", `${token}_LONG_END`);
         expect(params.match(missingTailMarker)).toBe(false);
         expect(params.match(missingQuoteChunk)).toBe(false);
         expect(params.match(tailChunk)).toBe(true);
@@ -1233,7 +957,6 @@ describe("WhatsApp QA live runtime", () => {
       requestStartedAt: new Date("2026-06-05T01:00:00.000Z"),
       scenarioId: "whatsapp-reply-delivery-shape",
       scenarioTitle: "WhatsApp gateway send chunks long replies",
-      sent: { messageId: "driver-message-1" },
     });
 
     await run.afterReply(
@@ -1248,10 +971,56 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("targets group approval reactions at the approval prompt participant", async () => {
-    const sendReaction = await approvalReactionFixture({
-      fromJid: "12345@g.us",
-      participantJid: "999@lid",
-      scenarioId: "whatsapp-approval-exec-group-reaction-native",
+    const scenario = getWhatsAppScenario("whatsapp-approval-exec-group-reaction-native");
+    const run = scenario.buildRun();
+    if (run.kind !== "approval") {
+      throw new Error("expected approval scenario run");
+    }
+    const sendReaction = vi.fn(async () => ({ messageId: "reaction-1" }));
+    let approvalId = "";
+    let waitCount = 0;
+    const driver = createDriver({
+      sendReaction,
+      waitForMessage: async ({ match }) => {
+        waitCount += 1;
+        const isPending = waitCount === 1;
+        const message = observedMessage(isPending ? "approval-message-1" : "approval-resolved-1", {
+          fromJid: "12345@g.us",
+          observedAt: isPending ? "2026-06-28T02:00:00.000Z" : "2026-06-28T02:00:01.000Z",
+          participantJid: "999@lid",
+          text: isPending
+            ? `Exec approval required\nID: ${approvalId}\n` +
+              `Pending command:\nprintf '%s\\n' '${run.token}'\n\n` +
+              "React with:\n\n👍 Allow Once\n👎 Deny"
+            : `✅ Exec approval allow-once. ID: ${approvalId}`,
+        });
+        if (!match(message)) {
+          throw new Error(`approval test message ${waitCount} did not match`);
+        }
+        return message;
+      },
+    });
+    const gateway = {
+      call: async (method: string, payload: { id?: string }) => {
+        if (method === "exec.approval.request") {
+          approvalId = payload.id ?? "";
+          return { id: approvalId, status: "accepted" };
+        }
+        if (method === "exec.approval.waitDecision") {
+          return { decision: "allow-once" };
+        }
+        throw new Error(`unexpected gateway call ${method}`);
+      },
+    } as Parameters<typeof runWhatsAppApprovalScenario>[0]["gateway"];
+
+    await runWhatsAppApprovalScenario({
+      driver,
+      gateway,
+      observedMessages: [],
+      run,
+      scenario,
+      sutAccountId: "work",
+      sutPhoneE164: phones.sutPhoneE164,
       turnSourceTo: "12345@g.us",
     });
 
@@ -1285,12 +1054,12 @@ describe("WhatsApp QA live runtime", () => {
 
   it("enables WhatsApp action discovery for the user-path agent reaction scenario", () => {
     const scenario = getWhatsAppScenario("whatsapp-agent-message-action-react");
-    const cfg = buildConfig({
-      overrides: scenario.configOverrides,
-    });
+    const cfg = buildConfig({ overrides: scenario.configOverrides });
 
-    expect(cfg.channels?.whatsapp?.actions).toMatchObject({ reactions: true });
-    expect(cfg.channels?.whatsapp?.reactionLevel).toBe("minimal");
+    expect(cfg.channels?.whatsapp).toMatchObject({
+      actions: { reactions: true },
+      reactionLevel: "minimal",
+    });
     expect(cfg.tools?.alsoAllow).toContain("message");
   });
 
@@ -1338,7 +1107,6 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("keeps pending-history group context enabled through the supported config path", () => {
-    const groupJid = "120363000000000000@g.us";
     const scenario = getWhatsAppScenario("whatsapp-group-pending-history-context");
     const cfg = buildConfig({
       groupJid,
@@ -1355,7 +1123,6 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("requires pending-history group replies to expose resolved SUT phone attribution", async () => {
-    const groupJid = "120363000000000000@g.us";
     const { scenario, run } = messageScenario("whatsapp-group-pending-history-context");
     const unresolvedReply = observedMessage("sut-lid-reply", {
       fromJid: groupJid,
