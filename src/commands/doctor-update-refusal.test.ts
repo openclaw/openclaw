@@ -257,6 +257,20 @@ async function refusalError(work: Promise<unknown>): Promise<Error> {
   throw new Error("Expected Doctor to refuse before repair");
 }
 
+function maintenanceRefusal(root: string) {
+  return refusalError(
+    beginDoctorMaintenance({
+      root,
+      options: { repair: true, nonInteractive: true },
+      runtime,
+    }),
+  );
+}
+
+function schemaRefusal(schemas: OpenClawDatabaseSchemaPreflight) {
+  return refusalError(guardUpdateDoctorSchemaUpgrade({ schemas, runtime }));
+}
+
 async function warnings(): Promise<string> {
   await flushLogger();
   const tail = await readConfiguredParsedLogTail();
@@ -290,13 +304,7 @@ describe("Doctor refusal recovery under the released Git update driver", () => {
         "npm",
         async ({ root }) => {
           mockProcessPlatform(platform);
-          const error = await refusalError(
-            beginDoctorMaintenance({
-              root,
-              options: { repair: true, nonInteractive: true },
-              runtime,
-            }),
-          );
+          const error = await maintenanceRefusal(root);
           expect(error.message).toContain("openclaw gateway stop");
           expect(error.message).toContain("openclaw update repair");
           expect(error.message).toContain("If the stop command already returned successfully");
@@ -321,7 +329,7 @@ describe("Doctor refusal recovery under the released Git update driver", () => {
       await withFixture(history, async ({ root, previous, state, schemas }) => {
         const databasePath = resolveOpenClawStateSqlitePath(state.env);
         const before = fs.readFileSync(databasePath);
-        const error = await refusalError(guardUpdateDoctorSchemaUpgrade({ schemas, runtime }));
+        const error = await schemaRefusal(schemas);
         // The schema bootstrap uses root CLI formatting before the 9.2 parent's ten-line tail.
         const message = formatCliFailureLines({
           title: "CLI failed",
@@ -352,15 +360,7 @@ describe("Doctor refusal recovery under the released Git update driver", () => {
   it("preserves activation ownership and records recovery without touching the service", async () => {
     await withFixture("detached", async ({ root, previous }) => {
       // Exercise the released parent's display boundary, not only the full child error.
-      const message = (
-        await refusalError(
-          beginDoctorMaintenance({
-            root,
-            options: { repair: true, nonInteractive: true },
-            runtime,
-          }),
-        )
-      ).message
+      const message = (await maintenanceRefusal(root)).message
         .trimEnd()
         .split("\n")
         .slice(-10)
@@ -386,16 +386,8 @@ describe("Doctor refusal recovery under the released Git update driver", () => {
         "The blocked schema change was not applied.\nLet the updater restore the previous package and exit. Then use an independent shell with the original service account, package prefix, profile, and state/config overrides.\n" +
         `Manual update: openclaw gateway stop && npm install -g openclaw@${VERSION} --allow-scripts=openclaw && openclaw doctor --fix && openclaw gateway start.\n` +
         `Use the package manager that owns this install (pnpm: pnpm add -g --allow-build=openclaw openclaw@${VERSION}; Bun: bun add -g --trust openclaw@${VERSION}). On npm 11.15 and earlier, omit --allow-scripts=openclaw.`;
-      expect(
-        (await refusalError(guardUpdateDoctorSchemaUpgrade({ schemas, runtime }))).message,
-      ).toBe(expectedSchema);
-      const maintenanceError = await refusalError(
-        beginDoctorMaintenance({
-          root,
-          options: { repair: true, nonInteractive: true },
-          runtime,
-        }),
-      );
+      expect((await schemaRefusal(schemas)).message).toBe(expectedSchema);
+      const maintenanceError = await maintenanceRefusal(root);
       expect(maintenanceError.message).toContain(
         `Doctor could not enter maintenance. Error: ${activationReason}`,
       );
@@ -415,17 +407,7 @@ describe("Doctor refusal recovery under the released Git update driver", () => {
         running: false,
         blockMessage: "Synthetic service inspection unavailable.",
       });
-      expect(
-        (
-          await refusalError(
-            beginDoctorMaintenance({
-              root,
-              options: { repair: true, nonInteractive: true },
-              runtime,
-            }),
-          )
-        ).message,
-      ).toBe(
+      expect((await maintenanceRefusal(root)).message).toBe(
         `Doctor could not enter maintenance. Error: Synthetic service inspection unavailable.${maintenanceSuffix}`,
       );
       expect(await warnings()).toBe("");
@@ -436,8 +418,7 @@ describe("Doctor refusal recovery under the released Git update driver", () => {
     "does not guess a previous commit with %s history",
     async (history) => {
       await withFixture(history, async ({ root, previous, candidate, schemas }) => {
-        const message = (await refusalError(guardUpdateDoctorSchemaUpgrade({ schemas, runtime })))
-          .message;
+        const message = (await schemaRefusal(schemas)).message;
         for (const output of [message, await warnings()]) {
           expect(output).toContain("The previous commit could not be determined; inspect");
           expect(output).toContain(`git -C ${quote(root)} reflog`);
@@ -466,7 +447,7 @@ it("preserves Git recovery instead of accepting its package-style early markers"
       step: "openclaw doctor",
       status: "in_progress",
     });
-    const error = await refusalError(guardUpdateDoctorSchemaUpgrade({ schemas, runtime }));
+    const error = await schemaRefusal(schemas);
     expect(error).toMatchObject({ code: "update-schema-bump-unfenced" });
     expectRecovery(error.message, root, previous);
   });

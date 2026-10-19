@@ -1,9 +1,7 @@
-// Covers doctor cleanup of legacy usage-cost cache sidecars.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as usageCacheSqlite from "../infra/session-cost-usage-cache.sqlite.js";
 import {
   decodeUsageCostRollup,
@@ -23,19 +21,28 @@ const note = vi.hoisted(() => vi.fn());
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
-let root: string | undefined;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 
 afterEach(async () => {
   vi.restoreAllMocks();
   note.mockReset();
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
-  if (root) {
-    await fs.rm(root, { recursive: true, force: true });
-    root = undefined;
-  }
+  tempDirs.cleanup();
 });
+
+async function uploadFixture() {
+  const root = tempDirs.make("openclaw-skill-upload-doctor-");
+  const uploadRoot = path.join(root, "tmp", "skill-uploads");
+  const metadataPath = path.join(
+    uploadRoot,
+    "11111111-1111-4111-8111-111111111111",
+    "metadata.json",
+  );
+  await fs.mkdir(path.dirname(metadataPath), { recursive: true });
+  await fs.writeFile(metadataPath, "{}\n", "utf8");
+  return { uploadRoot, metadataPath, env: { OPENCLAW_STATE_DIR: root } };
+}
 
 describe("legacy usage-cost cache cleanup", () => {
   it("reports the obsolete Control UI cache and removes only that cache on repair, recording failures", async () => {
@@ -77,7 +84,7 @@ describe("legacy usage-cost cache cleanup", () => {
   });
 
   it("removes only rebuildable usage-cost cache sidecars", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-cost-doctor-"));
+    const root = tempDirs.make("openclaw-usage-cost-doctor-");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     const cacheFiles = [
@@ -118,12 +125,7 @@ describe("legacy usage-cost cache cleanup", () => {
   });
 
   it("reports legacy skill-upload staging without deleting it unless repair is enabled", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-upload-doctor-"));
-    const uploadRoot = path.join(root, "tmp", "skill-uploads");
-    const metadataPath = path.join(uploadRoot, randomUploadId(), "metadata.json");
-    await fs.mkdir(path.dirname(metadataPath), { recursive: true });
-    await fs.writeFile(metadataPath, "{}\n", "utf8");
-    const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
+    const { uploadRoot, metadataPath, env } = await uploadFixture();
 
     await maybeRepairLegacyRuntimeFiles(false, env);
     await expect(fs.readFile(metadataPath, "utf8")).resolves.toBe("{}\n");
@@ -133,14 +135,10 @@ describe("legacy usage-cost cache cleanup", () => {
   });
 
   it.each([false, true])("reports skill-upload inspection failures (repair=%s)", async (repair) => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-upload-inspection-"));
-    const uploadRoot = path.join(root, "tmp", "skill-uploads");
-    const metadataPath = path.join(uploadRoot, randomUploadId(), "metadata.json");
-    await fs.mkdir(path.dirname(metadataPath), { recursive: true });
-    await fs.writeFile(metadataPath, "{}\n", "utf8");
+    const { metadataPath, env } = await uploadFixture();
     vi.spyOn(fs, "lstat").mockRejectedValueOnce(fsError("EACCES"));
 
-    await maybeRepairLegacyRuntimeFiles(repair, { OPENCLAW_STATE_DIR: root });
+    await maybeRepairLegacyRuntimeFiles(repair, env);
 
     expect(note).toHaveBeenCalledWith(
       expect.stringMatching(/Failed (?:removing|inspecting) legacy skill-upload staging:.*EACCES/u),
@@ -151,7 +149,7 @@ describe("legacy usage-cost cache cleanup", () => {
 
   const symlinkTest = process.platform === "win32" ? it.skip : it;
   symlinkTest("removes a legacy staging symlink without touching its target", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-upload-link-"));
+    const root = tempDirs.make("openclaw-skill-upload-link-");
     const uploadRoot = path.join(root, "tmp", "skill-uploads");
     const external = path.join(root, "external");
     await fs.mkdir(path.dirname(uploadRoot), { recursive: true });
@@ -171,7 +169,7 @@ describe("legacy usage-cost cache cleanup", () => {
     "continues retired-row cleanup after an agent failure (failure=%s)",
     async (failure) => {
       const rejectFirst = failure !== "none";
-      root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-cost-sqlite-doctor-"));
+      const root = tempDirs.make("openclaw-usage-cost-sqlite-doctor-");
       const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
       const firstDatabase = openOpenClawAgentDatabase({ agentId: "main", env });
       const databases = [firstDatabase, openOpenClawAgentDatabase({ agentId: "worker", env })];
@@ -255,33 +253,12 @@ describe("legacy usage-cost cache cleanup", () => {
   );
 
   it.each([
-    [
-      "reports an unreadable agent root without claiming a complete scan",
-      "root",
-      "readdir",
-      "EACCES",
-      false,
-      true,
-    ],
-    [
-      "reports an unreadable temp entry without removing partial scan results",
-      "entry",
-      "stat",
-      "EIO",
-      true,
-      true,
-    ],
-    ["treats a missing agent root as harmless absence", "root", "readdir", "ENOENT", true, false],
-    [
-      "skips a temp entry that disappears between readdir and stat",
-      "entry",
-      "stat",
-      "ENOENT",
-      true,
-      false,
-    ],
+    ["unreadable agent root", "root", "readdir", "EACCES", false, true],
+    ["unreadable temp entry", "entry", "stat", "EIO", true, true],
+    ["missing agent root", "root", "readdir", "ENOENT", true, false],
+    ["disappearing temp entry", "entry", "stat", "ENOENT", true, false],
   ] as const)("%s", async (_name, scope, operation, code, shouldRepair, diagnostic) => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-usage-cost-${scope}-fault-`));
+    const root = tempDirs.make(`openclaw-usage-cost-${scope}-fault-`);
     const agentsDir = path.join(root, "agents");
     const sessionsDir =
       scope === "root" ? path.join(root, "sessions") : path.join(agentsDir, "main", "sessions");
@@ -331,10 +308,6 @@ describe("legacy usage-cost cache cleanup", () => {
     await expect(fs.stat(cacheFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
-
-function randomUploadId(): string {
-  return "11111111-1111-4111-8111-111111111111";
-}
 
 function fsError(code: string): NodeJS.ErrnoException {
   return Object.assign(new Error(`${code}: injected filesystem failure`), { code });

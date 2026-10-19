@@ -39,6 +39,15 @@ function offer(overrides: Partial<Parameters<typeof maybeOfferUpdateBeforeDoctor
   });
 }
 
+function gitResult(code = 0, stdout = "/repo/source\n", stderr = "") {
+  return { code, stdout, stderr, killed: false, signal: null, termination: "exit" as const };
+}
+
+function expectNoUpdate() {
+  expect(mocks.confirm).not.toHaveBeenCalled();
+  expect(mocks.updateCommand).not.toHaveBeenCalled();
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
   vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
@@ -46,14 +55,7 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", undefined);
   Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
   vi.spyOn(fs, "realpath").mockImplementation(async (candidate) => String(candidate));
-  mocks.git.mockResolvedValue({
-    code: 0,
-    stdout: "/repo/source\n",
-    stderr: "",
-    killed: false,
-    signal: null,
-    termination: "exit",
-  });
+  mocks.git.mockResolvedValue(gitResult());
   mocks.confirm.mockResolvedValue(true);
   mocks.updateCommand.mockImplementation(async ({ onResult }) => {
     onResult?.(result("ok"));
@@ -89,8 +91,7 @@ describe("Doctor source update delegation", () => {
       });
 
       expect(mocks.git).not.toHaveBeenCalled();
-      expect(mocks.confirm).not.toHaveBeenCalled();
-      expect(mocks.updateCommand).not.toHaveBeenCalled();
+      expectNoUpdate();
       expect(mocks.note).toHaveBeenCalledExactlyOnceWith(
         "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
         "Update",
@@ -102,8 +103,7 @@ describe("Doctor source update delegation", () => {
     async (key) => {
       vi.stubEnv(key, "external");
       await expect(offer()).resolves.toEqual({ updated: false });
-      expect(mocks.confirm).not.toHaveBeenCalled();
-      expect(mocks.updateCommand).not.toHaveBeenCalled();
+      expectNoUpdate();
       expect(mocks.note).toHaveBeenCalledWith(
         expect.stringContaining("external supervisor's stop/update/finalize/restart workflow"),
         "Update",
@@ -135,8 +135,7 @@ describe("Doctor source update delegation", () => {
         offer({ options: gate === "nonInteractive" ? { nonInteractive: true } : {} }),
       ).resolves.toEqual({ updated: false });
       expect(mocks.git).not.toHaveBeenCalled();
-      expect(mocks.confirm).not.toHaveBeenCalled();
-      expect(mocks.updateCommand).not.toHaveBeenCalled();
+      expectNoUpdate();
     },
   );
 
@@ -174,18 +173,16 @@ describe("Doctor source update delegation", () => {
   it.each(["another checkout", "not a repository"])(
     "keeps package-manager guidance for %s",
     async (kind) => {
-      mocks.git.mockResolvedValue({
-        code: kind === "another checkout" ? 0 : 128,
-        stdout: "/repo/other\n",
-        stderr: kind === "not a repository" ? "fatal: not a git repository" : "",
-        killed: false,
-        signal: null,
-        termination: "exit",
-      });
+      mocks.git.mockResolvedValue(
+        gitResult(
+          kind === "another checkout" ? 0 : 128,
+          "/repo/other\n",
+          kind === "not a repository" ? "fatal: not a git repository" : "",
+        ),
+      );
       await expect(offer()).resolves.toEqual({ updated: false });
       expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining("openclaw update"), "Update");
-      expect(mocks.confirm).not.toHaveBeenCalled();
-      expect(mocks.updateCommand).not.toHaveBeenCalled();
+      expectNoUpdate();
     },
   );
 
@@ -195,19 +192,11 @@ describe("Doctor source update delegation", () => {
       if (kind === "missing git") {
         mocks.git.mockRejectedValue(new Error("spawn git ENOENT"));
       } else {
-        mocks.git.mockResolvedValue({
-          code: 128,
-          stdout: "",
-          stderr: "permission denied",
-          killed: false,
-          signal: null,
-          termination: "exit",
-        });
+        mocks.git.mockResolvedValue(gitResult(128, "", "permission denied"));
       }
       await expect(offer()).resolves.toEqual({ updated: false });
       expect(mocks.note).not.toHaveBeenCalled();
-      expect(mocks.confirm).not.toHaveBeenCalled();
-      expect(mocks.updateCommand).not.toHaveBeenCalled();
+      expectNoUpdate();
     },
   );
 });

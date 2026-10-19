@@ -54,6 +54,33 @@ beforeEach(() => {
 });
 afterEach(() => vi.resetAllMocks());
 
+function makeHistory(overrides: Partial<UpdateRunRecord>): UpdateRunRecord {
+  return {
+    runId: "interrupted-update",
+    createdAtMs: 1,
+    updatedAtMs: 2,
+    trigger: "cli",
+    phase: "finished",
+    status: "failed",
+    reason: "abandoned",
+    origin: {},
+    target: {},
+    before: {},
+    after: {},
+    steps: [],
+    verification: {},
+    repair: [],
+    confirmedAtMs: null,
+    finishedAtMs: 2,
+    downtimeMs: null,
+    ...overrides,
+  };
+}
+
+function expectHistoryNote(message: string) {
+  expect(note).toHaveBeenCalledWith(expect.stringContaining(message), "Update history");
+}
+
 it("keeps history read failure advisory without refreshing a running update", async () => {
   await withOpenClawTestState({ label: "update-history-refusal" }, async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() - ABANDONED_UPDATE_RUN_MS - 1);
@@ -74,11 +101,13 @@ it("keeps history read failure advisory without refreshing a running update", as
 
     await expect(noteStaleUpdateRuns({ migrateState: true })).resolves.toBeUndefined();
 
-    expect(note).toHaveBeenCalledWith(expect.stringContaining(failure.message), "Update history");
+    expectHistoryNote(failure.message);
     const saved = getUpdateRun(run.runId)!;
-    expect(saved.status).toBe(run.status);
-    expect(saved.finishedAtMs).toBe(run.finishedAtMs);
-    expect(saved.updatedAtMs).toBe(run.updatedAtMs);
+    expect(saved).toMatchObject({
+      status: run.status,
+      finishedAtMs: run.finishedAtMs,
+      updatedAtMs: run.updatedAtMs,
+    });
     expect(isStaleIdentitylessUpdateRun(saved)).toBe(true);
     expect(saved.steps).toContainEqual(
       expect.objectContaining({
@@ -115,7 +144,7 @@ it("repairs config after update history discovery cannot launch its runtime", as
         expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject({
           gateway: { bind: "loopback" },
         });
-        expect(note).toHaveBeenCalledWith(expect.stringContaining("EACCES"), "Update history");
+        expectHistoryNote("EACCES");
         return state.statePath("state", "openclaw.sqlite");
       } finally {
         // Physical admissions outlive handles; retire this fixture before its files are deleted.
@@ -133,14 +162,8 @@ it("keeps a warning visible when the existing history database cannot record it"
   await withOpenClawTestState({ label: "history-warning-unavailable" }, async (state) => {
     vi.mocked(listUpdateRunsAsync).mockRejectedValue(new Error("history unavailable"));
     await expect(noteStaleUpdateRuns()).resolves.toBeUndefined();
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("history unavailable"),
-      "Update history",
-    );
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("warning could not be saved"),
-      "Update history",
-    );
+    expectHistoryNote("history unavailable");
+    expectHistoryNote("warning could not be saved");
     await expect(fs.access(state.statePath("state", "openclaw.sqlite"))).rejects.toHaveProperty(
       "code",
       "ENOENT",
@@ -157,25 +180,14 @@ it("does not admit mutations while a history child still has unsettled process c
 });
 
 it("keeps foreign-destination remediation visible until a later successful update", async () => {
-  let latest: UpdateRunRecord = {
+  let latest = makeHistory({
     runId: "6631ecee-adbf-41e8-a0e3-1b88b28b0a59",
-    createdAtMs: 1,
-    updatedAtMs: 2,
-    trigger: "cli",
-    phase: "finished",
-    status: "failed",
     reason: "global-install-foreign-destination",
     origin: { nextAction: undefined },
     target: { kind: "package", version: "2026.9.4" },
     before: { version: "2026.7.1-2" },
-    after: {},
     steps: [{ step: "global-install-foreign-destination", status: "failed", detail: undefined }],
-    verification: {},
-    repair: [],
-    confirmedAtMs: null,
-    finishedAtMs: 2,
-    downtimeMs: null,
-  };
+  });
   vi.mocked(listUpdateRunsAsync).mockImplementation(async (input) =>
     input?.active ? [] : [latest],
   );
@@ -184,17 +196,11 @@ it("keeps foreign-destination remediation visible until a later successful updat
   await noteStaleUpdateRuns({});
 
   expect(note).toHaveBeenCalledOnce();
-  expect(note).toHaveBeenCalledWith(
-    expect.stringContaining("OpenClaw update failed: global-install-foreign-destination."),
-    "Update history",
-  );
+  expectHistoryNote("OpenClaw update failed: global-install-foreign-destination.");
   expect(reconcileInterruptedUpdateRuns).toHaveBeenCalledWith({ candidate: latest });
   expect(listUpdateRunsAsync).toHaveBeenCalledTimes(2);
-  expect(note).toHaveBeenCalledWith(
-    expect.stringContaining(
-      "https://docs.openclaw.ai/install/update-troubleshooting#node-and-global-install-permissions",
-    ),
-    "Update history",
+  expectHistoryNote(
+    "https://docs.openclaw.ai/install/update-troubleshooting#node-and-global-install-permissions",
   );
 
   latest = {
@@ -217,25 +223,7 @@ it("keeps foreign-destination remediation visible until a later successful updat
 });
 
 it("refreshes history outside the discovery snapshot after settling an interrupted update", async () => {
-  const abandoned: UpdateRunRecord = {
-    runId: "interrupted-update",
-    createdAtMs: 1,
-    updatedAtMs: 2,
-    trigger: "cli",
-    phase: "finished",
-    status: "failed",
-    reason: "abandoned",
-    origin: {},
-    target: {},
-    before: {},
-    after: {},
-    steps: [],
-    verification: {},
-    repair: [],
-    confirmedAtMs: null,
-    finishedAtMs: 2,
-    downtimeMs: null,
-  };
+  const abandoned = makeHistory({});
   const settled: UpdateRunRecord = {
     ...abandoned,
     status: "succeeded",

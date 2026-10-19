@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as entrypoint from "../daemon/gateway-entrypoint.js";
 import * as packageRoot from "../infra/openclaw-root.js";
@@ -15,7 +15,10 @@ import * as commands from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import * as databasePreflight from "./doctor-database-preflight.js";
 import {
   preflightUpdateDoctorCli,
@@ -43,134 +46,123 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-async function fixture(
-  run: (f: {
-    root: string;
-    external: string;
-    configPath: string;
-    statePath: string;
-    env: NodeJS.ProcessEnv;
-    runtime: {
-      log: ReturnType<typeof vi.fn>;
-      error: ReturnType<typeof vi.fn>;
-      exit: ReturnType<typeof vi.fn>;
-    };
-    launch: MockInstance<typeof commands.runUtf8CommandWithTimeout>;
-    cleanup: ReturnType<typeof vi.fn>;
-    invoke: () => Promise<void>;
-    schemas: databasePreflight.DoctorDatabasePreflight;
-  }) => Promise<void>,
-) {
-  await withOpenClawTestState({ scenario: "minimal" }, async (source) => {
-    const driver = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
-    recordUpdateRunStep(driver.runId, { step: "openclaw doctor", status: "in_progress" });
-    closeOpenClawStateDatabaseForTest();
-    const root = fs.realpathSync(dirs.make("openclaw-update-canary-"));
-    const external = fs.realpathSync(dirs.make("rehearsal-external-"));
-    fs.writeFileSync(path.join(external, "retained.txt"), "external acknowledged data", {
-      mode: 0o600,
-    });
-    fs.mkdirSync(path.join(root, "state"), { mode: 0o700 });
-    fs.mkdirSync(path.join(root, "workspace"), { mode: 0o700 });
-    const statePath = path.join(root, "state", "openclaw.sqlite");
-    fs.copyFileSync(resolveOpenClawStateSqlitePath(source.env), statePath);
-    fs.chmodSync(statePath, 0o600);
-    const configPath = path.join(root, "openclaw.json");
-    const workspace = path.join(root, "workspace");
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({
-        agents: {
-          defaults: { workspace, cwd: workspace, heartbeat: { every: "0m" } },
-          entries: {},
-        },
-        logging: { file: path.join(root, "canary.log") },
-        gateway: {
-          mode: "local",
-          bind: "loopback",
-          port: 12345,
-          auth: { mode: "token", token: "00000000-0000-4000-8000-000000000000" },
-          tls: { enabled: false },
-          tailscale: { mode: "off" },
-          controlUi: { enabled: false },
-        },
-        cron: { enabled: false, triggers: { enabled: false } },
-        hooks: { enabled: false, internal: { enabled: false } },
-        transcripts: { enabled: false, autoStart: [] },
-        discovery: { mdns: { mode: "off" } },
-      }),
-      { mode: 0o600 },
-    );
-    const bytes = fs.statSync(statePath).size;
-    const env = {
-      ...buildUpdateRehearsalPathEnv(root),
-      ...buildUpdateDoctorEnv({
-        allowGatewayServiceRepair: false,
-        allowGatewayActivation: false,
-        serviceRepairPolicy: "external",
-        deferConfiguredPluginInstallRepair: true,
-      }),
-    };
-    const cleanup = vi.fn(async (assertDirectoryCurrent?: (directory: string) => void) => {
-      assertDirectoryCurrent?.(root);
-      fs.rmSync(root, { recursive: true, force: true });
-    });
-    vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(source.root);
-    vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
-    vi.spyOn(entrypoint, "resolveGatewayInstallEntrypoint").mockResolvedValue(
-      path.join(source.root, "not-executed.js"),
-    );
-    // The copied-state producer and child process are controlled boundaries. The
-    // caller, inventory, filesystem guards, native state reads and collector run.
-    vi.spyOn(snapshots, "prepareUpdateCandidateRehearsal").mockResolvedValue({
-      stateDir: root,
-      configPath,
-      workspaceDir: workspace,
-      env,
-      port: 12345,
-      snapshotCapacity: {
-        reason: "explicit-tmpdir",
-        sqliteBytes: bytes,
-        pluginBytes: 0,
-        requiredBytes: bytes,
-        candidates: [],
-        selection: { kind: "explicit-tmpdir", directory: root },
+function prepareFixture(source: OpenClawTestState) {
+  const driver = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
+  recordUpdateRunStep(driver.runId, { step: "openclaw doctor", status: "in_progress" });
+  closeOpenClawStateDatabaseForTest();
+  const root = fs.realpathSync(dirs.make("openclaw-update-canary-"));
+  const external = fs.realpathSync(dirs.make("rehearsal-external-"));
+  fs.writeFileSync(path.join(external, "retained.txt"), "external acknowledged data", {
+    mode: 0o600,
+  });
+  fs.mkdirSync(path.join(root, "state"), { mode: 0o700 });
+  fs.mkdirSync(path.join(root, "workspace"), { mode: 0o700 });
+  const statePath = path.join(root, "state", "openclaw.sqlite");
+  fs.copyFileSync(resolveOpenClawStateSqlitePath(source.env), statePath);
+  fs.chmodSync(statePath, 0o600);
+  const configPath = path.join(root, "openclaw.json");
+  const workspace = path.join(root, "workspace");
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({
+      agents: {
+        defaults: { workspace, cwd: workspace, heartbeat: { every: "0m" } },
+        entries: {},
       },
-      cleanupDirectories: [root],
-      cleanup,
-    });
-    const launch = vi.spyOn(commands, "runUtf8CommandWithTimeout").mockResolvedValue({
-      code: 0,
-      stdout: "",
-      stderr: "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-      cleanup: "normal",
-    });
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    const schemas: databasePreflight.DoctorDatabasePreflight = {
-      updateSchemaRehearsal: { runId: driver.runId, updaterVersion: "2026.9.2" },
-      incompatible: [],
-      indeterminate: [],
-    };
-    await run({
-      schemas,
-      root,
-      external,
-      configPath,
-      statePath,
-      env,
-      runtime,
-      launch,
-      cleanup,
-      invoke: () => rehearseDeferredUpdateDoctorSchema(schemas, runtime),
-    });
-    expect(fs.readFileSync(path.join(external, "retained.txt"), "utf8")).toBe(
+      logging: { file: path.join(root, "canary.log") },
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        port: 12345,
+        auth: { mode: "token", token: "00000000-0000-4000-8000-000000000000" },
+        tls: { enabled: false },
+        tailscale: { mode: "off" },
+        controlUi: { enabled: false },
+      },
+      cron: { enabled: false, triggers: { enabled: false } },
+      hooks: { enabled: false, internal: { enabled: false } },
+      transcripts: { enabled: false, autoStart: [] },
+      discovery: { mdns: { mode: "off" } },
+    }),
+    { mode: 0o600 },
+  );
+  const bytes = fs.statSync(statePath).size;
+  const env: NodeJS.ProcessEnv = {
+    ...buildUpdateRehearsalPathEnv(root),
+    ...buildUpdateDoctorEnv({
+      allowGatewayServiceRepair: false,
+      allowGatewayActivation: false,
+      serviceRepairPolicy: "external",
+      deferConfiguredPluginInstallRepair: true,
+    }),
+  };
+  const cleanup = vi.fn(async (assertDirectoryCurrent?: (directory: string) => void) => {
+    assertDirectoryCurrent?.(root);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(source.root);
+  vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
+  vi.spyOn(entrypoint, "resolveGatewayInstallEntrypoint").mockResolvedValue(
+    path.join(source.root, "not-executed.js"),
+  );
+  // The copied-state producer and child process are controlled boundaries. The
+  // caller, inventory, filesystem guards, native state reads and collector run.
+  vi.spyOn(snapshots, "prepareUpdateCandidateRehearsal").mockResolvedValue({
+    stateDir: root,
+    configPath,
+    workspaceDir: workspace,
+    env,
+    port: 12345,
+    snapshotCapacity: {
+      reason: "explicit-tmpdir",
+      sqliteBytes: bytes,
+      pluginBytes: 0,
+      requiredBytes: bytes,
+      candidates: [],
+      selection: { kind: "explicit-tmpdir", directory: root },
+    },
+    cleanupDirectories: [root],
+    cleanup,
+  });
+  const launch = vi.spyOn(commands, "runUtf8CommandWithTimeout").mockResolvedValue({
+    code: 0,
+    stdout: "",
+    stderr: "",
+    signal: null,
+    killed: false,
+    termination: "exit",
+    cleanup: "normal",
+  });
+  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  const schemas: databasePreflight.DoctorDatabasePreflight = {
+    updateSchemaRehearsal: { runId: driver.runId, updaterVersion: "2026.9.2" },
+    incompatible: [],
+    indeterminate: [],
+  };
+  return {
+    schemas,
+    root,
+    external,
+    configPath,
+    statePath,
+    env,
+    runtime,
+    launch,
+    cleanup,
+    invoke: () => rehearseDeferredUpdateDoctorSchema(schemas, runtime),
+  };
+}
+
+async function fixture(run: (f: ReturnType<typeof prepareFixture>) => Promise<void>) {
+  await withOpenClawTestState({ scenario: "minimal" }, async (source) => {
+    const f = prepareFixture(source);
+    await run(f);
+    expect(fs.readFileSync(path.join(f.external, "retained.txt"), "utf8")).toBe(
       "external acknowledged data",
     );
   });
 }
+
 function migration(
   id: string,
   collectBackupResources?: PluginDoctorStateMigration["collectBackupResources"],
