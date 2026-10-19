@@ -10,6 +10,7 @@ import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { formatCronPayload, formatCronSchedule } from "../lib/presenter.ts";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
+import { createHovercardControlRef } from "./portaled-hovercard-focus.ts";
 import { Icon } from "./solid/icon.tsx";
 import "./tooltip.ts";
 
@@ -144,6 +145,7 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
   };
   const OpenLink = (link: { job?: CronJob }) => (
     <a
+      ref={createHovercardControlRef()}
       class="session-hovercard__automation-open"
       href={link.job ? jobHref(link.job.id) : props.automation.href}
       onClick={(event) => {
@@ -170,6 +172,7 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
       open-on-click
     >
       <a
+        ref={createHovercardControlRef()}
         class="session-hovercard__context-row session-hovercard__automation-link"
         href={props.automation.href}
         onClick={(event) => {
@@ -205,6 +208,7 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
             <For each={state().cronJobs} keyed={(job) => job.id}>
               {(job) => (
                 <button
+                  ref={createHovercardControlRef()}
                   type="button"
                   class="session-hovercard__automation-choice"
                   aria-pressed={selected()?.id === job().id ? "true" : "false"}
@@ -261,7 +265,9 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
                 </div>
                 <p class="session-hovercard__automation-preview">{instructions(value())}</p>
                 <details>
-                  <summary>{t("sessionHovercard.automationFullInstructions")}</summary>
+                  <summary ref={createHovercardControlRef()}>
+                    {t("sessionHovercard.automationFullInstructions")}
+                  </summary>
                   <pre>{instructions(value())}</pre>
                 </details>
               </div>
@@ -276,6 +282,7 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
         </Show>
         <Show when={state().cronJobsError}>
           <button
+            ref={createHovercardControlRef()}
             type="button"
             class="chip"
             disabled={loading() || !state().connected}
@@ -285,7 +292,13 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
           </button>
         </Show>
         <Show when={state().cronJobsHasMore}>
-          <button type="button" class="chip" disabled={loading()} onClick={() => void load(true)}>
+          <button
+            ref={createHovercardControlRef()}
+            type="button"
+            class="chip"
+            disabled={loading()}
+            onClick={() => void load(true)}
+          >
             {t("chat.sessionDetails.automationMore")}
           </button>
         </Show>

@@ -17,6 +17,7 @@ import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts"
 import { formatGitHubItemReference } from "./github-link-target.ts";
 import { PersonAvatarLink, PersonName } from "./person-activity-link-solid.tsx";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
+import { createHovercardControlRef } from "./portaled-hovercard-focus.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 import { SessionGitDiff } from "./session-git-diff.tsx";
 import {
@@ -28,7 +29,7 @@ import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
 import { progressCardHeadsUp } from "./session-progress-card.ts";
 import { ChannelAvatar } from "./solid/channel-avatar.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
+import { ViewerAvatar, ViewerFacepile } from "./solid/viewer-facepile.tsx";
 import "./session-hovercard.css";
 import "./tooltip.ts";
 
@@ -204,6 +205,7 @@ function AttributionContent(props: {
               open-on-click
             >
               <button
+                ref={createHovercardControlRef()}
                 type="button"
                 class="session-hovercard__attribution-others"
                 style={{
@@ -261,11 +263,11 @@ function AttributionContent(props: {
           </Show>
         </PersonAvatarLink>
         <Show when={remaining().length > 0}>
-          <openclaw-viewer-facepile
-            prop:staticParticipants={remaining()}
-            prop:totalCount={otherCount()}
-            prop:maxVisible={Math.min(remaining().length, MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS)}
-            prop:personActivity={props.routing}
+          <ViewerFacepile
+            staticParticipants={remaining()}
+            totalCount={otherCount()}
+            maxVisible={Math.min(remaining().length, MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS)}
+            personActivity={props.routing}
           />
         </Show>
       </span>
@@ -371,6 +373,7 @@ function PullRequestRow(props: { request: SessionDisplayPullRequest }) {
   const stateLabel = () => (checks() ? `${state()} · ${checks()}` : state());
   return (
     <a
+      ref={createHovercardControlRef()}
       class="session-hovercard__pr-row"
       data-state={props.request.state}
       href={props.request.url}
@@ -442,6 +445,7 @@ function PullRequestDetails(props: { snapshot?: ControlUiSessionPullRequestSnaps
             }
           >
             <a
+              ref={createHovercardControlRef()}
               class="session-hovercard__branch-action"
               href={branch()?.createUrl}
               target="_blank"

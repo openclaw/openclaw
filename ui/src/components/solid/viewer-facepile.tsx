@@ -18,6 +18,7 @@ import { projectAgentIdentity, projectAgents } from "../../lib/reactive/domain-c
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { personActivityLink, type PersonActivityRouting } from "../person-activity-link.ts";
+import { createHovercardControlRef } from "../portaled-hovercard-focus.ts";
 import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
 import { useIdentityAvatarView } from "./identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
@@ -170,6 +171,7 @@ function FacepilePerson(props: {
     <Show when={link()} fallback={avatar}>
       {(target) => (
         <a
+          ref={createHovercardControlRef()}
           class="person-activity-avatar-link"
           href={target().href}
           onClick={(event) => target().open(event)}
@@ -277,7 +279,7 @@ export const ViewerAvatar = defineSolidBridge<ViewerAvatarProps>(
   },
 );
 
-defineSolidBridge<ViewerFacepileProps>(
+export const ViewerFacepile = defineSolidBridge<ViewerFacepileProps>(
   "openclaw-viewer-facepile",
   (props, host) => {
     host.style.display = "contents";

@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import type { personActivityLink } from "./person-activity-link.ts";
+import { createHovercardControlRef } from "./portaled-hovercard-focus.ts";
 
 type ActivityLink = ReturnType<typeof personActivityLink>;
 
@@ -8,6 +9,7 @@ export function PersonName(props: { label: string; link: ActivityLink; class: st
   return (
     <Show when={props.link} fallback={<span class={props.class}>{props.label}</span>}>
       <a
+        ref={createHovercardControlRef()}
         class={[props.class, "person-activity-link"]}
         href={props.link?.href}
         onClick={(event) => props.link?.open(event)}
@@ -40,6 +42,7 @@ export function StandalonePersonLink(props: { children: JSX.Element; link: Activ
   return (
     <Show when={props.link} fallback={props.children}>
       <a
+        ref={createHovercardControlRef()}
         class="person-activity-avatar-link"
         href={props.link?.href}
         onClick={(event) => props.link?.open(event)}

@@ -261,6 +261,25 @@ export class MarkdownDomReconciler {
     this.range = createRange(container);
   }
 
+  /** Markdown owns this foreign DOM range, including its generated controls. */
+  focusableControls(): HTMLElement[] {
+    const controls: HTMLElement[] = [];
+    const selector = "a[href], button, summary, [tabindex]";
+    for (
+      let node = this.range.start.nextSibling;
+      node && node !== this.range.end;
+      node = node.nextSibling
+    ) {
+      if (node instanceof HTMLElement) {
+        if (node.matches(selector)) {
+          controls.push(node);
+        }
+        controls.push(...node.querySelectorAll<HTMLElement>(selector));
+      }
+    }
+    return controls;
+  }
+
   setConnected(connected: boolean): void {
     this.connected = connected;
     for (const slot of this.mediaSlots.values()) {
