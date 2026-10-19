@@ -94,11 +94,10 @@ export function createNodePluginTools(params: {
       continue;
     }
     const pluginId = normalizeToolPolicyName(descriptor.pluginId);
-    const originalToolName = normalizeToolPolicyName(descriptor.name);
     const exposedToolName = normalizeToolPolicyName(toolName);
     if (
       matchesAnyGlobPattern(pluginId, denylist) ||
-      matchesAnyGlobPattern(originalToolName, denylist) ||
+      matchesAnyGlobPattern(entry.normalizedName, denylist) ||
       matchesAnyGlobPattern(exposedToolName, denylist) ||
       matchesAnyGlobPattern("group:plugins", denylist)
     ) {
@@ -111,13 +110,13 @@ export function createNodePluginTools(params: {
       !allowlist.includesDefaults &&
       !(
         (pluginIdTrusted && allowlist.allowsPlugin(pluginId)) ||
-        allowlist.allowsToolName(originalToolName) ||
+        allowlist.allowsToolName(entry.normalizedName) ||
         allowlist.allowsToolName(exposedToolName)
       )
     ) {
       continue;
     }
-    existingNormalized.add(normalizeToolPolicyName(toolName));
+    existingNormalized.add(exposedToolName);
     const mcpTool = descriptor.command === NODE_MCP_TOOLS_CALL_COMMAND ? descriptor.mcp : undefined;
     const tool: AnyAgentTool = {
       name: toolName,
