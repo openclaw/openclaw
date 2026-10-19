@@ -13,16 +13,14 @@ import { WorkerTaskPoolCore } from "./worker-task-pool-core.js";
 import type { WorkerTaskPoolOptions, WorkerTaskResponse } from "./worker-task-pool.types.js";
 
 class FixtureWorker extends EventEmitter implements WorkerLifecycle {
-  threadId: number;
   readonly inputs: Array<{ taskId: number; input: unknown }> = [];
   readonly terminate = vi.fn(async () => {
     this.threadId = -1;
     this.emit("exit", 0);
   });
 
-  constructor(id: number) {
+  constructor(public threadId: number) {
     super();
-    this.threadId = id;
   }
 
   postMessage(value: unknown) {
@@ -40,6 +38,11 @@ class FixtureWorker extends EventEmitter implements WorkerLifecycle {
 
   ready() {
     this.emit("message", { status: "ready" });
+  }
+
+  complete() {
+    this.ready();
+    this.reply();
   }
 
   reply(error?: string) {
@@ -66,21 +69,24 @@ afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
 });
 
-function createPool(
-  options: Pick<
-    WorkerTaskPoolOptions<string>,
-    "maxWorkers" | "maxPendingTasks" | "maxPendingBytes" | "sharedCompute" | "onRotationComplete"
-  > & {
-    requiresReady?: false;
-    computeCapacity?: WorkerComputeCapacity;
-  } = {},
-) {
+function createPool({
+  maxWorkers = 1,
+  requiresReady,
+  computeCapacity = createWorkerComputeCapacity(4),
+  ...options
+}: Pick<
+  WorkerTaskPoolOptions<string>,
+  "maxWorkers" | "maxPendingTasks" | "maxPendingBytes" | "sharedCompute" | "onRotationComplete"
+> & {
+  requiresReady?: false;
+  computeCapacity?: WorkerComputeCapacity;
+} = {}) {
   const workers: FixtureWorker[] = [];
   let constructionFailure: Error | undefined;
   let onCreated: ((worker: FixtureWorker) => void) | undefined;
   let attempts = 0;
   const host: WorkerTaskHost = {
-    ...(options.requiresReady === false ? {} : { requiresReady: true }),
+    requiresReady: requiresReady === false ? undefined : true,
     createWorker() {
       attempts++;
       if (constructionFailure) {
@@ -102,7 +108,7 @@ function createPool(
     receiveMessage: () => false,
     workerStarted() {},
     workerRetiring() {},
-    computeCapacity: options.computeCapacity ?? createWorkerComputeCapacity(4),
+    computeCapacity,
     pools: {
       register: (pool) => pool,
       async close(_pool, closures, finish) {
@@ -114,11 +120,8 @@ function createPool(
   const pool = new WorkerTaskPoolCore<string, string>(
     {
       workerUrl: new URL("file:///synthetic-worker.mjs"),
-      maxWorkers: options.maxWorkers ?? 1,
-      onRotationComplete: options.onRotationComplete,
-      maxPendingTasks: options.maxPendingTasks,
-      maxPendingBytes: options.maxPendingBytes,
-      sharedCompute: options.sharedCompute,
+      maxWorkers,
+      ...options,
       idleTimeoutMs: 0,
     },
     host,
@@ -127,6 +130,7 @@ function createPool(
   return {
     pool,
     workers,
+    complete: () => workers.at(-1)!.complete(),
     attempts: () => attempts,
     failConstruction: (error?: Error) => {
       constructionFailure = error;
@@ -137,9 +141,22 @@ function createPool(
   };
 }
 
+const unavailable = { code: "unavailable" };
+const rejected = { status: "rejected", reason: expect.objectContaining(unavailable) };
+
+async function expectCapacity(result: Promise<string>) {
+  const error = await result.catch((reason: unknown) => reason);
+  expect(error).toBeInstanceOf(WorkerTaskError);
+  if (!(error instanceof WorkerTaskError) || !error.capacityAvailable) {
+    throw new Error("Expected an overload readiness signal");
+  }
+  expect(error.code).toBe("overloaded");
+  return { capacityAvailable: error.capacityAvailable };
+}
+
 it("publishes retired resources before dispatching queued successor input", async () => {
   let nativeReader = false;
-  const { pool, workers } = createPool({
+  const { pool, workers, complete } = createPool({
     onRotationComplete: () => {
       nativeReader = false;
     },
@@ -148,8 +165,7 @@ it("publishes retired resources before dispatching queued successor input", asyn
     nativeReader = true;
     return "first";
   }, {});
-  workers[0]!.ready();
-  workers[0]!.reply();
+  complete();
   await first;
   const rotating = pool.rotate();
   let previousReader: boolean | undefined;
@@ -159,9 +175,7 @@ it("publishes retired resources before dispatching queued successor input", asyn
     return "successor";
   }, {});
   await rotating;
-  const worker = workers.at(-1)!;
-  worker.ready();
-  worker.reply();
+  complete();
   await expect(successor).resolves.toBe("successor");
   expect(workers[0]!.threadId).toBe(-1);
   expect(previousReader).toBe(false);
@@ -173,10 +187,9 @@ it("holds queued input after resource publication fails until rotation is retrie
   const released = vi.fn().mockImplementationOnce(() => {
     throw failure;
   });
-  const { pool, workers } = createPool({ onRotationComplete: released });
+  const { pool, workers, complete } = createPool({ onRotationComplete: released });
   const first = pool.run("first", {});
-  workers[0]!.ready();
-  workers[0]!.reply();
+  complete();
   await first;
   const rotating = pool.rotate();
   const prepared = vi.fn(() => "successor");
@@ -185,8 +198,7 @@ it("holds queued input after resource publication fails until rotation is retrie
   expect(workers[0]!.threadId).toBe(-1);
   expect(prepared).not.toHaveBeenCalled();
   await pool.rotate();
-  workers.at(-1)!.ready();
-  workers.at(-1)!.reply();
+  complete();
   await expect(successor).resolves.toBe("successor");
   expect(released).toHaveBeenCalledTimes(2);
 });
@@ -194,7 +206,7 @@ it("holds queued input after resource publication fails until rotation is retrie
 it.each(["error", "exit", "constructor"] as const)(
   "rejects one bootstrap cohort after %s and retries only after rotation",
   async (failure) => {
-    const { pool, workers, attempts, failConstruction, onCreated } = createPool();
+    const { pool, complete, attempts, failConstruction, onCreated } = createPool();
     const nativeFailure = Object.assign(new Error("synthetic heap exhausted"), {
       code: "ERR_WORKER_OUT_OF_MEMORY",
     });
@@ -217,12 +229,7 @@ it.each(["error", "exit", "constructor"] as const)(
       pool.run(prepare, { inputBytes: 16, onInputConsumed: release }),
     );
     const outcomes = await Promise.allSettled(tasks);
-    expect(outcomes).toEqual(
-      Array.from({ length: 12 }, () => ({
-        status: "rejected",
-        reason: expect.objectContaining({ code: "unavailable" }),
-      })),
-    );
+    expect(outcomes).toEqual(Array.from({ length: 12 }, () => rejected));
     if (failure === "error") {
       expect(outcomes[0]).toMatchObject({ reason: { cause: nativeFailure } });
     }
@@ -230,16 +237,14 @@ it.each(["error", "exit", "constructor"] as const)(
     expect(prepare).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledTimes(12);
     expect(pool.getSnapshot()).toMatchObject({ activeTasks: 0, pendingTasks: 0, workers: 0 });
-    await expect(pool.run("still unavailable", {})).rejects.toMatchObject({ code: "unavailable" });
+    await expect(pool.run("still unavailable", {})).rejects.toMatchObject(unavailable);
     expect(attempts()).toBe(1);
 
     failConstruction();
     onCreated();
     await pool.rotate();
     const recovered = pool.run("recovered", {});
-    const worker = workers.at(-1)!;
-    worker.ready();
-    worker.reply();
+    complete();
     await expect(recovered).resolves.toBe("recovered");
     expect(attempts()).toBe(2);
   },
@@ -251,24 +256,21 @@ it("keeps a healthy sibling serving the backlog without repeatedly replacing the
   const worker = workers[0]!;
   worker.ready();
   const failed = pool.run("failed boot", {});
-  const failedResult = expect(failed).rejects.toMatchObject({ code: "unavailable" });
-  const pending = ["first", "second", "third"].map((input) => pool.run(input, {}));
+  const failedResult = expect(failed).rejects.toMatchObject(unavailable);
+  const inputs = ["first", "second", "third"];
+  const pending = inputs.map((input) => pool.run(input, {}));
   workers[1]!.emit("error", new Error("second worker failed to initialize"));
   await failedResult;
   pending.push(pool.run("newly admitted", {}));
+  inputs.push("newly admitted");
   expect(attempts()).toBe(2);
   worker.reply();
   await expect(healthy).resolves.toBe("healthy");
-  for (const input of ["first", "second", "third", "newly admitted"]) {
+  for (const input of inputs) {
     expect(worker.inputs.at(-1)?.input).toBe(input);
     worker.reply();
   }
-  await expect(Promise.all(pending)).resolves.toEqual([
-    "first",
-    "second",
-    "third",
-    "newly admitted",
-  ]);
+  await expect(Promise.all(pending)).resolves.toEqual(inputs);
   expect(attempts()).toBe(2);
 });
 
@@ -281,10 +283,7 @@ it("does not start a late input preparation after its sibling bootstrap failed",
   const results = Promise.allSettled([failed, preparing]);
   workers[0]!.emit("error", new Error("module unavailable"));
   prepared.resolve("prepared after failure");
-  expect(await results).toEqual([
-    { status: "rejected", reason: expect.objectContaining({ code: "unavailable" }) },
-    { status: "rejected", reason: expect.objectContaining({ code: "unavailable" }) },
-  ]);
+  expect(await results).toEqual([rejected, rejected]);
   expect(release).toHaveBeenCalledOnce();
   expect(attempts()).toBe(1);
   expect(pool.getSnapshot().pendingTasks).toBe(0);
@@ -304,7 +303,7 @@ it("requests a checkpoint when failed bootstrap leaves a healthy host-waiting si
   const worker = workers[0]!;
   worker.ready();
   const failed = pool.run("failed boot", {});
-  const failedResult = expect(failed).rejects.toMatchObject({ code: "unavailable" });
+  const failedResult = expect(failed).rejects.toMatchObject(unavailable);
   workers[1]!.emit("error", new Error("second worker failed to initialize"));
   await failedResult;
   worker.emit("message", {
@@ -331,10 +330,7 @@ it("retains rejected owned-task admission until each owner releases its task", a
   const queued = pool.runTask("queued task", { inputBytes: 16 });
   const results = Promise.allSettled([failed.result, queued.result]);
   workers[0]!.emit("error", new Error("module unavailable"));
-  expect(await results).toEqual([
-    { status: "rejected", reason: expect.objectContaining({ code: "unavailable" }) },
-    { status: "rejected", reason: expect.objectContaining({ code: "unavailable" }) },
-  ]);
+  expect(await results).toEqual([rejected, rejected]);
   expect(pool.getSnapshot().pendingTasks).toBe(2);
   await Promise.all([failed.close(), queued.close()]);
   expect(pool.getSnapshot().pendingTasks).toBe(0);
@@ -342,7 +338,7 @@ it("retains rejected owned-task admission until each owner releases its task", a
 });
 
 it("keeps a failed native stop latched until a successful rotation joins it", async () => {
-  const { pool, workers, attempts } = createPool();
+  const { pool, workers, complete, attempts } = createPool();
   const failed = pool.run("failed boot", {});
   const failedResult = expect(failed).rejects.toThrow("exit uncertain");
   const worker = workers[0]!;
@@ -353,13 +349,12 @@ it("keeps a failed native stop latched until a successful rotation joins it", as
   await failedResult;
   expect(pool.getSnapshot().pendingTasks).toBe(1);
   await expect(pool.rotate()).rejects.toThrow("exit still uncertain");
-  await expect(pool.run("no premature retry", {})).rejects.toMatchObject({ code: "unavailable" });
+  await expect(pool.run("no premature retry", {})).rejects.toMatchObject(unavailable);
   expect(attempts()).toBe(1);
   await pool.rotate();
   expect(pool.getSnapshot().pendingTasks).toBe(0);
   const recovered = pool.run("recovered", {});
-  workers[1]!.ready();
-  workers[1]!.reply();
+  complete();
   await expect(recovered).resolves.toBe("recovered");
 });
 
@@ -386,7 +381,7 @@ it("does not latch malformed task input or an ordinary failure from a ready work
 it("preserves arbitrary worker recovery without a served-protocol readiness requirement", async () => {
   const { pool, workers } = createPool({ requiresReady: false });
   const failed = pool.run("custom worker exits", {});
-  const failedResult = expect(failed).rejects.toMatchObject({ code: "unavailable" });
+  const failedResult = expect(failed).rejects.toMatchObject(unavailable);
   const queued = pool.run("custom response", {});
   workers[0]!.emit("exit", 0);
   await failedResult;
@@ -408,14 +403,7 @@ it.each(["local-first", "shared-first"] as const)(
     const other = createPool({ requiresReady: false, sharedCompute: true, computeCapacity });
     const localWork = local.pool.run("local", { inputBytes: 8 });
     const sharedWork = other.pool.run("shared", { inputBytes: DEFAULT_WORKER_PENDING_BYTES - 8 });
-    const overload = await local.pool
-      .run("retry", { inputBytes: 16 })
-      .catch((error: unknown) => error);
-    expect(overload).toBeInstanceOf(WorkerTaskError);
-    if (!(overload instanceof WorkerTaskError) || !overload.capacityAvailable) {
-      throw new Error("Expected an overload readiness signal");
-    }
-    expect(overload.code).toBe("overloaded");
+    const overload = await expectCapacity(local.pool.run("retry", { inputBytes: 16 }));
     let ready = false;
     void overload.capacityAvailable.then(() => {
       ready = true;
@@ -433,8 +421,7 @@ it.each(["local-first", "shared-first"] as const)(
     const retry = local.pool.run("retry", { inputBytes: 16 });
     local.workers[0]!.reply();
     await expect(retry).resolves.toBe("retry");
-    expect(computeCapacity.getSnapshot().pendingTasks).toBe(0);
-    expect(computeCapacity.getSnapshot().pendingBytes).toBe(0);
+    expect(computeCapacity.getSnapshot()).toMatchObject({ pendingTasks: 0, pendingBytes: 0 });
   },
 );
 
@@ -442,14 +429,11 @@ it("wakes an overloaded caller on close and rejects its retry as unavailable", a
   const { pool } = createPool({ requiresReady: false, maxPendingTasks: 1 });
   const held = pool.run("held", {});
   const heldOutcome = Promise.allSettled([held]);
-  const overload = await pool.run("retry", {}).catch((error: unknown) => error);
-  if (!(overload instanceof WorkerTaskError) || !overload.capacityAvailable) {
-    throw new Error("Expected an overload readiness signal");
-  }
+  const overload = await expectCapacity(pool.run("retry", {}));
   await pool.close();
   await overload.capacityAvailable;
   expect(await heldOutcome).toMatchObject([{ status: "rejected" }]);
-  await expect(pool.run("retry", {})).rejects.toMatchObject({ code: "unavailable" });
+  await expect(pool.run("retry", {})).rejects.toMatchObject(unavailable);
 });
 
 it("does not promise readiness for input that exceeds the pool byte limit", async () => {
