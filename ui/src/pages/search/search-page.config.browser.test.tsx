@@ -57,45 +57,33 @@ const testResult: WebSearchTestResult = {
 };
 
 beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
+
+function schemaAt(path: string[], properties: NonNullable<JsonSchema["properties"]>) {
+  return path.reduceRight<JsonSchema>(
+    (child, key) => ({ type: "object", properties: { [key]: child } }),
+    { type: "object", properties },
+  );
+}
 
 async function mount(options: { advanced?: boolean } = {}) {
-  const providerSchema = providerPath.reduceRight<JsonSchema>(
-    (child, key) => ({ type: "object", properties: { [key]: child } }),
-    {
-      type: "object",
-      properties: {
-        baseUrl: { type: "string", title: "Search endpoint" },
-        apiKey: { type: "string", title: "Example API key" },
-      },
+  const providerSchema = schemaAt(providerPath, {
+    baseUrl: { type: "string", title: "Search endpoint" },
+    apiKey: { type: "string", title: "Example API key" },
+  });
+  const schema = {
+    ...providerSchema,
+    properties: {
+      ...providerSchema.properties,
+      ...(options.advanced
+        ? schemaAt(["tools", "web", "search"], {
+            enabled: { type: "boolean" },
+            provider: { type: "string" },
+            maxResults: { type: "integer", title: "Result limit", default: 5 },
+          }).properties
+        : {}),
     },
-  );
-  const schema = options.advanced
-    ? {
-        ...providerSchema,
-        properties: {
-          ...providerSchema.properties,
-          tools: {
-            type: "object",
-            properties: {
-              web: {
-                type: "object",
-                properties: {
-                  search: {
-                    type: "object",
-                    properties: {
-                      maxResults: { type: "integer", title: "Result limit", default: 5 },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      }
-    : providerSchema;
+  };
   let stored: ConfigSnapshot = {
     config: structuredClone(config),
     sourceConfig: structuredClone(config),
@@ -108,56 +96,46 @@ async function mount(options: { advanced?: boolean } = {}) {
   };
   const save = createDeferred<unknown>();
   const writeStarted = createDeferred<{ raw: string; baseHash: string }>();
-  let searchResponse = Promise.resolve(testResult);
+  const searchResponse = Promise.resolve(testResult);
   const reads: Promise<unknown>[] = [];
   const tests: Promise<unknown>[] = [];
-  const request = createGatewayRequestMock((method, params) => {
-    let response: Promise<unknown>;
-    switch (method) {
-      case "config.get":
-        response = Promise.resolve(structuredClone(stored));
-        break;
-      case "config.schema":
-        response = Promise.resolve({
-          schema,
-          uiHints: {},
-          version: "test-1",
-          generatedAt: "",
-        });
-        break;
-      case "config.set":
-        writeStarted.resolve(params as { raw: string; baseHash: string });
-        response = save.promise;
-        break;
-      case "models.list":
-        response = Promise.resolve({ models: [] });
-        break;
-      case "plugins.credentials.inspect":
-        response = Promise.resolve({ baseHash: stored.hash, credential: { kind: "literal" } });
-        break;
-      case "webSearch.status":
-        response = Promise.resolve({
-          enabled: true,
+  const responses: Record<string, (params: unknown) => Promise<unknown>> = {
+    "config.get": async () => structuredClone(stored),
+    "config.schema": async () => ({ schema, uiHints: {}, version: "test-1", generatedAt: "" }),
+    "config.set": (params) => {
+      writeStarted.resolve(params as { raw: string; baseHash: string });
+      return save.promise;
+    },
+    "models.list": async () => ({ models: [] }),
+    "plugins.credentials.inspect": async () => ({
+      baseHash: stored.hash,
+      credential: { kind: "literal" },
+    }),
+    "webSearch.status": async () =>
+      ({
+        enabled: true,
+        provider: "example",
+        agentId: "main",
+        model: { provider: "example", id: "local", runtime: "openclaw" },
+        route: {
+          kind: "managed",
           provider: "example",
-          agentId: "main",
-          model: { provider: "example", id: "local", runtime: "openclaw" },
-          route: {
-            kind: "managed",
-            provider: "example",
-            label: `Runtime ${stored.appliedConfigHash}`,
-            testable: true,
-          },
-          providers: [provider],
-        } satisfies WebSearchStatusResult);
-        break;
-      case "webSearch.test":
-        response = searchResponse;
-        tests.push(response);
-        break;
-      default:
-        throw new Error(`Unexpected request: ${method}`);
+          label: `Runtime ${stored.appliedConfigHash}`,
+          testable: true,
+        },
+        providers: [provider],
+      }) satisfies WebSearchStatusResult,
+    "webSearch.test": () => searchResponse,
+  };
+  const request = createGatewayRequestMock((method, params) => {
+    const respond = Object.hasOwn(responses, method) ? responses[method] : undefined;
+    if (!respond) {
+      throw new Error(`Unexpected request: ${method}`);
     }
-    if (method !== "config.set" && method !== "webSearch.test") {
+    const response = respond(params);
+    if (method === "webSearch.test") {
+      tests.push(response);
+    } else if (method !== "config.set") {
       reads.push(response);
     }
     return response;
@@ -217,16 +195,16 @@ async function mount(options: { advanced?: boolean } = {}) {
   return {
     element,
     runtime,
-    request,
+    calls: (method: string) => request.mock.calls.filter(([name]) => name === method),
+    input: (label: string) =>
+      element.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!,
+    testButton: () => testButton(element),
     save,
     writeStarted,
     settle,
     replaceConnection: () => {
       client = createTestGatewayClient(request);
       connection.publish({ ...gateway.snapshot, client });
-    },
-    setTestResponse: (response: Promise<WebSearchTestResult>) => {
-      searchResponse = response;
     },
     setStored: (snapshot: ConfigSnapshot) => {
       stored = snapshot;
@@ -259,28 +237,32 @@ describe("Search configuration lifecycle", () => {
   ])("rejects a retired $label blur after replacing the connection", async ({ label, value }) => {
     const fixture = await mount({ advanced: true });
     if (label === "Result limit") {
-      fixture.element.querySelector<HTMLDetailsElement>("details")!.open = true;
+      const advanced = fixture.element.querySelector<HTMLDetailsElement>("details")!;
+      expect(advanced.open).toBe(false);
+      advanced.open = true;
     }
-    const selector = `input[aria-label="${label}"]`;
-    const field = fixture.element.querySelector<HTMLInputElement>(selector)!;
+    const field = fixture.input(label);
     expect(field).not.toBeNull();
+    if (label === "Search endpoint") {
+      expect(field.value).toBe("https://initial.example.test");
+    }
     await fixture.runtime.refresh({ background: true });
     await fixture.settle();
-    expect(fixture.element.querySelector(selector)).toBe(field);
+    expect(fixture.input(label)).toBe(field);
     field.focus();
     field.value = value;
     field.dispatchEvent(new Event("input", { bubbles: true }));
 
     fixture.replaceConnection();
     await fixture.settle();
-    const current = fixture.element.querySelector<HTMLInputElement>(selector)!;
+    const current = fixture.input(label);
     expect(current).not.toBeNull();
     expect(current).not.toBe(field);
     expect(current.disabled).toBe(false);
     expect(field.isConnected).toBe(false);
     field.dispatchEvent(new FocusEvent("blur"));
     await fixture.settle();
-    expect(fixture.request.mock.calls.some(([method]) => method === "config.set")).toBe(false);
+    expect(fixture.calls("config.set")).toHaveLength(0);
     expect(fixture.runtime.state.configFormDirty).toBe(false);
 
     if (label === "Result limit") {
@@ -289,6 +271,14 @@ describe("Search configuration lifecycle", () => {
     edit(fixture.element, label, value);
     const submitted = await fixture.writeStarted.promise;
     expect(submitted.baseHash).toBe("saved-1");
+    expect(JSON.parse(submitted.raw)).toMatchObject(
+      label === "Search endpoint"
+        ? { plugins: { entries: { example: { config: { webSearch: { baseUrl: value } } } } } }
+        : { tools: { web: { search: { maxResults: Number(value) } } } },
+    );
+    expect(fixture.element.querySelectorAll('select[aria-label="Search provider"]')).toHaveLength(
+      1,
+    );
     fixture.save.resolve({ config: JSON.parse(submitted.raw), hash: "saved-2" });
     await fixture.runtime.flushFormChanges();
   });
@@ -315,20 +305,18 @@ describe("Search configuration lifecycle", () => {
     }
     flush();
     try {
-      expect(fixture.runtime.state.configSaving).toBe(false);
-      expect(fixture.runtime.state.configFormDirty).toBe(phase !== "pending reverted");
-      expect(fixture.runtime.state.configAutoSaveStatus).toBe(
-        phase === "rejected" ? "error" : "saving",
-      );
-      expect(testButton(fixture.element).disabled).toBe(true);
-      testButton(fixture.element).click();
-      expect(fixture.request.mock.calls.some(([method]) => method === "webSearch.test")).toBe(
-        false,
-      );
+      expect(fixture.runtime.state).toMatchObject({
+        configSaving: false,
+        configFormDirty: phase !== "pending reverted",
+        configAutoSaveStatus: phase === "rejected" ? "error" : "saving",
+      });
+      expect(fixture.testButton().disabled).toBe(true);
+      fixture.testButton().click();
+      expect(fixture.calls("webSearch.test")).toHaveLength(0);
       if (phase === "rejected") {
         await waitForSolid(() => {
           expect(field.isConnected).toBe(true);
-          expect(fixture.element.querySelector(`input[aria-label="${label}"]`)).toBe(field);
+          expect(fixture.input(label)).toBe(field);
           expect(field.disabled).toBe(false);
         });
         expect(fixture.element.textContent).toContain("Synthetic save rejected");
@@ -350,14 +338,14 @@ describe("Search configuration lifecycle", () => {
 
   it("invalidates completed health after an external unsaved draft", async () => {
     const fixture = await mount();
-    testButton(fixture.element).click();
+    fixture.testButton().click();
     await fixture.settle(true);
     expect(fixture.element.textContent).toContain(testResult.content);
 
     fixture.runtime.patchForm(endpointPath, "https://draft.example.test");
     flush();
     expect(fixture.element.textContent).not.toContain(testResult.content);
-    expect(testButton(fixture.element).disabled).toBe(true);
+    expect(fixture.testButton().disabled).toBe(true);
   });
 
   it("waits for activation and refreshes automatically when only the applied revision advances", async () => {
@@ -378,23 +366,18 @@ describe("Search configuration lifecycle", () => {
     await committed;
     await vi.advanceTimersByTimeAsync(250);
     await fixture.settle();
-    expect(fixture.runtime.state.configFormDirty).toBe(false);
-    expect(fixture.runtime.state.configNeedsApply).toBe(true);
-    expect(testButton(fixture.element).disabled).toBe(true);
+    expect(fixture.runtime.state).toMatchObject({ configFormDirty: false, configNeedsApply: true });
+    expect(fixture.testButton().disabled).toBe(true);
     expect(fixture.element.textContent).toContain("Runtime revision-1");
-    const before = fixture.request.mock.calls.filter(
-      ([method]) => method === "webSearch.status",
-    ).length;
+    const before = fixture.calls("webSearch.status").length;
     const savedHash = fixture.runtime.state.configSnapshot?.hash;
     fixture.setStored({ ...fixture.stored(), appliedConfigHash: "revision-2" });
     await vi.advanceTimersByTimeAsync(750);
     await fixture.settle();
     expect(fixture.runtime.state.configSnapshot?.hash).toBe(savedHash);
     expect(fixture.runtime.state.configNeedsApply).toBe(false);
-    expect(
-      fixture.request.mock.calls.filter(([method]) => method === "webSearch.status").length,
-    ).toBeGreaterThan(before);
+    expect(fixture.calls("webSearch.status").length).toBeGreaterThan(before);
     expect(fixture.element.textContent).toContain("Runtime revision-2");
-    expect(testButton(fixture.element).disabled).toBe(false);
+    expect(fixture.testButton().disabled).toBe(false);
   });
 });

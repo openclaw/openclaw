@@ -173,8 +173,13 @@ async function mount(
   }
   return {
     element,
+    input: (label: string) =>
+      element.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!,
+    click: (label: string) => button(element, label).click(),
+    calls: (method: string) => request.mock.calls.filter(([name]) => name === method),
+    statuses: () =>
+      [...element.querySelectorAll('[role="status"]')].map((region) => region.textContent),
     dispose: () => view.unmount(),
-    request,
     runtime,
     publishRuntime: () => {
       for (const listener of runtimeListeners) {
@@ -212,6 +217,12 @@ function select(element: Element, label: string, value: string) {
   field.value = value;
   field.dispatchEvent(new Event("change", { bubbles: true }));
 }
+function editInput(input: HTMLInputElement, value: string) {
+  input.focus();
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.blur();
+}
 
 describe("Search settings", () => {
   it("keeps the initial localized query and edited draft when the locale changes", async () => {
@@ -219,9 +230,7 @@ describe("Search settings", () => {
     try {
       await i18n.setLocale("pt-BR");
       const fixture = await mount();
-      const query = fixture.element.querySelector<HTMLInputElement>(
-        `input[aria-label="${i18n.t("searchPage.query")}"]`,
-      )!;
+      const query = fixture.input(i18n.t("searchPage.query"));
       const initialQuery = i18n.t("searchPage.queryDefault");
       expect(query.value).toBe(initialQuery);
 
@@ -248,9 +257,7 @@ describe("Search settings", () => {
     async (outcome) => {
       const catalog = createDeferred<ModelCatalogResult>();
       const fixture = await mount({ modelsResponse: catalog.promise, waitReady: false });
-      expect(fixture.request.mock.calls.some(([method]) => method === "webSearch.status")).toBe(
-        false,
-      );
+      expect(fixture.calls("webSearch.status")).toHaveLength(0);
       if (outcome === "success") {
         fixture.setResult({ ...ready, agentId: "scout" });
         fixture.selection.set("scout");
@@ -260,9 +267,7 @@ describe("Search settings", () => {
       }
       await fixture.statusRequested;
       await fixture.settle();
-      const statuses = fixture.request.mock.calls.filter(
-        ([method]) => method === "webSearch.status",
-      );
+      const statuses = fixture.calls("webSearch.status");
       expect(statuses).toHaveLength(1);
       expect(statuses[0]?.[1]).toEqual({ agentId: outcome === "success" ? "scout" : "main" });
       expect(fixture.element.querySelector('select[aria-label="Search provider"]')).not.toBeNull();
@@ -274,9 +279,7 @@ describe("Search settings", () => {
     const fixture = await mount();
     expect(fixture.element.querySelector(".page-title")?.textContent).toBe("Search");
     expect(fixture.element.textContent).toContain("Configured");
-    expect(
-      [...fixture.element.querySelectorAll('[role="status"]')].map((region) => region.textContent),
-    ).toContainEqual(expect.stringContaining("Not tested"));
+    expect(fixture.statuses()).toContainEqual(expect.stringContaining("Not tested"));
     select(fixture.element, "Search provider", "searxng");
     await fixture.settle();
     expect(fixture.runtime.patchForm).toHaveBeenCalledWith(
@@ -291,74 +294,13 @@ describe("Search settings", () => {
       "search",
       "provider",
     ]);
-    button(fixture.element, "Test search").click();
+    fixture.click("Test search");
     await fixture.settle();
-    expect(
-      [...fixture.element.querySelectorAll('[role="status"]')].map((region) => region.textContent),
-    ).toContainEqual(expect.stringContaining("Search succeeded"));
+    expect(fixture.statuses()).toContainEqual(expect.stringContaining("Search succeeded"));
     expect(fixture.element.querySelector('a[href="https://example.com/docs"]')?.textContent).toBe(
       "Documentation",
     );
   });
-
-  it.each(["endpoint", "advanced"] as const)(
-    "edits %s fields through the config owner",
-    async (kind) => {
-      const fixture = await mount();
-      const endpoint = kind === "endpoint";
-      const path = endpoint ? providerPath : ["tools", "web", "search"];
-      const label = endpoint ? "Search endpoint" : "Result limit";
-      fixture.runtime.state.configSchema = path.reduceRight<unknown>(
-        (schema, key) => ({ type: "object", properties: { [key]: schema } }),
-        {
-          type: "object",
-          properties: endpoint
-            ? { baseUrl: { type: "string", title: label } }
-            : {
-                enabled: { type: "boolean" },
-                provider: { type: "string" },
-                maxResults: { type: "integer", title: label, default: 5 },
-              },
-        },
-      );
-      fixture.publishRuntime();
-      flush();
-      if (!endpoint) {
-        const advanced = fixture.element.querySelector<HTMLDetailsElement>("details")!;
-        expect(advanced.open).toBe(false);
-        advanced.open = true;
-      }
-      const field = fixture.element.querySelector<HTMLInputElement>(
-        `input[aria-label="${label}"]`,
-      )!;
-      expect(field).not.toBeNull();
-      if (endpoint) {
-        expect(field.value).toBe("https://search.example.com");
-      }
-      field.focus();
-      field.value = endpoint ? "https://custom.example.com" : "8";
-      field.dispatchEvent(new Event("input", { bubbles: true }));
-      field.blur();
-      await fixture.settle();
-      expect(fixture.runtime.patchForm).toHaveBeenCalledWith(
-        [...path, endpoint ? "baseUrl" : "maxResults"],
-        endpoint ? "https://custom.example.com" : 8,
-      );
-      if (endpoint) {
-        fixture.setResult({
-          ...ready,
-          providers: ready.providers.map((provider) => ({ ...provider, configPath: [] })),
-        });
-        button(fixture.element, "Refresh search status").click();
-        await fixture.settle();
-        expect(fixture.element.querySelector('input[aria-label="Search endpoint"]')).toBeNull();
-      } else {
-        expect(
-          fixture.element.querySelectorAll('select[aria-label="Search provider"]'),
-        ).toHaveLength(1);
-      }
-    },
-  );
 
   it.each([
     { label: "other subtree", configPath: providerPath, stored: REDACTED_SENTINEL },
@@ -401,10 +343,7 @@ describe("Search settings", () => {
     );
     if (configPath.length) {
       expect(independent).not.toBeNull();
-      independent!.focus();
-      independent!.value = "synthetic-request-key";
-      independent!.dispatchEvent(new Event("input", { bubbles: true }));
-      independent!.blur();
+      editInput(independent!, "synthetic-request-key");
       await fixture.settle();
       expect(fixture.runtime.patchForm).toHaveBeenCalledWith(
         [...providerPath, "apiKey"],
@@ -420,15 +359,21 @@ describe("Search settings", () => {
     )!;
     expect(input.placeholder).toBe(stored ? "••••••••" : "");
     expect(input.value).toBe("");
-    input.focus();
-    input.value = "synthetic-replacement-key";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.blur();
+    editInput(input, "synthetic-replacement-key");
     await fixture.settle();
     expect(fixture.runtime.patchForm).toHaveBeenCalledWith(
       credentialPath,
       "synthetic-replacement-key",
     );
+    if (configPath.length) {
+      fixture.setResult({
+        ...ready,
+        providers: [{ ...ready.providers[0]!, configPath: [] }],
+      });
+      fixture.click("Refresh search status");
+      await fixture.settle();
+      expect(fixture.input("Independent request key")).toBeNull();
+    }
   });
 
   it("retries a failed configuration read without attempting a write", async () => {
@@ -436,7 +381,7 @@ describe("Search settings", () => {
     fixture.runtime.state.lastError = "Could not load search settings";
     fixture.publishRuntime();
     flush();
-    button(fixture.element, "Retry").click();
+    fixture.click("Retry");
     await fixture.settle();
     expect(fixture.runtime.refresh).toHaveBeenCalledOnce();
     expect(fixture.runtime.refreshSchema).toHaveBeenCalledOnce();
@@ -449,13 +394,9 @@ describe("Search settings", () => {
       const fixture = await mount();
       const old = createDeferred<unknown>();
       fixture.setTestResponse(old.promise);
-      button(fixture.element, "Test search").click();
+      fixture.click("Test search");
       flush();
-      expect(
-        [...fixture.element.querySelectorAll('[role="status"]')].map(
-          (region) => region.textContent,
-        ),
-      ).toContainEqual(expect.stringContaining("Searching…"));
+      expect(fixture.statuses()).toContainEqual(expect.stringContaining("Searching…"));
       if (change === "agent") {
         fixture.setResult({
           ...ready,
@@ -478,14 +419,12 @@ describe("Search settings", () => {
     "locks the tested query until %s settles and clears health on editing",
     async (outcome) => {
       const fixture = await mount();
-      const query = fixture.element.querySelector<HTMLInputElement>(
-        'input[aria-label="Search query"]',
-      )!;
+      const query = fixture.input("Search query");
       query.value = "Query A";
       query.dispatchEvent(new Event("input", { bubbles: true }));
       const pending = createDeferred<unknown>();
       fixture.setTestResponse(pending.promise);
-      button(fixture.element, "Test search").click();
+      fixture.click("Test search");
       flush();
       try {
         expect(query.disabled).toBe(true);
@@ -517,9 +456,7 @@ describe("Search settings", () => {
         outcome === "success" ? "Search succeeded" : "Search failed",
       );
       expect(query.disabled).toBe(false);
-      expect(
-        fixture.request.mock.calls.find(([method]) => method === "webSearch.test")?.[1],
-      ).toMatchObject({ query: "Query A" });
+      expect(fixture.calls("webSearch.test")[0]?.[1]).toMatchObject({ query: "Query A" });
       if (outcome === "success") {
         expect(fixture.element.textContent).toContain("Previous answer");
       }
@@ -544,17 +481,17 @@ describe("Search settings", () => {
         },
       },
     });
-    expect(fixture.element.querySelector('input[aria-label="Search query"]')).toBeNull();
+    expect(fixture.input("Search query")).toBeNull();
     expect(
-      [...fixture.element.querySelectorAll("button")].some(
-        (candidate) => candidate.textContent?.trim() === "Test search",
+      [...fixture.element.querySelectorAll("button")].map((candidate) =>
+        candidate.textContent?.trim(),
       ),
-    ).toBe(false);
-    button(fixture.element, "Test in chat").click();
+    ).not.toContain("Test search");
+    fixture.click("Test in chat");
     expect(fixture.navigate).toHaveBeenCalledExactlyOnceWith("new-session", {
       search: "?agent=main&model=example%2Flocal",
     });
-    expect(fixture.request.mock.calls.some(([method]) => method === "webSearch.test")).toBe(false);
+    expect(fixture.calls("webSearch.test")).toHaveLength(0);
     fixture.dispose();
     const reader = await mount({ admin: false });
     expect(button(reader.element, "Test search").disabled).toBe(true);
@@ -574,11 +511,12 @@ describe("Search settings", () => {
         testProvider: { id: "searxng", label: "SearXNG" },
       },
     });
-    button(fixture.element, "Test SearXNG").click();
+    fixture.click("Test SearXNG");
     await fixture.settle();
-    expect(
-      fixture.request.mock.calls.find(([method]) => method === "webSearch.test")?.[1],
-    ).toMatchObject({ providerId: "searxng", agentId: "main" });
+    expect(fixture.calls("webSearch.test")[0]?.[1]).toMatchObject({
+      providerId: "searxng",
+      agentId: "main",
+    });
     expect(fixture.element.textContent).toContain("Search succeeded");
     expect(fixture.element.textContent).toContain("Check in chat");
   });
@@ -594,7 +532,7 @@ describe("Search settings", () => {
         citations: [{ title: "Unsafe", url: "javascript:alert(1)" }],
       }),
     );
-    button(fixture.element, "Test search").click();
+    fixture.click("Test search");
     await fixture.settle();
     expect(fixture.element.textContent).toContain('<img src=x onerror="alert(1)">');
     expect(fixture.element.querySelector('a[href^="javascript:"]')).toBeNull();
