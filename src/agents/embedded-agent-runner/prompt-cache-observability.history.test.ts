@@ -143,6 +143,56 @@ describe("prompt cache history fingerprints", () => {
     });
   });
 
+  it.each([false, true])(
+    "ignores internal tool-result envelopes but detects content rewrites (sealed=%s)",
+    async (sealed) => {
+      await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
+        const observer = createPromptCacheRequestObserver(
+          { sessionId: scopedKey("tool-result-envelope"), streamStrategy: "test" },
+          () => {},
+        );
+        const model = { provider: "openai", id: "test-model", api: "openai-responses" } as const;
+        const publish = (text: string, metadata?: Record<string, unknown>) => {
+          const entry = {
+            message: {
+              role: "toolResult" as const,
+              toolCallId: "exec-1",
+              toolName: "exec",
+              content: [{ type: "text" as const, text }],
+              isError: false,
+              timestamp: 1,
+              ...(metadata ? { __openclaw: metadata } : {}),
+            },
+          };
+          if (sealed) {
+            normalizeTranscriptJsonValue(entry, "entry");
+          }
+          return entry.message;
+        };
+        await observer.onModelRequest(model, { messages: [publish("fixture result")] });
+        const metadata = {
+          runId: "fixture-run",
+          codeModeCheckpoint: { status: "completed", replaySafe: true },
+        };
+        const message = publish("fixture result", metadata);
+        expect(await observer.onModelRequest(model, { messages: [message] })).toMatchObject({
+          prefixUnchanged: true,
+          changes: null,
+        });
+        const withoutEnvelope = sealed ? publish("fixture result") : message;
+        if (!sealed) {
+          delete withoutEnvelope["__openclaw"];
+        }
+        expect(await observer.onModelRequest(model, { messages: [withoutEnvelope] })).toMatchObject(
+          { prefixUnchanged: true, changes: null },
+        );
+        await expect(
+          observer.onModelRequest(model, { messages: [publish("rewritten result", metadata)] }),
+        ).rejects.toThrow("changed fields: content[0].text");
+      });
+    },
+  );
+
   it("cancels worker preparation without recording a request or hashing locally", async () => {
     const controller = new AbortController();
     const entry = { message: { role: "user" as const, content: "x".repeat(4096), timestamp: 1 } };
@@ -371,7 +421,6 @@ describe("prompt cache history fingerprints", () => {
   it.each([
     { field: "timestamp", value: 2, label: "timestamp" },
     { field: "idempotencyKey", value: "private-value", label: "idempotencyKey" },
-    { field: "__openclaw", value: { senderName: "private-value" }, label: "__openclaw" },
     { field: "usage", value: { input: 42 }, label: "usage" },
     { field: "private-field-name", value: "private-value", label: "other" },
   ])(
