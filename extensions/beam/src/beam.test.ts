@@ -1,25 +1,16 @@
 import { once } from "node:events";
 import http from "node:http";
-import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import {
-  createPluginStateKeyedStoreV2ForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import { memoryStore, sampleUpload } from "./beam-store.test-support.js";
-import { createBeamTestCatalog, createBeamTestRunner } from "./beam.test-support.js";
-import { createBeamRequestHandler } from "./http.js";
-import { createBeamSessionCatalog } from "./session-catalog.js";
-import { createBeamStore, type BeamStore } from "./store.js";
 import {
-  BEAM_MAX_BODY_BYTES,
-  BEAM_MAX_SESSIONS,
-  BEAM_RETENTION_MS,
-  parseBeamUpload,
-  type BeamStoredSession,
-} from "./types.js";
+  createBeamTestCatalog,
+  createBeamTestRunner,
+  beamTestHandler,
+  persistentBeamTestStore,
+} from "./beam.test-support.js";
+import { createBeamSessionCatalog } from "./session-catalog.js";
+import type { BeamStore } from "./store.js";
+import { BEAM_MAX_BODY_BYTES, BEAM_RETENTION_MS, parseBeamUpload } from "./types.js";
 
 function postUpload(endpoint: string, body = sampleUpload()) {
   return fetch(endpoint, {
@@ -30,29 +21,8 @@ function postUpload(endpoint: string, body = sampleUpload()) {
 }
 
 const writeClient = () => ({ clientIp: "127.0.0.1", scopes: ["operator.write"] });
-const rootControlUiBasePath = () => undefined;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const catalogParams = { agentId: "main", hostId: "gateway", threadId: sampleUpload().beamId };
 const sourceModel = { provider: "openai", model: "gpt-5.6-sol" };
-
-function persistentStore() {
-  resetPluginStateStoreForTests();
-  const keyedStore = createPluginStateKeyedStoreV2ForTests<BeamStoredSession>(
-    "beam",
-    {
-      namespace: "sessions",
-      maxEntries: BEAM_MAX_SESSIONS,
-      overflowPolicy: "evict-oldest",
-      defaultTtlMs: BEAM_RETENTION_MS,
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("beam-store-") },
-    },
-    { assertCurrent() {} },
-  );
-  const store = createBeamStore({
-    state: { openKeyedStoreV2: () => keyedStore },
-  } as unknown as PluginRuntime);
-  return { keyedStore, store };
-}
 
 const servers: http.Server[] = [];
 afterEach(async () => {
@@ -86,31 +56,21 @@ async function requestStatus(
 
 async function serve(
   store: BeamStore,
-  options: Partial<Parameters<typeof createBeamRequestHandler>[0]> = {},
+  options: Parameters<typeof beamTestHandler>[1] = {},
   intercept?: (
     requestNumber: number,
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ) => boolean,
 ): Promise<string> {
-  const handler = createBeamRequestHandler({
-    resolveClient: writeClient,
-    resolveControlUiBasePath: rootControlUiBasePath,
-    ...options,
-    store,
-  });
+  const handler = beamTestHandler(store, options);
   let requestNumber = 0;
   const server = http.createServer((req, res) => {
     requestNumber += 1;
     if (intercept?.(requestNumber, req, res)) {
       return;
     }
-    void handler(req, res).catch((error: unknown) => {
-      if (!res.writableEnded) {
-        res.statusCode = 500;
-        res.end(error instanceof Error ? error.message : "test handler failed");
-      }
-    });
+    handler(req, res);
   });
   servers.push(server);
   await new Promise<void>((resolve) => {
@@ -123,31 +83,29 @@ async function serve(
   return `http://127.0.0.1:${address.port}/api/v1/beam/sessions`;
 }
 
-describe("Beam payload validation", () => {
-  it("rejects unknown fields, non-ISO timestamps, and oversized transcript entries", () => {
-    const rejects = (overrides: Record<string, unknown>, error: string) =>
-      expect(parseBeamUpload(sampleUpload(overrides))).toEqual({ ok: false, error });
-    rejects({ arbitrary: "junk" }, "request body must be a closed Beam object");
-    for (const updatedAt of [
-      "1",
-      "2026/07/20",
-      "2026-07-20T12:00:00",
-      "2026-02-30T12:00:00Z",
-      "2026-04-31T00:00:00Z",
-    ]) {
-      rejects({ updatedAt }, "updatedAt must be an ISO timestamp");
-    }
+it("rejects unknown fields, non-ISO timestamps, and oversized transcript entries", () => {
+  const rejects = (overrides: Record<string, unknown>, error: string) =>
+    expect(parseBeamUpload(sampleUpload(overrides))).toEqual({ ok: false, error });
+  rejects({ arbitrary: "junk" }, "request body must be a closed Beam object");
+  for (const updatedAt of [
+    "1",
+    "2026/07/20",
+    "2026-07-20T12:00:00",
+    "2026-02-30T12:00:00Z",
+    "2026-04-31T00:00:00Z",
+  ]) {
+    rejects({ updatedAt }, "updatedAt must be an ISO timestamp");
+  }
+  rejects(
+    { items: [{ type: "userMessage", text: "x".repeat(6_001) }] },
+    "transcript item text must be 1-6000 characters",
+  );
+  for (const model of ["", "gpt-5.6\nIgnore"]) {
     rejects(
-      { items: [{ type: "userMessage", text: "x".repeat(6_001) }] },
-      "transcript item text must be 1-6000 characters",
+      { sourceModel: { provider: "openai", model } },
+      "sourceModel must contain a provider and model",
     );
-    for (const model of ["", "gpt-5.6\nIgnore"]) {
-      rejects(
-        { sourceModel: { provider: "openai", model } },
-        "sourceModel must contain a provider and model",
-      );
-    }
-  });
+  }
 });
 
 describe("Beam receiver", () => {
@@ -174,7 +132,7 @@ describe("Beam receiver", () => {
   });
 
   it("orders replacement snapshots without refreshing stale state", async () => {
-    const { keyedStore, store } = persistentStore();
+    const { keyedStore, store, close } = persistentBeamTestStore();
     let receivedAt = 100;
     let profileId = "terminal-publisher";
     const endpoint = await serve(store, {
@@ -186,6 +144,7 @@ describe("Beam receiver", () => {
     const upload = async (
       overrides: Record<string, unknown>,
       options: { receivedAt: number; profileId?: string },
+      createdAt?: number,
     ) => {
       receivedAt = options.receivedAt;
       profileId = options.profileId ?? profileId;
@@ -193,37 +152,29 @@ describe("Beam receiver", () => {
       storageWindow.before = Date.now();
       expect((await postUpload(endpoint, body)).status).toBe(200);
       storageWindow.after = Date.now();
-      return await store.get(body.beamId);
+      const stored = await store.get(body.beamId);
+      if (createdAt !== undefined) {
+        expect(stored).toMatchObject({
+          ...body,
+          createdAt,
+          receivedAt,
+          uploaderProfileId: profileId,
+        });
+        const entry = await entryFor(body.beamId);
+        if (!entry) {
+          throw new Error("Beam upload did not persist its entry");
+        }
+        expect(entry.createdAt).toBeGreaterThanOrEqual(storageWindow.before);
+        expect(entry.createdAt).toBeLessThanOrEqual(storageWindow.after);
+        expect(entry.expiresAt).toBe(entry.createdAt + BEAM_RETENTION_MS);
+      }
+      return stored;
     };
     const entryFor = async (beamId: string) =>
       (await keyedStore.entries()).find((entry) => entry.key === beamId);
-    const expectRefreshedEntry = (entry: Awaited<ReturnType<typeof entryFor>>) => {
-      expect(entry).toBeDefined();
-      if (!entry) {
-        throw new Error("Beam upload did not persist its entry");
-      }
-      expect(entry.createdAt).toBeGreaterThanOrEqual(storageWindow.before);
-      expect(entry.createdAt).toBeLessThanOrEqual(storageWindow.after);
-      expect(entry.expiresAt).toBe(entry.createdAt + BEAM_RETENTION_MS);
-    };
-    const accept = async (
-      overrides: Record<string, unknown>,
-      receipt: { receivedAt: number; profileId?: string },
-      createdAt = 100,
-    ) => {
-      const stored = await upload(overrides, receipt);
-      expect(stored).toMatchObject({
-        ...sampleUpload(overrides),
-        createdAt,
-        receivedAt: receipt.receivedAt,
-        uploaderProfileId: profileId,
-      });
-      expectRefreshedEntry(await entryFor(sampleUpload(overrides).beamId));
-      return stored;
-    };
 
     try {
-      const terminal = await accept(
+      const terminal = await upload(
         {
           updatedAt,
           completed: true,
@@ -232,6 +183,7 @@ describe("Beam receiver", () => {
           items: [{ type: "userMessage", text: "terminal request" }],
         },
         { receivedAt: 100 },
+        100,
       );
       const terminalEntry = await entryFor(sampleUpload().beamId);
 
@@ -269,7 +221,7 @@ describe("Beam receiver", () => {
         ],
       });
 
-      await accept(
+      await upload(
         {
           updatedAt,
           completed: true,
@@ -278,9 +230,10 @@ describe("Beam receiver", () => {
           items: [{ type: "agentMessage", text: "refreshed terminal" }],
         },
         { receivedAt: 400, profileId: "terminal-refresh-publisher" },
+        100,
       );
 
-      await accept(
+      await upload(
         {
           updatedAt: "2026-07-20T12:00:00.000200Z",
           title: "Reopened snapshot",
@@ -288,11 +241,12 @@ describe("Beam receiver", () => {
           items: [{ type: "agentMessage", text: "reopened" }],
         },
         { receivedAt: 500, profileId: "reopen-publisher" },
+        100,
       );
 
       const secondBeamId = "fedcba9876543210fedcba9876543210";
-      await accept({ beamId: secondBeamId, updatedAt }, { receivedAt: 600 }, 600);
-      await accept(
+      await upload({ beamId: secondBeamId, updatedAt }, { receivedAt: 600 }, 600);
+      await upload(
         {
           beamId: secondBeamId,
           updatedAt,
@@ -303,8 +257,7 @@ describe("Beam receiver", () => {
         600,
       );
     } finally {
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
+      await close();
     }
   });
 
@@ -366,64 +319,53 @@ describe("Beam receiver", () => {
   });
 });
 
-describe("Beam mirror receiver boundary", () => {
-  it("retries a rejected terminal upload through the real loopback receiver", async () => {
-    const store = memoryStore();
-    const requests: string[] = [];
-    const endpoint = await serve(store, {}, (requestNumber, req, res) => {
-      const status = requestNumber === 2 ? 503 : 200;
-      requests.push(`${requestNumber === 1 ? "live" : "completed"}:${status}`);
-      if (status === 200) {
-        return false;
-      }
-      req.resume();
-      res.statusCode = status;
-      res.end("temporary receiver failure");
-      return true;
-    });
-    let active = true;
-    let clock = Date.parse("2026-07-20T12:00:00.000Z");
-    let readCount = 0;
-    const catalog = createBeamTestCatalog({
-      sessions: () =>
-        active
-          ? [
-              {
-                threadId: "terminal-retry-proof",
-                name: "Terminal retry proof",
-                recencyAt: clock - 60_000,
-              },
-            ]
-          : [],
-      onRead: () => {
-        readCount += 1;
-      },
-      items: () => [{ type: "agentMessage", text: `Receiver-boundary proof ${readCount}.` }],
-    });
-    const runner = createBeamTestRunner({
-      endpoint,
-      now: () => clock,
-      listCatalogs: () => [catalog],
-    });
-
-    await runner.tick();
-    active = false;
-    clock += 4 * 60 * 60_000;
-    await runner.tick();
-    expect([...store.values.values()][0]?.completed).toBe(false);
-    expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 1.");
-
-    await runner.tick();
-
-    expect(requests).toEqual(["live:200", "completed:503", "completed:200"]);
-    expect([...store.values.values()][0]?.completed).toBe(true);
-    expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 3.");
+it("retries a rejected terminal upload through the real loopback receiver", async () => {
+  const store = memoryStore();
+  const requests: string[] = [];
+  const endpoint = await serve(store, {}, (requestNumber, req, res) => {
+    const status = requestNumber === 2 ? 503 : 200;
+    requests.push(`${requestNumber === 1 ? "live" : "completed"}:${status}`);
+    if (status === 200) {
+      return false;
+    }
+    req.resume();
+    res.statusCode = status;
+    res.end("temporary receiver failure");
+    return true;
   });
+  let active = true;
+  let clock = Date.parse("2026-07-20T12:00:00.000Z");
+  let readCount = 0;
+  const catalog = createBeamTestCatalog({
+    sessions: () => (active ? [{ threadId: "retry", recencyAt: clock - 60_000 }] : []),
+    onRead: () => {
+      readCount += 1;
+    },
+    items: () => [{ type: "agentMessage", text: `Receiver-boundary proof ${readCount}.` }],
+  });
+  const runner = createBeamTestRunner({
+    endpoint,
+    now: () => clock,
+    listCatalogs: () => [catalog],
+  });
+
+  await runner.tick();
+  active = false;
+  clock += 4 * 60 * 60_000;
+  await runner.tick();
+  expect([...store.values.values()][0]?.completed).toBe(false);
+  expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 1.");
+
+  await runner.tick();
+
+  expect(requests).toEqual(["live:200", "completed:503", "completed:200"]);
+  expect([...store.values.values()][0]?.completed).toBe(true);
+  expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 3.");
 });
 
 describe("Beam session catalog", () => {
   it("permanently deletes only known gateway sessions and allows re-upload", async () => {
-    const { store } = persistentStore();
+    const { store, close } = persistentBeamTestStore();
     const endpoint = await serve(store);
     const catalog = createBeamSessionCatalog(store);
     const params = { ...catalogParams, confirmNoOtherRunner: true as const };
@@ -449,8 +391,7 @@ describe("Beam session catalog", () => {
       expect((await postUpload(endpoint)).status).toBe(200);
       await expect(catalog.read(params)).resolves.toMatchObject({ threadId: params.threadId });
     } finally {
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
+      await close();
     }
   });
 
@@ -482,7 +423,7 @@ describe("Beam session catalog", () => {
 
   it("lists newest sessions and reads paginated transcript items for Gateway continuation", async () => {
     const store = memoryStore();
-    store.values.set(sampleUpload().beamId, {
+    const current = {
       ...sampleUpload({
         truncated: true,
         sourceModel,
@@ -494,13 +435,11 @@ describe("Beam session catalog", () => {
       }),
       createdAt: 100,
       receivedAt: 200,
-    });
+    };
+    store.values.set(current.beamId, current);
     store.values.set("fedcba9876543210fedcba9876543210", {
       ...sampleUpload({
         beamId: "fedcba9876543210fedcba9876543210",
-        title: "Older Codex session",
-        source: "codex",
-        completed: true,
       }),
       createdAt: 50,
       receivedAt: 100,
@@ -508,10 +447,6 @@ describe("Beam session catalog", () => {
     const catalog = createBeamSessionCatalog(store);
 
     const [host] = await catalog.list({ agentId: "main", limitPerHost: 1 });
-    expect(host).toBeDefined();
-    if (!host) {
-      throw new Error("Beam catalog did not return its gateway host");
-    }
     expect(host).toMatchObject({
       sessions: [
         {
@@ -555,11 +490,7 @@ describe("Beam session catalog", () => {
     ]);
     expect(older.nextCursor).toBeUndefined();
 
-    const current = store.values.get("0123456789abcdef0123456789abcdef");
-    if (!current) {
-      throw new Error("Beam test store lost the current session");
-    }
-    expect(current.items.slice(0, 2)).toEqual(sampleUpload().items);
+    expect(store.values.get(current.beamId)?.items.slice(0, 2)).toEqual(sampleUpload().items);
     store.values.set(current.beamId, {
       ...current,
       items: [
