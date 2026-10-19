@@ -473,7 +473,7 @@ describe("GatewayProtocolClient requests", () => {
     const expired = client.request("agent.identity.get", {}).catch((error: unknown) => error);
     refuseBootstrapRead(connection);
     await vi.advanceTimersByTimeAsync(61_000);
-    expect(await expired).toMatchObject({ code: "CLIENT_TIMEOUT", requestSent: true });
+    expect(await expired).toMatchObject({ code: "CLIENT_TIMEOUT", requestSent: false });
     const first = client.request("sessions.list", {});
     const second = client.request("question.list", {});
     expectMethods(connection, "agent.identity.get", "sessions.list");

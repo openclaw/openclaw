@@ -171,6 +171,7 @@ export class GatewayPendingRequests {
         startedAtMs: this.opts.nowMs(),
         prepareRetry: () => {
           inFlight = false;
+          requestSent = false;
           if (options?.signal?.aborted) {
             onAbort();
             return false;
@@ -238,9 +239,7 @@ export class GatewayPendingRequests {
           if (
             this.pending.get(id) !== pending ||
             options?.signal?.aborted ||
-            ((requestSent || pending.waitingForResume) &&
-              timeoutMs !== undefined &&
-              this.opts.nowMs() - pending.startedAtMs >= timeoutMs)
+            (timeoutMs !== undefined && this.opts.nowMs() - pending.startedAtMs >= timeoutMs)
           ) {
             return;
           }
@@ -260,7 +259,8 @@ export class GatewayPendingRequests {
             if (this.pending.get(id) !== pending) {
               return;
             }
-            requestSent = true;
+            // A synchronous refusal can already have proved non-delivery.
+            requestSent = inFlight;
             this.invoke("sent", () => options?.onSent?.(id));
           } catch (error) {
             if (retire("CLIENT_SEND_ERROR")) {
@@ -268,9 +268,10 @@ export class GatewayPendingRequests {
             }
           }
         };
-        // A startup refusal proves dispatch never reached the handler. Retain the
-        // exact frame for that retry only; ordinary writes still send synchronously.
+        // A startup refusal proves the handler has not run, so later attempts can
+        // share pause/resume. Ordinary writes still send synchronously.
         pending.retryStartup = (retryAfterMs) => {
+          pending.resend = send;
           clearTimeout(startupRetry);
           startupRetry = setTimeout(
             send,
