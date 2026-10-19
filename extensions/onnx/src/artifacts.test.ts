@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -29,8 +29,9 @@ const model: ModelPreset = {
   },
 };
 
-function mockDownload(body: BodyInit, release = vi.fn(async () => {})) {
+function mockDownload(body: BodyInit, onRelease = async () => {}) {
   const response = new Response(body);
+  const release = vi.fn(onRelease);
   vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
     response,
     finalUrl: "https://huggingface.co/fixture",
@@ -45,6 +46,26 @@ describe("ONNX artifact installation", () => {
   let target: string;
   const download = (signal = new AbortController().signal) => downloadModel(root, model, signal);
   const verify = () => verifyModel(root, model);
+  async function install(data: string | Buffer = bytes, location = target) {
+    await fs.mkdir(destination, { recursive: true });
+    await fs.writeFile(location, data);
+  }
+  async function withHandle(run: (handle: FileHandle) => Promise<void>) {
+    await install();
+    const handle = await fs.open(target, "r");
+    const openSpy = vi.spyOn(fs, "open").mockResolvedValueOnce(handle);
+    try {
+      await run(handle);
+    } finally {
+      openSpy.mockRestore();
+      await handle.close();
+    }
+  }
+  async function expectUnpublished({ response, release }: ReturnType<typeof mockDownload>) {
+    expect(await fs.readdir(destination)).toEqual([]);
+    expect(response.body?.locked).toBe(false);
+    expect(release).toHaveBeenCalledOnce();
+  }
   beforeEach(() => {
     root = tempDirs.make("models-");
     destination = path.join(root, model.id);
@@ -52,11 +73,8 @@ describe("ONNX artifact installation", () => {
   });
 
   it("publishes only complete hash-verified files and reuses valid existing artifacts", async () => {
-    const { release } = mockDownload(
-      bytes,
-      vi.fn(async () => {
-        await expect(fs.lstat(target)).rejects.toMatchObject({ code: "ENOENT" });
-      }),
+    const { release } = mockDownload(bytes, async () =>
+      expect(fs.lstat(target)).rejects.toMatchObject({ code: "ENOENT" }),
     );
     await download();
     await verify();
@@ -92,18 +110,16 @@ describe("ONNX artifact installation", () => {
     { name: "wrong hash", body: Buffer.alloc(bytes.length), error: /integrity/ },
     { name: "oversized download", body: Buffer.alloc(bytes.length + 1), error: /pinned size/ },
   ])("removes partial files and releases a $name", async ({ body, error }) => {
-    const { response, release } = mockDownload(body);
+    const guarded = mockDownload(body);
     await expect(download()).rejects.toThrow(error);
-    expect(await fs.readdir(destination)).toEqual([]);
-    expect(response.body?.locked).toBe(false);
-    expect(release).toHaveBeenCalledOnce();
+    await expectUnpublished(guarded);
   });
 
   it("cancels the response and removes staged bytes when a pending read is aborted", async () => {
     const controller = new AbortController();
     const reason = new Error("cancel model download");
     const cancel = vi.fn();
-    const { response, release } = mockDownload(
+    const guarded = mockDownload(
       new ReadableStream<Uint8Array>(
         {
           pull(stream) {
@@ -116,35 +132,25 @@ describe("ONNX artifact installation", () => {
       ),
     );
     await expect(download(controller.signal)).rejects.toBe(reason);
-    expect(await fs.readdir(destination)).toEqual([]);
-    expect(response.body?.locked).toBe(false);
+    await expectUnpublished(guarded);
     expect(cancel).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
   });
 
   it("does not publish when releasing the download fails", async () => {
     const failure = new Error("download release failed");
-    const { release } = mockDownload(
-      bytes,
-      vi.fn(async () => {
-        throw failure;
-      }),
-    );
+    const guarded = mockDownload(bytes, async () => {
+      throw failure;
+    });
     await expect(download()).rejects.toBe(failure);
     expect(await fs.readdir(destination)).toEqual([]);
-    expect(release).toHaveBeenCalledOnce();
+    expect(guarded.release).toHaveBeenCalledOnce();
   });
 
   it.each([
     { name: "verified", winner: bytes, accepted: true },
     { name: "mismatched", winner: Buffer.alloc(bytes.length), accepted: false },
   ])("preserves a $name artifact published by a competing writer", async ({ winner, accepted }) => {
-    const { release } = mockDownload(
-      bytes,
-      vi.fn(async () => {
-        await fs.writeFile(target, winner, { flag: "wx" });
-      }),
-    );
+    const { release } = mockDownload(bytes, () => fs.writeFile(target, winner, { flag: "wx" }));
     const operation = download();
     if (accepted) {
       await operation;
@@ -160,8 +166,7 @@ describe("ONNX artifact installation", () => {
     "reuses an operator's verified %s without downloading",
     async (kind) => {
       const external = path.join(root, "operator-model.onnx");
-      await fs.mkdir(destination);
-      await fs.writeFile(external, bytes);
+      await install(bytes, external);
       await (kind === "symlink" ? fs.symlink(external, target) : fs.link(external, target));
       vi.mocked(fetchWithSsrFGuard).mockClear();
       await download();
@@ -172,8 +177,7 @@ describe("ONNX artifact installation", () => {
   );
 
   it("refuses to overwrite an existing mismatched operator file", async () => {
-    await fs.mkdir(destination);
-    await fs.writeFile(target, "keep this");
+    await install("keep this");
     vi.mocked(fetchWithSsrFGuard).mockClear();
     await expect(download()).rejects.toThrow("model-integrity");
     expect(await fs.readFile(target, "utf8")).toBe("keep this");
@@ -185,55 +189,38 @@ describe("ONNX artifact installation", () => {
     { name: "empty", data: Buffer.alloc(0), code: "model-integrity" },
     { name: "oversized", data: Buffer.alloc(bytes.length + 1), code: "model-integrity" },
   ])("reports a $name installed artifact", async ({ data, code }) => {
-    await fs.mkdir(destination);
     if (data !== undefined) {
-      await fs.writeFile(target, data);
+      await install(data);
     }
     await expect(verify()).rejects.toThrow(code);
   });
 
   it.each(["grows", "shrinks"])("rejects an artifact that %s after admission", async (change) => {
-    await fs.mkdir(destination);
-    await fs.writeFile(target, bytes);
-    const handle = await fs.open(target, "r");
-    const stat = handle.stat.bind(handle);
-    const statSpy = vi.spyOn(handle, "stat").mockImplementationOnce(async (...args) => {
-      const before = await stat(...args);
-      if (change === "grows") {
-        await fs.appendFile(target, "unexpected trailing bytes");
-      } else {
-        await fs.truncate(target, bytes.length - 1);
-      }
-      return before;
-    });
-    const openSpy = vi.spyOn(fs, "open").mockResolvedValueOnce(handle);
-    try {
+    await withHandle(async (handle) => {
+      const stat = handle.stat.bind(handle);
+      vi.spyOn(handle, "stat").mockImplementationOnce(async (...args) => {
+        const before = await stat(...args);
+        if (change === "grows") {
+          await fs.appendFile(target, "unexpected trailing bytes");
+        } else {
+          await fs.truncate(target, bytes.length - 1);
+        }
+        return before;
+      });
       await expect(verify()).rejects.toThrow("model-integrity");
-    } finally {
-      openSpy.mockRestore();
-      statSpy.mockRestore();
-      await handle.close();
-    }
+    });
   });
 
   it("reports descriptor close failure during verification", async () => {
-    await fs.mkdir(destination);
-    await fs.writeFile(target, bytes);
-    const handle = await fs.open(target, "r");
-    const close = handle.close.bind(handle);
-    const failure = new Error("model descriptor close failed");
-    const closeSpy = vi.spyOn(handle, "close").mockImplementationOnce(async () => {
-      await close();
-      throw failure;
-    });
-    const openSpy = vi.spyOn(fs, "open").mockResolvedValueOnce(handle);
-    try {
+    await withHandle(async (handle) => {
+      const close = handle.close.bind(handle);
+      const failure = new Error("model descriptor close failed");
+      vi.spyOn(handle, "close").mockImplementationOnce(async () => {
+        await close();
+        throw failure;
+      });
       await expect(verify()).rejects.toBe(failure);
-    } finally {
-      openSpy.mockRestore();
-      closeSpy.mockRestore();
-      await close();
-    }
+    });
   });
 
   it("rejects local-export path traversal and mismatched source identity", async () => {
@@ -241,7 +228,7 @@ describe("ONNX artifact installation", () => {
       ...model,
       source: { kind: "local-export", repository: "example/model", revision: "a".repeat(40) },
     };
-    await fs.mkdir(destination);
+    const manifestPath = path.join(destination, "model.json");
     const manifest = {
       modelId: model.id,
       sourceRevision: "a".repeat(40),
@@ -256,13 +243,10 @@ describe("ONNX artifact installation", () => {
       { modelId: "different" },
       { sourceRevision: "b".repeat(40) },
     ]) {
-      await fs.writeFile(
-        path.join(destination, "model.json"),
-        JSON.stringify({ ...manifest, ...invalid }),
-      );
+      await install(JSON.stringify({ ...manifest, ...invalid }), manifestPath);
       await expect(resolveModelFiles(root, local)).rejects.toThrow("model-integrity");
     }
-    await fs.writeFile(path.join(destination, "model.json"), JSON.stringify(manifest));
+    await install(JSON.stringify(manifest), manifestPath);
     await expect(resolveModelFiles(root, local)).resolves.toEqual([
       { name: "model.onnx", bytes: 1, sha256: "a".repeat(64) },
       { name: "tokenizer.json", bytes: 1, sha256: "b".repeat(64) },
