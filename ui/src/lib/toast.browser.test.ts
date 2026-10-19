@@ -7,46 +7,25 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { showToast, type ToastOptions } from "./toast.ts";
 import "./toast-host.ts";
 
-const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
-const part = (host: HTMLElement, name = "") =>
-  host.querySelector<HTMLElement>(`.app-toast${name ? `__${name}` : ""}`)!;
-const rect = (host: HTMLElement, name = "") => part(host, name).getBoundingClientRect();
-const finishAnimations = (element: HTMLElement) =>
-  Promise.all(element.getAnimations().map((animation) => animation.finished));
-
-function makeAnchor(width: number, left = 0) {
-  const anchor = document.createElement("div");
-  anchor.style.cssText = `position: fixed; top: 100px; left: ${left}px; width: ${width}px; height: 100px`;
-  document.body.append(anchor);
-  return anchor;
-}
-
-function linkedMessage(href: string, label: string, before: string, after = "") {
-  const message = document.createDocumentFragment();
-  const link = document.createElement("a");
-  link.href = href;
-  link.textContent = label;
-  message.append(before, link, after);
-  return { message, link };
-}
-
-async function expectFocusPreserved(
-  host: HTMLElementTagNameMap["openclaw-toast-host"],
-  link: HTMLAnchorElement,
-) {
-  link.focus();
-  expect(document.activeElement).toBe(link);
-  host.toast = { ...host.toast! };
-  await waitForSolid(() => expect(part(host, "message").querySelector("a")).toBe(link));
-  expect(document.activeElement).toBe(link);
-}
-
-async function useViewport(width: number, height = 800) {
+const rect = (element: Element) => element.getBoundingClientRect();
+async function useViewport(width: number, height = 844) {
   const { page } = await import("vitest/browser");
   await page.viewport(width, height);
 }
-
-async function showArchiveToast(
+function makeAnchor(width: number, left = 0) {
+  const anchor = document.body.appendChild(document.createElement("div"));
+  anchor.style.cssText = `position: fixed; top: 100px; left: ${left}px; width: ${width}px; height: 100px`;
+  return anchor;
+}
+function linkedMessage(label: string, before = "Connection lost. ".repeat(12)) {
+  const message = document.createDocumentFragment();
+  const link = document.createElement("a");
+  link.href = `#${label}`;
+  link.textContent = label;
+  message.append(before, link);
+  return { message, link };
+}
+async function renderToast(
   options: Partial<ToastOptions> = {},
   host = document.createElement("openclaw-toast-host"),
 ) {
@@ -62,221 +41,187 @@ async function showArchiveToast(
     ...options,
   });
   await vi.dynamicImportSettled();
-  await waitForSolid(() => expect(host.querySelector(".app-toast")).not.toBeNull());
-  return host;
+  const part = (name = "") =>
+    host.querySelector<HTMLElement>(`.app-toast${name ? `__${name}` : ""}`)!;
+  await waitForSolid(() => expect(part()).not.toBeNull());
+  const toast = part(),
+    message = part("message"),
+    action = part("action"),
+    dismiss = part("dismiss");
+  await Promise.all(toast.getAnimations().map((animation) => animation.finished));
+  return { host, toast, message, action, dismiss };
+}
+type ToastFixture = Awaited<ReturnType<typeof renderToast>>;
+async function expectFocusPreserved({ host }: ToastFixture, link: HTMLAnchorElement) {
+  link.focus();
+  expect(document.activeElement).toBe(link);
+  host.toast = { ...host.toast! };
+  await waitForSolid(() => expect(host.querySelector(".app-toast__message a")).toBe(link));
+  expect(document.activeElement).toBe(link);
 }
 
-describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
+describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast browser layout", () => {
+  let rootStyle: string | null;
+  const root = document.documentElement;
+  beforeEach(async () => {
+    rootStyle = root.getAttribute("style");
+    await i18n.setLocale("en");
+  });
+  afterEach(() => {
+    document.body.replaceChildren();
+    if (rootStyle === null) {
+      root.removeAttribute("style");
+    } else {
+      root.setAttribute("style", rootStyle);
+    }
+  });
+
   it("shows the selected agent avatar at notification size without crowding the action", async () => {
-    await useViewport(390, 844);
+    await useViewport(390);
     const onAction = vi.fn();
-    const options = { message: "Garden plan: Done", actionLabel: "Open session", onAction };
-    const host = await showArchiveToast(options);
-    const avatar =
-      "data:image/svg+xml," +
-      encodeURIComponent(
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="45" fill="#ff9138"/><circle cx="38" cy="40" r="5"/><circle cx="62" cy="40" r="5"/><path d="M40 62 Q50 72 60 62" fill="none" stroke="#000" stroke-width="4"/></svg>',
-      );
-    showToast({
-      ...options,
-      durationMs: 60_000,
-      avatar: { id: "gardener", name: "Garden keeper", avatar },
-    });
-    const avatarImage = () => part(host, "avatar").querySelector("img")!;
+    const { host } = await renderToast({ onAction, actionLabel: "Open session" });
+    const avatar = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+    showToast({ ...host.toast!, avatar: { id: "gardener", name: "Garden keeper", avatar } });
+    const avatarImage = () => host.querySelector<HTMLImageElement>(".app-toast__avatar img")!;
     await waitForSolid(() => expect(avatarImage().naturalWidth).toBeGreaterThan(0));
-    const image = avatarImage();
-    expect(image.getAttribute("src")).toBe(avatar);
-    expect(image.getBoundingClientRect()).toMatchObject({ width: 28, height: 28 });
-    const action = part(host, "action");
-    expect(action.getBoundingClientRect().right).toBeLessThanOrEqual(390);
+    expect(avatarImage().getAttribute("src")).toBe(avatar);
+    expect(rect(avatarImage())).toMatchObject({ width: 28, height: 28 });
+    const action = host.querySelector("button")!;
+    expect(rect(action).right).toBeLessThanOrEqual(390);
     action.click();
     expect(onAction).toHaveBeenCalledOnce();
   });
 
-  beforeEach(async () => {
-    await i18n.setLocale("en");
-  });
-  afterEach(() => document.body.replaceChildren());
-
   it("keeps a toast usable inside a native modal and returns it to the shell on dismissal", async () => {
-    const shell = document.createElement("div");
+    const shell = document.body.appendChild(document.createElement("div"));
     shell.className = "shell";
-    const host = document.createElement("openclaw-toast-host");
-    shell.append(host);
-    document.body.append(shell);
+    const host = shell.appendChild(document.createElement("openclaw-toast-host"));
     const controller = new AbortController();
-    const confirmation = showConfirmDialog({
-      message: "Keep synthetic changes?",
-      signal: controller.signal,
-    });
+    const confirmation = showConfirmDialog({ message: "Keep?", signal: controller.signal });
     try {
       const { modal, dialog } = await waitForRenderedModalDialog(document.body);
-      const action = vi.fn();
-      await showArchiveToast({ message: "Synthetic change saved", onAction: action }, host);
+      const onAction = vi.fn();
+      const { action } = await renderToast({ message: "Saved", onAction }, host);
       expect(host.parentElement).toBe(modal.getOverlayContainer());
-      const undo = part(host, "action");
-      undo.focus();
-      expect(document.activeElement).toBe(undo);
+      action.focus();
+      expect(document.activeElement).toBe(action);
       expect(dialog.open).toBe(true);
-      // Hit testing proves the notice is above the modal rather than behind its backdrop.
-      const { left, top, width, height } = undo.getBoundingClientRect();
-      expect(document.elementFromPoint(left + width / 2, top + height / 2)).toBe(undo);
+      const { left, top, width, height } = rect(action);
+      expect(document.elementFromPoint(left + width / 2, top + height / 2)).toBe(action);
       modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
       await confirmation;
       await host.updateComplete;
       expect(host.parentElement).toBe(shell);
-      expect(host.textContent).toContain("Synthetic change saved");
-      part(host, "action").click();
-      expect(action).toHaveBeenCalledOnce();
+      expect(host.textContent).toContain("Saved");
+      host.querySelector<HTMLElement>(".app-toast__action")!.click();
+      expect(onAction).toHaveBeenCalledOnce();
     } finally {
       controller.abort();
       await confirmation;
     }
   });
 
-  it("keeps mobile actions trailing while the desktop toast stays compact", async () => {
-    await useViewport(390, 844);
-    const mobileHost = await showArchiveToast();
-    const mobileAction = rect(mobileHost, "action");
-    const mobileDismiss = rect(mobileHost, "dismiss");
-    const mobile = rect(mobileHost);
-
-    expect(mobile.top).toBeCloseTo(20, 0);
-    expect(mobile.left).toBeCloseTo(12, 0);
-    expect(mobile.right).toBeCloseTo(378, 0);
-    expect(mobileAction.left).toBeGreaterThan(mobile.left + mobile.width * 0.6);
-    expect(mobileDismiss.right).toBeLessThanOrEqual(mobile.right - 7);
-    expect(mobileAction.height).toBeGreaterThanOrEqual(44);
-    expect(mobileDismiss.height).toBe(44);
-
-    mobileHost.remove();
-    await useViewport(1280, 800);
-    const desktopHost = await showArchiveToast();
-    const desktopToast = rect(desktopHost);
-    expect(desktopToast.top).toBeCloseTo(20, 0);
-    expect(desktopToast.width).toBeLessThan(320);
-    expect(desktopToast.height).toBeLessThan(60);
-    expect(rect(desktopHost, "dismiss").height).toBe(32);
-  });
-  it("keeps settings feedback at the safe lower edge without moving anchored notices", async () => {
-    const root = document.documentElement;
-    const previousStyle = root.getAttribute("style");
-    // Physical insets belong to the app root, not the toast.
+  it.each([
+    ["top", 390],
+    ["top", 1280],
+    ["bottom", 390],
+    ["bottom", 1280],
+  ] as const)("keeps %s feedback usable at width %i", async (placement, width) => {
+    await useViewport(width);
     root.style.setProperty("--safe-area-bottom", "24px");
-    try {
-      for (const width of [1280, 390]) {
-        await useViewport(width, 844);
-        const host = await showArchiveToast({ placement: "bottom" });
-        const toast = part(host);
-        await finishAnimations(toast);
-        const bounds = toast.getBoundingClientRect();
-        expect(bounds.bottom).toBeCloseTo(800, 0);
-        expect(bounds.right).toBeCloseTo(width - (width === 390 ? 12 : 20), 0);
-        expect(rect(host, "dismiss").height).toBe(width === 390 ? 44 : 32);
-        // The keyboard shortens the canvas and removes the home-bar inset.
-        root.style.setProperty("--shell-viewport-height", "600px");
-        root.style.setProperty("--shell-safe-area-bottom", "0px");
-        expect(toast.getBoundingClientRect().bottom).toBeCloseTo(580, 0);
-        root.style.removeProperty("--shell-viewport-height");
-        root.style.removeProperty("--shell-safe-area-bottom");
-        expect(toast.getBoundingClientRect().bottom).toBeCloseTo(800, 0);
-        host.remove();
-      }
-
-      const anchor = makeAnchor(350, 20);
-      const host = await showArchiveToast({ anchor, placement: "bottom" });
-      const toast = part(host);
-      expect(toast.classList.contains("app-toast--bottom")).toBe(false);
-      expect(getComputedStyle(toast).top).toBe("100px");
-    } finally {
-      if (previousStyle === null) {
-        root.removeAttribute("style");
+    const { toast, action, dismiss } = await renderToast({ placement });
+    const bounds = rect(toast);
+    expect(rect(dismiss).height).toBe(width === 390 ? 44 : 32);
+    if (placement === "bottom") {
+      expect(bounds).toMatchObject({
+        bottom: expect.closeTo(800, 0),
+        right: expect.closeTo(width - (width === 390 ? 12 : 20), 0),
+      });
+      root.style.setProperty("--shell-viewport-height", "600px");
+      root.style.setProperty("--shell-safe-area-bottom", "0px");
+      expect(rect(toast).bottom).toBeCloseTo(580, 0);
+      root.style.removeProperty("--shell-viewport-height");
+      root.style.removeProperty("--shell-safe-area-bottom");
+      expect(rect(toast).bottom).toBeCloseTo(800, 0);
+    } else {
+      expect(bounds.top).toBeCloseTo(20, 0);
+      if (width === 390) {
+        expect(bounds).toMatchObject({
+          left: expect.closeTo(12, 0),
+          right: expect.closeTo(378, 0),
+        });
+        expect(rect(action).left).toBeGreaterThan(bounds.left + bounds.width * 0.6);
+        expect(rect(dismiss).right).toBeLessThanOrEqual(bounds.right - 7);
+        expect(rect(action).height).toBeGreaterThanOrEqual(44);
       } else {
-        root.setAttribute("style", previousStyle);
+        expect(bounds.width).toBeLessThan(320);
+        expect(bounds.height).toBeLessThan(60);
       }
     }
+  });
+
+  it("keeps anchored notices independent of bottom placement", async () => {
+    const { toast } = await renderToast({ anchor: makeAnchor(350, 20), placement: "bottom" });
+    expect(toast.classList.contains("app-toast--bottom")).toBe(false);
+    expect(getComputedStyle(toast).top).toBe("100px");
   });
 
   it("keeps oversized errors scrollable with actions inside a short phone viewport", async () => {
     await useViewport(320, 400);
     for (const placement of ["top", "bottom"] as const) {
-      const host = await showArchiveToast({
+      const { host, toast, message } = await renderToast({
         placement,
-        message: "The connection was interrupted. Please check your settings. ".repeat(100),
+        message: "Lost. ".repeat(1000),
       });
-      const toast = part(host);
-      await finishAnimations(toast);
-      const message = part(host, "message");
       expect(message.scrollHeight).toBeGreaterThan(message.clientHeight);
       message.scrollTop = message.scrollHeight;
       expect(message.scrollTop).toBeGreaterThan(0);
       for (const element of [toast, ...host.querySelectorAll("button")]) {
-        const bounds = element.getBoundingClientRect();
-        expect(bounds.top).toBeGreaterThanOrEqual(0);
-        expect(bounds.bottom).toBeLessThanOrEqual(400);
+        expect(rect(element).top).toBeGreaterThanOrEqual(0);
+        expect(rect(element).bottom).toBeLessThanOrEqual(400);
       }
       host.remove();
     }
   });
 
-  it("keeps recovery links and long actions readable across placements and text sizes", async () => {
-    for (const width of [1280, 390, 320]) {
-      await useViewport(width, 844);
-      for (const placement of ["top", "bottom", "anchored"] as const) {
-        const anchor = makeAnchor(width);
-        const recovery = linkedMessage(
-          "#settings",
-          "Gateway settings",
-          "Your changes could not be saved because the connection was interrupted. Keep this tab open, check ",
-          ", and try again when the connection is restored.",
-        );
-        const host = await showArchiveToast({
-          message: recovery.message,
-          actionLabel: "Discard unsaved changes and reload",
-          ...(placement === "anchored" ? { anchor } : { placement }),
-        });
-        host.style.setProperty("--control-ui-text-scale", "1.3");
-        const toast = part(host);
-        await finishAnimations(toast);
-        const message = part(host, "message");
-        const action = part(host, "action");
-        const bounds = toast.getBoundingClientRect();
-        expect(bounds.left).toBeGreaterThanOrEqual(0);
-        expect(bounds.right).toBeLessThanOrEqual(width);
-        for (const element of [message, action]) {
-          if (element === action) {
-            expect(element.clientHeight).toBeGreaterThanOrEqual(element.scrollHeight);
-          } else if (element.scrollHeight > element.clientHeight) {
-            element.scrollTop = element.scrollHeight;
-            expect(element.scrollTop).toBeGreaterThan(0);
-          }
-          expect(element.clientWidth).toBeGreaterThanOrEqual(element.scrollWidth);
-          expect(element.getBoundingClientRect().width).toBeGreaterThan(0);
-        }
-        const messageBounds = message.getBoundingClientRect();
-        const actionBounds = action.getBoundingClientRect();
-        expect(actionBounds.right).toBeLessThanOrEqual(rect(host, "dismiss").left);
-        expect(
-          messageBounds.right <= actionBounds.left || messageBounds.bottom <= actionBounds.top,
-        ).toBe(true);
-        const link = recovery.link;
-        expect(message.querySelector("a")).toBe(link);
-        await expectFocusPreserved(host, link);
-        expect(actionBounds.height).toBeGreaterThanOrEqual(width < 768 ? 44 : 32);
-        const replacement = linkedMessage(
-          "#sidebar",
-          "Sidebar settings",
-          "Another section hidden. ",
-        );
-        showToast({ ...host.toast!, message: replacement.message });
-        await waitForSolid(() => expect(replacement.link.isConnected).toBe(true));
-        expect(link.isConnected).toBe(false);
-        expect(message.textContent).toBe("Another section hidden. Sidebar settings");
-        expect(message.querySelector("a")).toBe(replacement.link);
-        await expectFocusPreserved(host, replacement.link);
-        host.remove();
-        anchor.remove();
+  it.each([1280, 390, 320])("keeps rich feedback readable at width %i", async (width) => {
+    await useViewport(width);
+    for (const placement of ["top", "bottom", "anchored"] as const) {
+      const anchor = makeAnchor(width);
+      const recovery = linkedMessage("Settings");
+      const fixture = await renderToast({
+        message: recovery.message,
+        actionLabel: "Discard unsaved changes and reload",
+        ...(placement === "anchored" ? { anchor } : { placement }),
+      });
+      const { host, toast, message, action, dismiss } = fixture;
+      host.style.setProperty("--control-ui-text-scale", "1.3");
+      expect(rect(toast).left).toBeGreaterThanOrEqual(0);
+      expect(rect(toast).right).toBeLessThanOrEqual(width);
+      expect(action.clientHeight).toBeGreaterThanOrEqual(action.scrollHeight);
+      if (message.scrollHeight > message.clientHeight) {
+        message.scrollTop = message.scrollHeight;
+        expect(message.scrollTop).toBeGreaterThan(0);
       }
+      for (const element of [message, action]) {
+        expect(element.clientWidth).toBeGreaterThanOrEqual(element.scrollWidth);
+        expect(rect(element).width).toBeGreaterThan(0);
+      }
+      const textBox = rect(message);
+      const actionBox = rect(action);
+      expect(actionBox.right).toBeLessThanOrEqual(rect(dismiss).left);
+      expect(textBox.right <= actionBox.left || textBox.bottom <= actionBox.top).toBe(true);
+      expect(message.querySelector("a")).toBe(recovery.link);
+      await expectFocusPreserved(fixture, recovery.link);
+      expect(actionBox.height).toBeGreaterThanOrEqual(width < 768 ? 44 : 32);
+      const replacement = linkedMessage("Sidebar", "Hidden. ");
+      showToast({ ...host.toast!, message: replacement.message });
+      await waitForSolid(() => expect(replacement.link.isConnected).toBe(true));
+      expect(recovery.link.isConnected).toBe(false);
+      expect(message.textContent).toBe("Hidden. Sidebar");
+      await expectFocusPreserved(fixture, replacement.link);
+      host.remove();
+      anchor.remove();
     }
   });
 });
