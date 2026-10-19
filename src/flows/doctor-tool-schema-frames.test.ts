@@ -9,6 +9,8 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
+type ResolveModel = typeof import("../agents/embedded-agent-runner/model.js").resolveModelAsync;
+
 const resolveModelAsync = vi.hoisted(() => vi.fn());
 vi.mock("../agents/embedded-agent-runner/model.js", () => ({ resolveModelAsync }));
 const { prepareDoctorToolSchemaFrames } = await import("./doctor-tool-schema-frames.js");
@@ -189,8 +191,7 @@ it.each([
                 contextWindow: 64000,
               });
             }
-            expect([...registrations.keys()].toSorted()).toEqual([...providers].toSorted());
-            expect([...registrations.values()]).toEqual(providers.map(() => 1));
+            expect(registrations).toEqual(new Map(providers.map((provider) => [provider, 1])));
             expect(peakRetainedInstances).toBe(providers.length);
             expect(captures).toBeLessThanOrEqual(providers.length * 2);
           } finally {
@@ -205,35 +206,29 @@ it.each([
 
 it("records deferred model preparation and continues with a healthy agent", async () => {
   await withOpenClawTestState({}, async (state) => {
-    resolveModelAsync.mockImplementation(
-      async (
-        _provider: string,
-        id: string,
-        _dir: string,
-        _cfg: OpenClawConfig,
-        options: { deferProviderDynamicModelPreparation?: boolean },
-      ) => {
-        if (id === "deferred") {
-          if (!options.deferProviderDynamicModelPreparation) {
-            throw new Error("live provider preparation must not start");
-          }
-          return {
-            error: "provider dynamic model preparation is deferred",
-            deferred: "provider-dynamic-model",
-          };
+    resolveModelAsync.mockImplementation(async (...args: Parameters<ResolveModel>) => {
+      const [, id] = args;
+      const options = args[4];
+      if (id === "deferred") {
+        if (!options?.deferProviderDynamicModelPreparation) {
+          throw new Error("live provider preparation must not start");
         }
         return {
-          model: {
-            id,
-            name: id,
-            provider: "fixture",
-            api: "openai-completions",
-            baseUrl: "http://127.0.0.1:1/v1",
-            contextWindow: 32000,
-          },
+          error: "provider dynamic model preparation is deferred",
+          deferred: "provider-dynamic-model",
         };
-      },
-    );
+      }
+      return {
+        model: {
+          id,
+          name: id,
+          provider: "fixture",
+          api: "openai-completions",
+          baseUrl: "http://127.0.0.1:1/v1",
+          contextWindow: 32000,
+        },
+      };
+    });
     const cfg: OpenClawConfig = {
       agents: {
         ownership: "explicit",

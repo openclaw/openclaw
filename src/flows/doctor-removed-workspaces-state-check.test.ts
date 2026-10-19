@@ -91,29 +91,25 @@ describe("removed Workspaces state doctor check", () => {
     await expect(fs.stat(staleDir)).resolves.toBeDefined();
   });
 
-  it("skips cleanup when an agent workspace symlink resolves beneath the retired state directory", async () => {
-    await fingerprint();
-    const nestedWorkspace = join(staleDir, "active-agent");
-    const workspaceAlias = join(root, "active-agent-link");
-    await fs.mkdir(nestedWorkspace);
-    await fs.symlink(nestedWorkspace, workspaceAlias, "dir");
-    const cfg = { agents: { defaults: { workspace: workspaceAlias } } };
-    const findings = await detect(cfg);
-    expect(await check.repair!(context(cfg), findings)).toMatchObject({
-      status: "skipped",
-      changes: [],
-    });
-    await expect(fs.stat(nestedWorkspace)).resolves.toBeDefined();
-  });
-
-  it("skips cleanup when the retired state directory is nested under an agent workspace", async () => {
-    await fingerprint();
-    const cfg = { agents: { defaults: { workspace: root } } };
-    const findings = await detect(cfg);
-    expect(await check.repair!(context(cfg), findings)).toMatchObject({
-      status: "skipped",
-      changes: [],
-    });
-    await expect(fs.stat(staleDir)).resolves.toBeDefined();
-  });
+  it.each(["symlink beneath state", "ancestor of state"])(
+    "preserves an overlapping agent workspace (%s)",
+    async (overlap) => {
+      await fingerprint();
+      let workspace = root;
+      let preserved = staleDir;
+      if (overlap === "symlink beneath state") {
+        workspace = join(root, "active-agent-link");
+        preserved = join(staleDir, "active-agent");
+        await fs.mkdir(preserved);
+        await fs.symlink(preserved, workspace, "dir");
+      }
+      const cfg = { agents: { defaults: { workspace } } };
+      const findings = await detect(cfg);
+      expect(await check.repair!(context(cfg), findings)).toMatchObject({
+        status: "skipped",
+        changes: [],
+      });
+      await expect(fs.stat(preserved)).resolves.toBeDefined();
+    },
+  );
 });

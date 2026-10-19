@@ -7,6 +7,7 @@ import type {
   EmbeddingProviderCreateResult,
 } from "../plugins/embedding-provider-types.js";
 import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { runMemorySetupFlow } from "./memory-setup.js";
 
@@ -75,6 +76,7 @@ function adapter(
 function memoryConfig(search: NonNullable<OpenClawConfig["memory"]>["search"]): OpenClawConfig {
   return { memory: { search } };
 }
+const secretRef = (id: string) => ({ source: "env" as const, provider: "default", id });
 
 function prompter(params: { confirms?: boolean[]; selects?: string[]; texts?: string[] } = {}) {
   const confirms = [...(params.confirms ?? [true, true])];
@@ -140,19 +142,38 @@ describe("memory setup", () => {
     expect(mocks.get).not.toHaveBeenCalled();
   });
 
-  it("persists a SecretRef but passes only its resolved value to the probe", async () => {
-    const ref = { source: "env" as const, provider: "default", id: "EMBED_KEY" };
-    mocks.promptRef.mockResolvedValue({ ref, resolvedValue: "probe-secret" });
-    mocks.resolveRef.mockResolvedValue("probe-secret");
-    const chosen = adapter();
-    mocks.get.mockReturnValue(chosen);
-    const result = await runMemorySetupFlow({}, prompter({ selects: ["remote-a", "ref"] }));
-    expect(result.memory?.search?.remote?.apiKey).toEqual(ref);
-    expect(chosen.create).toHaveBeenCalledWith(
-      expect.objectContaining({ remote: { apiKey: "probe-secret" } }),
-    );
-    expect(mocks.resolveRef).not.toHaveBeenCalled();
-  });
+  it.each([
+    { mode: "ref", key: secretRef("EMBED_KEY"), resolved: "probe-secret" },
+    { mode: "existing", key: secretRef("CURRENT_EMBED_KEY"), resolved: "current-probe-key" },
+    { mode: "key", key: "typed-key", resolved: "typed-key" },
+  ])(
+    "saves $mode credentials separately from the resolved probe key",
+    async ({ mode, key, resolved }) => {
+      mocks.promptRef.mockResolvedValue({ ref: key, resolvedValue: resolved });
+      mocks.resolveRef.mockResolvedValue(resolved);
+      const chosen = adapter();
+      mocks.get.mockReturnValue(chosen);
+      const config =
+        mode === "existing"
+          ? memoryConfig({ provider: "remote-a", model: "embed-default", remote: { apiKey: key } })
+          : {};
+      const prompts = prompter({
+        selects: ["remote-a", mode],
+        texts: ["embed-default", "typed-key"],
+      });
+      const result = await runMemorySetupFlow(config, prompts);
+      expect(result.memory?.search?.remote?.apiKey).toEqual(key);
+      expect(chosen.create).toHaveBeenCalledWith(
+        expect.objectContaining({ remote: { apiKey: resolved } }),
+      );
+      if (mode === "ref") {
+        expect(mocks.resolveRef).not.toHaveBeenCalled();
+      } else if (mode === "key") {
+        expect(vi.mocked(prompts.text).mock.calls[1]?.[0]).toMatchObject({ sensitive: true });
+        expect(mocks.get.mock.calls.every(([id]) => id === "remote-a")).toBe(true);
+      }
+    },
+  );
 
   it("offers configured native aliases only for available HTTP embedding owners", async () => {
     mocks.manifestIds.mockReturnValue(["ollama", "local"]);
@@ -181,17 +202,6 @@ describe("memory setup", () => {
     ).toEqual(["local-box", "ollama"]);
   });
 
-  it("masks entered keys and keeps the probe credential separate from saved config", async () => {
-    const prompts = prompter({
-      selects: ["remote-a", "key"],
-      texts: ["embed-default", "typed-key"],
-    });
-    const result = await runMemorySetupFlow({}, prompts);
-    expect(vi.mocked(prompts.text).mock.calls[1]?.[0]).toMatchObject({ sensitive: true });
-    expect(result.memory?.search?.remote?.apiKey).toBe("typed-key");
-    expect(mocks.get.mock.calls.every(([id]) => id === "remote-a")).toBe(true);
-  });
-
   it("keeps existing credentials as the ref-mode default and offers no plaintext entry", async () => {
     const prompts = prompter();
     const config = memoryConfig({ provider: "remote-a", remote: { apiKey: "saved-key" } });
@@ -199,23 +209,6 @@ describe("memory setup", () => {
     const credentialPrompt = vi.mocked(prompts.select).mock.calls[1]?.[0];
     expect(credentialPrompt?.initialValue).toBe("existing");
     expect(credentialPrompt?.options.map((entry) => entry.value)).toEqual(["existing", "ref"]);
-  });
-
-  it("preserves an existing same-provider remote ref and resolves it only for the probe", async () => {
-    const ref = { source: "env" as const, provider: "default", id: "CURRENT_EMBED_KEY" };
-    mocks.resolveRef.mockResolvedValue("current-probe-key");
-    const chosen = adapter();
-    mocks.get.mockReturnValue(chosen);
-    const config = memoryConfig({
-      provider: "remote-a",
-      model: "embed-default",
-      remote: { apiKey: ref },
-    });
-    const result = await runMemorySetupFlow(config, prompter());
-    expect(result.memory?.search?.remote?.apiKey).toEqual(ref);
-    expect(chosen.create).toHaveBeenCalledWith(
-      expect.objectContaining({ remote: { apiKey: "current-probe-key" } }),
-    );
   });
 
   it.each([
@@ -234,7 +227,7 @@ describe("memory setup", () => {
   ])(
     "resolves only $owner credentials for $selected",
     async ({ selected, owner, adapterOwner, keyPath }) => {
-      const ref = { source: "env" as const, provider: "default", id: "MODEL_EMBED_KEY" };
+      const ref = secretRef("MODEL_EMBED_KEY");
       const config: OpenClawConfig = {
         models: {
           providers: {
@@ -300,19 +293,33 @@ describe("memory setup", () => {
     expect(result.memory?.search?.remote).toEqual({ batch: { enabled: false } });
   });
 
-  it("keeps the original config on failed probe, save refusal, and cancellation", async () => {
-    const config: OpenClawConfig = {};
-    const bad = adapter(
-      "remote-a",
-      embeddingProvider({
-        embed: vi.fn(async () => [Number.NaN]),
+  it.each(["invalid vector", "provider error"])(
+    "keeps config and redacts failed readiness (%s)",
+    async (failure) => {
+      const config: OpenClawConfig = {};
+      const provider = embeddingProvider({
+        embed: vi.fn(async () => {
+          if (failure === "provider error") {
+            throw new Error("credential=private-probe-value rejected");
+          }
+          return [Number.NaN];
+        }),
         embedBatch: vi.fn(),
-        close: undefined,
-      }),
-    );
-    mocks.get.mockReturnValue(bad);
-    expect(await runMemorySetupFlow(config, prompter())).toBe(config);
-    mocks.get.mockReturnValue(adapter());
+      });
+      if (failure === "invalid vector") {
+        provider.close = undefined;
+      }
+      mocks.get.mockReturnValue(adapter("remote-a", provider));
+      const prompts = prompter();
+      expect(await runMemorySetupFlow(config, prompts)).toBe(config);
+      expect(JSON.stringify(vi.mocked(prompts.note).mock.calls)).not.toContain(
+        "private-probe-value",
+      );
+    },
+  );
+
+  it("keeps the original config on save refusal and cancellation", async () => {
+    const config: OpenClawConfig = {};
     expect(await runMemorySetupFlow(config, prompter({ confirms: [true, false] }))).toBe(config);
     const cancelled = prompter();
     vi.mocked(cancelled.text).mockRejectedValueOnce(new WizardCancelledError());
@@ -321,35 +328,14 @@ describe("memory setup", () => {
     );
   });
 
-  it("does not reveal a provider error in a failed readiness note", async () => {
-    const config: OpenClawConfig = {};
-    const secretError = new Error("credential=private-probe-value rejected");
-    const chosen = adapter(
-      "remote-a",
-      embeddingProvider({
-        embed: vi.fn(async () => {
-          throw secretError;
-        }),
-        embedBatch: vi.fn(),
-      }),
-    );
-    mocks.get.mockReturnValue(chosen);
-    const prompts = prompter();
-    expect(await runMemorySetupFlow(config, prompts)).toBe(config);
-    expect(JSON.stringify(vi.mocked(prompts.note).mock.calls)).not.toContain("private-probe-value");
-  });
-
   it("aborts a hanging embedding call and bounds a hanging close", async () => {
     vi.useFakeTimers();
-    let began!: () => void;
-    const started = new Promise<void>((resolve) => {
-      began = resolve;
-    });
+    const started = createDeferredCore();
     let signal: AbortSignal | undefined;
     const provider = embeddingProvider({
       embed: vi.fn((_input, options) => {
         signal = options?.signal;
-        began();
+        started.resolve();
         return new Promise<number[]>(() => {});
       }),
       embedBatch: vi.fn(async () => []),
@@ -358,7 +344,7 @@ describe("memory setup", () => {
     mocks.get.mockReturnValue(adapter("remote-a", provider));
     const config: OpenClawConfig = {};
     const running = runMemorySetupFlow(config, prompter());
-    await started;
+    await started.promise;
     await vi.advanceTimersByTimeAsync(150_000);
     expect(signal?.aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -369,27 +355,23 @@ describe("memory setup", () => {
 
   it("times out creation and closes a provider created after the deadline", async () => {
     vi.useFakeTimers();
-    let finishCreate!: (value: { provider: EmbeddingProvider }) => void;
-    let createStarted!: () => void;
-    const started = new Promise<void>((resolve) => {
-      createStarted = resolve;
-    });
+    const created = createDeferredCore<EmbeddingProviderCreateResult>();
+    const started = createDeferredCore();
     const close = vi.fn(async () => {});
     const late = adapter();
-    late.create = vi.fn(
-      () =>
-        new Promise<EmbeddingProviderCreateResult>((resolve) => {
-          finishCreate = resolve;
-          createStarted();
-        }),
-    );
+    late.create = vi.fn(() => {
+      started.resolve();
+      return created.promise;
+    });
     mocks.get.mockReturnValue(late);
     const config: OpenClawConfig = {};
     const running = runMemorySetupFlow(config, prompter());
-    await started;
+    await started.promise;
     await vi.advanceTimersByTimeAsync(150_000);
     expect(await running).toBe(config);
-    finishCreate({ provider: embeddingProvider({ embed: vi.fn(), embedBatch: vi.fn(), close }) });
+    created.resolve({
+      provider: embeddingProvider({ embed: vi.fn(), embedBatch: vi.fn(), close }),
+    });
     await Promise.resolve();
     await Promise.resolve();
     expect(close).toHaveBeenCalledOnce();

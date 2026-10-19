@@ -13,6 +13,7 @@ import * as pluginTools from "../plugins/tools.js";
 import { defaultRuntime } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
+import type { HealthFinding } from "./health-checks.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -222,13 +223,13 @@ module.exports = { id, register(api) {
           await expect(operation).rejects.toBe(detectorFailure);
         } else {
           const findings = await operation;
-          expect(findings).toContainEqual(
-            expect.objectContaining({
-              severity: "info",
-              path: "mcp.servers.requester",
-              requirement: "authenticated requester context",
-            }),
-          );
+          const expectFinding = (fields: Partial<HealthFinding>) =>
+            expect(findings).toContainEqual(expect.objectContaining(fields));
+          expectFinding({
+            severity: "info",
+            path: "mcp.servers.requester",
+            requirement: "authenticated requester context",
+          });
           expect(findings.filter((finding) => finding.target === toolName)).toEqual(
             (withoutPluginTools || (collision && providerConfigured) ? [] : ["alpha", "beta"]).map(
               (agentId) =>
@@ -241,20 +242,16 @@ module.exports = { id, register(api) {
             ),
           );
           if (!withoutPluginTools) {
-            expect(findings).toContainEqual(
-              expect.objectContaining({
-                target: "failed-tool",
-                requirement: expect.stringContaining("fixture registration unavailable"),
-              }),
-            );
+            expectFinding({
+              target: "failed-tool",
+              requirement: expect.stringContaining("fixture registration unavailable"),
+            });
           }
           if (variant === "cleanup-errors") {
-            expect(findings).toContainEqual(
-              expect.objectContaining({
-                message: "Runtime tool schema inspection could not confirm plugin cleanup.",
-                requirement: expect.stringContaining("Plugin tool inspection cleanup failed"),
-              }),
-            );
+            expectFinding({
+              message: "Runtime tool schema inspection could not confirm plugin cleanup.",
+              requirement: expect.stringContaining("Plugin tool inspection cleanup failed"),
+            });
           }
         }
         expect(rejectColdRead).not.toHaveBeenCalled();
