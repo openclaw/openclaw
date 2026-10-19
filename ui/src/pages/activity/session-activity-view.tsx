@@ -1,3 +1,4 @@
+import { createMemo as createActivityMemo } from "@solidjs/signals";
 import { dynamic } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
@@ -40,7 +41,6 @@ import { ActivitySessionGit } from "./session-activity-git.tsx";
 import { ActivitySessionMedia } from "./session-activity-media.tsx";
 import { PeopleControl } from "./session-activity-people.tsx";
 import { renderSessionActivityPulse as SessionActivityPulse } from "./session-activity-pulse.tsx";
-import { renderSessionActivitySummary as SessionActivitySummary } from "./session-activity-summary.tsx";
 import {
   ACTIVITY_TIME_FILTERS,
   TIME_LABELS,
@@ -155,6 +155,30 @@ function SessionLinkView(props: {
   );
   const showAgent = () => props.row.kind !== "global" || Boolean(props.row.agentId);
   const source = () => (props.row.createdVia === "cron" ? t("activityFeed.automation") : null);
+  const summary = () => props.row.activitySummary;
+  const state = createActivityMemo(() =>
+    summary()?.state === "current" && !summary()?.text
+      ? "missing"
+      : (summary()?.state ?? "missing"),
+  );
+  const updating = () => state() === "updating";
+  const feedback = createActivityMemo(() =>
+    state() === "stale"
+      ? t(summary()?.text ? "activityFeed.recapStale" : "activityFeed.recapMissing")
+      : state() === "unavailable"
+        ? t(summary()?.text ? "activityFeed.recapRefreshFailed" : "activityFeed.recapUnavailable")
+        : state() === "missing"
+          ? t("activityFeed.recapMissing")
+          : "",
+  );
+  const title = createActivityMemo(() => {
+    const updatedAt = summary()?.updatedAt;
+    return updatedAt
+      ? t("activityFeed.recapUpdated", {
+          time: formatRelativeTimestamp(updatedAt, { fallback: "" }),
+        })
+      : undefined;
+  });
   return (
     <div
       class={[
@@ -219,7 +243,44 @@ function SessionLinkView(props: {
           {activityAt() > 0 ? <span>{relativeTime()}</span> : undefined}
         </span>
       </SessionLink>
-      <SessionActivitySummary row={props.row} onRetry={props.onSummaryRetry} />
+      <div
+        class="activity-feed__recap"
+        data-activity-recap={props.row.key}
+        data-state={state()}
+        role="group"
+        aria-busy={updating() ? "true" : "false"}
+        aria-label={t("activityFeed.recap")}
+        title={title()}
+      >
+        {summary()?.text ? (
+          <p class="activity-feed__recap-text">{summary()?.text}</p>
+        ) : updating() ? (
+          <div class="activity-feed__recap-skeleton" aria-hidden="true">
+            <div class="skeleton skeleton-line skeleton-line--long" />
+            <div class="skeleton skeleton-line skeleton-line--medium" />
+          </div>
+        ) : undefined}
+        {updating() ? (
+          <span class="sr-only" role="status">
+            {t("activityFeed.recapUpdating")}
+          </span>
+        ) : undefined}
+        {feedback() ? (
+          <div class="activity-feed__note">
+            <span>{feedback()}</span>
+            {props.onSummaryRetry &&
+            summary()?.canEnsure === true &&
+            (state() === "unavailable" || state() === "stale") ? (
+              <button
+                class="activity-feed__note-action"
+                onClick={() => props.onSummaryRetry?.(props.row)}
+              >
+                {t("activityFeed.recapRetry")}
+              </button>
+            ) : undefined}
+          </div>
+        ) : undefined}
+      </div>
       <ActivitySessionGit
         context={context}
         sessionKey={scopedSessionArtifactKey(props.row.key, agentId())}

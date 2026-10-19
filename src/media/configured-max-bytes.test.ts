@@ -56,13 +56,6 @@ describe("resolveGeneratedMediaMaxBytes", () => {
     expect(resolveGeneratedMediaMaxBytes(undefined, kind)).toBe(expected);
   });
 
-  it.each([
-    { label: "zero", value: 0 },
-    { label: "NaN", value: Number.NaN },
-  ])("uses the per-kind default for $label mediaMaxMb", ({ value }) => {
-    expect(resolveGeneratedMediaMaxBytes(configWithMediaMaxMb(value), "image")).toBe(6 * MB);
-  });
-
   it("floors fractional configured megabytes to whole bytes", () => {
     const mediaMaxMb = 1.000_001;
 

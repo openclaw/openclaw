@@ -9,7 +9,6 @@ import {
   getCommandSenderAuthority,
   withCommandSenderAuthority,
 } from "../../auto-reply/command-sender-authority.js";
-import { normalizeTalkSection } from "../../config/talk.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   getRpcSourceForGateway,
@@ -72,7 +71,7 @@ export async function startTalkRealtimeAgentConsult(
   } catch (err) {
     return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)) };
   }
-  const normalizedTalk = normalizeTalkSection(request.context.getRuntimeConfig().talk);
+  const normalizedTalk = request.context.getRuntimeConfig().talk;
   const authority = resolveTalkAgentConsultAuthority(
     request.client?.connect?.scopes,
     request.client,

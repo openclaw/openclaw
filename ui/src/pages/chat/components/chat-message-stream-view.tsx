@@ -151,13 +151,10 @@ function NonstreamPart(props: {
   presentation: "standalone" | "continuation";
 }) {
   const indicator = () => (props.part.kind === "reading-indicator" ? props.part : undefined);
-  const question = createMemo(() => {
-    const prompt =
-      props.part.kind === "question"
-        ? props.options.questionPrompts?.get(props.part.questionId)
-        : undefined;
-    return prompt;
-  });
+  const question = () =>
+    props.part.kind === "question"
+      ? props.options.questionPrompts?.get(props.part.questionId)
+      : undefined;
   return (
     <Show
       when={indicator()}

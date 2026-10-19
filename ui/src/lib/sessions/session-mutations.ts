@@ -271,7 +271,6 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (target) {
         pendingTarget = target;
         if (canDispatchSettings()) {
-          // The ACK can identify a row before any roster can bind its preview.
           settingsPatchClaims.push([pendingTarget, startSettingsPatch?.(pendingTarget) ?? []]);
         }
       }
@@ -279,6 +278,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     let unsubscribeReceipt: (() => void) | undefined;
     try {
       if (options.waitFor) {
+        // The predecessor ACK can identify a row before any roster can bind its preview.
         unsubscribeReceipt = options.predecessorReceipt?.subscribe(adoptPredecessorReceipt);
         adoptPredecessorReceipt();
         await options.waitFor;

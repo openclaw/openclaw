@@ -65,6 +65,7 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
     stopSurface?.();
     stopTrigger?.();
   });
+  // Equal owner refreshes must not recreate the open menu's option content.
   const disabled = createMemo(() => props.disabled || props.pending);
   const selectedMode = createMemo(() => props.mode ?? null);
   const defaultMode = createMemo(() => props.defaultMode);

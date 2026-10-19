@@ -42,7 +42,6 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
     schedulerEnabled: undefined,
     error: null,
   });
-  const saving = createMemo(() => Object.keys(state.pending).length > 0);
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
   const gatewayProjection = createMemo(() => {
     const source = props.gateway;
@@ -365,7 +364,7 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
       pending: state.pending,
       schedulerEnabled: state.schedulerEnabled,
       loading: state.loading,
-      saving: saving(),
+      saving: Object.keys(state.pending).length > 0,
       error: state.error,
       disabled: Boolean(unavailable) || !state.loaded,
       disabledReason: unavailable,
