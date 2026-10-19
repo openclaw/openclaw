@@ -40,9 +40,7 @@ beforeAll(() => {
   database = openOpenClawStateDatabase({ env });
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 function request(id: string, accountId = "alpha", createdAt = new Date().toISOString()) {
   return {
@@ -58,6 +56,27 @@ function seed(channel: string, requests: PairingRequest[], allowFrom = {}) {
   writeChannelPairingStateSnapshot(channel, { version: 1, requests, allowFrom }, env);
 }
 
+function snapshot(channel: string, sourceEnv = env) {
+  return readChannelPairingStateSnapshot(channel, sourceEnv);
+}
+
+function scope(channel: string) {
+  return { channel, env, accountId: "alpha" };
+}
+
+function approve(
+  channel: string,
+  options: Omit<Parameters<typeof approveChannelPairingCode>[0], "channel" | "code"> = {},
+) {
+  return approveChannelPairingCode({
+    channel,
+    code: "ABCDEFGH",
+    env,
+    pairingAdapter: { idLabel: "peer" },
+    ...options,
+  });
+}
+
 it.each([
   { operation: "list", refusedStage: "transaction" },
   { operation: "list", refusedStage: "commit" },
@@ -70,7 +89,7 @@ it.each([
     const channel = `revoked-${operation}-${refusedStage}`;
     const createdAt = operation === "list" ? "2020-01-01T00:00:00.000Z" : new Date().toISOString();
     seed(channel, operation === "missing-approve" ? [] : [request("alice", "alpha", createdAt)]);
-    const before = readChannelPairingStateSnapshot(channel, env);
+    const before = snapshot(channel);
     let currentStage: workerAdmission.SqliteWorkerAdmissionRequest["stage"] | undefined;
     probe.admission(workerAdmission, (admission, grant, admit) => {
       currentStage = admission.stage;
@@ -85,16 +104,13 @@ it.each([
     await expect(
       operation === "list"
         ? listChannelPairingRequests(channel, env, undefined, assertCurrent)
-        : approveChannelPairingCode({
-            channel,
-            code: "ABCDEFGH",
-            env,
+        : approve(channel, {
             assertCurrent,
             pairingAdapter: { idLabel: "peer", normalizeAllowEntry: (entry) => entry },
           }),
     ).rejects.toBe(refusal);
     expect(currentStage).toBe(refusedStage);
-    expect(readChannelPairingStateSnapshot(channel, env)).toEqual(before);
+    expect(snapshot(channel)).toEqual(before);
   },
 );
 
@@ -108,11 +124,7 @@ it("settles an accepted approval when authority is revoked after the commit gran
       revoked = true;
     }
   });
-  const result = approveChannelPairingCode({
-    channel,
-    code: "ABCDEFGH",
-    env,
-    pairingAdapter: { idLabel: "peer" },
+  const result = approve(channel, {
     assertCurrent: () => {
       if (revoked) {
         throw new Error("owner revoked after accepting the approval");
@@ -121,7 +133,7 @@ it("settles an accepted approval when authority is revoked after the commit gran
   });
   await expect(result).resolves.toMatchObject({ id: "alice" });
   expect(revoked).toBe(true);
-  expect(readChannelPairingStateSnapshot(channel, env)).toMatchObject({
+  expect(snapshot(channel)).toMatchObject({
     requests: [],
     allowFrom: { alpha: ["alice"] },
   });
@@ -142,16 +154,14 @@ it.each(["selected", "missing"] as const)(
       { version: 1, requests: selection === "selected" ? [request("alice")] : [], allowFrom: {} },
       callerEnv,
     );
-    const before = readChannelPairingStateSnapshot(channel, callerEnv);
+    const before = snapshot(channel, callerEnv);
     await listChannelPairingRequests(channel, callerEnv);
     const claim = () => claimOpenClawStateOwnership("pairing-fixture", { env: externalEnv });
     if (selection === "missing") {
       claim();
     }
     await expect(
-      approveChannelPairingCode({
-        channel,
-        code: "ABCDEFGH",
+      approve(channel, {
         env: callerEnv,
         pairingAdapter: {
           idLabel: "peer",
@@ -162,7 +172,7 @@ it.each(["selected", "missing"] as const)(
         },
       }),
     ).rejects.toThrow(/externally supervised by pairing-fixture/);
-    expect(readChannelPairingStateSnapshot(channel, externalEnv)).toEqual(before);
+    expect(snapshot(channel, externalEnv)).toEqual(before);
   },
 );
 
@@ -183,31 +193,27 @@ it("runs request, prune, approval, dismissal, and allowlist mutations without ca
   try {
     const pending = await listChannelPairingRequests(channel, env, "alpha");
     expect(pending.map((entry) => entry.id)).toEqual(["approve", "dismiss"]);
-    const created = await upsertChannelPairingRequest({
-      channel,
-      id: "new",
-      accountId: "alpha",
-      env,
-    });
+    const created = await upsertChannelPairingRequest({ ...scope(channel), id: "new" });
     expect(created).toEqual({ code: expect.stringMatching(/^[A-HJ-NP-Z2-9]{8}$/), created: true });
+    await expect(upsertChannelPairingRequest({ ...scope(channel), id: "new" })).resolves.toEqual({
+      code: created.code,
+      created: false,
+    });
     await expect(
-      upsertChannelPairingRequest({ channel, id: "new", accountId: "alpha", env }),
-    ).resolves.toEqual({ code: created.code, created: false });
-    await expect(
-      addChannelAllowFromStoreEntry({ channel, accountId: "alpha", entry: "added", env }),
+      addChannelAllowFromStoreEntry({ ...scope(channel), entry: "added" }),
     ).resolves.toEqual({ changed: true, allowFrom: ["keep", "remove", "added"] });
     await expect(
-      removeChannelAllowFromStoreEntry({ channel, accountId: "alpha", entry: "remove", env }),
+      removeChannelAllowFromStoreEntry({ ...scope(channel), entry: "remove" }),
     ).resolves.toEqual({ changed: true, allowFrom: ["keep", "added"] });
     await expect(
-      approveChannelPairingCode({ channel, code: "ABCDEFGH", accountId: "alpha", env }),
-    ).resolves.toMatchObject({ id: "approve" });
+      approve(channel, { accountId: "alpha", pairingAdapter: undefined }),
+    ).resolves.toMatchObject({
+      id: "approve",
+    });
     await expect(
       dismissChannelPairingRequest({
-        channel,
-        accountId: "alpha",
+        ...scope(channel),
         requestId: resolveChannelPairingRequestId(channel, dismissal),
-        env,
       }),
     ).resolves.toMatchObject({ id: "dismiss" });
     expect(
@@ -216,7 +222,7 @@ it("runs request, prune, approval, dismissal, and allowlist mutations without ca
   } finally {
     sql.restore();
   }
-  expect(readChannelPairingStateSnapshot(channel, env)).toMatchObject({
+  expect(snapshot(channel)).toMatchObject({
     requests: [{ id: "new" }],
     allowFrom: { alpha: ["keep", "added", "approve"] },
   });
@@ -226,18 +232,12 @@ it("captures the physical store before yielding and preserves FIFO allowlist edi
   const channel = "captured-store";
   const captured = { ...env };
   const first = addChannelAllowFromStoreEntry({
-    channel,
-    accountId: "alpha",
+    ...scope(channel),
     entry: "first",
     env: captured,
   });
   captured.OPENCLAW_STATE_DIR = path.join(root, "replacement");
-  const second = addChannelAllowFromStoreEntry({
-    channel,
-    accountId: "alpha",
-    entry: "second",
-    env,
-  });
+  const second = addChannelAllowFromStoreEntry({ ...scope(channel), entry: "second" });
   await expect(first).resolves.toEqual({ changed: true, allowFrom: ["first"] });
   await expect(second).resolves.toEqual({ changed: true, allowFrom: ["first", "second"] });
   expect(fs.existsSync(captured.OPENCLAW_STATE_DIR)).toBe(false);
@@ -252,7 +252,7 @@ it("removes a legacy padded allow entry using its canonical sender id", async ()
     )
     .run(channel);
   await expect(
-    removeChannelAllowFromStoreEntry({ channel, accountId: "alpha", entry: "foreign", env }),
+    removeChannelAllowFromStoreEntry({ ...scope(channel), entry: "foreign" }),
   ).resolves.toEqual({ changed: true, allowFrom: ["keep"] });
   await expect(readChannelAllowFromStore(channel, env, "alpha")).resolves.toEqual(["keep"]);
   await expect(readChannelAllowFromStore(channel, env, "beta")).resolves.toEqual(["foreign"]);
@@ -263,14 +263,11 @@ it.each(["error", "null", "revoked"] as const)(
   async (outcome) => {
     const channel = `adapter-${outcome}`;
     seed(channel, [request("alice")], { alpha: ["existing"] });
-    const before = readChannelPairingStateSnapshot(channel, env);
+    const before = snapshot(channel);
     const refusal = new Error("synthetic approval refused");
     let current = true;
-    const result = approveChannelPairingCode({
-      channel,
+    const result = approve(channel, {
       accountId: "alpha",
-      code: "ABCDEFGH",
-      env,
       assertCurrent: () => {
         if (!current) {
           throw refusal;
@@ -292,13 +289,10 @@ it.each(["error", "null", "revoked"] as const)(
     });
     if (outcome === "null") {
       await expect(result).resolves.toMatchObject({ id: "alice" });
-      expect(readChannelPairingStateSnapshot(channel, env)).toEqual({
-        ...before,
-        requests: [],
-      });
+      expect(snapshot(channel)).toEqual({ ...before, requests: [] });
     } else {
       await expect(result).rejects.toBe(refusal);
-      expect(readChannelPairingStateSnapshot(channel, env)).toEqual(before);
+      expect(snapshot(channel)).toEqual(before);
     }
   },
 );
@@ -307,13 +301,9 @@ it.each(["metadata", "earlier-match", "expired"] as const)(
   "rereads the selected request after a foreign %s change during approval preparation",
   async (change) => {
     const channel = `approval-race-${change}`;
-    const first = request("alice", "alpha", new Date(Date.now() - 10_000).toISOString());
-    seed(channel, [first]);
+    seed(channel, [request("alice", "alpha", new Date(Date.now() - 10_000).toISOString())]);
     let changed = false;
-    const result = await approveChannelPairingCode({
-      channel,
-      code: "ABCDEFGH",
-      env,
+    const result = await approve(channel, {
       pairingAdapter: {
         idLabel: "peer",
         resolveApprovalStoreEntry: ({ meta }) => {
@@ -350,20 +340,16 @@ it.each(["metadata", "earlier-match", "expired"] as const)(
     expect(changed).toBe(true);
     if (change === "expired") {
       expect(result).toBeNull();
-      expect(readChannelPairingStateSnapshot(channel, env)).toEqual({
-        version: 1,
-        requests: [],
-        allowFrom: {},
-      });
+      expect(snapshot(channel)).toEqual({ version: 1, requests: [], allowFrom: {} });
     } else {
       expect(result).toMatchObject({ id: change === "metadata" ? "alice" : "bob" });
       const accountId = change === "metadata" ? "alpha" : "beta";
       await expect(readChannelAllowFromStore(channel, env, accountId)).resolves.toEqual([
         "foreign-proof",
       ]);
-      expect(
-        readChannelPairingStateSnapshot(channel, env).requests.map((entry) => entry.id),
-      ).toEqual(change === "metadata" ? [] : ["alice"]);
+      expect(snapshot(channel).requests.map((entry) => entry.id)).toEqual(
+        change === "metadata" ? [] : ["alice"],
+      );
     }
   },
 );

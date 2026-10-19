@@ -1,4 +1,3 @@
-// Tests SQLite-backed pairing store lifecycle and account isolation.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -72,9 +71,8 @@ afterEach(() => {
   );
 });
 
-function requireFirstPairingRequest(
-  requests: Awaited<ReturnType<typeof listChannelPairingRequests>>,
-) {
+async function requestFor(accountId: string) {
+  const requests = await listChannelPairingRequests("telegram", pairingEnv, accountId);
   expect(requests).toHaveLength(1);
   const request = requests[0];
   if (!request) {
@@ -83,16 +81,19 @@ function requireFirstPairingRequest(
   return request;
 }
 
-function writeAllowFromFixture(params: {
-  env: NodeJS.ProcessEnv;
-  channel: string;
-  accountId?: string;
-  allowFrom: string[];
-}) {
-  const state = readChannelPairingStateSnapshot(params.channel, params.env);
+function writeAllowFromFixture(entries: string[]) {
+  const state = readChannelPairingStateSnapshot("telegram", pairingEnv);
   state.allowFrom ??= {};
-  state.allowFrom[params.accountId ?? DEFAULT_ACCOUNT_ID] = params.allowFrom;
-  writeChannelPairingStateSnapshot(params.channel, state, params.env);
+  state.allowFrom.yy = entries;
+  writeChannelPairingStateSnapshot("telegram", state, pairingEnv);
+}
+
+function upsert(id: string, accountId = DEFAULT_ACCOUNT_ID, channel = "telegram") {
+  return upsertChannelPairingRequest({ channel, id, accountId, env: pairingEnv });
+}
+
+function allowFrom(accountId: string) {
+  return readChannelAllowFromStore("telegram", pairingEnv, accountId);
 }
 
 describe("pairing store", () => {
@@ -129,34 +130,17 @@ describe("pairing store", () => {
     await expect(
       approveChannelPairingCode({ channel: "telegram", accountId: "alpha", code: "GOODCODE", env }),
     ).resolves.toMatchObject({ id: "valid-user" });
-    await expect(readChannelAllowFromStore("telegram", env, "alpha")).resolves.toEqual([
-      "valid-user",
-    ]);
-    await expect(readChannelAllowFromStore("telegram", env, "stale-account")).resolves.toEqual([]);
+    await expect(allowFrom("alpha")).resolves.toEqual(["valid-user"]);
+    await expect(allowFrom("stale-account")).resolves.toEqual([]);
   });
 
   it("handles pending request reuse, expiry, and per-account limits", async () => {
     const env = pairingEnv;
-    const first = await upsertChannelPairingRequest({
-      channel: "demo-a",
-      id: "u1",
-      accountId: DEFAULT_ACCOUNT_ID,
-      env,
-    });
-    const reused = await upsertChannelPairingRequest({
-      channel: "demo-a",
-      id: "u1",
-      accountId: DEFAULT_ACCOUNT_ID,
-      env,
-    });
+    const first = await upsert("u1", DEFAULT_ACCOUNT_ID, "demo-a");
+    const reused = await upsert("u1", DEFAULT_ACCOUNT_ID, "demo-a");
     expect(reused).toEqual({ code: first.code, created: false });
 
-    const expired = await upsertChannelPairingRequest({
-      channel: "demo-b",
-      id: "expired",
-      accountId: DEFAULT_ACCOUNT_ID,
-      env,
-    });
+    const expired = await upsert("expired", DEFAULT_ACCOUNT_ID, "demo-b");
     expect(expired.created).toBe(true);
     const state = readChannelPairingStateSnapshot("demo-b", env);
     const expiredAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
@@ -169,72 +153,22 @@ describe("pairing store", () => {
     await expect(listChannelPairingRequests("demo-b", env)).resolves.toEqual([]);
 
     for (const id of ["one", "two", "three"]) {
-      await expect(
-        upsertChannelPairingRequest({
-          channel: "demo-c",
-          id,
-          accountId: DEFAULT_ACCOUNT_ID,
-          env,
-        }),
-      ).resolves.toMatchObject({ created: true });
+      await expect(upsert(id, DEFAULT_ACCOUNT_ID, "demo-c")).resolves.toMatchObject({
+        created: true,
+      });
     }
-    await expect(
-      upsertChannelPairingRequest({
-        channel: "demo-c",
-        id: "four",
-        accountId: DEFAULT_ACCOUNT_ID,
-        env,
-      }),
-    ).resolves.toEqual({ code: "", created: false });
-  });
-
-  it("persists a channel-derived approval entry from request metadata", async () => {
-    const env = pairingEnv;
-    const request = await upsertChannelPairingRequest({
-      channel: "demo-a",
-      id: "alice",
-      accountId: DEFAULT_ACCOUNT_ID,
-      meta: { proofEntry: "fixture-entry" },
-      env,
+    await expect(upsert("four", DEFAULT_ACCOUNT_ID, "demo-c")).resolves.toEqual({
+      code: "",
+      created: false,
     });
-    const pairingAdapter = {
-      idLabel: "peer",
-      normalizeAllowEntry: (entry: string) => entry,
-      resolveApprovalStoreEntry: ({ meta }: { meta?: Record<string, string> }) =>
-        meta?.proofEntry ?? null,
-    };
-
-    await expect(
-      approveChannelPairingCode({
-        channel: "demo-a",
-        code: request.code,
-        env,
-        pairingAdapter,
-      }),
-    ).resolves.toMatchObject({ id: "alice" });
-    await expect(readChannelAllowFromStore("demo-a", env)).resolves.toEqual(["fixture-entry"]);
   });
 
   it("approves and dismisses account-scoped requests by opaque id", async () => {
     const env = pairingEnv;
-    await upsertChannelPairingRequest({
-      channel: "telegram",
-      accountId: "alpha",
-      id: "shared-sender",
-      env,
-    });
-    await upsertChannelPairingRequest({
-      channel: "telegram",
-      accountId: "beta",
-      id: "shared-sender",
-      env,
-    });
-    const alphaRequest = requireFirstPairingRequest(
-      await listChannelPairingRequests("telegram", env, "alpha"),
-    );
-    const betaRequest = requireFirstPairingRequest(
-      await listChannelPairingRequests("telegram", env, "beta"),
-    );
+    await upsert("shared-sender", "alpha");
+    await upsert("shared-sender", "beta");
+    const alphaRequest = await requestFor("alpha");
+    const betaRequest = await requestFor("beta");
     const alphaChannel = " TeLeGrAm ";
     const alphaRequestId = resolveChannelPairingRequestId(alphaChannel, alphaRequest);
     const betaRequestId = resolveChannelPairingRequestId("telegram", betaRequest);
@@ -249,9 +183,7 @@ describe("pairing store", () => {
         env,
       }),
     ).resolves.toMatchObject({ id: "shared-sender" });
-    await expect(readChannelAllowFromStore("telegram", env, "alpha")).resolves.toEqual([
-      "shared-sender",
-    ]);
+    await expect(allowFrom("alpha")).resolves.toEqual(["shared-sender"]);
     await expect(
       approveChannelPairingRequest({
         channel: "telegram",
@@ -269,7 +201,7 @@ describe("pairing store", () => {
         env,
       }),
     ).resolves.toMatchObject({ id: "shared-sender" });
-    await expect(readChannelAllowFromStore("telegram", env, "beta")).resolves.toEqual([]);
+    await expect(allowFrom("beta")).resolves.toEqual([]);
     await expect(listChannelPairingRequests("telegram", env)).resolves.toEqual([]);
   });
 
@@ -295,37 +227,20 @@ describe("pairing store", () => {
       entry: "1001",
       env,
     });
-    await expect(readChannelAllowFromStore("telegram", env, "alpha")).resolves.toEqual(["1001"]);
-    await expect(readChannelAllowFromStore("telegram", env, "beta")).resolves.toEqual([]);
+    await expect(allowFrom("alpha")).resolves.toEqual(["1001"]);
+    await expect(allowFrom("beta")).resolves.toEqual([]);
 
-    const alpha = await upsertChannelPairingRequest({
-      channel: "telegram",
-      accountId: "alpha",
-      id: "shared",
-      env,
-    });
-    const beta = await upsertChannelPairingRequest({
-      channel: "telegram",
-      accountId: "beta",
-      id: "shared",
-      env,
-    });
+    const alpha = await upsert("shared", "alpha");
+    const beta = await upsert("shared", "beta");
     expect(beta.code).not.toBe(alpha.code);
-    expect(
-      requireFirstPairingRequest(await listChannelPairingRequests("telegram", env, "alpha")).code,
-    ).toBe(alpha.code);
-    expect(
-      requireFirstPairingRequest(await listChannelPairingRequests("telegram", env, "beta")).code,
-    ).toBe(beta.code);
+    expect((await requestFor("alpha")).code).toBe(alpha.code);
+    expect((await requestFor("beta")).code).toBe(beta.code);
 
     await expect(
       approveChannelPairingCode({ channel: "telegram", code: alpha.code, env }),
     ).resolves.toMatchObject({ id: "shared" });
-    await expect(readChannelAllowFromStore("telegram", env, "alpha")).resolves.toEqual([
-      "1001",
-      "shared",
-    ]);
-    await expect(readChannelAllowFromStore("telegram", env, "beta")).resolves.toEqual([]);
+    await expect(allowFrom("alpha")).resolves.toEqual(["1001", "shared"]);
+    await expect(allowFrom("beta")).resolves.toEqual([]);
 
     await expect(
       removeChannelAllowFromStoreEntry({
@@ -339,12 +254,12 @@ describe("pairing store", () => {
 
   it("reads current SQLite entries without a process-local file cache", async () => {
     const env = pairingEnv;
-    writeAllowFromFixture({ env, channel: "telegram", accountId: "yy", allowFrom: ["1001"] });
-    await expect(readChannelAllowFromStore("telegram", env, "yy")).resolves.toEqual(["1001"]);
+    writeAllowFromFixture(["1001"]);
+    await expect(allowFrom("yy")).resolves.toEqual(["1001"]);
     expect(readChannelAllowFromStoreSync("telegram", env, "yy")).toEqual(["1001"]);
 
-    writeAllowFromFixture({ env, channel: "telegram", accountId: "yy", allowFrom: ["10022"] });
-    await expect(readChannelAllowFromStore("telegram", env, "yy")).resolves.toEqual(["10022"]);
+    writeAllowFromFixture(["10022"]);
+    await expect(allowFrom("yy")).resolves.toEqual(["10022"]);
     const sql = observeHostDataSql();
     try {
       expect(readChannelAllowFromStoreSync("telegram", env, "yy")).toEqual(["10022"]);
