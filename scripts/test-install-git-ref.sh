@@ -5,7 +5,7 @@ set -euo pipefail
 if [[ "${1:-}" != --case ]]; then
   root="$(cd "$(dirname "$0")/.." && pwd)"
   for installer in "${@:-$root/scripts/install-cli.sh}"; do
-    for scenario in transient exhausted authentication missing lightweight annotated; do
+    for scenario in transient exhausted authentication missing lightweight annotated full; do
       fixture="$(mktemp -d)"
       mkdir -p "$fixture/home"
       result=0
@@ -31,21 +31,28 @@ trap 'rm -rf "$work"' EXIT
 seed="$work/seed"
 repo="$work/repo"
 ref=v2026.10.5
-git init -q --initial-branch=main "$seed"
-git -C "$seed" config user.email test@example.invalid
-git -C "$seed" config user.name test
+command git init -q --initial-branch=main "$seed"
+command git -C "$seed" config user.email test@example.invalid
+command git -C "$seed" config user.name test
+printf 'base\n' > "$seed/state.txt"
+command git -C "$seed" add state.txt
+command git -C "$seed" commit -qm base
 printf 'release\n' > "$seed/state.txt"
-git -C "$seed" add state.txt
-git -C "$seed" commit -qm release
-expected="$(git -C "$seed" rev-parse HEAD)"
+command git -C "$seed" add state.txt
+command git -C "$seed" commit -qm release
+expected="$(command git -C "$seed" rev-parse HEAD)"
 if [[ "$scenario" == annotated ]]; then
-  git -C "$seed" tag -am release "$ref"
+  command git -C "$seed" tag -am release "$ref"
 else
-  git -C "$seed" tag "$ref"
+  command git -C "$seed" tag "$ref"
 fi
 printf 'main\n' > "$seed/state.txt"
-git -C "$seed" commit -qam main
-git clone -q --depth 1 --no-tags "file://$seed" "$repo"
+command git -C "$seed" commit -qam main
+if [[ "$scenario" == full ]]; then
+  command git clone -q --no-tags "file://$seed" "$repo"
+else
+  command git clone -q --depth 1 --no-tags "file://$seed" "$repo"
+fi
 printf '0\n' > "$work/probes"
 
 git() {
@@ -77,10 +84,15 @@ if grep -Eq 'synthetic-password|synthetic-query|synthetic-header' "$work/output"
   exit 1
 fi
 case "$scenario" in
-  transient|lightweight|annotated)
+  transient|lightweight|annotated|full)
     [[ "$result" == 0 ]] || exit 1
     [[ "$(command git -C "$repo" rev-parse HEAD)" == "$expected" ]] || exit 1
     [[ -z "$(command git -C "$repo" symbolic-ref --quiet HEAD || true)" ]] || exit 1
+    if [[ "$scenario" == full ]]; then
+      [[ "$(command git -C "$repo" rev-list --count HEAD)" == 2 ]] || exit 1
+    else
+      [[ "$(command git -C "$repo" rev-list --count HEAD)" == 1 ]] || exit 1
+    fi
     ;;
   exhausted|authentication)
     [[ "$result" != 0 ]] || exit 1
@@ -93,7 +105,7 @@ case "$scenario" in
 esac || exit 1
 case "$scenario" in
   transient|exhausted) [[ "$(cat "$work/probes")" == 3 ]] ;;
-  authentication|lightweight|annotated) [[ "$(cat "$work/probes")" == 1 ]] ;;
+  authentication|lightweight|annotated|full) [[ "$(cat "$work/probes")" == 1 ]] ;;
   missing) [[ "$(cat "$work/probes")" == 2 ]] ;;
 esac || exit 1
 printf 'PASS: %s %s\n' "$(basename "$installer")" "$scenario"

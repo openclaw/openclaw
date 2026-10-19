@@ -437,7 +437,11 @@ checkout_git_openclaw_ref() {
                 installer_step "Checking out ${ref}" git -C "$repo_dir" checkout "${checkout_args[@]}" "origin/$ref"
                 GIT_REF_KIND="moving"
             else
-                installer_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"
+                local tag_depth=""
+                if [[ "$(git -C "$repo_dir" rev-parse --is-shallow-repository)" == true ]]; then
+                    tag_depth="--depth=1"
+                fi
+                installer_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}" ${tag_depth:+"$tag_depth"}
                 if ! git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
                     installer_error "Requested git version is not a commit: ${ref}"
                     return 1
