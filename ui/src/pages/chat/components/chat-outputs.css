@@ -19,7 +19,7 @@
   font: inherit;
   line-height: 24px;
   text-align: start;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-outputs__row:hover {
@@ -151,7 +151,7 @@
   background: transparent;
   color: var(--text);
   font: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-outputs--mobile .chat-outputs__icon {
