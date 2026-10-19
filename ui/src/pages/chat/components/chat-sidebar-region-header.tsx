@@ -124,7 +124,6 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
       ),
     { lazy: true },
   );
-  const items = createMemo(() => entries()(), { lazy: true });
   return (
     <Menu
       lazy="while-open"
@@ -136,7 +135,7 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
       placement="bottom-start"
       label={t("chat.sidePanel.addTab")}
       trigger={<Icon name="plus" />}
-      items={items()}
+      items={entries()()}
       onSelect={(item) => {
         const slot = props.panelDefinitions.find(
           (type) => type.available && type.slot === item.id,

@@ -39,7 +39,7 @@ import {
   mapActivationResult,
   type ModelSetupActivationState,
 } from "./state.ts";
-import type { ModelSetupViewProps } from "./view.tsx";
+import type { ModelSetupViewProps } from "./view-types.ts";
 import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizard-runner.ts";
 
 export type ModelSetupPageProps = {

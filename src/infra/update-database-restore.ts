@@ -15,7 +15,7 @@ import {
   sha256File,
 } from "./directory-durability.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
@@ -41,10 +41,7 @@ async function existingFile(file: string) {
     }
     return info;
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
+    return ignoreMissingPath(error);
   }
 }
 

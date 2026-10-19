@@ -212,6 +212,8 @@ describe("registerNodeCli", () => {
 
   it.each([
     { args: ["--port", "19001"], changed: false, plaintext: false },
+    { args: ["--tls-fingerprint", ""], changed: false, plaintext: false },
+    { args: ["--tls-fingerprint", "   "], changed: false, plaintext: false },
     { args: ["--port", "19002"], changed: true, plaintext: false },
     { args: ["--no-tls"], changed: false, plaintext: true },
   ])(

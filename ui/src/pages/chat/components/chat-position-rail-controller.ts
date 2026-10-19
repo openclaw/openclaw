@@ -181,7 +181,7 @@ export function createPositionRail(props: PositionRailParams) {
       refreshingWindow = true;
       try {
         void refresh(view);
-        // Keyboard navigation commits the retained target before focusing it.
+        // Native keyboard focus needs the virtualized rail target committed synchronously.
         flush();
       } finally {
         refreshingWindow = false;
