@@ -3,43 +3,29 @@ import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { afterEach, expect, it, vi } from "vitest";
 import { MAX_JSON_BYTES } from "./schema.js";
 import { requestEvaluation } from "./transport.js";
+import { mockResponse } from "./transport.test-support.js";
 
 const request = {
   apiKey: "synthetic-key",
   timeoutMs: 1000,
   body: { model: "jev-test", state: null, questions: { q: { type: "noul" as const } } },
 };
-function mockFetch(implementation: typeof globalThis.fetch) {
-  const fetch = vi.fn(implementation);
-  vi.stubGlobal("fetch", fetch);
-  return fetch;
-}
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 it("never follows redirects to a credential sink", async () => {
-  const fetch = mockFetch(
-    async () =>
-      new Response(null, {
-        status: 302,
-        headers: { location: "https://other.example/credential-sink" },
-      }),
-  );
+  const fetch = mockResponse(null, {
+    status: 302,
+    headers: { location: "https://other.example/credential-sink" },
+  });
   await expect(requestEvaluation(request)).rejects.toMatchObject({ reason: "transport" });
   expect(fetch).toHaveBeenCalledOnce();
   expect(fetch.mock.calls[0]?.[0]).toBe("https://api.typesafe.ai/v1/systemone");
 });
 it("bounds the serialized request including its model field", async () => {
-  const fetch = mockFetch(async () => new Response());
+  const fetch = mockResponse(undefined);
   await expect(
     requestEvaluation({ ...request, body: { ...request.body, state: "x".repeat(MAX_JSON_BYTES) } }),
   ).rejects.toThrow("request exceeds");
@@ -47,7 +33,7 @@ it("bounds the serialized request including its model field", async () => {
 });
 it("keeps the deadline active after response headers", async () => {
   const cancelled = vi.fn();
-  mockFetch(async () => new Response(new ReadableStream({ pull() {}, cancel: cancelled })));
+  mockResponse(new ReadableStream({ pull() {}, cancel: cancelled }));
   await expect(requestEvaluation({ ...request, timeoutMs: 25 })).rejects.toThrow(
     "TypeSafe evaluation timed out.",
   );
@@ -64,7 +50,7 @@ it("rejects cancellation concurrent with body EOF", async () => {
     },
     { highWaterMark: 0 },
   );
-  mockFetch(async () => new Response(body));
+  mockResponse(body);
   await expect(requestEvaluation({ ...request, signal: controller.signal })).rejects.toThrow(
     "TypeSafe evaluation cancelled.",
   );
@@ -77,7 +63,7 @@ it("preserves bounded multi-chunk JSON responses", async () => {
       stream.close();
     },
   });
-  mockFetch(async () => new Response(body));
+  mockResponse(body);
   await expect(requestEvaluation(request)).resolves.toEqual({ value: 0.37 });
 });
 it.each<[number, string, HeadersInit, number?]>([
@@ -95,13 +81,10 @@ it.each<[number, string, HeadersInit, number?]>([
       throw new Error("synthetic credential and submitted state");
     });
     const cancel = vi.fn();
-    const fetch = mockFetch(
-      async () =>
-        new Response(new ReadableStream({ pull, cancel }, { highWaterMark: 0 }), {
-          status,
-          headers: new Headers(headers),
-        }),
-    );
+    const fetch = mockResponse(new ReadableStream({ pull, cancel }, { highWaterMark: 0 }), {
+      status,
+      headers: new Headers(headers),
+    });
     const error = await requestEvaluation(request).catch((caught: unknown) => caught);
     expect(error).toMatchObject({ name: "EvaluationError", reason, retryAfterMs });
     if (reason === "unsupported-input") {
@@ -123,8 +106,8 @@ it.each([
 ])(
   "joins capture cancellation and release concurrently for $trigger/$status",
   async ({ status, trigger, reason }) => {
-    const cancellationGate = deferred();
-    const releaseGate = deferred();
+    const cancellationGate = Promise.withResolvers<void>();
+    const releaseGate = Promise.withResolvers<void>();
     const nativeCancel = vi.fn(() => cancellationGate.promise);
     const stream = new ReadableStream<Uint8Array>(
       {
@@ -155,14 +138,11 @@ it.each([
       };
     });
     let settled = false;
-    const settle = (value: unknown) => {
-      settled = true;
-      return value;
-    };
-    const outcome = requestEvaluation({ ...request, signal: controller.signal }).then(
-      settle,
-      settle,
-    );
+    const outcome = requestEvaluation({ ...request, signal: controller.signal })
+      .catch((error: unknown) => error)
+      .finally(() => {
+        settled = true;
+      });
     try {
       await setImmediate();
       if (trigger === "abort") {
@@ -195,7 +175,7 @@ it.each([
 );
 
 it("binds standard provider credentials to the provider's own API origin", async () => {
-  const fetch = mockFetch(async () => new Response("{}"));
+  const fetch = mockResponse("{}");
   await requestEvaluation({
     ...request,
     baseUrl: "https://unrelated.example",

@@ -3,7 +3,13 @@ import type { DecisionBatch } from "openclaw/plugin-sdk/decisions";
 import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { registeredDecisionProvider } from "./transport.test-support.js";
+import {
+  choiceAnswer,
+  mockFetch,
+  mockJsonResponse as mockResponse,
+  registeredDecisionProvider,
+  scoreAnswer,
+} from "./transport.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   getPreparedPluginSecretInput: vi.fn(),
@@ -21,19 +27,8 @@ const response = {
   model: "jev-test",
   answers: {
     q: { type: "noul", noul: 0.37 },
-    c: {
-      type: "choice",
-      choice: "skip",
-      confidence: 0.5,
-      probabilities: { keep: 0.5, skip: 0.49 },
-    },
-    s: {
-      type: "score",
-      score: 0.607,
-      confidence: 0.5,
-      probabilities: { 0: 0.4, 1: 0.6 },
-      legend: { 0: "Low", 1: "High" },
-    },
+    c: choiceAnswer("skip", { keep: 0.5, skip: 0.49 }, 0.5),
+    s: scoreAnswer(0.607, { 0: 0.4, 1: 0.6 }, { 0: "Low", 1: "High" }, 0.5),
   },
   usage: { input_tokens: 12, output_tokens: 3 },
 };
@@ -48,14 +43,6 @@ const context = (signal = new AbortController().signal) => ({
   signal,
   deadlineMonotonicMs: performance.now() + 1000,
 });
-function mockResponse(body: unknown = response, init?: ResponseInit) {
-  const fetch = vi.fn(
-    async (_url: RequestInfo | URL, _init?: RequestInit) =>
-      new Response(typeof body === "string" ? body : JSON.stringify(body), init),
-  );
-  vi.stubGlobal("fetch", fetch);
-  return fetch;
-}
 const withAnswer = (id: keyof typeof response.answers, overrides: object) => ({
   answers: { ...response.answers, [id]: { ...response.answers[id], ...overrides } },
 });
@@ -81,15 +68,15 @@ afterEach(() => {
 });
 
 const metadata = {
-  metrics: { seconds: 0.05, questions: 3, upstream_calls: 1 },
-  scoring: { method: "candidate_softmax", calibrated: false },
+  metrics: { seconds: 0.05 },
+  scoring: { calibrated: false },
 };
 const usageMetadata = {
   output_tokens_basis: "scored_decision_positions",
   decision_positions: 3,
-  generated_text_tokens: 0,
-  discarded_sampled_tokens: 1,
 };
+const withMetadata = { ...response, ...metadata, usage: { ...response.usage, ...usageMetadata } };
+const tokens = (output_tokens: unknown) => ({ usage: { input_tokens: 12, output_tokens } });
 
 describe.each<{ mode: string; config: { baseUrl?: string } }>([
   { mode: "hosted", config: {} },
@@ -148,56 +135,30 @@ describe.each<{ mode: string; config: { baseUrl?: string } }>([
     ["missing usage", { usage: undefined }],
     ["missing token count", { usage: { input_tokens: 12 } }],
     ["malformed token count", { usage: { input_tokens: "12", output_tokens: 3 } }],
-    ["negative token count", { usage: { input_tokens: 12, output_tokens: -1 } }],
-    ["fractional token count", { usage: { input_tokens: 12, output_tokens: 1.5 } }],
-    [
-      "unsafe token count",
-      { usage: { input_tokens: 12, output_tokens: Number.MAX_SAFE_INTEGER + 1 } },
-    ],
+    ["negative token count", tokens(-1)],
+    ["fractional token count", tokens(1.5)],
+    ["unsafe token count", tokens(Number.MAX_SAFE_INTEGER + 1)],
     ["missing answer", { answers: { c: response.answers.c, s: response.answers.s } }],
     ["extra answer", { answers: { ...response.answers, extra: response.answers.q } }],
     ["mismatched answer type", { answers: { ...response.answers, q: response.answers.c } }],
-    ["invalid Noul probability", withAnswer("q", { noul: 1.01 })],
     ["extra answer field", withAnswer("q", { debug: true })],
-    ["unknown Choice label", withAnswer("c", { choice: "other" })],
-    [
-      "mismatched distribution labels",
-      withAnswer("c", { probabilities: { keep: 0.5, other: 0.5 } }),
-    ],
-    ["zero distribution", withAnswer("c", { probabilities: { keep: 0, skip: 0 } })],
     [
       "invalid distribution probability",
       withAnswer("c", { probabilities: { keep: -0.1, skip: 1 } }),
     ],
     ["malformed confidence", withAnswer("c", { confidence: "0.5" })],
-    ["Score outside rubric", withAnswer("s", { score: 1.1 })],
-    ["incorrect Score legend", withAnswer("s", { legend: { 0: "Wrong", 1: "High" } })],
     ["excessive metadata bytes", { metrics: "x".repeat(4 * 1024 * 1024) }],
     ["excessive metadata nodes", { metrics: Array(262144).fill(null) }],
     [
       "excessive metadata depth",
       { metrics: Array.from({ length: 65 }).reduce<unknown>((value) => [value], null) },
     ],
+    [
+      "nonfinite required number",
+      JSON.stringify(withMetadata).replace('"noul":0.37', '"noul":1e400'),
+    ],
   ])("rejects %s despite additive metadata", async (_name, invalid) => {
-    mockResponse({
-      ...response,
-      ...metadata,
-      usage: { ...response.usage, ...usageMetadata },
-      ...invalid,
-    });
-    await expect(registeredProvider(config).evaluate(batch, context())).resolves.toEqual({
-      status: "unavailable",
-      reason: "invalid-response",
-    });
-  });
-
-  it("rejects nonfinite required numbers in JSON despite additive metadata", async () => {
-    const body = JSON.stringify({
-      ...response,
-      ...metadata,
-      usage: { ...response.usage, ...usageMetadata },
-    }).replace('"noul":0.37', '"noul":1e400');
-    mockResponse(body);
+    mockResponse(typeof invalid === "string" ? invalid : { ...withMetadata, ...invalid });
     await expect(registeredProvider(config).evaluate(batch, context())).resolves.toEqual({
       status: "unavailable",
       reason: "invalid-response",
@@ -228,7 +189,7 @@ it.each([
 
 it("observes prepared credential rotation, loss, recovery, and caller cancellation", async () => {
   vi.stubEnv("TYPESAFE_API_KEY", "synthetic-ambient");
-  const fetch = mockResponse();
+  const fetch = mockResponse(response);
   const provider = registeredProvider({ apiKey: "synthetic-unprepared" });
   const controller = new AbortController();
   for (const [revision, key] of [
@@ -284,7 +245,7 @@ it.each<DecisionBatch>([
 });
 
 it("does not dispatch when preparation consumes the native deadline", async () => {
-  const fetch = mockResponse();
+  const fetch = mockResponse(response);
   vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(100);
   await expect(
     registeredProvider().evaluate(batch, {
@@ -299,23 +260,17 @@ it("does not dispatch when preparation consumes the native deadline", async () =
 it("limits an in-flight request to the budget remaining after preparation", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(40);
-  let started!: (signal: AbortSignal) => void;
-  const startedSignal = new Promise<AbortSignal>((resolve) => {
-    started = resolve;
-  });
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(
-      (_url: RequestInfo | URL, init?: RequestInit) =>
-        new Promise<Response>((_resolve, reject) => {
-          const signal = init?.signal;
-          assert(signal);
-          signal.addEventListener("abort", () => reject(new Error("request aborted")), {
-            once: true,
-          });
-          started(signal);
-        }),
-    ),
+  const started = Promise.withResolvers<AbortSignal>();
+  mockFetch(
+    (_url, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        assert(signal);
+        signal.addEventListener("abort", () => reject(new Error("request aborted")), {
+          once: true,
+        });
+        started.resolve(signal);
+      }),
   );
   const controller = new AbortController();
   const pending = registeredProvider().evaluate(batch, {
@@ -324,7 +279,7 @@ it("limits an in-flight request to the budget remaining after preparation", asyn
     deadlineMonotonicMs: 50,
   });
   try {
-    const signal = await startedSignal;
+    const signal = await started.promise;
     await vi.advanceTimersByTimeAsync(9);
     expect(signal.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1);

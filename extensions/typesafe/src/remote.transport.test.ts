@@ -16,7 +16,14 @@ import {
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "./config.js";
-import { registeredDecisionProvider } from "./transport.test-support.js";
+import {
+  closeServer,
+  collectRequest,
+  decisionContext,
+  registeredDecisionProvider,
+  scoreAnswer,
+  stubAmbientProxies,
+} from "./transport.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/secret-input-runtime")>()),
@@ -61,10 +68,7 @@ async function listen<T extends Server>(listener: T) {
   return {
     listener,
     claim,
-    releaseListener: () =>
-      new Promise<void>((resolve, reject) => {
-        listener.close((error) => (error ? reject(error) : resolve()));
-      }),
+    releaseListener: () => closeServer(listener),
   };
 }
 
@@ -97,26 +101,24 @@ beforeAll(async () => {
     createServer(
       { key: PROXY_FIXTURE_KEY, cert: PROXY_FIXTURE_CERTIFICATE },
       (request, response) => {
-        const chunks: Buffer[] = [];
-        request.on("data", (chunk: Buffer) => chunks.push(chunk));
-        request.on("end", () => {
+        collectRequest(request, (body) => {
           received.push({
             url: request.url,
             host: request.headers.host,
             authorization: request.headers.authorization,
             apiKey: request.headers["x-api-key"],
-            body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+            body: JSON.parse(body),
           });
           if (redirect) {
             response.writeHead(302, { location: redirect });
             response.end();
           } else {
             response.setHeader("content-type", "application/json");
-            const body = JSON.stringify(
+            const payload = JSON.stringify(
               responsePayload ?? { ...answer, model: responseModel ?? answer.model },
             );
             response.end(
-              escapeResponse ? body.replaceAll("-", String.fromCharCode(92) + "u002d") : body,
+              escapeResponse ? payload.replaceAll("-", String.fromCharCode(92) + "u002d") : payload,
             );
           }
         });
@@ -158,20 +160,8 @@ beforeEach(() => {
     revision: 1,
     value: "synthetic-hosted-key",
   });
-  for (const key of [
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "ALL_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "all_proxy",
-  ]) {
-    vi.stubEnv(key, "http://127.0.0.1:1");
-  }
-  vi.stubEnv("NO_PROXY", "");
-  vi.stubEnv("no_proxy", "");
+  stubAmbientProxies();
   vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "0");
-  vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "false");
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -190,11 +180,7 @@ function provider(source: ModelProviderConfig | (() => ModelProviderConfig)) {
     plugins: { entries: { typesafe: { config } } },
   }));
 }
-const context = () => ({
-  model: "nemotron-deciffusion",
-  signal: new AbortController().signal,
-  deadlineMonotonicMs: performance.now() + 3000,
-});
+const context = () => decisionContext("nemotron-deciffusion", 3000);
 const endpointRef = {
   source: "store",
   provider: "default",
@@ -263,53 +249,40 @@ it("uses the common private-network opt-out and explicit opt-in", async () => {
   expect(received).toHaveLength(1);
 });
 
-it("applies the shared bearer override and /v1 base URL without duplicating paths", async () => {
-  await expect(
-    evaluate({
-      baseUrl: baseUrl + "/v1/",
-      apiKey: "synthetic-key",
-      headers: { authorization: "Bearer synthetic-stale" },
-      request: {
-        tls,
-        auth: { mode: "authorization-bearer", token: "synthetic-override" },
-      },
-    }),
-  ).resolves.toMatchObject({ status: "ok" });
-  expect(received).toHaveLength(1);
-  expect(received[0]).toMatchObject({
-    url: "/v1/systemone",
-    authorization: "Bearer synthetic-override",
-  });
-});
-
-it.each(["header-auth", "request-headers"] as const)(
+it.each(["bearer", "header-auth", "request-headers"] as const)(
   "applies %s after provider header defaults",
   async (mode) => {
+    const headers = {
+      Authorization: "Bearer synthetic-override",
+      "X-API-Key": "synthetic-replacement",
+    };
     const request: NonNullable<ModelProviderConfig["request"]> =
-      mode === "header-auth"
-        ? { tls, auth: { mode: "header", headerName: "X-API-Key", value: "synthetic-replacement" } }
-        : {
-            tls,
-            headers: {
-              Authorization: "Bearer synthetic-override",
-              "X-API-Key": "synthetic-replacement",
-            },
-          };
+      mode === "bearer"
+        ? { tls, auth: { mode: "authorization-bearer", token: "synthetic-override" } }
+        : mode === "header-auth"
+          ? {
+              tls,
+              auth: { mode: "header", headerName: "X-API-Key", value: "synthetic-replacement" },
+            }
+          : { tls, headers };
     await expect(
       evaluate({
+        ...(mode === "bearer" ? { baseUrl: baseUrl + "/v1/" } : {}),
         apiKey: "synthetic-default",
         headers: {
           authorization: "Bearer synthetic-stale",
-          "x-api-key": "synthetic-stale-header",
+          ...(mode === "bearer" ? {} : { "x-api-key": "synthetic-stale-header" }),
         },
         request,
       }),
     ).resolves.toMatchObject({ status: "ok" });
-    expect(received).toHaveLength(1);
-    expect(received[0]?.authorization).toBe(
-      mode === "header-auth" ? undefined : "Bearer synthetic-override",
-    );
-    expect(received[0]?.apiKey).toBe("synthetic-replacement");
+    expect(received).toMatchObject([
+      {
+        url: "/v1/systemone",
+        authorization: mode === "header-auth" ? undefined : "Bearer synthetic-override",
+        ...(mode === "bearer" ? {} : { apiKey: "synthetic-replacement" }),
+      },
+    ]);
   },
 );
 
@@ -475,17 +448,10 @@ it.each([false, true])(
       questions: { q: { type: "score" as const, criteria: ["Bearer demo", "Routine"] } },
     };
     responsePayload = {
-      model: "nemotron-deciffusion",
+      ...answer,
       answers: {
-        q: {
-          type: "score",
-          score: 0,
-          confidence: 1,
-          probabilities: { 0: 1, 1: 0 },
-          legend: { 0: "Bearer demo", 1: "Routine" },
-        },
+        q: scoreAnswer(0, { 0: 1, 1: 0 }, { 0: "Bearer demo", 1: "Routine" }, 1),
       },
-      usage: { input_tokens: 8, output_tokens: 1 },
     };
     const result = await provider(
       settings(authenticated ? { apiKey: "synthetic-server-key" } : {}),
