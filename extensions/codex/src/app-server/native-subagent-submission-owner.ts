@@ -349,8 +349,9 @@ export class CodexNativeSubagentSubmissionOwner {
     }
     custody.phase = "promoting";
     clearTimeout(custody.timer);
-    // Native history owns execution. Keep its existing submission receipt until
-    // the result is acknowledged; there is no task row to take restart custody.
+    // The monitor now protects execution. Keep only the receipt and completion
+    // custody until acknowledgement; there is no task row to take restart custody.
+    custody.release();
   }
 
   settleChild(state: ParentState, child: ChildState): void {
