@@ -21,6 +21,7 @@ import {
 } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import type { GatewayPluginReloadStatus } from "../gateway/server-plugin-reload-status.types.js";
 import type { SessionRowProjection } from "../gateway/session-row-projection.js";
 import { getGatewayInstallationReplacement } from "../gateway/stale-install.js";
 import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
@@ -593,6 +594,7 @@ export type StatusSummary = Omit<
     };
     eventLoop?: NonNullable<SystemInfoResult["eventLoop"]>;
     processMemory?: NonNullable<SystemInfoResult["processMemory"]>;
+    pluginReload?: GatewayPluginReloadStatus;
     degradedSecretOwners?: Array<
       Omit<
         NonNullable<GatheredStatusSummary["degradedSecretOwners"]>[number],

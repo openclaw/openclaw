@@ -9,6 +9,7 @@ import { pageCacheReadOperations, type PageCacheProgress } from "./sqlite-page-c
 
 const observed = vi.hoisted(() => ({
   readers: [] as import("node:sqlite").DatabaseSync[],
+  busyTimeoutPragmas: [] as (string | null)[],
 }));
 
 vi.mock("./node-sqlite.js", async (importOriginal) => {
@@ -19,17 +20,21 @@ vi.mock("./node-sqlite.js", async (importOriginal) => {
       const database = actual.openNodeSqliteDatabase(...args);
       if (args[1]?.readOnly) {
         observed.readers.push(database);
-        database.setAuthorizer((action, table, column) =>
-          action === constants.SQLITE_READ &&
-          ([
-            "trajectory_runtime_events",
-            "session_transcript_archives",
-            "session_transcript_cold_archives",
-          ].includes(table ?? "") ||
-            (table === "session_entry_snapshots" && column === "value_json"))
+        expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 0 });
+        database.setAuthorizer((action, table, column) => {
+          if (action === constants.SQLITE_PRAGMA && table === "busy_timeout") {
+            observed.busyTimeoutPragmas.push(column);
+          }
+          return action === constants.SQLITE_READ &&
+            ([
+              "trajectory_runtime_events",
+              "session_transcript_archives",
+              "session_transcript_cold_archives",
+            ].includes(table ?? "") ||
+              (table === "session_entry_snapshots" && column === "value_json"))
             ? constants.SQLITE_DENY
-            : constants.SQLITE_OK,
-        );
+            : constants.SQLITE_OK;
+        });
       }
       return database;
     },
@@ -225,6 +230,7 @@ describe.skipIf(process.platform !== "linux")("SQLite page-cache worker", () => 
     expect(result.queryBeforeMs).toBeGreaterThanOrEqual(0);
     expect(result.queryAfterMs).toBeGreaterThanOrEqual(0);
     expect(observed.readers.every((database) => !database.isOpen)).toBe(true);
+    expect(observed.busyTimeoutPragmas).toEqual([]);
   });
 
   it("yields between shared-state reads and stops at the byte budget", () => {

@@ -1,6 +1,7 @@
 import { realpathSync } from "node:fs";
 import nodePath from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { listGatewayOwnedAgentIds } from "../agents/agent-roster.js";
 import {
   isConfiguredAgentDatabaseTarget,
   listConfiguredSessionStoreAgentIds,
@@ -205,7 +206,12 @@ export async function preflightOpenClawDatabaseSchemas(
     : undefined;
   const admissionConfig = options.agentAdmissionConfig;
   const admittedAgentIds = new Set(
-    admissionConfig ? listConfiguredSessionStoreAgentIds(admissionConfig) : [],
+    admissionConfig
+      ? [
+          ...listConfiguredSessionStoreAgentIds(admissionConfig),
+          ...listGatewayOwnedAgentIds(admissionConfig),
+        ]
+      : [],
   );
   const scheduling = startup?.scheduling(
     options.env,
@@ -315,10 +321,9 @@ export async function preflightOpenClawDatabaseSchemas(
             // Boot admission exposes this native handle to its enclosing migration owner.
             stateDatabase = openNodeSqliteDatabase(
               cleanClose ? resolveImmutableSqliteFileUri(stateLocation) : stateLocation,
-              { readOnly: true },
+              { readOnly: true, timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
             );
             closeStateSchemaReadAdmission = options.openStateSchemaReadAdmission?.(stateDatabase);
-            stateDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
             const admittedDatabase = stateDatabase;
             assertStateSource?.();
             inspection = assertStateSource
