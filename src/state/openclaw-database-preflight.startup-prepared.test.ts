@@ -74,9 +74,14 @@ function withImmediateAdmission(run: Parameters<typeof withAgentDatabaseStartupA
   return withAgentDatabaseStartupAdmission(run, { deferInspections: false });
 }
 
-it.each(["openclaw", "crestodian", "worker"])(
-  "keeps a held old-schema %s store unavailable without blocking healthy startup",
-  async (agentId) => {
+it.each([
+  { agentId: "openclaw", ownerId: "openclaw" },
+  { agentId: "crestodian", ownerId: "crestodian" },
+  { agentId: "worker", ownerId: "worker" },
+  { agentId: "openclaw", ownerId: "foreign" },
+])(
+  "keeps a held old-schema $agentId store with owner $ownerId unavailable without blocking healthy startup",
+  async ({ agentId, ownerId }) => {
     const fleet = databaseFixture(tempDirs.make("startup-held-schema-"));
     const config = agentConfig(["main", "worker"], "main");
     const healthyPath = fleet.agent("main").path;
@@ -105,7 +110,7 @@ it.each(["openclaw", "crestodian", "worker"])(
     closeDatabases();
     execSql(
       heldPath,
-      `PRAGMA user_version=${supportedVersions.agent - 1}; UPDATE schema_meta SET schema_version=${supportedVersions.agent - 1} WHERE meta_key='primary';`,
+      `PRAGMA user_version=${supportedVersions.agent - 1}; UPDATE schema_meta SET schema_version=${supportedVersions.agent - 1}, agent_id='${ownerId}' WHERE meta_key='primary';`,
     );
     const before = fs.readFileSync(heldPath);
     const log = { info: vi.fn(), warn: vi.fn() };

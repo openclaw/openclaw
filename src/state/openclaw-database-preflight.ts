@@ -563,6 +563,37 @@ export async function preflightOpenClawDatabaseSchemas(
           );
           return undefined;
         }
+        // A held old store stays inaccessible even when Doctor cannot verify its owner.
+        // Healthy held stores retain runtime access; only Doctor may migrate a held store.
+        if (
+          agentVersion < supportedVersions.agent &&
+          purpose === "runtime" &&
+          row.agentId &&
+          (
+            await (recoveryHolds ??= withArtifactPreservingStateReads(() =>
+              readAgentDeletionRecoveryHoldsInWorker({ env: options.env }),
+            ))
+          ).some(
+            (held) =>
+              held.agentId === row.agentId &&
+              isSameOpenClawAgentDatabasePath(held.path, realAgentPath),
+          )
+        ) {
+          const cause = new AgentDatabaseRecoveryHeldError(
+            `Agent ${row.agentId} database is held for deletion recovery at schema ${agentVersion}; migration to schema ${supportedVersions.agent} requires Doctor.`,
+          );
+          const refusal = createAgentDatabaseInspectionRefusal({
+            agentId: row.agentId,
+            paths: [agentPath],
+            reason: cause.message,
+            cause,
+          });
+          (inspection.agentRefusals ??= []).push(refusal);
+          createSubsystemLogger("state/agent-admission").warn(
+            `${refusal.reason} ${refusal.repairHint}`,
+          );
+          return undefined;
+        }
         if (agentVersion <= supportedVersions.agent && inspectOwnership && row.agentId) {
           const refusal = inspectAgentDatabaseAdmission({
             agentId: row.agentId,
@@ -575,35 +606,6 @@ export async function preflightOpenClawDatabaseSchemas(
           }
         }
         if (agentVersion < supportedVersions.agent) {
-          // Healthy held stores retain runtime access; only Doctor may migrate a held store.
-          if (
-            purpose === "runtime" &&
-            row.agentId &&
-            (
-              await (recoveryHolds ??= withArtifactPreservingStateReads(() =>
-                readAgentDeletionRecoveryHoldsInWorker({ env: options.env }),
-              ))
-            ).some(
-              (held) =>
-                held.agentId === row.agentId &&
-                isSameOpenClawAgentDatabasePath(held.path, realAgentPath),
-            )
-          ) {
-            const cause = new AgentDatabaseRecoveryHeldError(
-              `Agent ${row.agentId} database is held for deletion recovery at schema ${agentVersion}; migration to schema ${supportedVersions.agent} requires Doctor.`,
-            );
-            const refusal = createAgentDatabaseInspectionRefusal({
-              agentId: row.agentId,
-              paths: [agentPath],
-              reason: cause.message,
-              cause,
-            });
-            (inspection.agentRefusals ??= []).push(refusal);
-            createSubsystemLogger("state/agent-admission").warn(
-              `${refusal.reason} ${refusal.repairHint}`,
-            );
-            return undefined;
-          }
           (inspection.pendingMigrations ??= []).push({
             kind: "agent",
             path: agentPath,
