@@ -1,4 +1,4 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, onCleanup, Show } from "solid-js";
 import type {
   SessionParticipant,
   SessionParticipantIdentity,
@@ -246,6 +246,16 @@ export function ParticipantAvatar(props: {
 type ViewerAvatarElement = SolidBridgeElement<ViewerAvatarProps>;
 type ViewerFacepileElement = SolidBridgeElement<ViewerFacepileProps>;
 
+const mountedFacepiles = new Map<HTMLElement, ViewerFacepileProps>();
+
+export function mountedViewerSessionKeys(root: HTMLElement): ReadonlySet<string> {
+  return new Set(
+    [...mountedFacepiles].flatMap(([element, props]) =>
+      root.contains(element) ? [props.sessionKey ?? ""] : [],
+    ),
+  );
+}
+
 export const ViewerAvatar = defineSolidBridge<ViewerAvatarProps>(
   "openclaw-viewer-avatar",
   (props, host) => {
@@ -266,6 +276,8 @@ defineSolidBridge<ViewerFacepileProps>(
   "openclaw-viewer-facepile",
   (props, host) => {
     host.style.display = "contents";
+    mountedFacepiles.set(host, host);
+    onCleanup(() => mountedFacepiles.delete(host));
     return <ViewerFacepileContent {...props} />;
   },
   {

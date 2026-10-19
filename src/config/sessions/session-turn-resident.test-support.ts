@@ -86,7 +86,7 @@ async function stage(f: Fixture, plan: SessionTurnPlan) {
 export function runSessionTurnResidentTests(
   withActor: (run: (fixture: Fixture) => void | Promise<void>) => Promise<void>,
 ) {
-  it("prepares committed entry, window, transcript and pending facts with only the identity read", async () => {
+  it("prepares a fresh input from complete committed actor facts without reads", async () => {
     await withActor(async (f) => {
       const plan = turn(f);
       const { outcome, pending } = await stage(f, plan);
@@ -107,7 +107,7 @@ export function runSessionTurnResidentTests(
             messages: [{ pending: true, existing: undefined }],
             version: { rawSeq: null },
           });
-          expect(reads.counts.read).toBe(1);
+          expect(reads.counts.read).toBe(0);
           // Resident pending rows are facts, never permission to consume another input.
           expect(() => f.prepareTurn({ ...plan, custody: undefined })).toThrow(
             "Pending input cannot be appended outside its admitted turn",
@@ -143,7 +143,11 @@ export function runSessionTurnResidentTests(
         f.writeEntry({ ...f.nativeEntry()!, restartRecoveryDeliveryRunId: "native-run" });
         runSqliteImmediateTransactionSync(f.database.db, () =>
           appendTranscriptEventsInTransaction(f.database, f.scope, [
-            { type: "message", id: "native", message: { role: "user", content: "native write" } },
+            {
+              type: "message",
+              id: "native",
+              message: { role: "user", content: "native write", idempotencyKey: "next-input" },
+            },
           ]),
         );
         const prepared = f.prepareTurn(turn(f));
@@ -151,6 +155,10 @@ export function runSessionTurnResidentTests(
           restartRecoveryDeliveryRunId: "native-run",
         });
         expect(prepared.version?.rawSeq).toBe(0);
+        expect(prepared.messages?.[0]?.existing).toMatchObject({
+          messageId: "native",
+          message: { content: "native write" },
+        });
       }),
     );
   });
@@ -214,7 +222,7 @@ export function runSessionTurnResidentTests(
     },
   );
 
-  it("uses the actor's committed transcript version on the next turn", async () => {
+  it("uses committed identities for fresh inputs and returns stored bytes on retry", async () => {
     await withActor(async (f) => {
       const before = withEngineStoreAdmission(() => f.read());
       const command: Mutation = {
@@ -237,7 +245,16 @@ export function runSessionTurnResidentTests(
             version: { rawSeq: 1 },
             expectedSessionState: { restartRecoveryDeliveryRunId: "append-run" },
           });
-          expect(reads.counts.read).toBe(1);
+          expect(reads.counts.read).toBe(0);
+          const retry = turn(f, "committed-input");
+          retry.options.messages[0]!.message = {
+            role: "user",
+            content: "different retry bytes",
+            idempotencyKey: "committed-input",
+          };
+          expect(f.prepareTurn(retry).messages?.[0]?.existing).toMatchObject({
+            message: { content: "committed-input" },
+          });
         } finally {
           reads.restore();
         }
@@ -269,6 +286,35 @@ export function runSessionTurnResidentTests(
           });
           expect(f.prepareTurn(plan).messages).toEqual(prepared.messages);
         }
+        const reads = countReads(f);
+        try {
+          expect(f.prepareTurn(turn(f)).messages?.[0]?.existing).toBeUndefined();
+          expect(reads.counts.read).toBe(1);
+        } finally {
+          reads.restore();
+        }
+      }),
+    );
+  });
+
+  it("scans assistant bodies without an indexed event identity", async () => {
+    await withActor((f) =>
+      withEngineStoreAdmission(() => {
+        runSqliteImmediateTransactionSync(f.database.db, () =>
+          appendTranscriptEventsInTransaction(f.database, f.scope, [
+            {
+              type: "message",
+              message: { role: "assistant", content: "stored answer", idempotencyKey: "answer" },
+            },
+          ]),
+        );
+        f.read();
+        const plan = turn(f, "answer");
+        plan.options.messages[0]!.idempotencyLookup = "scan-assistant";
+        expect(f.prepareTurn(plan).messages?.[0]?.existing).toMatchObject({
+          messageId: "answer",
+          message: { content: "stored answer" },
+        });
       }),
     );
   });

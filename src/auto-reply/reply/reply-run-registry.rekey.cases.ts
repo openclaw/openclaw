@@ -1,11 +1,11 @@
 import { expect, it } from "vitest";
 import {
   ReplyRunAlreadyActiveError,
-  resolveActiveSessionRunId,
-  waitForReplyRunEndBySessionId,
   getSessionControllerOperation,
   waitForSessionRunIdle,
 } from "../../sessions/session-controller.js";
+import { resolveActiveSessionRunId } from "../../sessions/session-controller.queries.js";
+import { waitForReplyRunEndBySessionId } from "../../sessions/session-controller.settlement.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
 
 export function registerReplyOperationRekeyCases() {

@@ -9,9 +9,9 @@ import {
   isAgentRunDirectAbortReason,
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
+import { cancelSessionEffectHandoff } from "../../sessions/session-controller.lifecycle-observation.js";
 import {
   beginSessionEffect,
-  cancelSessionEffectHandoff,
   interruptSessionControllerEffects,
   runSessionMutation,
 } from "../../sessions/session-controller.lifecycle.js";

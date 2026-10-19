@@ -11,18 +11,20 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import type { ReplyBackendHandle } from "../../sessions/session-controller.contracts.js";
 import {
   abortActiveReplyRuns,
-  clearReplyRunForResetBySessionId,
   getSessionControllerOperation,
-  isSessionRunActive,
-  isSessionRunActiveForKey,
 } from "../../sessions/session-controller.js";
 import {
   beginSessionEffect,
   captureSessionControllerSettlement,
   captureSessionTarget,
 } from "../../sessions/session-controller.lifecycle.js";
-import { isSessionRunCompactionBlocked } from "../../sessions/session-controller.queries.js";
+import {
+  isSessionRunActive,
+  isSessionRunActiveForKey,
+  isSessionRunCompactionBlocked,
+} from "../../sessions/session-controller.queries.js";
 import { waitForReplyOperationBackend } from "../../sessions/session-controller.state.js";
+import { clearReplyRunForResetBySessionId } from "../../sessions/session-controller.stop-runtime.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
 import { requestCurrentSessionStop } from "./reply-run-stop.test-support.js";

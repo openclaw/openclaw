@@ -87,12 +87,8 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   };
 
   const managedList = (scope: SessionListScope) =>
-    getManagedSessionList(managedLists, scope, (entry, isCurrent, immediate) =>
-      refreshManagedList(
-        entry,
-        { append: false, invalidated: true, background: true, immediate },
-        isCurrent,
-      ),
+    getManagedSessionList(managedLists, scope, (entry, isCurrent) =>
+      refreshManagedList(entry, { append: false, invalidated: true, background: true }, isCurrent),
     );
 
   const primaryWindows = createSessionPrimaryWindows(
@@ -107,7 +103,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   const scheduleManagedLists = (
     matches: (entry: ManagedSessionList) => boolean,
     excludedKey?: string,
-    options: { foreground?: boolean; immediate?: boolean } = {},
+    options: { foreground?: boolean } = {},
   ) => {
     // Dormant primary windows cannot close event gaps until selection revalidates them.
     primaryWindows.retire((entry) => entry.key !== excludedKey && matches(entry));
@@ -119,7 +115,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           // independently of a slow primary read or background bootstrap.
           void refreshManagedList(entry, { append: false, invalidated: true });
         } else {
-          entry.coordinator.schedule(options.immediate);
+          entry.coordinator.schedule();
         }
       }
     }
@@ -664,7 +660,6 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         primarySnapshotApplied?: boolean;
         affectsPrimary?: boolean;
         affectedLists?: ReadonlySet<ManagedSessionList>;
-        immediate?: boolean;
       } = {},
     ) {
       const matchesAgent = sessionListAgentMatcher(options.agentId);
@@ -676,12 +671,10 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       if (options.primarySnapshotApplied) {
         eventRefreshCoordinator.scheduleFallback();
       } else if (options.affectsPrimary ?? matchesAgent(lastListOptions.agentId)) {
-        eventRefreshCoordinator.schedule(options.immediate);
+        eventRefreshCoordinator.schedule();
       }
       if (affected) {
-        scheduleManagedLists((entry) => affected.has(entry), undefined, {
-          immediate: options.immediate,
-        });
+        scheduleManagedLists((entry) => affected.has(entry));
         for (const entry of managedLists.values()) {
           if (
             !affected.has(entry) &&

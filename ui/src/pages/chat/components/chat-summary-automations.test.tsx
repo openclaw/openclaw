@@ -183,6 +183,13 @@ it("omits confirmed-empty sections and preserves manual collapse until the conte
   await current.ready();
   expect(find("details")).toBe(group);
   expect(group.open).toBe(false);
+  const link = find(".chat-summary__automation");
+  current.update({ presented: false });
+  current.update({ presented: true });
+  await current.ready();
+  expect(find("details")).toBe(group);
+  expect(group.open).toBe(false);
+  expect(find(".chat-summary__automation")).toBe(link);
   current.request.mockResolvedValueOnce(page());
   current.cron("removed");
   await current.empty();

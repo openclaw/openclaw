@@ -124,7 +124,18 @@ function ChatHeaderSessionMenuContent(
     menu?.close();
   };
   const actions = new SessionMenuActions(
-    host,
+    {
+      get updateComplete() {
+        return host.updateComplete;
+      },
+      focusCurrentView() {
+        if (compactView() === "icon") {
+          view.appearance.focusFirst();
+        } else {
+          menu?.focusFirst();
+        }
+      },
+    },
     readState,
     (action) => props.onAction(action),
     close,

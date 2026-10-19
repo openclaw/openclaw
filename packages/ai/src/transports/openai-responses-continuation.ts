@@ -1,4 +1,5 @@
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput, ResponseOutputItem } from "openai/resources/responses/responses.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
@@ -328,7 +329,7 @@ export function responsesContinuationRequestFingerprint(
   request: ResponsesContinuationRequest,
 ): string {
   const serialized = JSON.stringify(requestWithoutInput(request));
-  return sha256Hex(stableStringify(JSON.parse(serialized)));
+  return sha256StableValue(JSON.parse(serialized)).digest;
 }
 
 export function responsesContinuationPrefixFingerprint(
@@ -339,7 +340,7 @@ export function responsesContinuationPrefixFingerprint(
     ...normalizeAssistantReplayInput(input),
     ...normalizeAssistantReplayInput(output, true),
   ]);
-  return sha256Hex(stableStringify(JSON.parse(serialized)));
+  return sha256StableValue(JSON.parse(serialized)).digest;
 }
 
 // Restore accepted replay IDs in the delta to match the provider's cached call.

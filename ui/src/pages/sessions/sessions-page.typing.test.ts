@@ -358,9 +358,6 @@ describe("Sessions page typing and detail ownership", () => {
         expect(filteredCalls).toBe(1);
         setVisibility("visible");
         await advance();
-      } else if (reason === "create" && resubscribe) {
-        // Creation retains its priority through the old read and resubscription.
-        await advance();
       } else if (!resubscribe || timing === "queued") {
         await advance(4_999);
         expect(filteredCalls).toBe(1);

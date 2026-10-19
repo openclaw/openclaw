@@ -7,7 +7,7 @@ export type ReplyOperationActivePhase =
   | "memory_flushing"
   | "running";
 
-export type ReplyOperationPhase =
+type ReplyOperationPhase =
   | ReplyOperationActivePhase
   | "completed"
   | "yielded"

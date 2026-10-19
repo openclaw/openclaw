@@ -287,10 +287,14 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     normalizeOptionalString(conversationIdentity?.channel) ??
     normalizeOptionalString(sessionCtx.OriginatingChannel) ??
     normalizeOptionalString(sessionCtx.Provider);
+  const inputIdempotencyKey =
+    sourceTurnId ?? (opts?.internalEventExecution ? sourceMessageId : undefined);
+  // Retrying an occurrence changes dispatch identity, not its durable input bytes.
+  const transportMessageId = opts?.internalEventExecution ? inputIdempotencyKey : sourceMessageId;
   const transport = {
     ...(transportChannel ? { channel: transportChannel } : {}),
     ...(conversationRef ? { conversationRef } : {}),
-    ...(sourceMessageId ? { messageId: sourceMessageId } : {}),
+    ...(transportMessageId ? { messageId: transportMessageId } : {}),
     ...(transportReplyToId ? { replyToId: transportReplyToId } : {}),
     ...(transportThreadId ? { threadId: transportThreadId } : {}),
   };
@@ -299,7 +303,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       ? {
           text: userTurnTranscriptText,
           senderIsOwner: command.senderIsOwner,
-          ...(sourceTurnId ? { idempotencyKey: sourceTurnId } : {}),
+          ...(inputIdempotencyKey ? { idempotencyKey: inputIdempotencyKey } : {}),
           ...(inputProvenance && !isHeartbeat ? { provenance: inputProvenance } : {}),
           ...(isHeartbeat
             ? {
@@ -326,6 +330,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     (userTurnInput
       ? createUserTurnTranscriptRecorder({
           input: userTurnInput,
+          // An unstarted occurrence may be re-admitted after a policy publication.
+          // Existing completion custody permits that exact source input to resume.
+          trackInputCompletion: opts?.internalEventExecution ? true : undefined,
           target: () => ({
             sessionId: preparedSessionState.sessionId,
             sessionKey: sessionKey ?? preparedSessionState.sessionId,
@@ -349,6 +356,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
             : undefined,
         })
       : undefined);
+  if (userTurnTranscriptRecorder) {
+    await opts?.internalEventExecution?.prepareInput?.(userTurnTranscriptRecorder);
+  }
   const replyPolicyChannel =
     (replyRoute.channel as OriginatingChannelType | undefined) ??
     (messageProvider as OriginatingChannelType | undefined);

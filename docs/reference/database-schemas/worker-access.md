@@ -2170,8 +2170,9 @@ resets, cold archives, and incompatible writes invalidate its retained facts.
 SQLite and PostgreSQL turn preparation in the serialized execution worker reuse the actor's
 committed exact entry, window, pending-input rows, and transcript version. Existing
 write receipts keep these facts current; missing residency, moved keys, cold
-archives, and turn mutations retain canonical readers. Idempotency still reads
-the canonical identity because a bounded transcript window cannot prove absence.
+archives, and turn mutations retain canonical readers. A complete resident identity
+index proves a fresh idempotency key is absent without reading SQL. Truncated
+indexes, matching keys, and assistant-body scans retain canonical lookups.
 Source validation, pending-input custody, and final write authority remain with
 their existing owners.
 Bounded context reads inside the actor transaction also derive logical parents
