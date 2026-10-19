@@ -13,49 +13,44 @@ describe("renderAssistantRequestFailureCopy", () => {
   const target = { provider: "openai", model: "test-model" };
   const runFailure =
     "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
+  const makeAssistant = (fields: Parameters<typeof makeAssistantMessageFixture>[0]) =>
+    makeAssistantMessageFixture({ ...target, ...fields });
+  const live = (fields: Parameters<typeof makeAssistant>[0]) =>
+    formatUserFacingAssistantErrorText(makeAssistant(fields));
+  function expectBoth(expected: string, fields: Parameters<typeof makeAssistant>[0]) {
+    const assistant = makeAssistant(fields);
+    expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
+  }
 
-  it.each([" | INVALID_REQUEST"])(
-    "preserves approval-expiry guidance in assistant history with suffix %j",
-    (suffix) => {
-      const message =
-        "Codex node execution approval expired before a decision. Retry the action and approve the new request.";
-      const errorMessage = message + suffix;
-      const assistant = makeAssistantMessageFixture({
-        ...target,
-        errorMessage,
-        errorCode: "INVALID_REQUEST",
-      });
-      expect(formatUserFacingAssistantErrorText(assistant)).toBe(`⚠️ ${message}`);
-      expect(renderRecordedAssistantFailureCopy(assistant)).toBe(`⚠️ ${message}`);
-      expect(isAuthErrorMessage(errorMessage)).toBe(false);
-    },
-  );
-
-  it.each([
-    [
-      "Invalid session transcript entry: model_change PRIVATE_CANARY",
-      "OpenClaw couldn't read this conversation's history. Ask the Gateway operator to try `openclaw doctor --fix`. If it still fails, preserve the history and contact support with the Gateway logs.",
-    ],
-  ])("distinguishes local transcript errors from provider expiry: %s", (errorMessage, expected) => {
-    expect(
-      formatUserFacingAssistantErrorText(makeAssistantMessageFixture({ ...target, errorMessage })),
-    ).toBe(expected);
+  it("preserves approval-expiry guidance in assistant history", () => {
+    const message =
+      "Codex node execution approval expired before a decision. Retry the action and approve the new request.";
+    const errorMessage = message + " | INVALID_REQUEST";
+    expectBoth(`⚠️ ${message}`, {
+      errorMessage,
+      errorCode: "INVALID_REQUEST",
+    });
+    expect(isAuthErrorMessage(errorMessage)).toBe(false);
   });
 
-  it.each([["disk I/O error", "couldn't save", "Check the storage"]])(
-    "gives useful storage guidance without internal details: %s",
-    (errorMessage, detail, nextStep) => {
-      const copy = formatUserFacingAssistantErrorText(
-        makeAssistantMessageFixture({ ...target, errorMessage }),
-      );
-      expect(copy).toContain(detail);
-      expect(copy).toContain(nextStep);
-      expect(copy).toContain("openclaw logs --follow");
-      expect(copy).not.toMatch(/SQLite|openai\/test-model|I\/O/);
-    },
-  );
+  it("distinguishes local transcript errors from provider expiry", () => {
+    const errorMessage = "Invalid session transcript entry: model_change PRIVATE_CANARY";
+    expect(live({ errorMessage })).toBe(
+      "OpenClaw couldn't read this conversation's history. Ask the Gateway operator to try `openclaw doctor --fix`. If it still fails, preserve the history and contact support with the Gateway logs.",
+    );
+  });
+
+  it("gives useful storage guidance without internal details", () => {
+    const copy = live({ errorMessage: "disk I/O error" });
+    expect(copy).toContain("couldn't save");
+    expect(copy).toContain("Check the storage");
+    expect(copy).toContain("openclaw logs --follow");
+    expect(copy).not.toMatch(/SQLite|openai\/test-model|I\/O/);
+  });
 
   it("renders loading facts consistently in live replies and saved history without provider prose", () => {
+    const expected = String.raw`Could not load model "local\/model" with 49152 context tokens. Wait for loading to finish on the model server, then retry, or lower the model's configured context size.`;
     const assistant = makeAssistantMessageFixture({
       model: "local/model",
       errorCode: "model_load_failed",
@@ -66,7 +61,6 @@ describe("renderAssistantRequestFailureCopy", () => {
         nextStep: "PRIVATE_INJECTION",
       }),
     });
-    const expected = String.raw`Could not load model "local\/model" with 49152 context tokens. Wait for loading to finish on the model server, then retry, or lower the model's configured context size.`;
     expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
     expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
   });
@@ -78,24 +72,19 @@ describe("renderAssistantRequestFailureCopy", () => {
       errorMessage: "PRIVATE_DETAIL",
       errorBody: '{"requestedContextLength":49152}',
     });
-    const live = formatUserFacingAssistantErrorText(assistant);
-    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(live);
-    expect(live).toContain(String.raw`local\/\[model\]`);
-    expect(live).not.toContain("sk-test");
-    expect(live).not.toContain("PRIVATE_DETAIL");
-    expect(live).not.toContain("\n");
-    expect(live.length).toBeLessThan(500);
+    const copy = formatUserFacingAssistantErrorText(assistant);
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(copy);
+    expect(copy).toContain(String.raw`local\/\[model\]`);
+    expect(copy).not.toContain("sk-test");
+    expect(copy).not.toContain("PRIVATE_DETAIL");
+    expect(copy).not.toContain("\n");
+    expect(copy.length).toBeLessThan(500);
   });
 
-  it.each([
-    {
+  it("keeps malformed loading facts private", () => {
+    const assistant = makeAssistant({
       errorCode: "model_load_failed",
       errorBody: JSON.stringify({ requestedContextLength: Number.MAX_SAFE_INTEGER + 1 }),
-    },
-  ])("keeps malformed or unrecognized loading facts private: %j", (error) => {
-    const assistant = makeAssistantMessageFixture({
-      ...target,
-      ...error,
       errorMessage: "PRIVATE_DETAIL",
     });
     expect(formatUserFacingAssistantErrorText(assistant)).toBe(runFailure);
@@ -103,26 +92,25 @@ describe("renderAssistantRequestFailureCopy", () => {
   });
 
   it("preserves an incomplete tool-call diagnosis without exposing provider text", () => {
-    const error = makeAssistantMessageFixture({
-      ...target,
+    const error = live({
       errorCode: "incomplete_tool_call",
       errorMessage: "PRIVATE_PROVIDER_DETAIL",
     });
-    expect(formatUserFacingAssistantErrorText(error)).toBe(
+    expect(error).toBe(
       "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.",
     );
   });
 
-  it.each([
-    [
-      "WorkerRunnerUnavailableError",
-      "runner-offline",
-      "⚠️ The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
-    ],
-  ])("renders bounded guidance for typed runtime code %s", (name, code, expected) => {
-    const error = Object.assign(new Error("private runtime diagnostic"), { name, code });
+  it("renders bounded guidance for a typed runtime code", () => {
+    const code = "runner-offline";
+    const error = Object.assign(new Error("private runtime diagnostic"), {
+      name: "WorkerRunnerUnavailableError",
+      code,
+    });
     const runtimeCode = isNonProviderRuntimeCoordinationError(error) ? code : undefined;
-    expect(renderRuntimeCoordinationFailureCopy(runtimeCode)).toBe(expected);
+    expect(renderRuntimeCoordinationFailureCopy(runtimeCode)).toBe(
+      "⚠️ The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
+    );
   });
 
   it("gives recovery guidance after a tool-result request is rejected", () => {
@@ -136,96 +124,71 @@ describe("renderAssistantRequestFailureCopy", () => {
       },
     });
     expect(
-      formatUserFacingAssistantErrorText(
-        makeAssistantMessageFixture({
-          ...target,
-          errorCode: "400",
-          errorMessage: `400: ${errorBody}`,
-          errorBody,
-        }),
-      ),
+      live({
+        errorCode: "400",
+        errorMessage: `400: ${errorBody}`,
+        errorBody,
+      }),
     ).toBe(
       "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the Control UI.",
     );
   });
 
-  it.each(["'reasoning_effort' is not supported for this model"])(
-    "gives the custom-model opt-out for rejected reasoning controls: %s",
-    (detail) => {
-      const assistant = makeAssistantMessageFixture({
-        provider: "custom-local",
-        model: "reasoning-model",
-        errorMessage: `400 ${JSON.stringify({ error: { type: "invalid_request_error", message: detail } })}`,
-      });
-      const expected =
-        "This model endpoint does not support reasoning_effort. Set compat.supportsReasoningEffort: false on this model in your custom provider configuration and try again.";
-      expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
-      expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
-    },
-  );
+  it("gives the custom-model opt-out for rejected reasoning controls", () => {
+    const detail = "'reasoning_effort' is not supported for this model";
+    const expected =
+      "This model endpoint does not support reasoning_effort. Set compat.supportsReasoningEffort: false on this model in your custom provider configuration and try again.";
+    expectBoth(expected, {
+      provider: "custom-local",
+      model: "reasoning-model",
+      errorMessage: `400 ${JSON.stringify({ error: { type: "invalid_request_error", message: detail } })}`,
+    });
+  });
 
-  it.each([
-    {
+  it("preserves the provider rejection across live and saved replies", () => {
+    expectBoth(String.raw`LLM request rejected: Invalid service\_tier argument`, {
       errorMessage: "Invalid service_tier argument",
       errorType: "invalid_request_error",
       errorBody: "PRIVATE_NON_ERROR_BODY",
-    },
-  ])("preserves the provider rejection across live and saved replies: %j", (error) => {
-    const assistant = makeAssistantMessageFixture({ ...target, ...error });
-    const expected = String.raw`LLM request rejected: Invalid service\_tier argument`;
-    expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
-    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
+    });
   });
 
-  it.each(["400 "])(
-    "explains an Ollama embedding model rejection in live and saved replies after %s",
-    (prefix) => {
-      const errorBody = JSON.stringify({ error: '"bge-m3:latest" does not support chat' });
-      const assistant = makeAssistantMessageFixture({
-        provider: "ollama",
-        model: "bge-m3:latest",
-        errorMessage: prefix + errorBody,
-        errorBody,
-      });
-      const expected = String.raw`bge\-m3\:latest is an embedding model and cannot chat; pick a chat model with /model (or remove it from models.providers.ollama.models).`;
-      expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
-      expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
-    },
-  );
+  it("explains an Ollama embedding model rejection in live and saved replies", () => {
+    const errorBody = JSON.stringify({ error: '"bge-m3:latest" does not support chat' });
+    const expected = String.raw`bge\-m3\:latest is an embedding model and cannot chat; pick a chat model with /model (or remove it from models.providers.ollama.models).`;
+    expectBoth(expected, {
+      provider: "ollama",
+      model: "bge-m3:latest",
+      errorMessage: "400 " + errorBody,
+      errorBody,
+    });
+  });
 
-  it.each([[{ input: "PRIVATE_PROMPT" }]])(
-    "does not display an envelope serialized inside error.message: %j",
-    (envelope) => {
-      const errorMessage = JSON.stringify({
-        error: { type: "invalid_request_error", message: JSON.stringify(envelope) },
-      });
-      const assistant = makeAssistantMessageFixture({ ...target, errorMessage });
-      expect(formatUserFacingAssistantErrorText(assistant)).not.toContain("PRIVATE");
-      expect(renderRecordedAssistantFailureCopy(assistant)).not.toContain("PRIVATE");
-    },
-  );
+  it("does not display an envelope serialized inside error.message", () => {
+    const errorMessage = JSON.stringify({
+      error: {
+        type: "invalid_request_error",
+        message: JSON.stringify({ input: "PRIVATE_PROMPT" }),
+      },
+    });
+    const assistant = makeAssistant({ errorMessage });
+    expect(formatUserFacingAssistantErrorText(assistant)).not.toContain("PRIVATE");
+    expect(renderRecordedAssistantFailureCopy(assistant)).not.toContain("PRIVATE");
+  });
 
-  it.each(["422 Unprocessable Entity: "])(
-    "unwraps direct and nested upstream rejections with status prefix %j",
-    (prefix) => {
-      const inner = JSON.stringify({
-        error: { type: "invalid_request_error", message: "Unsupported parameter" },
-        request: { input: "PRIVATE_PROMPT" },
-      });
-      for (const errorMessage of [
-        prefix + inner,
-        JSON.stringify({ error: { type: "invalid_request_error", message: prefix + inner } }),
-      ]) {
-        const assistant = makeAssistantMessageFixture({ ...target, errorMessage });
-        expect(formatUserFacingAssistantErrorText(assistant)).toBe(
-          "LLM request rejected: Unsupported parameter",
-        );
-        expect(renderRecordedAssistantFailureCopy(assistant)).toBe(
-          "LLM request rejected: Unsupported parameter",
-        );
-      }
-    },
-  );
+  it("unwraps direct and nested upstream rejections with status prefix", () => {
+    const prefix = "422 Unprocessable Entity: ";
+    const inner = JSON.stringify({
+      error: { type: "invalid_request_error", message: "Unsupported parameter" },
+      request: { input: "PRIVATE_PROMPT" },
+    });
+    for (const errorMessage of [
+      prefix + inner,
+      JSON.stringify({ error: { type: "invalid_request_error", message: prefix + inner } }),
+    ]) {
+      expectBoth("LLM request rejected: Unsupported parameter", { errorMessage });
+    }
+  });
 
   it.each([
     "422 Unprocessable Content: <html>PRIVATE_PROMPT</html>",
@@ -239,17 +202,12 @@ describe("renderAssistantRequestFailureCopy", () => {
 
   it("keeps provider bodies containing SQLite text redacted", () => {
     const errorMessage = '{"error":{"message":"database is locked PRIVATE_CANARY"}}';
-    expect(
-      formatUserFacingAssistantErrorText(makeAssistantMessageFixture({ ...target, errorMessage })),
-    ).toBe(runFailure);
+    expect(live({ errorMessage })).toBe(runFailure);
   });
 
-  it.each([[{ model: "test-model" }, runFailure]] as const)(
-    "handles partial model context %j",
-    (facts, expected) => {
-      expect(renderAssistantRequestFailureCopy(facts)).toBe(expected);
-    },
-  );
+  it("handles partial model context", () => {
+    expect(renderAssistantRequestFailureCopy({ model: "test-model" })).toBe(runFailure);
+  });
 
   it("requires a valid HTTP status before asserting a request failure", () => {
     expect(renderAssistantRequestFailureCopy({ ...target, status: 0 })).toBe(runFailure);
