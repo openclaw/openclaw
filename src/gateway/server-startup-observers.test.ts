@@ -15,9 +15,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./server-history-prewarm.js", () => ({
   prewarmGatewaySessionHistory: mocks.prewarm,
 }));
+// mock-isolation: Hold delivery recovery without reading persisted channel deliveries.
 vi.mock("./session-send-recovery.js", () => ({
   recoverSessionSendDeliveries: mocks.delivery,
 }));
+// mock-isolation: Hold exec notification recovery without dispatching persisted notifications.
 vi.mock("../agents/bash-tools.exec-notify.js", () => ({
   recoverExecExitNotifications: mocks.exec,
 }));
@@ -25,6 +27,7 @@ vi.mock("../agents/bash-tools.exec-notify.js", () => ({
 vi.mock("./server-agent-deletion-recovery.js", () => ({
   resumeAgentDeletions: vi.fn(async () => {}),
 }));
+// mock-isolation: Watch-notice persistence is independent of recovery activation ordering.
 vi.mock("../sessions/session-state-events.js", () => ({
   sweepSessionStateWatchNotices: vi.fn(async () => {}),
 }));

@@ -9,7 +9,6 @@ import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/pro
 import { SESSION_TRANSCRIPT_FOREGROUND_WORKERS } from "../../infra/worker-pool-sizing.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { createSessionTranscriptHistoryPool } from "./session-transcript-read-pools.js";
 import {
@@ -103,65 +102,18 @@ it.each([false, true])(
   },
 );
 
-it.for([false, true])(
-  "keeps healthy readers available while another database prepares (admitted=%s)",
-  async (admitted, { signal }) => {
-    observed.preparedDatabase = admitted;
-    observed.serializePools = true;
-    const slow = input();
-    const healthy = input();
-    const ready = createDeferredCore();
-    using preparation = vi.spyOn(agentExecution, "getPendingOpenClawAgentDatabasePreparation");
-    preparation.mockImplementation((pathname) =>
-      pathname === slow.database.path ? ready.promise : undefined,
-    );
-    observed.run.mockResolvedValue({ ok: true, value: false });
-    const read = (request: ReturnType<typeof input>) =>
-      withSessionHistoryWorkerDatabase(
-        request.database,
-        (owner) => owner.readEntryPresence(request.scope),
-        projectionLane,
-      );
-    const slowRead = read(slow);
-    const healthyRead = read(healthy);
-    try {
-      await expect(withinTest(healthyRead, signal)).resolves.toBe(false);
-      expect(observed.run).toHaveBeenCalledOnce();
-      expect(observed.run.mock.calls[0]?.[0]).toMatchObject({ database: healthy.database });
-      ready.resolve();
-      await expect(withinTest(slowRead, signal)).resolves.toBe(false);
-      expect(observed.run).toHaveBeenCalledTimes(2);
-      expect(observed.run.mock.calls[1]?.[0]).toMatchObject({ database: slow.database });
-    } finally {
-      ready.resolve();
-      await Promise.allSettled([slowRead, healthyRead]);
-    }
-  },
-);
-
-it.each([
-  ["deadline", false],
-  ["revocation", false],
-  ["deadline", true],
-  ["revocation", true],
-] as const)(
-  "cancels read admission on %s before pending work settles (preparing=%s)",
-  async (reason, preparing) => {
-    observed.preparedDatabase = preparing;
+it.each(["deadline", "revocation"])(
+  "cancels cold read admission on %s before the writer settles",
+  async (reason) => {
+    observed.preparedDatabase = false;
     const request = input();
     const entered = createDeferredCore();
     const ready = createDeferredCore();
-    using preparation = vi.spyOn(agentExecution, "getPendingOpenClawAgentDatabasePreparation");
-    preparation.mockReturnValue(preparing ? ready.promise : undefined);
-    const writer = preparing
-      ? Promise.resolve()
-      : runOpenClawAgentWriteAdmission(request.database, async () => {
-          entered.resolve();
-          await ready.promise;
-        });
-    if (!preparing) {
-      await entered.promise;
-    }
+    const writer = runOpenClawAgentWriteAdmission(request.database, async () => {
+      entered.resolve();
+      await ready.promise;
+    });
+    await entered.promise;
     observed.run.mockResolvedValue({ ok: true, value: false });
     const read = withSessionHistoryWorkerDatabase(request.database, (owner) =>
       owner.readEntryPresence(request.scope),

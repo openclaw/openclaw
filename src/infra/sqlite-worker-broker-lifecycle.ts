@@ -134,7 +134,18 @@ export function createSqliteWorkerLifecycle({
           "overloaded",
         );
       }
-      const selected = available.reduce((left, right) =>
+      const idle = available.filter((slot) => !slot.current);
+      if (idle.length === 0) {
+        // Keep new actors unassigned until a carrier is free: a short peer job
+        // must not strand their opening behind another agent's full integrity scan.
+        await racePromiseWithAbortSignal(
+          Promise.race(available.map((slot) => slot.current!.result.catch(() => {}))),
+          options.signal,
+          (signal) => signal.reason,
+        );
+        return acquireSlot(options, limits, createReplyOwner);
+      }
+      const selected = idle.reduce((left, right) =>
         left.actors.size <= right.actors.size ? left : right,
       );
       selected.pendingOpens += 1;

@@ -184,7 +184,7 @@ function preparedRuntimeConfig(): Record<string, unknown> {
 const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   {
     id: "slowAgentDatabase",
-    name: "gateway, one checking agent and two ready agents",
+    name: "gateway, one checking agent and four ready agents",
     runByDefault: false,
     config: {
       ...BASE_CONFIG,
@@ -796,7 +796,13 @@ function writeConfig(root: string, benchCase: GatewayBenchCase): string {
   return writeGatewayBenchConfig(root, benchCase.config, { agentList, pluginFixtures });
 }
 
-const SLOW_DATABASE_AGENT_IDS = ["bench-fast-01", "bench-fast-02", "bench-slow"] as const;
+const SLOW_DATABASE_AGENT_IDS = [
+  "bench-fast-01",
+  "bench-fast-02",
+  "bench-fast-03",
+  "bench-fast-04",
+  "bench-slow",
+] as const;
 
 async function seedSlowAgentFixture(root: string, mib: number, gateDelayMs: number): Promise<void> {
   mkdirSync(root);
@@ -1036,9 +1042,9 @@ async function runGatewaySample(
         if (line.includes("AgentDatabaseAdmissionError")) {
           agentDatabaseAdmissionErrors++;
         }
-        const recovery = /\[slow-agent-bench\] recovered (bench-(?:fast-0[12]|slow))/u.exec(line);
-        if (recovery) {
-          agentRecoveryMs[recovery[1]!] ??= nowMs;
+        const recoveredAgent = /\[slow-agent-bench\] recovered (\S+)/u.exec(line)?.[1];
+        if (recoveredAgent && SLOW_DATABASE_AGENT_IDS.some((id) => id === recoveredAgent)) {
+          agentRecoveryMs[recoveredAgent] ??= nowMs;
         }
         const gate = /\[slow-agent-bench\] (gate-start|gate-passed)/u.exec(line);
         if (gate) {

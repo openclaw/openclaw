@@ -1,9 +1,7 @@
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
 import { hasSqliteDatabaseSchemaAdmissionForPath } from "../../infra/sqlite-database-admission.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
-import { getPendingOpenClawAgentDatabasePreparation } from "../../state/openclaw-agent-execution.js";
 import {
   armDatabaseWorkerIdleRetirement,
   historyClearTimeout,
@@ -52,11 +50,10 @@ export async function withSessionHistoryReadAdmission<T>(
       refreshDatabaseWorkerPressureSubscription();
     }
     const admit: ReadAdmission = async (dispatch) => {
-      const preparation = getPendingOpenClawAgentDatabasePreparation(options.path);
       const start = (signal: AbortSignal | undefined) => {
         return dispatch(signal, remainingTime());
       };
-      const dispatchAfterAdmission = async () => {
+      const dispatchCold = async () => {
         const controller = new AbortController();
         const signal = request.signal
           ? AbortSignal.any([request.signal, controller.signal])
@@ -72,10 +69,6 @@ export async function withSessionHistoryReadAdmission<T>(
         );
         timer.unref?.();
         try {
-          // A slow native open must not occupy a reader needed by other agents.
-          if (preparation) {
-            await racePromiseWithAbortSignal(preparation, signal, (aborted) => aborted.reason);
-          }
           return await runWithSqliteDatabaseAdmissionTurn(
             [options.path],
             () => {
@@ -92,7 +85,7 @@ export async function withSessionHistoryReadAdmission<T>(
         }
       };
       // First creation shares schema admission; pure reads never reserve the writer.
-      return cold || preparation ? dispatchAfterAdmission() : start(request.signal);
+      return cold ? dispatchCold() : start(request.signal);
     };
     return await run(admit, lane);
   } finally {

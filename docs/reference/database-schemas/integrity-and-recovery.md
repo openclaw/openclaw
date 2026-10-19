@@ -758,6 +758,9 @@ so healthy agents continue. Cron retries after the admission owner publishes the
 agent's availability; it does not log an admission failure while inspection is pending.
 Session requests retain the typed, retryable inspection-pending response until
 preparation completes. No ordinary reads or writes bypass the integrity gate.
+New database opens wait for an available worker before selecting their execution
+carrier, so a brief busy period on one worker does not bind them behind another
+agent's full integrity scan. Worker limits and existing command ordering are unchanged.
 Genuine migration warnings remain recorded for the boot. This changes no stored state or update
 migration behavior.
 
