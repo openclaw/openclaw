@@ -1,4 +1,3 @@
-import type { CDPSession } from "@vitest/browser-playwright";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cdp } from "vitest/browser";
 import {
@@ -106,13 +105,11 @@ async function mount(
     lastErrorCode: null,
   };
   const listeners = new Set<() => void>();
-  const setSessionKey = vi.fn();
-  const selectAgent = vi.fn();
-  const navigate = vi.fn();
+  const actions = { setSessionKey: vi.fn(), selectAgent: vi.fn(), navigate: vi.fn() };
   const gateway = {
     snapshot,
     connectionRevision: 1,
-    setSessionKey,
+    setSessionKey: actions.setSessionKey,
     subscribe: (listener: () => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -123,7 +120,7 @@ async function mount(
     gateway,
     config: { current: config, refresh: vi.fn(async () => config) },
     agents: { state: { agentsList: { defaultId: "main", agents: [] } } },
-    agentSelection: { state: { selectedId: "main" }, set: selectAgent },
+    agentSelection: { state: { selectedId: "main" }, set: actions.selectAgent },
     sessions: {
       state: {
         result: {
@@ -132,14 +129,13 @@ async function mount(
       },
       subscribe: () => () => undefined,
     },
-    navigate,
+    navigate: actions.navigate,
   } as unknown as ApplicationContext;
   const container = options.container ?? document.createElement("div");
   document.body.append(container);
-  const provider = createSolidApplicationContextProvider(context);
   const mounted = mountSolid(
     () => <PluginPage pluginId={descriptor.pluginId} tabId={descriptor.id} />,
-    { container, wrapper: provider.wrapper },
+    { container, wrapper: createSolidApplicationContextProvider(context).wrapper },
   );
   const unmount = () => {
     mounted.unmount();
@@ -149,16 +145,13 @@ async function mount(
   flush();
   await waitForSolid(() => expect(container.querySelector("iframe")).not.toBeNull());
   const view = container.querySelector<HTMLElement>("openclaw-plugin-page")!;
-  const frame = view.querySelector("iframe")!;
   return {
+    ...actions,
     view,
-    frame,
+    frame: view.querySelector("iframe")!,
     descriptor,
     gateway,
     snapshot,
-    setSessionKey,
-    selectAgent,
-    navigate,
     unmount,
     notify: () => listeners.forEach((listener) => listener()),
   };
@@ -175,7 +168,7 @@ function dispatch(
 
 async function prepareClickDocument(view: HTMLElement, signal: AbortSignal) {
   signal.throwIfAborted();
-  const session: CDPSession = cdp();
+  const session = cdp();
   // Vitest initializes its CDP handler lazily; finish that before listener and command RPCs race.
   await session.send("Page.enable");
   const ready = createDeferred();
@@ -243,52 +236,51 @@ describe("authenticated plugin-frame session navigation", () => {
   }) => {
     const container = document.createElement("div");
     const clickDocument = await prepareClickDocument(container, signal);
-    const [fixture] = await Promise.all([mount({ container }), clickDocument.ready]);
-    expect(fixture.frame.getAttribute("sandbox")).toBe("allow-scripts");
-    fixture.frame.contentWindow!.postMessage("test-click", "*");
-    await waitForSolid(() => expect(fixture.navigate.mock.calls.length).toBe(1));
-    expect(fixture.selectAgent).toHaveBeenCalledExactlyOnceWith("writer");
-    expect(fixture.setSessionKey).toHaveBeenCalledExactlyOnceWith(sessionKey);
-    expect(fixture.selectAgent.mock.invocationCallOrder[0]).toBeLessThan(
-      fixture.setSessionKey.mock.invocationCallOrder[0]!,
+    const [{ frame, navigate, selectAgent, setSessionKey }] = await Promise.all([
+      mount({ container }),
+      clickDocument.ready,
+    ]);
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    frame.contentWindow!.postMessage("test-click", "*");
+    await waitForSolid(() => expect(navigate.mock.calls.length).toBe(1));
+    expect(selectAgent).toHaveBeenCalledExactlyOnceWith("writer");
+    expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(sessionKey);
+    expect(selectAgent.mock.invocationCallOrder[0]).toBeLessThan(
+      setSessionKey.mock.invocationCallOrder[0]!,
     );
-    expect(fixture.navigate).toHaveBeenCalledExactlyOnceWith("chat", {
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("chat", {
       pathname: "/console/chat/writer/subagent/11111111-2222-4333-8444-555555555555",
       search: "?__openclawSessionFacePreference=1",
     });
   });
 
   it("preserves the existing preferred face and explicit global owner", async () => {
-    const fixture = await mount({ boardFace: "dashboard" });
-    dispatch(fixture.frame.contentWindow, message, window.location.origin);
-    expect(fixture.navigate).toHaveBeenLastCalledWith("dashboard", {
+    const { frame, navigate, selectAgent, setSessionKey } = await mount({ boardFace: "dashboard" });
+    dispatch(frame.contentWindow, message, window.location.origin);
+    expect(navigate).toHaveBeenLastCalledWith("dashboard", {
       pathname: "/console/dashboard/writer/subagent/11111111-2222-4333-8444-555555555555",
       search: undefined,
     });
-    dispatch(fixture.frame.contentWindow, {
-      ...message,
-      sessionKey: "global",
-      agentId: "research",
-    });
-    expect(fixture.selectAgent).toHaveBeenLastCalledWith("research");
-    expect(fixture.setSessionKey).toHaveBeenLastCalledWith("global");
-    expect(fixture.navigate).toHaveBeenLastCalledWith("chat", {
+    dispatch(frame.contentWindow, { ...message, sessionKey: "global", agentId: "research" });
+    expect(selectAgent).toHaveBeenLastCalledWith("research");
+    expect(setSessionKey).toHaveBeenLastCalledWith("global");
+    expect(navigate).toHaveBeenLastCalledWith("chat", {
       pathname: "/console/chat/research",
       search: "?__openclawSessionFacePreference=1",
     });
   });
 
   it("rejects other windows, wrong origins, response channels, and malformed requests", async () => {
-    const fixture = await mount();
+    const { frame, navigate, selectAgent, setSessionKey } = await mount();
     dispatch(window);
     dispatch(null);
-    dispatch(fixture.frame.contentWindow, message, "https://unrelated.example");
+    dispatch(frame.contentWindow, message, "https://unrelated.example");
     const other = document.createElement("iframe");
     document.body.append(other);
     dispatch(other.contentWindow);
     other.remove();
     const channel = new MessageChannel();
-    dispatch(fixture.frame.contentWindow, message, "null", [channel.port1]);
+    dispatch(frame.contentWindow, message, "null", [channel.port1]);
     channel.port1.close();
     channel.port2.close();
     for (const invalid of [
@@ -316,50 +308,37 @@ describe("authenticated plugin-frame session navigation", () => {
       { ...message, url: "https://unrelated.example" },
       { ...message, prompt: "Do not run" },
     ]) {
-      dispatch(fixture.frame.contentWindow, invalid);
+      dispatch(frame.contentWindow, invalid);
     }
-    expect(fixture.navigate).not.toHaveBeenCalled();
-    expect(fixture.selectAgent).not.toHaveBeenCalled();
-    expect(fixture.setSessionKey).not.toHaveBeenCalled();
-    dispatch(fixture.frame.contentWindow);
-    expect(fixture.navigate).toHaveBeenCalledOnce();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(selectAgent).not.toHaveBeenCalled();
+    expect(setSessionKey).not.toHaveBeenCalled();
+    dispatch(frame.contentWindow);
+    expect(navigate).toHaveBeenCalledOnce();
   });
 
   it("rejects live descriptor, scope, client, and grant changes before a render", async () => {
-    const fixture = await mount();
-    const hello = fixture.snapshot.hello!;
-    hello.controlUiTabs = [];
-    dispatch(fixture.frame.contentWindow);
-    hello.controlUiTabs = [fixture.descriptor];
-    fixture.descriptor.path = "https://unrelated.example/panel";
-    dispatch(fixture.frame.contentWindow);
-    fixture.descriptor.path = "/plugins/example/other";
-    dispatch(fixture.frame.contentWindow);
-    fixture.descriptor.path = "/plugins/example/panel";
-    fixture.descriptor.requiresGatewayAuth = false;
-    dispatch(fixture.frame.contentWindow);
-    fixture.descriptor.requiresGatewayAuth = true;
-    hello.auth = { role: "operator", scopes: ["operator.approvals"] };
-    dispatch(fixture.frame.contentWindow);
-    hello.auth = { role: "operator", scopes: ["operator.read"] };
-    fixture.snapshot.phase = "reconnecting";
-    dispatch(fixture.frame.contentWindow);
-    fixture.snapshot.phase = "connected";
-    const client = fixture.snapshot.client;
-    fixture.snapshot.client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    dispatch(fixture.frame.contentWindow);
-    fixture.snapshot.client = client;
-    fixture.gateway.connectionRevision += 1;
-    dispatch(fixture.frame.contentWindow);
-    fixture.gateway.connectionRevision -= 1;
-    fixture.snapshot.hello = { ...hello };
-    dispatch(fixture.frame.contentWindow);
-    fixture.snapshot.hello = hello;
-    const now = Date.now();
-    vi.spyOn(Date, "now").mockReturnValue(now + CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS + 1);
-    dispatch(fixture.frame.contentWindow);
-    expect(fixture.navigate).not.toHaveBeenCalled();
-    expect(fixture.setSessionKey).not.toHaveBeenCalled();
+    const { frame, snapshot, descriptor, gateway, navigate, setSessionKey } = await mount();
+    const hello = snapshot.hello!;
+    function dispatchWith<T, K extends keyof T>(target: T, key: K, value: T[K]) {
+      const original = target[key];
+      target[key] = value;
+      dispatch(frame.contentWindow);
+      target[key] = original;
+    }
+    dispatchWith(hello, "controlUiTabs", []);
+    dispatchWith(descriptor, "path", "https://unrelated.example/panel");
+    dispatchWith(descriptor, "path", "/plugins/example/other");
+    dispatchWith(descriptor, "requiresGatewayAuth", false);
+    dispatchWith(hello, "auth", { role: "operator", scopes: ["operator.approvals"] });
+    dispatchWith(snapshot, "phase", "reconnecting");
+    dispatchWith(snapshot, "client", { request: vi.fn() } as unknown as GatewayBrowserClient);
+    dispatchWith(gateway, "connectionRevision", gateway.connectionRevision + 1);
+    dispatchWith(snapshot, "hello", { ...hello });
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS + 1);
+    dispatch(frame.contentWindow);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(setSessionKey).not.toHaveBeenCalled();
   });
 
   it.each(["reconnect", "descriptor"] as const)(
