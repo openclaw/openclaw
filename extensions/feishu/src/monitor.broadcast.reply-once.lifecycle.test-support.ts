@@ -8,7 +8,6 @@ import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runt
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { FeishuConfigSchema } from "./config-schema.js";
-// Feishu plugin module implements monitor.broadcast.reply once.lifecycle support behavior.
 import {
   createFeishuTextMessageEvent,
   createFeishuLifecycleReplyDispatcher,
@@ -20,7 +19,7 @@ import {
   setupFeishuLifecycleHandler,
   stopFeishuLifecycleMonitors,
 } from "./test-support/lifecycle-test-support.js";
-import type { FeishuConfig, ResolvedFeishuAccount } from "./types.js";
+import type { ResolvedFeishuAccount } from "./types.js";
 
 const {
   createEventDispatcherMock,
@@ -33,15 +32,25 @@ const {
 
 let runtimesByAccount = new Map<string, RuntimeEnv>();
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+const accountConfig = {
+  enabled: true,
+  connectionMode: "websocket",
+  groupPolicy: "open",
+  requireMention: false,
+  resolveSenderNames: false,
+  groups: { oc_broadcast_group: { requireMention: false } },
+} as const;
+
+function credentials(accountId: "account-A" | "account-B") {
+  return accountId === "account-A"
+    ? { appId: "cli_a", appSecret: "secret_a" } // pragma: allowlist secret
+    : { appId: "cli_b", appSecret: "secret_b" }; // pragma: allowlist secret
+}
 
 function createLifecycleConfig(): ClawdbotConfig {
   return {
-    broadcast: {
-      oc_broadcast_group: ["susan", "main"],
-    },
-    agents: {
-      entries: { main: {}, susan: {} },
-    },
+    broadcast: { oc_broadcast_group: ["susan", "main"] },
+    agents: { entries: { main: {}, susan: {} } },
     channels: {
       feishu: {
         enabled: true,
@@ -49,70 +58,24 @@ function createLifecycleConfig(): ClawdbotConfig {
         requireMention: false,
         resolveSenderNames: false,
         accounts: {
-          "account-A": {
-            enabled: true,
-            appId: "cli_a",
-            appSecret: "secret_a", // pragma: allowlist secret
-            connectionMode: "websocket",
-            groupPolicy: "open",
-            requireMention: false,
-            resolveSenderNames: false,
-            groups: {
-              oc_broadcast_group: {
-                requireMention: false,
-              },
-            },
-          },
-          "account-B": {
-            enabled: true,
-            appId: "cli_b",
-            appSecret: "secret_b", // pragma: allowlist secret
-            connectionMode: "websocket",
-            groupPolicy: "open",
-            requireMention: false,
-            resolveSenderNames: false,
-            groups: {
-              oc_broadcast_group: {
-                requireMention: false,
-              },
-            },
-          },
+          "account-A": { ...accountConfig, ...credentials("account-A") },
+          "account-B": { ...accountConfig, ...credentials("account-B") },
         },
       },
     },
-    messages: {
-      inbound: {
-        debounceMs: 0,
-        byChannel: {
-          feishu: 0,
-        },
-      },
-    },
+    messages: { inbound: { debounceMs: 0, byChannel: { feishu: 0 } } },
   } as ClawdbotConfig;
 }
 
 function createLifecycleAccount(accountId: "account-A" | "account-B"): ResolvedFeishuAccount {
-  const config: FeishuConfig = FeishuConfigSchema.parse({
-    enabled: true,
-    connectionMode: "websocket",
-    groupPolicy: "open",
-    requireMention: false,
-    resolveSenderNames: false,
-    groups: {
-      oc_broadcast_group: {
-        requireMention: false,
-      },
-    },
-  });
   return {
     accountId,
     selectionSource: "explicit",
     enabled: true,
     configured: true,
-    appId: accountId === "account-A" ? "cli_a" : "cli_b",
-    appSecret: accountId === "account-A" ? "secret_a" : "secret_b", // pragma: allowlist secret
+    ...credentials(accountId),
     domain: "feishu",
-    config,
+    config: FeishuConfigSchema.parse(accountConfig),
   };
 }
 
