@@ -7,6 +7,14 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
+import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.js";
+import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
+import type { ResponseFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import {
+  acquireGatewayTestWebSocket,
+  closeGatewayTestWebSocket,
+} from "../../test/helpers/gateway-websocket.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -80,6 +88,7 @@ it(
       });
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+    let startupProbe: WebSocket | undefined;
     const recoveryStarted = createDeferred();
     const releaseRecovery = createDeferred();
     const recover = deliveryRecovery.recoverSessionSendDeliveries;
@@ -270,12 +279,53 @@ it(
         deliver: false,
       };
       try {
-        await expect(gateway.client.request("chat.send", successor)).rejects.toMatchObject({
-          code: "UNAVAILABLE",
-          retryable: true,
+        // Observe the wire refusal; GatewayClient retries startup responses until ready.
+        startupProbe = new WebSocket(`ws://127.0.0.1:${gateway.port}`);
+        const connected = createDeferred<ResponseFrame>();
+        const refused = createDeferred<ResponseFrame>();
+        startupProbe.on("message", (data) => {
+          const frame = JSON.parse(rawDataToString(data)) as ResponseFrame;
+          if (frame.type === "res" && frame.id === "connect-probe") {
+            connected.resolve(frame);
+          } else if (frame.type === "res" && frame.id === "startup-probe") {
+            refused.resolve(frame);
+          }
+        });
+        await acquireGatewayTestWebSocket(startupProbe, 5_000);
+        startupProbe.send(
+          JSON.stringify({
+            type: "req",
+            id: "connect-probe",
+            method: "connect",
+            params: {
+              minProtocol: PROTOCOL_VERSION,
+              maxProtocol: PROTOCOL_VERSION,
+              client: { id: "gateway-client", version: "test", platform: "test", mode: "backend" },
+              role: "operator",
+              scopes: ["operator.admin"],
+              auth: { token: "synthetic-replay-token" },
+            },
+          }),
+        );
+        expect(await connected.promise).toMatchObject({ ok: true });
+        startupProbe.send(
+          JSON.stringify({
+            type: "req",
+            id: "startup-probe",
+            method: "chat.send",
+            params: successor,
+          }),
+        );
+        expect(await refused.promise).toMatchObject({
+          ok: false,
+          error: { code: "UNAVAILABLE", retryable: true },
         });
         expect(requests).toEqual([]);
       } finally {
+        if (startupProbe) {
+          await closeGatewayTestWebSocket(startupProbe);
+          startupProbe = undefined;
+        }
         releaseRecovery.resolve();
       }
       await expect(
@@ -354,6 +404,9 @@ it(
       releaseRecovery.resolve();
       recoverySpy.mockRestore();
       try {
+        if (startupProbe) {
+          await closeGatewayTestWebSocket(startupProbe);
+        }
         if (gateway) {
           await disconnectGatewayClient(gateway.client);
           await gateway.server.close({ reason: "chat replay authority proof complete" });
