@@ -4,14 +4,11 @@
 // asserted immediately before every disk effect via the caller-supplied
 // assertConfigPathForWrite, the same contract the root config file uses.
 import fsNode from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
-import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
-import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { recordUpdateDoctorConfigFileWrite } from "../infra/update-doctor-result.js";
-import { isPathInside } from "../security/scan-paths.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
@@ -22,10 +19,8 @@ import {
   resolveKeyedProviderModelsIncludePreservation,
 } from "./include-write-boundary.js";
 import {
-  ConfigIncludeError,
   hashConfigIncludeRaw,
   isInternalIncludeWriteTarget,
-  resolveConfigIncludeWritePath,
   type ConfigIncludeOwnership,
 } from "./includes.js";
 import { hashConfigRaw, restoreAuthoredTildePathsForWrite } from "./io.read-helpers.js";
@@ -38,9 +33,14 @@ import {
   type ConfigFileWriteRollbackProof,
 } from "./io.write-safety.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
+import {
+  formatJsonFileValue,
+  readRootBoundFileRawIfExists,
+  resolveExpectedRootBoundIncludeFile,
+  type RootBoundIncludeFile,
+} from "./mutate.include-io.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigFileSnapshot } from "./types.js";
-import { rejectConfigNonFiniteNumbers } from "./value-tree.js";
 import { withConfigWriteLock } from "./write-lock.js";
 
 /** Combines the two keyed-preservation resolvers into the single path list
@@ -192,87 +192,6 @@ export function captureIncludeWriteThrough(params: {
     }
   }
   return nextConfig;
-}
-
-function formatJsonFileValue(value: unknown): string {
-  rejectConfigNonFiniteNumbers(value);
-  return `${JSON.stringify(value, null, 2)}\n`;
-}
-
-type RootBoundIncludeFile = {
-  absolutePath: string;
-  relativePath: string;
-  root: FsSafeRoot;
-};
-
-async function resolveRootBoundIncludeFile(params: {
-  configPath: string;
-  includePath: string;
-  allowedRoots: readonly string[];
-}): Promise<RootBoundIncludeFile> {
-  const absolutePath = resolveConfigIncludeWritePath(params);
-  const candidateRoots = [path.dirname(params.configPath), ...params.allowedRoots];
-  for (const candidateRoot of candidateRoots) {
-    const rootReal = await fs.realpath(candidateRoot).catch(() => null);
-    if (!rootReal || !isPathInside(rootReal, absolutePath)) {
-      continue;
-    }
-    const relativePath = path.relative(rootReal, absolutePath);
-    if (
-      !relativePath ||
-      path.isAbsolute(relativePath) ||
-      relativePath.split(path.sep)[0] === ".."
-    ) {
-      continue;
-    }
-    return {
-      absolutePath,
-      relativePath,
-      root: await createFsRoot(rootReal, {
-        hardlinks: "reject",
-        mkdir: true,
-        mode: 0o600,
-        symlinks: "reject",
-      }),
-    };
-  }
-  throw new Error(`Config include write path has no approved existing root: ${absolutePath}`);
-}
-
-async function resolveExpectedRootBoundIncludeFile(params: {
-  configPath: string;
-  includePath: string;
-  allowedRoots: readonly string[];
-  expectedAbsolutePath: string;
-}): Promise<RootBoundIncludeFile> {
-  let target: RootBoundIncludeFile;
-  try {
-    target = await resolveRootBoundIncludeFile(params);
-  } catch (error) {
-    if (
-      error instanceof ConfigIncludeError ||
-      (error instanceof Error &&
-        error.message.startsWith("Config include write path has no approved existing root:"))
-    ) {
-      throw new ConfigMutationConflictError("included config target changed since last load");
-    }
-    throw error;
-  }
-  if (path.normalize(target.absolutePath) !== path.normalize(params.expectedAbsolutePath)) {
-    throw new ConfigMutationConflictError("included config target changed since last load");
-  }
-  return target;
-}
-
-async function readRootBoundFileRawIfExists(target: RootBoundIncludeFile): Promise<string | null> {
-  try {
-    return await target.root.readText(target.relativePath);
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return null;
-    }
-    throw error;
-  }
 }
 
 async function rollbackJsonFileWriteIfUnchanged(params: {
