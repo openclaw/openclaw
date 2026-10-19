@@ -32,9 +32,16 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function prepare(input: Parameters<typeof prepareUpdateRestart>[0]) {
+function prepare(input: Partial<Parameters<typeof prepareUpdateRestart>[0]>) {
   return prepareUpdateRestart(
-    input,
+    {
+      root: "/installed",
+      result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
+      shouldRestart: true,
+      updateStepTimeoutMs: 1000,
+      assertCurrent: () => {},
+      ...input,
+    },
     createConfigFileSnapshot({
       path: "/managed/state/openclaw.json",
       exists: true,
@@ -67,11 +74,6 @@ describe("prepareUpdateRestart", () => {
             : new Error("Service inspection unavailable"),
       );
       const prepared = prepare({
-        root: "/installed",
-        result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
-        shouldRestart: true,
-        updateStepTimeoutMs: 1000,
-        assertCurrent: () => {},
         preManagedServiceStop: {
           stopped: true,
           inspected: true,
@@ -123,11 +125,7 @@ describe("prepareUpdateRestart", () => {
       });
       mocks.revalidate.mockResolvedValue(verdict);
       const result = await prepare({
-        root: "/installed",
         result: { status: "ok", mode, steps: [], durationMs: 0 },
-        shouldRestart: true,
-        updateStepTimeoutMs: 1000,
-        assertCurrent: () => {},
         preManagedServiceStop: {
           stopped,
           inspected: true,

@@ -20,30 +20,21 @@ import * as utils from "../../utils.js";
 import * as restartProbe from "../daemon-cli/restart-health-probe.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import * as serviceExports from "./update-command-service.js";
+import type { verifyUpdatedGateway } from "./update-command-verification.js";
+
+type Restart = typeof serviceExports.maybeRestartService;
 
 export async function createReadinessRollbackFixture(params: {
   packageRoot: string;
   launcher: string;
-  env: NodeJS.ProcessEnv & {
-    HOME: string;
-    USERPROFILE: string;
-    OPENCLAW_STATE_DIR: string;
-    OPENCLAW_CONFIG_PATH: string;
-  };
+  env: NodeJS.ProcessEnv &
+    Record<"HOME" | "USERPROFILE" | "OPENCLAW_STATE_DIR" | "OPENCLAW_CONFIG_PATH", string>;
   harness: {
     gatewayCommand: Mock<
       typeof import("./update-command-service-command.js").runUpdatedInstallGatewayCommand
     >;
-    restartCandidate: {
-      mockImplementationOnce: (
-        implementation: typeof serviceExports.maybeRestartService,
-      ) => unknown;
-    };
-    verifyGateway: {
-      mockImplementation: (
-        implementation: typeof import("./update-command-verification.js").verifyUpdatedGateway,
-      ) => unknown;
-    };
+    restartCandidate: { mockImplementationOnce: (implementation: Restart) => unknown };
+    verifyGateway: { mockImplementation: (implementation: typeof verifyUpdatedGateway) => unknown };
   };
 }) {
   const entered = createDeferred();
@@ -70,15 +61,16 @@ export async function createReadinessRollbackFixture(params: {
     signal?.throwIfAborted();
     nowMs += ms;
   });
-  const server = createServer((_req, res) => {
-    res.writeHead(servingVersion === "1.0.0" ? 200 : 503).end();
-  });
+  const server = createServer((_req, res) =>
+    res.writeHead(servingVersion === "1.0.0" ? 200 : 503).end(),
+  );
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("Missing recovery HTTP listener");
   }
+  const { HOME, USERPROFILE, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH } = params.env;
   const command = {
     programArguments: [
       process.execPath,
@@ -87,12 +79,7 @@ export async function createReadinessRollbackFixture(params: {
       "--port",
       String(address.port),
     ],
-    environment: {
-      HOME: params.env.HOME,
-      USERPROFILE: params.env.USERPROFILE,
-      OPENCLAW_STATE_DIR: params.env.OPENCLAW_STATE_DIR,
-      OPENCLAW_CONFIG_PATH: params.env.OPENCLAW_CONFIG_PATH,
-    },
+    environment: { HOME, USERPROFILE, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH },
   };
   const service = createMockGatewayService({
     isLoaded: async () => true,

@@ -29,8 +29,6 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 const url = (key: keyof typeof updateExecutorNativeEntrypoints) =>
   resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints[key]).href;
 
-// The real direct owner, native authority/exec path and lease process probes use
-// one compiled graph. Only secure-temp location is redirected into this fixture.
 function parentScript() {
   return `
   import fs from "node:fs";
@@ -39,26 +37,22 @@ function parentScript() {
   import { withUpdateCommandExecutor } from ${JSON.stringify(url("executor"))};
   import { withRetainedUpdateServiceAuthority } from ${JSON.stringify(url("retainedService"))};
   import { execFileUtf8 } from ${JSON.stringify(url("nativeExec"))};
-  const { a,b,temp,request,ready,milestones,outcome }=JSON.parse(process.argv[1]);
-  fs.writeFileSync(milestones,JSON.stringify({phase:"imports",elapsedMs:performance.now()})+"\\n");
+  const { a,b,temp,request,ready,outcome }=JSON.parse(process.argv[1]);
   registerSealedRuntime({json5:null,resolveSecureTempRoot:()=>temp});
   const run={runId: "native-parent-"+process.pid};
   try {
     await withUpdateCommandExecutor(run.runId,async executor=>{
       run.executorFence=await executor.enter(b,{serviceRoot:a});
-      fs.appendFileSync(milestones,JSON.stringify({phase:"admitted",elapsedMs:performance.now()})+"\\n");
       fs.writeFileSync(ready+".tmp","ready"); fs.renameSync(ready+".tmp",ready);
       process.stdout.write("PARENT_READY\\n");
       while(!fs.existsSync(request))await sleep(10);
       const {argv,timeout,parallel}=JSON.parse(fs.readFileSync(request,"utf8"));
-      fs.appendFileSync(milestones,JSON.stringify({phase:"dispatch",elapsedMs:performance.now()})+"\\n");
       const result=await withRetainedUpdateServiceAuthority(
         {run,root:a,assertCurrent:()=>{}},
         ()=>parallel
           ? Promise.all([execFileUtf8(argv[0],argv.slice(1),{timeout}),execFileUtf8(argv[0],argv.slice(1),{timeout})])
           : execFileUtf8(argv[0],argv.slice(1),{timeout})
       );
-      fs.appendFileSync(milestones,JSON.stringify({phase:"settled",elapsedMs:performance.now()})+"\\n");
       fs.writeFileSync(outcome,JSON.stringify(result));
       if((Array.isArray(result)?result:[result]).some(entry=>entry.code!==0))throw Error("native-failed:"+JSON.stringify(result));
     });
@@ -68,10 +62,11 @@ function parentScript() {
 
 function setup() {
   const root = fs.realpathSync(dirs.make("retained-native-parent-"));
-  const a = path.join(root, "A");
-  const b = path.join(root, "B");
-  const temp = path.join(root, "control");
-  const controllers = path.join(root, "controllers");
+  const file = (name: string) => path.join(root, name);
+  const a = file("A");
+  const b = file("B");
+  const temp = file("control");
+  const controllers = file("controllers");
   for (const dir of [a, b, temp, controllers]) {
     fs.mkdirSync(dir);
   }
@@ -81,13 +76,12 @@ function setup() {
     b,
     temp,
     controllers,
-    started: path.join(root, "started.json"),
-    request: path.join(root, "request.json"),
-    ready: path.join(root, "parent-ready"),
-    milestones: path.join(root, "milestones.jsonl"),
-    finish: path.join(root, "finish"),
-    effect: path.join(root, "effect"),
-    outcome: path.join(root, "outcome.json"),
+    started: file("started.json"),
+    request: file("request.json"),
+    ready: file("parent-ready"),
+    finish: file("finish"),
+    effect: file("effect"),
+    outcome: file("outcome.json"),
   };
 }
 
@@ -118,7 +112,6 @@ function startParent(killProcessTree: boolean) {
         }
       },
       signal: abort.signal,
-      // Retain the runner's ownership of successful inherited output during startup too.
       timeoutMs: DEFAULT_VITEST_TEST_TIMEOUT_MS,
       killProcessTree,
       ...(killProcessTree ? { requireProcessTreeExtinction: true } : {}),
@@ -159,7 +152,6 @@ function startParent(killProcessTree: boolean) {
     cleanup() {
       return (cleaning ??= (async () => {
         clearBehaviorTimer();
-        // Every actual fixture controller has this cooperative release path, including timeout cases.
         fs.writeFileSync(fixture.finish, "");
         if (!dispatched) {
           abort.abort();
@@ -175,7 +167,6 @@ function startParent(killProcessTree: boolean) {
           );
         }
         if (parentPid !== undefined) {
-          // beforeInput proves admission; the runner then joins this direct child's close.
           expect(isPidAlive(parentPid)).toBe(false);
         }
         const receipts = () =>
@@ -185,14 +176,12 @@ function startParent(killProcessTree: boolean) {
           if (expectedControllers === 0) {
             throw new Error(`Native launch did not report settlement; retaining ${fixture.root}`);
           }
-          // Unknown completion still needs every bound controller accounted for below.
           await expect.poll(() => receipts().length, { timeout: 5000 }).toBe(expectedControllers);
         }
         for (const receipt of receipts()) {
           const native: { pid: number; gate: number } = JSON.parse(
             fs.readFileSync(path.join(fixture.controllers, receipt), "utf8"),
           );
-          // Cleanup hang guards after the owner released the fixture; these are not readiness races.
           await waitForDead(native.pid, AbortSignal.timeout(NATIVE_CLEANUP_GUARD_MS));
           await waitForDead(native.gate, AbortSignal.timeout(NATIVE_CLEANUP_GUARD_MS));
           await expect
@@ -222,6 +211,34 @@ function useParent(killProcessTree: boolean) {
   };
 }
 
+function leaseStore(fixture: ReturnType<typeof setup>) {
+  return createManagedHandoffLeaseStore({
+    databasePath: path.join(fixture.temp, "managed-update-handoffs.sqlite"),
+    serviceManagerEnv: {},
+  });
+}
+
+const readJson = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
+const expectEffect = (fixture: ReturnType<typeof setup>) =>
+  expect.poll(() => fs.existsSync(fixture.effect), { timeout: 5000 }).toBe(true);
+
+function runNative(
+  prepared: ReturnType<typeof startParent>,
+  script: string,
+  { timeout = 10000, deadline = 15000, parallel = false, missing = false } = {},
+) {
+  return prepared.run(
+    {
+      argv: missing
+        ? [path.join(prepared.fixture.root, "missing-native")]
+        : [process.execPath, "-e", controllerScript(prepared.fixture, script)],
+      timeout,
+      parallel,
+    },
+    deadline,
+  );
+}
+
 function controllerScript(fixture: ReturnType<typeof setup>, script: string): string {
   return `
     const fs=require("node:fs");
@@ -249,19 +266,16 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
       "retains both roots after %s loss while its real native controller survives",
       async (loss) => {
         const prepared = parent();
-        const fixture = prepared.fixture;
-        const pending = prepared.run(
-          {
-            argv: [process.execPath, "-e", controllerScript(fixture, "setInterval(()=>{},10);")],
-            timeout: 15000,
-          },
-          20000,
-        );
+        const { fixture } = prepared;
+        const pending = runNative(prepared, "setInterval(()=>{},10);", {
+          timeout: 15000,
+          deadline: 20000,
+        });
         const parentPid = prepared.pid();
         let native: { pid: number; gate: number } | undefined;
         try {
           await expect.poll(() => fs.existsSync(fixture.started), { timeout: 10000 }).toBe(true);
-          native = JSON.parse(fs.readFileSync(fixture.started, "utf8"));
+          native = readJson(fixture.started);
           if (!native || !parentPid) {
             throw new Error("Missing live fixture process receipt");
           }
@@ -271,16 +285,13 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
             process.kill(native.gate, "SIGKILL");
           }
           process.kill(native.pid, 0);
-          const store = createManagedHandoffLeaseStore({
-            databasePath: path.join(fixture.temp, "managed-update-handoffs.sqlite"),
-            serviceManagerEnv: {},
-          });
+          const store = leaseStore(fixture);
           for (const root of [fixture.a, fixture.b]) {
             expect(store.acquire(root, randomUUID(), { kind: "update" }).kind).toBe("busy");
           }
           expect(fs.existsSync(fixture.effect)).toBe(false);
           fs.writeFileSync(fixture.finish, "");
-          await expect.poll(() => fs.existsSync(fixture.effect), { timeout: 5000 }).toBe(true);
+          await expectEffect(fixture);
           // Release is possible only after the recorded gate AND its actual native
           // lineage disappear. No absent PID or killed parent alone certifies this.
           for (const root of [fixture.a, fixture.b]) {
@@ -288,10 +299,7 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
               .poll(
                 () => {
                   const admitted = store.acquire(root, randomUUID(), { kind: "update" });
-                  if (admitted.kind !== "acquired") {
-                    return false;
-                  }
-                  return store.release(admitted.lease);
+                  return admitted.kind === "acquired" && store.release(admitted.lease);
                 },
                 { timeout: 5000 },
               )
@@ -301,7 +309,7 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
           fs.writeFileSync(fixture.finish, "");
           await pending;
           if (native) {
-            await expect.poll(() => fs.existsSync(fixture.effect), { timeout: 5000 }).toBe(true);
+            await expectEffect(fixture);
           }
         }
       },
@@ -313,60 +321,40 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
     const parent = useParent(true);
 
     it.each([
-      {
-        name: "nonzero",
-        script:
-          'process.stdout.write("raw-out");process.stderr.write("raw-err");process.exitCode=7;',
-        expected: { code: 7, termination: "exit", stdout: "raw-out", stderr: "raw-err" },
-      },
-      {
-        name: "signal",
-        script: 'process.kill(process.pid,"SIGTERM");',
-        expected: { termination: "signal" },
-      },
-      {
-        name: "timeout",
-        script: "setInterval(()=>{},10);",
-        expected: { code: 124, termination: "timeout" },
-      },
-      {
-        name: "missing binary",
-        script: "",
-        expected: { code: 1, termination: "error", errorCode: "ENOENT" },
-      },
-    ])(
-      "preserves real native $name result or cleanup uncertainty through the bound gate",
-      async ({ name, script, expected }) => {
+      [
+        "nonzero",
+        'process.stdout.write("raw-out");process.stderr.write("raw-err");process.exitCode=7;',
+        { code: 7, termination: "exit", stdout: "raw-out", stderr: "raw-err" },
+      ],
+      ["signal", 'process.kill(process.pid,"SIGTERM");', {}],
+      ["timeout", "setInterval(()=>{},10);", { code: 124, termination: "timeout" }],
+      ["missing binary", "", { code: 1, termination: "error", errorCode: "ENOENT" }],
+    ] as const)(
+      "preserves real native %s result or cleanup uncertainty through the bound gate",
+      async (name, script, expected) => {
         const prepared = parent();
         const fixture = prepared.fixture;
-        const result = await prepared.run(
-          {
-            argv:
-              name === "missing binary"
-                ? [path.join(fixture.root, "missing-native")]
-                : [process.execPath, "-e", controllerScript(fixture, script)],
-            timeout: name === "timeout" ? 1000 : 10000,
-          },
-          15000,
-        );
+        const result = await runNative(prepared, script, {
+          timeout: name === "timeout" ? 1000 : 10000,
+          missing: name === "missing binary",
+        });
         if (name === "signal") {
           // The shared runner deliberately marks a child-requested signal uncertain.
           // Do not convert it to a settled native failure or release retained roots.
-          expect(result.code).toBe(1);
-          expect(result.stderr).toContain(
-            "Command cleanup could not confirm that owned work stopped",
-          );
-          expect(fs.existsSync(fixture.outcome)).toBe(false);
-          const store = createManagedHandoffLeaseStore({
-            databasePath: path.join(fixture.temp, "managed-update-handoffs.sqlite"),
-            serviceManagerEnv: {},
+          expect(result).toMatchObject({
+            code: 1,
+            stderr: expect.stringContaining(
+              "Command cleanup could not confirm that owned work stopped",
+            ),
           });
+          expect(fs.existsSync(fixture.outcome)).toBe(false);
+          const store = leaseStore(fixture);
           for (const root of [fixture.a, fixture.b]) {
             expect(store.read(root).kind).toBe("current");
           }
         } else {
           expect(fs.existsSync(fixture.outcome), result.stderr).toBe(true);
-          expect(JSON.parse(fs.readFileSync(fixture.outcome, "utf8"))).toMatchObject(expected);
+          expect(readJson(fixture.outcome)).toMatchObject(expected);
           expect(result.code, result.stderr).toBe(1);
         }
       },
@@ -376,22 +364,15 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
     it("serializes real concurrent reads under one retained executor", async () => {
       const prepared = parent();
       const fixture = prepared.fixture;
-      const settled = await prepared.run(
+      const settled = await runNative(
+        prepared,
+        'setTimeout(()=>process.stdout.write("read"),30);',
         {
           parallel: true,
-          timeout: 10000,
-          argv: [
-            process.execPath,
-            "-e",
-            controllerScript(fixture, 'setTimeout(()=>process.stdout.write("read"),30);'),
-          ],
         },
-        15000,
       );
       expect(settled.code, settled.stderr).toBe(0);
-      const results = JSON.parse(fs.readFileSync(fixture.outcome, "utf8"));
-      expect(results).toHaveLength(2);
-      expect(results).toEqual([
+      expect(readJson(fixture.outcome)).toEqual([
         expect.objectContaining({ code: 0, stdout: "read" }),
         expect.objectContaining({ code: 0, stdout: "read" }),
       ]);

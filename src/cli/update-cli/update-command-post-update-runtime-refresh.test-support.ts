@@ -1,5 +1,6 @@
 import { expect, it, vi, type Mock } from "vitest";
 import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
+import type { readGatewayServiceState } from "../../daemon/service.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
@@ -12,11 +13,9 @@ import * as rollbackModule from "./update-command-rollback.js";
 import type * as serviceOperations from "./update-command-service.js";
 
 type RuntimeRefreshMocks = {
-  readService: Mock<typeof import("../../daemon/service.js").readGatewayServiceState>;
-  restart: Mock<typeof import("./update-command-service.js").maybeRestartService>;
-  stop: Mock<
-    typeof import("./update-command-service.js").maybeStopManagedServiceBeforeMutableUpdate
-  >;
+  readService: Mock<typeof readGatewayServiceState>;
+  restart: Mock<typeof serviceOperations.maybeRestartService>;
+  stop: Mock<typeof serviceOperations.maybeStopManagedServiceBeforeMutableUpdate>;
   revalidate: Mock;
   converge: Mock;
   healthy: boolean;
@@ -186,21 +185,19 @@ export function registerServiceStartRefusalFinalizationTests({
         mocks.restartService.mockResolvedValueOnce("reconciliation-pending");
       }
 
-      const failure = await finishSuccessfulPackageSwitch(
-        {
-          packageRoot: root,
-          restartEnvironment: process.env,
-          stoppedForUpdate: phase === "revalidation",
-        },
-        { packageTransaction: { backupRoot: root, rollback: restorePackage, complete } },
-      ).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+      await expect(
+        finishSuccessfulPackageSwitch(
+          {
+            packageRoot: root,
+            restartEnvironment: process.env,
+            stoppedForUpdate: phase === "revalidation",
+          },
+          { packageTransaction: { backupRoot: root, rollback: restorePackage, complete } },
+        ),
+      ).resolves.toBeUndefined();
 
       expect(rollback).not.toHaveBeenCalled();
       expect(restorePackage).not.toHaveBeenCalled();
-      expect(failure).toBeUndefined();
       expect(mocks.restartService).toHaveBeenCalledOnce();
       if (phase === "revalidation") {
         expect(mocks.restartService).toHaveBeenCalledWith(

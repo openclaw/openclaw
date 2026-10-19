@@ -50,27 +50,20 @@ export function registerRestartOutcomeTests(
     root: string,
     result: UpdateRunResult,
     before: Awaited<ReturnType<typeof maybeStopManagedServiceBeforeMutableUpdate>>,
-    assertCurrent: () => void,
+    run: NonNullable<UpdateCommandOptions["run"]>,
   ) {
-    return prepareUpdateRestart(
+    const prepared = await prepareUpdateRestart(
       {
         root,
         result,
         preManagedServiceStop: before,
         shouldRestart: true,
         updateStepTimeoutMs: 1_000,
-        assertCurrent,
+        assertCurrent: () => run.executorFence?.assertCurrent(),
       },
       await readConfigFileSnapshot(),
     );
-  }
-  function restartPrepared(
-    prepared: Awaited<ReturnType<typeof prepareUpdateRestart>>,
-    result: UpdateRunResult,
-    run: NonNullable<UpdateCommandOptions["run"]>,
-    onVerified?: Parameters<typeof maybeRestartService>[0]["onVerified"],
-  ) {
-    return maybeRestartService({
+    return {
       ...prepared,
       shouldRestart: true,
       result,
@@ -79,8 +72,7 @@ export function registerRestartOutcomeTests(
       serviceEnv: prepared.gatewayServiceEnv,
       serviceInstallEnv: prepared.gatewayServiceInstallEnv,
       timeoutMs: 1_000,
-      onVerified,
-    });
+    };
   }
   it.each([false, true])(
     "uses the native restart owner after preparing a writable unknown-version target (revoked=%s)",
@@ -98,9 +90,7 @@ export function registerRestartOutcomeTests(
         jsonMode: true,
       });
       const result: UpdateRunResult = serviceUpdateResult(root);
-      const prepared = await prepareRestart(root, result, before, () =>
-        run.executorFence?.assertCurrent(),
-      );
+      const prepared = await prepareRestart(root, result, before, run);
       expect(prepared.refreshGatewayServiceEnv).toBe(true);
       let current = true;
       const executorFence = {
@@ -128,7 +118,11 @@ export function registerRestartOutcomeTests(
         });
       });
       const onVerified = vi.fn();
-      const activation = restartPrepared(prepared, result, { ...run, executorFence }, onVerified);
+      const activation = maybeRestartService({
+        ...prepared,
+        opts: { json: true, run: { ...run, executorFence } },
+        onVerified,
+      });
       if (revoked) {
         await expect(activation).rejects.toThrow("Original update owner revoked");
         expect(mocks.restart).not.toHaveBeenCalled();
@@ -227,14 +221,14 @@ export function registerRestartOutcomeTests(
           before: { version: VERSION },
           after: { version: VERSION },
         });
-        const prepared = await prepareRestart(root, result, before, assertCurrent);
+        const prepared = await prepareRestart(root, result, before, run);
         expect(prepared.serviceUpdateVerdict).toMatchObject({
           kind: "owned",
           root,
           requiresInstallRootRefresh: true,
         });
         expect(prepared.refreshGatewayServiceEnv).toBe(true);
-        await expect(restartPrepared(prepared, result, run)).resolves.toBe("ok");
+        await expect(maybeRestartService(prepared)).resolves.toBe("ok");
         expect(mocks.child).toHaveBeenCalledOnce();
         expect(await summarizeGatewayServiceLayout(command)).toMatchObject({
           packageRootReal: packageRoot,

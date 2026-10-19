@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi, type Mock } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -29,44 +29,27 @@ type UpdatePreflightFixture = {
   makeTempDir: (prefix: string) => string;
 };
 
-export function registerUpdatePreflightTests({
-  mockPackageInstallAtCaseDir,
-  statfsFixture,
-  resolveNpmChannelTag,
-  fetchNpmPackageTargetStatus,
-  listUpdateRuns,
-  updateCommand,
-  getLogOutput,
-  getErrorOutput,
-  lastWriteJsonCall,
-  expectPackageInstallSpec,
-  packageInstallCommandCall,
-  defaultRuntime,
-  retainUpdateRuntime,
-  initializeExistingUpdateProfile,
-  profileStateDir,
-  makeTempDir,
-}: UpdatePreflightFixture) {
-  const latestRun = () => listUpdateRuns({ limit: 1 })[0];
+export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
+  const latestRun = () => f.listUpdateRuns({ limit: 1 })[0];
   const containingStep = (step: object) => expect.arrayContaining([expect.objectContaining(step)]);
+  const diskSpace = (bavail: number) =>
+    vi.spyOn(fsSync, "statfsSync").mockReturnValue(f.statfsFixture({ bavail, bsize: 1024 * 1024 }));
 
   it("reports low disk space before target lookup and persists it after admission", async () => {
-    await mockPackageInstallAtCaseDir();
-    const historyBefore = listUpdateRuns();
-    vi.spyOn(fsSync, "statfsSync").mockReturnValue(
-      statfsFixture({ bavail: 256, bsize: 1024 * 1024 }),
-    );
+    await f.mockPackageInstallAtCaseDir();
+    const historyBefore = f.listUpdateRuns();
+    diskSpace(256);
     const targetLookups: Array<{ output: string; history: UpdateRunRecord[] }> = [];
-    const resolveTag = vi.mocked(resolveNpmChannelTag).getMockImplementation()!;
-    vi.mocked(resolveNpmChannelTag).mockImplementation(async (...args) => {
+    const resolveTag = vi.mocked(f.resolveNpmChannelTag).getMockImplementation()!;
+    vi.mocked(f.resolveNpmChannelTag).mockImplementation(async (...args) => {
       targetLookups.push({
-        output: getLogOutput(),
-        history: listUpdateRuns(),
+        output: f.getLogOutput(),
+        history: f.listUpdateRuns(),
       });
       return await resolveTag(...args);
     });
 
-    await updateCommand({ yes: true });
+    await f.updateCommand({ yes: true });
 
     expect(targetLookups).toContainEqual({
       output: expect.stringContaining("Low disk space near"),
@@ -79,21 +62,21 @@ export function registerUpdatePreflightTests({
         detail: expect.stringContaining("256 MiB available"),
       }),
     );
-    expectPackageInstallSpec("openclaw@9999.0.0");
+    f.expectPackageInstallSpec("openclaw@9999.0.0");
     const preflightParams = vi
-      .mocked(fetchNpmPackageTargetStatus)
+      .mocked(f.fetchNpmPackageTargetStatus)
       .mock.calls.find(([params]) => params.target === "9999.0.0")?.[0];
     expect(preflightParams).toMatchObject({
       target: "9999.0.0",
       spec: "openclaw@9999.0.0",
       cwd: process.cwd(),
     });
-    expect(packageInstallCommandCall()?.[1].env).toBe(preflightParams?.env);
-    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    expect(f.packageInstallCommandCall()?.[1].env).toBe(preflightParams?.env);
+    expect(f.defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
   it("records runtime retention while it runs and settles its outcome", async () => {
-    const packageRoot = await mockPackageInstallAtCaseDir();
+    const packageRoot = await f.mockPackageInstallAtCaseDir();
     const retention = {
       inventoryMs: 17,
       materializationMs: 23,
@@ -102,7 +85,7 @@ export function registerUpdatePreflightTests({
       linked: 4,
       copied: 1,
     };
-    retainUpdateRuntime.mockImplementationOnce(async ({ assertCurrent, installTarget }) => {
+    f.retainUpdateRuntime.mockImplementationOnce(async ({ assertCurrent, installTarget }) => {
       assertCurrent();
       expect(installTarget).toMatchObject({ manager: "npm", packageRoot });
       expect(latestRun()?.steps).toEqual(
@@ -115,10 +98,10 @@ export function registerUpdatePreflightTests({
       return retention;
     });
 
-    await updateCommand({ yes: true, json: true });
+    await f.updateCommand({ yes: true, json: true });
 
-    expect(retainUpdateRuntime).toHaveBeenCalledOnce();
-    expect(lastWriteJsonCall()).toMatchObject({
+    expect(f.retainUpdateRuntime).toHaveBeenCalledOnce();
+    expect(f.lastWriteJsonCall()).toMatchObject({
       steps: containingStep({
         name: "updater-runtime-retention",
         command: "retain running updater runtime",
@@ -142,41 +125,35 @@ export function registerUpdatePreflightTests({
   });
 
   it("ends unfinished retention at --timeout with the installed package untouched", async () => {
-    const packageRoot = await mockPackageInstallAtCaseDir();
+    const packageRoot = await f.mockPackageInstallAtCaseDir();
     const manifest = await fs.readFile(`${packageRoot}/package.json`, "utf8");
     const entered = createDeferredCore();
     const release = createDeferredCore();
     let retentionSettled = false;
-    retainUpdateRuntime.mockImplementationOnce(async ({ signal }) => {
+    f.retainUpdateRuntime.mockImplementationOnce(async ({ signal }) => {
       entered.resolve();
       try {
-        await new Promise<void>((resolve, reject) => {
-          signal?.addEventListener(
-            "abort",
-            () => reject(toErrorObject(signal.reason, "Runtime retention cancelled")),
-            { once: true },
-          );
-          void release.promise.then(resolve);
-          signal?.throwIfAborted();
-        });
+        await (signal ? withinTest(release.promise, signal) : release.promise);
       } finally {
         retentionSettled = true;
       }
     });
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
-    const work = updateCommand({ yes: true, json: true, timeout: "60" }).catch((error: unknown) => {
-      entered.reject(error);
-      return error;
-    });
+    const work = f
+      .updateCommand({ yes: true, json: true, timeout: "60" })
+      .catch((error: unknown) => {
+        entered.reject(error);
+        return error;
+      });
     try {
       await entered.promise;
-      expect(retainUpdateRuntime).toHaveBeenCalledOnce();
+      expect(f.retainUpdateRuntime).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(60_000);
-      await vi.waitFor(() => expect(lastWriteJsonCall()).toMatchObject({ status: "error" }));
+      await vi.waitFor(() => expect(f.lastWriteJsonCall()).toMatchObject({ status: "error" }));
       expect(await work).toMatchObject({ code: 1 });
-      expect(retainUpdateRuntime).toHaveBeenCalledOnce();
+      expect(f.retainUpdateRuntime).toHaveBeenCalledOnce();
       expect(retentionSettled).toBe(true);
-      expect(lastWriteJsonCall()).toMatchObject({ reason: "update-activation-timeout" });
+      expect(f.lastWriteJsonCall()).toMatchObject({ reason: "update-activation-timeout" });
       expect(latestRun()).toMatchObject({
         status: "failed",
         phase: "finished",
@@ -191,19 +168,17 @@ export function registerUpdatePreflightTests({
   });
 
   it("refuses insufficient initial snapshot capacity before staging", async () => {
-    await mockPackageInstallAtCaseDir();
-    initializeExistingUpdateProfile();
-    const historyBefore = listUpdateRuns();
-    const stateDir = await fs.realpath(profileStateDir());
+    await f.mockPackageInstallAtCaseDir();
+    f.initializeExistingUpdateProfile();
+    const historyBefore = f.listUpdateRuns();
+    const stateDir = await fs.realpath(f.profileStateDir());
     const captureDir = `${stateDir}.update-captures`;
     await fs.mkdir(captureDir);
-    vi.stubEnv("TMPDIR", makeTempDir("initial-snapshot-temp-"));
-    vi.spyOn(fsSync, "statfsSync").mockReturnValue(
-      statfsFixture({ bavail: 32, bsize: 1024 * 1024 }),
-    );
+    vi.stubEnv("TMPDIR", f.makeTempDir("initial-snapshot-temp-"));
+    diskSpace(32);
     const allocate = vi.spyOn(fs, "mkdtemp");
 
-    const update = updateCommand({ yes: true, json: true });
+    const update = f.updateCommand({ yes: true, json: true });
     await expect(update).rejects.toMatchObject({ code: 1 });
 
     const record = latestRun();
@@ -217,21 +192,21 @@ export function registerUpdatePreflightTests({
         ]),
       }),
     });
-    expect(lastWriteJsonCall()).toMatchObject({
+    expect(f.lastWriteJsonCall()).toMatchObject({
       runId: record?.runId,
       status: "error",
       reason: "snapshot-capacity-insufficient",
       failedStep: snapshotFailure,
       steps: expect.arrayContaining([snapshotFailure]),
     });
-    expect(packageInstallCommandCall()).toBeUndefined();
+    expect(f.packageInstallCommandCall()).toBeUndefined();
     expect(
       allocate.mock.calls.some(
         ([prefix]) =>
           prefix.includes(".openclaw.update-stage-") || prefix.includes("openclaw-update-canary-"),
       ),
     ).toBe(false);
-    expect(listUpdateRuns()).toEqual([
+    expect(f.listUpdateRuns()).toEqual([
       expect.objectContaining({
         status: "failed",
         phase: "finished",
@@ -239,9 +214,9 @@ export function registerUpdatePreflightTests({
       }),
       ...historyBefore,
     ]);
-    expect(getErrorOutput()).toContain("MiB needed");
-    expect(getErrorOutput()).toContain("32 MiB free");
-    expect(getErrorOutput()).toContain("Free space on a reported filesystem or set TMPDIR");
-    expect(getErrorOutput()).toContain("SQLite family");
+    expect(f.getErrorOutput()).toContain("MiB needed");
+    expect(f.getErrorOutput()).toContain("32 MiB free");
+    expect(f.getErrorOutput()).toContain("Free space on a reported filesystem or set TMPDIR");
+    expect(f.getErrorOutput()).toContain("SQLite family");
   });
 }

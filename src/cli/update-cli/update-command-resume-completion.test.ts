@@ -20,7 +20,6 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { registerUpdateCli } from "../update-cli.js";
-// Register shared mocks before the tested runtime modules are imported.
 import {
   entrypoint,
   events,
@@ -38,6 +37,8 @@ import {
 installUpdateLeaseHarness();
 
 const readyEvents = ["post-attempt", "post-acquired", "validate", "readiness"];
+const unchangedPluginResult = () => ({ ...pluginResult, changed: false });
+const readConfig = (suffix = "") => fs.readFile(`${state.configPath}${suffix}`, "utf8");
 const localConfig = {
   gateway: { mode: "local", auth: { mode: "none" } },
   agents: { entries: { main: {} } },
@@ -71,7 +72,6 @@ describe("update completion ownership", () => {
         reason: "The installed plugin has not confirmed its saved data and settings.",
         command: "openclaw doctor --fix",
       };
-      // Each Doctor phase formats with the env its updater gives it.
       const swapWarning = formatDeferredPluginMigration(pending, {
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
       });
@@ -96,7 +96,7 @@ describe("update completion ownership", () => {
         if (pendingAgain) {
           await recordDeferredPluginMigrations({ pending: [pending] });
         }
-        return { ...pluginResult, changed: false };
+        return unchangedPluginResult();
       });
 
       await invoke("repair");
@@ -125,32 +125,34 @@ describe("update completion ownership", () => {
   it("repair completes deferred migrations after unchanged plugin convergence", async () => {
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     const pluginId = "repair-convergence";
-    const pluginDir = state.statePath("extensions", pluginId);
-    await state.writeJson(`extensions/${pluginId}/package.json`, {
+    const pluginRoot = `extensions/${pluginId}`;
+    const reason =
+      "Package convergence must wait until the updating parent releases its install records.";
+    await state.writeJson(`${pluginRoot}/package.json`, {
       name: pluginId,
       version: "1.0.0",
       type: "module",
       openclaw: { extensions: ["./index.js"] },
     });
-    await state.writeJson(`extensions/${pluginId}/openclaw.plugin.json`, {
+    await state.writeJson(`${pluginRoot}/openclaw.plugin.json`, {
       id: pluginId,
       activation: { onStartup: true },
       doctorContract: { stateMigrations: [] },
       configSchema: { type: "object", additionalProperties: false },
     });
     await state.writeText(
-      `extensions/${pluginId}/doctor-contract-api.js`,
+      `${pluginRoot}/doctor-contract-api.js`,
       "export const stateMigrations = [];\n",
     );
     await state.writeText(
-      `extensions/${pluginId}/index.js`,
+      `${pluginRoot}/index.js`,
       `export default { id: "${pluginId}", register() {} };\n`,
     );
     await state.writeConfig({
       ...localConfig,
       plugins: {
         allow: [pluginId],
-        load: { paths: [pluginDir] },
+        load: { paths: [state.statePath(pluginRoot)] },
         entries: { [pluginId]: { enabled: true } },
       },
     });
@@ -158,26 +160,15 @@ describe("update completion ownership", () => {
       runDoctorConfigFlow: true,
       verifyRepairOwner: true,
       doctorWarningsByInvocation: [
-        [
-          formatDeferredPluginMigration({
-            pluginId,
-            reason:
-              "Package convergence must wait until the updating parent releases its install records.",
-            command: "openclaw update repair",
-          }),
-        ],
+        [formatDeferredPluginMigration({ pluginId, reason, command: "openclaw update repair" })],
         [],
       ],
     });
     mocks.plugins.mockImplementationOnce(async () => {
       expect(await readDeferredPluginMigrationsAsync()).toEqual([
-        expect.objectContaining({
-          pluginId,
-          reason:
-            "Package convergence must wait until the updating parent releases its install records.",
-        }),
+        expect.objectContaining({ pluginId, reason }),
       ]);
-      return { ...pluginResult, changed: false };
+      return unchangedPluginResult();
     });
 
     await runRegisteredCli({
@@ -278,10 +269,9 @@ describe("update completion ownership", () => {
       messages: { queue: { allowCollaborativeSteering: false } },
     });
     const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
-    expect(snapshot.valid).toBe(true);
-    expect(snapshot.legacyIssues).toEqual([]);
+    expect(snapshot).toMatchObject({ valid: true, legacyIssues: [] });
     expect(snapshot.sourceConfig).not.toHaveProperty("plugins.installs");
-    const originalConfig = await fs.readFile(state.configPath, "utf8");
+    const originalConfig = await readConfig();
     const node = {
       version: 1,
       nodeId: "published-node",
@@ -298,13 +288,13 @@ describe("update completion ownership", () => {
     await expect(loadNodeHostConfig()).rejects.toThrow("retired node-host state remains");
     mocks.plugins.mockImplementation(async ({ configSnapshot }) => {
       expect(configSnapshot.valid).toBe(true);
-      expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+      expect(await readConfig()).toBe(originalConfig);
       await expect(fs.stat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.stat(`${sourcePath}.doctor-importing`)).rejects.toMatchObject({
         code: "ENOENT",
       });
       expect(await loadNodeHostConfig()).toStrictEqual({ ...node, installedAppsSharing: false });
-      return { ...pluginResult, changed: false };
+      return unchangedPluginResult();
     });
 
     await invoke("resume");
@@ -312,7 +302,7 @@ describe("update completion ownership", () => {
     expectSuccess("resume");
     expect(mocks.plugins).toHaveBeenCalledOnce();
     expect(mocks.restart).not.toHaveBeenCalled();
-    expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+    expect(await readConfig()).toBe(originalConfig);
     expect(await events()).toEqual(readyEvents);
   }, 60_000);
 
@@ -327,7 +317,7 @@ describe("update completion ownership", () => {
         ...(metadata ? { meta: { lastTouchedAt: "2026-07-02T00:00:00.000Z" } } : {}),
         agents: { list: [{ id: "main" }] },
       });
-      const original = await fs.readFile(state.configPath, "utf8");
+      const original = await readConfig();
       const expectedRecords = { existing: canonical };
       mocks.plugins.mockImplementation(async ({ configSnapshot, pluginInstallRecords }) => {
         expect(configSnapshot.valid).toBe(true);
@@ -335,27 +325,24 @@ describe("update completion ownership", () => {
         expect(configSnapshot.sourceConfig).toHaveProperty("agents.entries.main");
         expect(configSnapshot.sourceConfig).not.toHaveProperty("meta.lastTouchedAt");
         expect(pluginInstallRecords).toEqual(expectedRecords);
-        return { ...pluginResult, changed: false };
+        return unchangedPluginResult();
       });
 
       await invoke("resume");
 
       expectSuccess("resume", false);
-      expect(await fs.readFile(`${state.configPath}.bak`, "utf8")).toBe(original);
-      expect(
-        JSON.parse(
-          readPersistedInstalledPluginIndexRowSync({ stateDir: state.stateDir })!.value_json,
-        ).index.installRecords,
-      ).toEqual(expectedRecords);
-      const saved = await fs.readFile(state.configPath, "utf8");
+      expect(await readConfig(".bak")).toBe(original);
+      const savedIndex = readPersistedInstalledPluginIndexRowSync({ stateDir: state.stateDir })!;
+      expect(JSON.parse(savedIndex.value_json).index.installRecords).toEqual(expectedRecords);
+      const saved = await readConfig();
       const firstEvents = await events();
       expect(firstEvents).toEqual(readyEvents);
       expect(process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBeUndefined();
 
       await invoke("resume");
 
-      expect(await fs.readFile(state.configPath, "utf8")).toBe(saved);
-      expect(await fs.readFile(`${state.configPath}.bak`, "utf8")).toBe(original);
+      expect(await readConfig()).toBe(saved);
+      expect(await readConfig(".bak")).toBe(original);
       expect(await events()).toEqual([...firstEvents, ...readyEvents]);
     },
     60_000,
